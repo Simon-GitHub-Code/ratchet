@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import route
-from tests.repos import branch, commit, repository, write
+from tests.repos import branch, commit, git, repository, write
 
 Out = pytest.CaptureFixture[str]
 STANZA = "# P\n\nLoad the `ratchet:method` skill first.\n"
@@ -75,6 +75,7 @@ def test_a_dirty_tree_is_finished_first(tmp_path: Path) -> None:
 
 def test_a_working_branch_waits_for_its_pull_request(tmp_path: Path) -> None:
     root = repository(tmp_path, ADOPTED)
+    git(root, "remote", "add", "origin", "https://example.invalid/r.git")
     branch(root, "feature/4-x")
     assert route.decide(root, None).command == route.PULL_REQUEST
     assert route.decide(root, FakeGh(pr=None)).stage == "pull-request"
@@ -83,6 +84,8 @@ def test_a_working_branch_waits_for_its_pull_request(tmp_path: Path) -> None:
     waiting = route.decide(root, FakeGh(pr='{"state": "OPEN", "url": "https://x/pull/1"}'))
     assert waiting.command == route.WAIT
     assert "https://x/pull/1" in waiting.why
+    write(root, "src/x.py", "x = 1\n")
+    assert route.decide(root, None).then == route.PULL_REQUEST
 
 
 def test_the_records_come_before_any_ticket(tmp_path: Path) -> None:
@@ -168,3 +171,41 @@ def test_main_prints_the_three_lines_or_json(tmp_path: Path, capsys: Out) -> Non
     ]
     assert route.main(["route", "--root", str(root), "--offline", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["stage"] == "init"
+
+
+def test_without_a_forge_the_owner_merges_the_branch(tmp_path: Path) -> None:
+    # Why: `/ratchet:init` keeps a repository local when the owner declines the remote, and a
+    # pull request then has nowhere to go.
+    root = repository(tmp_path, ADOPTED)
+    write(root, "notes.md", "x\n")
+    assert route.decide(root, None).then == route.NEXT
+    branch(root, "feature/4-x")
+    write(root, "src/x.py", "x = 1\n")
+    assert "the owner merges it" in route.decide(root, None).then
+    commit(root, "feat(x): x")
+    step = route.decide(root, FakeGh(pr=None))
+    assert step.stage == "merge"
+    assert "git switch main && git merge --no-ff feature/4-x" in step.command
+    assert ".scratch/changes/feature-4-x.md" in step.why
+
+
+def test_a_ticket_waiting_on_an_open_blocker_is_not_built(tmp_path: Path) -> None:
+    files = {
+        **ADOPTED,
+        ".scratch/f/issues/01-a.md": "# 01: A\n\nStatus: ready-for-human\n",
+        ".scratch/f/issues/02-b.md": "# 02: B\n\nBlocked by: 01\n\nStatus: ready-for-agent"
+        + CONJECTURE,
+        ".scratch/f/issues/03-c.md": "# 03: C\n\nStatus: ready-for-agent\n\nBody.\n",
+    }
+    root = repository(tmp_path, files)
+    assert route.decide(root, None).command == f"{route.CONJECTURE} .scratch/f/issues/03-c.md"
+    (root / ".scratch/f/issues/03-c.md").unlink()
+    commit(root, "docs(tracker): drop 03")
+    held = route.decide(root, None)
+    assert held.stage == "blocked"
+    assert held.command == 'finish ticket .scratch/f/issues/01-a.md "A", then mark it resolved'
+    write(
+        root, ".scratch/f/issues/02-b.md", "# 02: B\n\nBlocked by: 09\n\nStatus: ready-for-agent\n"
+    )
+    commit(root, "docs(tracker): lost blocker")
+    assert route.decide(root, None).command == route.SPEC

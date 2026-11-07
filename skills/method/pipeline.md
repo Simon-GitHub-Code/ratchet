@@ -31,8 +31,8 @@ At most nine agents run, the preflight's included. Agents leave every change unc
 
 The orchestrator is the `/ratchet:feature` skill's session: it runs the preflight, creates the branch, runs the workflow, reads its result and the spec, and nothing else: reading the implementation would anchor it on one agent's reasoning and defeat the independence the pipeline exists for. If the result is not enough to decide, add the missing field to the schema.
 
-1. Check `verdict === "approve"`, empty `unresolvedBlockingFindings`, and a green tail in `checkOutput`. Otherwise rerun `/ratchet:feature <ticket>` after the ticket has been adjusted, or stop and report.
+1. Check `verdict === "approve"`, empty `unresolvedBlockingFindings`, and a green tail in `checkOutput`. Otherwise stash what the agents left (`git stash push -u`), switch back to the base branch, and rerun `/ratchet:feature <ticket>` after the ticket has been adjusted, or stop and report.
 2. Relay every dispute to the owner, through the interactive question dialog where one exists. The owner decides; any gate change is the owner's.
 3. Commit `filesChanged` on the branch with a message naming the slug, push.
-4. Open the pull request with every section of the repository's template filled ([records.md](records.md)). If an ADR is suggested, it goes in the same pull request, which means an interactive session with the owner present, since `docs/adr/` is a guard path.
+4. Open the pull request with every section of the repository's template filled ([records.md](records.md)). With no forge (the binding's Forge section names a change template instead of a pull request template), nothing is pushed: the filled template is `.scratch/changes/<branch>.md` (the branch's `/` written as `-`), committed on the branch, and the owner merges. If an ADR is suggested, it goes in the same pull request, which means an interactive session with the owner present, since `docs/adr/` is a guard path.
 5. Wait. A human merges.

@@ -15,9 +15,10 @@ The stages, in order; the first that does not hold is the answer:
 3. the tracker record ``docs/agents/issue-tracker.md`` (the mattpocock-skills setup);
 4. the binding ``docs/process/binding.md`` (``/ratchet:adopt``);
 5. a clean tree (finish the change: ``check``, commit, pull request);
-6. on a working branch: the pull request is open, else open it;
+6. on a working branch: the pull request is open, else open it; with no forge (no ``origin``)
+   the owner merges the branch once ``check`` is green;
 7. on the default branch: the glossary and design brief (``grill-with-docs``), then an
-   agent-ready ticket (``to-spec`` and ``to-tickets``), its conjecture
+   agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
    away, ``/pstack:poteto-mode`` when they stay).
 
@@ -58,6 +59,8 @@ FEATURE = "/ratchet:feature"
 POTETO = "/pstack:poteto-mode"
 PULL_REQUEST = "open the pull request (the `pr` skill fills the body); a human merges"
 WAIT = "nothing: wait for the review; a human merges"
+NEXT = "/ratchet:next"
+CHANGES = ".scratch/changes"
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,7 @@ class Checkout:
     branch: str | None
     default_branch: str
     dirty: bool
+    forge: bool = True
 
     @property
     def on_default(self) -> bool:
@@ -92,7 +96,15 @@ def observe(root: Path) -> Checkout | None:
         return None
     branch = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
     default = gatelib.default_branches(root)[0].removeprefix("origin/")
-    return Checkout(root, branch or None, default, bool(status.strip()))
+    forge = gatelib.git(root, "remote", "get-url", "origin") is not None
+    return Checkout(root, branch or None, default, bool(status.strip()), forge)
+
+
+def review(checkout: Checkout) -> str:
+    """How a finished branch reaches the default branch: a pull request, or the owner's merge."""
+    if checkout.forge:
+        return PULL_REQUEST
+    return f"the owner merges it once `check` is green (no forge; {CHANGES}/<branch>.md)"
 
 
 def names_method(root: Path) -> bool:
@@ -170,7 +182,22 @@ def has_conjecture(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -
     return preflight.conjecture_failure(ticket, root, gh) is None
 
 
-def ticket_step(root: Path, gh: preflight.Runner | None) -> Step:
+def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) -> Step | None:
+    """When every agent-ready ticket waits on an open blocker: the blocker to finish first."""
+    for ticket in tickets:
+        for ref in ticket.blockers:
+            blocker = preflight.fetch(preflight.blocker_ref(ticket, ref, root), root, gh)
+            if blocker is not None and blocker.is_open:
+                return Step(
+                    f'finish ticket {blocker.ref} "{blocker.title}", then mark it resolved',
+                    f"every agent-ready ticket waits on an open blocker; {ticket.ref} waits on it",
+                    NEXT,
+                    "blocked",
+                )
+    return None
+
+
+def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
     """The step among the tickets: write one, give one its conjecture, or build one."""
     tickets = tracker_tickets(root, gh) if gh is not None else None
     if tickets is None:
@@ -183,13 +210,22 @@ def ticket_step(root: Path, gh: preflight.Runner | None) -> Step:
             "specify",
         )
     offline_gh = gh or (lambda _args: None)
+    unblocked = [t for t in tickets if not preflight.open_blockers(t, root, offline_gh)]
+    if not unblocked:
+        return blocking(tickets, root, offline_gh) or Step(
+            SPEC,
+            "every agent-ready ticket names a blocker that cannot be found",
+            f"{TICKETS}, then {CONJECTURE} <ticket>",
+            "specify",
+        )
+    tickets = unblocked
     for ticket in tickets:
         if has_conjecture(ticket, root, offline_gh):
             return Step(
                 f"{FEATURE} {ticket.ref}",
                 f'ticket {ticket.ref} "{ticket.title}" is agent-ready with a conjecture;'
                 f" {POTETO} {ticket.ref} instead when you stay at the keyboard",
-                PULL_REQUEST,
+                review(checkout),
                 "build",
             )
     first = tickets[0]
@@ -206,6 +242,15 @@ def ticket_step(root: Path, gh: preflight.Runner | None) -> Step:
 
 def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
     """On a working branch with a clean tree: wait for the review, or open the pull request."""
+    if not checkout.forge:
+        return Step(
+            f"merge `{checkout.branch}` once `check` is green:"
+            f" `git switch {checkout.default_branch} && git merge --no-ff {checkout.branch}`",
+            f"branch `{checkout.branch}` is clean and there is no forge; its change description"
+            f" is {CHANGES}/{checkout.branch.replace('/', '-') if checkout.branch else ''}.md",
+            NEXT,
+            "merge",
+        )
     output = None if gh is None else gh(["pr", "view", "--json", "state,url"])
     if output is not None:
         try:
@@ -252,7 +297,7 @@ def decide(root: Path, gh: preflight.Runner | None = preflight.run_gh) -> Step:
         return Step(
             f"run {check_command(root)}, then commit on branch `{checkout.branch}`",
             "the working tree has uncommitted changes",
-            PULL_REQUEST,
+            NEXT if checkout.on_default else review(checkout),
             "change",
         )
     if not checkout.on_default:
@@ -260,7 +305,7 @@ def decide(root: Path, gh: preflight.Runner | None = preflight.run_gh) -> Step:
     missing = records_missing(root)
     if missing:
         return Step(GRILL, missing, f"{SPEC}, then {TICKETS}", "records")
-    return ticket_step(root, gh)
+    return ticket_step(root, gh, checkout)
 
 
 def main(argv: list[str]) -> int:
