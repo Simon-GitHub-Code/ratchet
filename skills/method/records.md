@@ -1,10 +1,10 @@
 # Records
 
-Records are the standards a review judges against. Each has a fixed shape so a machine can check its presence and a reader can find its content.
+Records are the standards a review judges against. Their formats come from `mattpocock-skills:domain-modeling` where it has one; the method adds a section or a check and names it here. The conformance gate checks presence and shape.
 
 ## Design brief: `docs/design-brief.md`
 
-Dated, and the agreed result of an interview. Lasting decisions go to ADRs and vocabulary to the glossary; the brief points at them.
+The agreed result of an interview. Run `mattpocock-skills:grill-with-docs`: it writes ADRs and glossary entries as decisions crystallise. Record the outcome here, dated, pointing at them.
 
 ```markdown
 # <Project>
@@ -22,43 +22,19 @@ Numbered, checkable, end to end, ending with "every gate tier green".
 
 An unlisted capability is out by default. A listed exclusion needs a document change to come in.
 
-## Glossary: `GLOSSARY.md`
+## Glossary: `GLOSSARY.md`, or `GLOSSARY-MAP.md` over several contexts
 
-One concept, one name, its synonyms listed out loud and banned. A fitness test scans every identifier defined in the pure core and the application layer, splits at word boundaries, and fails on any *Avoid* term as consecutive whole words. The check cannot see meaning, so the whole word is banned; collisions are allow-listed with a `Why:` and an ADR.
-
-```markdown
-## Language
-
-### <cluster>
-
-**Term**:
-One to three sentences, with the boundary stated ("never", "only").
-_Avoid_: synonym, synonym (qualifier)
-```
+The format is domain-modeling's `GLOSSARY-FORMAT.md`: one concept, one name, the synonyms under _Avoid_. The method adds enforcement where the stack allows it: a fitness test scans every identifier defined on the absolute and declared paths, splits at word boundaries, and fails on any _Avoid_ term as consecutive whole words. The check cannot see meaning, so the whole word is banned; a collision is allow-listed with a `Why:` and an ADR.
 
 ## Architecture decision records: `docs/adr/NNNN-<slug>.md`
 
-Numbered without gaps. The title states the decision as a sentence, never a topic.
+The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for when to write one (hard to reverse, surprising without context, a real trade-off) holds. The method adds:
 
-```markdown
----
-status: accepted
----
-# <The decision, as a sentence>
-
-<Context, then "We decided ...", then the consequence. Date any fact that will age.>
-
-## Refutation criterion
-<What observation or measurement would show this decision wrong, and when to look.>
-
-## Considered options
-- <option>: rejected because ... / deferred until ... / ruled out by the owner.
-```
-
-- `status` is `proposed`, `accepted`, `superseded` or `rejected`. A superseded ADR gains `superseded-by: NNNN`; the new one says what it supersedes, in full or in part.
-- A change that contradicts an ADR needs the superseding ADR first.
-- Every machine-enforced rule cites its ADR: a policy constant in a fitness test (`FORBIDDEN_*`, `REQUIRED_*`, `ALLOWED_*`) carries an `ADR NNNN` comment, and a fitness test checks the number exists.
-- A rejection is a decision too (`status: accepted`, the title states the negative): scope, claims checked against evidence, the experiment run through our own gates with numbers, revisit triggers, and the seam that keeps the option cheap, enforced by a rule. Link the research document.
+- A `## Refutation criterion` section: the observation or measurement that would show the decision wrong, and when to look. The conformance gate requires it.
+- Numbering without gaps. The title states the decision as a sentence.
+- A change that contradicts an ADR needs the superseding ADR first: `status: superseded` with `superseded-by: NNNN`, or domain-modeling's `superseded by ADR-NNNN`.
+- Every machine-enforced rule cites its ADR: a policy constant in a fitness test carries an `ADR NNNN` comment, and a fitness test checks the number exists.
+- A rejection is a decision too. The title states the negative; the body gives the scope, the claims checked against evidence, the experiment run through the gates with its numbers, the revisit triggers, and the seam that keeps the option cheap. Link the document `mattpocock-skills:research` wrote.
 
 ## Feature brief: `docs/features/<slug>/brief.md`
 
@@ -80,13 +56,13 @@ Anything not listed is fair game for the spec role to ask about.
 Exact names. Propose new terms here, before code.
 
 ## Acceptance sketch
-Three to six "Given ... when ... then ..." bullets, each naming the layer it lives in.
+Three to six "Given ... when ... then ..." bullets, each naming where it lives.
 ```
 
 ## Dispute: `docs/disputes/NNNN-<slug>.md`
 
 The template and lifecycle are in [guards.md](guards.md).
 
-## Research: `docs/research/<topic>.md`
+## Pull request
 
-Sources with URLs, the strongest counter-argument, the cheapest experiment with its pre-declared win condition, and the costs to budget if adopted anyway.
+The body follows the repository's template at the path the binding names. `mattpocock-skills:pr` supplies Summary, Evidence and Merge Danger; the method adds Conjecture, Criticism, Guard paths, Decisions and Gates, and the conformance gate checks the template carries them. Every section is filled: an empty section is an open criticism of the pull request.

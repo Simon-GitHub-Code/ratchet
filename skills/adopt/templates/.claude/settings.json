@@ -41,7 +41,8 @@
       "Edit(/docs/adr/**)",
       "Edit(/docs/process/**)",
       "Edit(/CLAUDE.md)",
-      "Edit(/GLOSSARY.md)"
+      "Edit(/GLOSSARY.md)",
+      "Edit(/AGENTS.md)"
     ]
   }
 }

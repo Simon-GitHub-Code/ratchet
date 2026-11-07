@@ -1,6 +1,6 @@
 # Guards and disputes
 
-Agents push and run `gh` as the owner, so the platform cannot tell an agent's change from the owner's. The gates are the main quality control, so the gates themselves are protected: enforced in the harness, which the model cannot override, and detected in the diff for whatever slips past. Anything an agent can set is something an agent can forge, so there is no switch that turns the guard off.
+Agents push and drive the forge's CLI as the owner, so the forge cannot tell an agent's change from the owner's. The gates are the main quality control, so the gates themselves are protected: enforced in the harness, which the model cannot override, and detected in the diff for whatever slips past. Anything an agent can set is something an agent can forge, so there is no switch that turns the guard off.
 
 ## The manifest
 
@@ -20,9 +20,9 @@ exclude = [".claude/worktrees", ".claude/worktrees/**"]
 paths = [".claude/**", "guards/**", "~/.claude/settings.json", "~/.claude/settings.local.json"]
 ```
 
-Groups every binding has: tool configs and thresholds; the command contract and gate scripts; ratchets; CI and the pull-request template; the harness (`edit = "deny"`); local git hooks and config (`edit = "deny"`); fitness tests; home-grown gate tools; formal specs; decisions (`docs/adr/**`, `docs/process/**`, `CLAUDE.md`, `GLOSSARY.md`).
+Groups every binding has: tool configs and thresholds; the command contract and gate scripts; ratchets; CI and the pull-request template; the harness (`edit = "deny"`); local git hooks and config (`edit = "deny"`); fitness tests; home-grown gate tools; formal models and the project-local verification skill; decisions (`docs/adr/**`, `docs/process/**`, `AGENTS.md`, `CLAUDE.md`, the glossary).
 
-Three things read the manifest, so a guard path is one entry here and nowhere else: the hook, the diff check, and a fitness test that keeps the permission rules in step with it.
+Three things read the manifest, so a guard path is one entry here and nowhere else: the hook, the diff check, and a fitness test that keeps the permission rules in step with it. The template manifest names the groups every binding has; `AGENTS.md`, `GLOSSARY.md` and the glossary map sit in the decisions group.
 
 ## The hook
 
@@ -30,7 +30,7 @@ The method's plugin registers a PreToolUse hook on every edit and shell call. It
 
 - **Ask.** An edit to a guard path, naming the group and its reason. Merging a pull request.
 - **Deny an edit** in a group marked `edit = "deny"`: the harness and local git, where the platform's own protected-path handling would let an `ask` through. The plugin's own files and `~/.claude/plugins/**` are always in this set.
-- **Deny a command** that bypasses a gate or rewrites history: `--no-verify` and its spellings, `SKIP=`, hook uninstalls and hook-path changes; force pushes in every spelling, pushes to main, hard resets on main, amending a pushed commit, history filters; `gh` calls touching branch protection, rulesets, labels, repository settings, secrets, variables, workflows or runs; nested `claude` invocations given settings or plugin flags; any shell write, move, copy, link or delete of a guard path, including through wrappers, substitutions, `eval`, heredocs and `-c` strings.
+- **Deny a command** that bypasses a gate or rewrites history: `--no-verify` and its spellings, `SKIP=`, hook uninstalls and hook-path changes; force pushes in every spelling, pushes to main, hard resets on main, amending a pushed commit, history filters; forge CLI calls (`gh` on GitHub) touching branch protection, rulesets, labels, repository settings, secrets, variables, workflows or runs; nested `claude` invocations given settings or plugin flags; any shell write, move, copy, link or delete of a guard path, including through wrappers, substitutions, `eval`, heredocs and `-c` strings.
 
 Without a `guards/manifest.toml` the path rules are off and the command rules still apply.
 
@@ -38,7 +38,7 @@ Permission rules in the project's `.claude/settings.json` are a second, independ
 
 ## The diff check
 
-Some writes are out of the hook's reach: interpreters, `git apply`, merges, variable paths, edits made outside the harness. `just guard-diff` (tier 1) and a CI job list every changed path that matches the manifest at the merge base or at head, with renames split so moving a guard file away is caught. The CI job fails when any guard path changed, as information for the owner's merge decision; it is not a required check.
+Some writes are out of the hook's reach: interpreters, `git apply`, merges, variable paths, edits made outside the harness. The `guard-diff` entry point (tier 1) and a CI job list every changed path that matches the manifest at the merge base or at head, with renames split so moving a guard file away is caught. The CI job fails when any guard path changed, as information for the owner's merge decision; it is not a required check.
 
 ## What only the owner does
 
@@ -46,7 +46,7 @@ Approves an `ask` at the prompt. Edits a locked file outside the harness, in a p
 
 ## Disputes
 
-A denied or unanswered call is the signal to open a dispute. It is not a puzzle to route around.
+A denied or unanswered call is the signal to open a dispute.
 
 **When.** The gate fails and you believe the gate, not the code, is wrong: a limit the change cannot reasonably meet, a rule that misfires, a fitness test encoding an outdated decision, a flaky check. Fixing the code being hard is a reason to split the function, write the test or narrow the change, and that comes first.
 
@@ -63,7 +63,7 @@ A denied or unanswered call is the signal to open a dispute. It is not a puzzle 
    - Date: <YYYY-MM-DD>
 
    ## Gate
-   Its name as the binding lists it, its recipe, and the guard path(s) that define it.
+   Its question as the binding lists it, its entry point, and the guard path(s) that define it.
 
    ## Exact failure
    The command and its output, verbatim, trimmed to the relevant lines.

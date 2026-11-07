@@ -4,19 +4,23 @@
 Compares ``quality/thresholds.toml`` at head with the merge base.
 
 Usage: ``lowered.py [--root DIR] [--base REF] [--file PATH]``. The base defaults to the merge
-base of HEAD with ``origin/main`` (then ``main``), or ``HEAD~1`` on a clean main. A base
-without the file passes: that is the first adoption.
+base of HEAD with the default branch: the remote's HEAD, else the branch the binding names
+under ``- Default branch:``, else ``main`` or ``master``. On the default branch itself the base
+is ``HEAD~1``. A base without the file passes: that is the first adoption.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
-MAIN_BRANCHES = ("origin/main", "main")
+FALLBACK_BRANCHES = ("main", "master")
+BINDING = Path("docs/process/binding.md")
+DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
 
 
 def git(root: Path, *args: str) -> str | None:
@@ -26,13 +30,30 @@ def git(root: Path, *args: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def default_branches(root: Path) -> list[str]:
+    """Candidate default branches, most authoritative first."""
+    candidates: list[str] = []
+    remote_head = git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if remote_head:
+        candidates.append(remote_head)
+    binding = root / BINDING
+    if binding.is_file():
+        match = DEFAULT_BRANCH_LINE.search(binding.read_text(encoding="utf-8"))
+        if match:
+            candidates.extend((f"origin/{match.group(1)}", match.group(1)))
+    for name in FALLBACK_BRANCHES:
+        candidates.extend((f"origin/{name}", name))
+    return list(dict.fromkeys(candidates))
+
+
 def base_commit(root: Path) -> str | None:
     head = git(root, "rev-parse", "--abbrev-ref", "HEAD")
-    for branch in MAIN_BRANCHES:
+    for branch in default_branches(root):
         base = git(root, "merge-base", "HEAD", branch)
         if base is None:
             continue
-        if base == git(root, "rev-parse", "HEAD") or head in ("main", "master"):
+        on_default = head in (branch, branch.removeprefix("origin/"))
+        if base == git(root, "rev-parse", "HEAD") or on_default:
             return git(root, "rev-parse", "HEAD~1")
         return base
     return git(root, "rev-parse", "HEAD~1")

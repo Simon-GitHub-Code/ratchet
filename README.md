@@ -1,14 +1,17 @@
 # ratchet
 
-The Ratchet method: how software is built and verified here, by agents, under tiered deterministic gates that only tighten, guarded by the harness, and judged by critical rationalism. Packaged as a Claude Code plugin so every repository reads one copy of the method and keeps only its own binding.
+The Ratchet method: what must be true before a merge, when software is built by agents. Tiered deterministic gates that only tighten, guard paths the harness protects, disputes, records, a four-role feature pipeline, and the merge rule of critical rationalism. Packaged as a Claude Code plugin so every repository reads one copy of the method and keeps only its own binding.
+
+It composes with two other plugins and competes with neither. `mattpocock-skills` says how the work is done (`tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grill-with-docs`, `pr`, `research`). `pstack` says in what style and with which levers (`poteto-mode`, `architect`, `interrogate`, `arena`, `correct`, the formal verification skills). Ratchet's roles call those skills by name; its records use their formats and add a section each.
 
 ## What is in the plugin
 
 | Path | What it is |
 | --- | --- |
-| `skills/method/SKILL.md` | the founding document: the vocabulary, the ten commitments, how work runs |
-| `skills/method/*.md` | the reference behind each commitment: epistemology, tiers, ratchet, guards and disputes, pipeline, records, code shape, formal specs |
-| `skills/adopt/` | `/ratchet:adopt`: steps and templates that bring a repository onto the method |
+| `skills/method/SKILL.md` | the founding document: the words, the nine commitments, how work runs |
+| `skills/method/*.md` | the reference behind each commitment: the merge rule, tiers as questions, the ratchet, guards and disputes, the pipeline, records, verifiable shape |
+| `skills/init/` | `/ratchet:init`: the bare bones for any repository, an `AGENTS.md` naming the three plugins with `CLAUDE.md` linked to it |
+| `skills/adopt/` | `/ratchet:adopt`: steps and templates that bind the method to a repository's runner, forge and stack |
 | `workflows/feature.js` | `/ratchet:feature`: the four-role pipeline (spec, implement, critic, review) |
 | `hooks/` | the PreToolUse guard hook and its `ratchet_guards` package (`guard-diff` lives here too) |
 | `scripts/conformance.py` | tier 1 gate: the repository still carries the method's artefacts; `--self-test` shows it bites |
@@ -24,13 +27,15 @@ claude plugin install ratchet@ratchet
 
 A local marketplace is read in place: edits apply at the next session or `/reload-plugins`. Other machines take the GitHub form and get updates when `version` in `.claude-plugin/plugin.json` rises.
 
-## Adopt in a repository
+## Use in a repository
 
-Run `/ratchet:adopt` in the repository. It copies the templates, interviews the owner for `CLAUDE.md`, the binding, the brief and the glossary, and leaves the `justfile` red until every gate is bound. The repository's `CLAUDE.md` then opens with one stanza telling agents to load `ratchet:method`.
+Run `/ratchet:init` in any repository for the bare bones. Run `/ratchet:adopt` when the owner wants the gates: it copies the templates, interviews the owner for the binding, and leaves the entry points red until every gate is bound to a tool or accepted as `none` with a reason. The `justfile` and `.github/` templates are the `just` and GitHub examples; any runner and any forge can carry the entry points.
 
-## Keep the plugin honest
+## Develop the plugin
 
-`just check` in this repository runs the hook's tests, lint and types, the conformance self-test, a parse of the workflow and `claude plugin validate`. The method says gates are themselves gated; this is where that applies to the method.
+The guard hook locks the installed plugin's root with or without a manifest, and a directory marketplace is read in place, so an agent cannot edit this checkout while the plugin is enabled. Disable it for the session (`claude plugin disable ratchet`, then `/reload-plugins`) and re-enable it afterwards, or install the plugin from a separate clone.
+
+`just check` here runs the hook's tests, lint and types, the conformance self-test, a parse of the workflow and `claude plugin validate`. The method says gates are themselves gated; this is where that applies to the method.
 
 ## Change the method
 

@@ -2,8 +2,8 @@
 """Method conformance gate: does a repository still carry the Ratchet method's artefacts?
 
 Usage: ``conformance.py [ROOT]`` exits 1 and prints one line per failure. ``conformance.py
---self-test`` builds repositories from the adopt templates, expects the pristine one to pass
-and each mutated one to fail, so the checker is shown to bite.
+--self-test`` builds repositories from the init and adopt templates, expects the pristine one
+to pass and each mutated one to fail, so the checker is shown to bite.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import tomllib
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-REQUIRED_RECIPES = (
+ENTRY_POINTS = (
     "tier0",
     "tier1",
     "tier2",
@@ -31,19 +31,12 @@ REQUIRED_RECIPES = (
     "conformance",
     "reports",
 )
-BINDING_RECIPES = (
-    "tier0",
-    "tier1",
-    "tier2",
-    "check",
-    "check-deep",
-    "ratchet-lowered",
-    "snapshots-check",
-    "suppressions",
-    "guard-diff",
-    "conformance",
+ADR_STATUS = re.compile(r"^(proposed|accepted|deprecated|rejected|superseded( by ADR-\d{4})?)$")
+ADR_FRONT_MATTER = re.compile(
+    r"\A(?:---\nstatus: (?P<status>[^\n]+)\n(?:superseded-by: (?P<by>\d{4})\n)?---\n+)?# \S"
 )
-ADR_STATUSES = {"proposed", "accepted", "superseded", "rejected"}
+ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
+REFUTATION_SECTION = "## Refutation criterion"
 DISPUTE_STATUSES = {"open", "upheld", "rejected"}
 DISPUTE_SECTIONS = (
     "## Gate",
@@ -61,15 +54,16 @@ BRIEF_SECTIONS = (
 )
 PR_SECTIONS = (
     "## Conjecture",
-    "## Brief and spec",
     "## Criticism",
     "## Guard paths",
-    "## Dependencies",
     "## Decisions",
     "## Gates",
 )
 LOCKED_PATTERNS = {".claude/**", "guards/**"}
-RECIPE_LINE = re.compile(r"^([A-Za-z0-9_-]+)(?:\s+[^:=]*)?:(?!=)")
+TABLE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|")
+PR_TEMPLATE_LINE = re.compile(r"^- Pull request template: `([^`]+)`$", re.MULTILINE)
+DEFAULT_PR_TEMPLATE = ".github/pull_request_template.md"
+NONE_REASON = re.compile(r"^none\b[\s,:;-]*(.*)$")
 NUMBERED = re.compile(r"^(\d{4})-[a-z0-9-]+\.md$")
 MIN_REASON = 10
 MIN_REGISTER_REASON = 20
@@ -81,18 +75,22 @@ def read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
-def check_claude_md(root: Path) -> Iterable[str]:
-    text = read(root / "CLAUDE.md")
+def check_agent_instructions(root: Path) -> Iterable[str]:
+    text = read(root / "AGENTS.md")
     if text is None:
-        yield "CLAUDE.md: missing"
+        text = read(root / "CLAUDE.md")
+    if text is None:
+        yield "AGENTS.md (or CLAUDE.md): missing"
     elif "ratchet:method" not in text:
-        yield "CLAUDE.md: does not tell agents to load the ratchet:method skill"
+        yield "AGENTS.md: does not tell agents to load the ratchet:method skill"
 
 
 def check_glossary(root: Path) -> Iterable[str]:
+    if (root / "GLOSSARY-MAP.md").is_file():
+        return
     text = read(root / "GLOSSARY.md")
     if text is None:
-        yield "GLOSSARY.md: missing"
+        yield "GLOSSARY.md (or GLOSSARY-MAP.md): missing"
     elif "## Language" not in text:
         yield "GLOSSARY.md: has no '## Language' section"
 
@@ -129,19 +127,39 @@ def check_adrs(root: Path) -> Iterable[str]:
     if numbers != list(range(1, len(numbers) + 1)):
         yield f"docs/adr: numbering has gaps or duplicates: {numbers}"
     for number, path in files:
+        rel = path.relative_to(root)
         text = path.read_text(encoding="utf-8")
-        match = re.match(r"---\nstatus: (\S+)\n(?:superseded-by: (\d{4})\n)?---\n# \S", text)
+        match = ADR_FRONT_MATTER.match(text)
         if match is None:
-            rel = path.relative_to(root)
-            yield f"{rel}: needs front matter 'status: <value>' then a '# ' title"
+            yield f"{rel}: opens with a '# ' title, optionally after 'status:' front matter"
             continue
-        status, superseded_by = match.group(1), match.group(2)
-        if status not in ADR_STATUSES:
-            yield f"{path.relative_to(root)}: status '{status}' not in {sorted(ADR_STATUSES)}"
+        status, superseded_by = match.group("status"), match.group("by")
+        if status is not None and not ADR_STATUS.match(status):
+            yield f"{rel}: status '{status}' is not {ADR_STATUS_WORDS}"
         if status == "superseded" and superseded_by is None:
-            yield f"{path.relative_to(root)}: a superseded ADR carries 'superseded-by: NNNN'"
+            yield f"{rel}: a superseded ADR names its successor: 'superseded-by: NNNN'"
+        if REFUTATION_SECTION not in text:
+            yield f"{rel}: has no '{REFUTATION_SECTION}' section"
         if number == 1 and "Ratchet method" not in text:
-            yield f"{path.relative_to(root)}: ADR 0001 records adopting the Ratchet method"
+            yield f"{rel}: ADR 0001 records adopting the Ratchet method"
+
+
+def section(text: str, heading: str) -> str:
+    start = text.find(heading)
+    if start < 0:
+        return ""
+    body = text[start + len(heading) :]
+    end = body.find("\n## ")
+    return body if end < 0 else body[:end]
+
+
+def table_cells(body: str) -> list[tuple[str, str]]:
+    rows = []
+    for line in body.splitlines():
+        match = TABLE_ROW.match(line)
+        if match and not set(match.group(2)) <= set("-: ") and match.group(1) != "---":
+            rows.append((match.group(1), match.group(2)))
+    return rows[1:]
 
 
 def check_binding(root: Path) -> Iterable[str]:
@@ -149,9 +167,27 @@ def check_binding(root: Path) -> Iterable[str]:
     if text is None:
         yield "docs/process/binding.md: missing"
         return
-    for recipe in BINDING_RECIPES:
-        if f"`just {recipe}`" not in text:
-            yield f"docs/process/binding.md: does not name `just {recipe}`"
+    commands = dict(table_cells(section(text, "## Entry points")))
+    for name in ENTRY_POINTS:
+        command = commands.get(name, "")
+        if not command or "<" in command:
+            yield f"docs/process/binding.md: entry point '{name}' names no command"
+    gates = section(text, "## Gates")
+    if not gates:
+        yield "docs/process/binding.md: has no '## Gates' section"
+    for question, tool in table_cells(gates):
+        match = NONE_REASON.match(tool)
+        if match and len(match.group(1)) < MIN_REASON:
+            yield (
+                f"docs/process/binding.md: gate '{question}' is bound to none without a reason "
+                f"of {MIN_REASON}+ characters"
+            )
+
+
+def pr_template_path(root: Path) -> str:
+    text = read(root / "docs/process/binding.md") or ""
+    match = PR_TEMPLATE_LINE.search(text)
+    return match.group(1) if match else DEFAULT_PR_TEMPLATE
 
 
 def check_manifest(root: Path) -> Iterable[str]:
@@ -214,17 +250,6 @@ def check_register(data: dict[str, object]) -> Iterable[str]:
             )
 
 
-def check_justfile(root: Path) -> Iterable[str]:
-    text = read(root / "justfile")
-    if text is None:
-        yield "justfile: missing"
-        return
-    recipes = {match.group(1) for line in text.splitlines() if (match := RECIPE_LINE.match(line))}
-    for recipe in REQUIRED_RECIPES:
-        if recipe not in recipes:
-            yield f"justfile: has no recipe '{recipe}'"
-
-
 def check_disputes(root: Path) -> Iterable[str]:
     directory = root / "docs/disputes"
     if not directory.is_dir():
@@ -253,24 +278,24 @@ def check_features(root: Path) -> Iterable[str]:
 
 
 def check_pr_template(root: Path) -> Iterable[str]:
-    text = read(root / ".github/pull_request_template.md")
+    relative = pr_template_path(root)
+    text = read(root / relative)
     if text is None:
-        yield ".github/pull_request_template.md: missing"
+        yield f"{relative}: missing (the binding names the pull request template)"
         return
-    for section in PR_SECTIONS:
-        if not re.search(rf"^{re.escape(section)}\s*$", text, re.MULTILINE):
-            yield f".github/pull_request_template.md: has no '{section}' section"
+    for heading in PR_SECTIONS:
+        if not re.search(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE):
+            yield f"{relative}: has no '{heading}' section"
 
 
 CHECKS: tuple[Check, ...] = (
-    check_claude_md,
+    check_agent_instructions,
     check_glossary,
     check_brief,
     check_adrs,
     check_binding,
     check_manifest,
     check_quality,
-    check_justfile,
     check_disputes,
     check_features,
     check_pr_template,
@@ -294,19 +319,26 @@ Mutation = tuple[str, Callable[[Path], None]]
 
 def mutations() -> list[Mutation]:
     def strip_stanza(root: Path) -> None:
-        path = root / "CLAUDE.md"
+        path = root / "AGENTS.md"
         path.write_text(path.read_text().replace("ratchet:method", "nothing"))
 
-    def drop_recipe(root: Path) -> None:
-        path = root / "justfile"
-        path.write_text(path.read_text().replace("\nconformance:", "\nconform:"))
+    def drop_entry_point(root: Path) -> None:
+        path = root / "docs/process/binding.md"
+        path.write_text(path.read_text().replace("| conformance |", "| conform |"))
+
+    def none_without_reason(root: Path) -> None:
+        path = root / "docs/process/binding.md"
+        path.write_text(path.read_text().replace("| format | |", "| format | none |"))
+
+    def adr_without_refuter(root: Path) -> None:
+        (root / "docs/adr/0002-plain.md").write_text("# We keep it plain\n\nBecause.\n")
 
     def unlock_harness(root: Path) -> None:
         path = root / "guards/manifest.toml"
         path.write_text(path.read_text().replace('edit = "deny"', 'edit = "ask"'))
 
     def gap_adrs(root: Path) -> None:
-        (root / "docs/adr/0003-gap.md").write_text("---\nstatus: accepted\n---\n# A gap\n")
+        (root / "docs/adr/0003-gap.md").write_text(f"# A gap\n\n{REFUTATION_SECTION}\nNone.\n")
 
     def bad_dispute(root: Path) -> None:
         (root / "docs/disputes/0001-bad.md").write_text("# 0001: bad\n\n- Status: maybe\n")
@@ -319,12 +351,14 @@ def mutations() -> list[Mutation]:
         )
 
     def drop_pr_section(root: Path) -> None:
-        path = root / ".github/pull_request_template.md"
+        path = root / DEFAULT_PR_TEMPLATE
         path.write_text(path.read_text().replace("## Guard paths", "## Guards"))
 
     return [
-        ("CLAUDE.md without the method stanza", strip_stanza),
-        ("justfile without the conformance recipe", drop_recipe),
+        ("AGENTS.md without the method stanza", strip_stanza),
+        ("binding without the conformance entry point", drop_entry_point),
+        ("binding with a gate bound to none and no reason", none_without_reason),
+        ("ADR without a refutation criterion", adr_without_refuter),
         ("manifest with the harness unlocked", unlock_harness),
         ("ADR numbering with a gap", gap_adrs),
         ("dispute with an unknown status", bad_dispute),
@@ -333,10 +367,14 @@ def mutations() -> list[Mutation]:
     ]
 
 
-def self_test(templates: Path) -> int:
+def self_test(templates: Path, init_templates: Path) -> int:
+    def build(target: Path) -> None:
+        shutil.copytree(init_templates, target, symlinks=True)
+        shutil.copytree(templates, target, symlinks=True, dirs_exist_ok=True)
+
     with tempfile.TemporaryDirectory() as scratch:
         pristine = Path(scratch) / "pristine"
-        shutil.copytree(templates, pristine)
+        build(pristine)
         found = failures(pristine)
         if found:
             print("self-test: the pristine templates fail:")
@@ -347,7 +385,7 @@ def self_test(templates: Path) -> int:
         broken = 0
         for label, mutate in mutations():
             copy = Path(scratch) / re.sub(r"\W+", "-", label)
-            shutil.copytree(templates, copy)
+            build(copy)
             mutate(copy)
             bites = bool(failures(copy))
             print(f"self-test: {label}: {'bites' if bites else 'DOES NOT BITE'}")
@@ -357,8 +395,8 @@ def self_test(templates: Path) -> int:
 
 def main(argv: list[str]) -> int:
     if argv[1:2] == ["--self-test"]:
-        templates = Path(__file__).resolve().parents[1] / "skills/adopt/templates"
-        return self_test(templates)
+        skills = Path(__file__).resolve().parents[1] / "skills"
+        return self_test(skills / "adopt/templates", skills / "init/templates")
     root = Path(argv[1]) if len(argv) > 1 else Path()
     return run(root.resolve())
 

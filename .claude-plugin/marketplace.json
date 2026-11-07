@@ -1,7 +1,13 @@
 {
   "name": "ratchet",
-  "owner": { "name": "Simon Tulett" },
+  "owner": {
+    "name": "Simon Tulett"
+  },
   "plugins": [
-    { "name": "ratchet", "source": "./", "description": "The Ratchet method: tiered deterministic gates, guards, disputes, the four-role pipeline and critical rationalism." }
+    {
+      "name": "ratchet",
+      "source": "./",
+      "description": "The Ratchet method: tiered deterministic gates, guards, disputes, the four-role pipeline and the merge rule of critical rationalism; composes with mattpocock-skills and pstack."
+    }
   ]
 }

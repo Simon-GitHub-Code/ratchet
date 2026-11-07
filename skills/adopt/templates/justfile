@@ -1,5 +1,6 @@
-# The command contract (Ratchet method). `just` lists every recipe; CI runs these same recipes.
-# Tier bodies are the binding's job: fill each recipe with the tool docs/process/binding.md names.
+# The `just` example of the method's entry points. `just` lists every recipe; CI runs these same
+# recipes. Bodies are the binding's job: fill each with the tool docs/process/binding.md names. A
+# gate the binding binds to `none` with a reason becomes `@echo "none: <reason>"` and exits 0.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -14,7 +15,7 @@ tier0: fmt-check lint types imports deadcode lint-workflows secrets snapshots-ch
 
 tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build guard-diff conformance
 
-tier2: mutation api-deep symbolic fuzz e2e formal traces
+tier2: mutation api-deep symbolic fuzz e2e formal
 
 check: tier0 tier1
 
@@ -116,10 +117,7 @@ e2e:
     @echo "bind: end-to-end suite"; exit 1
 
 formal:
-    @echo "bind: parse and model-check formal/specs"; exit 1
-
-traces:
-    @echo "bind: replay model-test traces through the checker"; exit 1
+    @echo "bind: run the project-local formal verification skill's command"; exit 1
 
 # --- outside the tiers ------------------------------------------------------------
 

@@ -28,9 +28,10 @@ paths = [
 
 [[group]]
 name = "ci"
-reason = "Workflows and the pull-request template decide what runs before the owner merges."
+reason = "CI config and the pull-request template decide what runs before the owner merges."
 paths = [
     ".github/**",
+    # bind: the CI config paths of another forge
 ]
 
 [[group]]
@@ -70,9 +71,10 @@ paths = [
 
 [[group]]
 name = "formal"
-reason = "Formal specs are the design that code must conform to."
+reason = "Formal models and the project-local verification skill are the design the code must mirror."
 paths = [
     "formal/**",
+    # bind: the project-local verification skill, e.g. .claude/skills/<area>/**
 ]
 
 [[group]]
@@ -81,6 +83,8 @@ reason = "ADRs, the agent instructions, the vocabulary and the process documents
 paths = [
     "docs/adr/**",
     "docs/process/**",
+    "AGENTS.md",
     "CLAUDE.md",
     "GLOSSARY.md",
+    "GLOSSARY-MAP.md",
 ]

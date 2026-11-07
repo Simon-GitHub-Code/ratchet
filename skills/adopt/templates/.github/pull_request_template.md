@@ -1,23 +1,32 @@
-## Conjecture
-What this change claims, and the criterion that would show it wrong.
+## Summary
 
-## Brief and spec
-Links to docs/features/<slug>/brief.md and spec.md; the acceptance criteria in one list.
+<diagram, diff-sketch, or tree>
+
+## Evidence
+
+- **Before:** <screenshot/output/failing test run>
+  **After:** <screenshot/output/passing test run>
+
+## Merge Danger
+
+**Door:** <one-way or two-way>
+
+**Blast Radius:** <one-word description>
+
+## Conjecture
+What this change claims, and the observation that would show it wrong.
 
 ## Criticism
-Critic findings and how each was resolved; review issues; disputes raised and their status.
+Critic findings and how each was resolved; review issues; disputes raised and their status. Links to the brief and spec where they exist.
 
 ## Guard paths
-Output of `just guard-diff`, and for each path the upheld dispute or the owner's hand.
-
-## Dependencies
-Each new dependency and why it is a good decision, or "none".
+Output of the guard-diff entry point, and for each path the upheld dispute or the owner's hand.
 
 ## Decisions
-ADRs written or superseded, or "none".
+ADRs written or superseded, new dependencies and why, or "none".
 
 ## Gates
-The tail of `just check`:
+The tail of the check entry point:
 
 ```
 ```
