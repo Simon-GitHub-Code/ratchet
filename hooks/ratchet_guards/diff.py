@@ -6,22 +6,27 @@ moving a guard file away is caught) plus untracked files. They are matched again
 manifest at the merge base and at the work tree together, so a change that drops a pattern
 from the manifest still reports the paths that pattern guarded.
 
-Usage, from inside the repository, with the plugin's ``hooks/`` directory on the path:
-``PYTHONPATH="$CLAUDE_PLUGIN_ROOT/hooks" python3 -m ratchet_guards.diff [--base REF]
-[--summary FILE] [--annotate] [--fail-if-present]``. ``--summary`` appends a Markdown report
+Usage, with the plugin's ``hooks/`` directory on the path: ``PYTHONPATH="$RATCHET_PLUGIN/hooks"
+python3 -m ratchet_guards.diff [--root DIR] [--base REF] [--summary FILE] [--annotate]
+[--fail-if-present]``. The base defaults to the default branch as ``scripts/gatelib.py`` resolves
+it for every gate (the remote's ``HEAD``, the binding's, else ``main`` or ``master``), so this
+check and the lowered gate never disagree about "before". ``--summary`` appends a Markdown report
 (CI passes ``$GITHUB_STEP_SUMMARY``), ``--annotate`` prints GitHub error annotations, and
 ``--fail-if-present`` exits 1 when any guard path changed; otherwise the exit is 0.
 """
 
 import argparse
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from ratchet_guards.manifest import MANIFEST_PATH, Group, Manifest, ManifestError, parse
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import gatelib  # -- the gate library lives beside the gate scripts
+
 Git = Callable[[Sequence[str]], str | None]
-DEFAULT_BASE = "origin/main"
 
 
 def run_git(args: Sequence[str]) -> str | None:
@@ -33,6 +38,20 @@ def run_git(args: Sequence[str]) -> str | None:
         check=False,  # pragma: no mutate # -- a failure returns None either way
     )
     return completed.stdout if completed.returncode == 0 else None
+
+
+def git_in(root: Path) -> Git:
+    """``run_git`` inside ``root``."""
+    return lambda args: run_git(["-C", str(root), *args])
+
+
+def default_base(git: Git, root: Path) -> str:
+    """The first default-branch candidate that exists, else the first candidate by name."""
+    candidates = gatelib.default_branches(root)
+    for ref in candidates:
+        if git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]):
+            return ref
+    return candidates[0]
 
 
 def _required(git: Git, args: Sequence[str]) -> str:
@@ -112,29 +131,33 @@ def annotations(matches: Sequence[tuple[str, Group]]) -> list[str]:
 
 def _arguments(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="List changed guard paths.")
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument("--root", type=Path, default=Path())
+    parser.add_argument("--base")
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--annotate", action="store_true")
     parser.add_argument("--fail-if-present", action="store_true")
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None, git: Git = run_git) -> int:
+def main(argv: Sequence[str] | None = None, git: Git | None = None) -> int:
     """Print changed guard paths; see the module docstring for the flags."""
     arguments = _arguments(argv)
+    root = Path(arguments.root).resolve()
+    git = git or git_in(root)
+    base = arguments.base or default_base(git, root)
     worktree = Path(_required(git, ["rev-parse", "--show-toplevel"]).strip())
-    found = manifests(git, arguments.base, worktree)
-    matches = guarded(changed_paths(git, arguments.base), found)
+    found = manifests(git, base, worktree)
+    matches = guarded(changed_paths(git, base), found)
     for path, group in matches:
         print(f"{group.name}\t{path}")
     if not matches:
-        print(f"no guard path changed against the merge base with {arguments.base}")
+        print(f"no guard path changed against the merge base with {base}")
     if arguments.annotate:
         for line in annotations(matches):
             print(line)
     if arguments.summary is not None:
         with arguments.summary.open("ab") as summary:
-            summary.write(markdown(matches, arguments.base).encode())
+            summary.write(markdown(matches, base).encode())
     return 1 if arguments.fail_if_present and matches else 0
 
 

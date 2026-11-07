@@ -2,62 +2,24 @@
 """The ratchet's first rule as a gate: no threshold lowered, no ceiling raised, none missing.
 
 Compares ``quality/thresholds.toml`` at head with the merge base. Every key only rises, except
-the keys under ``ceilings`` (the speed gate's seconds per tier and gate), which only fall.
+the keys under ``ceilings`` (the speed gate's seconds per tier and gate, the change-size
+ceiling), which only fall.
 
-Usage: ``lowered.py [--root DIR] [--base REF] [--file PATH]``. The base defaults to the merge
-base of HEAD with the default branch: the remote's HEAD, else the branch the binding names
-under ``- Default branch:``, else ``main`` or ``master``. On the default branch itself the base
-is ``HEAD~1``. A base without the file passes: that is the first adoption.
+Usage: ``lowered.py [--root DIR] [--base REF] [--file PATH]``. The base is ``gatelib.base_commit``:
+the merge base of HEAD with the default branch, or ``HEAD~1`` on the default branch itself. A
+base without the file passes: that is the first adoption.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
-FALLBACK_BRANCHES = ("main", "master")
-BINDING = Path("docs/process/binding.md")
-DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
+import gatelib
 
-
-def git(root: Path, *args: str) -> str | None:
-    result = subprocess.run(
-        ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
-    )
-    return result.stdout.strip() if result.returncode == 0 else None
-
-
-def default_branches(root: Path) -> list[str]:
-    """Candidate default branches, most authoritative first."""
-    candidates: list[str] = []
-    remote_head = git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-    if remote_head:
-        candidates.append(remote_head)
-    binding = root / BINDING
-    if binding.is_file():
-        match = DEFAULT_BRANCH_LINE.search(binding.read_text(encoding="utf-8"))
-        if match:
-            candidates.extend((f"origin/{match.group(1)}", match.group(1)))
-    for name in FALLBACK_BRANCHES:
-        candidates.extend((f"origin/{name}", name))
-    return list(dict.fromkeys(candidates))
-
-
-def base_commit(root: Path) -> str | None:
-    head = git(root, "rev-parse", "--abbrev-ref", "HEAD")
-    for branch in default_branches(root):
-        base = git(root, "merge-base", "HEAD", branch)
-        if base is None:
-            continue
-        on_default = head in (branch, branch.removeprefix("origin/"))
-        if base == git(root, "rev-parse", "HEAD") or on_default:
-            return git(root, "rev-parse", "HEAD~1")
-        return base
-    return git(root, "rev-parse", "HEAD~1")
+CEILINGS = "ceilings."
 
 
 def flatten(data: dict[str, object], prefix: str = "") -> dict[str, float]:
@@ -69,9 +31,6 @@ def flatten(data: dict[str, object], prefix: str = "") -> dict[str, float]:
         elif isinstance(value, (int, float)) and not isinstance(value, bool):
             flat[name] = float(value)
     return flat
-
-
-CEILINGS = "ceilings."
 
 
 def loosened(before: dict[str, float], after: dict[str, float]) -> list[str]:
@@ -102,21 +61,18 @@ def main(argv: list[str]) -> int:
     if not current_path.is_file():
         print(f"{options.file}: missing")
         return 1
-    base = options.base or base_commit(root)
+    base = gatelib.base_commit(root, options.base)
     if base is None:
         print(f"ratchet-lowered: no base commit yet; {options.file} accepted as is")
         return 0
-    previous = git(root, "show", f"{base}:{options.file}")
+    previous = gatelib.show(root, base, options.file)
     if previous is None:
         print(f"ratchet-lowered: {options.file} is new at {base[:12]}; accepted as is")
         return 0
     problems = lowered(
         flatten(tomllib.loads(previous)), flatten(tomllib.loads(current_path.read_text()))
     )
-    for line in problems:
-        print(line)
-    print(f"ratchet-lowered: {'red' if problems else 'green'} against {base[:12]}")
-    return 1 if problems else 0
+    return gatelib.report("ratchet-lowered", problems, base)
 
 
 if __name__ == "__main__":

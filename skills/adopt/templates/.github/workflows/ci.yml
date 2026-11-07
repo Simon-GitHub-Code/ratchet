@@ -71,4 +71,4 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { repository: "<owner>/ratchet", ref: "<version tag>", path: ratchet } # bind: the ratchet plugin, pinned
-      - run: PYTHONPATH=ratchet/hooks python3 -m ratchet_guards.diff --root . --fail-on-change
+      - run: PYTHONPATH=ratchet/hooks python3 -m ratchet_guards.diff --root . --fail-if-present

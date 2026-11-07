@@ -29,6 +29,7 @@ def fake_git(
         ("diff", "--name-only", "--no-renames", "-z", "abc123"): tracked,
         ("ls-files", "--others", "--exclude-standard", "--full-name", "-z", ":/"): untracked,
         ("show", f"abc123:{MANIFEST_PATH}"): base_manifest,
+        ("rev-parse", "--verify", "--quiet", "origin/main^{commit}"): "abc\n",
     }
 
     def git(args: Sequence[str]) -> str | None:
@@ -137,6 +138,15 @@ def test_run_git_returns_stdout_or_none(tmp_path: Path) -> None:
     assert version is not None
     assert version.startswith("git version")
     assert diff.run_git(["-C", str(tmp_path), "rev-parse", "HEAD"]) is None
+    assert diff.git_in(tmp_path)(["rev-parse", "HEAD"]) is None
+
+
+def test_the_default_base_is_the_first_branch_that_exists(tmp_path: Path) -> None:
+    # Why: guard-diff and the lowered gate must mean the same "before"; both take the
+    # candidates from gatelib and this one picks the first the repository actually has.
+    answers = {("rev-parse", "--verify", "--quiet", "main^{commit}"): "abc\n"}
+    assert diff.default_base(lambda args: answers.get(tuple(args)), tmp_path) == "main"
+    assert diff.default_base(lambda _: None, tmp_path) == "origin/main"
 
 
 def test_help_describes_the_command(capsys: pytest.CaptureFixture[str]) -> None:

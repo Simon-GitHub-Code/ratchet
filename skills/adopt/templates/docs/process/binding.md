@@ -27,6 +27,7 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | ratchet-lowered | `just ratchet-lowered` |
 | snapshots | `just snapshots` |
 | snapshots-check | `just snapshots-check` |
+| commits | `just commits` |
 | suppressions | `just suppressions` |
 | guard-diff | `just guard-diff` |
 | settings-check | `just settings-check` |
@@ -47,15 +48,16 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | dead code and dependency hygiene | | 0 | | `just deadcode` |
 | scripts and CI lint | | 0 | | `just lint-workflows` |
 | secrets | | 0 | | `just secrets` |
-| pins and least privilege | | 0 | | `just pins` |
+| pins and least privilege | `ratchet` plugin `scripts/pins.py` plus the lockfile check | 0 | | `just pins` |
 | size and complexity limits | | 0 | the Limits section below | `just limits` |
-| marker comments did not rise | | 0 | the merge base's own counts | `just markers` |
-| prose vocabulary | | 0 | `GLOSSARY.md` | `just prose` |
-| effective-config snapshots | | 0 | `quality/snapshots/` | `just snapshots-check` |
+| marker comments did not rise | `ratchet` plugin `scripts/markers.py` | 0 | the merge base's own counts | `just markers` |
+| prose vocabulary | `ratchet` plugin `scripts/prose.py` | 0 | `GLOSSARY.md` | `just prose` |
+| effective-config snapshots | `ratchet` plugin `scripts/snapshots.py` | 0 | `quality/snapshots/` | `just snapshots-check` |
 | no threshold lowered | `ratchet` plugin `scripts/lowered.py` | 0 | `quality/thresholds.toml` at the merge base | `just ratchet-lowered` |
-| no suppression kind rose, no focus marker | | 0 | the merge base's own counts | `just suppressions` |
+| no suppression kind rose, no focus marker | `ratchet` plugin `scripts/suppressions.py` | 0 | the merge base's own counts | `just suppressions` |
+| commit subjects follow the convention | `ratchet` plugin `scripts/commits.py` | 0 | | `just commits` |
 | unit, property and fitness tests | | 1 | | `just test` |
-| coverage, absolute and ratcheted | | 1 | 100% for absolute paths; `quality/thresholds.toml` for the rest | `just coverage` |
+| coverage, absolute and ratcheted | `ratchet` plugin `scripts/coverage_groups.py` over the suite's Cobertura report | 1 | 100% for absolute paths; `quality/thresholds.toml` for the rest | `just coverage` |
 | diff coverage | | 1 | every changed line and branch | `just diff-coverage` |
 | test count did not fall | | 1 | the merge base's count | `just test-counts` |
 | changed-code mutation | | 1 | `quality/mutation-register.toml` | `just mutation-changed` |
@@ -64,7 +66,7 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | duplication | | 1 | | `just duplication` |
 | build | | 1 | | `just build` |
 | starts and answers | | 1 | | `just smoke` |
-| every checker bites | | 1 | | `just bite` |
+| every checker bites | `ratchet` plugin `scripts/bite.py` plus the project's own | 1 | | `just bite` |
 | public surface changed on purpose | | 1 | `quality/snapshots/` | `just api-check` |
 | old data still loads | | 1 | | `just data-compat` |
 | documentation examples run | | 1 | | `just doctests` |
@@ -72,7 +74,7 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | artefact and image scan | | 1 | | `just artefact-scan` |
 | type coverage, ratcheted | | 1 | `quality/thresholds.toml` | `just type-coverage` |
 | documentation coverage, ratcheted | | 1 | `quality/thresholds.toml` | `just doc-coverage` |
-| change size | | 1 | the Limits section below | `just change-size` |
+| change size | `ratchet` plugin `scripts/change_size.py` | 1 | `quality/thresholds.toml` `[ceilings.change]` | `just change-size` |
 | guard paths changed | `ratchet` plugin `ratchet_guards.diff` | 1 | `guards/manifest.toml` | `just guard-diff` |
 | permission rules mirror the manifest | `ratchet` plugin `scripts/settings_rules.py` | 1 | `guards/manifest.toml` | `just settings-check` |
 | method conformance | `ratchet` plugin `scripts/conformance.py` | 1 | | `just conformance` |

@@ -31,6 +31,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Is every unit within its size and complexity limits? | the linter's size and complexity rules plus a fitness test, with the numbers the binding's Limits section holds; a hard limit, split the unit |
 | Did the count of TODO, FIXME and HACK markers rise? | counted at the merge base and at head, never stored |
 | Does prose use the glossary too? | a prose linter carrying the _Avoid_ lists over docs and comments |
+| Do commit subjects follow the convention? | the method's commits gate: `type(scope): summary`, at most 72 characters |
 | Has any gate been loosened? | the method's own gates: snapshots match the effective configuration, no threshold lowered, no suppression kind rose, no focus marker |
 
 ## Tier 1: the behaviour of the code

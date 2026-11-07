@@ -7,6 +7,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "coverage>=7.6",
     "hypothesis>=6.115",
     "mypy>=1.13",
     "pytest>=8.3",
@@ -16,6 +17,18 @@ dev = [
 # Why: the plugin is hooks, skills and workflows, not an installable package.
 [tool.uv]
 package = false
+
+# Why: the gate scripts are the method's own checkers; a line of them nobody ran is a gate that
+# may never fire, so they are held at 100% by the tool, not by a number that could be lowered.
+[tool.coverage.run]
+branch = true
+source = ["scripts"]
+omit = ["scripts/conformance.py", "scripts/budget.py"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+exclude_also = ['if __name__ == "__main__":']
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers --strict-config"

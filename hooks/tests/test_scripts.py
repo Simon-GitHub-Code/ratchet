@@ -8,6 +8,7 @@ import pytest
 
 import budget
 import lowered
+from tests.repos import branch, commit, repository, write
 
 THRESHOLDS = """# thresholds
 [py.coverage.core]
@@ -133,3 +134,26 @@ def test_parse_requires_the_separator_and_a_command() -> None:
     with pytest.raises(SystemExit):
         budget.parse(["budget", "tier0"])
     assert budget.main(["budget", "tier0", "--"]) == 2
+
+
+def test_lowered_main_against_a_real_repository(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = repository(tmp_path)
+    assert lowered.main(["x", "--root", str(root)]) == 1
+    assert capsys.readouterr().out == "quality/thresholds.toml: missing\n"
+    write(root, "quality/thresholds.toml", THRESHOLDS)
+    assert lowered.main(["x", "--root", str(root)]) == 0
+    assert "no base commit yet" in capsys.readouterr().out
+    commit(root, "chore(quality): thresholds")
+    branch(root)
+    write(root, "quality/thresholds.toml", THRESHOLDS.replace("90.0", "80.0"))
+    assert lowered.main(["x", "--root", str(root)]) == 1
+    assert "py.coverage.core.line: lowered from 90.0 to 80.0" in capsys.readouterr().out
+    write(root, "quality/thresholds.toml", THRESHOLDS.replace("90.0", "95.0"))
+    assert lowered.main(["x", "--root", str(root)]) == 0
+    fresh = repository(tmp_path / "fresh") if (tmp_path / "fresh").mkdir() is None else root
+    commit(fresh, "feat(core): second")
+    write(fresh, "quality/thresholds.toml", THRESHOLDS)
+    assert lowered.main(["x", "--root", str(fresh)]) == 0
+    assert "is new at" in capsys.readouterr().out

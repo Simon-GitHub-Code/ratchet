@@ -10,7 +10,7 @@ default:
 tier0: lint types validate parse-workflow
 
 # Tier 1: behaviour.
-tier1: test conformance-self-test lowered-smoke
+tier1: test coverage conformance-self-test lowered-smoke bite
 
 check: tier0 tier1
 
@@ -30,8 +30,17 @@ parse-workflow:
 test:
     uv run pytest -q hooks/tests
 
+# The gate scripts and their library are absolute paths: every line and branch runs under test.
+coverage:
+    uv run coverage run -m pytest -q hooks/tests
+    uv run coverage report
+
 conformance-self-test:
     python3 scripts/conformance.py --self-test
+
+# Every shipped gate against its synthetic violation; each must go red, and green without it.
+bite:
+    python3 scripts/bite.py
 
 # The lowered gate on this repository's own thresholds: no ceiling raised against the merge base.
 lowered-smoke:

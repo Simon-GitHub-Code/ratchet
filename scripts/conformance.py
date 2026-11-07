@@ -29,6 +29,7 @@ ENTRY_POINTS = (
     "snapshots",
     "snapshots-check",
     "suppressions",
+    "commits",
     "guard-diff",
     "settings-check",
     "conformance",
