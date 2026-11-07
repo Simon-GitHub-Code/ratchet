@@ -1,6 +1,6 @@
 {
   "name": "ratchet",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "The Ratchet method: what must be true before a merge. Tiered deterministic gates that only tighten, guarded by the harness, judged by the merge rule of critical rationalism; composes with mattpocock-skills, pstack and impeccable.",
   "author": {
     "name": "Simon Tulett"

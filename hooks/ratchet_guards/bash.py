@@ -139,7 +139,6 @@ def _export(words: Sequence[str]) -> list[Verdict]:
 
 
 _DIRECT: dict[str, Callable[[Sequence[str]], list[Verdict]]] = {
-    "gh": gh.check,
     "pre-commit": _pre_commit,
     "claude": _nested_claude,
     "export": _export,
@@ -232,6 +231,8 @@ class _Checker:
     def _ruled(self, head: str, words: Sequence[str], context: Context) -> list[Verdict]:
         if head == "git":
             return git.check(words, context, self.guard)
+        if head == "gh":
+            return gh.check(words, context, self.guard)
         direct = _DIRECT.get(head)
         if direct is not None:
             return direct(words)

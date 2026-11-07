@@ -42,6 +42,7 @@
       "Edit(/.github/**)",
       "Edit(/formal/**)",
       "Edit(/docs/adr/**)",
+      "Edit(/docs/agents/**)",
       "Edit(/docs/process/**)",
       "Edit(/CLAUDE.md)",
       "Edit(/GLOSSARY.md)",

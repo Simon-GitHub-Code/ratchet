@@ -22,6 +22,14 @@ ROOT = Path("/repo")
 WORKTREE = ROOT / ".claude/worktrees/agent-1"
 UNGUARDED = Path("/elsewhere")
 HOME = Path("/home/agent")
+LABELS_RECORD = """# Triage Labels
+
+| Label in mattpocock/skills | Label in our tracker | Meaning |
+| --- | --- | --- |
+| `needs-triage` | `needs-triage` | Maintainer needs to evaluate this issue |
+| `ready-for-agent` | `agent:ready` | Fully specified, ready for an AFK agent |
+| `wontfix` | `wontfix` | Will not be actioned |
+"""
 _VARIABLE = re.compile(r"\$(\w+)|\$\{(\w+)\}")
 
 
@@ -36,6 +44,10 @@ class FakeFilesystem:
         "/repo/config/types.json",
         "/repo/config/types.node.json",
         "/repo/app/core/money.py",
+        "/repo/docs/agents/triage-labels.md",
+    )
+    contents: dict[str, str] = field(
+        default_factory=lambda: {"/repo/docs/agents/triage-labels.md": LABELS_RECORD}
     )
     variables: dict[str, str] = field(
         default_factory=lambda: {"HOME": str(HOME), "CLAUDE_PROJECT_DIR": str(ROOT)}
@@ -50,6 +62,13 @@ class FakeFilesystem:
             return None
         nearest = max(roots, key=lambda root: len(root.parts))
         return nearest if nearest in self.guarded else None
+
+    def checkout(self, path: Path) -> Path | None:
+        roots = [root for root in (*self.guarded, *self.unguarded) if path.is_relative_to(root)]
+        return max(roots, key=lambda root: len(root.parts)) if roots else None
+
+    def read_text(self, path: Path) -> str | None:
+        return self.contents.get(str(path))
 
     def glob(self, pattern: Path) -> list[Path]:
         return [Path(name) for name in self.files if PurePosixPath(name).full_match(str(pattern))]

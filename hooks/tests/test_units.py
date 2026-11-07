@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ratchet_guards import bash, git
+from ratchet_guards import bash, gh, git
 from ratchet_guards.context import Context
 from ratchet_guards.manifest import Group, ManifestError, Scope, parse
 from ratchet_guards.options import NO_VALUES, Spec, scan
@@ -18,8 +18,10 @@ from ratchet_guards.verdict import RULES, Decision, Verdict, strictest
 from ratchet_guards.writes import Touched, touched
 from tests.support import (
     HOME,
+    LABELS_RECORD,
     MANIFEST,
     ROOT,
+    UNGUARDED,
     FakeFilesystem,
     FakeRepo,
     details,
@@ -398,6 +400,22 @@ def test_details_name_the_offending_command() -> None:
     assert details("GIT_CONFIG_COUNT=1 git status") == ["GIT_CONFIG_COUNT=1"]
     assert details("claude --settings x.json -p hi") == ["--settings"]
     assert details("pre-commit uninstall") == ["pre-commit uninstall"]
+
+
+def test_recorded_labels_are_read_from_the_checkout_holding_cwd() -> None:
+    assert rules("gh label create needs-triage") == []
+    assert rules("gh label create needs-triage", cwd=ROOT / "app") == []
+    assert rules("gh label create needs-triage", cwd=UNGUARDED) == ["labels"]
+    without = make_guard(filesystem=FakeFilesystem(contents={}))
+    assert rules("gh label create needs-triage", without) == ["labels"]
+
+
+def test_listed_labels_reads_the_tracker_column() -> None:
+    assert gh.listed_labels(LABELS_RECORD) == {"needs-triage", "agent:ready", "wontfix"}
+    assert gh.listed_labels("| Label in our tracker | Meaning |\n| --- | --- |\n| x | y |") == {"x"}
+    assert gh.listed_labels("| Role | Label |\n| --- | --- |\n| a | b |") == frozenset()
+    assert gh.listed_labels("prose with | pipes | and `needs-triage`") == frozenset()
+    assert gh.listed_labels("") == frozenset()
 
 
 def test_gh_details_name_the_subcommand_and_method() -> None:

@@ -13,6 +13,11 @@ so a write chained before the refused command is lost with it. The deny message 
 names the matched command, and the method asks agents to keep a gated command in a tool
 call of its own.
 
+One forge write is allowed by a record: ``gh label create <name>`` in a checkout whose
+``docs/agents/triage-labels.md`` lists ``<name>`` in its "Label in our tracker" column (see
+``ratchet_guards.gh``). The file is a guard path in the decisions group once the repository
+is adopted, so the list is the owner's.
+
 The guard paths come from ``guards/manifest.toml`` in the nearest checkout holding the root
 (an ancestor with ``.git``, else the root itself). When that file is absent no repository
 path is a guard path and only the command rules apply. The plugin's own files are locked
@@ -63,6 +68,17 @@ class LocalFilesystem:
             if (candidate / ".git").exists():
                 return candidate if (candidate / MANIFEST_PATH).is_file() else None
         return None
+
+    def checkout(self, path: Path) -> Path | None:
+        """The nearest ancestor holding ``.git``."""
+        return next((c for c in (path, *path.parents) if (c / ".git").exists()), None)
+
+    def read_text(self, path: Path) -> str | None:
+        """The file's text, or ``None`` when it is missing or unreadable."""
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
 
     def glob(self, pattern: Path) -> list[Path]:
         """Existing paths matching ``pattern``."""

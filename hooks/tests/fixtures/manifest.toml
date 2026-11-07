@@ -97,6 +97,7 @@ name = "decisions"
 reason = "Decision records, the agent instructions, the vocabulary and the process documents are the standards every review judges against."
 paths = [
     "docs/adr/**",
+    "docs/agents/**",
     "docs/process/**",
     "CLAUDE.md",
     "GLOSSARY.md",

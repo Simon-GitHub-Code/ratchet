@@ -34,6 +34,14 @@ class Filesystem(Protocol):
         """The nearest checkout holding ``path``, if that checkout carries the manifest."""
         ...
 
+    def checkout(self, path: Path) -> Path | None:
+        """The nearest checkout holding ``path`` (an ancestor with ``.git``), manifest or not."""
+        ...
+
+    def read_text(self, path: Path) -> str | None:
+        """The text of the file at ``path``, or ``None`` when there is no readable file."""
+        ...
+
     def glob(self, pattern: Path) -> list[Path]:
         """Existing paths matching a shell glob, hidden files included."""
         ...
