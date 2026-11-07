@@ -1,0 +1,148 @@
+# typescript-pnpm preset: recipe bodies adopt merges into the template justfile. Every recipe here
+# replaces the template recipe of the same name. Tools run through `pnpm exec` so the lockfile
+# pins them; `pnpm install --frozen-lockfile` installs them once. `diff-cover` and the
+# plugin's gates are Python, which the method requires anyway.
+
+# --- tier 0 bodies ---------------------------------------------------------------
+
+fmt-check:
+    pnpm exec prettier --check .
+
+lint:
+    pnpm exec eslint . --max-warnings 0
+
+types:
+    pnpm exec tsc --noEmit
+
+imports:
+    pnpm exec depcruise src --config .dependency-cruiser.cjs
+
+deadcode:
+    pnpm exec knip
+
+lint-workflows:
+    uvx actionlint
+    git ls-files -z '*.sh' | xargs -0 -r shellcheck
+
+secrets:
+    uvx gitleaks git --no-banner --redact .
+
+pins:
+    python3 "{{ratchet_plugin}}/scripts/pins.py"
+    pnpm install --frozen-lockfile --offline --ignore-scripts
+
+# Size and complexity are eslint rules (complexity, max-lines, max-params, max-depth) with the
+# numbers from the binding's Limits; the fitness test checks the numbers are the binding's.
+limits:
+    pnpm exec eslint . --rule 'complexity: [error, 10]' --rule 'max-lines: [error, 400]' --rule 'max-params: [error, 4]' --rule 'max-depth: [error, 3]'
+    pnpm exec vitest run tests/fitness -t limits
+
+# --- tier 1 bodies ---------------------------------------------------------------
+
+test:
+    pnpm exec vitest run
+
+coverage:
+    pnpm exec vitest run --coverage --coverage.reporter=cobertura --coverage.reportsDirectory=.
+    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report cobertura-coverage.xml
+
+diff-coverage:
+    uvx diff-cover cobertura-coverage.xml --compare-branch="$(git merge-base HEAD origin/main)" --fail-under=100
+
+test-counts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base="$(git merge-base HEAD origin/main)"
+    now="$(pnpm exec vitest list 2>/dev/null | grep -c '>' || true)"
+    rm -rf .ratchet/base && git worktree add -q --detach .ratchet/base "$base"
+    was="$(cd .ratchet/base && pnpm install --frozen-lockfile --offline --ignore-scripts >/dev/null && pnpm exec vitest list 2>/dev/null | grep -c '>' || true)"
+    git worktree remove --force .ratchet/base
+    echo "tests: $was at base, $now at head"
+    test "$now" -ge "$was"
+
+mutation-changed:
+    pnpm exec stryker run --mutate "$(git diff --name-only "$(git merge-base HEAD origin/main)" -- 'src/*.ts' | grep -v '\.test\.ts$' | tr '\n' ',')"
+
+contracts-check:
+    @echo "none: no generated contract artefacts in this stack; see the binding's ADR"; exit 0
+
+audit:
+    pnpm audit --prod --audit-level low
+
+duplication:
+    pnpm exec jscpd src --threshold 1 --min-lines 8
+
+build:
+    pnpm build
+
+bite:
+    python3 "{{ratchet_plugin}}/scripts/bite.py"
+    pnpm exec vitest run tests/fitness -t bites
+
+api-check:
+    pnpm exec api-extractor run --local
+    git diff --exit-code -- api/
+
+doctests:
+    @echo "none: TypeScript documentation examples are type-checked with twoslash in docs builds only; see the binding's ADR"; exit 0
+
+sast:
+    uvx semgrep scan --config p/typescript --error --quiet
+
+artefact-scan:
+    uvx trivy fs --exit-code 1 --severity HIGH,CRITICAL .
+
+type-coverage:
+    pnpm exec type-coverage --strict --at-least "$(python3 -c 'import tomllib;print(tomllib.load(open("quality/thresholds.toml","rb"))["typescript"]["types"]["coverage"])')"
+
+doc-coverage:
+    @echo "none: no documentation-coverage tool fits this stack yet; see the binding's ADR"; exit 0
+
+# --- tier 2 bodies ---------------------------------------------------------------
+
+mutation:
+    pnpm exec stryker run
+
+symbolic:
+    @echo "none: no symbolic checker fits this stack; see the binding's ADR"; exit 0
+
+fuzz seconds="600":
+    FUZZ_SECONDS={{seconds}} pnpm exec vitest run --project fuzz
+
+e2e:
+    pnpm exec playwright test
+
+test-stability:
+    pnpm exec vitest run --sequence.shuffle --retry 0
+    pnpm exec vitest run --sequence.shuffle --retry 0
+    pnpm exec vitest run --sequence.shuffle --retry 0
+
+reproducible:
+    rm -rf dist && pnpm build && find dist -type f -exec sha256sum {} + | sort > .ratchet/build-1.sha
+    rm -rf dist && pnpm build && find dist -type f -exec sha256sum {} + | sort > .ratchet/build-2.sha
+    diff .ratchet/build-1.sha .ratchet/build-2.sha
+
+sanitizers:
+    @echo "none: no race or memory detector for the JavaScript runtime; see the binding's ADR"; exit 0
+
+perf:
+    pnpm exec vitest bench --run
+
+a11y:
+    pnpm exec playwright test --project a11y
+
+# --- outside the tiers ------------------------------------------------------------
+
+audit-all:
+    pnpm audit --audit-level low
+
+licenses:
+    pnpm licenses list --prod --json > .ratchet/licenses.json
+    pnpm exec license-checker-rseidelsohn --production --failOn 'GPL-3.0-only;AGPL-3.0-only'
+
+drift:
+    pnpm outdated
+    uvx cyclonedx-py environment -o .ratchet/sbom.json || pnpm exec cyclonedx-npm --output-file .ratchet/sbom.json
+
+reports:
+    pnpm exec eslint . --rule 'complexity: [warn, 1]' --format compact || true

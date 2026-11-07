@@ -1,0 +1,140 @@
+# python-uv preset: recipe bodies adopt merges into the template justfile. Every recipe here
+# replaces the template recipe of the same name. Tools run through `uv run` so the lockfile pins
+# them; `uv sync --group dev` installs them once.
+
+# --- tier 0 bodies ---------------------------------------------------------------
+
+fmt-check:
+    uv run ruff format --check .
+
+lint:
+    uv run ruff check .
+
+types:
+    uv run mypy --strict .
+
+imports:
+    uv run lint-imports
+
+deadcode:
+    uv run vulture src tests --min-confidence 80
+    uv run deptry .
+
+lint-workflows:
+    uvx actionlint
+    git ls-files -z '*.sh' | xargs -0 -r shellcheck
+
+secrets:
+    uvx gitleaks git --no-banner --redact .
+
+pins:
+    python3 "{{ratchet_plugin}}/scripts/pins.py"
+    uv lock --check
+
+# Size and complexity are ruff rules (C901, PLR09xx) with the numbers from the binding's Limits;
+# the fitness test checks the numbers are the ones the binding names.
+limits:
+    uv run ruff check --select C901,PLR0912,PLR0913,PLR0915,PLR0917 .
+    uv run pytest -q tests/fitness -k limits
+
+# --- tier 1 bodies ---------------------------------------------------------------
+
+test:
+    uv run pytest -q
+
+coverage:
+    uv run pytest -q --cov=src --cov-branch --cov-report=xml:coverage.xml
+    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
+
+diff-coverage:
+    uv run diff-cover coverage.xml --compare-branch="$(git merge-base HEAD origin/main)" --fail-under=100
+
+test-counts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base="$(git merge-base HEAD origin/main)"
+    now="$(uv run pytest --collect-only -q | grep -c '::' || true)"
+    rm -rf .ratchet/base && git worktree add -q --detach .ratchet/base "$base"
+    was="$(cd .ratchet/base && uv run pytest --collect-only -q | grep -c '::' || true)"
+    git worktree remove --force .ratchet/base
+    echo "tests: $was at base, $now at head"
+    test "$now" -ge "$was"
+
+mutation-changed:
+    uv run mutmut run --paths-to-mutate "$(git diff --name-only "$(git merge-base HEAD origin/main)" -- 'src/*.py' | tr '\n' ',')"
+    uv run mutmut results
+
+contracts-check:
+    @echo "none: no generated contract artefacts in this stack; see the binding's ADR"; exit 0
+
+audit:
+    uv run pip-audit --strict
+
+duplication:
+    uv run pylint --disable=all --enable=duplicate-code --min-similarity-lines=8 src
+
+build:
+    uv build
+
+bite:
+    python3 "{{ratchet_plugin}}/scripts/bite.py"
+    uv run pytest -q tests/fitness -k bites
+
+api-check:
+    uv run griffe check "$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["name"].replace("-","_"))')" --against "$(git merge-base HEAD origin/main)"
+
+doctests:
+    uv run pytest -q --doctest-modules src
+
+sast:
+    uv run bandit -q -r src -c pyproject.toml
+
+artefact-scan:
+    uvx trivy fs --exit-code 1 --severity HIGH,CRITICAL .
+
+type-coverage:
+    @echo "none: mypy --strict leaves no untyped code to measure; see the binding's ADR"; exit 0
+
+doc-coverage:
+    uv run interrogate -q src --fail-under "$(python3 -c 'import tomllib;print(tomllib.load(open("quality/thresholds.toml","rb"))["python"]["docs"]["coverage"])')"
+
+# --- tier 2 bodies ---------------------------------------------------------------
+
+mutation:
+    uv run mutmut run
+    uv run mutmut results
+
+symbolic:
+    uv run crosshair check src
+
+fuzz seconds="600":
+    HYPOTHESIS_PROFILE=fuzz FUZZ_SECONDS={{seconds}} uv run pytest -q -m fuzz
+
+test-stability:
+    uv run pytest -q -p randomly --count 3
+
+reproducible:
+    rm -rf dist && uv build && sha256sum dist/* > .ratchet/build-1.sha
+    rm -rf dist && uv build && sha256sum dist/* > .ratchet/build-2.sha
+    diff .ratchet/build-1.sha .ratchet/build-2.sha
+
+sanitizers:
+    @echo "none: pure Python has no race or memory detector to run; see the binding's ADR"; exit 0
+
+perf:
+    uv run pytest -q --benchmark-only --benchmark-compare-fail=mean:10%
+
+# --- outside the tiers ------------------------------------------------------------
+
+audit-all:
+    uv run pip-audit --strict --group dev
+
+licenses:
+    uv run pip-licenses --fail-on "GPL-3.0-only;AGPL-3.0-only"
+
+drift:
+    uv tree --outdated
+    uvx cyclonedx-py environment -o .ratchet/sbom.json
+
+reports:
+    uv run radon cc -s -a src

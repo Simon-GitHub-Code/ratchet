@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 from types import ModuleType
 
@@ -22,12 +23,27 @@ from tests.support import HOME, MANIFEST, MANIFEST_TEXT, PLUGIN, PLUGIN_ROOT, ma
 W = "guard-path-write"
 
 
-def checkout(tmp_path: Path, *, manifest: bool) -> Path:
+def git(root: Path, *args: str) -> str:
+    argv = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@x", *args]
+    completed = subprocess.run(argv, capture_output=True, text=True, check=True)  # noqa: S603 # -- a fixed argv, no shell
+    return completed.stdout.strip()
+
+
+def checkout(tmp_path: Path, *, manifest: bool, state: str = "default") -> Path:
+    """A real repository on ``main``; the manifest ``untracked``, on a ``branch`` or ``default``."""
     root = tmp_path / "repo"
-    (root / ".git").mkdir(parents=True)
-    if manifest:
-        (root / "guards").mkdir()
-        (root / MANIFEST_PATH).write_text(MANIFEST_TEXT, encoding="utf-8")
+    root.mkdir(parents=True)
+    git(root, "init", "-q", "-b", "main")
+    git(root, "commit", "-q", "--allow-empty", "-m", "root")
+    if not manifest:
+        return root
+    if state == "branch":
+        git(root, "switch", "-q", "-c", "feat/adopt")
+    (root / "guards").mkdir()
+    (root / MANIFEST_PATH).write_text(MANIFEST_TEXT, encoding="utf-8")
+    if state != "untracked":
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "adopt")
     return root
 
 
@@ -78,6 +94,47 @@ def test_with_a_manifest_the_path_rules_apply_too(tmp_path: Path) -> None:
     assert hook.decide(bash("echo x > CLAUDE.md", root), guard) == Verdict(
         W, "redirects into CLAUDE.md (decisions)"
     )
+
+
+@pytest.mark.parametrize("state", ["untracked", "branch"])
+def test_a_manifest_not_on_the_default_branch_guards_nothing_yet(
+    tmp_path: Path, state: str
+) -> None:
+    root = checkout(tmp_path, manifest=True, state=state)
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    assert hook.decide(edit(root / "CLAUDE.md", root), guard) is None
+    assert hook.decide(edit(root / MANIFEST_PATH, root), guard) is None
+    assert hook.decide(bash("echo x > .claude/settings.json", root), guard) is None
+    verdict = hook.decide(bash("git push --force", root), guard)
+    assert verdict is not None
+    assert verdict.rule == "force-push"
+
+
+def test_the_committed_manifest_wins_over_the_work_tree(tmp_path: Path) -> None:
+    root = checkout(tmp_path, manifest=True)
+    (root / MANIFEST_PATH).write_text("", encoding="utf-8")
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    verdict = hook.decide(edit(root / "CLAUDE.md", root), guard)
+    assert verdict is not None
+    assert verdict.rule == "guard-path-edit"
+    assert hook.reason(verdict).endswith(
+        "Guard paths come from guards/manifest.toml as committed on the default branch. "
+        "Approve only if you, the owner, intend this. An agent that thinks a gate is wrong "
+        "writes a gate dispute (docs/disputes/NNNN-<slug>.md) instead."
+    )
+
+
+def test_the_remote_default_branch_is_preferred(tmp_path: Path) -> None:
+    root = checkout(tmp_path, manifest=True)
+    upstream = tmp_path / "upstream.git"
+    git(root, "init", "-q", "--bare", str(upstream))
+    git(root, "remote", "add", "origin", str(upstream))
+    git(root, "push", "-q", "origin", "main")
+    git(root, "remote", "set-head", "origin", "main")
+    git(root, "rm", "-q", "-r", "guards")
+    git(root, "commit", "-q", "-m", "drop locally")
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    assert hook.decide(edit(root / "CLAUDE.md", root), guard) is not None
 
 
 def test_the_manifest_is_read_from_the_nearest_checkout(tmp_path: Path) -> None:

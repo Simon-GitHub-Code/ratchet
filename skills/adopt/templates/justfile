@@ -11,9 +11,9 @@ default:
 
 # --- tiers -----------------------------------------------------------------
 
-tier0: fmt-check lint types imports deadcode lint-workflows secrets pins limits markers prose snapshots-check ratchet-lowered suppressions
+tier0: fmt-check lint types imports deadcode lint-workflows secrets pins limits markers prose snapshots-check ratchet-lowered suppressions commits
 
-tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke bite api-check data-compat doctests sast artefact-scan type-coverage doc-coverage change-size guard-diff conformance
+tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke bite api-check data-compat doctests sast artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance
 
 tier2: mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast a11y formal
 
@@ -29,6 +29,14 @@ ratchet-lowered:
 guard-diff:
     PYTHONPATH="{{ratchet_plugin}}/hooks" python3 -m ratchet_guards.diff --root . || true
 
+# The permission rules in .claude/settings.json mirror guards/manifest.toml: one Edit rule per
+# pattern, deny for a locked group, plus the fixed command rules. `just settings` regenerates them.
+settings-check:
+    python3 "{{ratchet_plugin}}/scripts/settings_rules.py" --check
+
+settings:
+    python3 "{{ratchet_plugin}}/scripts/settings_rules.py" --write
+
 conformance:
     python3 "{{ratchet_plugin}}/scripts/conformance.py" .
 
@@ -41,16 +49,22 @@ budget key *flags:
 
 # Raise every threshold to its measured value and refresh the snapshots.
 ratchet:
-    @echo "bind: run the suites, raise quality/thresholds.toml, then 'just snapshots'"; exit 1
+    @echo "bind: run the suites with a Cobertura report at coverage.xml, then the mutation run"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml --write
+    just snapshots
 
+# The files of the manifest's tool-config group, copied into quality/snapshots/ (a ratchet path).
 snapshots:
-    @echo "bind: write each gate's effective config into quality/snapshots/"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/snapshots.py" --write
 
 snapshots-check:
-    @echo "bind: regenerate snapshots to a temp dir and diff against quality/snapshots/"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/snapshots.py" --check
 
 suppressions:
-    @echo "bind: count suppressions per kind at merge base and head; fail if any rose or a focus marker exists"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/suppressions.py"
+
+commits:
+    python3 "{{ratchet_plugin}}/scripts/commits.py"
 
 # --- tier 0 bodies ---------------------------------------------------------------
 
@@ -76,16 +90,17 @@ secrets:
     @echo "bind: secret scanner over the tree"; exit 1
 
 pins:
-    @echo "bind: lockfile matches manifest, no floating range; actions and images by digest; CI permissions minimal"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/pins.py"
+    @echo "bind: lockfile matches manifest, no floating range (the stack's lock --check)"; exit 1
 
 limits:
     @echo "bind: size and complexity rules plus the fitness test, numbers from the binding's Limits"; exit 1
 
 markers:
-    @echo "bind: count TODO/FIXME/HACK at merge base and head; fail if any rose"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/markers.py"
 
 prose:
-    @echo "bind: prose linter carrying the glossary's Avoid lists over docs and comments"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/prose.py"
 
 # --- tier 1 bodies ---------------------------------------------------------------
 
@@ -93,7 +108,8 @@ test:
     @echo "bind: unit, property and fitness tests"; exit 1
 
 coverage:
-    @echo "bind: per-layer coverage; 100% for absolute layers"; exit 1
+    @echo "bind: run the suite with a Cobertura report at coverage.xml"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
 
 diff-coverage:
     @echo "bind: every changed line and branch ran"; exit 1
@@ -120,7 +136,8 @@ smoke:
     @echo "bind: start the deliverable, hit its health probe, stop it"; exit 1
 
 bite:
-    @echo "bind: run every fitness test and gate tool against its synthetic violation; each must fail"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/bite.py"
+    @echo "bind: run every project fitness test and gate tool against its synthetic violation"; exit 1
 
 api-check:
     @echo "bind: snapshot the public surface and diff; a change needs a version bump or changelog line"; exit 1
@@ -144,7 +161,7 @@ doc-coverage:
     @echo "bind: documentation coverage of the public surface >= quality/thresholds.toml"; exit 1
 
 change-size:
-    @echo "bind: files and lines changed against the merge base within the binding's ceiling"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/change_size.py"
 
 # --- tier 2 bodies ---------------------------------------------------------------
 

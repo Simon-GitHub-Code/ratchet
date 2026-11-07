@@ -9,6 +9,7 @@ import pytest
 import adapter
 import budget
 import lowered
+from tests.repos import branch, commit, repository, write
 
 THRESHOLDS = """# thresholds
 [py.coverage.core]
@@ -149,6 +150,25 @@ def test_codex_hooks_merge_once_and_keep_what_is_there() -> None:
     assert adapter.codex_hooks({"other": 1}, root)["other"] == 1
 
 
+def test_codex_hooks_treats_a_shapeless_entry_as_empty() -> None:
+    root = Path("/plugins/ratchet")
+    shapeless = {"hooks": {"PreToolUse": ["not a dict", {"hooks": "not a list"}]}}
+    merged = adapter.codex_hooks(shapeless, root)
+    hooks = merged["hooks"]
+    assert isinstance(hooks, dict)
+    assert len(hooks["PreToolUse"]) == 3
+    assert hooks["PreToolUse"][-1]["matcher"] == adapter.MATCHER
+
+
+def test_adapter_main_without_apply_only_prints_the_steps(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = tmp_path / "home"
+    assert adapter.main(["adapter", "codex", "--home", str(home)]) == 0
+    assert "docs/harness/" in capsys.readouterr().out
+    assert not home.exists()
+
+
 def test_opencode_plugin_fills_the_root_and_adapter_writes_files(tmp_path: Path) -> None:
     template = (adapter.PLUGIN_ROOT / adapter.OPENCODE_TEMPLATE).read_text(encoding="utf-8")
     assert adapter.PLACEHOLDER in template
@@ -165,3 +185,26 @@ def test_opencode_plugin_fills_the_root_and_adapter_writes_files(tmp_path: Path)
     for harness in ("claude", "grok", "pi"):
         assert adapter.main(["adapter", harness, "--home", str(home), "--apply"]) == 0
         assert adapter.steps(harness, Path("/p"), home)[-1].startswith("see docs/harness/")
+
+
+def test_lowered_main_against_a_real_repository(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = repository(tmp_path)
+    assert lowered.main(["x", "--root", str(root)]) == 1
+    assert capsys.readouterr().out == "quality/thresholds.toml: missing\n"
+    write(root, "quality/thresholds.toml", THRESHOLDS)
+    assert lowered.main(["x", "--root", str(root)]) == 0
+    assert "no base commit yet" in capsys.readouterr().out
+    commit(root, "chore(quality): thresholds")
+    branch(root)
+    write(root, "quality/thresholds.toml", THRESHOLDS.replace("90.0", "80.0"))
+    assert lowered.main(["x", "--root", str(root)]) == 1
+    assert "py.coverage.core.line: lowered from 90.0 to 80.0" in capsys.readouterr().out
+    write(root, "quality/thresholds.toml", THRESHOLDS.replace("90.0", "95.0"))
+    assert lowered.main(["x", "--root", str(root)]) == 0
+    fresh = repository(tmp_path / "fresh") if (tmp_path / "fresh").mkdir() is None else root
+    commit(fresh, "feat(core): second")
+    write(fresh, "quality/thresholds.toml", THRESHOLDS)
+    assert lowered.main(["x", "--root", str(fresh)]) == 0
+    assert "is new at" in capsys.readouterr().out

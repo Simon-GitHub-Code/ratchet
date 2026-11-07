@@ -16,6 +16,8 @@ import tomllib
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+import settings_rules
+
 ENTRY_POINTS = (
     "tier0",
     "tier1",
@@ -27,7 +29,9 @@ ENTRY_POINTS = (
     "snapshots",
     "snapshots-check",
     "suppressions",
+    "commits",
     "guard-diff",
+    "settings-check",
     "conformance",
     "reports",
     "budget",
@@ -40,6 +44,9 @@ ADR_FRONT_MATTER = re.compile(
     r"\A(?:---\nstatus: (?P<status>[^\n]+)\n(?:superseded-by: (?P<by>\d{4})\n)?---\n+)?# \S"
 )
 ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
+ADR_PLACEHOLDERS = ("<X.Y.Z>", "<ratchet-sha>")
+GLOSSARY_PLACEHOLDER = "<project>"
+PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 REFUTATION_SECTION = "## Refutation criterion"
 CONJECTURE_SECTION = "## Conjecture about the solution"
 EMPTY_BODIES = {"none", "n/a", "na", "tbd", "todo", "-", "?"}
@@ -66,7 +73,7 @@ PR_SECTIONS = (
     "## Decisions",
     "## Gates",
 )
-LOCKED_PATTERNS = {".claude/**", "guards/**"}
+LOCKED_PATTERNS = {".claude/settings.json", ".claude/hooks/**", "guards/**"}
 TABLE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|")
 PR_TEMPLATE_LINE = re.compile(r"^- Pull request template: `([^`]+)`$", re.MULTILINE)
 DEFAULT_PR_TEMPLATE = ".github/pull_request_template.md"
@@ -100,6 +107,8 @@ def check_glossary(root: Path) -> Iterable[str]:
         yield "GLOSSARY.md (or GLOSSARY-MAP.md): missing"
     elif "## Language" not in text:
         yield "GLOSSARY.md: has no '## Language' section"
+    elif GLOSSARY_PLACEHOLDER in text:
+        yield f"GLOSSARY.md: still names '{GLOSSARY_PLACEHOLDER}'; name the project"
 
 
 def check_brief(root: Path) -> Iterable[str]:
@@ -154,6 +163,10 @@ def check_adr(number: int, path: Path, rel: Path) -> Iterable[str]:
         yield f"{rel}: '{REFUTATION_SECTION}' names no observation that would show it wrong"
     if number == 1 and "Ratchet method" not in text:
         yield f"{rel}: ADR 0001 records adopting the Ratchet method"
+    if number == 1:
+        for placeholder in ADR_PLACEHOLDERS:
+            if placeholder in text:
+                yield f"{rel}: still carries '{placeholder}'; adopt step 9 fills the plugin version"
 
 
 def section(text: str, heading: str) -> str:
@@ -243,10 +256,27 @@ def check_manifest(root: Path) -> Iterable[str]:
             yield f"guards/manifest.toml: group '{name}' needs a reason of {MIN_REASON}+ characters"
         if not isinstance(group.get("paths"), list):
             yield f"guards/manifest.toml: group '{name}' needs a paths list"
+        elif not group["paths"]:
+            yield f"guards/manifest.toml: group '{name}' has no paths yet; bind or remove it"
         elif group.get("edit") == "deny":
             locked.update(group["paths"])
     for pattern in sorted(LOCKED_PATTERNS - locked):
         yield f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group"
+
+
+def check_plugin_checkout(root: Path) -> Iterable[str]:
+    for name in ("ci.yml", "deep.yml"):
+        text = read(root / WORKFLOWS / name)
+        if text is not None and PLUGIN_CHECKOUT_PLACEHOLDER in text:
+            yield (
+                f"{WORKFLOWS / name}: checks the plugin out at '{PLUGIN_CHECKOUT_PLACEHOLDER}'; "
+                "adopt step 10 fills the commit ADR 0001 names"
+            )
+
+
+def check_settings(root: Path) -> Iterable[str]:
+    if (root / settings_rules.MANIFEST).is_file():
+        yield from settings_rules.drift(root)
 
 
 def check_quality(root: Path) -> Iterable[str]:
@@ -330,6 +360,8 @@ CHECKS: tuple[Check, ...] = (
     check_binding,
     check_speed,
     check_manifest,
+    check_settings,
+    check_plugin_checkout,
     check_quality,
     check_disputes,
     check_features,
@@ -353,7 +385,7 @@ Mutation = tuple[str, Callable[[Path], None]]
 
 
 def mutations() -> list[Mutation]:
-    return [*artefact_mutations(), *record_mutations()]
+    return [*artefact_mutations(), *guard_mutations(), *record_mutations()]
 
 
 def artefact_mutations() -> list[Mutation]:
@@ -368,10 +400,6 @@ def artefact_mutations() -> list[Mutation]:
     def none_without_reason(root: Path) -> None:
         path = root / "docs/process/binding.md"
         path.write_text(path.read_text().replace("| format | |", "| format | none |"))
-
-    def unlock_harness(root: Path) -> None:
-        path = root / "guards/manifest.toml"
-        path.write_text(path.read_text().replace('edit = "deny"', 'edit = "ask"'))
 
     def drop_pr_section(root: Path) -> None:
         path = root / DEFAULT_PR_TEMPLATE
@@ -389,21 +417,67 @@ def artefact_mutations() -> list[Mutation]:
         path = root / WORKFLOWS / "deep.yml"
         path.write_text(path.read_text().replace("cache", "store"))
 
+    def ci_with_the_plugin_at_a_placeholder(root: Path) -> None:
+        path = root / WORKFLOWS / "ci.yml"
+        path.write_text(path.read_text().replace("0" * 40, PLUGIN_CHECKOUT_PLACEHOLDER, 1))
+
+    def glossary_naming_the_placeholder(root: Path) -> None:
+        path = root / "GLOSSARY.md"
+        path.write_text(path.read_text().replace("the project", GLOSSARY_PLACEHOLDER, 1))
+
     return [
         ("AGENTS.md without the method stanza", strip_stanza),
         ("binding without the conformance entry point", drop_entry_point),
         ("binding with a gate bound to none and no reason", none_without_reason),
-        ("manifest with the harness unlocked", unlock_harness),
         ("pull-request template missing a section", drop_pr_section),
         ("binding without a Speed section", drop_speed_section),
         ("CI workflow without concurrency control", ci_without_concurrency),
         ("CI workflow without a cache", ci_without_cache),
+        (
+            "CI workflow checking the plugin out at a placeholder",
+            ci_with_the_plugin_at_a_placeholder,
+        ),
+        ("glossary still naming <project>", glossary_naming_the_placeholder),
+    ]
+
+
+def guard_mutations() -> list[Mutation]:
+    def unlock_harness(root: Path) -> None:
+        path = root / "guards/manifest.toml"
+        path.write_text(path.read_text().replace('edit = "deny"', 'edit = "ask"'))
+
+    def unbound_group(root: Path) -> None:
+        path = root / "guards/manifest.toml"
+        path.write_text(path.read_text().replace('paths = [\n    "quality/**",\n]', "paths = []"))
+
+    def settings_with_a_foreign_deny(root: Path) -> None:
+        path = root / settings_rules.SETTINGS
+        path.write_text(
+            path.read_text().replace(
+                '"Bash(gh label edit:*)",',
+                '"Bash(gh label edit:*)",\n      "Bash(gh label create:*)",',
+            )
+        )
+
+    def settings_missing_a_rule(root: Path) -> None:
+        path = root / settings_rules.SETTINGS
+        path.write_text(path.read_text().replace('      "Edit(/GLOSSARY-MAP.md)",\n', ""))
+
+    return [
+        ("manifest with the harness unlocked", unlock_harness),
+        ("manifest with a group still unbound", unbound_group),
+        ("settings denying what the hook allows", settings_with_a_foreign_deny),
+        ("settings missing a manifest rule", settings_missing_a_rule),
     ]
 
 
 def record_mutations() -> list[Mutation]:
     def adr_without_refuter(root: Path) -> None:
         (root / "docs/adr/0002-plain.md").write_text("# We keep it plain\n\nBecause.\n")
+
+    def adr_0001_with_the_version_placeholder(root: Path) -> None:
+        path = root / "docs/adr/0001-adopt-the-ratchet-method.md"
+        path.write_text(path.read_text().replace("0.0.0", "<X.Y.Z>", 1))
 
     def adr_with_an_empty_refuter(root: Path) -> None:
         (root / "docs/adr/0002-empty.md").write_text(
@@ -434,6 +508,7 @@ def record_mutations() -> list[Mutation]:
     return [
         ("ADR without a refutation criterion", adr_without_refuter),
         ("ADR with an empty refutation criterion", adr_with_an_empty_refuter),
+        ("ADR 0001 with the version placeholder", adr_0001_with_the_version_placeholder),
         ("feature brief with a placeholder conjecture", brief_without_a_conjecture),
         ("ADR numbering with a gap", gap_adrs),
         ("dispute with an unknown status", bad_dispute),
@@ -441,10 +516,36 @@ def record_mutations() -> list[Mutation]:
     ]
 
 
+UNBOUND_GROUP = re.compile(r"paths = \[\n(?:\s*# bind:[^\n]*\n)+\]")
+
+
+def fill_placeholders(root: Path) -> None:
+    """Stand in for adopt on a template copy: bind every group adopt would have bound."""
+    path = root / "guards/manifest.toml"
+    path.write_text(UNBOUND_GROUP.sub('paths = [\n    "bound/**",\n]', path.read_text()))
+    settings_rules.write(root)
+    fills = {
+        "docs/adr/0001-adopt-the-ratchet-method.md": {
+            "<X.Y.Z>": "0.0.0",
+            "<ratchet-sha>": "0" * 40,
+        },
+        "GLOSSARY.md": {GLOSSARY_PLACEHOLDER: "the project"},
+        str(WORKFLOWS / "ci.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
+        str(WORKFLOWS / "deep.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
+    }
+    for name, replacements in fills.items():
+        target = root / name
+        text = target.read_text()
+        for placeholder, value in replacements.items():
+            text = text.replace(placeholder, value)
+        target.write_text(text)
+
+
 def self_test(templates: Path, init_templates: Path) -> int:
     def build(target: Path) -> None:
         shutil.copytree(init_templates, target, symlinks=True)
         shutil.copytree(templates, target, symlinks=True, dirs_exist_ok=True)
+        fill_placeholders(target)
 
     with tempfile.TemporaryDirectory() as scratch:
         pristine = Path(scratch) / "pristine"

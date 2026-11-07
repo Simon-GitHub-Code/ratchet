@@ -9,6 +9,7 @@
       "Edit(/.claude/agents/**)",
       "Edit(/.claude/skills/**)",
       "Edit(/.claude/commands/**)",
+      "Edit(/.claude/rules/**)",
       "Edit(/guards/**)",
       "Edit(~/.claude/settings.json)",
       "Edit(~/.claude/settings.local.json)",
@@ -27,7 +28,6 @@
       "Bash(gh api *branches/*/protection*)",
       "Bash(gh api *rulesets*)",
       "Bash(gh repo edit:*)",
-      "Bash(gh label create:*)",
       "Bash(gh label edit:*)",
       "Bash(gh label delete:*)",
       "Bash(gh label clone:*)",
@@ -44,9 +44,10 @@
       "Edit(/docs/adr/**)",
       "Edit(/docs/agents/**)",
       "Edit(/docs/process/**)",
+      "Edit(/AGENTS.md)",
       "Edit(/CLAUDE.md)",
       "Edit(/GLOSSARY.md)",
-      "Edit(/AGENTS.md)",
+      "Edit(/GLOSSARY-MAP.md)",
       "Edit(/PRODUCT.md)",
       "Edit(/DESIGN.md)"
     ]

@@ -151,7 +151,8 @@ def test_reasons_and_output_shape() -> None:
     edit = hook.reason(Verdict("guard-path-edit", "CLAUDE.md is in guard group 'g'. Because."))
     assert edit.startswith(
         "Ratchet guard: this tool call edits a guard path; only the owner approves a "
-        "gate change: CLAUDE.md is in guard group 'g'. Because. Approve only if"
+        "gate change: CLAUDE.md is in guard group 'g'. Because. Guard paths come from "
+        "guards/manifest.toml as committed on the default branch. Approve only if"
     )
 
 
@@ -169,12 +170,26 @@ def test_run_fails_closed() -> None:
 
 
 def checkout(tmp_path: Path, *, manifest: bool = True) -> Path:
-    """A checkout under ``tmp_path``, with the fixture manifest unless told otherwise."""
+    """A repository on ``main`` under ``tmp_path``, the fixture manifest committed by default."""
     root = tmp_path / "checkout"
-    (root / ".git").mkdir(parents=True)
+    root.mkdir(parents=True)
+    _git(root, "init", "-q", "-b", "main")
     if manifest:
         (root / "guards").mkdir()
         (root / MANIFEST_PATH).write_text(MANIFEST_TEXT, encoding="utf-8")
+        _git(root, "add", "-A")
+    _git(
+        root,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "x",
+    )
     return root
 
 
@@ -198,7 +213,8 @@ def test_local_filesystem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     filesystem = hook.LocalFilesystem()
     root = checkout(tmp_path)
     nested = root / "inner"
-    (nested / ".git").mkdir(parents=True)
+    nested.mkdir()
+    _git(nested, "init", "-q", "-b", "main")
     (root / "a.toml").write_text("", encoding="utf-8")
     (root / ".hidden.toml").write_text("", encoding="utf-8")
     (root / "link").symlink_to(root / "a.toml")

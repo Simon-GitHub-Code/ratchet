@@ -19,11 +19,13 @@ One forge write is allowed by a record: ``gh label create <name>`` in a checkout
 ``ratchet_guards.gh``). The file is a guard path in the decisions group once the repository
 is adopted, so the list is the owner's.
 
-The guard paths come from ``guards/manifest.toml`` in the nearest checkout holding the root
-(an ancestor with ``.git``, else the root itself). When that file is absent no repository
-path is a guard path and only the command rules apply. The plugin's own files are locked
-either way: ``PLUGIN_ROOT`` (two parents above this package) and ``~/.claude/plugins/**``,
-together with ``~/.claude/settings.json`` and ``~/.claude/settings.local.json``.
+The guard paths come from ``guards/manifest.toml`` as committed on the default branch of the
+nearest checkout holding the root (an ancestor with ``.git``, else the root itself), read from
+git (``ratchet_guards.committed``). An uncommitted manifest, or one committed only on a
+branch, guards nothing yet: that is the adoption in progress, and only the command rules
+apply until it merges. The plugin's own files are locked either way: ``PLUGIN_ROOT`` (two
+parents above this package) and ``~/.claude/plugins/**``, together with
+``~/.claude/settings.json`` and ``~/.claude/settings.local.json``.
 """
 
 import json
@@ -36,8 +38,9 @@ from pathlib import Path
 from typing import TextIO
 
 from ratchet_guards import bash
+from ratchet_guards.committed import committed_manifest
 from ratchet_guards.context import Context, Guard
-from ratchet_guards.manifest import EMPTY, MANIFEST_PATH, Manifest, parse, with_plugin_group
+from ratchet_guards.manifest import EMPTY, Manifest, parse, with_plugin_group
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.verdict import Decision, Verdict, strictest
 
@@ -55,6 +58,7 @@ PATCH_HEADER = re.compile(
 PATCH_DESTRUCTIVE = frozenset({"Delete File", "Move to"})
 GIT_TIMEOUT_SECONDS = 5
 DISPUTES = "docs/disputes/NNNN-<slug>.md"
+COMMITTED = "Guard paths come from guards/manifest.toml as committed on the default branch."
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -71,11 +75,11 @@ class LocalFilesystem:
         return Path(os.path.realpath(path))
 
     def guarded_root(self, path: Path) -> Path | None:
-        """The nearest ancestor holding ``.git``, if it also holds the manifest."""
-        for candidate in (path, *path.parents):
-            if (candidate / ".git").exists():
-                return candidate if (candidate / MANIFEST_PATH).is_file() else None
-        return None
+        """The nearest ancestor holding ``.git``, if its default branch carries the manifest."""
+        root = self.checkout(path)
+        if root is None:
+            return None
+        return root if committed_manifest(root) is not None else None
 
     def checkout(self, path: Path) -> Path | None:
         """The nearest ancestor holding ``.git``."""
@@ -178,6 +182,9 @@ def _hit_verdict(hit: Hit) -> Verdict:
 def reason(verdict: Verdict) -> str:
     """The sentence Claude (deny) or the human (ask) reads."""
     stop = "" if verdict.detail.endswith(".") else "."
+    if verdict.rule.startswith("guard-path"):
+        # Why: the agent should know where the rule comes from, and that it is not in the tree.
+        stop += f" {COMMITTED}"
     if verdict.decision is Decision.DENY:
         # Why: a denied Bash call runs none of its commands, so an unrelated write chained
         # with the refused one is lost; the agent must hear that, and the matched token.
@@ -222,9 +229,9 @@ def repository_root(path: Path) -> Path:
 
 
 def read_manifest(root: Path) -> Manifest:
-    """The manifest of the checkout holding ``root``, or ``EMPTY`` when there is no file."""
-    path = repository_root(root) / MANIFEST_PATH
-    return parse(path.read_bytes().decode()) if path.is_file() else EMPTY
+    """The manifest committed on the default branch of the checkout holding ``root``."""
+    text = committed_manifest(repository_root(root))
+    return EMPTY if text is None else parse(text)
 
 
 def local_guard(root: Path, plugin_root: Path = PLUGIN_ROOT) -> Guard:
