@@ -7,7 +7,18 @@
     {
       "name": "ratchet",
       "source": "./",
-      "description": "The Ratchet method: tiered deterministic gates, guards, disputes, the four-role pipeline and the merge rule of critical rationalism; composes with mattpocock-skills, pstack and impeccable."
+      "description": "The Ratchet method: tiered deterministic gates with ceilings that only fall, guards, disputes, the four-role pipeline and the merge rule of critical rationalism; runs in Claude Code, Grok, Codex, pi and OpenCode; composes with mattpocock-skills, pstack and impeccable.",
+      "dependencies": [
+        "mattpocock-skills@claude-plugins-official",
+        "pstack@cursor-plugins",
+        "impeccable@impeccable"
+      ]
     }
-  ]
+  ],
+  "allowCrossMarketplaceDependenciesOn": [
+    "claude-plugins-official",
+    "cursor-plugins",
+    "impeccable"
+  ],
+  "description": "The Ratchet method and the three plugins it composes with; install ratchet and its dependencies follow."
 }

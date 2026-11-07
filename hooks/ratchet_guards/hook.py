@@ -1,7 +1,8 @@
 """The Claude Code PreToolUse hook: JSON in on stdin, a decision out on stdout.
 
 ``hooks/guard.py`` puts ``hooks/`` on ``sys.path`` and calls ``main`` with the repository
-root. For Edit, Write, MultiEdit and NotebookEdit on a guard path the hook answers ``ask``,
+root. For Edit, Write, MultiEdit and NotebookEdit on a guard path, and for a Codex ``apply_patch``
+whose headers name one, the hook answers ``ask``,
 which needs a human at the permission prompt, or ``deny`` in a group whose ``edit`` is
 ``"deny"`` (paths Claude Code's bypass mode would let through an ``ask``); for a Bash
 command that bypasses a gate, rewrites history, removes a plugin or writes a guard path it
@@ -27,6 +28,7 @@ together with ``~/.claude/settings.json`` and ``~/.claude/settings.local.json``.
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -36,7 +38,7 @@ from typing import TextIO
 from ratchet_guards import bash
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.manifest import EMPTY, MANIFEST_PATH, Manifest, parse, with_plugin_group
-from ratchet_guards.paths import Locator
+from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.verdict import Decision, Verdict, strictest
 
 EDIT_TOOLS = {
@@ -45,6 +47,12 @@ EDIT_TOOLS = {
     "MultiEdit": "file_path",
     "NotebookEdit": "notebook_path",
 }
+# Why: Codex edits through apply_patch, whose input is the patch text; the paths are its headers.
+PATCH_TOOL = "apply_patch"
+PATCH_HEADER = re.compile(
+    r"^\*\*\* (?P<verb>Add File|Update File|Delete File|Move to): (?P<path>.+)$", re.MULTILINE
+)
+PATCH_DESTRUCTIVE = frozenset({"Delete File", "Move to"})
 GIT_TIMEOUT_SECONDS = 5
 DISPUTES = "docs/disputes/NNNN-<slug>.md"
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -128,21 +136,41 @@ def decide(payload: object, guard: Guard) -> Verdict | None:
     tool, tool_input, cwd = payload.get("tool_name"), payload.get("tool_input"), payload.get("cwd")
     if not isinstance(tool, str) or not isinstance(tool_input, dict) or not isinstance(cwd, str):
         return _unreadable("the hook input lacks tool_name, tool_input or cwd")
+    if tool == PATCH_TOOL:
+        return _patch(tool_input, Path(cwd), guard)
     key = "command" if tool == "Bash" else EDIT_TOOLS.get(tool)
     if key is None:
         return None
     target = tool_input.get(key)
     if not isinstance(target, str):
         return _unreadable(f"{tool} input has no {key}")
+    return _judge(tool, target, Context(Path(cwd)), guard=guard)
+
+
+def _judge(tool: str, target: str, context: Context, *, guard: Guard) -> Verdict | None:
     if tool == "Bash":
-        return strictest(bash.check(target, Context(Path(cwd)), guard))
-    return _edit(Path(cwd) / target, guard)
+        return strictest(bash.check(target, context, guard))
+    return _edit(context.cwd / target, guard)
+
+
+def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | None:
+    """The strictest verdict over the files an ``apply_patch`` adds, updates, deletes or moves."""
+    text = "\n".join(value for value in tool_input.values() if isinstance(value, str))
+    verdicts = []
+    for match in PATCH_HEADER.finditer(text):
+        destructive = match.group("verb") in PATCH_DESTRUCTIVE
+        hit = guard.locator.classify(cwd / match.group("path").strip(), destructive=destructive)
+        if hit is not None:
+            verdicts.append(_hit_verdict(hit))
+    return strictest(verdicts)
 
 
 def _edit(path: Path, guard: Guard) -> Verdict | None:
     hit = guard.locator.classify(path, destructive=False)  # pragma: no mutate # -- None is False
-    if hit is None:
-        return None
+    return None if hit is None else _hit_verdict(hit)
+
+
+def _hit_verdict(hit: Hit) -> Verdict:
     detail = f"{hit.path} is in guard group '{hit.group.name}'. {hit.group.reason}"
     return Verdict("guard-path-locked" if hit.group.locked else "guard-path-edit", detail)
 

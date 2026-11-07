@@ -4,6 +4,7 @@
 lint = 30
 types = 60
 parse-workflow = 10
+parse-adapters = 10
 test = 120
 conformance-self-test = 30
 lowered-smoke = 10

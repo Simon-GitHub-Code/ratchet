@@ -32,11 +32,28 @@ PLUGIN_REASON = (
     "The guard's own code, the installed plugins and the user settings that enable them: "
     "changing them can switch the guard off, so the owner changes them by hand."
 )
+# Why: the guard runs in five harnesses; each one's installed plugins and the settings that
+# enable them are the switch an agent must not reach.
 PLUGIN_HOME_PATTERNS = (
     "~/.claude/plugins",
     "~/.claude/plugins/**",
     "~/.claude/settings.json",
     "~/.claude/settings.local.json",
+    "~/.grok/installed-plugins",
+    "~/.grok/installed-plugins/**",
+    "~/.grok/hooks",
+    "~/.grok/hooks/**",
+    "~/.grok/config.toml",
+    "~/.codex/plugins",
+    "~/.codex/plugins/**",
+    "~/.codex/hooks.json",
+    "~/.codex/config.toml",
+    "~/.pi/agent/extensions",
+    "~/.pi/agent/extensions/**",
+    "~/.pi/agent/settings.json",
+    "~/.config/opencode/plugins",
+    "~/.config/opencode/plugins/**",
+    "~/.config/opencode/opencode.json",
 )
 
 

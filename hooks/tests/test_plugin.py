@@ -56,6 +56,9 @@ def test_without_a_manifest_only_the_command_rules_apply(tmp_path: Path) -> None
         ("gh repo edit --default-branch dev", "repo-settings"),
         ("claude --settings s.json -p hi", "nested-settings"),
         ("claude plugin disable ratchet", "plugin-removal"),
+        ("grok plugin uninstall ratchet", "plugin-removal"),
+        ("codex plugin remove ratchet@ratchet", "plugin-removal"),
+        ("pi remove git:github.com/o/ratchet", "plugin-removal"),
     ]:
         verdict = hook.decide(bash(command, root), guard)
         assert verdict is not None, command
@@ -102,6 +105,21 @@ def test_the_plugin_group_is_prepended_and_locked() -> None:
             "~/.claude/plugins/**",
             "~/.claude/settings.json",
             "~/.claude/settings.local.json",
+            "~/.grok/installed-plugins",
+            "~/.grok/installed-plugins/**",
+            "~/.grok/hooks",
+            "~/.grok/hooks/**",
+            "~/.grok/config.toml",
+            "~/.codex/plugins",
+            "~/.codex/plugins/**",
+            "~/.codex/hooks.json",
+            "~/.codex/config.toml",
+            "~/.pi/agent/extensions",
+            "~/.pi/agent/extensions/**",
+            "~/.pi/agent/settings.json",
+            "~/.config/opencode/plugins",
+            "~/.config/opencode/plugins/**",
+            "~/.config/opencode/opencode.json",
         ),
         locked=True,
     )
@@ -129,6 +147,16 @@ def _scope(pattern: str) -> Scope:
         HOME / ".claude/plugins",
         HOME / ".claude/settings.json",
         HOME / ".claude/settings.local.json",
+        HOME / ".grok/installed-plugins/ratchet/hooks/guard.py",
+        HOME / ".grok/hooks/herdr.json",
+        HOME / ".grok/config.toml",
+        HOME / ".codex/plugins/cache/ratchet/hooks/hooks.json",
+        HOME / ".codex/hooks.json",
+        HOME / ".codex/config.toml",
+        HOME / ".pi/agent/extensions/ratchet-guard.ts",
+        HOME / ".pi/agent/settings.json",
+        HOME / ".config/opencode/plugins/ratchet-guard.ts",
+        HOME / ".config/opencode/opencode.json",
     ],
 )
 def test_plugin_files_are_locked_with_or_without_a_manifest(path: Path) -> None:
@@ -205,7 +233,7 @@ def test_hooks_json_registers_the_session_shim_for_sessions_and_subagents(event:
 def test_hooks_json_registers_the_shim_for_edits_and_bash() -> None:
     registered = json.loads((PLUGIN_ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
     [entry] = registered["hooks"]["PreToolUse"]
-    assert entry["matcher"] == "Edit|Write|MultiEdit|NotebookEdit|Bash"
+    assert entry["matcher"] == "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch"
     [command] = entry["hooks"]
     assert command == {
         "type": "command",
@@ -234,3 +262,41 @@ def test_the_shim_resolves_the_root_from_cwd_then_the_environment() -> None:
     assert shim.root_of("[]", {}, default) == default
     assert shim.MINIMUM_PYTHON == (3, 13)
     assert shim.HOOKS == PLUGIN_ROOT / "hooks"
+
+
+PATCH = """*** Begin Patch
+*** Update File: {path}
+@@
+-a
++b
+*** End Patch
+"""
+
+
+def patch(text: str, cwd: Path) -> dict[str, object]:
+    return {"tool_name": "apply_patch", "tool_input": {"input": text}, "cwd": str(cwd)}
+
+
+def test_apply_patch_is_judged_by_the_paths_in_its_headers(tmp_path: Path) -> None:
+    root = checkout(tmp_path, manifest=True)
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    verdict = hook.decide(patch(PATCH.format(path="CLAUDE.md"), root), guard)
+    assert verdict is not None
+    assert verdict.rule == "guard-path-edit"
+    assert "CLAUDE.md is in guard group 'decisions'" in verdict.detail
+    assert hook.decide(patch(PATCH.format(path="app/main.py"), root), guard) is None
+    deleted = "*** Begin Patch\n*** Delete File: quality/thresholds.toml\n*** End Patch\n"
+    verdict = hook.decide(patch(deleted, root), guard)
+    assert verdict is not None
+    assert verdict.rule == "guard-path-edit"
+    moved = "*** Begin Patch\n*** Update File: notes.md\n*** Move to: .claude/settings.json\n"
+    verdict = hook.decide(patch(moved, root), guard)
+    assert verdict is not None
+    assert verdict.rule == "guard-path-locked"
+    locked = hook.decide(patch(PATCH.format(path=".claude/settings.json"), root), guard)
+    assert locked is not None
+    assert locked.decision is Decision.DENY
+    assert hook.decide(patch("no headers here", root), guard) is None
+    assert (
+        hook.decide({"tool_name": "apply_patch", "tool_input": {}, "cwd": str(root)}, guard) is None
+    )

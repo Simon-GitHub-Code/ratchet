@@ -7,7 +7,7 @@ default:
     @just --list --unsorted
 
 # Tier 0: shape.
-tier0: lint types validate parse-workflow
+tier0: lint types validate parse-workflow parse-adapters
 
 # Tier 1: behaviour.
 tier1: test conformance-self-test lowered-smoke
@@ -26,6 +26,11 @@ validate:
 
 parse-workflow:
     node --check workflows/feature.js
+
+# Node strips types, so a syntax check of the pi and OpenCode adapters needs no toolchain.
+parse-adapters:
+    node --check adapters/pi/ratchet-guard.ts
+    node --check adapters/opencode/ratchet-guard.ts
 
 test:
     uv run pytest -q hooks/tests

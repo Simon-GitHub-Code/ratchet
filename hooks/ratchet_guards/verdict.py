@@ -58,7 +58,7 @@ RULES: dict[str, Rule] = {
         "starts Claude Code with other settings sources or with hooks or plugins off",
     ),
     "plugin-removal": Rule(
-        Decision.DENY, "disables or removes a Claude Code plugin or marketplace"
+        Decision.DENY, "disables or removes a harness plugin, package or marketplace"
     ),
     "unreadable": Rule(Decision.ASK, "could not be checked by the guard"),
 }

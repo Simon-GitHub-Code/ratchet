@@ -45,6 +45,19 @@ _REMOVALS: dict[str, tuple[frozenset[str], str]] = {
     "plugins": (_PLUGIN_REMOVALS, "claude plugin"),
     "marketplace": (frozenset({"remove", "rm"}), "claude plugin marketplace"),
 }
+# Why: the same guard runs in Grok, Codex, pi and OpenCode; each has its own spelling of
+# "remove the plugin that carries the guard".
+_HARNESS_REMOVALS: dict[str, dict[str, tuple[frozenset[str], str]]] = {
+    "grok": {
+        "plugin": (_PLUGIN_REMOVALS | {"rm"}, "grok plugin"),
+        "marketplace": (frozenset({"remove", "rm"}), "grok plugin marketplace"),
+    },
+    "codex": {
+        "plugin": (frozenset({"remove", "rm"}), "codex plugin"),
+        "marketplace": (frozenset({"remove", "rm"}), "codex plugin marketplace"),
+    },
+}
+_PI_REMOVALS = frozenset({"remove", "uninstall"})
 _MOVERS = frozenset({"cd", "pushd", "git"})
 _SHELL = Spec("oO", frozenset({"--rcfile", "--init-file"}))
 
@@ -130,6 +143,26 @@ def _nested_claude(words: Sequence[str]) -> list[Verdict]:
     return verdicts
 
 
+def _harness(name: str) -> Callable[[Sequence[str]], list[Verdict]]:
+    removals = _HARNESS_REMOVALS[name]
+
+    def check(words: Sequence[str]) -> list[Verdict]:
+        verdicts = []
+        for noun, verb in pairwise(words):
+            verbs, prefix = removals.get(noun, (frozenset[str](), ""))
+            if verb in verbs:
+                verdicts.append(Verdict("plugin-removal", f"{prefix} {verb}"))
+        return verdicts
+
+    return check
+
+
+def _pi(words: Sequence[str]) -> list[Verdict]:
+    """``pi remove`` and ``pi uninstall`` drop a package, the guard's included."""
+    verb = words[1] if len(words) > 1 else ""
+    return [Verdict("plugin-removal", f"pi {verb}")] if verb in _PI_REMOVALS else []
+
+
 def _pre_commit(words: Sequence[str]) -> list[Verdict]:
     return [Verdict("skip-hooks", "pre-commit uninstall")] if "uninstall" in words else []
 
@@ -141,6 +174,9 @@ def _export(words: Sequence[str]) -> list[Verdict]:
 _DIRECT: dict[str, Callable[[Sequence[str]], list[Verdict]]] = {
     "pre-commit": _pre_commit,
     "claude": _nested_claude,
+    "grok": _harness("grok"),
+    "codex": _harness("codex"),
+    "pi": _pi,
     "export": _export,
 }
 

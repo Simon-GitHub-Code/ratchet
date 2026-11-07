@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import adapter
 import budget
 import lowered
 
@@ -133,3 +134,34 @@ def test_parse_requires_the_separator_and_a_command() -> None:
     with pytest.raises(SystemExit):
         budget.parse(["budget", "tier0"])
     assert budget.main(["budget", "tier0", "--"]) == 2
+
+
+def test_codex_hooks_merge_once_and_keep_what_is_there() -> None:
+    root = Path("/plugins/ratchet")
+    merged = adapter.codex_hooks({"hooks": {"SessionStart": [{"hooks": [{"command": "x"}]}]}}, root)
+    hooks = merged["hooks"]
+    assert isinstance(hooks, dict)
+    assert len(hooks["SessionStart"]) == 2
+    assert hooks["PreToolUse"][0]["matcher"] == adapter.MATCHER
+    assert "/plugins/ratchet/hooks/guard.py" in hooks["PreToolUse"][0]["hooks"][0]["command"]
+    again = adapter.codex_hooks(merged, root)
+    assert again == merged
+    assert adapter.codex_hooks({"other": 1}, root)["other"] == 1
+
+
+def test_opencode_plugin_fills_the_root_and_adapter_writes_files(tmp_path: Path) -> None:
+    template = (adapter.PLUGIN_ROOT / adapter.OPENCODE_TEMPLATE).read_text(encoding="utf-8")
+    assert adapter.PLACEHOLDER in template
+    filled = adapter.opencode_plugin(template, Path("/p/ratchet"))
+    assert adapter.PLACEHOLDER not in filled
+    assert '"/p/ratchet"' in filled
+    home = tmp_path / "home"
+    assert adapter.main(["adapter", "opencode", "--home", str(home), "--apply"]) == 0
+    written = (home / adapter.OPENCODE_PLUGIN).read_text(encoding="utf-8")
+    assert adapter.PLUGIN_ROOT.as_posix() in written
+    assert adapter.main(["adapter", "codex", "--home", str(home), "--apply"]) == 0
+    hooks = json.loads((home / adapter.CODEX_HOOKS).read_text(encoding="utf-8"))["hooks"]
+    assert set(hooks) == {"PreToolUse", "SessionStart"}
+    for harness in ("claude", "grok", "pi"):
+        assert adapter.main(["adapter", harness, "--home", str(home), "--apply"]) == 0
+        assert adapter.steps(harness, Path("/p"), home)[-1].startswith("see docs/harness/")

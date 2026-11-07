@@ -59,7 +59,7 @@ def test_the_rule_catalogue_is_pinned() -> None:
         ),
         "plugin-removal": (
             "DENY",
-            "disables or removes a Claude Code plugin or marketplace",
+            "disables or removes a harness plugin, package or marketplace",
         ),
         "unreadable": ("ASK", "could not be checked by the guard"),
     }
