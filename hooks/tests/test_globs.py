@@ -42,6 +42,13 @@ CASES = [
     ("a^b", "a[^]b", True),
     ("/home/u/.claude/plugins/x", "/home/u/.claude/plugins/**", True),
     ("src/core/a.py", "src/core/**/", True),
+    ("/", "/*", False),
+    ("/", "/**", True),
+    ("/", "/***", True),
+    ("/a", "/*", True),
+    ("//", "//*", False),
+    ("", "***", True),
+    ("", "?", False),
 ]
 
 

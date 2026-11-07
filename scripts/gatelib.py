@@ -120,10 +120,9 @@ def matches(path: str, patterns: list[str]) -> bool:
     3.13 and the gates run on the runner's ``python3``. ``ratchet_guards.globs`` is the same
     function for the hook; ``test_globs.py`` holds the two to the same answers.
     """
+    # Why: the empty path (``.``) matches exactly the patterns whose regex matches the empty
+    # string, as pathlib has it: ``**`` and ``***`` do, ``*`` and ``?`` do not.
     normal = _glob_normalised(path)
-    if not normal:
-        # Why: pathlib matches the empty path against nothing but ``**`` segments.
-        return any(all(s == "**" for s in _glob_segments(p)) for p in patterns)
     return any(glob_regex(pattern).fullmatch(normal) for pattern in patterns)
 
 
@@ -159,6 +158,9 @@ def glob_regex(pattern: str) -> re.Pattern[str]:
 
 
 def _glob_segment(segment: str) -> str:
+    if segment == "*":
+        # Why: pathlib gives a lone `*` one non-empty segment, so `/*` does not match `/`.
+        return "[^/]+"
     out = ""
     index = 0
     while index < len(segment):

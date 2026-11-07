@@ -22,11 +22,9 @@ ANY_SEGMENTS = "(?:[^/]+/)*"
 
 def matches(path: str, pattern: str) -> bool:
     """Whether ``pattern`` matches all of ``path``."""
-    normal = normalised(path)
-    if not normal:
-        # Why: pathlib matches the empty path against nothing but ``**`` segments.
-        return all(segment == "**" for segment in segments(pattern))
-    return regex(pattern).fullmatch(normal) is not None
+    # Why: the empty path (``.``) matches exactly the patterns whose regex matches the empty
+    # string, as pathlib has it: ``**`` and ``***`` do, ``*`` and ``?`` do not.
+    return regex(pattern).fullmatch(normalised(path)) is not None
 
 
 def normalised(text: str) -> str:
@@ -64,6 +62,9 @@ def regex(pattern: str) -> re.Pattern[str]:
 
 def _segment(segment: str) -> str:
     """One segment translated: ``*`` and ``?`` never cross a slash."""
+    if segment == "*":
+        # Why: pathlib gives a lone `*` one non-empty segment, so `/*` does not match `/`.
+        return "[^/]+"
     out = ""
     index = 0
     while index < len(segment):
