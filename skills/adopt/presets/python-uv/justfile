@@ -43,8 +43,9 @@ limits:
 test:
     uv run pytest -q
 
+# Every root a coverage group names is measured; a group no report measures is skipped, not scored.
 coverage:
-    uv run pytest -q --cov=src --cov-branch --cov-report=xml:coverage.xml
+    uv run pytest -q --cov=src --cov=tests --cov-branch --cov-report=xml:coverage.xml
     python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
 
 diff-coverage:
@@ -146,6 +147,12 @@ perf:
     uv run pytest -q --benchmark-only --benchmark-compare-fail=mean:10%
 
 # --- outside the tiers ------------------------------------------------------------
+
+# The `coverage` run, writing each group's measured value back as its new floor.
+ratchet:
+    uv run pytest -q --cov=src --cov=tests --cov-branch --cov-report=xml:coverage.xml
+    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml --write
+    just snapshots
 
 audit-all:
     uv run pip-audit --strict

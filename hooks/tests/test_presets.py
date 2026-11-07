@@ -203,3 +203,27 @@ def test_the_typescript_fragments_work_under_pnpm_and_vitest() -> None:
     dev = json.loads((preset / "tools/package.json").read_text())["devDependencies"]
     assert set(knip["ignoreDependencies"]) <= set(dev)
     assert "just" in knip["ignoreBinaries"]
+
+
+def body(justfile: str, recipe: str) -> str:
+    match = re.search(rf"^{recipe}:.*\n((?:    .*\n)+)", justfile, re.MULTILINE)
+    assert match, recipe
+    return match.group(1)
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+def test_coverage_measures_every_root_a_coverage_group_names(preset: Path) -> None:
+    # Why: coverage_groups.py skips a group no report measures, so a root left out of the run
+    # silently drops its group, `tests/fitness/**` in the absolute core included.
+    justfile = (preset / "justfile").read_text(encoding="utf-8")
+    thresholds = tomllib.loads((preset / "thresholds.toml").read_text(encoding="utf-8"))
+    (language,) = (k for k in thresholds if k != "ceilings")
+    named = {
+        path.split("/")[0]
+        for group in thresholds[language]["coverage"].values()
+        for path in group["paths"]
+    } - {"tools"}
+    run = body(justfile, "coverage").splitlines()[0]
+    measured = set(re.findall(r"--cov=([\w.-]+)|--coverage\.include='([\w.-]+)/", run))
+    assert named <= {a or b for a, b in measured}, run
+    assert body(justfile, "ratchet").splitlines()[0] == run, "the ratchet measures as coverage does"

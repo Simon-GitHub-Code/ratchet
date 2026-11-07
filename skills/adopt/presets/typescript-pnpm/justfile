@@ -43,8 +43,10 @@ limits:
 test:
     pnpm exec vitest run
 
+# Every root a coverage group names is measured; a group no report measures is skipped, not scored.
+# The exclude replaces vitest's default, which drops every test file and so `tests/fitness/**`.
 coverage:
-    pnpm exec vitest run --coverage --coverage.reporter=cobertura --coverage.reportsDirectory=coverage
+    pnpm exec vitest run --coverage --coverage.reporter=cobertura --coverage.reportsDirectory=coverage --coverage.include='src/**' --coverage.include='tests/**' --coverage.exclude='src/**/*.test.ts'
     python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage/cobertura-coverage.xml
 
 diff-coverage:
@@ -143,6 +145,12 @@ a11y:
     pnpm exec playwright test --project a11y
 
 # --- outside the tiers ------------------------------------------------------------
+
+# The `coverage` run, writing each group's measured value back as its new floor.
+ratchet:
+    pnpm exec vitest run --coverage --coverage.reporter=cobertura --coverage.reportsDirectory=coverage --coverage.include='src/**' --coverage.include='tests/**' --coverage.exclude='src/**/*.test.ts'
+    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage/cobertura-coverage.xml --write
+    just snapshots
 
 audit-all:
     pnpm audit --audit-level low

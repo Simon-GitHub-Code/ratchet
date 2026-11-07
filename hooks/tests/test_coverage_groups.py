@@ -119,6 +119,26 @@ def test_a_file_in_no_group_fails_and_paths_resolve_through_sources(tmp_path: Pa
     assert coverage_groups.relative("src/core/a.py", [], root) == "src/core/a.py"
 
 
+def test_a_report_with_several_roots_scores_each_file_where_it_lives(tmp_path: Path) -> None:
+    root = project(
+        tmp_path,
+        THRESHOLDS.replace('["src/core/**"]', '["src/core/**", "tests/fitness/**"]'),
+    )
+    write(root, "tests/fitness/test_fitness.py", "x = 1\n")
+    xml = (
+        f"<coverage><sources><source>{root / 'src'}</source><source>{root / 'tests'}</source>"
+        "</sources><packages><package><classes>"
+        '<class filename="core/a.py"><lines><line number="1" hits="1"/></lines></class>'
+        '<class filename="fitness/test_fitness.py"><lines><line number="1" hits="0"/></lines>'
+        "</class></classes></package></packages></coverage>"
+    )
+    (root / "coverage.xml").write_text(xml)
+    assert coverage_groups.problems(root, [root / "coverage.xml"]) == [
+        "python.coverage.core: line coverage 50.0% on an absolute path, needs 100%"
+    ], "the unhit fitness line counts against core, not app"
+    assert coverage_groups.relative("gone.py", [str(root / "src")], root) == "src/gone.py"
+
+
 def test_missing_inputs_are_reported(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert coverage_groups.main(["x", "--root", str(tmp_path)]) == 1
     assert "coverage.xml: missing" in capsys.readouterr().out
