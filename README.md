@@ -21,11 +21,11 @@ It composes with three other plugins and competes with none. `mattpocock-skills`
 ## Install
 
 ```bash
-claude plugin marketplace add /home/simon/ratchet   # or owner/repo once pushed
+claude plugin marketplace add Simon-GitHub-Code/ratchet
 claude plugin install ratchet@ratchet
 ```
 
-A local marketplace is read in place: edits apply at the next session or `/reload-plugins`. Other machines take the GitHub form and get updates when `version` in `.claude-plugin/plugin.json` rises.
+Updates arrive when `version` in `.claude-plugin/plugin.json` rises. To develop the plugin, add the checkout as a local marketplace instead (`claude plugin marketplace add /path/to/ratchet`): it is read in place, so edits apply at the next session or `/reload-plugins`.
 
 ## Use in a repository
 
