@@ -11,11 +11,11 @@ default:
 
 # --- tiers -----------------------------------------------------------------
 
-tier0: fmt-check lint types imports deadcode lint-workflows secrets snapshots-check ratchet-lowered suppressions
+tier0: fmt-check lint types imports deadcode lint-workflows secrets pins limits markers prose snapshots-check ratchet-lowered suppressions
 
-tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build guard-diff conformance
+tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke bite api-check data-compat doctests sast artefact-scan type-coverage doc-coverage change-size guard-diff conformance
 
-tier2: mutation api-deep symbolic fuzz e2e formal
+tier2: mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast a11y formal
 
 check: tier0 tier1
 
@@ -70,6 +70,18 @@ lint-workflows:
 secrets:
     @echo "bind: secret scanner over the tree"; exit 1
 
+pins:
+    @echo "bind: lockfile matches manifest, no floating range; actions and images by digest; CI permissions minimal"; exit 1
+
+limits:
+    @echo "bind: size and complexity rules plus the fitness test, numbers from the binding's Limits"; exit 1
+
+markers:
+    @echo "bind: count TODO/FIXME/HACK at merge base and head; fail if any rose"; exit 1
+
+prose:
+    @echo "bind: prose linter carrying the glossary's Avoid lists over docs and comments"; exit 1
+
 # --- tier 1 bodies ---------------------------------------------------------------
 
 test:
@@ -99,6 +111,36 @@ duplication:
 build:
     @echo "bind: build the deliverable"; exit 1
 
+smoke:
+    @echo "bind: start the deliverable, hit its health probe, stop it"; exit 1
+
+bite:
+    @echo "bind: run every fitness test and gate tool against its synthetic violation; each must fail"; exit 1
+
+api-check:
+    @echo "bind: snapshot the public surface and diff; a change needs a version bump or changelog line"; exit 1
+
+data-compat:
+    @echo "bind: load golden fixtures from earlier versions; apply and reverse migrations"; exit 1
+
+doctests:
+    @echo "bind: run the documentation's examples"; exit 1
+
+sast:
+    @echo "bind: static security analysis with the stack's rule set"; exit 1
+
+artefact-scan:
+    @echo "bind: scan the shipped artefact or base image for known vulnerabilities"; exit 1
+
+type-coverage:
+    @echo "bind: type coverage >= quality/thresholds.toml"; exit 1
+
+doc-coverage:
+    @echo "bind: documentation coverage of the public surface >= quality/thresholds.toml"; exit 1
+
+change-size:
+    @echo "bind: files and lines changed against the merge base within the binding's ceiling"; exit 1
+
 # --- tier 2 bodies ---------------------------------------------------------------
 
 mutation:
@@ -116,6 +158,24 @@ fuzz seconds="600":
 e2e:
     @echo "bind: end-to-end suite"; exit 1
 
+test-stability:
+    @echo "bind: run the suite shuffled and repeated with fresh seeds"; exit 1
+
+reproducible:
+    @echo "bind: build twice and compare hashes"; exit 1
+
+sanitizers:
+    @echo "bind: race detector and sanitizers where the stack has them"; exit 1
+
+perf:
+    @echo "bind: benchmarks against the binding's performance ceilings"; exit 1
+
+dast:
+    @echo "bind: dynamic security scan against the end-to-end environment"; exit 1
+
+a11y:
+    @echo "bind: accessibility checks inside the end-to-end suite"; exit 1
+
 formal:
     @echo "bind: run the project-local formal verification skill's command"; exit 1
 
@@ -123,6 +183,12 @@ formal:
 
 audit-all:
     @echo "bind: audit every dependency, dev tooling included"; exit 1
+
+licenses:
+    @echo "bind: licence compatibility of shipped dependencies"; exit 1
+
+drift:
+    @echo "bind: outdated dependencies and the software bill of materials; advisory"; exit 1
 
 reports:
     @echo "bind: hotspots, coupling, complexity; advisory only"; exit 1

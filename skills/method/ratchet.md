@@ -4,7 +4,7 @@ A stored number is one more thing an agent can edit to pass. The ratchet has fiv
 
 ## 1. Thresholds only rise
 
-`quality/thresholds.toml` holds a line and a branch coverage value per ratcheted path group, and the mutation score per language for the trend:
+`quality/thresholds.toml` holds a line and a branch coverage value per ratcheted path group, the mutation score per language for the trend, and any other ratcheted percentage the binding names, such as type coverage and documentation coverage:
 
 ```toml
 [<language>.coverage.<group>]
@@ -13,6 +13,9 @@ branch = 88.0
 
 [<language>.mutation]
 score = 99.8
+
+[<language>.types]
+coverage = 97.1
 ```
 
 - The `ratchet-lowered` entry point (tier 0) flattens the file to dotted keys at the merge base and at head and fails on any key that is lower or missing.
@@ -28,6 +31,7 @@ The gate tools, and every path the binding declares pure, need 100% line and bra
 On every run, the gate counts at the merge base and at head:
 
 - suppressions per kind: lint ignores, type ignores, coverage and mutation pragmas, test skips and expected failures, lowered property-test example counts;
+- marker comments: TODO, FIXME, HACK and their cousins;
 - the number of collected tests per suite.
 
 No suppression kind may rise. Test counts may not fall, and deleted test files are named. A focus marker (`.only` and its cousins) is banned outright. There is no number to edit, no slack to spend and no merge conflict.
