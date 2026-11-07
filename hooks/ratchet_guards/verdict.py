@@ -52,6 +52,10 @@ RULES: dict[str, Rule] = {
         Decision.DENY, "changes repository, secret, variable or workflow settings"
     ),
     "labels": Rule(Decision.DENY, "manages labels"),
+    "agent-ready-label": Rule(
+        Decision.ASK,
+        "applies the agent-ready label, the owner's agreement that a ticket is ready to build",
+    ),
     "workflow-runs": Rule(Decision.DENY, "deletes or cancels workflow runs"),
     "nested-settings": Rule(
         Decision.DENY,

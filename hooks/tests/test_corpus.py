@@ -256,6 +256,14 @@ ASKED: list[tuple[str, list[str]]] = [
         "gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {}) { a } }'",
         ["merge-pr"],
     ),
+    ("gh issue edit 4 --add-label agent:ready", ["agent-ready-label"]),
+    ("gh issue edit 4 --add-label needs-info,agent:ready", ["agent-ready-label"]),
+    ("gh issue edit 4 --add-label=agent:ready --body x", ["agent-ready-label"]),
+    ("gh issue create --title t --body b --label agent:ready", ["agent-ready-label"]),
+    ("gh issue create -t t -b b -l agent:ready", ["agent-ready-label"]),
+    ("gh pr edit 3 --add-label agent:ready", ["agent-ready-label"]),
+    ("gh pr create --title t --body b --label agent:ready", ["agent-ready-label"]),
+    ("bash -c 'gh issue edit 4 --add-label agent:ready'", ["agent-ready-label"]),
 ]
 
 ALLOWED: list[str] = [
@@ -290,6 +298,13 @@ ALLOWED: list[str] = [
     "git restore app/core/money.py",
     "git worktree list",
     "gh pr create --title t --body-file /tmp/body.md",
+    "gh pr create --title t --body b --label bug",
+    "gh issue edit 4 --add-label needs-info",
+    "gh issue edit 4 --remove-label agent:ready",
+    "gh issue edit 4 --add-label ready-for-agent",
+    "gh issue create --title t --body b --label needs-triage",
+    "gh issue view 4 --json number,title,body,labels,state",
+    "gh issue comment 4 --body 'the conjecture is in the ticket'",
     "gh pr view 3",
     "gh pr checks 3 --watch",
     "gh pr comment 3 --body 'merge when green'",

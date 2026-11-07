@@ -52,6 +52,10 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "branch-protection": ("DENY", "reads or changes branch protection or rulesets"),
         "repo-settings": ("DENY", "changes repository, secret, variable or workflow settings"),
         "labels": ("DENY", "manages labels"),
+        "agent-ready-label": (
+            "ASK",
+            "applies the agent-ready label, the owner's agreement that a ticket is ready to build",
+        ),
         "workflow-runs": ("DENY", "deletes or cancels workflow runs"),
         "nested-settings": (
             "DENY",
@@ -414,6 +418,26 @@ def test_recorded_labels_are_read_from_the_checkout_holding_cwd() -> None:
     assert rules("gh label create needs-triage", cwd=UNGUARDED) == ["labels"]
     without = make_guard(filesystem=FakeFilesystem(contents={}))
     assert rules("gh label create needs-triage", without) == ["labels"]
+
+
+def test_the_agent_ready_label_is_the_recorded_spelling_or_the_role_name() -> None:
+    assert rules("gh issue edit 4 --add-label agent:ready") == ["agent-ready-label"]
+    assert rules("gh issue edit 4 --add-label ready-for-agent") == []
+    assert rules("gh issue edit 4 --add-label agent:ready", cwd=UNGUARDED) == []
+    assert rules("gh issue edit 4 --add-label ready-for-agent", cwd=UNGUARDED) == [
+        "agent-ready-label"
+    ]
+    without = make_guard(filesystem=FakeFilesystem(contents={}))
+    assert rules("gh issue edit 4 --add-label ready-for-agent", without) == ["agent-ready-label"]
+    assert gh.label_for_role(LABELS_RECORD, "ready-for-agent") == "agent:ready"
+    assert gh.label_for_role(LABELS_RECORD, "needs-info") is None
+    assert gh.label_for_role("| Role | Label |\n| --- | --- |\n| a | b |", "a") is None
+    assert (
+        gh.label_for_role("| Label in mattpocock/skills | Label in our tracker |\n| x |", "x")
+        is None
+    )
+    assert gh.applied_labels(["issue", "edit", "4", "--add-label"]) == []
+    assert gh.applied_labels(["-l", "a, b", "--label=c", "--add-label", ""]) == ["a", "b", "c"]
 
 
 def test_listed_labels_reads_the_tracker_column() -> None:

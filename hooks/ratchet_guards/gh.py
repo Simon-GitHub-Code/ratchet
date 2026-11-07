@@ -11,6 +11,12 @@ from the owner's answer, and a guard path in the decisions group once the reposi
 adopted. Creating a label routes nothing by itself; the list is the owner's; and a label named
 nowhere in the record is still refused. ``--force`` edits an existing label, ``-R`` names
 another repository, and both stay refused.
+
+Applying a label to an issue or pull request is routing, not label management, and passes,
+with one exception: the agent-ready label (the ``ready-for-agent`` role of the triage-labels
+record, as the tracker spells it) is the owner's agreement that a ticket is ready to build,
+and the feature preflight reads it as such. An agent that applies it is asking the owner, so
+the call asks.
 """
 
 import re
@@ -30,6 +36,12 @@ _FORCE = frozenset({"-f", "--force"})
 _LABEL_CREATE = Spec("Rcd", _REPO_FLAGS | {"--color", "--description"})
 LABELS_RECORD = Path("docs/agents/triage-labels.md")
 _TRACKER_COLUMN = "label in our tracker"
+_ROLE_COLUMN = "label in mattpocock/skills"
+READY_ROLE = "ready-for-agent"
+_LABEL_FLAGS = frozenset({"--add-label", "--label", "-l"})
+_LABEL_APPLIERS = frozenset(
+    {("issue", "edit"), ("issue", "create"), ("pr", "edit"), ("pr", "create")}
+)
 _RULE_CELLS = frozenset("-: ")
 _COMMANDS = {
     ("pr", "merge"): "merge-pr",
@@ -152,14 +164,60 @@ def listed_labels(record: str) -> frozenset[str]:
     return frozenset(labels)
 
 
-def _recorded(name: str, context: Context, guard: Guard) -> bool:
-    """Whether the checkout holding ``context.cwd`` records ``name`` as a triage label."""
+def label_for_role(record: str, role: str) -> str | None:
+    """The tracker's label for a mattpocock/skills ``role`` in the triage-labels record."""
+    columns: dict[str, int] = {}
+    for line in record.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = _cells(line)
+        if not columns:
+            columns = {cell.lower(): index for index, cell in enumerate(cells)}
+            continue
+        role_at, tracker_at = columns.get(_ROLE_COLUMN), columns.get(_TRACKER_COLUMN)
+        if role_at is None or tracker_at is None or max(role_at, tracker_at) >= len(cells):
+            continue
+        if cells[role_at] == role and cells[tracker_at]:
+            return cells[tracker_at]
+    return None
+
+
+def _record(context: Context, guard: Guard) -> str | None:
+    """The triage-labels record of the checkout holding ``context.cwd``, if any."""
     filesystem = guard.locator.filesystem
     root = filesystem.checkout(filesystem.canonical(context.cwd))
-    if root is None:
-        return False
-    record = filesystem.read_text(root / LABELS_RECORD)
+    return None if root is None else filesystem.read_text(root / LABELS_RECORD)
+
+
+def _recorded(name: str, context: Context, guard: Guard) -> bool:
+    """Whether the checkout holding ``context.cwd`` records ``name`` as a triage label."""
+    record = _record(context, guard)
     return record is not None and name in listed_labels(record)
+
+
+def _ready_label(context: Context, guard: Guard) -> str:
+    """The agent-ready label here: the record's spelling, else the role name itself."""
+    record = _record(context, guard)
+    label = None if record is None else label_for_role(record, READY_ROLE)
+    return label or READY_ROLE
+
+
+def applied_labels(words: Sequence[str]) -> list[str]:
+    """Every label the command applies through ``--add-label``, ``--label`` or ``-l``."""
+    labels: list[str] = []
+    remaining = iter(words)
+    for word in remaining:
+        flag, equals, inline = word.partition("=")
+        if flag in _LABEL_FLAGS:
+            value = inline if equals else next(remaining, "")
+            labels.extend(part.strip() for part in value.split(",") if part.strip())
+    return labels
+
+
+def _applies_ready_label(words: Sequence[str], context: Context, guard: Guard) -> str | None:
+    """The agent-ready label when this command applies it, else ``None``."""
+    label = _ready_label(context, guard)
+    return label if label in applied_labels(words) else None
 
 
 def _label_create(words: Sequence[str], context: Context, guard: Guard) -> bool:
@@ -184,6 +242,11 @@ def check(words: Sequence[str], context: Context, guard: Guard) -> list[Verdict]
         rule = "labels" if action in _LABEL_WRITES else None
         if action == "create" and _label_create(words, context, guard):
             rule = None
+    elif (group, action) in _LABEL_APPLIERS:
+        label = _applies_ready_label(words, context, guard)
+        return (
+            [] if label is None else [Verdict("agent-ready-label", f"gh {group} {action} {label}")]
+        )
     else:
         rule = _COMMANDS.get((group, action))
     return [] if rule is None else [Verdict(rule, f"gh {group} {action}")]
