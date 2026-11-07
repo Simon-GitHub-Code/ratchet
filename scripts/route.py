@@ -167,16 +167,36 @@ def tracker_tickets(root: Path, gh: preflight.Runner) -> list[preflight.Ticket] 
     return sorted(tickets, key=lambda ticket: ticket.number or 0)
 
 
-def local_tickets(root: Path) -> list[preflight.Ticket]:
-    """The agent-ready tickets under ``.scratch``, where there is no tracker."""
+def local_tickets(root: Path, *, ready: bool = True) -> list[preflight.Ticket]:
+    """The open tickets under ``.scratch``, where there is no tracker: agent-ready, or not."""
     label = preflight.ready_label(root)
     tickets = []
     for path in sorted(root.glob(LOCAL_TICKETS)):
         ref = path.relative_to(root).as_posix()
         ticket = preflight.local_ticket(ref, path.read_text(encoding="utf-8", errors="replace"))
-        if ticket.is_open and label in ticket.labels:
+        if ticket.is_open and (label in ticket.labels) == ready:
             tickets.append(ticket)
     return tickets
+
+
+def triage_step(root: Path) -> Step | None:
+    """Open local tickets, none agent-ready: the first unblocked one is the owner's to agree."""
+    waiting = [
+        t
+        for t in local_tickets(root, ready=False)
+        if not preflight.open_blockers(t, root, lambda _args: None)
+    ]
+    for_agents = [t for t in waiting if not any("human" in label for label in t.labels)]
+    if not waiting:
+        return None
+    pick = (for_agents or waiting)[0]
+    return Step(
+        f'agree ticket {pick.ref} "{pick.title}": set its `Status:` to'
+        f" {preflight.ready_label(root)} if an agent may build it, or work it yourself",
+        f"{len(waiting)} unblocked open ticket(s) wait for triage, and none is agent-ready",
+        f"{CONJECTURE} {pick.ref}",
+        "triage",
+    )
 
 
 def has_conjecture(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> bool:
@@ -263,10 +283,11 @@ def stalled(ticket: preflight.Ticket, runs: dict[str, str]) -> str | None:
 def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
     """The step among the tickets: write one, give one its conjecture, or build one."""
     tickets = tracker_tickets(root, gh) if gh is not None else None
+    local = tickets is None
     if tickets is None:
         tickets = local_tickets(root)
     if not tickets:
-        return Step(
+        return (triage_step(root) if local else None) or Step(
             SPEC,
             "no open ticket carries the agent-ready label",
             f"{TICKETS}, then {CONJECTURE} <ticket>",

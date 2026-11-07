@@ -274,3 +274,28 @@ def test_an_unnumbered_ticket_is_matched_by_its_branch() -> None:
     ticket = route.preflight.Ticket("idea.md", None, "Idea", "", (), is_open=True)
     assert route.finished([ticket], ["feature/idea"]) is not None
     assert route.finished([ticket], ["feature/other"]) is None
+
+
+def test_open_local_tickets_none_agent_ready_are_triaged_before_a_new_spec(
+    tmp_path: Path,
+) -> None:
+    files = {
+        **ADOPTED,
+        ".scratch/f/issues/01-a.md": "# 01: A\n\nStatus: resolved\n",
+        ".scratch/f/issues/02-b.md": "# 02: B\n\nBlocked by: 03\n\nStatus: needs-triage\n",
+        ".scratch/f/issues/03-c.md": "# 03: C\n\nStatus: ready-for-human\n",
+        ".scratch/f/issues/04-d.md": "# 04: D\n\nStatus: needs-triage\n",
+    }
+    root = repository(tmp_path, files)
+    step = route.decide(root, None)
+    assert step.stage == "triage"
+    assert step.command.startswith('agree ticket .scratch/f/issues/04-d.md "D"')
+    assert "2 unblocked open ticket(s)" in step.why, "03 for the human, 04; 02 waits on 03"
+    (root / ".scratch/f/issues/04-d.md").unlink()
+    commit(root, "docs(tracker): drop 04")
+    assert route.decide(root, None).command.startswith("agree ticket .scratch/f/issues/03-c.md")
+    write(root, ".scratch/f/issues/03-c.md", "# 03: C\n\nStatus: resolved\n")
+    write(root, ".scratch/f/issues/02-b.md", "# 02: B\n\nStatus: resolved\n")
+    commit(root, "docs(tracker): all resolved")
+    assert route.decide(root, None).stage == "specify"
+    assert route.decide(root, FakeGh(issues="[]")).stage == "specify", "a tracker is not triaged"
