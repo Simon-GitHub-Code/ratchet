@@ -23,7 +23,7 @@ Adopt merges each section into `docs/process/binding.md`: the Runner paragraph r
 | coverage, absolute and ratcheted | `pytest-cov` writing `coverage.xml`, judged by `ratchet` plugin `scripts/coverage_groups.py` |
 | diff coverage | `diff-cover` at 100% over the merge base |
 | test count did not fall | `pytest --collect-only` at the merge base (a detached worktree) and at head |
-| changed-code mutation | `mutmut` over the changed files; zero unregistered survivors |
+| changed-code mutation | `mutmut` over the changed modules, judged by `ratchet` plugin `scripts/mutation_survivors.py` against `quality/mutation-register.toml`: every live mutant killed or registered, no stale entry |
 | contract drift | none: this stack generates no contract artefacts; ADR 0002 accepts the gap |
 | shipped-dependency audit | `pip-audit --strict` |
 | duplication | `pylint` `duplicate-code` at 8 lines |
@@ -37,7 +37,7 @@ Adopt merges each section into `docs/process/binding.md`: the Runner paragraph r
 | artefact and image scan | `trivy fs` at HIGH and CRITICAL |
 | type coverage, ratcheted | none: `mypy --strict` leaves nothing untyped to measure; ADR 0002 accepts the gap |
 | documentation coverage, ratcheted | `interrogate` against `[python.docs] coverage` |
-| full mutation | `mutmut run` over the absolute paths |
+| full mutation | `mutmut run` over the absolute paths, judged by `ratchet` plugin `scripts/mutation_survivors.py`; the score is the trend |
 | deep interface conformance | none until the project exposes a stateful interface; ADR 0002 accepts the gap |
 | symbolic checking | `crosshair check src` over the contracts in docstrings |
 | fuzzing | `hypothesis` under the `fuzz` profile for `FUZZ_SECONDS` |

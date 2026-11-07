@@ -23,7 +23,7 @@ Adopt merges each section into `docs/process/binding.md`: the Runner paragraph r
 | coverage, absolute and ratcheted | `vitest --coverage` (v8) writing a Cobertura report, judged by `ratchet` plugin `scripts/coverage_groups.py` |
 | diff coverage | `diff-cover` at 100% over the merge base |
 | test count did not fall | `vitest list` at the merge base (a detached worktree) and at head |
-| changed-code mutation | `stryker` over the changed files; zero unregistered survivors |
+| changed-code mutation | `stryker` over the changed modules, judged by `ratchet` plugin `scripts/mutation_survivors.py` against `quality/mutation-register.toml`: every live mutant killed or registered, no stale entry |
 | contract drift | none: this stack generates no contract artefacts; ADR 0002 accepts the gap |
 | shipped-dependency audit | `pnpm audit --prod --audit-level low` |
 | duplication | `jscpd` at 8 lines, 1% ceiling |
@@ -37,7 +37,7 @@ Adopt merges each section into `docs/process/binding.md`: the Runner paragraph r
 | artefact and image scan | `trivy fs` at HIGH and CRITICAL |
 | type coverage, ratcheted | `type-coverage --strict` against `[typescript.types] coverage` |
 | documentation coverage, ratcheted | none: no tool fits yet; ADR 0002 accepts the gap |
-| full mutation | `stryker run` over the absolute paths |
+| full mutation | `stryker run` over the absolute paths, judged by `ratchet` plugin `scripts/mutation_survivors.py`; the score is the trend |
 | deep interface conformance | none until the project exposes a stateful interface; ADR 0002 accepts the gap |
 | symbolic checking | none: no symbolic checker fits this stack; ADR 0002 accepts the gap |
 | fuzzing | `fast-check` under the `fuzz` vitest project for `FUZZ_SECONDS` |

@@ -60,9 +60,18 @@ test-counts:
     echo "tests: $was at base, $now at head"
     test "$now" -ge "$was"
 
+# The score is a trend; the gate is the register: every live mutant killed or registered, no stale
+# entry. `mutants/` is removed first because mutmut keeps a verdict until the function changes, so
+# a new test never re-tests an old survivor from the cache. `mutmut run` takes mutant-name
+# patterns; `--changed` prints one per changed source module, with `do_not_mutate` applied.
 mutation-changed:
-    uv run mutmut run --paths-to-mutate "$(git diff --name-only "$(git merge-base HEAD origin/main)" -- 'src/*.py' | tr '\n' ',')"
-    uv run mutmut results
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mapfile -t scope < <(python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool mutmut --changed)
+    if [ "${#scope[@]}" -eq 0 ]; then echo "mutation-changed: no source module changed"; exit 0; fi
+    rm -rf mutants
+    uv run mutmut run "${scope[@]}"
+    uv run mutmut results --all | python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool mutmut --results - --only "${scope[@]}"
 
 contracts-check:
     @echo "none: no generated contract artefacts in this stack; see the binding's ADR"; exit 0
@@ -101,8 +110,11 @@ doc-coverage:
 # --- tier 2 bodies ---------------------------------------------------------------
 
 mutation:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf mutants
     uv run mutmut run
-    uv run mutmut results
+    uv run mutmut results --all | python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool mutmut --results -
 
 symbolic:
     uv run crosshair check src

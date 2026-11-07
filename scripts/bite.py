@@ -26,6 +26,7 @@ import commits
 import coverage_groups
 import lowered
 import markers
+import mutation_survivors
 import pins
 import prose
 import settings_rules
@@ -50,6 +51,12 @@ MANIFEST = (
 THRESHOLDS = (
     '[python.coverage.core]\npaths = ["src/**"]\nabsolute = true\n\n'
     "[ceilings.change]\nfiles = 1\nlines = 2\n"
+)
+RESULTS = "    a.x_f__mutmut_1: killed\n    a.x_f__mutmut_2: {status}\n"
+REGISTER = (
+    '# Mutation register\n\n[[survivor]]\ntool = "mutmut"\nidentity = "a.x_f__mutmut_1"\n'
+    'function_hash = "{function_hash}"\n'
+    'reason = "Equivalent: the operands commute at every call site."\ndate = 2026-11-07\n'
 )
 REPORT = (
     '<?xml version="1.0"?><coverage><sources><source>{root}</source></sources><packages>'
@@ -76,7 +83,7 @@ def scratch(root: Path) -> None:
     git(root, "config", "user.email", "bite@example.invalid")
     git(root, "config", "user.name", "bite")
     git(root, "config", "commit.gpgsign", "false")
-    write(root, "src/a.py", "x = 1\n")
+    write(root, "src/a.py", "def f(a, b):\n    return a + b\n")
     write(root, "lint.toml", "strict = true\n")
     write(root, "README.md", "# A\n\nThe customer pays.\n")
     write(root, "GLOSSARY.md", GLOSSARY)
@@ -84,6 +91,8 @@ def scratch(root: Path) -> None:
     write(root, "quality/thresholds.toml", THRESHOLDS)
     write(root, WORKFLOW, PINNED)
     write(root, "coverage.xml", REPORT.format(root=root, hits=1, cond=100, total=1))
+    write(root, "mutants.txt", RESULTS.format(status="killed"))
+    write(root, "quality/mutation-register.toml", "# Mutation register\n")
     settings_rules.write(root)
     snapshots.write(root, snapshots.GROUP)
     git(root, "add", "-A")
@@ -97,11 +106,20 @@ def commit(root: Path, subject: str) -> None:
 
 
 def add_marker(root: Path) -> None:
-    write(root, "src/a.py", "x = 1  # TODO later\n")
+    write(root, "src/a.py", "def f(a, b):\n    return a + b  # TODO later\n")
 
 
 def add_suppression(root: Path) -> None:
-    write(root, "src/a.py", "x = 1  # noqa: E501\n")
+    write(root, "src/a.py", "def f(a, b):\n    return a + b  # noqa: E501\n")
+
+
+def survivor(root: Path) -> None:
+    write(root, "mutants.txt", RESULTS.format(status="survived"))
+
+
+def stale_entry(root: Path) -> None:
+    function_hash = mutation_survivors.python_function_hash(root, "a", "x_f")
+    write(root, "quality/mutation-register.toml", REGISTER.format(function_hash=function_hash))
 
 
 def add_focus(root: Path) -> None:
@@ -146,6 +164,7 @@ def foreign_deny(root: Path) -> None:
     )
 
 
+MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
 SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("markers", markers.main, add_marker, []),
     ("suppressions: a count rose", suppressions.main, add_suppression, []),
@@ -156,6 +175,8 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("change-size", change_size.main, two_files, []),
     ("commits", commits.main, bad_subject, []),
     ("coverage", coverage_groups.main, uncovered, []),
+    ("mutation: a survivor", mutation_survivors.main, survivor, MUTMUT),
+    ("mutation: a stale entry", mutation_survivors.main, stale_entry, MUTMUT),
     ("ratchet-lowered", lowered.main, lowered_threshold, []),
     ("settings-check", settings_rules.main, foreign_deny, ["--check"]),
 ]

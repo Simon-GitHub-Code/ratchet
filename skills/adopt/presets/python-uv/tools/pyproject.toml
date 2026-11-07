@@ -11,7 +11,7 @@ dev = [
     "hypothesis>=6.115",
     "import-linter>=2.1",
     "interrogate>=1.7",
-    "mutmut>=3.2",
+    "mutmut>=3.8",
     "mypy>=1.13",
     "pip-audit>=2.7",
     "pip-licenses>=5.0",
@@ -84,9 +84,10 @@ root_packages = ["<package>"]
 # type = "layers"
 # layers = ["<package>.app", "<package>.core"]
 
+# `mutation_survivors.py --changed` reads source_paths and do_not_mutate to scope a changed-code run.
 [tool.mutmut]
-paths_to_mutate = ["src/"]
-tests_dir = ["tests/"]
+source_paths = ["src/"]
+pytest_add_cli_args_test_selection = ["tests/"]
 
 [tool.interrogate]
 fail-under = 0

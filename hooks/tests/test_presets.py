@@ -101,3 +101,33 @@ def test_the_python_pyproject_fragment_parses_and_forbids_coverage_exclusions() 
     assert data["tool"]["ruff"]["lint"]["mccabe"]["max-complexity"] == 10
     assert "exclude_lines" not in data["tool"]["coverage"]["report"]
     assert "omit" not in data["tool"]["coverage"]["run"]
+
+
+def test_the_stryker_fragment_feeds_the_register_gate_and_keeps_the_score_a_trend() -> None:
+    # Why: issue #2. `break: null` alone made stryker green with survivors; the json report is
+    # what `mutation_survivors.py` judges, and the `mutate` globs are what `--changed` applies.
+    data = json.loads((ADOPT / "presets/typescript-pnpm/tools/stryker.config.json").read_text())
+    assert "json" in data["reporters"]
+    assert data["jsonReporter"]["fileName"] == "reports/mutation/mutation.json"
+    assert data["thresholds"]["break"] is None
+    assert any(not g.startswith("!") for g in data["mutate"])
+    assert all(".test." in g for g in data["mutate"] if g.startswith("!")), "only tests excluded"
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+def test_preset_mutation_recipes_go_through_the_register_gate(preset: Path) -> None:
+    text = (preset / "justfile").read_text(encoding="utf-8")
+    assert text.count("scripts/mutation_survivors.py") >= 3, (
+        "changed scope, changed gate, full gate"
+    )
+    assert "--changed" in text
+    if preset.name == "python-uv":
+        assert "rm -rf mutants" in text, "mutmut keeps verdicts a new test cannot change"
+        assert "mutmut results --all |" in text
+        assert "--paths-to-mutate" not in text, "not a mutmut 3 option"
+        tools = tomllib.loads((preset / "tools/pyproject.toml").read_text())
+        assert tools["tool"]["mutmut"]["source_paths"] == ["src/"]
+        assert any(d.startswith("mutmut>=3.8") for d in tools["dependency-groups"]["dev"])
+    else:
+        assert 'stryker run --mutate "$files"' in text
+        assert "--report reports/mutation/mutation.json" in text

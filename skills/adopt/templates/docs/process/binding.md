@@ -60,7 +60,7 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | coverage, absolute and ratcheted | `ratchet` plugin `scripts/coverage_groups.py` over the suite's Cobertura report | 1 | 100% for absolute paths; `quality/thresholds.toml` for the rest | `just coverage` |
 | diff coverage | | 1 | every changed line and branch | `just diff-coverage` |
 | test count did not fall | | 1 | the merge base's count | `just test-counts` |
-| changed-code mutation | | 1 | `quality/mutation-register.toml` | `just mutation-changed` |
+| changed-code mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 1 | `quality/mutation-register.toml` | `just mutation-changed` |
 | contract drift | | 1 | | `just contracts-check` |
 | shipped-dependency audit | | 1 | any advisory fails | `just audit` |
 | duplication | | 1 | | `just duplication` |
@@ -78,7 +78,7 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | guard paths changed | `ratchet` plugin `ratchet_guards.diff` | 1 | `guards/manifest.toml` | `just guard-diff` |
 | permission rules mirror the manifest | `ratchet` plugin `scripts/settings_rules.py` | 1 | `guards/manifest.toml` | `just settings-check` |
 | method conformance | `ratchet` plugin `scripts/conformance.py` | 1 | | `just conformance` |
-| full mutation | | 2 | `quality/mutation-register.toml` | `just mutation` |
+| full mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 2 | `quality/mutation-register.toml` | `just mutation` |
 | deep interface conformance | | 2 | | `just api-deep` |
 | symbolic checking | | 2 | | `just symbolic` |
 | fuzzing | | 2 | `FUZZ_SECONDS` | `just fuzz` |

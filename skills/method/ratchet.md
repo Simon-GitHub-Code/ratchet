@@ -49,7 +49,7 @@ reason = "Equivalent: the branch rounds a value that is already integral here."
 date = 2026-11-06
 ```
 
-- The identity is stable: the mutant's name plus a hash of its enclosing function (or file, unit, mutator and replacement where the tool has no function identity).
+- The identity is stable: the mutant's name plus a hash of its enclosing function (or file, mutator and replacement plus a hash of the enclosing unit where the tool numbers mutants per run). The plugin's `scripts/mutation_survivors.py` computes both and prints the entry to paste for every unregistered survivor; a partial run judges only its scope.
 - The reason has twenty characters or more. The honesty of the reason is for the owner's review; the register is a guard path.
 - An entry whose mutant is now killed, gone, or whose function hash changed is stale and fails. Editing a function forces its equivalents to be reviewed again.
 - Pull requests mutate changed functions (tier 1). The default branch mutates everything on the absolute paths (tier 2).

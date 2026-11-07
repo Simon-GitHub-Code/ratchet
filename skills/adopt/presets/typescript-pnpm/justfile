@@ -60,8 +60,16 @@ test-counts:
     echo "tests: $was at base, $now at head"
     test "$now" -ge "$was"
 
+# The score is a trend (`thresholds.break` stays null); the gate is the register: every live mutant
+# killed or registered, no stale entry, read from the json reporter. `--mutate` on the command line
+# replaces the config's list, exclusions included, so `--changed` applies the config's globs first.
 mutation-changed:
-    pnpm exec stryker run --mutate "$(git diff --name-only "$(git merge-base HEAD origin/main)" -- 'src/*.ts' | grep -v '\.test\.ts$' | tr '\n' ',')"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    files="$(python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool stryker --changed)"
+    if [ -z "$files" ]; then echo "mutation-changed: no mutable file changed"; exit 0; fi
+    pnpm exec stryker run --mutate "$files"
+    python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool stryker --report reports/mutation/mutation.json
 
 contracts-check:
     @echo "none: no generated contract artefacts in this stack; see the binding's ADR"; exit 0
@@ -102,6 +110,7 @@ doc-coverage:
 
 mutation:
     pnpm exec stryker run
+    python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool stryker --report reports/mutation/mutation.json
 
 symbolic:
     @echo "none: no symbolic checker fits this stack; see the binding's ADR"; exit 0
