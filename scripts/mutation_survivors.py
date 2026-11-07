@@ -322,16 +322,19 @@ def stryker_changed(root: Path, base: str | None) -> list[str]:
     patterns = stryker_patterns(root)
     before = gatelib.base_commit(root, base)
     changed = gatelib.changed_paths(root, before) if before else gatelib.tracked_paths(root)
-    return [path for path in changed if mutated_by(path, patterns)]
+    return [path for path in changed if mutated_by(path, patterns) and (root / path).is_file()]
 
 
-def nothing_to_mutate(root: Path, report: dict[str, object]) -> bool:
-    """Whether stryker ran and had nothing to mutate, which a fresh skeleton's empty core is.
+def nothing_to_mutate(root: Path, report: dict[str, object], scope: list[str]) -> bool:
+    """Whether stryker ran and had nothing to mutate: types or re-exports only, or no code yet.
 
-    The report lists no file and no tracked file passes the ``mutate`` globs, so a glob that
-    misses real code still fails as an empty run.
+    The report lists no file. A scoped run was given files that exist, so stryker read them and
+    found no mutant. A full run passes only when no tracked file passes the ``mutate`` globs, so
+    a glob that misses real code still fails as an empty run.
     """
     ran = "schemaVersion" in report and report.get("files") == {}
+    if scope:
+        return ran and all((root / path).is_file() for path in scope)
     patterns = stryker_patterns(root)
     return ran and not any(mutated_by(path, patterns) for path in gatelib.tracked_paths(root))
 
@@ -429,8 +432,9 @@ def check(options: argparse.Namespace, root: Path) -> list[str]:
             given = options.report or STRYKER_REPORT
             return [*problems, f"{given}: missing; run stryker with the json reporter first"]
         report = _json(path)
-        if nothing_to_mutate(root, report):
-            print("stryker: no source file to mutate yet; the mutate globs match no tracked file")
+        given = [f for files in options.only or [] for f in files.split(",") if f]
+        if nothing_to_mutate(root, report, given):
+            print("stryker: no mutant in the files it was given; nothing to mutate yet")
             return problems
         mutants = stryker_mutants(report)
     return problems + judge(options.tool, mutants, found, scope=options.only or [])
@@ -451,7 +455,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--tool", choices=TOOLS, required=True)
     parser.add_argument("--results", help="mutmut: `mutmut results --all` output, `-` for stdin")
     parser.add_argument("--report", help="stryker: the json reporter's file")
-    parser.add_argument("--only", nargs="+", help="mutmut: the patterns the run was given")
+    parser.add_argument(
+        "--only", nargs="+", help="the run's scope: mutmut patterns, or stryker's `--mutate` files"
+    )
     parser.add_argument(
         "--changed", action="store_true", help="print the scope of a changed-code run"
     )

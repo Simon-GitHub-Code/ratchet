@@ -72,7 +72,7 @@ mutation-changed:
     files="$(python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool stryker --changed)"
     if [ -z "$files" ]; then echo "mutation-changed: no mutable file changed"; exit 0; fi
     pnpm exec stryker run --mutate "$files"
-    python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool stryker --report reports/mutation/mutation.json
+    python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool stryker --report reports/mutation/mutation.json --only "$files"
 
 contracts-check:
     @echo "none: no generated contract artefacts in this stack; see the binding's ADR"; exit 0
