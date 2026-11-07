@@ -19,7 +19,11 @@ coverage exclusion in its files (``pragma: no cover``, ``istanbul ignore`` and p
 file that falls in no group fails: new code cannot land outside the rules. ``--write`` raises each
 group's recorded line and branch to the measured value and never lowers one.
 
-Usage: ``coverage_groups.py [--root DIR] [--report FILE] [--write]``.
+A group whose paths match no measured file is not measured, not 100%: it is skipped, said so, and
+``--write`` leaves it alone. Several ``--report`` arguments are tallied together, so a repository
+with one suite per stack judges every group against the merged view in one run.
+
+Usage: ``coverage_groups.py [--root DIR] [--report FILE]... [--write]``.
 """
 
 from __future__ import annotations
@@ -62,6 +66,11 @@ class Tally:
     branches_hit: int = 0
     files: list[str] = field(default_factory=list)
 
+    @property
+    def measured(self) -> bool:
+        """Whether any file fell in this tally."""
+        return bool(self.files) or self.lines > 0 or self.branches > 0
+
     def rate(self, kind: str) -> float:
         """The percentage covered, ``100`` when nothing was measured."""
         total, hit = (
@@ -97,14 +106,18 @@ def _number(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def measured(report: Path, root: Path) -> dict[str, Tally]:
-    """Per-file tallies, keyed by the repository-relative path the report resolves to."""
+def measured(report: Path, root: Path, tallies: dict[str, Tally] | None = None) -> dict[str, Tally]:
+    """Per-file tallies, keyed by the repository-relative path the report resolves to.
+
+    Passing ``tallies`` adds this report's files to it, so several reports merge into one view.
+    """
     tree = ET.parse(report)  # noqa: S314 # -- see the import
     sources = [s.text.strip() for s in tree.iter("source") if s.text and s.text.strip()]
-    tallies: dict[str, Tally] = {}
+    tallies = {} if tallies is None else tallies
     for cls in tree.iter("class"):
         path = relative(cls.get("filename", ""), sources, root)
         tally = tallies.setdefault(path, Tally())
+        tally.files = [path]
         for line in cls.iter("line"):
             tally.lines += 1
             tally.lines_hit += int(line.get("hits", "0")) > 0
@@ -159,6 +172,8 @@ def exclusions(root: Path, files: list[str]) -> list[str]:
 
 
 def judge(group: Group, tally: Tally, root: Path) -> list[str]:
+    if not tally.measured:
+        return []
     problems = []
     for kind, recorded in (("line", group.line), ("branch", group.branch)):
         rate = tally.rate(kind)
@@ -179,6 +194,8 @@ def judge(group: Group, tally: Tally, root: Path) -> list[str]:
 def raised(text: str, group: Group, tally: Tally) -> str:
     """The thresholds text with the group's line and branch raised to the measured values."""
     block = re.compile(rf"(?m)^{re.escape(f'[{group.key}]')}\n(?P<body>(?:(?!\[)[^\n]*\n)*)")
+    if not tally.measured:
+        return text
     for kind, recorded in (("line", group.line), ("branch", group.branch)):
         rate = tally.rate(kind)
         found = block.search(text)
@@ -203,20 +220,33 @@ def write(root: Path, found: list[Group], totals: dict[str, Tally]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def problems(root: Path, report: Path, *, write_back: bool = False) -> list[str]:
-    if not report.is_file():
-        return [f"{report}: missing; run the suite with a Cobertura report first"]
+def problems(root: Path, reports: list[Path], *, write_back: bool = False) -> list[str]:
+    missing = [
+        f"{r}: missing; run the suite with a Cobertura report first"
+        for r in reports
+        if not r.is_file()
+    ]
+    if missing:
+        return missing
     found = groups(gatelib.thresholds(root))
     if not found:
         return [f"{gatelib.THRESHOLDS}: no [<language>.coverage.<group>] table with paths"]
-    totals, orphans = tally_groups(found, measured(report, root))
+    files: dict[str, Tally] = {}
+    for report in reports:
+        measured(report, root, files)
+    totals, orphans = tally_groups(found, files)
     if write_back:
         write(root, found, totals)
         found = groups(gatelib.thresholds(root))
     faults = [f"{path}: measured but in no coverage group" for path in orphans]
     for group in found:
         tally = totals[group.key]
-        print(f"{group.key}: {tally.rate('line')}% lines, {tally.rate('branch')}% branches")
+        if tally.measured:
+            print(f"{group.key}: {tally.rate('line')}% lines, {tally.rate('branch')}% branches")
+        else:
+            # Why: an unmeasured group is not 100%; scoring it so would ratchet it to a value
+            # the next report, from another stack's suite, could never reach.
+            print(f"{group.key}: not measured; no file in the report falls in it")
         faults += judge(group, tally, root)
     return faults
 
@@ -224,13 +254,13 @@ def problems(root: Path, report: Path, *, write_back: bool = False) -> list[str]
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
-    parser.add_argument("--report", default="coverage.xml")
+    parser.add_argument("--report", action="append", default=None, help="repeatable")
     parser.add_argument("--write", action="store_true")
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
-    report = Path(options.report)
-    report = report if report.is_absolute() else root / report
-    return gatelib.report("coverage", problems(root, report, write_back=options.write))
+    reports = [Path(r) for r in options.report or ["coverage.xml"]]
+    reports = [r if r.is_absolute() else root / r for r in reports]
+    return gatelib.report("coverage", problems(root, reports, write_back=options.write))
 
 
 if __name__ == "__main__":
