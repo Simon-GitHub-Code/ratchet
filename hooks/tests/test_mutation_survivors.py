@@ -377,3 +377,22 @@ def test_a_deleted_file_is_not_in_the_changed_scope(tmp_path: Path) -> None:
     write(root, "src/b.ts", "b2\n")
     commit(root, "refactor: drop a")
     assert gate.stryker_changed(root, "main") == ["src/b.ts"]
+
+
+def test_a_full_run_whose_globs_reach_no_tracked_file_is_still_empty(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path,
+        {str(gate.STRYKER_CONFIG): '{"mutate": ["src/**/*.ts"]}', "lib/add.ts": "a + b;\n"},
+    )
+    write(root, str(gate.STRYKER_REPORT), '{"schemaVersion": "2", "files": {}}')
+    assert run(root, "--tool", "stryker") == 1, "a glob that misses the code is no skeleton"
+    assert "no mutant reported" in capsys.readouterr().out
+
+
+def test_an_empty_changed_scope_prints_nothing(tmp_path: Path, capsys: Out) -> None:
+    root = repository(tmp_path, {str(gate.STRYKER_CONFIG): '{"mutate": ["src/**/*.ts"]}'})
+    assert run(root, "--tool", "mutmut", "--changed") == 0
+    assert run(root, "--tool", "stryker", "--changed") == 0
+    assert capsys.readouterr().out == "", "mapfile would read one empty pattern from a newline"

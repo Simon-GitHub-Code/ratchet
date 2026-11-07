@@ -329,14 +329,18 @@ def nothing_to_mutate(root: Path, report: dict[str, object], scope: list[str]) -
     """Whether stryker ran and had nothing to mutate: types or re-exports only, or no code yet.
 
     The report lists no file. A scoped run was given files that exist, so stryker read them and
-    found no mutant. A full run passes only when no tracked file passes the ``mutate`` globs, so
-    a glob that misses real code still fails as an empty run.
+    found no mutant. A full run passes only when the globs' includes reach tracked files and
+    its exclusions drop every one, as a skeleton's re-exporting index; an include that reaches
+    no tracked file is a glob that misses the code, and still fails as an empty run.
     """
     ran = "schemaVersion" in report and report.get("files") == {}
     if scope:
         return ran and all((root / path).is_file() for path in scope)
     patterns = stryker_patterns(root)
-    return ran and not any(mutated_by(path, patterns) for path in gatelib.tracked_paths(root))
+    includes = [p for p in patterns if not p.startswith("!")]
+    tracked = gatelib.tracked_paths(root)
+    reached = [path for path in tracked if mutated_by(path, includes)]
+    return ran and bool(reached) and not any(mutated_by(path, patterns) for path in reached)
 
 
 def mutated_by(path: str, patterns: list[str]) -> bool:
@@ -466,9 +470,11 @@ def main(argv: list[str]) -> int:
     root = Path(options.root).resolve()
     if options.changed:
         if options.tool == "mutmut":
-            print("\n".join(mutmut_changed(root, options.base)))
+            scope = "\n".join(mutmut_changed(root, options.base))
         else:
-            print(",".join(stryker_changed(root, options.base)))
+            scope = ",".join(stryker_changed(root, options.base))
+        if scope:
+            print(scope)
         return 0
     return gatelib.report("mutation", check(options, root))
 

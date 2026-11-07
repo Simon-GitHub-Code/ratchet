@@ -49,6 +49,7 @@ TRACKER_COLUMN = "label in our tracker"
 EMPTY_BODIES = frozenset({"", "tbd", "todo", "n/a", "none", "-", "..."})
 MIN_BODY = 40
 SLUG_WIDTH = 40
+CLOSED_STATUSES = frozenset({"resolved", "closed", "done", "wontfix"})
 STATUS_LINE = re.compile(
     r"^\*{0,2}status:?\*{0,2}:?\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE
 )
@@ -213,7 +214,7 @@ def local_ticket(ref: str, text: str) -> Ticket:
         title=title,
         body=text,
         labels=labels,
-        is_open=not any(label.lower() in {"resolved", "closed", "done"} for label in labels),
+        is_open=not any(label.lower() in CLOSED_STATUSES for label in labels),
     )
 
 

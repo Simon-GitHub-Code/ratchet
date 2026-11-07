@@ -96,6 +96,7 @@ def observe(root: Path) -> Checkout | None:
     if status is None:
         return None
     branch = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    branch = None if branch == "HEAD" else branch
     default = gatelib.default_branches(root)[0].removeprefix("origin/")
     forge = gatelib.git(root, "remote", "get-url", "origin") is not None
     return Checkout(root, branch or None, default, bool(status.strip()), forge)
@@ -186,6 +187,7 @@ def triage_step(root: Path) -> Step | None:
         for t in local_tickets(root, ready=False)
         if not preflight.open_blockers(t, root, lambda _args: None)
     ]
+    waiting = [t for t in waiting if not any("info" in label for label in t.labels)]
     for_agents = [t for t in waiting if not any("human" in label for label in t.labels)]
     if not waiting:
         return None
@@ -219,12 +221,17 @@ def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) 
 
 
 def merged_features(root: Path, default_branch: str) -> list[str]:
-    """Feature branches merged into the default branch: each tip a merge commit's second parent.
+    """Feature branches merged into the default branch by a merge made on its own line.
 
-    A branch made and never built points at an old default commit, which is no merge's second
-    parent, so it does not count.
+    Each tip is the second parent of a merge on the default branch's first-parent line, as
+    `git merge --no-ff` makes. A branch made and never built points at an old default commit,
+    which no merge on that line brings in. A fast-forward or squash merge leaves no such merge,
+    so the feature skill resolves the ticket in the branch itself.
     """
-    merges = gatelib.git(root, "rev-list", "--merges", "--parents", default_branch) or ""
+    merges = (
+        gatelib.git(root, "rev-list", "--merges", "--first-parent", "--parents", default_branch)
+        or ""
+    )
     merged = {parent for line in merges.splitlines() for parent in line.split()[2:]}
     heads = gatelib.git(
         root, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/feature/"
@@ -236,10 +243,8 @@ def merged_features(root: Path, default_branch: str) -> list[str]:
 def finished(tickets: list[preflight.Ticket], merged: list[str]) -> Step | None:
     """An open ticket whose branch is already merged: it is done, so it is resolved, not rebuilt."""
     for ticket in tickets:
-        prefix = f"feature/{ticket.number}-" if ticket.number is not None else None
-        own = preflight.branch_of(ticket, preflight.slug_of(ticket.title, None))
-        branch = next((b for b in merged if b == own or (prefix and b.startswith(prefix))), None)
-        if branch is not None:
+        branch = own_branch(ticket)
+        if branch in merged:
             return Step(
                 f"mark ticket {ticket.ref} resolved (`Status: resolved` on a local ticket;"
                 " close the issue on a forge)",
@@ -272,12 +277,14 @@ def blocked_runs(root: Path, default_branch: str) -> dict[str, str]:
 def stalled(ticket: preflight.Ticket, runs: dict[str, str]) -> str | None:
     """The stash of the blocked run that still holds ``ticket``, if one does.
 
-    A numbered ticket is known by its number, so a branch made under an older slug still counts.
+    Matched by the whole branch name: local ticket numbers repeat across features.
     """
-    if ticket.number is None:
-        return runs.get(preflight.branch_of(ticket, preflight.slug_of(ticket.title, None)))
-    prefix = f"feature/{ticket.number}-"
-    return next((run for branch, run in runs.items() if branch.startswith(prefix)), None)
+    return runs.get(own_branch(ticket))
+
+
+def own_branch(ticket: preflight.Ticket) -> str:
+    """The branch the feature preflight names for ``ticket``."""
+    return preflight.branch_of(ticket, preflight.slug_of(ticket.title, ticket.number))
 
 
 def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
@@ -311,7 +318,8 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
         held = unblocked[0]
         return Step(
             f"answer the questions or land the guard edits the blocked run of {held.ref} named"
-            f" (stash `{stalled(held, runs)}`) on {checkout.default_branch}",
+            f" (stash `{stalled(held, runs)}`) on {checkout.default_branch}; an answer given"
+            " elsewhere, as an issue comment, releases it once you drop that stash",
             f"the last {FEATURE} run on every agent-ready ticket blocked, and"
             f" {checkout.default_branch} has not moved since; a rerun would block the same way",
             f"{FEATURE} {held.ref}, or {POTETO} {held.ref} now to make the edits as the guard asks",

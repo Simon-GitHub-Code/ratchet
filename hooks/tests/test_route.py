@@ -218,13 +218,13 @@ def test_a_ticket_whose_feature_run_blocked_waits_for_the_default_branch_to_move
     files = {**ADOPTED, ticket: "# 02: B\n\nStatus: ready-for-agent" + CONJECTURE}
     root = repository(tmp_path, files)
     assert route.decide(root, None).command == f"{route.FEATURE} {ticket}"
-    git(root, "switch", "-q", "-c", "feature/2-b-under-an-older-slug")
+    git(root, "switch", "-q", "-c", "feature/2-b")
     write(root, "docs/features/b/spec.md", "draft\n")
-    git(root, "stash", "push", "-q", "-u", "-m", "feature/2-b-under-an-older-slug: blocked run")
+    git(root, "stash", "push", "-q", "-u", "-m", "feature/2-b: blocked run")
     git(root, "switch", "-q", "main")
     held = route.decide(root, None)
     assert held.stage == "blocked-run"
-    assert "stash `feature/2-b-under-an-older-slug: blocked run`" in held.command
+    assert "stash `feature/2-b: blocked run`" in held.command
     assert held.then.startswith(f"{route.FEATURE} {ticket}")
     write(root, "package.json", "{}\n")
     commit(root, "build: the guard edit the run named")
@@ -299,3 +299,58 @@ def test_open_local_tickets_none_agent_ready_are_triaged_before_a_new_spec(
     commit(root, "docs(tracker): all resolved")
     assert route.decide(root, None).stage == "specify"
     assert route.decide(root, FakeGh(issues="[]")).stage == "specify", "a tracker is not triaged"
+
+
+def test_local_ticket_numbers_repeat_across_features_so_branches_match_whole(
+    tmp_path: Path,
+) -> None:
+    beta = ".scratch/f2/issues/01-beta.md"
+    files = {
+        **ADOPTED,
+        ".scratch/f1/issues/01-alpha.md": "# 01: Alpha\n\nStatus: resolved\n",
+        beta: "# 01: Beta\n\nStatus: ready-for-agent" + CONJECTURE,
+    }
+    root = repository(tmp_path, files)
+    git(root, "switch", "-q", "-c", "feature/1-alpha")
+    write(root, "src/a.py", "a = 1\n")
+    commit(root, "feat(a): a")
+    git(root, "switch", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "feature/1-alpha", "-m", "Merge branch 'feature/1-alpha'")
+    assert route.decide(root, None).command == f"{route.FEATURE} {beta}"
+
+
+def test_a_default_commit_merged_into_a_side_branch_is_no_feature_merge(tmp_path: Path) -> None:
+    ticket = ".scratch/f/issues/05-gamma.md"
+    files = {**ADOPTED, ticket: "# 05: Gamma\n\nStatus: ready-for-agent" + CONJECTURE}
+    root = repository(tmp_path, files)
+    git(root, "switch", "-q", "-c", "side")
+    write(root, "s.txt", "s\n")
+    commit(root, "chore: side")
+    git(root, "switch", "-q", "main")
+    write(root, "m.txt", "m\n")
+    commit(root, "chore: main moves")
+    git(root, "branch", "feature/5-gamma")
+    git(root, "switch", "-q", "side")
+    git(root, "merge", "-q", "--no-ff", "main", "-m", "Merge branch 'main' into side")
+    git(root, "switch", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "side", "-m", "Merge branch 'side'")
+    assert route.merged_features(root, "main") == []
+    assert route.decide(root, None).stage == "build"
+
+
+def test_wontfix_is_closed_and_needs_info_is_not_for_triage(tmp_path: Path) -> None:
+    files = {
+        **ADOPTED,
+        ".scratch/f/issues/01-a.md": "# 01: A\n\nStatus: wontfix\n",
+        ".scratch/f/issues/02-b.md": "# 02: B\n\nStatus: needs-info\n",
+    }
+    root = repository(tmp_path, files)
+    assert route.decide(root, None).stage == "specify"
+
+
+def test_a_detached_head_counts_as_the_default_branch(tmp_path: Path) -> None:
+    root = repository(tmp_path, ADOPTED)
+    git(root, "switch", "-q", "--detach")
+    checkout = route.observe(root)
+    assert checkout is not None
+    assert checkout.on_default
