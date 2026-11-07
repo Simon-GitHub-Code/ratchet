@@ -248,3 +248,29 @@ def test_an_unnumbered_ticket_is_held_by_its_slug() -> None:
         "feature/idea: blocked run"
     )
     assert route.stalled(ticket, {"feature/other": "feature/other: blocked run"}) is None
+
+
+def test_a_ticket_whose_branch_is_merged_is_resolved_not_rebuilt(tmp_path: Path) -> None:
+    ticket = ".scratch/f/issues/02-b.md"
+    files = {**ADOPTED, ticket: "# 02: B\n\nStatus: ready-for-agent" + CONJECTURE}
+    root = repository(tmp_path, files)
+    git(root, "branch", "feature/2-b-never-built")
+    assert route.decide(root, None).stage == "build", "an empty branch is no merge"
+    git(root, "switch", "-q", "-c", "feature/2-b")
+    write(root, "src/b.py", "b = 1\n")
+    commit(root, "feat(b): b")
+    git(root, "switch", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "feature/2-b", "-m", "Merge branch 'feature/2-b'")
+    done = route.decide(root, None)
+    assert done.stage == "resolve"
+    assert done.command.startswith(f"mark ticket {ticket} resolved")
+    assert "`feature/2-b`" in done.why
+    write(root, ticket, "# 02: B\n\nStatus: resolved" + CONJECTURE)
+    commit(root, "docs(tracker): resolve 02")
+    assert route.decide(root, None).stage == "specify"
+
+
+def test_an_unnumbered_ticket_is_matched_by_its_branch() -> None:
+    ticket = route.preflight.Ticket("idea.md", None, "Idea", "", (), is_open=True)
+    assert route.finished([ticket], ["feature/idea"]) is not None
+    assert route.finished([ticket], ["feature/other"]) is None

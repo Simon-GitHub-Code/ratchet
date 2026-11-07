@@ -198,6 +198,38 @@ def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) 
     return None
 
 
+def merged_features(root: Path, default_branch: str) -> list[str]:
+    """Feature branches merged into the default branch: each tip a merge commit's second parent.
+
+    A branch made and never built points at an old default commit, which is no merge's second
+    parent, so it does not count.
+    """
+    merges = gatelib.git(root, "rev-list", "--merges", "--parents", default_branch) or ""
+    merged = {parent for line in merges.splitlines() for parent in line.split()[2:]}
+    heads = gatelib.git(
+        root, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/feature/"
+    )
+    pairs = [line.split(" ", 1) for line in (heads or "").splitlines()]
+    return [name for name, tip in pairs if tip in merged]
+
+
+def finished(tickets: list[preflight.Ticket], merged: list[str]) -> Step | None:
+    """An open ticket whose branch is already merged: it is done, so it is resolved, not rebuilt."""
+    for ticket in tickets:
+        prefix = f"feature/{ticket.number}-" if ticket.number is not None else None
+        own = preflight.branch_of(ticket, preflight.slug_of(ticket.title, None))
+        branch = next((b for b in merged if b == own or (prefix and b.startswith(prefix))), None)
+        if branch is not None:
+            return Step(
+                f"mark ticket {ticket.ref} resolved (`Status: resolved` on a local ticket;"
+                " close the issue on a forge)",
+                f"branch `{branch}` is merged, yet {ticket.ref} is still open",
+                NEXT,
+                "resolve",
+            )
+    return None
+
+
 def blocked_runs(root: Path, default_branch: str) -> dict[str, str]:
     """Branches whose last feature run blocked and whose block still stands, with its stash.
 
@@ -240,6 +272,9 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             f"{TICKETS}, then {CONJECTURE} <ticket>",
             "specify",
         )
+    done = finished(tickets, merged_features(root, checkout.default_branch))
+    if done is not None:
+        return done
     offline_gh = gh or (lambda _args: None)
     unblocked = [t for t in tickets if not preflight.open_blockers(t, root, offline_gh)]
     if not unblocked:
