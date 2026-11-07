@@ -31,12 +31,14 @@ def over_the_line_limit(files: list[Path], limit: int = MAX_MODULE_LINES) -> lis
 
 
 def banned_words(glossary: str) -> set[str]:
-    words = {w.strip().strip("`").lower() for line in AVOID.findall(glossary) for w in line.split(",")}
+    words = {
+        w.strip().strip("`").lower() for line in AVOID.findall(glossary) for w in line.split(",")
+    }
     return {w for w in words if w and not w.startswith("<")}
 
 
 def banned_identifiers(source: str, banned: set[str]) -> list[str]:
-    """Identifiers defined or used in ``source`` that contain a banned word as a whole word."""
+    """Return the identifiers in ``source`` that contain a banned word as a whole word."""
     found = []
     for node in ast.walk(ast.parse(source)):
         name = getattr(node, "name", None) or getattr(node, "id", None)

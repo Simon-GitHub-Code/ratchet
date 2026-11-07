@@ -12,7 +12,7 @@ Adopt merges each section into `docs/process/binding.md`: the Runner paragraph r
 | --- | --- |
 | format | `prettier --check` |
 | lint, near-all rules | `eslint` with `typescript-eslint` `strictTypeChecked` and `--max-warnings 0`; each disable names its rule and a reason |
-| strict types | `tsc --noEmit` with `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`; `any` and `@ts-ignore` are banned by eslint |
+| strict types | `tsc --noEmit` with `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`; `any` and the TypeScript ignore directives are banned by eslint |
 | dependency direction | `dependency-cruiser` rules from the Layers table, plus the fitness test |
 | dead code and dependency hygiene | `knip` |
 | scripts and CI lint | `actionlint` and `shellcheck` |
@@ -52,7 +52,7 @@ Adopt merges each section into `docs/process/binding.md`: the Runner paragraph r
 
 ## Absolute paths
 
-`src/core/**` and `tests/fitness/**`: 100% line and branch coverage, no `istanbul ignore` or `c8 ignore`, no coverage exclude that reaches them. The `core` coverage group in `quality/thresholds.toml` is `absolute = true`.
+`src/core/**` and `tests/fitness/**`: 100% line and branch coverage, no coverage-ignore comment, no coverage exclude that reaches them. The `core` coverage group in `quality/thresholds.toml` is `absolute = true`.
 
 ## Limits
 

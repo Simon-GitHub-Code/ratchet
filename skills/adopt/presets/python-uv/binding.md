@@ -52,7 +52,7 @@ Adopt merges each section into `docs/process/binding.md`: the Runner paragraph r
 
 ## Absolute paths
 
-`src/<package>/core/**` and `tests/fitness/**`: 100% line and branch coverage, no `pragma: no cover`, no coverage omit that reaches them. The `core` coverage group in `quality/thresholds.toml` is `absolute = true`.
+`src/<package>/core/**` and `tests/fitness/**`: 100% line and branch coverage, no coverage-exclusion pragma, no coverage omit that reaches them. The `core` coverage group in `quality/thresholds.toml` is `absolute = true`.
 
 ## Limits
 

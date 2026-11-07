@@ -28,6 +28,8 @@ dev = [
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+# Why: the snapshots copy pyproject.toml, and ruff would read the copy as a nested config.
+extend-exclude = ["quality/snapshots"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -35,10 +37,12 @@ ignore = [
     "D203",   # one-blank-line-before-class: conflicts with D211
     "D213",   # multi-line-summary-second-line: conflicts with D212
     "COM812", # missing-trailing-comma: the formatter owns commas
+    "CPY001", # missing-copyright-notice: a per-file licence header is the project's choice
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "PLR2004", "D100", "D101", "D102", "D103", "D104"]
+# INP001: pytest collects test directories without `__init__.py`.
+"tests/**" = ["S101", "PLR2004", "D100", "D101", "D102", "D103", "D104", "INP001"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10 # C901; the binding's Limits
@@ -87,7 +91,8 @@ root_packages = ["<package>"]
 # `mutation_survivors.py --changed` reads source_paths and do_not_mutate to scope a changed-code run.
 [tool.mutmut]
 source_paths = ["src/"]
-pytest_add_cli_args_test_selection = ["tests/"]
+# Why: the fitness tests read source text, and mutmut's trampolines lengthen every mutated module.
+pytest_add_cli_args_test_selection = ["tests/", "--ignore=tests/fitness"]
 
 [tool.interrogate]
 fail-under = 0
