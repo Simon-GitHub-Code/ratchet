@@ -16,6 +16,8 @@ import tomllib
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+import settings_rules
+
 ENTRY_POINTS = (
     "tier0",
     "tier1",
@@ -28,6 +30,7 @@ ENTRY_POINTS = (
     "snapshots-check",
     "suppressions",
     "guard-diff",
+    "settings-check",
     "conformance",
     "reports",
     "budget",
@@ -66,7 +69,7 @@ PR_SECTIONS = (
     "## Decisions",
     "## Gates",
 )
-LOCKED_PATTERNS = {".claude/**", "guards/**"}
+LOCKED_PATTERNS = {".claude/settings.json", ".claude/hooks/**", "guards/**"}
 TABLE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|")
 PR_TEMPLATE_LINE = re.compile(r"^- Pull request template: `([^`]+)`$", re.MULTILINE)
 DEFAULT_PR_TEMPLATE = ".github/pull_request_template.md"
@@ -251,6 +254,11 @@ def check_manifest(root: Path) -> Iterable[str]:
         yield f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group"
 
 
+def check_settings(root: Path) -> Iterable[str]:
+    if (root / settings_rules.MANIFEST).is_file():
+        yield from settings_rules.drift(root)
+
+
 def check_quality(root: Path) -> Iterable[str]:
     for name in ("thresholds", "mutation-register"):
         path = root / "quality" / f"{name}.toml"
@@ -332,6 +340,7 @@ CHECKS: tuple[Check, ...] = (
     check_binding,
     check_speed,
     check_manifest,
+    check_settings,
     check_quality,
     check_disputes,
     check_features,
@@ -355,7 +364,7 @@ Mutation = tuple[str, Callable[[Path], None]]
 
 
 def mutations() -> list[Mutation]:
-    return [*artefact_mutations(), *record_mutations()]
+    return [*artefact_mutations(), *guard_mutations(), *record_mutations()]
 
 
 def artefact_mutations() -> list[Mutation]:
@@ -370,14 +379,6 @@ def artefact_mutations() -> list[Mutation]:
     def none_without_reason(root: Path) -> None:
         path = root / "docs/process/binding.md"
         path.write_text(path.read_text().replace("| format | |", "| format | none |"))
-
-    def unlock_harness(root: Path) -> None:
-        path = root / "guards/manifest.toml"
-        path.write_text(path.read_text().replace('edit = "deny"', 'edit = "ask"'))
-
-    def unbound_group(root: Path) -> None:
-        path = root / "guards/manifest.toml"
-        path.write_text(path.read_text().replace('paths = [\n    "quality/**",\n]', "paths = []"))
 
     def drop_pr_section(root: Path) -> None:
         path = root / DEFAULT_PR_TEMPLATE
@@ -399,12 +400,40 @@ def artefact_mutations() -> list[Mutation]:
         ("AGENTS.md without the method stanza", strip_stanza),
         ("binding without the conformance entry point", drop_entry_point),
         ("binding with a gate bound to none and no reason", none_without_reason),
-        ("manifest with the harness unlocked", unlock_harness),
-        ("manifest with a group still unbound", unbound_group),
         ("pull-request template missing a section", drop_pr_section),
         ("binding without a Speed section", drop_speed_section),
         ("CI workflow without concurrency control", ci_without_concurrency),
         ("CI workflow without a cache", ci_without_cache),
+    ]
+
+
+def guard_mutations() -> list[Mutation]:
+    def unlock_harness(root: Path) -> None:
+        path = root / "guards/manifest.toml"
+        path.write_text(path.read_text().replace('edit = "deny"', 'edit = "ask"'))
+
+    def unbound_group(root: Path) -> None:
+        path = root / "guards/manifest.toml"
+        path.write_text(path.read_text().replace('paths = [\n    "quality/**",\n]', "paths = []"))
+
+    def settings_with_a_foreign_deny(root: Path) -> None:
+        path = root / settings_rules.SETTINGS
+        path.write_text(
+            path.read_text().replace(
+                '"Bash(gh label edit:*)",',
+                '"Bash(gh label edit:*)",\n      "Bash(gh label create:*)",',
+            )
+        )
+
+    def settings_missing_a_rule(root: Path) -> None:
+        path = root / settings_rules.SETTINGS
+        path.write_text(path.read_text().replace('      "Edit(/GLOSSARY-MAP.md)",\n', ""))
+
+    return [
+        ("manifest with the harness unlocked", unlock_harness),
+        ("manifest with a group still unbound", unbound_group),
+        ("settings denying what the hook allows", settings_with_a_foreign_deny),
+        ("settings missing a manifest rule", settings_missing_a_rule),
     ]
 
 
@@ -455,6 +484,7 @@ def fill_placeholders(root: Path) -> None:
     """Stand in for adopt on a template copy: bind every group adopt would have bound."""
     path = root / "guards/manifest.toml"
     path.write_text(UNBOUND_GROUP.sub('paths = [\n    "bound/**",\n]', path.read_text()))
+    settings_rules.write(root)
 
 
 def self_test(templates: Path, init_templates: Path) -> int:

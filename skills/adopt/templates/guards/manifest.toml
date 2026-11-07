@@ -38,9 +38,17 @@ paths = [
 name = "harness"
 reason = "Settings, hooks and workflows and this manifest enforce the guards; changing them can switch the guards off, so the owner edits them by hand."
 edit = "deny"
-exclude = [".claude/worktrees", ".claude/worktrees/**"]
 paths = [
-    ".claude/**",
+    # Listed, not `.claude/**`: `just settings` mirrors every pattern as a permission rule, and a
+    # rule cannot exclude the agent worktrees under .claude/worktrees/ as a group's `exclude` can.
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".claude/hooks/**",
+    ".claude/workflows/**",
+    ".claude/agents/**",
+    ".claude/skills/**",
+    ".claude/commands/**",
+    ".claude/rules/**",
     "guards/**",
     "~/.claude/settings.json",
     "~/.claude/settings.local.json",

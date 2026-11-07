@@ -29,6 +29,7 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | snapshots-check | `just snapshots-check` |
 | suppressions | `just suppressions` |
 | guard-diff | `just guard-diff` |
+| settings-check | `just settings-check` |
 | conformance | `just conformance` |
 | budget | `just budget tier1` |
 | reports | `just reports` |
@@ -73,6 +74,7 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | documentation coverage, ratcheted | | 1 | `quality/thresholds.toml` | `just doc-coverage` |
 | change size | | 1 | the Limits section below | `just change-size` |
 | guard paths changed | `ratchet` plugin `ratchet_guards.diff` | 1 | `guards/manifest.toml` | `just guard-diff` |
+| permission rules mirror the manifest | `ratchet` plugin `scripts/settings_rules.py` | 1 | `guards/manifest.toml` | `just settings-check` |
 | method conformance | `ratchet` plugin `scripts/conformance.py` | 1 | | `just conformance` |
 | full mutation | | 2 | `quality/mutation-register.toml` | `just mutation` |
 | deep interface conformance | | 2 | | `just api-deep` |

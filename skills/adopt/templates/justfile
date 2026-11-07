@@ -13,7 +13,7 @@ default:
 
 tier0: fmt-check lint types imports deadcode lint-workflows secrets pins limits markers prose snapshots-check ratchet-lowered suppressions
 
-tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke bite api-check data-compat doctests sast artefact-scan type-coverage doc-coverage change-size guard-diff conformance
+tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke bite api-check data-compat doctests sast artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance
 
 tier2: mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast a11y formal
 
@@ -28,6 +28,14 @@ ratchet-lowered:
 
 guard-diff:
     PYTHONPATH="{{ratchet_plugin}}/hooks" python3 -m ratchet_guards.diff --root . || true
+
+# The permission rules in .claude/settings.json mirror guards/manifest.toml: one Edit rule per
+# pattern, deny for a locked group, plus the fixed command rules. `just settings` regenerates them.
+settings-check:
+    python3 "{{ratchet_plugin}}/scripts/settings_rules.py" --check
+
+settings:
+    python3 "{{ratchet_plugin}}/scripts/settings_rules.py" --write
 
 conformance:
     python3 "{{ratchet_plugin}}/scripts/conformance.py" .

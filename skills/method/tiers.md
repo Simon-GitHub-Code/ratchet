@@ -55,6 +55,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | How much of the public surface is documented, and did it fall? | documentation coverage, ratcheted |
 | Is the change within the size budget? | files and lines against the merge base, a ceiling the binding holds |
 | Did a guard path change? | the method's guard diff, against the manifest at base and head |
+| Do the permission rules still mirror the manifest? | the method's settings check: one `Edit` rule per manifest pattern, the fixed command rules, nothing else in `deny` or `ask` |
 | Does the repository still carry the method? | the method's conformance gate |
 
 ## Tier 2: the limits of the code

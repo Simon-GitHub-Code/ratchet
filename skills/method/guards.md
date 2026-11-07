@@ -16,13 +16,12 @@ paths = ["quality/**"]
 name = "harness"
 reason = "Settings, hooks, workflows and this manifest enforce the guards; the owner edits them by hand."
 edit = "deny"
-exclude = [".claude/worktrees", ".claude/worktrees/**"]
-paths = [".claude/**", "guards/**", "~/.claude/settings.json", "~/.claude/settings.local.json"]
+paths = [".claude/settings.json", ".claude/hooks/**", "guards/**", "~/.claude/settings.json"]
 ```
 
 Groups every binding has: tool configs and thresholds; the command contract and gate scripts; ratchets; CI and the pull-request template; the harness (`edit = "deny"`); local git hooks and config (`edit = "deny"`); fitness tests; home-grown gate tools; formal models and the project-local verification skill; decisions (`docs/adr/**`, `docs/process/**`, `docs/agents/**`, `AGENTS.md`, `CLAUDE.md`, the glossary, `PRODUCT.md`, `DESIGN.md`).
 
-Three things read the manifest, so a guard path is one entry here and nowhere else: the hook, the diff check, and a fitness test that keeps the permission rules in step with it. The template manifest names the groups every binding has; `AGENTS.md`, `GLOSSARY.md` and the glossary map sit in the decisions group.
+Three things read the manifest, so a guard path is one entry here and nowhere else: the hook, the diff check, and the settings check that keeps the permission rules in step with it. The template manifest names the groups every binding has; `AGENTS.md`, `GLOSSARY.md` and the glossary map sit in the decisions group. A group may carry `exclude` patterns its paths do not cover, but a permission rule cannot, so the template lists the harness paths one by one rather than `.claude/**` with the agent worktrees excluded.
 
 ## The hook
 
@@ -36,7 +35,7 @@ A verdict covers the whole tool call. Claude Code runs none of a denied command 
 
 The path rules are on only once `guards/manifest.toml` is committed on the default branch (the remote's `HEAD`, else `main` or `master`). The hook reads that commit from git and judges every path against it, whatever the work tree says: not a flag an agent could set, and not the work tree, where an adoption in progress is still writing the manifest and the files it names. Until the adoption merges, a manifest that is untracked or committed only on a branch guards nothing, and the command rules apply alone; after it merges, the owner's merged manifest governs even if the work tree's copy is edited or deleted (ADR 0005). A group whose `paths` is still empty matches nothing. The command rules are on from the first session, before `/ratchet:adopt` has written a binding: anything an agent can set is something an agent can forge, so the guard has no off state and no "not adopted yet" state. `/ratchet:init` is written so that none of its steps provokes a denial; its label step uses the recorded-label path above.
 
-Permission rules in the project's `.claude/settings.json` are a second, independent layer that mirrors the manifest: `deny` for locked groups and bypass commands, `ask` for the rest and for `gh pr merge`.
+Permission rules in the project's `.claude/settings.json` are a second, independent layer generated from the manifest, never written by hand: `just settings` turns every pattern into an `Edit` rule, `deny` for a locked group and `ask` for the rest, and adds the fixed command rules (the bypasses and forge changes as `deny`, `gh pr merge` as `ask`); `just settings-check` (tier 1) fails on a rule missing or foreign to those two lists. `gh label create` is not in the deny list, because the hook lets a recorded label through and a settings deny would refuse that one too (ADR 0006).
 
 ## The diff check
 
