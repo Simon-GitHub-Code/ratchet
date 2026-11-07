@@ -1,0 +1,130 @@
+# The command contract (Ratchet method). `just` lists every recipe; CI runs these same recipes.
+# Tier bodies are the binding's job: fill each recipe with the tool docs/process/binding.md names.
+
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", "~/.claude/plugins/marketplaces/ratchet")
+
+default:
+    @just --list --unsorted
+
+# --- tiers -----------------------------------------------------------------
+
+tier0: fmt-check lint types imports deadcode lint-workflows secrets snapshots-check ratchet-lowered suppressions
+
+tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build guard-diff conformance
+
+tier2: mutation api-deep symbolic fuzz e2e formal traces
+
+check: tier0 tier1
+
+check-deep: check tier2
+
+# --- method gates (tool-neutral, shipped by the ratchet plugin) --------------
+
+ratchet-lowered:
+    python3 "{{ratchet_plugin}}/scripts/lowered.py"
+
+guard-diff:
+    PYTHONPATH="{{ratchet_plugin}}/hooks" python3 -m ratchet_guards.diff --root . || true
+
+conformance:
+    python3 "{{ratchet_plugin}}/scripts/conformance.py" .
+
+# --- ratchet maintenance ------------------------------------------------------
+
+# Raise every threshold to its measured value and refresh the snapshots.
+ratchet:
+    @echo "bind: run the suites, raise quality/thresholds.toml, then 'just snapshots'"; exit 1
+
+snapshots:
+    @echo "bind: write each gate's effective config into quality/snapshots/"; exit 1
+
+snapshots-check:
+    @echo "bind: regenerate snapshots to a temp dir and diff against quality/snapshots/"; exit 1
+
+suppressions:
+    @echo "bind: count suppressions per kind at merge base and head; fail if any rose or a focus marker exists"; exit 1
+
+# --- tier 0 bodies ---------------------------------------------------------------
+
+fmt-check:
+    @echo "bind: formatter --check"; exit 1
+
+lint:
+    @echo "bind: linter with near-all rules"; exit 1
+
+types:
+    @echo "bind: strict type checker"; exit 1
+
+imports:
+    @echo "bind: dependency-direction tool"; exit 1
+
+deadcode:
+    @echo "bind: dead code and dependency hygiene"; exit 1
+
+lint-workflows:
+    @echo "bind: shell and CI workflow linters"; exit 1
+
+secrets:
+    @echo "bind: secret scanner over the tree"; exit 1
+
+# --- tier 1 bodies ---------------------------------------------------------------
+
+test:
+    @echo "bind: unit, property and fitness tests"; exit 1
+
+coverage:
+    @echo "bind: per-layer coverage; 100% for absolute layers"; exit 1
+
+diff-coverage:
+    @echo "bind: every changed line and branch ran"; exit 1
+
+test-counts:
+    @echo "bind: collected test count at head >= merge base"; exit 1
+
+mutation-changed:
+    @echo "bind: mutate changed functions; zero unregistered survivors"; exit 1
+
+contracts-check:
+    @echo "bind: regenerate contract artefacts and diff"; exit 1
+
+audit:
+    @echo "bind: audit shipped dependencies"; exit 1
+
+duplication:
+    @echo "bind: clone detector with a ceiling"; exit 1
+
+build:
+    @echo "bind: build the deliverable"; exit 1
+
+# --- tier 2 bodies ---------------------------------------------------------------
+
+mutation:
+    @echo "bind: full mutation run over absolute layers"; exit 1
+
+api-deep:
+    @echo "bind: deep and stateful interface conformance"; exit 1
+
+symbolic:
+    @echo "bind: symbolic checker over contracts"; exit 1
+
+fuzz seconds="600":
+    @echo "bind: fuzz for {{seconds}} seconds"; exit 1
+
+e2e:
+    @echo "bind: end-to-end suite"; exit 1
+
+formal:
+    @echo "bind: parse and model-check formal/specs"; exit 1
+
+traces:
+    @echo "bind: replay model-test traces through the checker"; exit 1
+
+# --- outside the tiers ------------------------------------------------------------
+
+audit-all:
+    @echo "bind: audit every dependency, dev tooling included"; exit 1
+
+reports:
+    @echo "bind: hotspots, coupling, complexity; advisory only"; exit 1

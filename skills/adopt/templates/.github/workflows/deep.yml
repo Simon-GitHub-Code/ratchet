@@ -1,0 +1,19 @@
+name: deep
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tier2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@<pinned-sha> # vN
+        with: { fetch-depth: 0 }
+      - uses: extractions/setup-just@<pinned-sha> # vN
+      # bind: toolchain setup
+      - run: just tier2

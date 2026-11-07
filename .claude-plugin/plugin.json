@@ -1,0 +1,10 @@
+{
+  "name": "ratchet",
+  "version": "0.1.0",
+  "description": "The Ratchet method: build and verify software with agents under tiered deterministic gates that only tighten, guarded by the harness, judged by critical rationalism.",
+  "author": { "name": "Simon Tulett" },
+  "keywords": ["method", "quality-gates", "ratchet", "critical-rationalism", "agents"],
+  "skills": ["./skills/"],
+  "workflows": ["./workflows/feature.js"],
+  "hooks": "./hooks/hooks.json"
+}

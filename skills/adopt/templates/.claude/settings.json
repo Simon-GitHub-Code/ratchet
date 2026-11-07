@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Edit(/.claude/settings.json)",
+      "Edit(/.claude/settings.local.json)",
+      "Edit(/.claude/hooks/**)",
+      "Edit(/.claude/workflows/**)",
+      "Edit(/.claude/agents/**)",
+      "Edit(/.claude/skills/**)",
+      "Edit(/.claude/commands/**)",
+      "Edit(/guards/**)",
+      "Edit(~/.claude/settings.json)",
+      "Edit(~/.claude/settings.local.json)",
+      "Edit(/.git/hooks/**)",
+      "Edit(/.git/config)",
+      "Bash(git push --force:*)",
+      "Bash(git push * --force*)",
+      "Bash(git push -f:*)",
+      "Bash(git push * -f)",
+      "Bash(git push * -f *)",
+      "Bash(git push --no-verify:*)",
+      "Bash(git push * --no-verify*)",
+      "Bash(git commit --no-verify:*)",
+      "Bash(git commit * --no-verify*)",
+      "Bash(pre-commit uninstall:*)",
+      "Bash(gh api *branches/*/protection*)",
+      "Bash(gh api *rulesets*)",
+      "Bash(gh repo edit:*)",
+      "Bash(gh label:*)",
+      "Bash(gh run delete:*)"
+    ],
+    "ask": [
+      "Bash(gh pr merge:*)",
+      "Edit(/justfile)",
+      "Edit(/scripts/**)",
+      "Edit(/.pre-commit-config.yaml)",
+      "Edit(/quality/**)",
+      "Edit(/.github/**)",
+      "Edit(/formal/**)",
+      "Edit(/docs/adr/**)",
+      "Edit(/docs/process/**)",
+      "Edit(/CLAUDE.md)",
+      "Edit(/GLOSSARY.md)"
+    ]
+  }
+}

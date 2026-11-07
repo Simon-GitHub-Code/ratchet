@@ -1,0 +1,86 @@
+# Guard paths (Ratchet method): the single list of files that define, run or record the quality gates.
+# Globs are matched against repository-relative paths; `*` stays within a segment, `**` spans any.
+# A `~/` pattern matches against the home directory. `edit = "deny"` locks a group: the owner edits
+# those files by hand. The hook, `just guard-diff` and a fitness test all read this file.
+
+[[group]]
+name = "tool-config"
+reason = "Rule sets, limits and thresholds of every gate: loosening one silently weakens every later check."
+paths = [
+    # bind: the config files of every gate tool
+]
+
+[[group]]
+name = "gate-commands"
+reason = "The command contract and the scripts that run or score the gates: changing them changes what passing means."
+paths = [
+    "justfile",
+    "scripts/**",
+    ".pre-commit-config.yaml",
+]
+
+[[group]]
+name = "ratchets"
+reason = "Recorded thresholds, the mutation register and config snapshots only ever rise."
+paths = [
+    "quality/**",
+]
+
+[[group]]
+name = "ci"
+reason = "Workflows and the pull-request template decide what runs before the owner merges."
+paths = [
+    ".github/**",
+]
+
+[[group]]
+name = "harness"
+reason = "Settings, hooks and workflows and this manifest enforce the guards; changing them can switch the guards off, so the owner edits them by hand."
+edit = "deny"
+exclude = [".claude/worktrees", ".claude/worktrees/**"]
+paths = [
+    ".claude/**",
+    "guards/**",
+    "~/.claude/settings.json",
+    "~/.claude/settings.local.json",
+]
+
+[[group]]
+name = "local-git"
+reason = "Git hooks and repository config run the tier 0 gates on every commit; only the hook can see them."
+edit = "deny"
+paths = [
+    ".git/hooks/**",
+    ".git/config",
+]
+
+[[group]]
+name = "fitness"
+reason = "Architectural fitness tests encode the ADRs as executable checks."
+paths = [
+    # bind: the fitness test directories
+]
+
+[[group]]
+name = "gate-tools"
+reason = "Home-grown checkers behind the gates."
+paths = [
+    # bind: tools/ directories that implement gates
+]
+
+[[group]]
+name = "formal"
+reason = "Formal specs are the design that code must conform to."
+paths = [
+    "formal/**",
+]
+
+[[group]]
+name = "decisions"
+reason = "ADRs, the agent instructions, the vocabulary and the process documents are the standards every review judges against."
+paths = [
+    "docs/adr/**",
+    "docs/process/**",
+    "CLAUDE.md",
+    "GLOSSARY.md",
+]

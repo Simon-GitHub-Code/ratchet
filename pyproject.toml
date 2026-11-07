@@ -1,0 +1,83 @@
+[project]
+name = "ratchet"
+version = "0.1.0"
+description = "The Ratchet method as a Claude Code plugin: harness-enforced guards on the quality gates."
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.115",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+
+# Why: the plugin is hooks, skills and workflows, not an installable package.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers --strict-config"
+testpaths = ["hooks/tests"]
+pythonpath = ["hooks"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["hooks", "scripts"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D203",   # one-blank-line-before-class: conflicts with D211 (no-blank-line-before-class)
+    "D213",   # multi-line-summary-second-line: conflicts with D212 (summary on first line)
+    "COM812", # missing-trailing-comma: conflicts with the formatter, which owns commas
+    "CPY001", # copyright notice: private single-owner repository, no header policy
+]
+
+[tool.ruff.lint.per-file-ignores]
+"hooks/guard.py" = [
+    "INP001", # the shim is a standalone script, deliberately not a package
+]
+"hooks/ratchet_guards/diff.py" = [
+    "T201", # the diff tool reports to stdout by design
+]
+"scripts/*.py" = [
+    "T201",   # the gate scripts report to stdout by design
+    "D103",   # docstrings are required only in core layers; the module docstring carries the contract
+    "S603", "S607", # subprocess runs git with a literal argv list, no shell
+    "INP001", # standalone scripts, deliberately not a package
+]
+"hooks/tests/**" = [
+    "S101",    # assert is the test idiom
+    "PLR2004", # magic numbers are the test fixtures
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10 # C901
+
+[tool.ruff.lint.pylint]
+max-branches = 12        # PLR0912
+max-returns = 6          # PLR0911
+max-args = 5             # PLR0913
+max-positional-args = 3  # PLR0917
+max-statements = 40      # PLR0915
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["ratchet_guards", "tests"]
+
+[tool.mypy]
+files = ["hooks"]
+python_version = "3.13"
+strict = true
+disallow_any_explicit = true
+disallow_any_unimported = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "truthy-bool", "redundant-expr"]

@@ -1,0 +1,10 @@
+# Ratcheted thresholds (Ratchet method). Values only rise; `just ratchet` raises each to its
+# measured value and `just ratchet-lowered` fails any key that is lower or missing than at the
+# merge base. Absolute layers are not listed: they are held at 100% by the coverage tool itself.
+
+# [<language>.coverage.<layer>]
+# line = 0.0
+# branch = 0.0
+
+# [<language>.mutation]
+# score = 0.0

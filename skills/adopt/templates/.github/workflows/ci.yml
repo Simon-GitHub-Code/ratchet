@@ -1,0 +1,36 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  tier0:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@<pinned-sha> # vN
+        with: { fetch-depth: 0 }
+      - uses: extractions/setup-just@<pinned-sha> # vN
+      # bind: toolchain setup
+      - run: just tier0
+  tier1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: tier0
+    steps:
+      - uses: actions/checkout@<pinned-sha> # vN
+        with: { fetch-depth: 0 }
+      - uses: extractions/setup-just@<pinned-sha> # vN
+      # bind: toolchain setup
+      - run: just tier1
+  guard-changes-present:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@<pinned-sha> # vN
+        with: { fetch-depth: 0 }
+      # bind: check out the ratchet plugin repository to ./ratchet, then:
+      - run: PYTHONPATH=ratchet/hooks python3 -m ratchet_guards.diff --root . --fail-on-change
