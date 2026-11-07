@@ -18,7 +18,7 @@ Severity: *blocker* is a wrong result, data loss, a layer violation or a broken 
 ## The loop
 
 0. Preflight. `scripts/feature_preflight.py` on the ticket: open, `## Conjecture` stated, the agent-ready label present, the tree clean, `HEAD` on the branch. The skill runs it before the workflow and spawns nothing while it is red; the workflow runs it again as its first stage through one low-effort agent that types the command and relays its JSON. Red stops the run with `verdict: "blocked"` and, per failure, what produces the missing piece.
-1. Spec. A non-empty `openQuestions` stops the run with `verdict: "blocked"`; the orchestrator asks the owner, who answers on the ticket, and reruns.
+1. Spec. A non-empty `openQuestions` stops the run with `verdict: "blocked"`; the orchestrator asks the owner, who answers on the ticket, and reruns. So does a non-empty `guardEdits`: criteria that need a guard path changed (an import contract, a shared test fixture, a Layers row, a glossary entry) cannot be met by a run with no owner at the keyboard, so the owner lands those edits first, or builds the ticket with `/pstack:poteto-mode` while present, where the guard can ask.
 2. Implement.
 3. Critique.
 4. While blocker or major findings remain, up to two rounds: a *fresh* fix agent (it has not seen the previous implementer's reasoning), then re-critique by title plus a search for new breakage.

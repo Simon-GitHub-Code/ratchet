@@ -142,6 +142,18 @@ const SPEC_SCHEMA = {
       items: { type: 'string' },
       description: 'Questions the ticket does not answer; each must also be recorded in spec.md. Any entry stops the pipeline before Implement.',
     },
+    guardEdits: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Repo-relative guard path, matching a pattern in guards/manifest.toml' },
+          edit: { type: 'string', description: 'The change the criteria need there, concrete enough for the owner to make it' },
+        },
+        required: ['path', 'edit'],
+      },
+      description: 'Guard paths the criteria cannot be met without changing (an import contract, a test fixture, a Layers row, a glossary entry); this run cannot edit them. Any entry stops the pipeline before Implement.',
+    },
     failingForRightReason: {
       type: 'boolean',
       description: 'true only if every new test fails because the behaviour is missing, not because of import/syntax errors',
@@ -160,7 +172,7 @@ const SPEC_SCHEMA = {
     },
     ...checkOutputField(),
   },
-  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'failingForRightReason', 'failures', 'checkOutput'],
+  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
 }
 
 const DISPUTES_FIELD = {
@@ -387,6 +399,13 @@ Your tasks, in order:
 Open questions stop the pipeline: if \`openQuestions\` is non-empty the orchestrator asks the
 owner, who answers on the ticket, and re-runs. So record a question only when the ticket truly
 does not decide it; a question the ADRs or GLOSSARY.md answer is not open.
+
+Guard edits stop it too. This run has no owner at the keyboard, so no agent in it can change a
+guard path. Before writing tests, check each criterion against \`guards/manifest.toml\`: when
+one cannot be met without changing a guard path (a new import contract, a shared test fixture,
+a Layers row, a glossary entry), list it in \`guardEdits\` with the concrete edit. The owner
+lands those first and re-runs; it costs one agent instead of a whole run that ends in
+disputes.
 
 Return the structured result only; the implementer will see spec.md and the test files, and
 nothing of your reasoning about the ticket.`
@@ -643,21 +662,24 @@ log(`Spec ${spec.slug}: ${spec.testFiles.length} test file(s), layers ${spec.lay
   (spec.failingForRightReason ? '' : ' -- WARNING: tests not failing for the right reason') +
   (spec.openQuestions.length ? `, ${spec.openQuestions.length} open question(s)` : ''))
 
-// An open question is the owner's to answer, not the implementer's to guess. Stop here; the
-// orchestrator asks, the owner answers on the ticket, and the run repeats.
-if (spec.openQuestions.length > 0) {
-  log(`Blocked before Implement: ${spec.openQuestions.length} open question(s) in the ticket`)
+// An open question is the owner's to answer, not the implementer's to guess, and a guard path is
+// the owner's to edit. Stop here; the owner answers or lands the edits, and the run repeats.
+const guardEdits = spec.guardEdits ?? []
+if (spec.openQuestions.length > 0 || guardEdits.length > 0) {
+  log(`Blocked before Implement: ${spec.openQuestions.length} open question(s), ${guardEdits.length} guard edit(s)`)
   return {
     slug: SLUG,
     ref: REF,
     verdict: 'blocked',
     openQuestions: spec.openQuestions,
+    guardEdits,
     specPath: spec.specPath,
     testFiles: spec.testFiles,
     branch: BRANCH,
     checkOutput: spec.checkOutput,
     requiredByOrchestrator: [
       'Put each open question to the owner; the answers go on the ticket (a comment or an edit), where the next spec agent reads them',
+      'Give the owner each guard edit to land on the default branch (by hand, or with an agent at the keyboard where the guard can ask); an owner-away run cannot',
       'Re-run `/ratchet:feature <ticket>` after the ticket answers them; do not open a PR from a blocked run',
     ],
   }
