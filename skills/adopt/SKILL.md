@@ -10,7 +10,7 @@ Load the `ratchet:method` skill first; this skill assumes its vocabulary. Templa
 
 ## Steps
 
-1. **Check the ground.** The repository is a git repository with a default branch; `claude plugin list` shows `ratchet`, `mattpocock-skills`, `pstack` and `impeccable`; `python3` (3.11 or later) is installed for the plugin's own gates. Done when all hold or you have told the owner which is missing.
+1. **Check the ground.** The repository is a git repository with a default branch; `claude plugin list` shows `ratchet`, `mattpocock-skills`, `pstack` and `impeccable`; `python3` (3.11 or later) is installed for the plugin's own gates; `docs/agents/issue-tracker.md` exists, which `/mattpocock-skills:setup-matt-pocock-skills` writes and only the owner can run (stop and name that command when it is missing: the feature route reads the tracker it records). Done when all hold or you have told the owner which is missing.
 
 2. **Initialise.** Run `/ratchet:init` unless `AGENTS.md` already opens with its four-plugin stanza. Done when `AGENTS.md` exists and `CLAUDE.md` links to it.
 
@@ -37,3 +37,5 @@ Load the `ratchet:method` skill first; this skill assumes its vocabulary. Templa
 12. **Conformance.** Run the `conformance` entry point. Fix each failure it names. Done when it exits 0.
 
 13. **Hand over.** Commit on a branch as `chore(method): adopt the ratchet method` (the `commits` gate accepts it, and the change-size gate exempts a range made only of such commits and prints the size instead), push, and open a pull request with every template section filled, the `tier0` tail under Gates, and under Criticism, as standing criticisms of the binding: the list of unbound entry points and `none` rows, and the adoption's measured size, which is the counter to the change-size gate for this one change. The tier 0 commit hook: when the stack uses pre-commit, run `pre-commit install` yourself, the guard allows it; a hook kept in the repository needs `git config core.hooksPath <dir>`, which the guard refuses from an agent as a hook-path change, so the hand-over and the Criticism section name that command for the owner to run once rather than running it. Merging is the owner's too. Say also that the guard's path rules switch on when this pull request merges, since the hook reads the manifest from the default branch.
+
+   Then the route, as the last lines: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its three lines as they are. On the adoption branch they say to wait for the merge; say also what follows it, from [route.md](../method/route.md): `/mattpocock-skills:grill-with-docs` when the design brief or glossary is still thin, else `/mattpocock-skills:to-spec` and `to-tickets` for the first feature, `/ratchet:conjecture` on its ticket, then `/ratchet:feature` or `/pstack:poteto-mode`. Close with `/ratchet:next` on its own line, which prints the step whenever the owner asks.

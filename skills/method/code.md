@@ -1,6 +1,6 @@
 # Verifiable shape
 
-How code is designed and tested belongs to the other plugins: `mattpocock-skills:codebase-design` for modules, seams and adapters, `mattpocock-skills:tdd` for the loop and the seams under test, `pstack:architect` before code crosses a boundary. The method adds only the rules that exist so the gates can see the code. Each one has a gate in the binding.
+How code is designed and tested belongs to the other plugins: `mattpocock-skills:codebase-design` for modules, seams and adapters, `mattpocock-skills:tdd` for the loop and the seams under test, `/pstack:architect`, which the owner types, before code crosses a boundary. The method adds only the rules that exist so the gates can see the code. Each one has a gate in the binding.
 
 - **Logic where every verifier reaches.** A decorated, wrapped or generated function is a docstring plus one call to a plain function with the same parameters. Logic inside a wrapper escapes the mutation tool while the coverage report still calls it covered. A fitness test enforces the shape.
 - **Declared layers are checked.** A project that declares layers in `AGENTS.md` has a tool checking the dependency direction and a fitness test checking it again, so a violation cannot hide behind import-time side effects. A path declared pure has no I/O, clock, randomness or environment, and is an absolute path.

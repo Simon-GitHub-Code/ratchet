@@ -121,6 +121,63 @@ def test_a_placeholder_conjecture_is_no_conjecture(tmp_path: Path, body: str) ->
     assert "states no conjecture" in report.failures[0].detail
 
 
+class ParentGh:
+    """A ``gh`` that serves the ticket and, when asked, its parent spec."""
+
+    def __init__(self, ticket: str, parent: str | None) -> None:
+        self.ticket, self.parent = ticket, parent
+        self.calls: list[Sequence[str]] = []
+
+    def __call__(self, args: Sequence[str]) -> str | None:
+        self.calls.append(args)
+        return self.parent if args[2] == "12" else self.ticket
+
+
+def spec(body: str) -> str:
+    return json.dumps(
+        {"number": 12, "title": "The spec", "body": body, "labels": [], "state": "OPEN"}
+    )
+
+
+def test_a_ticket_inherits_the_conjecture_of_its_parent_spec(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    child = issue(
+        body="**Parent:** #12\n\n## What to build\n\nA slice.\n", labels=("ready-for-agent",)
+    )
+    gh = ParentGh(child, spec("## Solution\n\nX." + CONJECTURE))
+    report = run(root, "4", gh)
+    assert report.ok, report.failures
+    assert gh.calls[1][2] == "12"
+    for parent, detail in [
+        (None, "its parent #12 was not found"),
+        (spec("## Solution\n\nNo conjecture here.\n"), "its parent #12 states none"),
+        (spec("## Conjecture\n\nTBD\n"), "its parent #12 states none"),
+    ]:
+        failed = run(root, "4", ParentGh(child, parent))
+        assert checks(failed) == ["conjecture"]
+        assert detail in failed.failures[0].detail
+    orphan = run(
+        root, "4", gh_returning(issue(body="## What to build\n\nX.\n", labels=("ready-for-agent",)))
+    )
+    assert "names no parent" in orphan.failures[0].detail
+
+
+def test_a_local_ticket_inherits_from_the_spec_beside_it(tmp_path: Path) -> None:
+    files = {
+        ".scratch/f/spec.md": "# F\n\n## Solution\n\nX." + CONJECTURE,
+        ".scratch/f/issues/01-a.md": (
+            "# 01: A\n\n**Parent:** `../spec.md`\n\n**Status:** `ready-for-agent`\n\nBody.\n"
+        ),
+        ".scratch/f/issues/02-b.md": "# 02: B\n\nParent: nowhere.md\n\nStatus: ready-for-agent\n",
+    }
+    root = repository(tmp_path, files)
+    assert run(root, ".scratch/f/issues/01-a.md").ok
+    assert run(root, "./.scratch/f/issues/01-a.md").ok
+    missing = run(root, ".scratch/f/issues/02-b.md")
+    assert "its parent .scratch/f/issues/nowhere.md was not found" in missing.failures[0].detail
+    assert preflight.local_ticket("4", "Parent: spec.md\n").parent == "spec.md"
+
+
 def test_a_conjecture_under_a_deeper_heading_still_counts(tmp_path: Path) -> None:
     root = repository(tmp_path)
     body = "## Conjecture\n\n### Approach\n\nA stated approach with its refuter, long enough.\n"

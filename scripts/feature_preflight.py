@@ -9,7 +9,8 @@ failure and the skill that produces the missing piece:
 - the ticket exists and is open;
 - it carries a ``## Conjecture`` section that states something (the method's one addition to
   the ticket: the approach, the observation that would refute it, the alternatives and the
-  criticism that kills each);
+  criticism that kills each), on the ticket itself or on the parent spec its ``Parent:`` line
+  names, since ``to-tickets`` cuts one spec into several tickets that share one approach;
 - it carries the owner's agent-ready label, the ``ready-for-agent`` role as
   ``docs/agents/triage-labels.md`` maps it (a local ticket: a ``Status:`` line with that label);
 - the working tree is clean;
@@ -48,14 +49,18 @@ SLUG_WIDTH = 40
 STATUS_LINE = re.compile(
     r"^\*{0,2}status:?\*{0,2}:?\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE
 )
+PARENT_LINE = re.compile(
+    r"^\*{0,2}parent:?\*{0,2}:?\s*`?(#?\d+|[^`\s]+\.md)`?", re.IGNORECASE | re.MULTILINE
+)
 Runner = Callable[[Sequence[str]], str | None]
 
 PRODUCES = {
     "ticket": "mattpocock-skills:to-spec, to-tickets or triage writes the ticket on the tracker",
     "open": "a closed ticket is done or rejected; pick an open one",
     "conjecture": (
-        "the owner adds `## Conjecture` to the ticket: the approach, the observation that would"
-        " refute it, the alternatives and the criticism that kills each"
+        "the owner adds `## Conjecture` to the ticket, or to the spec its Parent line names:"
+        " `/ratchet:conjecture <ticket>` drafts it (the approach, the observation that would"
+        " refute it, the alternatives and the criticism that kills each)"
     ),
     "label": "the owner applies the agent-ready label (mattpocock-skills:triage, or by hand)",
     "clean": "commit or stash the working tree; the pipeline's agents leave their work uncommitted",
@@ -73,6 +78,22 @@ class Ticket:
     body: str
     labels: tuple[str, ...]
     is_open: bool
+
+    @property
+    def parent(self) -> str | None:
+        """The ref of the parent spec the ticket names, if any."""
+        match = PARENT_LINE.search(self.body)
+        if match is None:
+            return None
+        parent = match.group(1)
+        if parent.endswith(".md") and not parent.startswith("#"):
+            return str(Path(self.ref).parent / parent) if "/" in self.ref else parent
+        return parent
+
+    @property
+    def conjecture(self) -> str | None:
+        """The body of the ticket's own ``## Conjecture`` section, or ``None`` without one."""
+        return section(self.body, CONJECTURE) if CONJECTURE in self.body else None
 
 
 @dataclass
@@ -121,9 +142,9 @@ def run_gh(args: Sequence[str]) -> str | None:
 
 def fetch(ref: str, root: Path, gh: Runner) -> Ticket | None:
     """The ticket behind ``ref``: a local file, or an issue by number through ``gh``."""
-    path = root / ref
+    path = root / Path(ref)
     if path.is_file():
-        return local_ticket(ref, path.read_text(encoding="utf-8"))
+        return local_ticket(Path(ref).as_posix(), path.read_text(encoding="utf-8"))
     number = ref.lstrip("#")
     if not number.isdigit():
         return None
@@ -218,16 +239,34 @@ def branch_of(ticket: Ticket, slug: str) -> str:
     return f"feature/{ticket.number}-{slug}" if ticket.number else f"feature/{slug}"
 
 
-def check_ticket(report: Report, ticket: Ticket, label: str) -> None:
+def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
+    """Why the ticket states no conjecture, itself or through its parent; ``None`` when it does."""
+    own = ticket.conjecture
+    if own is not None:
+        if states_a_conjecture(own):
+            return None
+        return f"{ticket.ref}: `{CONJECTURE}` states no conjecture"
+    parent_ref = ticket.parent
+    if parent_ref is None:
+        return f"{ticket.ref} has no `{CONJECTURE}` section and names no parent"
+    parent = fetch(parent_ref, root, gh)
+    if parent is None:
+        return f"{ticket.ref} has no `{CONJECTURE}` section; its parent {parent_ref} was not found"
+    inherited = parent.conjecture
+    if inherited is not None and states_a_conjecture(inherited):
+        return None
+    return f"{ticket.ref} has no `{CONJECTURE}` section and its parent {parent_ref} states none"
+
+
+def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: Runner) -> None:
     report.number, report.title = ticket.number, ticket.title
     report.slug = slug_of(ticket.title, ticket.number)
     report.branch = branch_of(ticket, report.slug)
     if not ticket.is_open:
         report.fail("open", f"{ticket.ref} is not open")
-    if CONJECTURE not in ticket.body:
-        report.fail("conjecture", f"{ticket.ref} has no `{CONJECTURE}` section")
-    elif not states_a_conjecture(section(ticket.body, CONJECTURE)):
-        report.fail("conjecture", f"{ticket.ref}: `{CONJECTURE}` states no conjecture")
+    failure = conjecture_failure(ticket, root, gh)
+    if failure is not None:
+        report.fail("conjecture", failure)
     if label not in ticket.labels:
         report.fail(
             "label", f"{ticket.ref} does not carry `{label}`; labels: {list(ticket.labels)}"
@@ -258,7 +297,7 @@ def preflight(
     if ticket is None:
         report.fail("ticket", f"{ref}: no such ticket (a number on the tracker, or a file path)")
     else:
-        check_ticket(report, ticket, report.label)
+        check_ticket(report, ticket, report.label, root=root, gh=gh)
     check_checkout(report, root, base=base, branch=branch)
     return report
 

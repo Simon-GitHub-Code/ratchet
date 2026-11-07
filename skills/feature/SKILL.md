@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 `/ratchet:feature <ticket>`: the ticket is a number on the tracker (`4` or `#4`) or the path of a local ticket file (`.scratch/<slug>/issues/02-<slug>.md`). Load the `ratchet:method` skill first; [pipeline.md](../method/pipeline.md) says what the four roles do and [records.md](../method/records.md) what the ticket carries.
 
-The feature's input is the ticket `mattpocock-skills:to-spec`, `to-tickets` or `triage` wrote, plus one section the method adds, `## Conjecture`, and one label the owner applies: the agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it). The label is the owner's agreement; nothing below infers it.
+The feature's input is the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` wrote, plus one section the method adds, `## Conjecture`, and one label the owner applies: the agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it). The label is the owner's agreement; nothing below infers it.
 
 ## Steps
 
@@ -32,6 +32,8 @@ The feature's input is the ticket `mattpocock-skills:to-spec`, `to-tickets` or `
    (`name: "ratchet:pipeline"` where the harness lists plugin workflows by name.) The workflow runs the same preflight as its first stage, through one low-effort agent, so the pipeline cannot be entered around this skill; then Spec, Implement, Critique, the fix loop and Review. It never commits, pushes or opens a pull request.
 
 4. **The result.** Follow the orchestrator section of [pipeline.md](../method/pipeline.md): `verdict`, `unresolvedBlockingFindings`, the `checkOutput` tail, every dispute to the owner, then commit `filesChanged`, push, and open the pull request with every section of the template filled. A `blocked` verdict with `openQuestions` goes back to the owner on the ticket (a comment or an edit); re-run `/ratchet:feature <ticket>` when the ticket answers them.
+
+5. **Hand over.** The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its three lines. With the pull request open they say to wait for the review; say also which of the owner's own passes the change warrants before they merge, from [route.md](../method/route.md) stage 8: `/pstack:interrogate` for a contested design, `/pstack:blast-radius` for a change with reach, `impeccable audit` or `polish` for a surface.
 
 ## Why the skill reads the way it does
 

@@ -71,10 +71,10 @@ Every comparison against history uses the merge base with the default branch (`H
 | Does the suite pass in any order, twice? | shuffled order, repeated runs, fresh seeds; a failure here is a bug, never "flaky" |
 | Is the build reproducible? | build twice, compare hashes |
 | Does the code hold under a race or memory detector? | race detector and sanitizers where the stack has them |
-| Is it within the performance budget? | benchmarks against the ceilings the binding holds for latency, allocation and bundle size; `pstack:benchmark-checklist` before trusting a number |
+| Is it within the performance budget? | benchmarks against the ceilings the binding holds for latency, allocation and bundle size; the owner's `/pstack:benchmark-checklist` before a number is trusted |
 | Does the running system resist a dynamic scan? | a dynamic application security scan against the end-to-end environment |
 | Is the interface usable by everyone? | accessibility checks inside the end-to-end suite, for user interfaces; `impeccable audit` is the agent-side pass, the gate is the deterministic one |
-| Does the model still hold, and does the code still mirror it? | the project-local formal verification skill: `pstack:create-formal-verification-skill` writes it where a bug costs most and tests reach least, `pstack:maintain-formal-verification-skill` keeps it true to the code. The model and the skill are guard paths |
+| Does the model still hold, and does the code still mirror it? | the project-local formal verification skill: the owner's `/pstack:create-formal-verification-skill` writes it where a bug costs most and tests reach least, their `/pstack:maintain-formal-verification-skill` keeps it true to the code. The model and the skill are guard paths |
 
 ## Weekly and advisory
 

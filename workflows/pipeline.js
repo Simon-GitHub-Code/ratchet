@@ -26,7 +26,7 @@ export const meta = {
     { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
     { title: 'Spec', detail: 'ticket -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the ticket leaves open questions' },
     { title: 'Implement', detail: 'make the new tests pass test-first with tdd; check green' },
-    { title: 'Critique', detail: 'adversarial, with interrogate: properties, edge cases, mutation, fuzz, fitness sabotage as binding.md names them' },
+    { title: 'Critique', detail: 'one adversary with the rule of evidence: properties, edge cases, mutation, fuzz, fitness sabotage as binding.md names them' },
     { title: 'Fix', detail: 'fresh implementer per blocker/major round (max 2), re-critique after each' },
     { title: 'Review', detail: 'independent code-review of the diff on the spec, standards and guard axes; the script forces the verdict from the evidence' },
   ],
@@ -463,8 +463,9 @@ title. Then look for NEW ways the fix may have broken things.`
     : ''
   return `${PREAMBLE}
 You are the CRITIC for feature \`${spec.slug}\` of this repository. Your job is to BREAK it.
-Load the \`pstack:interrogate\` skill and follow its brief as the one adversary (the pipeline
-fixes the agent count, so you run it in-process): a finding survives only when a run proves
+You are the one adversary of this pipeline (its agent count is fixed, so you do the work
+in-process; the owner may run \`/pstack:interrogate\` on the branch afterwards, which is theirs
+to type, not yours to imitate). The rule of evidence: a finding survives only when a run proves
 it, so each carries the exact command, the output it printed and the output the spec requires;
 leave out anything you did not run; "no findings" is a valid result when you name what you ran.
 ${commonRules()}

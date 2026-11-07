@@ -4,7 +4,7 @@ Records are the standards a review judges against. Their formats come from `matt
 
 ## Design brief: `docs/design-brief.md`
 
-The agreed result of an interview. Run `mattpocock-skills:grill-with-docs`: it writes ADRs and glossary entries as decisions crystallise. Record the outcome here, dated, pointing at them.
+The agreed result of an interview. The owner types `/mattpocock-skills:grill-with-docs` (an agent calls `grilling` then `domain-modeling`, which is the same two steps): it writes ADRs and glossary entries as decisions crystallise. Record the outcome here, dated, pointing at them.
 
 ```markdown
 # <Project>
@@ -42,14 +42,14 @@ The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for whe
 
 ## Feature input: a tracker ticket
 
-A feature starts as the ticket `mattpocock-skills:to-spec`, `to-tickets` or `triage` writes: on the tracker (`gh issue view <n>`), or a local file under `.scratch/<slug>/issues/` where there is no tracker. Its sections are those skills' (What to build, Acceptance criteria, Blocked by; or Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope). The method adds one section and reads one label:
+A feature starts as the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` writes: on the tracker (`gh issue view <n>`), or a local file under `.scratch/<slug>/issues/` where there is no tracker. Its sections are those skills' (What to build, Acceptance criteria, Blocked by; or Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope). The method adds one section and reads one label:
 
 ```markdown
 ## Conjecture
 The one approach expected to work, stated so it can be shown wrong: what would refute it. The alternatives considered and the criticism that kills each.
 ```
 
-The agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The owner applies it; the guard asks when an agent tries to. `scripts/feature_preflight.py` refuses a ticket that is closed, has no stated conjecture or lacks the label, and names the skill that produces each missing piece; `/ratchet:feature <ticket>` runs it before any agent exists, and the pipeline runs it again as its first stage. The spec role writes `docs/features/<slug>/spec.md` from the ticket.
+The agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The skill the owner typed applies it; the guard asks when an agent tries to. `/ratchet:conjecture <ticket>` drafts the section from the conversation that produced the ticket and writes it after one dialog. `scripts/feature_preflight.py` refuses a ticket that is closed, has no stated conjecture or lacks the label, and names the skill that produces each missing piece; `/ratchet:feature <ticket>` runs it before any agent exists, and the pipeline runs it again as its first stage. The spec role writes `docs/features/<slug>/spec.md` from the ticket.
 
 ## Dispute: `docs/disputes/NNNN-<slug>.md`
 

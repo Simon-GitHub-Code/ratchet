@@ -13,6 +13,9 @@ It composes with three other plugins and competes with none. `mattpocock-skills`
 | `skills/init/` | `/ratchet:init`: the bare bones for any repository: `git init` where needed, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it, the other three plugins' one-time setup, the first commit, the remote and the triage labels |
 | `skills/adopt/` | `/ratchet:adopt`: steps and templates that bind the method to a repository's runner, forge and stack |
 | `skills/feature/` | `/ratchet:feature <ticket>`: the feature preflight on an agent-ready ticket, the branch, then the pipeline |
+| `skills/conjecture/` | `/ratchet:conjecture <ticket>`: the method's one addition to a ticket, drafted from the conversation that produced it |
+| `skills/next/` | `/ratchet:next`: the command the owner types next, decided from the checkout and the tracker |
+| `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
 | `workflows/pipeline.js` | the four-role pipeline (preflight, spec, implement, critic, review) the feature skill runs |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |

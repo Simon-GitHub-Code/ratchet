@@ -11,6 +11,11 @@ from tests.support import PLUGIN_ROOT
 STANZA = "This repository follows the method: load the `ratchet:method` skill first.\n"
 STANCE = "## The stance\n\nWork as a critical rationalist.\n\n- One.\n- Two.\n"
 SKILL = "---\nname: method\n---\n\n# The method\n\nIntro.\n\n" + STANCE + "\n## Working\n\nLater.\n"
+STEP = '{"command": "/ratchet:adopt", "why": "no binding", "then": "grill", "stage": "adopt"}'
+
+
+def silent(_argv: list[str]) -> str | None:
+    return None
 
 
 def checkout(tmp_path: Path, *, stanza: bool, binding: bool, file: str = "AGENTS.md") -> Path:
@@ -24,11 +29,14 @@ def checkout(tmp_path: Path, *, stanza: bool, binding: bool, file: str = "AGENTS
     return root
 
 
-def plugin(tmp_path: Path, *, skill: str | None = SKILL) -> Path:
+def plugin(tmp_path: Path, *, skill: str | None = SKILL, route: bool = False) -> Path:
     root = tmp_path / "plugin"
     (root / session.METHOD_SKILL).parent.mkdir(parents=True, exist_ok=True)
     if skill is not None:
         (root / session.METHOD_SKILL).write_text(skill, encoding="utf-8")
+    if route:
+        (root / session.ROUTE_SCRIPT).parent.mkdir(parents=True, exist_ok=True)
+        (root / session.ROUTE_SCRIPT).write_text("print('{}')\n", encoding="utf-8")
     return root
 
 
@@ -117,3 +125,45 @@ def test_the_shim_answers_each_event_in_its_form(tmp_path: Path) -> None:
     output = json.loads(shim({"hook_event_name": "SubagentStart", "cwd": str(adopted)}, tmp_path))
     assert "## The stance" in output["hookSpecificOutput"]["additionalContext"]
     assert shim({"cwd": str(tmp_path / "loose")}, tmp_path) == ""
+
+
+def test_the_next_step_closes_every_message(tmp_path: Path) -> None:
+    root = checkout(tmp_path, stanza=True, binding=False)
+    plugin_root = plugin(tmp_path, route=True)
+    calls: list[list[str]] = []
+
+    def run(argv: list[str]) -> str | None:
+        calls.append(argv)
+        return STEP
+
+    text = session.message(root, plugin_root, run)
+    assert text is not None
+    assert text.endswith(
+        "Next, for the owner to type: /ratchet:adopt. Why: no binding. Then: grill."
+    )
+    assert calls[0][1:] == [
+        str(plugin_root / session.ROUTE_SCRIPT),
+        "--root",
+        str(root),
+        "--offline",
+        "--json",
+    ]
+    adopted = session.message(checkout(tmp_path / "b", stanza=True, binding=True), plugin_root, run)
+    assert adopted is not None
+    assert "## The stance" in adopted
+    assert adopted.endswith("Then: grill.")
+
+
+def test_a_route_that_cannot_answer_adds_nothing(tmp_path: Path) -> None:
+    root = checkout(tmp_path, stanza=True, binding=True)
+    plugin_root = plugin(tmp_path, route=True)
+    for output in (None, "not json", "[]", '{"command": 1}'):
+        assert session.next_step(root, plugin_root, lambda _a, o=output: o) == ""
+    assert session.next_step(root, plugin(tmp_path / "noroute"), silent) == ""
+    assert session.message(root, plugin_root, silent) == session.message(root, plugin(tmp_path))
+
+
+def test_run_route_survives_a_missing_or_failing_interpreter() -> None:
+    assert session.run_route(["/nonexistent/python"]) is None
+    assert session.run_route([sys.executable, "-c", "raise SystemExit(1)"]) is None
+    assert session.run_route([sys.executable, "-c", "print('ok')"]) == "ok\n"
