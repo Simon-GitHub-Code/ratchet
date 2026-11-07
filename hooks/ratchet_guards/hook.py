@@ -8,6 +8,11 @@ command that bypasses a gate, rewrites history, removes a plugin or writes a gua
 answers ``deny``. When no rule fires it prints nothing, so Claude Code's own permission rules
 decide; it never answers ``allow``. Any failure answers ``ask``.
 
+A verdict covers the whole tool call: Claude Code runs none of a denied Bash command line,
+so a write chained before the refused command is lost with it. The deny message says so and
+names the matched command, and the method asks agents to keep a gated command in a tool
+call of its own.
+
 The guard paths come from ``guards/manifest.toml`` in the nearest checkout holding the root
 (an ancestor with ``.git``, else the root itself). When that file is absent no repository
 path is a guard path and only the command rules apply. The plugin's own files are locked
@@ -129,15 +134,19 @@ def _edit(path: Path, guard: Guard) -> Verdict | None:
 def reason(verdict: Verdict) -> str:
     """The sentence Claude (deny) or the human (ask) reads."""
     stop = "" if verdict.detail.endswith(".") else "."
-    said = f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop}"
     if verdict.decision is Decision.DENY:
+        # Why: a denied Bash call runs none of its commands, so an unrelated write chained
+        # with the refused one is lost; the agent must hear that, and the matched token.
         return (
-            f"{said} Do not work around it. If you believe the gate is wrong, stop, write a "
-            f"gate dispute ({DISPUTES}) and report it to the orchestrator."
+            f"Ratchet guard denied this tool call; no part of it ran. It {verdict.because}: "
+            f"{verdict.detail}{stop} Do not work around it. If you believe the gate is wrong, "
+            f"stop, write a gate dispute ({DISPUTES}) and report it to whoever started you. If "
+            f"the call also did unrelated work, redo that in a tool call of its own."
         )
     return (
-        f"{said} Approve only if you, the owner, intend this. An agent that thinks a gate "
-        f"is wrong writes a gate dispute ({DISPUTES}) instead."
+        f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop} Approve only "
+        f"if you, the owner, intend this. An agent that thinks a gate is wrong writes a gate "
+        f"dispute ({DISPUTES}) instead."
     )
 
 

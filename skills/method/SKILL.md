@@ -69,7 +69,7 @@ The hook puts this section in every session's context in a repository on the met
 **Branches you will meet.**
 - A gate goes red: fix the code. Split the unit, write the test, narrow the change.
 - You believe the gate is wrong: write a dispute, report it, continue with the work the gate leaves open. [guards.md](guards.md)
-- An edit or command is denied, or asks for approval you cannot give: that is the dispute signal. Stop on that gate there.
+- An edit or command is denied, or asks for approval you cannot give: that is the dispute signal. Stop on that gate there. A denied Bash call runs no part of itself, so keep a command the guard may refuse (a forge CLI call, a push, anything near a guard path) in a tool call of its own; an unrelated write chained with it is lost with it.
 - A mutant survives: kill it with a test, or register it as equivalent with a reason of twenty characters or more.
 - A measured value is above its threshold: run `ratchet`, commit the result with the change that earned it.
 - The change touches a user interface: `impeccable` `shape` before you build the surface, `polish` before you open the pull request; `DESIGN.md` is the standard the review judges it against.

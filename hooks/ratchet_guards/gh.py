@@ -1,7 +1,8 @@
 """Rules for the GitHub CLI: merges, branch protection, repository settings, labels and runs.
 
 The agent's ``gh`` runs as the owner, so GitHub cannot tell the two apart; these rules are
-where the difference is drawn.
+where the difference is drawn. Reads pass: ``gh label list`` and a ``GET`` on a labels
+endpoint are how an agent learns what the owner has set up.
 """
 
 import re
@@ -12,6 +13,9 @@ from ratchet_guards.options import Spec, scan
 from ratchet_guards.verdict import Verdict
 
 _REPO_FLAGS = frozenset({"-R", "--repo", "--hostname"})
+# Why: `gh label list` is a read and `gh label` alone prints help; only the verbs that change a
+# label are the owner's.
+_LABEL_WRITES = frozenset({"create", "edit", "delete", "clone"})
 _COMMANDS = {
     ("pr", "merge"): "merge-pr",
     ("repo", "edit"): "repo-settings",
@@ -122,5 +126,8 @@ def check(words: Sequence[str]) -> list[Verdict]:
     if group == "api":
         return _api(words[words.index("api") + 1 :])
     action = operands[1] if len(operands) > 1 else ""
-    rule = "labels" if group == "label" else _COMMANDS.get((group, action))
+    if group == "label":
+        rule = "labels" if action in _LABEL_WRITES else None
+    else:
+        rule = _COMMANDS.get((group, action))
     return [] if rule is None else [Verdict(rule, f"gh {group} {action}")]

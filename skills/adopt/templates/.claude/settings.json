@@ -27,7 +27,10 @@
       "Bash(gh api *branches/*/protection*)",
       "Bash(gh api *rulesets*)",
       "Bash(gh repo edit:*)",
-      "Bash(gh label:*)",
+      "Bash(gh label create:*)",
+      "Bash(gh label edit:*)",
+      "Bash(gh label delete:*)",
+      "Bash(gh label clone:*)",
       "Bash(gh run delete:*)"
     ],
     "ask": [

@@ -401,8 +401,10 @@ def test_details_name_the_offending_command() -> None:
 
 
 def test_gh_details_name_the_subcommand_and_method() -> None:
-    assert details("gh label") == ["gh label "]
+    assert details("gh label") == []
+    assert details("gh label list") == []
     assert details("gh label create bug") == ["gh label create"]
+    assert details("gh -R o/r label edit bug --color 000") == ["gh label edit"]
     assert details("gh pr --squash merge 12") == ["gh pr merge"]
     assert details("gh api repos/o/r/labels -f name=x") == ["gh api POST repos/o/r/labels"]
 

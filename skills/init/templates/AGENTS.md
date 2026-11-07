@@ -11,6 +11,10 @@ Four plugins build software here, and each owns one question. `CLAUDE.md` is a s
 
 <One paragraph: purpose, who it is for, the one sentence that says what the system's job is.>
 
+## Agent skills
+
+<Written by the mattpocock-skills setup in init step 5: the issue tracker, the triage labels and the domain-doc layout, each pointing at its file under docs/agents/. It updates this section in place. Delete the section if that setup was declined.>
+
 ## Read before any design work
 
 - `docs/design-brief.md`: scope, slice one, what is out.

@@ -132,9 +132,11 @@ def test_reasons_and_output_shape() -> None:
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
-                "Ratchet guard: this tool call manages labels: gh label create x. Do not "
-                "work around it. If you believe the gate is wrong, stop, write a gate dispute "
-                "(docs/disputes/NNNN-<slug>.md) and report it to the orchestrator."
+                "Ratchet guard denied this tool call; no part of it ran. It manages labels: "
+                "gh label create x. Do not work around it. If you believe the gate is wrong, "
+                "stop, write a gate dispute (docs/disputes/NNNN-<slug>.md) and report it to "
+                "whoever started you. If the call also did unrelated work, redo that in a tool "
+                "call of its own."
             ),
         }
     }

@@ -30,9 +30,11 @@ The method's plugin registers a PreToolUse hook on every edit and shell call. It
 
 - **Ask.** An edit to a guard path, naming the group and its reason. Merging a pull request.
 - **Deny an edit** in a group marked `edit = "deny"`: the harness and local git, where the platform's own protected-path handling would let an `ask` through. The plugin's own files and `~/.claude/plugins/**` are always in this set.
-- **Deny a command** that bypasses a gate or rewrites history: `--no-verify` and its spellings, `SKIP=`, hook uninstalls and hook-path changes; force pushes in every spelling, pushes to main, hard resets on main, amending a pushed commit, history filters; forge CLI calls (`gh` on GitHub) touching branch protection, rulesets, labels, repository settings, secrets, variables, workflows or runs; nested `claude` invocations given settings or plugin flags; any shell write, move, copy, link or delete of a guard path, including through wrappers, substitutions, `eval`, heredocs and `-c` strings.
+- **Deny a command** that bypasses a gate or rewrites history: `--no-verify` and its spellings, `SKIP=`, hook uninstalls and hook-path changes; force pushes in every spelling, pushes to main, hard resets on main, amending a pushed commit, history filters; forge CLI calls (`gh` on GitHub) that change branch protection, rulesets, labels, repository settings, secrets, variables, workflows or runs; nested `claude` invocations given settings or plugin flags; any shell write, move, copy, link or delete of a guard path, including through wrappers, substitutions, `eval`, heredocs and `-c` strings. Reads pass: `gh label list`, a `GET` on a labels endpoint, `gh run list`.
 
-Without a `guards/manifest.toml` the path rules are off and the command rules still apply.
+A verdict covers the whole tool call. Claude Code runs none of a denied command line, so a file write chained before the refused command is lost with it; the deny message says so and names the matched command. Keep a command the guard may refuse (a forge CLI call, a push, anything near a guard path) in a tool call of its own, so an unrelated write is never lost with it.
+
+Without a `guards/manifest.toml` the path rules are off and the command rules still apply. The command rules are on from the first session, before `/ratchet:adopt` has written a binding: anything an agent can set is something an agent can forge, so the guard has no off state and no "not adopted yet" state. `/ratchet:init` is written so that none of its steps provokes a denial; label creation, which the forge rule refuses, is listed for the owner instead.
 
 Permission rules in the project's `.claude/settings.json` are a second, independent layer that mirrors the manifest: `deny` for locked groups and bypass commands, `ask` for the rest and for `gh pr merge`.
 
@@ -78,6 +80,8 @@ A denied or unanswered call is the signal to open a dispute.
    The option you recommend, and the change to which guard path.
    ```
 
-3. Report it to whoever started you (a pipeline agent returns it in `disputes`), and continue with the work the gate does not block.
+3. Report it to whoever started you (a pipeline agent returns it in `disputes`; an agent an owner is driving interactively reports it in its reply), and continue with the work the gate does not block.
+
+Before `/ratchet:adopt` has run there is no `docs/disputes/` yet; create the directory, write the dispute at the same path, and report it to the owner in the reply. Adopt's template skips an existing file, so the dispute survives adoption.
 
 **Resolution.** The owner upholds it (the gate changes by the owner's hand or approval; an ADR follows when the change relaxes a rule or contradicts a decision; status `upheld` with a link) or rejects it (status `rejected` with the reason; the code changes). A dispute names one gate. A changed guard path is covered only by an upheld dispute that names that path, or by the owner's own hand. Records stay as the history of how the gates evolved; they are not guard paths, so any agent can write one.
