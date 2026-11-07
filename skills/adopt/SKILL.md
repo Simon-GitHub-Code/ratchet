@@ -10,9 +10,9 @@ Load the `ratchet:method` skill first; this skill assumes its vocabulary. Templa
 
 ## Steps
 
-1. **Check the ground.** The repository is a git repository with a default branch; `claude plugin list` shows `ratchet`, `mattpocock-skills` and `pstack`; `python3` (3.11 or later) is installed for the plugin's own gates. Done when all hold or you have told the owner which is missing.
+1. **Check the ground.** The repository is a git repository with a default branch; `claude plugin list` shows `ratchet`, `mattpocock-skills`, `pstack` and `impeccable`; `python3` (3.11 or later) is installed for the plugin's own gates. Done when all hold or you have told the owner which is missing.
 
-2. **Initialise.** Run `/ratchet:init` unless `AGENTS.md` already opens with its three-plugin stanza. Done when `AGENTS.md` exists and `CLAUDE.md` links to it.
+2. **Initialise.** Run `/ratchet:init` unless `AGENTS.md` already opens with its four-plugin stanza. Done when `AGENTS.md` exists and `CLAUDE.md` links to it.
 
 3. **Copy the templates.** Copy every file under `templates/` to the same path in the repository, skipping any that exists and listing the skipped ones for the owner. Done when the listing of `templates/` and the repository agree, and the skip list is reported.
 
@@ -26,7 +26,7 @@ Load the `ratchet:method` skill first; this skill assumes its vocabulary. Templa
 
 8. **Fill the manifest.** Add this stack's tool-config, fitness-test and gate-tool paths to `guards/manifest.toml`, and mirror every pattern as an `ask` rule in `.claude/settings.json` (locked groups as `deny`). Done when every manifest pattern has a permission rule.
 
-9. **Records.** Run `mattpocock-skills:grill-with-docs` for the design brief: purpose, shape, slice one as checkable items, the explicit out-list. It writes ADRs and glossary entries as decisions crystallise; record the agreed brief in `docs/design-brief.md`, dated. Fill the version and URL in `docs/adr/0001-adopt-the-ratchet-method.md`. Done when the brief is dated and ADR 0001 names the plugin version.
+9. **Records.** Run `mattpocock-skills:grill-with-docs` for the design brief: purpose, shape, slice one as checkable items, the explicit out-list. It writes ADRs and glossary entries as decisions crystallise; record the agreed brief in `docs/design-brief.md`, dated. When the repository has a user interface, run `/impeccable document` so `DESIGN.md` records the design system the reviews judge against. Fill the version and URL in `docs/adr/0001-adopt-the-ratchet-method.md`. Done when the brief is dated and ADR 0001 names the plugin version.
 
 10. **CI.** Pin every action or image to a commit SHA or digest with the version in a trailing comment; add the toolchain steps the binding needs. Done when the CI config parses.
 

@@ -7,7 +7,7 @@ description: Load when a gate goes red, an edit or command is denied, a threshol
 
 Software here is written mostly by agents, so quality is enforced by machines. Every change is a **conjecture** that **stands** only while no **criticism** of it is **open**. The **gates** are criticism made deterministic. They run in **tiers**, they only **ratchet** tighter, and every exception to them is a written **record**.
 
-Three plugins compose, and each owns one question. `mattpocock-skills` says how the work is done: `tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grill-with-docs`, `pr`, `research`. `pstack` says in what style and with which levers: `poteto-mode`, `architect`, `interrogate`, `arena`, `correct`, the formal verification skills. This method says what must be true before a merge, and names those skills where a role needs one.
+Four plugins compose, and each owns one question. `mattpocock-skills` says how the work is done: `tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grill-with-docs`, `pr`, `research`. `pstack` says in what style and with which levers: `poteto-mode`, `architect`, `interrogate`, `arena`, `correct`, the formal verification skills. `impeccable` says how anything a person sees is designed: every user interface goes through it, and its `PRODUCT.md` and `DESIGN.md` are records. This method says what must be true before a merge, and names those skills where a role needs one.
 
 The method fixes the contract. Each repository writes a **binding** (`docs/process/binding.md`) naming the runner, the forge and the tool behind each gate, and its `AGENTS.md` holds only what the method leaves to the project: its purpose, its declared paths, its non-negotiables. A project may add rules and tighten limits. Loosening one is a method change and needs a superseding ADR in the project.
 
@@ -23,7 +23,7 @@ Use these words, in code, tests, records and prose. Each one is a hook for the b
 - **absolute path**: code held at 100% coverage with no exclusion reaching it: the gate tools, and whatever the binding declares pure.
 - **guard path**: a file that defines, runs or records a gate. Listed in `guards/manifest.toml`; the harness asks the owner before an edit, or denies it.
 - **dispute**: the record an agent writes when it believes a gate, not the code, is wrong. The owner decides.
-- **record**: the design brief, the glossary, an ADR, a feature brief, a dispute. Records are the standards a review judges against.
+- **record**: the design brief, the glossary, an ADR, a feature brief, a dispute, and for a user interface `PRODUCT.md` and `DESIGN.md`. Records are the standards a review judges against.
 - **owner**: the human. Merges, decides disputes, changes gates by hand.
 - **red**, **green**: a test or gate's observable state. A test that was never red proves nothing.
 - **bite**: a checker proven to fail on a synthetic violation. A gate nobody tests is a gate nobody can trust.
@@ -72,6 +72,7 @@ The hook puts this section in every session's context in a repository on the met
 - An edit or command is denied, or asks for approval you cannot give: that is the dispute signal. Stop on that gate there.
 - A mutant survives: kill it with a test, or register it as equivalent with a reason of twenty characters or more.
 - A measured value is above its threshold: run `ratchet`, commit the result with the change that earned it.
+- The change touches a user interface: `impeccable` `shape` before you build the surface, `polish` before you open the pull request; `DESIGN.md` is the standard the review judges it against.
 - You need a word the glossary lacks: add the entry with its *Avoid* list, through `domain-modeling`, before using it in code.
 - You need a dependency: that is a design decision. Say why in the pull request body, or in an ADR when it shapes the architecture.
 - A tool reports a finding you think is wrong: it is a criticism. Answer it in writing (a dispute, an ADR, a register entry with a reason) or fix the code.

@@ -329,7 +329,9 @@ spec.md is ambiguous, pick the reading that is most consistent with the glossary
 and record the choice in \`notes\`.
 
 Load the \`mattpocock-skills:tdd\` skill and work its loop one slice at a time: run the listed
-tests, implement the smallest change that makes one pass, re-run, repeat. The spec's tests
+tests, implement the smallest change that makes one pass, re-run, repeat. If the change touches
+a user interface, load \`impeccable:impeccable\` as well: \`shape\` before you build the surface,
+\`polish\` before you return, and DESIGN.md is the standard you build to. The spec's tests
 are fixed inputs: a test you believe wrong stays red and is named in \`notes\`. Keep every
 declared-path rule and every AGENTS.md non-negotiable, add the contracts binding.md requires
 where the spec states pre/postconditions, and regenerate any contract artefacts binding.md
@@ -422,7 +424,10 @@ Do all of the following and report evidence for each:
 5. Non-negotiables and vocabulary: check every AGENTS.md non-negotiable holds in the change,
    the glossary's banned words are absent from new identifiers, and any generated contract
    artefact binding.md names matches the code that it describes.
-6. Guard paths: run \`guard-diff\` and put every path it lists in \`guardFilesChanged\`.
+6. User interface: if the change touches one, load \`impeccable:impeccable\` and run its \`audit\`
+   and \`critique\` on the surface; each finding they prove is a finding here, judged against
+   DESIGN.md.
+7. Guard paths: run \`guard-diff\` and put every path it lists in \`guardFilesChanged\`.
    Each one is a blocker finding (title "guard path changed: <path>") unless a gate dispute
    under docs/disputes/ in the change names that path, and even then a major one: the
    pipeline never changes a gate, only the owner does. Your scratch copy for step 4 is outside
@@ -451,7 +456,7 @@ Inputs you may read, and nothing else:
 - The uncommitted diff: the change is uncommitted on branch \`${BRANCH}\`. Enumerate it with
   \`git diff ${BASE} --stat\`, \`git diff ${BASE}\` and \`git status --porcelain\` (untracked files are
   new files: read them). If the branch has commits, \`git diff ${BASE}...${BRANCH}\` is equivalent.
-- AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/
+- AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
 - Any generated contract artefacts that binding.md names
 The implementer's notes, the critic's findings and the feature brief are outside your inputs:
 judge the code against the spec and the standards only.
@@ -468,6 +473,7 @@ B. Standards conformance:
    - Declared-path rules as AGENTS.md and binding.md define them: dependency direction, purity
      of the paths they call pure, no forbidden imports
    - Every AGENTS.md non-negotiable, checked one by one against the diff
+   - For a user interface, DESIGN.md: tokens, components and patterns used as it records them
    - Contracts: the pre/postcondition mechanism binding.md names, where the spec states them;
      generated contract artefacts match the code they describe
    - Type strictness, lint, test placement and coverage as the gates in binding.md require

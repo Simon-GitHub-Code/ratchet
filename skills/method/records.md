@@ -36,6 +36,10 @@ The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for whe
 - Every machine-enforced rule cites its ADR: a policy constant in a fitness test carries an `ADR NNNN` comment, and a fitness test checks the number exists.
 - A rejection is a decision too. The title states the negative; the body gives the scope, the claims checked against evidence, the experiment run through the gates with its numbers, the revisit triggers, and the seam that keeps the option cheap. Link the document `mattpocock-skills:research` wrote.
 
+## Product and design: `PRODUCT.md`, `DESIGN.md`
+
+`impeccable` owns both: `init` writes the product context, `document` derives the design system from the shipped code, and a redesign replaces it. They are guard paths in the decisions group, so a change to the design system is the owner's. A review of a user interface judges against `DESIGN.md`.
+
 ## Feature brief: `docs/features/<slug>/brief.md`
 
 Short; the spec role expands it.

@@ -2,7 +2,7 @@
 
 The Ratchet method: what must be true before a merge, when software is built by agents. Tiered deterministic gates that only tighten, guard paths the harness protects, disputes, records, a four-role feature pipeline, and the merge rule of critical rationalism. Packaged as a Claude Code plugin so every repository reads one copy of the method and keeps only its own binding.
 
-It composes with two other plugins and competes with neither. `mattpocock-skills` says how the work is done (`tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grill-with-docs`, `pr`, `research`). `pstack` says in what style and with which levers (`poteto-mode`, `architect`, `interrogate`, `arena`, `correct`, the formal verification skills). Ratchet's roles call those skills by name; its records use their formats and add a section each.
+It composes with three other plugins and competes with none. `mattpocock-skills` says how the work is done (`tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grill-with-docs`, `pr`, `research`). `pstack` says in what style and with which levers (`poteto-mode`, `architect`, `interrogate`, `arena`, `correct`, the formal verification skills). `impeccable` says how anything a person sees is designed, and its `PRODUCT.md` and `DESIGN.md` are records. Ratchet's roles call those skills by name; its records use their formats and add a section each.
 
 ## What is in the plugin
 
@@ -10,7 +10,7 @@ It composes with two other plugins and competes with neither. `mattpocock-skills
 | --- | --- |
 | `skills/method/SKILL.md` | the founding document: the words, the nine commitments, how work runs |
 | `skills/method/*.md` | the reference behind each commitment: the merge rule, tiers as questions, the ratchet, guards and disputes, the pipeline, records, verifiable shape |
-| `skills/init/` | `/ratchet:init`: the bare bones for any repository, an `AGENTS.md` naming the three plugins with `CLAUDE.md` linked to it |
+| `skills/init/` | `/ratchet:init`: the bare bones for any repository, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it |
 | `skills/adopt/` | `/ratchet:adopt`: steps and templates that bind the method to a repository's runner, forge and stack |
 | `workflows/feature.js` | `/ratchet:feature`: the four-role pipeline (spec, implement, critic, review) |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |

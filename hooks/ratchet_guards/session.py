@@ -26,7 +26,8 @@ SUBAGENT_EVENT = "SubagentStart"
 NO_STANZA = (
     "Ratchet: {root} names no method. No deterministic gate runs on code written here, and no "
     "AGENTS.md says which plugins build it. Before building anything, ask the owner to run "
-    "/ratchet:init (AGENTS.md naming mattpocock-skills, pstack and ratchet) and /ratchet:adopt "
+    "/ratchet:init (AGENTS.md naming mattpocock-skills, pstack, impeccable and ratchet) and "
+    "/ratchet:adopt "
     "(the gates). Both are owner-invoked; until then, say in your first reply that nothing checks "
     "the code."
 )

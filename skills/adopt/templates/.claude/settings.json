@@ -42,7 +42,9 @@
       "Edit(/docs/process/**)",
       "Edit(/CLAUDE.md)",
       "Edit(/GLOSSARY.md)",
-      "Edit(/AGENTS.md)"
+      "Edit(/AGENTS.md)",
+      "Edit(/PRODUCT.md)",
+      "Edit(/DESIGN.md)"
     ]
   }
 }

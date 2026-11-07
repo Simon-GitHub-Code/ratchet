@@ -3,7 +3,7 @@ status: accepted
 ---
 # This repository is built and verified under the Ratchet method
 
-Code here is written mostly by agents, so quality is enforced by machines rather than trusted. We decided to adopt the Ratchet method (the `ratchet` plugin, version <X.Y.Z>, at <repository URL>) in full: the entry points and three tiers, the ratchet, harness-enforced guards with gate disputes, the records, the four-role feature pipeline, the verifiable code shape and the merge rule. `docs/process/binding.md` names the runner, the forge and the tool behind each gate; `AGENTS.md` holds what the method leaves to the project and names the two plugins the method composes with, `mattpocock-skills` and `pstack`. A rule of the method is loosened here only by an ADR that supersedes this one for that rule.
+Code here is written mostly by agents, so quality is enforced by machines rather than trusted. We decided to adopt the Ratchet method (the `ratchet` plugin, version <X.Y.Z>, at <repository URL>) in full: the entry points and three tiers, the ratchet, harness-enforced guards with gate disputes, the records, the four-role feature pipeline, the verifiable code shape and the merge rule. `docs/process/binding.md` names the runner, the forge and the tool behind each gate; `AGENTS.md` holds what the method leaves to the project and names the three plugins the method composes with, `mattpocock-skills`, `pstack` and `impeccable`. A rule of the method is loosened here only by an ADR that supersedes this one for that rule.
 
 ## Refutation criterion
 

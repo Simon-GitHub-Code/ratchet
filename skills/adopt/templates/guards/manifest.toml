@@ -79,7 +79,7 @@ paths = [
 
 [[group]]
 name = "decisions"
-reason = "ADRs, the agent instructions, the vocabulary and the process documents are the standards every review judges against."
+reason = "ADRs, the agent instructions, the vocabulary, the design records and the process documents are the standards every review judges against."
 paths = [
     "docs/adr/**",
     "docs/process/**",
@@ -87,4 +87,6 @@ paths = [
     "CLAUDE.md",
     "GLOSSARY.md",
     "GLOSSARY-MAP.md",
+    "PRODUCT.md",
+    "DESIGN.md",
 ]
