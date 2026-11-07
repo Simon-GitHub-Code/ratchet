@@ -70,6 +70,15 @@ def test_a_ceiling_is_only_ever_lowered() -> None:
     assert budget.lowered_ceiling(None, 0.4, 1.5) == 1.0
 
 
+def test_a_tier_ceiling_starts_no_tighter_than_the_tier_budget() -> None:
+    # Why: a trial adoption measured an empty skeleton and set tier1 to 14 seconds, so the first
+    # feature's tests would have needed an ADR to "loosen" a ceiling 60 times under the budget.
+    assert budget.lowered_ceiling(None, 9.0, 1.5, floor=budget.TIER_BUDGETS["tier1"]) == 900.0
+    assert budget.lowered_ceiling(None, 1000.0, 1.5, floor=900.0) == 1500.0
+    assert budget.lowered_ceiling(14.0, 9.0, 1.5, floor=900.0) is None, "an existing ceiling stands"
+    assert budget.lowered_ceiling(1500.0, 100.0, 1.5, floor=900.0) == 900.0
+
+
 @pytest.mark.parametrize(
     ("outcome", "status", "verdict"),
     [
@@ -90,7 +99,8 @@ def test_main_times_a_command_reports_and_sets(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     (tmp_path / "quality").mkdir()
-    (tmp_path / "quality/thresholds.toml").write_text(THRESHOLDS, encoding="utf-8")
+    without_tier0 = THRESHOLDS.replace("tier0 = 60\n", "")
+    (tmp_path / "quality/thresholds.toml").write_text(without_tier0, encoding="utf-8")
     argv = [
         "budget",
         "tier0",
@@ -110,8 +120,8 @@ def test_main_times_a_command_reports_and_sets(
     assert "ceilings.seconds.tier0 set to" in out
     record = json.loads((tmp_path / "timing/tier0.jsonl").read_text().splitlines()[0])
     assert record["key"] == "tier0"
-    assert record["status"] == "green"
-    assert budget.ceiling_of((tmp_path / "quality/thresholds.toml").read_text(), "tier0") < 60.0
+    assert record["status"] == "unbounded", "the first adoption has no ceiling yet"
+    assert budget.ceiling_of((tmp_path / "quality/thresholds.toml").read_text(), "tier0") == 60.0
     failing = [
         "budget",
         "tier0",

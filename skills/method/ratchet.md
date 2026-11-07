@@ -60,7 +60,7 @@ date = 2026-11-06
 
 ## 6. Ceilings only fall
 
-`[ceilings.seconds]` in the same file holds the wall-clock ceiling of each tier, and of any gate with its own runner. The `budget` entry point wraps the run and goes red over the ceiling; `ratchet-lowered` fails a raised ceiling exactly as it fails a lowered threshold; `budget --set` records the first ceiling from a measured run with headroom and afterwards only lowers it. A ceiling is paid for by caching, splitting, sharding or running less, never by a quarantined test. [tiers.md](tiers.md#speed)
+`[ceilings.seconds]` in the same file holds the wall-clock ceiling of each tier, and of any gate with its own runner. The `budget` entry point wraps the run and goes red over the ceiling; `ratchet-lowered` fails a raised ceiling exactly as it fails a lowered threshold; `budget --set` records the first ceiling from a measured run with headroom, no lower than the tier's budget, and afterwards only lowers it. A ceiling is paid for by caching, splitting, sharding or running less, never by a quarantined test. [tiers.md](tiers.md#speed)
 
 ## Limits versus ratchets
 
