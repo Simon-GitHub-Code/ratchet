@@ -30,6 +30,7 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | suppressions | `just suppressions` |
 | guard-diff | `just guard-diff` |
 | conformance | `just conformance` |
+| budget | `just budget tier1` |
 | reports | `just reports` |
 
 ## Gates
@@ -93,6 +94,10 @@ One row per question the method asks. The Tool cell names the tool for this stac
 ## Limits
 
 <The ceilings the gates hold, per path group where they differ: size and complexity (cognitive and cyclomatic complexity, nesting depth, unit and file length); change size per pull request; performance (latency, allocation, bundle size). Hard limits: split the unit rather than raise one.>
+
+## Speed
+
+<The ceilings: `quality/thresholds.toml` `[ceilings.seconds]`, one per tier, set by `just budget <tier> --set` from the first green run and only lowered since. The cache keys: the lockfile(s) and tool configs each CI job's cache is keyed on, and the tool caches it restores. The shard counts: each suite over the budget below, its tool and its runner count. The affected-only tool, if any, and the path filters. The budget: the seconds a single gate may take before it is sharded.>
 
 ## Weekly and advisory
 

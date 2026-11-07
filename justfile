@@ -33,6 +33,10 @@ test:
 conformance-self-test:
     python3 scripts/conformance.py --self-test
 
-# The lowered gate against this repository's own (absent) thresholds file must report the first-adoption case cleanly.
+# The lowered gate on this repository's own thresholds: no ceiling raised against the merge base.
 lowered-smoke:
-    python3 scripts/lowered.py --root skills/adopt/templates --base HEAD || true
+    python3 scripts/lowered.py
+
+# Time one gate against its ceiling in quality/thresholds.toml; CI wraps every matrix job in it.
+budget key *flags:
+    python3 scripts/budget.py {{key}} --report .ratchet/timing.jsonl {{flags}} -- just {{key}}

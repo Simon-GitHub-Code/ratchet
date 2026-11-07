@@ -30,7 +30,11 @@ ENTRY_POINTS = (
     "guard-diff",
     "conformance",
     "reports",
+    "budget",
 )
+SPEED_SECTION = "## Speed"
+WORKFLOWS = Path(".github/workflows")
+CI_SHAPE = (("concurrency:", "cancels superseded runs"), ("cache", "caches between runs"))
 ADR_STATUS = re.compile(r"^(proposed|accepted|deprecated|rejected|superseded( by ADR-\d{4})?)$")
 ADR_FRONT_MATTER = re.compile(
     r"\A(?:---\nstatus: (?P<status>[^\n]+)\n(?:superseded-by: (?P<by>\d{4})\n)?---\n+)?# \S"
@@ -204,6 +208,20 @@ def pr_template_path(root: Path) -> str:
     return match.group(1) if match else DEFAULT_PR_TEMPLATE
 
 
+def check_speed(root: Path) -> Iterable[str]:
+    text = read(root / "docs/process/binding.md") or ""
+    if text and SPEED_SECTION not in text:
+        yield f"docs/process/binding.md: has no '{SPEED_SECTION}' section (ceilings, shards)"
+    workflows = root / WORKFLOWS
+    if not workflows.is_dir():
+        return
+    for path in sorted(workflows.glob("*.yml")):
+        content = path.read_text(encoding="utf-8")
+        for marker, meaning in CI_SHAPE:
+            if marker not in content:
+                yield f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)"
+
+
 def check_manifest(root: Path) -> Iterable[str]:
     path = root / "guards/manifest.toml"
     if not path.is_file():
@@ -310,6 +328,7 @@ CHECKS: tuple[Check, ...] = (
     check_brief,
     check_adrs,
     check_binding,
+    check_speed,
     check_manifest,
     check_quality,
     check_disputes,
@@ -358,12 +377,27 @@ def artefact_mutations() -> list[Mutation]:
         path = root / DEFAULT_PR_TEMPLATE
         path.write_text(path.read_text().replace("## Guard paths", "## Guards"))
 
+    def drop_speed_section(root: Path) -> None:
+        path = root / "docs/process/binding.md"
+        path.write_text(path.read_text().replace(SPEED_SECTION, "## Slowness"))
+
+    def ci_without_concurrency(root: Path) -> None:
+        path = root / WORKFLOWS / "ci.yml"
+        path.write_text(path.read_text().replace("concurrency:", "serial:"))
+
+    def ci_without_cache(root: Path) -> None:
+        path = root / WORKFLOWS / "deep.yml"
+        path.write_text(path.read_text().replace("cache", "store"))
+
     return [
         ("AGENTS.md without the method stanza", strip_stanza),
         ("binding without the conformance entry point", drop_entry_point),
         ("binding with a gate bound to none and no reason", none_without_reason),
         ("manifest with the harness unlocked", unlock_harness),
         ("pull-request template missing a section", drop_pr_section),
+        ("binding without a Speed section", drop_speed_section),
+        ("CI workflow without concurrency control", ci_without_concurrency),
+        ("CI workflow without a cache", ci_without_cache),
     ]
 
 

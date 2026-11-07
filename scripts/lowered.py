@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""The ratchet's first rule as a gate: no threshold lowered, none missing.
+"""The ratchet's first rule as a gate: no threshold lowered, no ceiling raised, none missing.
 
-Compares ``quality/thresholds.toml`` at head with the merge base.
+Compares ``quality/thresholds.toml`` at head with the merge base. Every key only rises, except
+the keys under ``ceilings`` (the speed gate's seconds per tier and gate), which only fall.
 
 Usage: ``lowered.py [--root DIR] [--base REF] [--file PATH]``. The base defaults to the merge
 base of HEAD with the default branch: the remote's HEAD, else the branch the binding names
@@ -70,14 +71,24 @@ def flatten(data: dict[str, object], prefix: str = "") -> dict[str, float]:
     return flat
 
 
-def lowered(before: dict[str, float], after: dict[str, float]) -> list[str]:
+CEILINGS = "ceilings."
+
+
+def loosened(before: dict[str, float], after: dict[str, float]) -> list[str]:
+    """Every key that was removed, lowered (a threshold) or raised (a ceiling)."""
     problems = []
     for key, old in sorted(before.items()):
         if key not in after:
             problems.append(f"{key}: removed (was {old})")
-        elif after[key] < old:
+        elif key.startswith(CEILINGS) and after[key] > old:
+            problems.append(f"{key}: ceiling raised from {old} to {after[key]}")
+        elif not key.startswith(CEILINGS) and after[key] < old:
             problems.append(f"{key}: lowered from {old} to {after[key]}")
     return problems
+
+
+def lowered(before: dict[str, float], after: dict[str, float]) -> list[str]:
+    return loosened(before, after)
 
 
 def main(argv: list[str]) -> int:

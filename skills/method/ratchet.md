@@ -1,6 +1,6 @@
 # The ratchet
 
-A stored number is one more thing an agent can edit to pass. The ratchet has five rules that make loosening visible, enforced by gate tools that are themselves absolute paths: typed, 100% covered and mutation-tested.
+A stored number is one more thing an agent can edit to pass. The ratchet has six rules that make loosening visible, enforced by gate tools that are themselves absolute paths: typed, 100% covered and mutation-tested.
 
 ## 1. Thresholds only rise
 
@@ -58,6 +58,10 @@ date = 2026-11-06
 
 `quality/snapshots/` holds each gate's configuration as the tool resolves it (presets, inherited defaults and upgrades included), normalised and sorted. The `snapshots-check` entry point (tier 0) regenerates and diffs. After an intended change, the `snapshots` entry point rewrites them and the diff is reviewed with the pull request. Loosening a gate therefore shows as a reviewed diff instead of a silent config edit.
 
+## 6. Ceilings only fall
+
+`[ceilings.seconds]` in the same file holds the wall-clock ceiling of each tier, and of any gate with its own runner. The `budget` entry point wraps the run and goes red over the ceiling; `ratchet-lowered` fails a raised ceiling exactly as it fails a lowered threshold; `budget --set` records the first ceiling from a measured run with headroom and afterwards only lowers it. A ceiling is paid for by caching, splitting, sharding or running less, never by a quarantined test. [tiers.md](tiers.md#speed)
+
 ## Limits versus ratchets
 
-A ratchet that only rises cannot hold a ceiling. Size and complexity are therefore hard limits, tighter on absolute paths, held in the lint config and in a fitness test. Split the unit rather than raise the limit. The binding holds the numbers.
+A ratchet that only rises cannot hold a ceiling, so the file carries both directions: thresholds rise, ceilings fall, and the gate knows which is which by the `ceilings` table. Size and complexity are hard limits rather than either, tighter on absolute paths, held in the lint config and in a fitness test. Split the unit rather than raise the limit. The binding holds the numbers.

@@ -20,6 +20,7 @@ Use these words, in code, tests, records and prose. Each one is a hook for the b
 - **entry point**: one named command per tier and per method gate, in whatever runner the binding names. `check` is tier 0 plus tier 1.
 - **binding**: the repository's table mapping each question to the tool that answers it, or to `none` with a reason.
 - **ratchet**: a recorded threshold that only rises. The `ratchet` entry point raises it to the measured value.
+- **ceiling**: a recorded wall-clock limit per tier or gate, in seconds, that only falls. The `budget` entry point measures against it.
 - **absolute path**: code held at 100% coverage with no exclusion reaching it: the gate tools, and whatever the binding declares pure.
 - **guard path**: a file that defines, runs or records a gate. Listed in `guards/manifest.toml`; the harness asks the owner before an edit, or denies it.
 - **dispute**: the record an agent writes when it believes a gate, not the code, is wrong. The owner decides.
@@ -31,7 +32,7 @@ Use these words, in code, tests, records and prose. Each one is a hook for the b
 
 ## The contract
 
-Every repository on the method keeps all nine. The conformance gate checks the artefacts; the owner reads for the rest.
+Every repository on the method keeps all ten. The conformance gate checks the artefacts; the owner reads for the rest.
 
 1. **One set of entry points.** The binding's table is the only list of gates; CI runs the same entry points, and a red `check` names the one that failed. [tiers.md](tiers.md)
 2. **Three tiers, two aggregates.** `check` is tier 0 plus tier 1 and runs before every pull request. `check-deep` adds tier 2 and runs on the default branch and nightly. A red tier 2 there is the next piece of work. A question with no tool in the stack is bound to `none` with a reason and an ADR: green, and a standing criticism of the binding. [tiers.md](tiers.md)
@@ -41,7 +42,8 @@ Every repository on the method keeps all nine. The conformance gate checks the a
 6. **Records.** A dated design brief with a first slice and an explicit out-list; a glossary whose *Avoid* lists are banned identifiers; one ADR per lasting decision, each with its refutation criterion, superseded in writing; a feature brief per feature; every machine-enforced rule cites the ADR that justifies it. Formats come from `domain-modeling`; the method adds its sections. [records.md](records.md)
 7. **The pipeline.** A feature is built by four roles with fixed sight lines: spec, implement, critic, review, each working with the skill the role names. The orchestrator reads only the brief, the structured result and the spec, opens the pull request when the gates are green, and a human merges. [pipeline.md](pipeline.md)
 8. **Verifiable shape.** Logic sits where every verifier reaches it. Declared layers are checked by a tool and a fitness test. Absolute paths are held at 100%. Limits are hard: split the unit. A red test stays red. Suppressions and policy constants cite their rule and their ADR. [code.md](code.md)
-9. **The merge rule.** A change is merged when no criticism of it is open. A test is a refuter made executable, a gate is a refuter made deterministic, a review finding is a criticism, a dispute is a counter. A criticism is answered by revision or by a counter, in writing. [epistemology.md](epistemology.md)
+9. **Speed.** Each tier has a ceiling in seconds that only falls, measured by the `budget` entry point and set at adoption from the first run. CI starts cached, split one job per gate, sharded above the binding's budget, and cancels superseded runs; the conformance gate checks the shape. A tier over its ceiling on the default branch is the next piece of work. [tiers.md](tiers.md#speed)
+10. **The merge rule.** A change is merged when no criticism of it is open. A test is a refuter made executable, a gate is a refuter made deterministic, a review finding is a criticism, a dispute is a counter. A criticism is answered by revision or by a counter, in writing. [epistemology.md](epistemology.md)
 
 ## The stance
 
@@ -72,6 +74,7 @@ The hook puts this section in every session's context in a repository on the met
 - An edit or command is denied, or asks for approval you cannot give: that is the dispute signal. Stop on that gate there. A denied Bash call runs no part of itself, so keep a command the guard may refuse (a forge CLI call, a push, anything near a guard path) in a tool call of its own; an unrelated write chained with it is lost with it.
 - A mutant survives: kill it with a test, or register it as equivalent with a reason of twenty characters or more.
 - A measured value is above its threshold: run `ratchet`, commit the result with the change that earned it.
+- A tier runs over its ceiling: make it faster in the same change (cache, split, shard, run less), never by quarantining a test or raising the ceiling; raising is an ADR.
 - The change touches a user interface: `impeccable` `shape` before you build the surface, `polish` before you open the pull request; `DESIGN.md` is the standard the review judges it against.
 - You need a word the glossary lacks: add the entry with its *Avoid* list, through `domain-modeling`, before using it in code.
 - You need a dependency: that is a design decision. Say why in the pull request body, or in an ADR when it shapes the architecture.

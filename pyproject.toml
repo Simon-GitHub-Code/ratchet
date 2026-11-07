@@ -20,7 +20,7 @@ package = false
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers --strict-config"
 testpaths = ["hooks/tests"]
-pythonpath = ["hooks"]
+pythonpath = ["hooks", "scripts"]
 xfail_strict = true
 filterwarnings = ["error"]
 

@@ -1,4 +1,4 @@
-# Ratcheted thresholds (Ratchet method). Values only rise; `just ratchet` raises each to its
+# Ratcheted thresholds (Ratchet method). Values only rise, except ceilings, which only fall; `just ratchet` raises each to its
 # measured value and `just ratchet-lowered` fails any key that is lower or missing than at the
 # merge base. Absolute layers are not listed: they are held at 100% by the coverage tool itself.
 
@@ -8,3 +8,11 @@
 
 # [<language>.mutation]
 # score = 0.0
+
+# Wall-clock ceilings in seconds, one per tier and per gate with its own runner. `just budget <key>`
+# measures against them and `budget --set` records the first ones from a measured run; afterwards
+# they only fall. Raising one is a loosening and needs an ADR.
+# [ceilings.seconds]
+# tier0 = 60
+# tier1 = 600
+# tier2 = 3600

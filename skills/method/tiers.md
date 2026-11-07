@@ -78,6 +78,27 @@ Every comparison against history uses the merge base with the default branch (`H
 
 `audit-all` audits every dependency, dev tooling included. `licenses` checks the shipped dependencies' licences are compatible. `drift` lists outdated dependencies and writes the software bill of materials. `reports` prints hotspots (churn times complexity), coupling, cohesion and the complexity distribution: read before a refactor to pick targets, never as a score to chase.
 
+## Speed
+
+Gates that accumulate become gates that get skipped. Every repository on the method starts with CI shaped for speed and a ceiling per tier that only falls, so the optimisation phase that usually arrives late is a standing obligation from the first commit.
+
+**The ceiling.** `quality/thresholds.toml` holds `[ceilings.seconds]` with one key per tier, and one per gate where a gate has its own runner. The `budget` entry point wraps a tier or gate, measures its wall clock and goes red over its ceiling. A ceiling only falls: `ratchet-lowered` fails a raised one as it fails a lowered threshold, and raising one is a loosening with an ADR behind it. Adopt sets the first ceilings from the first measured run with headroom (`budget --set`); from then on every change that pushes a tier over must pay for itself in the same pull request. Runners vary, so the ceiling blocks on the default branch and nightly, in the tier 2 sense, and reports on pull requests.
+
+**The shape, from the start.** The CI templates ship with these, and the conformance gate checks the first two are present:
+
+| Technique | Where | Why from day one |
+| --- | --- | --- |
+| Cancel superseded runs (`concurrency`, cancel-in-progress on pull requests) | every workflow | a pushed fix should not wait behind the run it replaces |
+| Cache dependencies and tool caches (type checker, linter, test and mutation caches), keyed on the lockfile and the tool's config, with fallback keys | every job | a cold toolchain is the first minute of every job |
+| Split a tier into one job per gate (a matrix over the recipes), `fail-fast: false` | tier 1 and tier 2 | wall clock is the slowest gate, not the sum, and one run shows every red |
+| Shard any suite over the budget the binding names (`pytest-split`, `vitest --shard`, `cargo nextest partition`, the mutation tool's shards) | the long gates | the ceiling is reached by adding runners, not by removing tests |
+| Run only what the change can affect (path filters; `turbo`, `nx`, `pants` for a monorepo), with the full run on the default branch | tier 0 and 1 on pull requests | a docs change should not run the mutation suite |
+| Incremental where the tool allows (changed-function mutation, incremental type checking, a build cache) | tier 1 | the pull request pays for its diff |
+| Pin the toolchain and use the setup action's own cache | every job | installs are the slow, flaky part |
+| Publish the timings (`budget --report`, uploaded as an artefact) and read them in `reports` | every job | the slowest gate is always named |
+
+What speed never buys: a quarantined test (a failure here is a bug, never "flaky"), a tier 2 gate moved to on-demand to hide its cost, or a `timeout-minutes` so generous it never fires. The binding's Speed section records the ceilings, the cache keys, the shard counts and the affected-only tool.
+
 ## Choosing a tier for a new question
 
 Fast and local: tier 0. Needs the whole tree or a test run: tier 1. Needs more than the pull-request budget: tier 2. The catalogue is a floor: a project adds rows for what its domain demands.

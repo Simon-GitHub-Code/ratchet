@@ -1,0 +1,9 @@
+# The plugin's own ceilings (Ratchet method, rule 6): seconds per gate, only ever lowered.
+# `just budget <gate>` measures; raising one is an ADR.
+[ceilings.seconds]
+lint = 30
+types = 60
+parse-workflow = 10
+test = 120
+conformance-self-test = 30
+lowered-smoke = 10

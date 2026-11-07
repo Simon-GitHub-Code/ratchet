@@ -30,6 +30,8 @@ Load the `ratchet:method` skill first; this skill assumes its vocabulary. Templa
 
 10. **CI.** Pin every action or image to a commit SHA or digest with the version in a trailing comment; add the toolchain steps the binding needs. Done when the CI config parses.
 
-11. **Conformance.** Run the `conformance` entry point. Fix each failure it names. Done when it exits 0.
+11. **Speed.** The CI templates arrive cached, split one job per gate and cancelling superseded runs; keep that shape when you bind them. Fill each `bind:` cache line with the dependency directory and the tool caches of this stack, keyed on its lockfiles and tool configs. Run `just budget tier0 --set` and `just budget tier1 --set` once on the skeleton, which records the first ceilings in `quality/thresholds.toml` with headroom; they only fall from here. Name in the binding's Speed section the ceilings, the cache keys, the shard counts for any suite over the budget you set there, and the affected-only tool if the repository is a monorepo. Done when the Speed section has no placeholder and `[ceilings.seconds]` has a key per tier.
 
-12. **Hand over.** Commit on a branch as `chore(method): adopt the ratchet method` (or the convention the binding names), push, and open a pull request with every template section filled, the `tier0` tail under Gates, and the list of unbound entry points and `none` rows under Criticism as standing criticisms of the binding. The owner merges.
+12. **Conformance.** Run the `conformance` entry point. Fix each failure it names. Done when it exits 0.
+
+13. **Hand over.** Commit on a branch as `chore(method): adopt the ratchet method` (or the convention the binding names), push, and open a pull request with every template section filled, the `tier0` tail under Gates, and the list of unbound entry points and `none` rows under Criticism as standing criticisms of the binding. The owner merges.
