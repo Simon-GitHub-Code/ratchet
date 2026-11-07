@@ -44,6 +44,9 @@ ADR_FRONT_MATTER = re.compile(
     r"\A(?:---\nstatus: (?P<status>[^\n]+)\n(?:superseded-by: (?P<by>\d{4})\n)?---\n+)?# \S"
 )
 ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
+ADR_PLACEHOLDERS = ("<X.Y.Z>", "<ratchet-sha>")
+GLOSSARY_PLACEHOLDER = "<project>"
+PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 REFUTATION_SECTION = "## Refutation criterion"
 CONJECTURE_SECTION = "## Conjecture about the solution"
 EMPTY_BODIES = {"none", "n/a", "na", "tbd", "todo", "-", "?"}
@@ -104,6 +107,8 @@ def check_glossary(root: Path) -> Iterable[str]:
         yield "GLOSSARY.md (or GLOSSARY-MAP.md): missing"
     elif "## Language" not in text:
         yield "GLOSSARY.md: has no '## Language' section"
+    elif GLOSSARY_PLACEHOLDER in text:
+        yield f"GLOSSARY.md: still names '{GLOSSARY_PLACEHOLDER}'; name the project"
 
 
 def check_brief(root: Path) -> Iterable[str]:
@@ -158,6 +163,10 @@ def check_adr(number: int, path: Path, rel: Path) -> Iterable[str]:
         yield f"{rel}: '{REFUTATION_SECTION}' names no observation that would show it wrong"
     if number == 1 and "Ratchet method" not in text:
         yield f"{rel}: ADR 0001 records adopting the Ratchet method"
+    if number == 1:
+        for placeholder in ADR_PLACEHOLDERS:
+            if placeholder in text:
+                yield f"{rel}: still carries '{placeholder}'; adopt step 9 fills the plugin version"
 
 
 def section(text: str, heading: str) -> str:
@@ -255,6 +264,16 @@ def check_manifest(root: Path) -> Iterable[str]:
         yield f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group"
 
 
+def check_plugin_checkout(root: Path) -> Iterable[str]:
+    for name in ("ci.yml", "deep.yml"):
+        text = read(root / WORKFLOWS / name)
+        if text is not None and PLUGIN_CHECKOUT_PLACEHOLDER in text:
+            yield (
+                f"{WORKFLOWS / name}: checks the plugin out at '{PLUGIN_CHECKOUT_PLACEHOLDER}'; "
+                "adopt step 10 fills the commit ADR 0001 names"
+            )
+
+
 def check_settings(root: Path) -> Iterable[str]:
     if (root / settings_rules.MANIFEST).is_file():
         yield from settings_rules.drift(root)
@@ -342,6 +361,7 @@ CHECKS: tuple[Check, ...] = (
     check_speed,
     check_manifest,
     check_settings,
+    check_plugin_checkout,
     check_quality,
     check_disputes,
     check_features,
@@ -397,6 +417,14 @@ def artefact_mutations() -> list[Mutation]:
         path = root / WORKFLOWS / "deep.yml"
         path.write_text(path.read_text().replace("cache", "store"))
 
+    def ci_with_the_plugin_at_a_placeholder(root: Path) -> None:
+        path = root / WORKFLOWS / "ci.yml"
+        path.write_text(path.read_text().replace("0" * 40, PLUGIN_CHECKOUT_PLACEHOLDER, 1))
+
+    def glossary_naming_the_placeholder(root: Path) -> None:
+        path = root / "GLOSSARY.md"
+        path.write_text(path.read_text().replace("the project", GLOSSARY_PLACEHOLDER, 1))
+
     return [
         ("AGENTS.md without the method stanza", strip_stanza),
         ("binding without the conformance entry point", drop_entry_point),
@@ -405,6 +433,11 @@ def artefact_mutations() -> list[Mutation]:
         ("binding without a Speed section", drop_speed_section),
         ("CI workflow without concurrency control", ci_without_concurrency),
         ("CI workflow without a cache", ci_without_cache),
+        (
+            "CI workflow checking the plugin out at a placeholder",
+            ci_with_the_plugin_at_a_placeholder,
+        ),
+        ("glossary still naming <project>", glossary_naming_the_placeholder),
     ]
 
 
@@ -442,6 +475,10 @@ def record_mutations() -> list[Mutation]:
     def adr_without_refuter(root: Path) -> None:
         (root / "docs/adr/0002-plain.md").write_text("# We keep it plain\n\nBecause.\n")
 
+    def adr_0001_with_the_version_placeholder(root: Path) -> None:
+        path = root / "docs/adr/0001-adopt-the-ratchet-method.md"
+        path.write_text(path.read_text().replace("0.0.0", "<X.Y.Z>", 1))
+
     def adr_with_an_empty_refuter(root: Path) -> None:
         (root / "docs/adr/0002-empty.md").write_text(
             f"# We keep it empty\n\nBecause.\n\n{REFUTATION_SECTION}\nNone.\n"
@@ -471,6 +508,7 @@ def record_mutations() -> list[Mutation]:
     return [
         ("ADR without a refutation criterion", adr_without_refuter),
         ("ADR with an empty refutation criterion", adr_with_an_empty_refuter),
+        ("ADR 0001 with the version placeholder", adr_0001_with_the_version_placeholder),
         ("feature brief with a placeholder conjecture", brief_without_a_conjecture),
         ("ADR numbering with a gap", gap_adrs),
         ("dispute with an unknown status", bad_dispute),
@@ -486,6 +524,21 @@ def fill_placeholders(root: Path) -> None:
     path = root / "guards/manifest.toml"
     path.write_text(UNBOUND_GROUP.sub('paths = [\n    "bound/**",\n]', path.read_text()))
     settings_rules.write(root)
+    fills = {
+        "docs/adr/0001-adopt-the-ratchet-method.md": {
+            "<X.Y.Z>": "0.0.0",
+            "<ratchet-sha>": "0" * 40,
+        },
+        "GLOSSARY.md": {GLOSSARY_PLACEHOLDER: "the project"},
+        str(WORKFLOWS / "ci.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
+        str(WORKFLOWS / "deep.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
+    }
+    for name, replacements in fills.items():
+        target = root / name
+        text = target.read_text()
+        for placeholder, value in replacements.items():
+            text = text.replace(placeholder, value)
+        target.write_text(text)
 
 
 def self_test(templates: Path, init_templates: Path) -> int:
