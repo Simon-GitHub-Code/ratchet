@@ -26,6 +26,8 @@ Each stage names what the owner types, what exists afterwards, and what the meth
 
 Debugging enters at stage 7: `diagnosing-bugs`, which an agent may call, or `/pstack:poteto-mode` with its bug-fix playbook.
 
+A `/ratchet:feature` run that blocks leaves a stash named `<branch>: blocked run`. The route holds that ticket while the default branch has not moved past the stash, and names the questions or guard edits instead, so `/ratchet:next` never offers a rerun that would block the same way. The owner answering the ticket or landing the edits on the default branch releases it.
+
 ## Where poteto-mode meets the guard
 
 `/pstack:poteto-mode` is pstack's front door and runs its own playbooks. On a repository on the method they run under the guard, and three of them meet it:

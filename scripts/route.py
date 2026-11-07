@@ -61,6 +61,7 @@ PULL_REQUEST = "open the pull request (the `pr` skill fills the body); a human m
 WAIT = "nothing: wait for the review; a human merges"
 NEXT = "/ratchet:next"
 CHANGES = ".scratch/changes"
+BLOCKED_RUN = ": blocked run"
 
 
 @dataclass(frozen=True)
@@ -197,6 +198,36 @@ def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) 
     return None
 
 
+def blocked_runs(root: Path, default_branch: str) -> dict[str, str]:
+    """Branches whose last feature run blocked and whose block still stands, with its stash.
+
+    The feature skill stashes a blocked run as ``<branch>: blocked run``. The block stands while
+    the default branch has not moved past the run: the owner answers the ticket or lands the
+    guard edits there, so a newer default branch is the cue to build again.
+    """
+    listing = gatelib.git(root, "stash", "list", "--format=%gd%x09%gs") or ""
+    found: dict[str, str] = {}
+    for line in listing.splitlines():
+        ref, _, subject = line.partition("\t")
+        run = subject.split(": ", 1)[-1]
+        if run.endswith(BLOCKED_RUN) and (
+            gatelib.git(root, "merge-base", "--is-ancestor", default_branch, ref) is not None
+        ):
+            found.setdefault(run.removesuffix(BLOCKED_RUN), run)
+    return found
+
+
+def stalled(ticket: preflight.Ticket, runs: dict[str, str]) -> str | None:
+    """The stash of the blocked run that still holds ``ticket``, if one does.
+
+    A numbered ticket is known by its number, so a branch made under an older slug still counts.
+    """
+    if ticket.number is None:
+        return runs.get(preflight.branch_of(ticket, preflight.slug_of(ticket.title, None)))
+    prefix = f"feature/{ticket.number}-"
+    return next((run for branch, run in runs.items() if branch.startswith(prefix)), None)
+
+
 def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
     """The step among the tickets: write one, give one its conjecture, or build one."""
     tickets = tracker_tickets(root, gh) if gh is not None else None
@@ -218,7 +249,18 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             f"{TICKETS}, then {CONJECTURE} <ticket>",
             "specify",
         )
-    tickets = unblocked
+    runs = blocked_runs(root, checkout.default_branch)
+    tickets = [t for t in unblocked if not stalled(t, runs)]
+    if not tickets:
+        held = unblocked[0]
+        return Step(
+            f"answer the questions or land the guard edits the blocked run of {held.ref} named"
+            f" (stash `{stalled(held, runs)}`) on {checkout.default_branch}",
+            f"the last {FEATURE} run on every agent-ready ticket blocked, and"
+            f" {checkout.default_branch} has not moved since; a rerun would block the same way",
+            f"{FEATURE} {held.ref}, or {POTETO} {held.ref} now to make the edits as the guard asks",
+            "blocked-run",
+        )
     for ticket in tickets:
         if has_conjecture(ticket, root, offline_gh):
             return Step(

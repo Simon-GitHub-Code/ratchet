@@ -209,3 +209,42 @@ def test_a_ticket_waiting_on_an_open_blocker_is_not_built(tmp_path: Path) -> Non
     )
     commit(root, "docs(tracker): lost blocker")
     assert route.decide(root, None).command == route.SPEC
+
+
+def test_a_ticket_whose_feature_run_blocked_waits_for_the_default_branch_to_move(
+    tmp_path: Path,
+) -> None:
+    ticket = ".scratch/f/issues/02-b.md"
+    files = {**ADOPTED, ticket: "# 02: B\n\nStatus: ready-for-agent" + CONJECTURE}
+    root = repository(tmp_path, files)
+    assert route.decide(root, None).command == f"{route.FEATURE} {ticket}"
+    git(root, "switch", "-q", "-c", "feature/2-b-under-an-older-slug")
+    write(root, "docs/features/b/spec.md", "draft\n")
+    git(root, "stash", "push", "-q", "-u", "-m", "feature/2-b-under-an-older-slug: blocked run")
+    git(root, "switch", "-q", "main")
+    held = route.decide(root, None)
+    assert held.stage == "blocked-run"
+    assert "stash `feature/2-b-under-an-older-slug: blocked run`" in held.command
+    assert held.then.startswith(f"{route.FEATURE} {ticket}")
+    write(root, "package.json", "{}\n")
+    commit(root, "build: the guard edit the run named")
+    assert route.decide(root, None).command == f"{route.FEATURE} {ticket}", "main moved on"
+
+
+def test_only_a_blocked_run_holds_a_ticket(tmp_path: Path) -> None:
+    files = {**ADOPTED, ".scratch/f/issues/02-b.md": "# 02: B\n\nStatus: ready-for-agent\n"}
+    root = repository(tmp_path, files)
+    git(root, "switch", "-q", "-c", "feature/2-b")
+    write(root, "x.txt", "draft\n")
+    git(root, "stash", "push", "-q", "-u", "-m", "feature/2-b: changes-requested run")
+    git(root, "switch", "-q", "main")
+    assert route.blocked_runs(root, "main") == {}
+    assert route.decide(root, None).stage == "conjecture"
+
+
+def test_an_unnumbered_ticket_is_held_by_its_slug() -> None:
+    ticket = route.preflight.Ticket("idea.md", None, "Idea", "", (), is_open=True)
+    assert route.stalled(ticket, {"feature/idea": "feature/idea: blocked run"}) == (
+        "feature/idea: blocked run"
+    )
+    assert route.stalled(ticket, {"feature/other": "feature/other: blocked run"}) is None

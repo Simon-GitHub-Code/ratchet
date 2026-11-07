@@ -258,7 +258,10 @@ def ready_label(root: Path) -> str:
 
 
 def slug_of(title: str, number: int | None) -> str:
-    words = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:SLUG_WIDTH].strip("-")
+    words = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    if len(words) > SLUG_WIDTH:
+        cut = words[: SLUG_WIDTH + 1]
+        words = cut.rsplit("-", 1)[0] if "-" in cut else cut[:SLUG_WIDTH]
     return words or (f"ticket-{number}" if number else "feature")
 
 

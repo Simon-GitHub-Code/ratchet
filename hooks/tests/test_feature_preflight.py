@@ -269,6 +269,10 @@ def test_slugs_are_kebab_case_and_bounded() -> None:
     assert preflight.slug_of("  Hello, World! ", 1) == "hello-world"
     assert preflight.slug_of("x" * 60, 1) == "x" * 40
     assert preflight.slug_of("a" * 39 + "-b", 1) == "a" * 39
+    assert (
+        preflight.slug_of("Walking skeleton: an empty page that builds and serves", 2)
+        == "walking-skeleton-an-empty-page-that"
+    ), "a word the width cuts is dropped whole"
     assert preflight.slug_of("", 7) == "ticket-7"
     assert preflight.slug_of("!!!", None) == "feature"
 
