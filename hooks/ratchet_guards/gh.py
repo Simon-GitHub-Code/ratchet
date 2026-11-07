@@ -195,7 +195,7 @@ def _recorded(name: str, context: Context, guard: Guard) -> bool:
     return record is not None and name in listed_labels(record)
 
 
-def _ready_label(context: Context, guard: Guard) -> str:
+def ready_label(context: Context, guard: Guard) -> str:
     """The agent-ready label here: the record's spelling, else the role name itself."""
     record = _record(context, guard)
     label = None if record is None else label_for_role(record, READY_ROLE)
@@ -216,7 +216,7 @@ def applied_labels(words: Sequence[str]) -> list[str]:
 
 def _applies_ready_label(words: Sequence[str], context: Context, guard: Guard) -> str | None:
     """The agent-ready label when this command applies it, else ``None``."""
-    label = _ready_label(context, guard)
+    label = ready_label(context, guard)
     return label if label in applied_labels(words) else None
 
 

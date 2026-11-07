@@ -14,6 +14,9 @@ so a write chained before the refused command is lost with it. The deny message 
 names the matched command, and the method asks agents to keep a gated command in a tool
 call of its own.
 
+An Edit, Write or MultiEdit that gives a local ticket under ``.scratch/`` the agent-ready status
+asks, as applying that label on a forge does (``ratchet_guards.tickets``).
+
 One forge write is allowed by a record: ``gh label create <name>`` in a checkout whose
 ``docs/agents/triage-labels.md`` lists ``<name>`` in its "Label in our tracker" column (see
 ``ratchet_guards.gh``). The file is a guard path in the decisions group once the repository
@@ -37,7 +40,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
-from ratchet_guards import bash
+from ratchet_guards import bash, tickets
 from ratchet_guards.committed import committed_manifest
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.manifest import EMPTY, Manifest, parse, with_plugin_group
@@ -148,13 +151,17 @@ def decide(payload: object, guard: Guard) -> Verdict | None:
     target = tool_input.get(key)
     if not isinstance(target, str):
         return _unreadable(f"{tool} input has no {key}")
-    return _judge(tool, target, Context(Path(cwd)), guard=guard)
+    return _judge(tool, target, Context(Path(cwd)), guard=guard, tool_input=tool_input)
 
 
-def _judge(tool: str, target: str, context: Context, *, guard: Guard) -> Verdict | None:
+def _judge(
+    tool: str, target: str, context: Context, *, guard: Guard, tool_input: dict[str, object]
+) -> Verdict | None:
     if tool == "Bash":
         return strictest(bash.check(target, context, guard))
-    return _edit(context.cwd / target, guard)
+    path = context.cwd / target
+    label = tickets.check(tool, tool_input, path, context=context, guard=guard)
+    return strictest(v for v in (_edit(path, guard), label) if v is not None)
 
 
 def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | None:

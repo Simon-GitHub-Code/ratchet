@@ -1,0 +1,104 @@
+"""The agent-ready status on a local ticket: an agent that writes it asks the owner."""
+
+import pytest
+
+from ratchet_guards import hook, tickets
+from ratchet_guards.verdict import Decision
+from tests.support import LABELS_RECORD, ROOT, FakeFilesystem, make_guard
+
+TICKET = "/repo/.scratch/f/issues/02-b.md"
+TRIAGED = "# 02: B\n\n**Status:** needs-triage\n\nBody.\n"
+
+
+def decide(tool: str, tool_input: dict[str, object], existing: str | None = None) -> str | None:
+    contents = {"/repo/docs/agents/triage-labels.md": LABELS_RECORD}
+    if existing is not None:
+        contents[TICKET] = existing
+    payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(ROOT)}
+    verdict = hook.decide(payload, make_guard(filesystem=FakeFilesystem(contents=contents)))
+    if verdict is None:
+        return None
+    assert verdict.decision is Decision.ASK
+    return verdict.rule
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input", "existing"),
+    [
+        ("Write", {"file_path": TICKET, "content": "# 02: B\n\nStatus: agent:ready\n"}, None),
+        ("Write", {"file_path": TICKET, "content": "**Status:** `agent:ready`\n"}, TRIAGED),
+        (
+            "Edit",
+            {"file_path": TICKET, "old_string": "needs-triage", "new_string": "agent:ready"},
+            TRIAGED,
+        ),
+        (
+            "Edit",
+            {
+                "file_path": TICKET,
+                "old_string": "needs-triage",
+                "new_string": "agent:ready",
+                "replace_all": True,
+            },
+            TRIAGED,
+        ),
+        (
+            "MultiEdit",
+            {
+                "file_path": TICKET,
+                "edits": [
+                    {"old_string": "Body.", "new_string": "Body, sharper."},
+                    {"old_string": "needs-triage", "new_string": "agent:ready"},
+                ],
+            },
+            TRIAGED,
+        ),
+    ],
+)
+def test_giving_a_local_ticket_the_agent_ready_status_asks(
+    tool: str, tool_input: dict[str, object], existing: str | None
+) -> None:
+    assert decide(tool, tool_input, existing) == "agent-ready-label"
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input", "existing"),
+    [
+        ("Write", {"file_path": TICKET, "content": "Status: needs-triage\n"}, None),
+        ("Write", {"file_path": "/repo/docs/x.md", "content": "Status: agent:ready\n"}, None),
+        (
+            "Write",
+            {"file_path": "/repo/.scratch/f/x.txt", "content": "Status: agent:ready\n"},
+            None,
+        ),
+        (
+            "Edit",
+            {"file_path": TICKET, "old_string": "Body.", "new_string": "More."},
+            "Status: agent:ready\n\nBody.\n",
+        ),
+        ("MultiEdit", {"file_path": TICKET, "edits": "not a list"}, TRIAGED),
+        ("MultiEdit", {"file_path": TICKET, "edits": ["not an edit"]}, TRIAGED),
+    ],
+)
+def test_other_writes_to_tracker_files_pass(
+    tool: str, tool_input: dict[str, object], existing: str | None
+) -> None:
+    assert decide(tool, tool_input, existing) is None
+
+
+def test_without_a_record_the_role_name_is_the_label() -> None:
+    guard = make_guard(filesystem=FakeFilesystem(contents={}))
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": TICKET, "content": "Status: ready-for-agent\n"},
+        "cwd": str(ROOT),
+    }
+    verdict = hook.decide(payload, guard)
+    assert verdict is not None
+    assert "02-b.md gets the status `ready-for-agent`" in verdict.detail
+
+
+def test_statuses_reads_every_spelling_the_preflight_reads() -> None:
+    text = "Status: a\n**Status:** b\n**Status**: `c`\nstatus d\n"
+    assert tickets.statuses(text) == {"a", "b", "c", "d"}
+    assert tickets.after("Write", {}, "x") == ""
