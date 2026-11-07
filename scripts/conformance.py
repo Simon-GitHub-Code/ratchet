@@ -243,6 +243,8 @@ def check_manifest(root: Path) -> Iterable[str]:
             yield f"guards/manifest.toml: group '{name}' needs a reason of {MIN_REASON}+ characters"
         if not isinstance(group.get("paths"), list):
             yield f"guards/manifest.toml: group '{name}' needs a paths list"
+        elif not group["paths"]:
+            yield f"guards/manifest.toml: group '{name}' has no paths yet; bind or remove it"
         elif group.get("edit") == "deny":
             locked.update(group["paths"])
     for pattern in sorted(LOCKED_PATTERNS - locked):
@@ -373,6 +375,10 @@ def artefact_mutations() -> list[Mutation]:
         path = root / "guards/manifest.toml"
         path.write_text(path.read_text().replace('edit = "deny"', 'edit = "ask"'))
 
+    def unbound_group(root: Path) -> None:
+        path = root / "guards/manifest.toml"
+        path.write_text(path.read_text().replace('paths = [\n    "quality/**",\n]', "paths = []"))
+
     def drop_pr_section(root: Path) -> None:
         path = root / DEFAULT_PR_TEMPLATE
         path.write_text(path.read_text().replace("## Guard paths", "## Guards"))
@@ -394,6 +400,7 @@ def artefact_mutations() -> list[Mutation]:
         ("binding without the conformance entry point", drop_entry_point),
         ("binding with a gate bound to none and no reason", none_without_reason),
         ("manifest with the harness unlocked", unlock_harness),
+        ("manifest with a group still unbound", unbound_group),
         ("pull-request template missing a section", drop_pr_section),
         ("binding without a Speed section", drop_speed_section),
         ("CI workflow without concurrency control", ci_without_concurrency),
@@ -441,10 +448,20 @@ def record_mutations() -> list[Mutation]:
     ]
 
 
+UNBOUND_GROUP = re.compile(r"paths = \[\n(?:\s*# bind:[^\n]*\n)+\]")
+
+
+def fill_placeholders(root: Path) -> None:
+    """Stand in for adopt on a template copy: bind every group adopt would have bound."""
+    path = root / "guards/manifest.toml"
+    path.write_text(UNBOUND_GROUP.sub('paths = [\n    "bound/**",\n]', path.read_text()))
+
+
 def self_test(templates: Path, init_templates: Path) -> int:
     def build(target: Path) -> None:
         shutil.copytree(init_templates, target, symlinks=True)
         shutil.copytree(templates, target, symlinks=True, dirs_exist_ok=True)
+        fill_placeholders(target)
 
     with tempfile.TemporaryDirectory() as scratch:
         pristine = Path(scratch) / "pristine"

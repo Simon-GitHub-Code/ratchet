@@ -192,6 +192,15 @@ def test_exclude_carves_paths_out_of_a_group() -> None:
         parse(GOOD.replace('reason = "because"', 'reason = "because"\nexclude = ["/abs"]'))
 
 
+def test_a_group_with_no_paths_yet_matches_nothing() -> None:
+    # Why: the adopt template ships `paths = []` behind `# bind:` comments until step 8 fills
+    # them; a manifest that failed to parse would turn every tool call into an ask meanwhile.
+    unbound = parse(GOOD.replace('paths = ["a/**", "b.txt", "~/.x/*.json"]', "paths = []"))
+    assert unbound.groups[0].patterns == ()
+    assert unbound.group_of("a/x") is None
+    assert unbound.group_below("a") is None
+
+
 def test_agent_worktrees_are_not_guard_paths_of_the_main_checkout() -> None:
     assert MANIFEST.group_of(".claude/worktrees/agent-x/app/src/a.py") is None
     assert MANIFEST.group_of(".claude/worktrees/agent-x/.claude/settings.json") is None
@@ -261,11 +270,8 @@ PATTERN = "pattern {} must be a non-empty relative glob without '..'"
         ("x = 1", "the manifest needs at least one [[group]]"),
         ("group = []", "the manifest needs at least one [[group]]"),
         ("group = [1]", "every [[group]] must be a table"),
-        ('[[group]]\nname = "n"\nreason = "r"', "group 'paths' must be a non-empty list"),
-        (
-            '[[group]]\nname = "n"\nreason = "r"\npaths = []',
-            "group 'paths' must be a non-empty list",
-        ),
+        ('[[group]]\nname = "n"\nreason = "r"', "group 'paths' must be a list"),
+        ('[[group]]\nname = "n"\nreason = "r"\npaths = "a"', "group 'paths' must be a list"),
         (
             '[[group]]\nname = " "\nreason = "r"\npaths = ["a"]',
             "group 'name' must be a non-empty string",

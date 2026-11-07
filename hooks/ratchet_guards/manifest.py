@@ -7,7 +7,9 @@ the absolute path (only the implicit plugin group uses these; the file may not),
 anything else relative to the repository. A group's optional ``edit`` is ``"ask"`` (the
 default) or ``"deny"``, for paths Claude Code's bypass mode would otherwise let through. Its
 optional ``exclude`` lists patterns its ``paths`` do not cover, such as agent worktrees under
-``.claude/worktrees/``, which are checkouts of their own.
+``.claude/worktrees/``, which are checkouts of their own. A group whose ``paths`` list is
+empty matches nothing: the adopt template ships such groups behind ``# bind:`` comments until
+step 8 fills them, and the conformance gate reports any still empty.
 
 The manifest is optional. When the file is absent the hook judges with ``EMPTY``, so no
 repository path is a guard path and only the command rules apply (gate bypasses, force
@@ -145,8 +147,8 @@ def _group(table: object) -> Group:
         msg = "every [[group]] must be a table"
         raise ManifestError(msg)
     paths = table.get("paths")
-    if not isinstance(paths, list) or not paths:
-        msg = "group 'paths' must be a non-empty list"
+    if not isinstance(paths, list):
+        msg = "group 'paths' must be a list"
         raise ManifestError(msg)
     excluded = table.get("exclude", [])
     if not isinstance(excluded, list):
