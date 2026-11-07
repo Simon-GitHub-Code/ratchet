@@ -21,11 +21,12 @@ deadcode:
     uv run deptry .
 
 lint-workflows:
-    uvx actionlint
+    uvx --from actionlint-py actionlint
     git ls-files -z '*.sh' | xargs -0 -r shellcheck
 
 secrets:
-    uvx gitleaks git --no-banner --redact .
+    @command -v gitleaks >/dev/null || { echo "secrets: gitleaks is not on PATH; the binding's Tool versions names the version"; exit 1; }
+    gitleaks git --no-banner --redact .
 
 pins:
     python3 "{{ratchet_plugin}}/scripts/pins.py"
@@ -106,7 +107,8 @@ sast:
     uv run bandit -q -r src -c pyproject.toml
 
 artefact-scan:
-    uvx trivy fs --exit-code 1 --severity HIGH,CRITICAL .
+    @command -v trivy >/dev/null || { echo "artefact-scan: trivy is not on PATH; the binding's Tool versions names the version"; exit 1; }
+    trivy fs --exit-code 1 --severity HIGH,CRITICAL --skip-dirs node_modules .
 
 type-coverage:
     @echo "none: mypy --strict leaves no untyped code to measure; see the binding's ADR"; exit 0
@@ -153,7 +155,7 @@ licenses:
 
 drift:
     uv tree --outdated
-    uvx cyclonedx-py environment -o .ratchet/sbom.json
+    uvx --from cyclonedx-bom cyclonedx-py environment -o .ratchet/sbom.json
 
 reports:
     uv run radon cc -s -a src

@@ -60,4 +60,4 @@ McCabe complexity 10 (`C901`); 12 branches (`PLR0912`), 5 arguments (`PLR0913`),
 
 ## Tool versions
 
-`uv.lock` pins every Python tool, `uv lock --check` fails when it drifts from `pyproject.toml`; `uvx` tools (`actionlint`, `gitleaks`, `trivy`, `cyclonedx-py`) are pinned by version in the `justfile` once the first run names them; GitHub actions by commit in the workflows.
+`uv.lock` pins every Python tool, `uv lock --check` fails when it drifts from `pyproject.toml`; `uvx` tools (`actionlint` from `actionlint-py`, `cyclonedx-py` from `cyclonedx-bom`) are pinned by version in the `justfile` once the first run names them; `gitleaks`, `trivy` and `shellcheck` are not Python packages, so they are binaries on `PATH` at the version named here, and a CI job that runs one installs it by pinned version first; GitHub actions by commit in the workflows.

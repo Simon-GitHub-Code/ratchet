@@ -21,11 +21,12 @@ deadcode:
     pnpm exec knip
 
 lint-workflows:
-    uvx actionlint
+    uvx --from actionlint-py actionlint
     git ls-files -z '*.sh' | xargs -0 -r shellcheck
 
 secrets:
-    uvx gitleaks git --no-banner --redact .
+    @command -v gitleaks >/dev/null || { echo "secrets: gitleaks is not on PATH; the binding's Tool versions names the version"; exit 1; }
+    gitleaks git --no-banner --redact .
 
 pins:
     python3 "{{ratchet_plugin}}/scripts/pins.py"
@@ -43,11 +44,11 @@ test:
     pnpm exec vitest run
 
 coverage:
-    pnpm exec vitest run --coverage --coverage.reporter=cobertura --coverage.reportsDirectory=.
-    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report cobertura-coverage.xml
+    pnpm exec vitest run --coverage --coverage.reporter=cobertura --coverage.reportsDirectory=coverage
+    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage/cobertura-coverage.xml
 
 diff-coverage:
-    uvx diff-cover cobertura-coverage.xml --compare-branch="{{merge_base}}" --fail-under=100
+    uvx diff-cover coverage/cobertura-coverage.xml --compare-branch="{{merge_base}}" --fail-under=100
 
 test-counts:
     #!/usr/bin/env bash
@@ -98,7 +99,8 @@ sast:
     uvx semgrep scan --config p/typescript --error --quiet
 
 artefact-scan:
-    uvx trivy fs --exit-code 1 --severity HIGH,CRITICAL .
+    @command -v trivy >/dev/null || { echo "artefact-scan: trivy is not on PATH; the binding's Tool versions names the version"; exit 1; }
+    trivy fs --exit-code 1 --severity HIGH,CRITICAL --skip-dirs node_modules .
 
 type-coverage:
     pnpm exec type-coverage --strict --at-least "$(python3 -c 'import tomllib;print(tomllib.load(open("quality/thresholds.toml","rb"))["typescript"]["types"]["coverage"])')"
@@ -151,7 +153,7 @@ licenses:
 
 drift:
     pnpm outdated
-    uvx cyclonedx-py environment -o .ratchet/sbom.json || pnpm exec cyclonedx-npm --output-file .ratchet/sbom.json
+    uvx --from cyclonedx-bom cyclonedx-py environment -o .ratchet/sbom.json || pnpm exec cyclonedx-npm --output-file .ratchet/sbom.json
 
 reports:
     pnpm exec eslint . --rule 'complexity: [warn, 1]' --format compact || true

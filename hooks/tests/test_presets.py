@@ -183,3 +183,23 @@ def test_the_python_fitness_scaffold_is_clean_under_the_preset_s_own_ruff(tmp_pa
             [ruff, *argv], cwd=tmp_path, capture_output=True, text=True, check=False
         )
         assert run.returncode == 0, run.stdout + run.stderr
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+def test_uvx_runs_only_python_packages(preset: Path) -> None:
+    # Why: gitleaks and trivy are not on PyPI, and actionlint and cyclonedx-py are executables
+    # of differently named packages, so a bare `uvx <tool>` failed to resolve in two adoptions.
+    text = (preset / "justfile").read_text(encoding="utf-8")
+    assert not re.search(r"uvx (actionlint|gitleaks|trivy|shellcheck|cyclonedx-py)\b", text)
+
+
+def test_the_typescript_fragments_work_under_pnpm_and_vitest() -> None:
+    preset = ADOPT / "presets/typescript-pnpm"
+    text = (preset / "justfile").read_text(encoding="utf-8")
+    assert "reportsDirectory=." not in text, "vitest refuses to clean the project root"
+    stryker = json.loads((preset / "tools/stryker.config.json").read_text())
+    assert "@stryker-mutator/vitest-runner" in stryker["plugins"], "pnpm hides unnamed plugins"
+    knip = json.loads((preset / "tools/knip.json").read_text())
+    dev = json.loads((preset / "tools/package.json").read_text())["devDependencies"]
+    assert set(knip["ignoreDependencies"]) <= set(dev)
+    assert "just" in knip["ignoreBinaries"]

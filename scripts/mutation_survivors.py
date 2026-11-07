@@ -309,18 +309,31 @@ def _closes_unit(line: str) -> bool:
     return bool(line.strip()) and line[0] in "})]"
 
 
+def stryker_patterns(root: Path) -> list[str]:
+    """The stryker config's ``mutate`` globs, or stryker's default."""
+    globs = _json(root / STRYKER_CONFIG).get("mutate")
+    if isinstance(globs, list):
+        return [g for g in globs if isinstance(g, str)]
+    return list(DEFAULT_STRYKER_MUTATE)
+
+
 def stryker_changed(root: Path, base: str | None) -> list[str]:
     """Changed files the stryker config's ``mutate`` globs keep, for ``--mutate``."""
-    config = _json(root / STRYKER_CONFIG)
-    globs = config.get("mutate")
-    patterns = (
-        [g for g in globs if isinstance(g, str)]
-        if isinstance(globs, list)
-        else list(DEFAULT_STRYKER_MUTATE)
-    )
+    patterns = stryker_patterns(root)
     before = gatelib.base_commit(root, base)
     changed = gatelib.changed_paths(root, before) if before else gatelib.tracked_paths(root)
     return [path for path in changed if mutated_by(path, patterns)]
+
+
+def nothing_to_mutate(root: Path, report: dict[str, object]) -> bool:
+    """Whether stryker ran and had nothing to mutate, which a fresh skeleton's empty core is.
+
+    The report lists no file and no tracked file passes the ``mutate`` globs, so a glob that
+    misses real code still fails as an empty run.
+    """
+    ran = "schemaVersion" in report and report.get("files") == {}
+    patterns = stryker_patterns(root)
+    return ran and not any(mutated_by(path, patterns) for path in gatelib.tracked_paths(root))
 
 
 def mutated_by(path: str, patterns: list[str]) -> bool:
@@ -415,7 +428,11 @@ def check(options: argparse.Namespace, root: Path) -> list[str]:
         if not path.is_file():
             given = options.report or STRYKER_REPORT
             return [*problems, f"{given}: missing; run stryker with the json reporter first"]
-        mutants = stryker_mutants(_json(path))
+        report = _json(path)
+        if nothing_to_mutate(root, report):
+            print("stryker: no source file to mutate yet; the mutate globs match no tracked file")
+            return problems
+        mutants = stryker_mutants(report)
     return problems + judge(options.tool, mutants, found, scope=options.only or [])
 
 

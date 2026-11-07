@@ -328,3 +328,21 @@ def test_mutate_globs_apply_in_order_with_negations() -> None:
     assert not gate.mutated_by("lib/y.ts", patterns)
     assert gate.mutated_by("src/main.tsx", gate.DEFAULT_STRYKER_MUTATE)
     assert not gate.mutated_by("src/main.test.tsx", gate.DEFAULT_STRYKER_MUTATE)
+
+
+def test_a_skeleton_with_nothing_to_mutate_is_not_an_empty_run(tmp_path: Path, capsys: Out) -> None:
+    # Why: a fresh adoption's core holds no code, so stryker reports no file and tier 2 stayed
+    # red until the first feature, which a red tier 2 on the default branch would block.
+    config = '{"mutate": ["src/**/*.ts", "!src/**/index.ts"]}'
+    report = '{"schemaVersion": "1", "files": {}}'
+    root = repository(
+        tmp_path,
+        {str(gate.STRYKER_CONFIG): config, "src/core/index.ts": "export {};\n"},
+    )
+    write(root, str(gate.STRYKER_REPORT), report)
+    assert run(root, "--tool", "stryker") == 0
+    assert "no source file to mutate yet" in capsys.readouterr().out
+    write(root, "src/core/tide.ts", "export const x = 1;\n")
+    commit(root, "feat(core): code the globs keep")
+    assert run(root, "--tool", "stryker") == 1, "files the globs keep, yet no mutant: misread"
+    assert "stryker: no mutant reported" in capsys.readouterr().out

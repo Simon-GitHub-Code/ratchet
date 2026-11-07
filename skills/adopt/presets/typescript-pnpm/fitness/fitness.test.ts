@@ -37,7 +37,7 @@ export function overTheLineLimit(
 export function bannedWords(glossary: string): Set<string> {
   const words = new Set<string>();
   for (const match of glossary.matchAll(AVOID)) {
-    for (const word of match[1]!.split(",")) {
+    for (const word of (match[1] ?? "").split(",")) {
       const cleaned = word.trim().replace(/^`|`$/g, "").toLowerCase();
       if (cleaned && !cleaned.startsWith("<")) words.add(cleaned);
     }
@@ -58,13 +58,13 @@ export function bannedIdentifiers(source: string, banned: ReadonlySet<string>): 
 describe("limits", () => {
   it("files stay within the line limit", () => {
     const over = overTheLineLimit(sourceFiles()).map((f) => relative(ROOT, f));
-    expect(over, `split these files (limit ${MAX_FILE_LINES} lines)`).toEqual([]);
+    expect(over, `split these files (limit ${String(MAX_FILE_LINES)} lines)`).toEqual([]);
   });
 
   it("eslint holds the same complexity limit as the binding", () => {
     const justfile = readFileSync(join(ROOT, "justfile"), "utf8");
-    expect(justfile).toContain(`complexity: [error, ${MAX_COMPLEXITY}]`);
-    expect(justfile).toContain(`max-lines: [error, ${MAX_FILE_LINES}]`);
+    expect(justfile).toContain(`complexity: [error, ${String(MAX_COMPLEXITY)}]`);
+    expect(justfile).toContain(`max-lines: [error, ${String(MAX_FILE_LINES)}]`);
   });
 });
 

@@ -60,4 +60,4 @@ Cyclomatic complexity 10 (`complexity`); 400 lines per file (`max-lines`), 4 par
 
 ## Tool versions
 
-`pnpm-lock.yaml` pins every Node tool and `--frozen-lockfile` fails when it drifts from `package.json`; `packageManager` in `package.json` pins pnpm itself; `uvx` tools (`actionlint`, `gitleaks`, `trivy`, `semgrep`, `diff-cover`) are pinned by version in the `justfile` once the first run names them; GitHub actions by commit in the workflows.
+`pnpm-lock.yaml` pins every Node tool and `--frozen-lockfile` fails when it drifts from `package.json`; `packageManager` in `package.json` pins pnpm itself; `uvx` tools (`actionlint` from `actionlint-py`, `semgrep`, `diff-cover`) are pinned by version in the `justfile` once the first run names them; `gitleaks`, `trivy` and `shellcheck` are not Python packages, so they are binaries on `PATH` at the version named here, and a CI job that runs one installs it by pinned version first; GitHub actions by commit in the workflows.
