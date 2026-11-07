@@ -189,6 +189,19 @@ def test_the_plugin_root_is_resolved_from_the_package() -> None:
     assert verdict.rule == "guard-path-locked"
 
 
+@pytest.mark.parametrize("event", ["SessionStart", "SubagentStart"])
+def test_hooks_json_registers_the_session_shim_for_sessions_and_subagents(event: str) -> None:
+    registered = json.loads((PLUGIN_ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
+    [entry] = registered["hooks"][event]
+    assert "matcher" not in entry
+    [command] = entry["hooks"]
+    assert command == {
+        "type": "command",
+        "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/session.py"',
+        "timeout": 10,
+    }
+
+
 def test_hooks_json_registers_the_shim_for_edits_and_bash() -> None:
     registered = json.loads((PLUGIN_ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
     [entry] = registered["hooks"]["PreToolUse"]

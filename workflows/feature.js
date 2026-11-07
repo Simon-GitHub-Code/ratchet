@@ -125,9 +125,21 @@ const SPEC_SCHEMA = {
       type: 'boolean',
       description: 'true only if every new test fails because the behaviour is missing, not because of import/syntax errors',
     },
+    failures: {
+      type: 'array',
+      description: 'One entry per new test file: the failure content it printed (the assertion diff or the missing-name error), quoted, never the assertion line alone',
+      items: {
+        type: 'object',
+        properties: {
+          testFile: { type: 'string', description: 'Repo-relative path, one of testFiles' },
+          content: { type: 'string', description: 'The quoted failure content' },
+        },
+        required: ['testFile', 'content'],
+      },
+    },
     ...checkOutputField(),
   },
-  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'failingForRightReason', 'checkOutput'],
+  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'failingForRightReason', 'failures', 'checkOutput'],
 }
 
 const DISPUTES_FIELD = {
@@ -187,6 +199,11 @@ const CRITIQUE_SCHEMA = {
       },
     },
     testsAdded: { type: 'array', items: { type: 'string' }, description: 'Repo-relative test files you created or extended' },
+    attempted: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Every command you ran trying to break the change, one per entry, with its one-line outcome. "No findings" is credible only by this list',
+    },
     mutationSummary: { type: 'string', description: 'Mutation-testing result for the touched modules, or "not applicable" with the reason (e.g. binding.md names no mutation gate)' },
     fuzzSummary: { type: 'string', description: 'Fuzz harness result for touched value types, or "not applicable" with the reason' },
     fitnessSabotageConfirmed: {
@@ -201,7 +218,7 @@ const CRITIQUE_SCHEMA = {
     ...checkOutputField(),
   },
   required: [
-    'findings', 'testsAdded', 'mutationSummary', 'fuzzSummary', 'fitnessSabotageConfirmed',
+    'findings', 'testsAdded', 'attempted', 'mutationSummary', 'fuzzSummary', 'fitnessSabotageConfirmed',
     'fitnessSabotageSummary', 'guardFilesChanged', 'checkOutput',
   ],
 }
@@ -284,7 +301,9 @@ Your tasks, in order:
    class, endpoint or component, or an assertion on behaviour that does not exist yet. An
    ImportError on a module that should already exist, a syntax error or a fixture error means
    the test is wrong: fix the test. Set failingForRightReason true only when every failure is
-   the predicted one.
+   the predicted one, and return the quoted content per test file in \`failures\`; the script
+   blocks the run when a test file has no quoted failure. Put the same quotes in spec.md's
+   test plan, so the reviewer sees what each test refuted.
 4. Run \`check\` and capture its tail. It is expected to be red only on your new tests.
 
 Open questions stop the pipeline: if \`openQuestions\` is non-empty the orchestrator asks the
@@ -412,6 +431,10 @@ Do all of the following and report evidence for each:
 Keep every test you added that PASSES (regression value) and every test that FAILS because of
 a genuine defect (list it as \`suggestedTest\` on the finding). Delete tests that fail because
 the test itself was wrong. You edit test files only.
+
+List every command you ran trying to break the change in \`attempted\`, with its one-line
+outcome. Nothing found refutes only the attempts that would have hit; the script blocks a
+run whose critic found nothing and attempted nothing.
 
 Severity: blocker = wrong result, data loss, a violated AGENTS.md non-negotiable, a
 declared-path or contract violation; major = unhandled edge case the spec covers, survived
@@ -609,6 +632,10 @@ if (unresolved.length) forcedReasons.push(`${unresolved.length} unresolved block
 if (blockingReviewIssues.length) forcedReasons.push(`${blockingReviewIssues.length} blocker/major review issue(s)`)
 if (!lastCheckPasses) forcedReasons.push('the last implement/fix result reported checkPasses: false')
 if (!spec.failingForRightReason) forcedReasons.push('the spec reported failingForRightReason: false')
+const unquoted = (spec.testFiles || []).filter(f => !(spec.failures || []).some(x => x && x.testFile === f && String(x.content || '').trim()))
+if (unquoted.length) forcedReasons.push(`spec test files with no quoted failure content: ${unquoted.join(', ')}`)
+const lastAttempted = (critique.attempted || []).filter(a => a && String(a).trim())
+if (critique.findings.length === 0 && lastAttempted.length === 0) forcedReasons.push('the critic found nothing and lists nothing attempted')
 const verdict = forcedReasons.length ? 'request_changes' : review.verdict
 if (verdict !== review.verdict) log(`Verdict forced to request_changes: ${forcedReasons.join('; ')}`)
 else if (forcedReasons.length) log(`Reviewer and script agree on request_changes: ${forcedReasons.join('; ')}`)
@@ -637,6 +664,8 @@ return {
   openQuestions: spec.openQuestions,
   fitnessSabotageConfirmed: critique.fitnessSabotageConfirmed,
   fitnessSabotageSummary: critique.fitnessSabotageSummary,
+  specFailures: spec.failures,
+  criticAttempted: critique.attempted,
   checkPasses: lastCheckPasses && review.checkPasses === true,
   checkOutput: lastCheckOutput,
   branch: BRANCH,

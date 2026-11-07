@@ -42,6 +42,16 @@ ignore = [
 "hooks/guard.py" = [
     "INP001", # the shim is a standalone script, deliberately not a package
 ]
+"hooks/session.py" = [
+    "INP001", # the shim is a standalone script, deliberately not a package
+    "T201",   # the hook reports context to stdout by design
+]
+"hooks/ratchet_guards/session.py" = [
+    "T201", # the hook reports context to stdout by design
+]
+"hooks/tests/test_session.py" = [
+    "S603", # subprocess runs the shim with a literal argv list, no shell
+]
 "hooks/ratchet_guards/diff.py" = [
     "T201", # the diff tool reports to stdout by design
 ]
@@ -71,7 +81,7 @@ max-statements = 40      # PLR0915
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["ratchet_guards", "tests"]
+known-first-party = ["ratchet_guards", "tests", "guard"]
 
 [tool.mypy]
 files = ["hooks"]

@@ -30,7 +30,7 @@ The format is domain-modeling's `GLOSSARY-FORMAT.md`: one concept, one name, the
 
 The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for when to write one (hard to reverse, surprising without context, a real trade-off) holds. The method adds:
 
-- A `## Refutation criterion` section: the observation or measurement that would show the decision wrong, and when to look. The conformance gate requires it.
+- A `## Refutation criterion` section: the observation or measurement that would show the decision wrong, and when to look. The conformance gate requires it and rejects an empty or placeholder body.
 - Numbering without gaps. The title states the decision as a sentence.
 - A change that contradicts an ADR needs the superseding ADR first: `status: superseded` with `superseded-by: NNNN`, or domain-modeling's `superseded by ADR-NNNN`.
 - Every machine-enforced rule cites its ADR: a policy constant in a fitness test carries an `ADR NNNN` comment, and a fitness test checks the number exists.
@@ -47,7 +47,7 @@ Short; the spec role expands it.
 What is wrong or missing, for whom, why now. One paragraph.
 
 ## Conjecture about the solution
-The one approach expected to work, stated so it can be shown wrong. The alternatives and why they lose.
+The one approach expected to work, stated so it can be shown wrong. The alternatives and why they lose. The conformance gate rejects an empty or placeholder body.
 
 ## Out of scope
 Anything not listed is fair game for the spec role to ask about.
@@ -65,4 +65,4 @@ The template and lifecycle are in [guards.md](guards.md).
 
 ## Pull request
 
-The body follows the repository's template at the path the binding names. `mattpocock-skills:pr` supplies Summary, Evidence and Merge Danger; the method adds Conjecture, Criticism, Guard paths, Decisions and Gates, and the conformance gate checks the template carries them. Every section is filled: an empty section is an open criticism of the pull request.
+The body follows the repository's template at the path the binding names. `mattpocock-skills:pr` supplies Summary, Evidence and Merge Danger; the method adds Conjecture (the claim, its refuter, and for a fix the alternative explanation and the check that eliminated it), Criticism, Guard paths, Decisions and Gates, and the conformance gate checks the template carries them. Every section is filled: an empty section is an open criticism of the pull request.

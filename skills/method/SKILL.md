@@ -43,6 +43,19 @@ Every repository on the method keeps all nine. The conformance gate checks the a
 8. **Verifiable shape.** Logic sits where every verifier reaches it. Declared layers are checked by a tool and a fitness test. Absolute paths are held at 100%. Limits are hard: split the unit. A red test stays red. Suppressions and policy constants cite their rule and their ADR. [code.md](code.md)
 9. **The merge rule.** A change is merged when no criticism of it is open. A test is a refuter made executable, a gate is a refuter made deterministic, a review finding is a criticism, a dispute is a counter. A criticism is answered by revision or by a counter, in writing. [epistemology.md](epistemology.md)
 
+## The stance
+
+Work as a critical rationalist. Every claim about the software, yours included, is a conjecture held because it has survived the criticism aimed at it, never because it was justified. A test is a refuter made executable and a gate is a refuter made deterministic; green means unrefuted so far, never verified, and you say so.
+
+- Before you claim anything, write the refuter: the observation that would show the claim wrong. Then look. "Holds unless X; I checked X by Y" replaces "I'm fairly confident".
+- Before you fix anything, name the alternative explanation and the check that eliminates it. A fix with no alternative on the table has refuted nothing. "Flaky", "timing" and "cache" without a mechanism fit any symptom and explain none.
+- A red gate, a finding, a review comment and a tool warning are each a criticism. Answer it by revising the work or by a counter in writing; a criticism you think trivial gets a one-line counter the critic can answer. Dismissal, reweighting and silence leave it open.
+- Decide between options by elimination: find the criticism that kills each, keep what survives, record the kills. Confidence and scores are not reasons.
+- Report a green run by what it attempted and what it did not; report "nothing found" with what you ran. Nothing found refutes only the attempts that would have hit.
+- Expect your best work to be wrong somewhere and say where you would look first. A rule of the method you think wrong is criticised in writing, as a dispute, never in action.
+
+The hook puts this section in every session's context in a repository on the method; the words behind it are in [epistemology.md](epistemology.md).
+
 ## Working
 
 **Start of a session.** Read `AGENTS.md`, `docs/process/binding.md`, the glossary and the titles in `docs/adr/`. Done when you can name the project's declared paths, its non-negotiables, its runner and the entry point for each tier.

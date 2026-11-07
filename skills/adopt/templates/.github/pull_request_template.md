@@ -14,7 +14,7 @@
 **Blast Radius:** <one-word description>
 
 ## Conjecture
-What this change claims, and the observation that would show it wrong.
+What this change claims, and the observation that would show it wrong. For a fix: the alternative explanation considered, and the check that eliminated it.
 
 ## Criticism
 Critic findings and how each was resolved; review issues; disputes raised and their status. Links to the brief and spec where they exist.

@@ -37,6 +37,9 @@ ADR_FRONT_MATTER = re.compile(
 )
 ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
 REFUTATION_SECTION = "## Refutation criterion"
+CONJECTURE_SECTION = "## Conjecture about the solution"
+EMPTY_BODIES = {"none", "n/a", "na", "tbd", "todo", "-", "?"}
+MIN_BODY = 20
 DISPUTE_STATUSES = {"open", "upheld", "rejected"}
 DISPUTE_SECTIONS = (
     "## Gate",
@@ -127,21 +130,26 @@ def check_adrs(root: Path) -> Iterable[str]:
     if numbers != list(range(1, len(numbers) + 1)):
         yield f"docs/adr: numbering has gaps or duplicates: {numbers}"
     for number, path in files:
-        rel = path.relative_to(root)
-        text = path.read_text(encoding="utf-8")
-        match = ADR_FRONT_MATTER.match(text)
-        if match is None:
-            yield f"{rel}: opens with a '# ' title, optionally after 'status:' front matter"
-            continue
-        status, superseded_by = match.group("status"), match.group("by")
-        if status is not None and not ADR_STATUS.match(status):
-            yield f"{rel}: status '{status}' is not {ADR_STATUS_WORDS}"
-        if status == "superseded" and superseded_by is None:
-            yield f"{rel}: a superseded ADR names its successor: 'superseded-by: NNNN'"
-        if REFUTATION_SECTION not in text:
-            yield f"{rel}: has no '{REFUTATION_SECTION}' section"
-        if number == 1 and "Ratchet method" not in text:
-            yield f"{rel}: ADR 0001 records adopting the Ratchet method"
+        yield from check_adr(number, path, path.relative_to(root))
+
+
+def check_adr(number: int, path: Path, rel: Path) -> Iterable[str]:
+    text = path.read_text(encoding="utf-8")
+    match = ADR_FRONT_MATTER.match(text)
+    if match is None:
+        yield f"{rel}: opens with a '# ' title, optionally after 'status:' front matter"
+        return
+    status, superseded_by = match.group("status"), match.group("by")
+    if status is not None and not ADR_STATUS.match(status):
+        yield f"{rel}: status '{status}' is not {ADR_STATUS_WORDS}"
+    if status == "superseded" and superseded_by is None:
+        yield f"{rel}: a superseded ADR names its successor: 'superseded-by: NNNN'"
+    if REFUTATION_SECTION not in text:
+        yield f"{rel}: has no '{REFUTATION_SECTION}' section"
+    elif empty_body(text, REFUTATION_SECTION):
+        yield f"{rel}: '{REFUTATION_SECTION}' names no observation that would show it wrong"
+    if number == 1 and "Ratchet method" not in text:
+        yield f"{rel}: ADR 0001 records adopting the Ratchet method"
 
 
 def section(text: str, heading: str) -> str:
@@ -151,6 +159,12 @@ def section(text: str, heading: str) -> str:
     body = text[start + len(heading) :]
     end = body.find("\n## ")
     return body if end < 0 else body[:end]
+
+
+def empty_body(text: str, heading: str) -> bool:
+    """Whether the section under ``heading`` says nothing: absent, blank, placeholder or short."""
+    body = section(text, heading).strip()
+    return body.lower().rstrip(".") in EMPTY_BODIES or len(body) < MIN_BODY
 
 
 def table_cells(body: str) -> list[tuple[str, str]]:
@@ -272,9 +286,11 @@ def check_features(root: Path) -> Iterable[str]:
         return
     for brief in sorted(directory.glob("*/brief.md")):
         text = brief.read_text(encoding="utf-8")
-        for section in BRIEF_SECTIONS:
-            if section not in text:
-                yield f"{brief.relative_to(root)}: has no '{section}' section"
+        for heading in BRIEF_SECTIONS:
+            if heading not in text:
+                yield f"{brief.relative_to(root)}: has no '{heading}' section"
+        if CONJECTURE_SECTION in text and empty_body(text, CONJECTURE_SECTION):
+            yield f"{brief.relative_to(root)}: '{CONJECTURE_SECTION}' states no conjecture"
 
 
 def check_pr_template(root: Path) -> Iterable[str]:
@@ -318,6 +334,10 @@ Mutation = tuple[str, Callable[[Path], None]]
 
 
 def mutations() -> list[Mutation]:
+    return [*artefact_mutations(), *record_mutations()]
+
+
+def artefact_mutations() -> list[Mutation]:
     def strip_stanza(root: Path) -> None:
         path = root / "AGENTS.md"
         path.write_text(path.read_text().replace("ratchet:method", "nothing"))
@@ -330,12 +350,39 @@ def mutations() -> list[Mutation]:
         path = root / "docs/process/binding.md"
         path.write_text(path.read_text().replace("| format | |", "| format | none |"))
 
-    def adr_without_refuter(root: Path) -> None:
-        (root / "docs/adr/0002-plain.md").write_text("# We keep it plain\n\nBecause.\n")
-
     def unlock_harness(root: Path) -> None:
         path = root / "guards/manifest.toml"
         path.write_text(path.read_text().replace('edit = "deny"', 'edit = "ask"'))
+
+    def drop_pr_section(root: Path) -> None:
+        path = root / DEFAULT_PR_TEMPLATE
+        path.write_text(path.read_text().replace("## Guard paths", "## Guards"))
+
+    return [
+        ("AGENTS.md without the method stanza", strip_stanza),
+        ("binding without the conformance entry point", drop_entry_point),
+        ("binding with a gate bound to none and no reason", none_without_reason),
+        ("manifest with the harness unlocked", unlock_harness),
+        ("pull-request template missing a section", drop_pr_section),
+    ]
+
+
+def record_mutations() -> list[Mutation]:
+    def adr_without_refuter(root: Path) -> None:
+        (root / "docs/adr/0002-plain.md").write_text("# We keep it plain\n\nBecause.\n")
+
+    def adr_with_an_empty_refuter(root: Path) -> None:
+        (root / "docs/adr/0002-empty.md").write_text(
+            f"# We keep it empty\n\nBecause.\n\n{REFUTATION_SECTION}\nNone.\n"
+        )
+
+    def brief_without_a_conjecture(root: Path) -> None:
+        (root / "docs/features/x").mkdir(parents=True)
+        headings = "\n\n".join(f"{h}\nSomething substantive here." for h in BRIEF_SECTIONS)
+        text = "# X\n\n" + headings.replace(
+            f"{CONJECTURE_SECTION}\nSomething substantive here.", f"{CONJECTURE_SECTION}\nTBD"
+        )
+        (root / "docs/features/x/brief.md").write_text(text + "\n")
 
     def gap_adrs(root: Path) -> None:
         (root / "docs/adr/0003-gap.md").write_text(f"# A gap\n\n{REFUTATION_SECTION}\nNone.\n")
@@ -350,20 +397,13 @@ def mutations() -> list[Mutation]:
             + '\n[[survivor]]\ntool = "x"\nidentity = "y"\nreason = "short"\ndate = 2026-01-01\n'
         )
 
-    def drop_pr_section(root: Path) -> None:
-        path = root / DEFAULT_PR_TEMPLATE
-        path.write_text(path.read_text().replace("## Guard paths", "## Guards"))
-
     return [
-        ("AGENTS.md without the method stanza", strip_stanza),
-        ("binding without the conformance entry point", drop_entry_point),
-        ("binding with a gate bound to none and no reason", none_without_reason),
         ("ADR without a refutation criterion", adr_without_refuter),
-        ("manifest with the harness unlocked", unlock_harness),
+        ("ADR with an empty refutation criterion", adr_with_an_empty_refuter),
+        ("feature brief with a placeholder conjecture", brief_without_a_conjecture),
         ("ADR numbering with a gap", gap_adrs),
         ("dispute with an unknown status", bad_dispute),
         ("register entry with a short reason", short_register_reason),
-        ("pull-request template missing a section", drop_pr_section),
     ]
 
 
