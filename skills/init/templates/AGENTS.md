@@ -13,7 +13,7 @@ Four plugins build software here, and each owns one question. `CLAUDE.md` is a s
 
 ## Agent skills
 
-<Written by the mattpocock-skills setup in init step 5: the issue tracker, the triage labels and the domain-doc layout, each pointing at its file under docs/agents/. It updates this section in place. Delete the section if that setup was declined.>
+<Written by `/mattpocock-skills:setup-matt-pocock-skills`, which the owner types after init: the issue tracker, the triage labels and the domain-doc layout, each pointing at its file under docs/agents/. It updates this section in place. Delete the section if that setup was declined.>
 
 ## Read before any design work
 

@@ -1,6 +1,6 @@
 # Stack presets
 
-One directory per stack the method has been bound to before. Adopt reads `## Stack` from `PRODUCT.md` (or recognises the manifests in the tree), picks the matching preset, merges its files into the templates it has just copied, and confirms the resulting binding with the owner in one dialog. A stack with no preset goes through the binding interview as before; a binding that worked becomes the next preset.
+One directory per stack the method has been bound to before. Adopt reads `## Stack` from `PRODUCT.md` or `AGENTS.md` (or recognises the manifests in the tree), picks the matching preset, merges its files into the templates it has just copied, and confirms the resulting binding with the owner in one dialog. A stack with no preset goes through the binding interview as before; a binding that worked becomes the next preset.
 
 Every preset has the same files, each a fragment adopt merges into the template of the same name:
 
