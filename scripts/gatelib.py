@@ -9,9 +9,11 @@ is the merge base, before is ``HEAD~1``. ``lowered``, ``guard-diff`` and the gat
 
 from __future__ import annotations
 
+import fnmatch
 import re
 import subprocess
 import tomllib
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 FALLBACK_BRANCHES = ("main", "master")
@@ -112,8 +114,83 @@ def table(data: dict[str, object], *keys: str) -> dict[str, object]:
 
 
 def matches(path: str, patterns: list[str]) -> bool:
-    """Whether a repository-relative path matches one of the globs (``**`` spans segments)."""
-    return any(PurePosixPath(path).full_match(pattern) for pattern in patterns)
+    """Whether a repository-relative path matches one of the globs (``**`` spans segments).
+
+    The ``PurePosixPath.full_match`` rules, written out because that method arrived in Python
+    3.13 and the gates run on the runner's ``python3``. ``ratchet_guards.globs`` is the same
+    function for the hook; ``test_globs.py`` holds the two to the same answers.
+    """
+    normal = _glob_normalised(path)
+    if not normal:
+        # Why: pathlib matches the empty path against nothing but ``**`` segments.
+        return any(all(s == "**" for s in _glob_segments(p)) for p in patterns)
+    return any(glob_regex(pattern).fullmatch(normal) for pattern in patterns)
+
+
+def _glob_normalised(text: str) -> str:
+    posix = PurePosixPath(text).as_posix()
+    return "" if posix == "." else posix
+
+
+def _glob_segments(pattern: str) -> list[str]:
+    normal = _glob_normalised(pattern)
+    return normal.split("/") if normal else []
+
+
+@lru_cache(maxsize=4096)
+def glob_regex(pattern: str) -> re.Pattern[str]:
+    """The compiled regular expression for a glob pattern."""
+    parts = _glob_segments(pattern)
+    expression = ""
+    separator_due = False
+    for index, segment in enumerate(parts):
+        last = index == len(parts) - 1
+        if segment == "**":
+            if last:
+                # Why: as pathlib has it, `a/**` needs the slash, so `a` itself is not matched.
+                expression += "/.*" if separator_due else ".*"
+            else:
+                expression += ("/" if separator_due else "") + "(?:[^/]+/)*"
+            separator_due = False
+            continue
+        expression += ("/" if separator_due else "") + _glob_segment(segment)
+        separator_due = True
+    return re.compile(expression)
+
+
+def _glob_segment(segment: str) -> str:
+    out = ""
+    index = 0
+    while index < len(segment):
+        char = segment[index]
+        if char == "*":
+            while index + 1 < len(segment) and segment[index + 1] == "*":
+                index += 1
+            out += "[^/]*"
+        elif char == "?":
+            out += "[^/]"
+        elif char == "[":
+            body, index = _glob_class(segment, index)
+            out += body
+        else:
+            out += re.escape(char)
+        index += 1
+    return out
+
+
+def _glob_class(segment: str, start: int) -> tuple[str, int]:
+    end = start + 1
+    if end < len(segment) and segment[end] == "!":
+        end += 1
+    if end < len(segment) and segment[end] == "]":
+        end += 1
+    while end < len(segment) and segment[end] != "]":
+        end += 1
+    if end >= len(segment):
+        return re.escape("["), start
+    # Why: ranges, negation and escaping inside a class follow fnmatch, as pathlib's do.
+    translated = fnmatch.translate(segment[start : end + 1])
+    return translated[len("(?s:") : -len(")\\Z")], end
 
 
 def report(name: str, problems: list[str], against: str | None = None) -> int:

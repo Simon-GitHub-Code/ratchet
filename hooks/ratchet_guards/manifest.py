@@ -1,6 +1,7 @@
 """The guard manifest, ``guards/manifest.toml`` under the repository root, plus the plugin's own.
 
-A pattern is matched against a POSIX path with ``PurePosixPath.full_match``: ``*`` and ``?``
+A pattern is matched against a POSIX path with the ``PurePosixPath.full_match`` rules
+(``ratchet_guards.globs``, since the system ``python3`` may predate 3.13): ``*`` and ``?``
 stay within one segment and ``**`` spans any number of segments. Its ``Scope`` is read from
 its first characters: ``~/`` is matched relative to the user's home directory, ``/`` against
 the absolute path (only the implicit plugin group uses these; the file may not), and
@@ -24,6 +25,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
+
+from ratchet_guards.globs import matches
 
 MANIFEST_PATH = "guards/manifest.toml"
 HOME_PREFIX = "~/"
@@ -92,7 +95,7 @@ class Group:
 
     def excludes(self, path: PurePosixPath) -> bool:
         """Whether one of the group's ``exclude`` patterns matches ``path``."""
-        return any(path.full_match(pattern) for pattern in self.excluded)
+        return any(matches(str(path), pattern) for pattern in self.excluded)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +114,7 @@ class Manifest:
         """The group guarding ``path``, written relative to ``scope``."""
         candidate = PurePosixPath(path)
         for group, pattern in self._patterns(scope):
-            if candidate.full_match(pattern) and not group.excludes(candidate):
+            if matches(path, pattern) and not group.excludes(candidate):
                 return group
         return None
 

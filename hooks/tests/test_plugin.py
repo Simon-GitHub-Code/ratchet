@@ -317,7 +317,7 @@ def test_the_shim_resolves_the_root_from_cwd_then_the_environment() -> None:
     assert shim.root_of("{}", {}, default) == default
     assert shim.root_of("not json", {}, default) == default
     assert shim.root_of("[]", {}, default) == default
-    assert shim.MINIMUM_PYTHON == (3, 13)
+    assert shim.MINIMUM_PYTHON == (3, 11)
     assert shim.HOOKS == PLUGIN_ROOT / "hooks"
 
 

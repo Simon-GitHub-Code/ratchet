@@ -4,10 +4,11 @@ import posixpath
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from ratchet_guards import bash
 from ratchet_guards.context import Context, Guard
+from ratchet_guards.globs import matches
 from ratchet_guards.manifest import Manifest, parse, with_plugin_group
 from ratchet_guards.paths import Locator
 from ratchet_guards.verdict import Verdict
@@ -71,7 +72,7 @@ class FakeFilesystem:
         return self.contents.get(str(path))
 
     def glob(self, pattern: Path) -> list[Path]:
-        return [Path(name) for name in self.files if PurePosixPath(name).full_match(str(pattern))]
+        return [Path(name) for name in self.files if matches(name, str(pattern))]
 
     def expand(self, word: str) -> str:
         if word == "~" or word.startswith("~/"):

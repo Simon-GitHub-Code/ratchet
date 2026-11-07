@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code PreToolUse hook of the Ratchet plugin: delegates to ``ratchet_guards.hook``.
 
-Standard library only and run on the system ``python3`` (3.13 or later). The repository
+Standard library only and run on the system ``python3`` (3.11 or later). The repository
 root is the hook input's ``cwd``, else ``$CLAUDE_PROJECT_DIR``, else the working directory.
 If the guard cannot even be loaded, the answer is ``ask``, so a broken guard stops at a
 human instead of letting the tool call through.
@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
-MINIMUM_PYTHON = (3, 13)
+MINIMUM_PYTHON = (3, 11)
 
 
 def fallback(problem: str) -> str:
@@ -44,7 +44,7 @@ def root_of(text: str, environ: Mapping[str, str], default: Path) -> Path:
 def main() -> int:
     """Load the guard and answer one hook call."""
     if sys.version_info < MINIMUM_PYTHON:
-        sys.stdout.write(fallback(f"python3 is {sys.version.split()[0]}, 3.13+ needed") + "\n")
+        sys.stdout.write(fallback(f"python3 is {sys.version.split()[0]}, 3.11+ needed") + "\n")
         return 0
     text = sys.stdin.read()
     root = root_of(text, os.environ, Path.cwd())

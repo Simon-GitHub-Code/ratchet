@@ -48,7 +48,7 @@ import re
 import sys
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import gatelib
 
@@ -230,7 +230,7 @@ def mutmut_changed(root: Path, base: str | None) -> list[str]:
     for path in changed:
         if not path.endswith(".py") or not any(path.startswith(s) for s in source_paths):
             continue
-        if any(PurePosixPath(path).full_match(glob) for glob in excluded):
+        if gatelib.matches(path, excluded):
             continue
         module = path.removesuffix(".py").removesuffix("/__init__").replace("/", ".")
         patterns.append(f"{module.removeprefix('src.')}.*")
@@ -328,7 +328,7 @@ def mutated_by(path: str, patterns: list[str]) -> bool:
     kept = False
     for pattern in patterns:
         negated = pattern.startswith("!")
-        if any(PurePosixPath(path).full_match(g) for g in expand_braces(pattern.lstrip("!"))):
+        if gatelib.matches(path, expand_braces(pattern.lstrip("!"))):
             kept = not negated
     return kept
 
