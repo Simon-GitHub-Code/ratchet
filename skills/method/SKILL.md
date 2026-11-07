@@ -1,6 +1,6 @@
 ---
 name: method
-description: Load when a gate goes red, an edit or command is denied, a threshold, guard path or dispute is in play, a binding or tier is being written, a feature brief exists, or AGENTS.md names the Ratchet method. The method says what must be true before a merge, under tiered deterministic gates that only tighten, judged by the merge rule of critical rationalism.
+description: Load when a gate goes red, an edit or command is denied, a threshold, guard path or dispute is in play, a binding or tier is being written, a feature ticket is agent-ready, or AGENTS.md names the Ratchet method. The method says what must be true before a merge, under tiered deterministic gates that only tighten, judged by the merge rule of critical rationalism.
 ---
 
 # The Ratchet method
@@ -40,7 +40,7 @@ Every repository on the method keeps all ten. The conformance gate checks the ar
 4. **Guards.** Guard paths are enforced by the harness, which the model cannot override, and surfaced in the diff for whatever slips past. A denial is the dispute signal. [guards.md](guards.md)
 5. **Disputes.** When a gate blocks and you believe the gate is wrong, stop on that gate and write `docs/disputes/NNNN-<slug>.md`. The owner upholds or rejects; an upheld dispute that relaxes a rule also needs an ADR. [guards.md](guards.md)
 6. **Records.** A dated design brief with a first slice and an explicit out-list; a glossary whose *Avoid* lists are banned identifiers; one ADR per lasting decision, each with its refutation criterion, superseded in writing; a feature brief per feature; every machine-enforced rule cites the ADR that justifies it. Formats come from `domain-modeling`; the method adds its sections. [records.md](records.md)
-7. **The pipeline.** A feature is built by four roles with fixed sight lines: spec, implement, critic, review, each working with the skill the role names. The orchestrator reads only the brief, the structured result and the spec, opens the pull request when the gates are green, and a human merges. [pipeline.md](pipeline.md)
+7. **The pipeline.** A feature is built by four roles with fixed sight lines: spec, implement, critic, review, each working with the skill the role names. The orchestrator reads only the ticket, the structured result and the spec, opens the pull request when the gates are green, and a human merges. [pipeline.md](pipeline.md)
 8. **Verifiable shape.** Logic sits where every verifier reaches it. Declared layers are checked by a tool and a fitness test. Absolute paths are held at 100%. Limits are hard: split the unit. A red test stays red. Suppressions and policy constants cite their rule and their ADR. [code.md](code.md)
 9. **Speed.** Each tier has a ceiling in seconds that only falls, measured by the `budget` entry point and set at adoption from the first run. CI starts cached, split one job per gate, sharded above the binding's budget, and cancels superseded runs; the conformance gate checks the shape. A tier over its ceiling on the default branch is the next piece of work. [tiers.md](tiers.md#speed)
 10. **The merge rule.** A change is merged when no criticism of it is open. A test is a refuter made executable, a gate is a refuter made deterministic, a review finding is a criticism, a dispute is a counter. A criticism is answered by revision or by a counter, in writing. [epistemology.md](epistemology.md)
@@ -64,7 +64,7 @@ The hook puts this section in every session's context in a repository on the met
 
 **A change.** Branch from the default branch. Work the loop as `mattpocock-skills:tdd` describes: the test goes red for the right reason, then green, then refactor. Run `check`. Open one pull request with every section of the template filled and the tail of `check` pasted. Wait: a human merges. Done when the pull request is open and green.
 
-**A feature.** Write `docs/features/<slug>/brief.md` as [records.md](records.md) describes, then run `/ratchet:feature`. [pipeline.md](pipeline.md)
+**A feature.** The ticket is written with `mattpocock-skills` (`wayfinder` to find the route, `grilling` or `domain-modeling` to sharpen it, `to-spec` and `to-tickets` to write it, `triage` for an issue that arrived). The owner adds `## Conjecture` as [records.md](records.md) describes and applies the agent-ready label; that label is the agreement. Then `/ratchet:feature <ticket>`: the preflight refuses anything less before an agent exists. [pipeline.md](pipeline.md)
 
 **A decision with lasting consequences** (a layer, a dependency, a representation, a tool, a rule). Write the ADR first, with the options considered and the criterion that would show the decision wrong. A change that contradicts an ADR needs a superseding ADR first. [records.md](records.md)
 

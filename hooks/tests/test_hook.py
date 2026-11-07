@@ -42,7 +42,7 @@ def test_edits_to_guard_paths_ask(tool: str, key: str, path: str) -> None:
     "path",
     [
         "/repo/.claude/settings.json",
-        "/repo/.claude/workflows/feature.js",
+        "/repo/.claude/workflows/pipeline.js",
         "/repo/.claude/worktrees/agent-1/.claude/settings.json",
         "/repo/.claude/worktrees/agent-1/guards/manifest.toml",
         "/repo/guards/manifest.toml",

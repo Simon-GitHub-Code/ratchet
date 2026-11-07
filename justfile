@@ -25,7 +25,7 @@ validate:
     claude plugin validate .
 
 parse-workflow:
-    node --check workflows/feature.js
+    node --check workflows/pipeline.js
 
 # Node strips types, so a syntax check of the pi and OpenCode adapters needs no toolchain.
 parse-adapters:

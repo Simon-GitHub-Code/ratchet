@@ -1,21 +1,30 @@
 // What this workflow assumes of the repository that adopts the Ratchet method.
-// It is shipped by the ratchet plugin and runs as /ratchet:feature in any repository, so it
-// knows nothing about the project's domain, runner or forge. It relies on the method's entry
-// points and file layout only. The repository must provide: docs/process/binding.md, whose
-// Entry points table names the command for `check` (tier 0 plus tier 1, non-zero on any
-// failure) and `guard-diff` (prints every guard path the branch changed, one per line); the
-// guard manifest at guards/manifest.toml; a feature brief at docs/features/<slug>/brief.md
-// written by the orchestrator; a docs/disputes/ directory; AGENTS.md at the root stating the
-// non-negotiables; and GLOSSARY.md (or GLOSSARY-MAP.md) stating the vocabulary. Every agent
-// loads the ratchet:method skill first and takes every project-specific rule from those
-// files, never from this script. Each role works with the skill pipeline.md names for it.
+// It is shipped by the ratchet plugin and the /ratchet:feature skill runs it in any repository,
+// so it knows nothing about the project's domain, runner or forge. It relies on the method's
+// entry points and file layout only. The repository must provide: docs/process/binding.md,
+// whose Entry points table names the command for `check` (tier 0 plus tier 1, non-zero on
+// any failure) and `guard-diff` (prints every guard path the branch changed, one per line);
+// the guard manifest at guards/manifest.toml; a docs/features/ directory for the spec;
+// a docs/disputes/ directory; AGENTS.md at the root stating the non-negotiables; and
+// GLOSSARY.md (or GLOSSARY-MAP.md) stating the vocabulary. The feature's input is a tracker
+// ticket (mattpocock-skills:to-spec, to-tickets or triage wrote it) carrying a `## Conjecture`
+// section and the owner's agent-ready label: the plugin's scripts/feature_preflight.py says
+// whether it does, and nothing else runs until it says so. Every agent loads the
+// ratchet:method skill first and takes every project-specific rule from those files, never
+// from this script. Each role works with the skill pipeline.md names for it.
+//
+// A Workflow script cannot read a file or run a command itself, so the preflight runs twice:
+// once in the /ratchet:feature skill, deterministically, before this workflow is invoked, and
+// once here as the first stage, through one low-effort agent, so the pipeline cannot be
+// entered around the skill.
 
 export const meta = {
-  name: 'feature',
-  description: 'Build one feature from a brief with the Ratchet method: spec -> implement -> adversarial critique -> fix loop -> independent review',
-  whenToUse: 'When a feature brief exists at docs/features/<slug>/brief.md in a repository that follows the Ratchet method and a working branch has been created. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
+  name: 'pipeline',
+  description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> implement -> adversarial critique -> fix loop -> independent review',
+  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight? } after its own preflight is green; not by hand. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
   phases: [
-    { title: 'Spec', detail: 'brief -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the brief leaves open questions' },
+    { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
+    { title: 'Spec', detail: 'ticket -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the ticket leaves open questions' },
     { title: 'Implement', detail: 'make the new tests pass test-first with tdd; check green' },
     { title: 'Critique', detail: 'adversarial, with interrogate: properties, edge cases, mutation, fuzz, fitness sabotage as binding.md names them' },
     { title: 'Fix', detail: 'fresh implementer per blocker/major round (max 2), re-critique after each' },
@@ -27,14 +36,24 @@ export const meta = {
 // Arguments. Everything that could vary between runs comes in via args so the
 // script is a pure function of (args, agent results) and resumes cleanly.
 // ---------------------------------------------------------------------------
-if (!args || typeof args.brief !== 'string' || typeof args.branch !== 'string') {
-  throw new Error('feature workflow needs args = { brief: "<path to brief .md>", branch: "<git branch>", root?: "<repo root>", base?: "<base branch, default main>" }')
+// The slash form of a workflow passes no args, so a missing ref is answered, not thrown: the
+// result says what to run instead, and no agent has been spawned.
+const ARGS = typeof args === 'string' ? { ref: args } : (args && typeof args === 'object' ? args : {})
+const REF = typeof ARGS.ref === 'string' ? ARGS.ref.trim() : ''
+if (!REF) {
+  return {
+    verdict: 'blocked',
+    preflight: { ok: false, failures: [{ check: 'ticket', detail: 'no ticket ref was passed', produce: 'run the /ratchet:feature skill with the ticket number or path; it runs the preflight and passes args = { ref, branch, base }' }] },
+    requiredByOrchestrator: ['Run `/ratchet:feature <ticket>`; the slash form of this workflow passes no args and spawns nothing'],
+  }
 }
-const BRIEF = args.brief
-const BRANCH = args.branch
-const BASE = typeof args.base === 'string' && args.base ? args.base : 'main'
-const ROOT = typeof args.root === 'string' && args.root ? args.root : ''
+const BASE = typeof ARGS.base === 'string' && ARGS.base ? ARGS.base : 'main'
+const ROOT = typeof ARGS.root === 'string' && ARGS.root ? ARGS.root : ''
+const PREFLIGHT_SCRIPT = typeof ARGS.preflight === 'string' && ARGS.preflight ? ARGS.preflight : ''
 const MAX_FIX_ITERATIONS = 2
+// The branch is the preflight's to derive (feature/<number>-<slug>) unless the skill passed it.
+let BRANCH = typeof ARGS.branch === 'string' && ARGS.branch ? ARGS.branch : ''
+let SLUG = ''
 
 const ROOT_HINT = ROOT
   ? `the repository root (${ROOT}, the directory holding AGENTS.md)`
@@ -68,7 +87,8 @@ Guard paths and gate disputes:
   owner decides.
 `
 
-const COMMON_RULES = `
+function commonRules() {
+  return `
 Ground rules for every agent in this pipeline:
 - Work in ${ROOT_HINT} on branch \`${BRANCH}\`.
   First run \`git rev-parse --abbrev-ref HEAD\`; if it does not print \`${BRANCH}\`, run
@@ -84,6 +104,7 @@ Ground rules for every agent in this pipeline:
   its output verbatim in the \`checkOutput\` field of your structured result.
 - Your final output is consumed by a script, not a human: return only the structured object.
 ${GUARD_RULES}`
+}
 
 function checkOutputField() {
   return {
@@ -103,7 +124,7 @@ const SPEC_SCHEMA = {
     slug: {
       type: 'string',
       pattern: '^[a-z0-9]+(-[a-z0-9]+)*$',
-      description: 'kebab-case feature slug; the brief filename stem unless the brief names one',
+      description: 'the feature slug the preflight derived, returned unchanged',
     },
     specPath: { type: 'string', description: 'docs/features/<slug>/spec.md, repo-relative' },
     testFiles: {
@@ -119,7 +140,7 @@ const SPEC_SCHEMA = {
     openQuestions: {
       type: 'array',
       items: { type: 'string' },
-      description: 'Questions the brief does not answer; each must also be recorded in spec.md. Any entry stops the pipeline before Implement.',
+      description: 'Questions the ticket does not answer; each must also be recorded in spec.md. Any entry stops the pipeline before Implement.',
     },
     failingForRightReason: {
       type: 'boolean',
@@ -267,23 +288,80 @@ const REVIEW_SCHEMA = {
 // ---------------------------------------------------------------------------
 // Prompts. Each role receives only the context it is allowed to see.
 // ---------------------------------------------------------------------------
+const PREFLIGHT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean', description: 'the "ok" field of the script\'s JSON; false when the script could not be found or run' },
+    number: { type: ['integer', 'null'], description: 'the "number" field' },
+    title: { type: 'string', description: 'the "title" field' },
+    slug: { type: 'string', description: 'the "slug" field' },
+    branch: { type: 'string', description: 'the "branch" field' },
+    label: { type: 'string', description: 'the "label" field: the agent-ready label as this tracker spells it' },
+    failures: {
+      type: 'array',
+      description: 'the "failures" field, verbatim; when the script could not run, one entry with check "script"',
+      items: {
+        type: 'object',
+        properties: {
+          check: { type: 'string' },
+          detail: { type: 'string' },
+          produce: { type: 'string' },
+        },
+        required: ['check', 'detail', 'produce'],
+      },
+    },
+    output: { type: 'string', description: 'the script\'s stdout and stderr, verbatim' },
+  },
+  required: ['ok', 'number', 'title', 'slug', 'branch', 'label', 'failures', 'output'],
+}
+
+function ticketHint() {
+  return /^#?\d+$/.test(REF)
+    ? `issue ${REF.replace('#', '')} on the tracker (\`gh issue view ${REF.replace('#', '')} --json number,title,body,labels,comments\`)`
+    : `the file \`${REF}\` under ${ROOT_HINT}`
+}
+
+function preflightPrompt() {
+  const script = PREFLIGHT_SCRIPT
+    ? `\`${PREFLIGHT_SCRIPT}\``
+    : 'the ratchet plugin\'s `scripts/feature_preflight.py` (the newest version under `~/.claude/plugins/cache/*/ratchet/*/scripts/`, or wherever the plugin is installed; `find` it, do not write one)'
+  const branchFlag = BRANCH ? ` --branch "${BRANCH}"` : ''
+  return `You run one command and relay its output. You decide nothing.
+
+In ${ROOT_HINT}, run, in a single Bash call:
+
+    python3 ${script} "${REF}" --root . --base "${BASE}"${branchFlag}
+
+It prints a JSON object on stdout ({ ok, ref, failures: [{ check, detail, produce }], number,
+title, slug, branch, label }) and a verdict line on stderr. Return that JSON's fields in the
+structured result, verbatim, plus the full output. Do not fix, label, edit or commit anything,
+and do not re-run with different arguments. If the script cannot be found or Python refuses
+it, return ok: false with one failure { check: "script", detail: <what happened>, produce:
+"install the ratchet plugin; the skill passes the script path as args.preflight" }.`
+}
+
 function specPrompt() {
   return `${PREAMBLE}
 You are the SPEC agent for one feature of this repository.
-${COMMON_RULES}
+${commonRules()}
 Load the \`mattpocock-skills:tdd\` skill: it says what a good test is and how the seams under
-test are chosen. The spec names those seams; the owner has agreed them through the brief.
+test are chosen. The spec names those seams; the owner has agreed the approach through the
+ticket's \`## Conjecture\` section and the agent-ready label.
 
 Inputs you may read:
-- The feature brief: \`${BRIEF}\`
-- AGENTS.md, GLOSSARY.md, docs/process/binding.md, every ADR in docs/adr/ that the brief touches,
-  and any design document AGENTS.md tells you to read first
+- The ticket: ${ticketHint()}. Its sections are mattpocock-skills' (Parent, What to build,
+  Acceptance criteria, Blocked by, or the spec's Problem Statement, Solution, User Stories,
+  Implementation Decisions, Testing Decisions, Out of Scope) plus the method's
+  \`## Conjecture\`: the approach the owner agreed, the observation that would refute it,
+  the alternatives and the criticism that killed each. Build that approach, not another.
+  Read the comments too: the owner's answers live there.
+- AGENTS.md, GLOSSARY.md, docs/process/binding.md, every ADR in docs/adr/ that the ticket
+  touches, and any design document AGENTS.md tells you to read first
 - The existing code and tests only as far as needed to place the feature and name test files
 
 Your tasks, in order:
-1. Derive the slug: kebab-case of the brief's filename stem (without extension) unless the brief
-   explicitly names a slug. Write \`docs/features/<slug>/spec.md\` containing:
-   - Problem (one paragraph, from the brief)
+1. The slug is \`${SLUG}\`. Write \`docs/features/${SLUG}/spec.md\` containing:
+   - Problem (one paragraph, from the ticket)
    - Acceptance criteria: numbered, each in Given / When / Then form, each testable
    - Glossary terms used (exact GLOSSARY.md names) and any new term you think the glossary needs
    - Placement: for each piece of the feature, which declared path or layer it lives in (using
@@ -291,8 +369,8 @@ Your tasks, in order:
    - Seams under test: the public interfaces the tests observe behaviour through, one line
      each on what it catches and what it misses
    - Test plan: the list of test files you will create, mapped to acceptance criteria
-   - Open questions the brief does not answer (do not resolve them yourself; record them)
-   - Out of scope (copied from the brief)
+   - Open questions the ticket does not answer (do not resolve them yourself; record them)
+   - Out of scope (copied from the ticket)
 2. Write the failing tests at those seams, with the test frameworks and directories binding.md
    names. Write a property test for every invariant you can state. Follow every AGENTS.md
    non-negotiable in the tests themselves. Implementation code is the implementer's: you write
@@ -307,24 +385,24 @@ Your tasks, in order:
 4. Run \`check\` and capture its tail. It is expected to be red only on your new tests.
 
 Open questions stop the pipeline: if \`openQuestions\` is non-empty the orchestrator asks the
-owner, edits the brief and re-runs. So record a question only when the brief truly does not
-decide it; a question the ADRs or GLOSSARY.md answer is not open.
+owner, who answers on the ticket, and re-runs. So record a question only when the ticket truly
+does not decide it; a question the ADRs or GLOSSARY.md answer is not open.
 
 Return the structured result only; the implementer will see spec.md and the test files, and
-nothing of your reasoning about the brief.`
+nothing of your reasoning about the ticket.`
 }
 
 function implementPrompt(spec) {
   return `${PREAMBLE}
 You are the IMPLEMENT agent for feature \`${spec.slug}\` of this repository.
-${COMMON_RULES}
+${commonRules()}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The failing tests: ${JSON.stringify(spec.testFiles)}
 - Layers the spec expects you to touch: ${JSON.stringify(spec.layersTouched)}
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/, and the existing code those
   tests exercise
-You are deliberately given neither the feature brief nor the spec author's reasoning. If
+You are deliberately given neither the ticket nor the spec author's reasoning. If
 spec.md is ambiguous, pick the reading that is most consistent with the glossary and the ADRs
 and record the choice in \`notes\`.
 
@@ -347,7 +425,7 @@ function fixPrompt(spec, findings, testsAdded, iteration) {
   const minors = findings.filter(f => f.severity === 'minor')
   return `${PREAMBLE}
 You are the FIX agent (iteration ${iteration} of ${MAX_FIX_ITERATIONS}) for feature \`${spec.slug}\` of this repository.
-${COMMON_RULES}
+${commonRules()}
 A previous implementer built this feature and an adversarial critic found problems. You start
 fresh, from the spec and the code as they are; the previous implementer's reasoning is not
 among your inputs.
@@ -389,14 +467,14 @@ Load the \`pstack:interrogate\` skill and follow its brief as the one adversary 
 fixes the agent count, so you run it in-process): a finding survives only when a run proves
 it, so each carries the exact command, the output it printed and the output the spec requires;
 leave out anything you did not run; "no findings" is a valid result when you name what you ran.
-${COMMON_RULES}
+${commonRules()}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The spec's tests: ${JSON.stringify(spec.testFiles)}
 - Files the implementer changed: ${JSON.stringify(filesChanged)}
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/, and the fitness tests, mutation
   config and fuzz harness binding.md names
-The implementer's notes and the feature brief are outside your inputs.
+The implementer's notes and the ticket are outside your inputs.
 ${previous}
 Do all of the following and report evidence for each:
 1. Property tests: with the property-testing library binding.md names, add a property for
@@ -450,7 +528,7 @@ to be red only on the failing tests you kept; say so in the finding evidence.`
 function reviewPrompt(spec) {
   return `${PREAMBLE}
 You are the independent REVIEWER for feature \`${spec.slug}\` of this repository.
-${COMMON_RULES}
+${commonRules()}
 Inputs you may read, and nothing else:
 - The spec: \`${spec.specPath}\`
 - The uncommitted diff: the change is uncommitted on branch \`${BRANCH}\`. Enumerate it with
@@ -458,7 +536,7 @@ Inputs you may read, and nothing else:
   new files: read them). If the branch has commits, \`git diff ${BASE}...${BRANCH}\` is equivalent.
 - AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
 - Any generated contract artefacts that binding.md names
-The implementer's notes, the critic's findings and the feature brief are outside your inputs:
+The implementer's notes, the critic's findings and the ticket are outside your inputs:
 judge the code against the spec and the standards only.
 
 Load the \`mattpocock-skills:code-review\` skill and apply its two axes in-process, as both of
@@ -530,21 +608,47 @@ function must(result, label) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 0: Preflight. One low-effort agent runs the plugin's script and relays its JSON;
+// the script decides, the agent types. Red stops the run before the spec agent exists.
+// ---------------------------------------------------------------------------
+phase('Preflight')
+const preflight = must(await agent(preflightPrompt(), { label: 'preflight', phase: 'Preflight', effort: 'low', schema: PREFLIGHT_SCHEMA }), 'preflight')
+if (!preflight.ok) {
+  const failures = preflight.failures || []
+  log(`Blocked by the preflight: ${failures.map(f => f.check).join(', ') || 'no reason given'}`)
+  return {
+    verdict: 'blocked',
+    ref: REF,
+    preflight,
+    branch: BRANCH || preflight.branch || '',
+    requiredByOrchestrator: [
+      ...failures.map(f => `${f.check}: ${f.detail} -> ${f.produce}`),
+      'Re-run `/ratchet:feature <ticket>` once the ticket carries what is missing; do not open a PR from a blocked run',
+    ],
+  }
+}
+SLUG = preflight.slug
+BRANCH = BRANCH || preflight.branch
+if (!SLUG || !BRANCH) throw new Error(`preflight returned ok without a slug and branch: ${JSON.stringify(preflight)}`)
+log(`Preflight green: ticket ${preflight.number || REF} "${preflight.title}" on branch ${BRANCH}`)
+
+// ---------------------------------------------------------------------------
 // Phase 1: Spec
 // ---------------------------------------------------------------------------
 phase('Spec')
-log(`Spec: ${BRIEF} on branch ${BRANCH}`)
+log(`Spec: ${REF} on branch ${BRANCH}`)
 const spec = must(await agent(specPrompt(), { label: 'spec', phase: 'Spec', schema: SPEC_SCHEMA }), 'spec')
 log(`Spec ${spec.slug}: ${spec.testFiles.length} test file(s), layers ${spec.layersTouched.join(', ')}` +
   (spec.failingForRightReason ? '' : ' -- WARNING: tests not failing for the right reason') +
   (spec.openQuestions.length ? `, ${spec.openQuestions.length} open question(s)` : ''))
 
 // An open question is the owner's to answer, not the implementer's to guess. Stop here; the
-// orchestrator asks, edits the brief and re-runs.
+// orchestrator asks, the owner answers on the ticket, and the run repeats.
 if (spec.openQuestions.length > 0) {
-  log(`Blocked before Implement: ${spec.openQuestions.length} open question(s) in the brief`)
+  log(`Blocked before Implement: ${spec.openQuestions.length} open question(s) in the ticket`)
   return {
-    slug: spec.slug,
+    slug: SLUG,
+    ref: REF,
     verdict: 'blocked',
     openQuestions: spec.openQuestions,
     specPath: spec.specPath,
@@ -552,8 +656,8 @@ if (spec.openQuestions.length > 0) {
     branch: BRANCH,
     checkOutput: spec.checkOutput,
     requiredByOrchestrator: [
-      'Put each open question to the owner and record the answers in the brief',
-      'Re-run this workflow with the same args after editing the brief; do not open a PR from a blocked run',
+      'Put each open question to the owner; the answers go on the ticket (a comment or an edit), where the next spec agent reads them',
+      'Re-run `/ratchet:feature <ticket>` after the ticket answers them; do not open a PR from a blocked run',
     ],
   }
 }
@@ -650,7 +754,8 @@ else if (forcedReasons.length) log(`Reviewer and script agree on request_changes
 // Result. The orchestrator commits / opens the PR; this workflow never does.
 // ---------------------------------------------------------------------------
 return {
-  slug: spec.slug,
+  slug: SLUG,
+  ref: REF,
   verdict,
   verdictForcedBy: forcedReasons,
   iterations,

@@ -48,7 +48,6 @@ ADR_PLACEHOLDERS = ("<X.Y.Z>", "<ratchet-sha>")
 GLOSSARY_PLACEHOLDER = "<project>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 REFUTATION_SECTION = "## Refutation criterion"
-CONJECTURE_SECTION = "## Conjecture about the solution"
 EMPTY_BODIES = {"none", "n/a", "na", "tbd", "todo", "-", "?"}
 MIN_BODY = 20
 DISPUTE_STATUSES = {"open", "upheld", "rejected"}
@@ -58,13 +57,6 @@ DISPUTE_SECTIONS = (
     "## Why the gate is wrong",
     "## Options",
     "## Recommendation",
-)
-BRIEF_SECTIONS = (
-    "## Problem",
-    "## Conjecture about the solution",
-    "## Out of scope",
-    "## Glossary terms",
-    "## Acceptance sketch",
 )
 PR_SECTIONS = (
     "## Conjecture",
@@ -328,17 +320,10 @@ def check_disputes(root: Path) -> Iterable[str]:
 
 
 def check_features(root: Path) -> Iterable[str]:
-    directory = root / "docs/features"
-    if not directory.is_dir():
+    # Why: the pipeline's spec role writes docs/features/<slug>/spec.md; the directory is the
+    # method's. The feature's input is a tracker ticket, which the feature preflight checks.
+    if not (root / "docs/features").is_dir():
         yield "docs/features: missing"
-        return
-    for brief in sorted(directory.glob("*/brief.md")):
-        text = brief.read_text(encoding="utf-8")
-        for heading in BRIEF_SECTIONS:
-            if heading not in text:
-                yield f"{brief.relative_to(root)}: has no '{heading}' section"
-        if CONJECTURE_SECTION in text and empty_body(text, CONJECTURE_SECTION):
-            yield f"{brief.relative_to(root)}: '{CONJECTURE_SECTION}' states no conjecture"
 
 
 def check_pr_template(root: Path) -> Iterable[str]:
@@ -484,13 +469,9 @@ def record_mutations() -> list[Mutation]:
             f"# We keep it empty\n\nBecause.\n\n{REFUTATION_SECTION}\nNone.\n"
         )
 
-    def brief_without_a_conjecture(root: Path) -> None:
-        (root / "docs/features/x").mkdir(parents=True)
-        headings = "\n\n".join(f"{h}\nSomething substantive here." for h in BRIEF_SECTIONS)
-        text = "# X\n\n" + headings.replace(
-            f"{CONJECTURE_SECTION}\nSomething substantive here.", f"{CONJECTURE_SECTION}\nTBD"
-        )
-        (root / "docs/features/x/brief.md").write_text(text + "\n")
+    def features_directory_removed(root: Path) -> None:
+        (root / "docs/features/.gitkeep").unlink()
+        (root / "docs/features").rmdir()
 
     def gap_adrs(root: Path) -> None:
         (root / "docs/adr/0003-gap.md").write_text(f"# A gap\n\n{REFUTATION_SECTION}\nNone.\n")
@@ -509,7 +490,7 @@ def record_mutations() -> list[Mutation]:
         ("ADR without a refutation criterion", adr_without_refuter),
         ("ADR with an empty refutation criterion", adr_with_an_empty_refuter),
         ("ADR 0001 with the version placeholder", adr_0001_with_the_version_placeholder),
-        ("feature brief with a placeholder conjecture", brief_without_a_conjecture),
+        ("features directory removed", features_directory_removed),
         ("ADR numbering with a gap", gap_adrs),
         ("dispute with an unknown status", bad_dispute),
         ("register entry with a short reason", short_register_reason),

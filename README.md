@@ -12,7 +12,9 @@ It composes with three other plugins and competes with none. `mattpocock-skills`
 | `skills/method/*.md` | the reference behind each commitment: the merge rule, tiers as questions, the ratchet, guards and disputes, the pipeline, records, verifiable shape |
 | `skills/init/` | `/ratchet:init`: the bare bones for any repository: `git init` where needed, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it, the other three plugins' one-time setup, the first commit, the remote and the triage labels |
 | `skills/adopt/` | `/ratchet:adopt`: steps and templates that bind the method to a repository's runner, forge and stack |
-| `workflows/feature.js` | `/ratchet:feature`: the four-role pipeline (spec, implement, critic, review) |
+| `skills/feature/` | `/ratchet:feature <ticket>`: the feature preflight on an agent-ready ticket, the branch, then the pipeline |
+| `workflows/pipeline.js` | the four-role pipeline (preflight, spec, implement, critic, review) the feature skill runs |
+| `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |
 | `scripts/conformance.py` | tier 1 gate: the repository still carries the method's artefacts; `--self-test` shows it bites |
 | `scripts/lowered.py` | tier 0 gate: no threshold lowered and no ceiling raised against the merge base |

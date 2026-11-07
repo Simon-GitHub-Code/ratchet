@@ -18,12 +18,13 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import change_size
 import commits
 import coverage_groups
+import feature_preflight
 import lowered
 import markers
 import mutation_survivors
@@ -51,6 +52,11 @@ MANIFEST = (
 THRESHOLDS = (
     '[python.coverage.core]\npaths = ["src/**"]\nabsolute = true\n\n'
     "[ceilings.change]\nfiles = 1\nlines = 2\n"
+)
+TICKET = (
+    "# 01: Add the thing\n\n**Status:** `ready-for-agent`\n\n## What to build\n\nThe thing.\n\n"
+    "## Conjecture\n\nOne function in src/a.py; the refuter is a failing call with two operands."
+    " Alternatives: a class (killed: nothing holds state).\n"
 )
 RESULTS = "    a.x_f__mutmut_1: killed\n    a.x_f__mutmut_2: {status}\n"
 REGISTER = (
@@ -93,6 +99,7 @@ def scratch(root: Path) -> None:
     write(root, "coverage.xml", REPORT.format(root=root, hits=1, cond=100, total=1))
     write(root, "mutants.txt", RESULTS.format(status="killed"))
     write(root, "quality/mutation-register.toml", "# Mutation register\n")
+    write(root, "tickets/01-add-the-thing.md", TICKET)
     settings_rules.write(root)
     snapshots.write(root, snapshots.GROUP)
     git(root, "add", "-A")
@@ -120,6 +127,16 @@ def survivor(root: Path) -> None:
 def stale_entry(root: Path) -> None:
     function_hash = mutation_survivors.python_function_hash(root, "a", "x_f")
     write(root, "quality/mutation-register.toml", REGISTER.format(function_hash=function_hash))
+
+
+def no_conjecture(root: Path) -> None:
+    write(root, "tickets/01-add-the-thing.md", TICKET.replace("## Conjecture", "## Notes"))
+    commit(root, "docs(tickets): drop the conjecture")
+
+
+def not_agent_ready(root: Path) -> None:
+    write(root, "tickets/01-add-the-thing.md", TICKET.replace("ready-for-agent", "needs-info"))
+    commit(root, "docs(tickets): back to triage")
 
 
 def add_focus(root: Path) -> None:
@@ -165,6 +182,7 @@ def foreign_deny(root: Path) -> None:
 
 
 MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
+TICKET_REF = ["tickets/01-add-the-thing.md"]
 SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("markers", markers.main, add_marker, []),
     ("suppressions: a count rose", suppressions.main, add_suppression, []),
@@ -178,12 +196,14 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("mutation: a survivor", mutation_survivors.main, survivor, MUTMUT),
     ("mutation: a stale entry", mutation_survivors.main, stale_entry, MUTMUT),
     ("ratchet-lowered", lowered.main, lowered_threshold, []),
+    ("feature-preflight: no conjecture", feature_preflight.main, no_conjecture, TICKET_REF),
+    ("feature-preflight: not agent-ready", feature_preflight.main, not_agent_ready, TICKET_REF),
     ("settings-check", settings_rules.main, foreign_deny, ["--check"]),
 ]
 
 
 def run(gate: Gate, root: Path, flags: list[str]) -> int:
-    with redirect_stdout(io.StringIO()):
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         return gate(["gate", "--root", str(root), *flags])
 
 

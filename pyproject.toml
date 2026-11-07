@@ -1,6 +1,6 @@
 [project]
 name = "ratchet"
-version = "0.5.2"
+version = "0.5.3"
 description = "The Ratchet method as a Claude Code plugin: harness-enforced guards on the quality gates."
 requires-python = ">=3.11"
 dependencies = []

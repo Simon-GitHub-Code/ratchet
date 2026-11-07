@@ -15,7 +15,7 @@ Six words carry the rule; the stance in [SKILL.md](SKILL.md) says how to work by
 
 | Word | Record | Who checks |
 | --- | --- | --- |
-| conjecture, refuter | the Conjecture section of the pull request; the Refutation criterion of every ADR; the brief's conjecture about the solution | the conformance gate checks the section exists; the reviewer reads it |
+| conjecture, refuter | the Conjecture section of the pull request; the Refutation criterion of every ADR; the ticket's Conjecture section | the conformance gate checks the pull request's and the ADR's; the feature preflight checks the ticket's; the reviewer reads it |
 | alternative | the Considered options of an ADR; the alternative explanation a diagnosis names before the fix | the reviewer |
 | criticism | a red gate, a critic finding, a review issue, a tool finding | the gates, the critic, the reviewer |
 | counter | a dispute against a gate; a register entry with its reason; an answer in the pull request's Criticism section | the owner |

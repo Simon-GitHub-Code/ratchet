@@ -40,28 +40,16 @@ The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for whe
 
 `impeccable` owns both: `init` writes the product context, `document` derives the design system from the shipped code, and a redesign replaces it. They are guard paths in the decisions group, so a change to the design system is the owner's. A review of a user interface judges against `DESIGN.md`.
 
-## Feature brief: `docs/features/<slug>/brief.md`
+## Feature input: a tracker ticket
 
-Short; the spec role expands it.
+A feature starts as the ticket `mattpocock-skills:to-spec`, `to-tickets` or `triage` writes: on the tracker (`gh issue view <n>`), or a local file under `.scratch/<slug>/issues/` where there is no tracker. Its sections are those skills' (What to build, Acceptance criteria, Blocked by; or Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope). The method adds one section and reads one label:
 
 ```markdown
-# <Feature title>
-
-## Problem
-What is wrong or missing, for whom, why now. One paragraph.
-
-## Conjecture about the solution
-The one approach expected to work, stated so it can be shown wrong. The alternatives and why they lose. The conformance gate rejects an empty or placeholder body.
-
-## Out of scope
-Anything not listed is fair game for the spec role to ask about.
-
-## Glossary terms
-Exact names. Propose new terms here, before code.
-
-## Acceptance sketch
-Three to six "Given ... when ... then ..." bullets, each naming where it lives.
+## Conjecture
+The one approach expected to work, stated so it can be shown wrong: what would refute it. The alternatives considered and the criticism that kills each.
 ```
+
+The agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The owner applies it; the guard asks when an agent tries to. `scripts/feature_preflight.py` refuses a ticket that is closed, has no stated conjecture or lacks the label, and names the skill that produces each missing piece; `/ratchet:feature <ticket>` runs it before any agent exists, and the pipeline runs it again as its first stage. The spec role writes `docs/features/<slug>/spec.md` from the ticket.
 
 ## Dispute: `docs/disputes/NNNN-<slug>.md`
 

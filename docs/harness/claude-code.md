@@ -31,4 +31,4 @@ The ratchet marketplace entry declares `mattpocock-skills`, `pstack` and `impecc
 
 ## What is Claude Code only
 
-`workflows/feature.js` runs on the Workflow tool. The pipeline's roles and sight lines are in `skills/method/pipeline.md` for any harness with subagents.
+`workflows/pipeline.js` runs on the Workflow tool. The pipeline's roles and sight lines are in `skills/method/pipeline.md` for any harness with subagents.
