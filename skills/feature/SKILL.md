@@ -18,7 +18,7 @@ The feature's input is the ticket the owner's `/mattpocock-skills:to-spec`, `to-
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" "<ticket>" --root . --base main
    ```
 
-   It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `label`) and exits 1 when red. Red: report `verdict: blocked` and, for each failure, its `check`, `detail` and `produce` (the skill or action that supplies the missing piece: `to-spec`, `to-tickets` or `triage` for the ticket, the owner for the Conjecture and the label, a commit or stash for the tree). Spawn nothing, create nothing, label nothing: applying the agent-ready label is the owner's act and the guard asks on it. Stop.
+   It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `label`) and exits 1 when red. Red: report `verdict: blocked` and, for each failure, its `check`, `detail` and `produce` (the skill or action that supplies the missing piece: `to-spec`, `to-tickets` or `triage` for the ticket, the owner for the Conjecture and the label, the blocking tickets for `blocked`, a commit or stash for the tree). Spawn nothing, create nothing, label nothing: applying the agent-ready label is the owner's act and the guard asks on it. Stop.
 
 2. **The branch.** Green: `git switch -c <branch> <base>` where `<branch>` is the preflight's (`feature/<number>-<slug>`); `git switch <branch>` when it already exists. Run the preflight once more with `--branch <branch>`; it must stay green.
 
