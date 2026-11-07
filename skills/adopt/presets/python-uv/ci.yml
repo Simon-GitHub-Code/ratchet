@@ -1,0 +1,16 @@
+# python-uv preset: the toolchain steps and cache lines adopt merges into every job of ci.yml
+# and deep.yml. `steps` replace the `# bind: toolchain setup` comment; `cache` replaces the
+# template's `path:` and `key:` lines. Every action is pinned to a commit with its version beside it.
+steps:
+  - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+    with:
+      enable-cache: true
+      cache-dependency-glob: uv.lock
+  - run: uv sync --group dev --frozen
+cache:
+  path: |
+    .mypy_cache
+    .ruff_cache
+    .pytest_cache
+    .hypothesis
+  key: ${{ runner.os }}-${{ hashFiles('uv.lock') }}-${{ hashFiles('pyproject.toml') }}

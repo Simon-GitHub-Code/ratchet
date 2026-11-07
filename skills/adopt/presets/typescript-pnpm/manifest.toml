@@ -1,0 +1,31 @@
+# typescript-pnpm preset: paths adopt appends to the template manifest's groups of the same name,
+# in place of each group's `# bind:` comment.
+
+[[group]]
+name = "tool-config"
+paths = [
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "tsconfig*.json",
+    "eslint.config.*",
+    ".prettierrc*",
+    "vitest.config.*",
+    "stryker.config.*",
+    "knip.json",
+    ".dependency-cruiser.cjs",
+    "api-extractor.json",
+    "playwright.config.*",
+]
+
+[[group]]
+name = "fitness"
+paths = [
+    "tests/fitness/**",
+]
+
+[[group]]
+name = "gate-tools"
+paths = [
+    "tools/gates/**",
+]

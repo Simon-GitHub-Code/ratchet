@@ -1,0 +1,26 @@
+# typescript-pnpm preset: appended to quality/thresholds.toml. The core group is absolute; the
+# others start at 0 and `just ratchet` raises them to the first measured values.
+
+[typescript.coverage.core]
+paths = ["src/core/**", "tests/fitness/**"]
+absolute = true
+
+[typescript.coverage.app]
+paths = ["src/**"]
+line = 0.0
+branch = 0.0
+
+[typescript.coverage.tests]
+paths = ["tests/**", "tools/**"]
+line = 0.0
+branch = 0.0
+
+[typescript.mutation]
+score = 0.0
+
+[typescript.types]
+coverage = 0.0
+
+[ceilings.change]
+files = 40
+lines = 1500
