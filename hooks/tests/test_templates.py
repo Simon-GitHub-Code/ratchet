@@ -31,6 +31,7 @@ def test_adopt_names_the_two_skills_and_the_owner_s_steps() -> None:
     assert "`mattpocock-skills:domain-modeling`" in ADOPT
     assert "Run `mattpocock-skills:grill-with-docs`" not in ADOPT
     assert "do not create `DESIGN.md`" in ADOPT
-    assert "`git config core.hooksPath <dir>`" in ADOPT
+    assert "`pre-commit install`" in ADOPT
+    assert "`git config --unset core.hooksPath`" in ADOPT
     assert "exempts a range made only of such commits" in ADOPT
     assert 'ref: "<ratchet-sha>"' in ADOPT

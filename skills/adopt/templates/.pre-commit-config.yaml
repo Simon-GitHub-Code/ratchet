@@ -1,0 +1,24 @@
+# Tier 0 on every commit, in two stages. `pre-commit install` wires both, from
+# default_install_hook_types. The guard refuses `--no-verify`, `SKIP=` and `pre-commit uninstall`
+# from an agent.
+#
+# The tree gates run before the commit. The subject is checked on the message being written:
+# `commits` over history at the pre-commit stage would judge the commit an amend replaces and could
+# never see the new subject. CI and `just check` still run the whole `tier0`, history included.
+default_install_hook_types: [pre-commit, commit-msg]
+repos:
+  - repo: local
+    hooks:
+      - id: tier0-tree
+        name: tier 0, the tree
+        entry: just pre-commit
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: tier0-subject
+        name: tier 0, the subject
+        entry: just commit-msg
+        language: system
+        stages: [commit-msg]
+        always_run: true

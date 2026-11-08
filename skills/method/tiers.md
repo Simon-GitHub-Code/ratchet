@@ -6,7 +6,7 @@ The method asks questions; the binding names the tool that answers each one for 
 
 | Tier | When | Entry point | Budget | Blocks |
 | --- | --- | --- | --- | --- |
-| 0 | every commit | `tier0`, mirrored by the commit hook for the inputs the commit touches | about a minute | the commit, and the pull request |
+| 0 | every commit | `tier0`; the commit hooks split it, `pre-commit` on the tree before the commit and `commit-msg` on the message being written, since `commits` over history would judge the commit an amend replaces | about a minute | the commit, and the pull request |
 | 1 | every pull request | `tier1` | under fifteen minutes, so nobody is tempted to skip it | the pull request |
 | 2 | merge to the default branch, nightly, on demand | `tier2` | unbounded; time-boxed where a tool runs forever | the next piece of work: a red tier 2 on the default branch is fixed before anything else merges |
 | weekly | scheduled | `audit-all`, `licenses`, `drift` | | nothing; the finding is visible and gets its own pull request |

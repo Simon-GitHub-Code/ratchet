@@ -238,6 +238,45 @@ def test_commit_subjects_follow_the_convention(tmp_path: Path, capsys: Out) -> N
     assert run(commits, bad) == 1
 
 
+def message(root: Path, text: str) -> str:
+    path = root / ".git/COMMIT_EDITMSG"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def test_the_message_being_written_is_checked_alone(tmp_path: Path, capsys: Out) -> None:
+    root = repository(tmp_path)
+    branch(root)
+    commit(root, "a subject the history check would refuse")
+    ok = "feat: " + "x" * 66
+    assert run(commits, root, "--message-file", message(root, ok + "\n\nbody\n")) == 0, (
+        "72 characters pass, and the bad commit an amend would replace is not judged"
+    )
+    too_long = ok + "x"
+    assert run(commits, root, "--message-file", message(root, too_long + "\n")) == 1
+    assert "73 characters, at most 72" in capsys.readouterr().out
+
+
+def test_the_subject_is_the_first_line_git_keeps(tmp_path: Path, capsys: Out) -> None:
+    root = repository(tmp_path)
+    text = "\n# Please enter the commit message\n\nwip\n# On branch main\n"
+    assert run(commits, root, "--message-file", message(root, text)) == 1
+    assert "'wip': not" in capsys.readouterr().out
+    assert run(commits, root, "--message-file", message(root, "# only comments\n\n")) == 0, (
+        "git aborts an empty message itself"
+    )
+
+
+def test_a_merge_message_is_not_judged(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    branch(root)
+    commit(root, "feat: on the side")
+    git(root, "checkout", "-q", "main")
+    commit(root, "feat: on main")
+    git(root, "merge", "-q", "--no-commit", "change")
+    assert run(commits, root, "--message-file", message(root, "Merge branch 'change'\n")) == 0
+
+
 # --- change size ----------------------------------------------------------------------------
 
 
