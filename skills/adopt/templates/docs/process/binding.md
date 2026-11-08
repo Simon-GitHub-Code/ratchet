@@ -19,6 +19,8 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | Entry point | Command |
 | --- | --- |
 | tier0 | `just tier0` |
+| pre-commit | `just pre-commit` |
+| commit-msg | `just commit-msg .git/COMMIT_EDITMSG` |
 | tier1 | `just tier1` |
 | tier2 | `just tier2` |
 | check | `just check` |

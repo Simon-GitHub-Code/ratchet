@@ -16,7 +16,11 @@ default:
 
 # --- tiers -----------------------------------------------------------------
 
-tier0: fmt-check lint types imports deadcode lint-workflows secrets pins limits markers prose snapshots-check ratchet-lowered suppressions commits
+tier0: pre-commit commits
+
+# Tier 0 less the history gate: what the pre-commit hook runs, since `commits` there would judge
+# the commit an amend replaces. The commit-msg hook checks the new subject with `commit-msg`.
+pre-commit: fmt-check lint types imports deadcode lint-workflows secrets pins limits markers prose snapshots-check ratchet-lowered suppressions
 
 tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke bite api-check data-compat doctests sast artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance
 
@@ -70,6 +74,9 @@ suppressions:
 
 commits:
     python3 "{{ratchet_plugin}}/scripts/commits.py"
+
+commit-msg file:
+    python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"
 
 # --- tier 0 bodies ---------------------------------------------------------------
 

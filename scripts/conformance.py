@@ -20,6 +20,8 @@ import settings_rules
 
 ENTRY_POINTS = (
     "tier0",
+    "pre-commit",
+    "commit-msg",
     "tier1",
     "tier2",
     "check",
@@ -47,6 +49,10 @@ ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
 ADR_PLACEHOLDERS = ("<X.Y.Z>", "<ratchet-sha>")
 GLOSSARY_PLACEHOLDER = "<project>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
+COMMIT_HOOKS = Path(".pre-commit-config.yaml")
+INSTALLS_COMMIT_MSG = re.compile(r"^default_install_hook_types:.*\bcommit-msg\b", re.MULTILINE)
+COMMIT_MSG_STAGE = re.compile(r"^\s*stages:\s*\[\s*commit-msg\s*\]", re.MULTILINE)
+WHOLE_TIER0_ENTRY = re.compile(r"^\s*entry:.*\btier0\b", re.MULTILINE)
 REFUTATION_SECTION = "## Refutation criterion"
 EMPTY_BODIES = {"none", "n/a", "na", "tbd", "todo", "-", "?"}
 MIN_BODY = 20
@@ -266,6 +272,20 @@ def check_plugin_checkout(root: Path) -> Iterable[str]:
             )
 
 
+def check_commit_hooks(root: Path) -> Iterable[str]:
+    text = read(root / COMMIT_HOOKS)
+    if text is None:
+        yield f"{COMMIT_HOOKS}: missing; the tier 0 commit hooks are installed from it"
+        return
+    if not (INSTALLS_COMMIT_MSG.search(text) and COMMIT_MSG_STAGE.search(text)):
+        yield f"{COMMIT_HOOKS}: no commit-msg hook installed, so a bad subject is first seen in CI"
+    if WHOLE_TIER0_ENTRY.search(text):
+        yield (
+            f"{COMMIT_HOOKS}: a hook runs the whole tier0, whose history gate judges the commit "
+            "an amend replaces; run `pre-commit` and `commit-msg` instead"
+        )
+
+
 def check_settings(root: Path) -> Iterable[str]:
     if (root / settings_rules.MANIFEST).is_file():
         yield from settings_rules.drift(root)
@@ -346,6 +366,7 @@ CHECKS: tuple[Check, ...] = (
     check_speed,
     check_manifest,
     check_settings,
+    check_commit_hooks,
     check_plugin_checkout,
     check_quality,
     check_disputes,
@@ -370,7 +391,7 @@ Mutation = tuple[str, Callable[[Path], None]]
 
 
 def mutations() -> list[Mutation]:
-    return [*artefact_mutations(), *guard_mutations(), *record_mutations()]
+    return [*artefact_mutations(), *hook_mutations(), *guard_mutations(), *record_mutations()]
 
 
 def artefact_mutations() -> list[Mutation]:
@@ -423,6 +444,21 @@ def artefact_mutations() -> list[Mutation]:
             ci_with_the_plugin_at_a_placeholder,
         ),
         ("glossary still naming <project>", glossary_naming_the_placeholder),
+    ]
+
+
+def hook_mutations() -> list[Mutation]:
+    def hooks_without_commit_msg(root: Path) -> None:
+        path = root / COMMIT_HOOKS
+        path.write_text(path.read_text().replace("stages: [commit-msg]", "stages: [pre-push]"))
+
+    def hooks_running_the_whole_tier(root: Path) -> None:
+        path = root / COMMIT_HOOKS
+        path.write_text(path.read_text().replace("entry: just pre-commit", "entry: just tier0"))
+
+    return [
+        ("commit hooks without the commit-msg stage", hooks_without_commit_msg),
+        ("commit hooks running the whole tier0", hooks_running_the_whole_tier),
     ]
 
 

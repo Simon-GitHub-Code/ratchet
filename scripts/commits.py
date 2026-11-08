@@ -5,7 +5,11 @@ A subject is ``type(scope): summary`` or ``type: summary``, with a type from the
 set, a lower-case scope, a summary that starts with a non-space character, no trailing full
 stop, and at most 72 characters. Merge commits are skipped.
 
-Usage: ``commits.py [--root DIR] [--base REF]``.
+With ``--message-file`` it checks the one message being written instead, as git's ``commit-msg``
+hook: the history check at the ``pre-commit`` stage would judge the commit an amend replaces, and
+cannot see the new subject at all.
+
+Usage: ``commits.py [--root DIR] [--base REF]`` or ``commits.py --message-file PATH``.
 """
 
 from __future__ import annotations
@@ -49,12 +53,31 @@ def problems(subjects: list[str]) -> list[str]:
     return [fault for subject in subjects for fault in faults(subject)]
 
 
+def subject_of(message: str) -> str | None:
+    """The first line git keeps: comment lines and leading blank lines are stripped."""
+    for line in message.splitlines():
+        if line.strip() and not line.startswith("#"):
+            return line.rstrip()
+    return None
+
+
+def merging(root: Path) -> bool:
+    return gatelib.git(root, "rev-parse", "-q", "--verify", "MERGE_HEAD") is not None
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
     parser.add_argument("--base")
+    parser.add_argument("--message-file", type=Path)
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
+    if options.message_file is not None:
+        subject = subject_of(options.message_file.read_text(encoding="utf-8", errors="replace"))
+        # Why: the history check skips merge commits, so the message git writes for one is not
+        # judged here either.
+        checked = [] if subject is None or merging(root) else [subject]
+        return gatelib.report("commits", problems(checked))
     base = gatelib.base_commit(root, options.base)
     if base is None:
         head = gatelib.git(root, "log", "-1", "--format=%s") or ""
