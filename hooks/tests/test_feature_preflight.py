@@ -66,9 +66,9 @@ def run(
     base: str = "main",
     branch: str | None = None,
 ) -> preflight.Report:
-    if gh is None:
-        return preflight.preflight(ref, root, base=base, branch=branch)
-    return preflight.preflight(ref, root, base=base, branch=branch, gh=gh)
+    # Why: no test reaches the real tracker; a ticket number with no runner given is not found.
+    runner = gh_returning(None) if gh is None else gh
+    return preflight.preflight(ref, root, base=base, branch=branch, gh=runner)
 
 
 def checks(report: preflight.Report) -> list[str]:

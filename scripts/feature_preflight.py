@@ -355,9 +355,7 @@ def check_checkout(report: Report, root: Path, *, base: str, branch: str | None)
         report.fail("branch", f"`{branch}` is the base branch")
 
 
-def preflight(
-    ref: str, root: Path, *, base: str, branch: str | None, gh: Runner = run_gh
-) -> Report:
+def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner) -> Report:
     report = Report(ref=ref, label=ready_label(root))
     ticket = fetch(ref, root, gh)
     if ticket is None:
@@ -376,7 +374,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--branch", help="the working branch HEAD must be on")
     options = parser.parse_args(argv[1:])
     report = preflight(
-        options.ref, Path(options.root).resolve(), base=options.base, branch=options.branch
+        options.ref,
+        Path(options.root).resolve(),
+        base=options.base,
+        branch=options.branch,
+        gh=run_gh,
     )
     print(json.dumps(asdict(report), indent=2))
     for failure in report.failures:

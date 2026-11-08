@@ -391,7 +391,7 @@ def setup_step(root: Path) -> Step | None:
     return None
 
 
-def decide(root: Path, gh: preflight.Runner | None = preflight.run_gh) -> Step:
+def decide(root: Path, gh: preflight.Runner | None) -> Step:
     """The owner's next command for the checkout at ``root``; ``gh=None`` stays offline."""
     checkout = observe(root)
     if checkout is None:
