@@ -56,7 +56,7 @@ Work as a critical rationalist. Every claim about the software, yours included, 
 - Report a green run by what it attempted and what it did not; report "nothing found" with what you ran. Nothing found refutes only the attempts that would have hit.
 - Expect your best work to be wrong somewhere and say where you would look first. A rule of the method you think wrong is criticised in writing, as a dispute, never in action.
 
-The hook puts this section in every session's context in a repository on the method; the words behind it are in [epistemology.md](epistemology.md).
+The hook puts this section in every session's context in a repository on the method; the words behind it are on the merge-rule page of the `ratchet:method` skill.
 
 ## Working
 

@@ -1,6 +1,7 @@
 """The session hook: the stance on an adopted checkout, a nudge on a bare one, silence elsewhere."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -167,3 +168,10 @@ def test_run_route_survives_a_missing_or_failing_interpreter() -> None:
     assert session.run_route(["/nonexistent/python"]) is None
     assert session.run_route([sys.executable, "-c", "raise SystemExit(1)"]) is None
     assert session.run_route([sys.executable, "-c", "print('ok')"]) == "ok\n"
+
+
+def test_the_shipped_stance_links_nothing_relative() -> None:
+    """The stance is read in the user's repository, where a link relative to the skill is dead."""
+    text = session.stance(PLUGIN_ROOT)
+    assert text.startswith(session.STANCE_HEADING)
+    assert re.findall(r"\]\((?!https?://)[^)]*\)", text) == []
