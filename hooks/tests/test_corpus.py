@@ -104,6 +104,8 @@ DENIED: list[tuple[str, list[str]]] = [
     ("claude --no-plugins -p hi", ["nested-settings"]),
     ("claude -p hi --disable-all-hooks", ["nested-settings"]),
     ("claude --bare -p hi", ["nested-settings"]),
+    ("claude -p plugin eval init --bare", ["nested-settings"]),
+    ("claude --bare plugin eval init x", ["nested-settings"]),
     ("claude -p hi disableAllHooks=true", ["nested-settings"]),
     ("claude plugin disable ratchet", ["plugin-removal"]),
     ("claude plugin disable ratchet --scope user", ["plugin-removal"]),
@@ -267,6 +269,8 @@ ASKED: list[tuple[str, list[str]]] = [
 ]
 
 ALLOWED: list[str] = [
+    "claude plugin eval init --bare stance-probe",
+    "claude plugins eval init --bare x",
     "git status",
     "git diff --stat origin/main",
     "git log --oneline -5",
