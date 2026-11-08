@@ -4,7 +4,12 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", "~/.claude/plugins/marketplaces/ratchet")
+# `just` never expands `~`, so the fallback is built from the home directory.
+ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", home_directory() / ".claude/plugins/marketplaces/ratchet")
+
+# What the diff gates compare against: the remote default branch, else the local one when the
+# repository has no remote.
+merge_base := `git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || true`
 
 default:
     @just --list --unsorted

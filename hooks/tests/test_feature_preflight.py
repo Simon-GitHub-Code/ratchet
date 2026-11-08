@@ -66,9 +66,9 @@ def run(
     base: str = "main",
     branch: str | None = None,
 ) -> preflight.Report:
-    if gh is None:
-        return preflight.preflight(ref, root, base=base, branch=branch)
-    return preflight.preflight(ref, root, base=base, branch=branch, gh=gh)
+    # Why: no test reaches the real tracker; a ticket number with no runner given is not found.
+    runner = gh_returning(None) if gh is None else gh
+    return preflight.preflight(ref, root, base=base, branch=branch, gh=runner)
 
 
 def checks(report: preflight.Report) -> list[str]:
@@ -269,6 +269,10 @@ def test_slugs_are_kebab_case_and_bounded() -> None:
     assert preflight.slug_of("  Hello, World! ", 1) == "hello-world"
     assert preflight.slug_of("x" * 60, 1) == "x" * 40
     assert preflight.slug_of("a" * 39 + "-b", 1) == "a" * 39
+    assert (
+        preflight.slug_of("Walking skeleton: an empty page that builds and serves", 2)
+        == "walking-skeleton-an-empty-page-that"
+    ), "a word the width cuts is dropped whole"
     assert preflight.slug_of("", 7) == "ticket-7"
     assert preflight.slug_of("!!!", None) == "feature"
 
@@ -306,3 +310,54 @@ def test_main_prints_json_and_the_verdict(
     assert "preflight: ticket: 9: no such ticket" in err
     assert "produce: mattpocock-skills:to-spec" in err
     assert err.rstrip().endswith("preflight: red")
+
+
+def test_a_parent_section_names_the_spec_as_to_tickets_writes_it(tmp_path: Path) -> None:
+    # Why: mattpocock-skills' ticket template has a `## Parent` section, not a `Parent:` line.
+    root = repository(tmp_path)
+    for body in ("## Parent\n\n#12\n", "## Parent\n\nhttps://github.com/o/r/issues/12\n"):
+        child = issue(body=body + "\n## What to build\n\nA slice.\n", labels=("ready-for-agent",))
+        report = run(root, "4", ParentGh(child, spec("## Solution\n\nX." + CONJECTURE)))
+        assert report.ok, report.failures
+
+
+def test_a_local_ticket_inherits_from_its_feature_spec_without_naming_it(tmp_path: Path) -> None:
+    # Why: the local tracker files tickets at `<feature>/issues/NN-<slug>.md` beside
+    # `<feature>/spec.md`, and its template omits the Parent section.
+    files = {
+        ".scratch/f/spec.md": "# F\n\n## Solution\n\nX." + CONJECTURE,
+        ".scratch/f/issues/01-a.md": "# 01: A\n\n**Status:** ready-for-agent\n\nBody.\n",
+        ".scratch/g/issues/01-b.md": "# 01: B\n\nStatus: ready-for-agent\n",
+    }
+    root = repository(tmp_path, files)
+    assert run(root, ".scratch/f/issues/01-a.md").ok
+    assert "names no parent" in run(root, ".scratch/g/issues/01-b.md").failures[0].detail
+
+
+def test_an_open_blocker_holds_the_ticket_back(tmp_path: Path) -> None:
+    ready = "Status: ready-for-agent" + CONJECTURE
+    files = {
+        ".scratch/f/issues/01-a.md": "# 01: A\n\nStatus: ready-for-human\n",
+        ".scratch/f/issues/02-b.md": "# 02: B\n\nStatus: resolved\n",
+        ".scratch/f/issues/03-c.md": "# 03: C\n\n**Blocked by:** 01 (A), 02 (B)\n\n" + ready,
+        ".scratch/f/issues/04-d.md": "# 04: D\n\nBlocked by: 02-b.md\n\n" + ready,
+        ".scratch/f/issues/05-e.md": "# 05: E\n\nBlocked by: None (can start now)\n\n" + ready,
+        ".scratch/f/issues/06-f.md": "# 06: F\n\nBlocked by: 09\n\n" + ready,
+    }
+    root = repository(tmp_path, files)
+    held = run(root, ".scratch/f/issues/03-c.md")
+    assert checks(held) == ["blocked"]
+    assert "01-a.md is still open" in held.failures[0].detail
+    assert run(root, ".scratch/f/issues/04-d.md").ok
+    assert run(root, ".scratch/f/issues/05-e.md").ok
+    assert "blocker 09 was not found" in run(root, ".scratch/f/issues/06-f.md").failures[0].detail
+
+
+def test_a_forge_ticket_is_held_by_an_open_blocking_issue(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    child = issue(
+        body="## Blocked by\n\n- #12 Log 2 brews\n" + CONJECTURE, labels=("ready-for-agent",)
+    )
+    for state, expected in (("OPEN", ["blocked"]), ("CLOSED", [])):
+        blocker = json.dumps({"number": 12, "title": "B", "body": "", "labels": [], "state": state})
+        assert checks(run(root, "4", ParentGh(child, blocker))) == expected

@@ -1,6 +1,6 @@
 {
   "name": "ratchet",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "The Ratchet method: what must be true before a merge. Tiered deterministic gates that only tighten, ceilings that only fall, guarded by the harness, judged by the merge rule of critical rationalism; runs in Claude Code, Grok, Codex, pi and OpenCode; composes with mattpocock-skills, pstack and impeccable.",
   "author": {
     "name": "Simon Tulett"

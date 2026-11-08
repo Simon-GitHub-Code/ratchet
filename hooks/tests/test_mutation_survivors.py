@@ -328,3 +328,71 @@ def test_mutate_globs_apply_in_order_with_negations() -> None:
     assert not gate.mutated_by("lib/y.ts", patterns)
     assert gate.mutated_by("src/main.tsx", gate.DEFAULT_STRYKER_MUTATE)
     assert not gate.mutated_by("src/main.test.tsx", gate.DEFAULT_STRYKER_MUTATE)
+
+
+def test_a_skeleton_with_nothing_to_mutate_is_not_an_empty_run(tmp_path: Path, capsys: Out) -> None:
+    # Why: a fresh adoption's core holds no code, so stryker reports no file and tier 2 stayed
+    # red until the first feature, which a red tier 2 on the default branch would block.
+    config = '{"mutate": ["src/**/*.ts", "!src/**/index.ts"]}'
+    report = '{"schemaVersion": "1", "files": {}}'
+    root = repository(
+        tmp_path,
+        {str(gate.STRYKER_CONFIG): config, "src/core/index.ts": "export {};\n"},
+    )
+    write(root, str(gate.STRYKER_REPORT), report)
+    assert run(root, "--tool", "stryker") == 0
+    assert "nothing to mutate yet" in capsys.readouterr().out
+    write(root, "src/core/tide.ts", "export const x = 1;\n")
+    commit(root, "feat(core): code the globs keep")
+    assert run(root, "--tool", "stryker") == 1, "files the globs keep, yet no mutant: misread"
+    assert "stryker: no mutant reported" in capsys.readouterr().out
+
+
+def test_a_changed_file_with_no_mutable_code_is_not_an_empty_run(
+    tmp_path: Path, capsys: Out
+) -> None:
+    # Why: a types-only module has no mutant, and stryker's report is then `{}`, the same as a
+    # run that read nothing; the files the run was given tell the two apart.
+    config = '{"mutate": ["src/**/*.ts"]}'
+    root = repository(
+        tmp_path,
+        {str(gate.STRYKER_CONFIG): config, "src/core/types.ts": "export type W = 1;\n"},
+    )
+    write(root, str(gate.STRYKER_REPORT), '{"schemaVersion": "1", "files": {}}')
+    assert run(root, "--tool", "stryker") == 1, "a full run still reads {} as empty"
+    capsys.readouterr()
+    assert run(root, "--tool", "stryker", "--only", "src/core/types.ts") == 0
+    assert "no mutant in the files it was given" in capsys.readouterr().out
+    assert run(root, "--tool", "stryker", "--only", "src/core/types.ts,src/core/gone.ts") == 1
+
+
+def test_a_deleted_file_is_not_in_the_changed_scope(tmp_path: Path) -> None:
+    config = '{"mutate": ["src/**/*.ts"]}'
+    root = repository(
+        tmp_path,
+        {str(gate.STRYKER_CONFIG): config, "src/a.ts": "a\n", "src/b.ts": "b\n"},
+    )
+    branch(root, "feature/x")
+    (root / "src/a.ts").unlink()
+    write(root, "src/b.ts", "b2\n")
+    commit(root, "refactor: drop a")
+    assert gate.stryker_changed(root, "main") == ["src/b.ts"]
+
+
+def test_a_full_run_whose_globs_reach_no_tracked_file_is_still_empty(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path,
+        {str(gate.STRYKER_CONFIG): '{"mutate": ["src/**/*.ts"]}', "lib/add.ts": "a + b;\n"},
+    )
+    write(root, str(gate.STRYKER_REPORT), '{"schemaVersion": "2", "files": {}}')
+    assert run(root, "--tool", "stryker") == 1, "a glob that misses the code is no skeleton"
+    assert "no mutant reported" in capsys.readouterr().out
+
+
+def test_an_empty_changed_scope_prints_nothing(tmp_path: Path, capsys: Out) -> None:
+    root = repository(tmp_path, {str(gate.STRYKER_CONFIG): '{"mutate": ["src/**/*.ts"]}'})
+    assert run(root, "--tool", "mutmut", "--changed") == 0
+    assert run(root, "--tool", "stryker", "--changed") == 0
+    assert capsys.readouterr().out == "", "mapfile would read one empty pattern from a newline"

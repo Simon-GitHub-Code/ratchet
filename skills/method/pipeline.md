@@ -18,7 +18,7 @@ Severity: *blocker* is a wrong result, data loss, a layer violation or a broken 
 ## The loop
 
 0. Preflight. `scripts/feature_preflight.py` on the ticket: open, `## Conjecture` stated, the agent-ready label present, the tree clean, `HEAD` on the branch. The skill runs it before the workflow and spawns nothing while it is red; the workflow runs it again as its first stage through one low-effort agent that types the command and relays its JSON. Red stops the run with `verdict: "blocked"` and, per failure, what produces the missing piece.
-1. Spec. A non-empty `openQuestions` stops the run with `verdict: "blocked"`; the orchestrator asks the owner, who answers on the ticket, and reruns.
+1. Spec. A non-empty `openQuestions` stops the run with `verdict: "blocked"`; the orchestrator asks the owner, who answers on the ticket, and reruns. So does a non-empty `guardEdits`: criteria that need a guard path changed (an import contract, a shared test fixture, a Layers row, a glossary entry) cannot be met by a run with no owner at the keyboard, so the owner lands those edits first, or builds the ticket with `/pstack:poteto-mode` while present, where the guard can ask.
 2. Implement.
 3. Critique.
 4. While blocker or major findings remain, up to two rounds: a *fresh* fix agent (it has not seen the previous implementer's reasoning), then re-critique by title plus a search for new breakage.
@@ -31,8 +31,8 @@ At most nine agents run, the preflight's included. Agents leave every change unc
 
 The orchestrator is the `/ratchet:feature` skill's session: it runs the preflight, creates the branch, runs the workflow, reads its result and the spec, and nothing else: reading the implementation would anchor it on one agent's reasoning and defeat the independence the pipeline exists for. If the result is not enough to decide, add the missing field to the schema.
 
-1. Check `verdict === "approve"`, empty `unresolvedBlockingFindings`, and a green tail in `checkOutput`. Otherwise rerun `/ratchet:feature <ticket>` after the ticket has been adjusted, or stop and report.
+1. Check `verdict === "approve"`, empty `unresolvedBlockingFindings`, and a green tail in `checkOutput`. Otherwise stash what the agents left (`git stash push -u`), switch back to the base branch, and rerun `/ratchet:feature <ticket>` after the ticket has been adjusted, or stop and report.
 2. Relay every dispute to the owner, through the interactive question dialog where one exists. The owner decides; any gate change is the owner's.
 3. Commit `filesChanged` on the branch with a message naming the slug, push.
-4. Open the pull request with every section of the repository's template filled ([records.md](records.md)). If an ADR is suggested, it goes in the same pull request, which means an interactive session with the owner present, since `docs/adr/` is a guard path.
+4. Open the pull request with every section of the repository's template filled ([records.md](records.md)). With no forge (the binding's Forge section names a change template instead of a pull request template), nothing is pushed: the filled template is `.scratch/changes/<branch>.md` (the branch's `/` written as `-`), committed on the branch with the local ticket's `Status:` line set to `resolved` (the local form of `Closes #N`, so the merge resolves it), and the owner merges. If an ADR is suggested, it goes in the same pull request, which means an interactive session with the owner present, since `docs/adr/` is a guard path.
 5. Wait. A human merges.

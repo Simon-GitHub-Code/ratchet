@@ -8,7 +8,9 @@ own when it fails; 1 when it passed but ran over its ceiling; 0 otherwise. A mis
 reports and passes: that is the first adoption. ``--report`` appends one JSON line per run so
 CI can publish the timings. ``--set`` records the measured time times ``HEADROOM`` (default
 1.5) as the ceiling when none exists or the new value is lower; it never raises one, because
-raising a ceiling is a loosening and needs an ADR, like lowering a threshold.
+raising a ceiling is a loosening and needs an ADR, like lowering a threshold. A tier's ceiling is
+never set under the tier's budget in the method (tier 0 about a minute, tier 1 fifteen minutes):
+a skeleton's few seconds would otherwise become the first feature's ceiling.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from pathlib import Path
 
 CEILINGS_TABLE = "ceilings.seconds"
 DEFAULT_HEADROOM = 1.5
+TIER_BUDGETS = {"tier0": 60.0, "tier1": 900.0}
 _TABLE_HEADER = re.compile(r"^\[ceilings\.seconds\]\s*$", re.MULTILINE)
 _ANY_HEADER = re.compile(r"^\[", re.MULTILINE)
 
@@ -93,9 +96,11 @@ def with_ceiling(text: str, key: str, seconds: float) -> str:
     return text[:start] + body + text[end:]
 
 
-def lowered_ceiling(existing: float | None, measured: float, headroom: float) -> float | None:
-    """The ceiling to record: measured times headroom, only when it lowers or sets one."""
-    proposed = float(math.ceil(measured * headroom))
+def lowered_ceiling(
+    existing: float | None, measured: float, headroom: float, *, floor: float = 0.0
+) -> float | None:
+    """The ceiling to record: measured times headroom but not under ``floor``, if it lowers."""
+    proposed = max(float(math.ceil(measured * headroom)), floor)
     return proposed if existing is None or proposed < existing else None
 
 
@@ -145,7 +150,8 @@ def main(argv: list[str]) -> int:
     if options.report:
         report(root / options.report, outcome)
     if options.headroom is not None and exit_code == 0:
-        new = lowered_ceiling(outcome.ceiling, seconds, options.headroom)
+        floor = TIER_BUDGETS.get(options.key, 0.0)
+        new = lowered_ceiling(outcome.ceiling, seconds, options.headroom, floor=floor)
         if new is not None:
             thresholds.parent.mkdir(parents=True, exist_ok=True)
             thresholds.write_text(with_ceiling(text, options.key, new), encoding="utf-8")

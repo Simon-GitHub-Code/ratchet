@@ -128,17 +128,25 @@ def measured(report: Path, root: Path, tallies: dict[str, Tally] | None = None) 
 
 
 def relative(filename: str, sources: list[str], root: Path) -> str:
-    """The report's filename as a repository-relative path, through its ``<source>`` roots."""
+    """The report's filename as a repository-relative path, through its ``<source>`` roots.
+
+    With several roots the file names are relative to each, so the root where the file exists
+    wins; the first root inside the repository is the answer when none does.
+    """
+    fallback = None
     for source in [*sources, ""]:
         candidate = Path(source) / filename if source else Path(filename)
         if candidate.is_absolute():
             try:
-                return candidate.resolve().relative_to(root.resolve()).as_posix()
+                path = candidate.resolve().relative_to(root.resolve()).as_posix()
             except ValueError:
                 continue
-        if (root / candidate).is_file():
+            if (root / path).is_file():
+                return path
+            fallback = fallback or path
+        elif (root / candidate).is_file():
             return candidate.as_posix()
-    return filename
+    return fallback or filename
 
 
 def tally_groups(found: list[Group], files: dict[str, Tally]) -> tuple[dict[str, Tally], list[str]]:

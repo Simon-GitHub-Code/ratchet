@@ -21,11 +21,12 @@ deadcode:
     uv run deptry .
 
 lint-workflows:
-    uvx actionlint
+    uvx --from actionlint-py actionlint
     git ls-files -z '*.sh' | xargs -0 -r shellcheck
 
 secrets:
-    uvx gitleaks git --no-banner --redact .
+    @command -v gitleaks >/dev/null || { echo "secrets: gitleaks is not on PATH; the binding's Tool versions names the version"; exit 1; }
+    gitleaks git --no-banner --redact .
 
 pins:
     python3 "{{ratchet_plugin}}/scripts/pins.py"
@@ -42,20 +43,22 @@ limits:
 test:
     uv run pytest -q
 
+# Every root a coverage group names is measured; a group no report measures is skipped, not scored.
 coverage:
-    uv run pytest -q --cov=src --cov-branch --cov-report=xml:coverage.xml
+    uv run pytest -q --cov=src --cov=tests --cov-branch --cov-report=xml:coverage.xml
     python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
 
 diff-coverage:
-    uv run diff-cover coverage.xml --compare-branch="$(git merge-base HEAD origin/main)" --fail-under=100
+    uv run diff-cover coverage.xml --compare-branch="{{merge_base}}" --fail-under=100
 
 test-counts:
     #!/usr/bin/env bash
     set -euo pipefail
-    base="$(git merge-base HEAD origin/main)"
-    now="$(uv run pytest --collect-only -q | grep -c '::' || true)"
+    base="{{merge_base}}"
+    # Why: addopts carries -q, and a second -q prints per-file counts with no node ids to count.
+    now="$(uv run pytest --collect-only -q -o addopts= | grep -c '::' || true)"
     rm -rf .ratchet/base && git worktree add -q --detach .ratchet/base "$base"
-    was="$(cd .ratchet/base && uv run pytest --collect-only -q | grep -c '::' || true)"
+    was="$(cd .ratchet/base && uv run pytest --collect-only -q -o addopts= | grep -c '::' || true)"
     git worktree remove --force .ratchet/base
     echo "tests: $was at base, $now at head"
     test "$now" -ge "$was"
@@ -71,13 +74,19 @@ mutation-changed:
     if [ "${#scope[@]}" -eq 0 ]; then echo "mutation-changed: no source module changed"; exit 0; fi
     rm -rf mutants
     uv run mutmut run "${scope[@]}"
-    uv run mutmut results --all | python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool mutmut --results - --only "${scope[@]}"
+    uv run mutmut results --all true | python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool mutmut --results - --only "${scope[@]}"
 
 contracts-check:
     @echo "none: no generated contract artefacts in this stack; see the binding's ADR"; exit 0
 
+# The shipped dependencies only; `audit-all` audits the whole environment, dev tools included.
 audit:
-    uv run pip-audit --strict
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p .ratchet
+    uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt > .ratchet/shipped.txt
+    if ! grep -q '^[a-zA-Z]' .ratchet/shipped.txt; then echo "audit: no shipped dependency"; exit 0; fi
+    uv run pip-audit --strict --disable-pip -r .ratchet/shipped.txt
 
 duplication:
     uv run pylint --disable=all --enable=duplicate-code --min-similarity-lines=8 src
@@ -90,7 +99,7 @@ bite:
     uv run pytest -q tests/fitness -k bites
 
 api-check:
-    uv run griffe check "$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["name"].replace("-","_"))')" --against "$(git merge-base HEAD origin/main)"
+    uv run griffe check "$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["name"].replace("-","_"))')" --against "{{merge_base}}"
 
 doctests:
     uv run pytest -q --doctest-modules src
@@ -99,7 +108,8 @@ sast:
     uv run bandit -q -r src -c pyproject.toml
 
 artefact-scan:
-    uvx trivy fs --exit-code 1 --severity HIGH,CRITICAL .
+    @command -v trivy >/dev/null || { echo "artefact-scan: trivy is not on PATH; the binding's Tool versions names the version"; exit 1; }
+    trivy fs --exit-code 1 --severity HIGH,CRITICAL --skip-dirs node_modules .
 
 type-coverage:
     @echo "none: mypy --strict leaves no untyped code to measure; see the binding's ADR"; exit 0
@@ -114,7 +124,7 @@ mutation:
     set -euo pipefail
     rm -rf mutants
     uv run mutmut run
-    uv run mutmut results --all | python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool mutmut --results -
+    uv run mutmut results --all true | python3 "{{ratchet_plugin}}/scripts/mutation_survivors.py" --tool mutmut --results -
 
 symbolic:
     uv run crosshair check src
@@ -138,15 +148,21 @@ perf:
 
 # --- outside the tiers ------------------------------------------------------------
 
+# The `coverage` run, writing each group's measured value back as its new floor.
+ratchet:
+    uv run pytest -q --cov=src --cov=tests --cov-branch --cov-report=xml:coverage.xml
+    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml --write
+    just snapshots
+
 audit-all:
-    uv run pip-audit --strict --group dev
+    uv run pip-audit --strict
 
 licenses:
     uv run pip-licenses --fail-on "GPL-3.0-only;AGPL-3.0-only"
 
 drift:
     uv tree --outdated
-    uvx cyclonedx-py environment -o .ratchet/sbom.json
+    uvx --from cyclonedx-bom cyclonedx-py environment -o .ratchet/sbom.json
 
 reports:
     uv run radon cc -s -a src

@@ -9,8 +9,11 @@ failure and the skill that produces the missing piece:
 - the ticket exists and is open;
 - it carries a ``## Conjecture`` section that states something (the method's one addition to
   the ticket: the approach, the observation that would refute it, the alternatives and the
-  criticism that kills each), on the ticket itself or on the parent spec its ``Parent:`` line
-  names, since ``to-tickets`` cuts one spec into several tickets that share one approach;
+  criticism that kills each), on the ticket itself or on its parent spec, since ``to-tickets``
+  cuts one spec into several tickets that share one approach. The parent is the one a
+  ``Parent:`` line or a ``## Parent`` section names, else, for a local ticket under
+  ``<feature>/issues/``, the ``<feature>/spec.md`` beside that directory;
+- no ticket its ``Blocked by`` line or section names is still open;
 - it carries the owner's agent-ready label, the ``ready-for-agent`` role as
   ``docs/agents/triage-labels.md`` maps it (a local ticket: a ``Status:`` line with that label);
 - the working tree is clean;
@@ -46,23 +49,33 @@ TRACKER_COLUMN = "label in our tracker"
 EMPTY_BODIES = frozenset({"", "tbd", "todo", "n/a", "none", "-", "..."})
 MIN_BODY = 40
 SLUG_WIDTH = 40
+CLOSED_STATUSES = frozenset({"resolved", "closed", "done", "wontfix"})
 STATUS_LINE = re.compile(
     r"^\*{0,2}status:?\*{0,2}:?\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE
 )
 PARENT_LINE = re.compile(
     r"^\*{0,2}parent:?\*{0,2}:?\s*`?(#?\d+|[^`\s]+\.md)`?", re.IGNORECASE | re.MULTILINE
 )
+PARENT_SECTION = "## Parent"
+SECTION_REF = re.compile(r"(?:#|/issues/)(\d+)|([^`\s()\[\]]+\.md)")
+BLOCKED_LINE = re.compile(r"^\*{0,2}blocked by:?\*{0,2}:?[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
+BLOCKED_SECTION = "## Blocked by"
+BLOCKER_REF = re.compile(r"[^`\s,()]+\.md|#?\d+")
 Runner = Callable[[Sequence[str]], str | None]
 
 PRODUCES = {
     "ticket": "mattpocock-skills:to-spec, to-tickets or triage writes the ticket on the tracker",
     "open": "a closed ticket is done or rejected; pick an open one",
     "conjecture": (
-        "the owner adds `## Conjecture` to the ticket, or to the spec its Parent line names:"
+        "the owner adds `## Conjecture` to the ticket, or to its parent spec:"
         " `/ratchet:conjecture <ticket>` drafts it (the approach, the observation that would"
         " refute it, the alternatives and the criticism that kills each)"
     ),
     "label": "the owner applies the agent-ready label (mattpocock-skills:triage, or by hand)",
+    "blocked": (
+        "build the blocking tickets first; when the order no longer holds, the owner edits the"
+        " ticket's Blocked by"
+    ),
     "clean": "commit or stash the working tree; the pipeline's agents leave their work uncommitted",
     "branch": "`git switch -c <branch> <base>`; the `/ratchet:feature` skill does this",
 }
@@ -83,12 +96,27 @@ class Ticket:
     def parent(self) -> str | None:
         """The ref of the parent spec the ticket names, if any."""
         match = PARENT_LINE.search(self.body)
-        if match is None:
-            return None
-        parent = match.group(1)
+        if match is not None:
+            parent = match.group(1)
+        else:
+            found = SECTION_REF.search(section(self.body, PARENT_SECTION))
+            if found is None:
+                return None
+            parent = f"#{found.group(1)}" if found.group(1) else found.group(2)
         if parent.endswith(".md") and not parent.startswith("#"):
             return str(Path(self.ref).parent / parent) if "/" in self.ref else parent
         return parent
+
+    @property
+    def blockers(self) -> tuple[str, ...]:
+        """The refs the ``Blocked by`` line or section names, parentheses and "none" ignored."""
+        match = BLOCKED_LINE.search(self.body)
+        text = match.group(1) if match else section(self.body, BLOCKED_SECTION)
+        refs = BLOCKER_REF.findall(re.sub(r"\([^)]*\)", " ", text))
+        if self.ref.endswith(".md"):
+            return tuple(refs)
+        # Why: on a forge only `#N` names an issue; a bare number is part of a title.
+        return tuple(ref for ref in refs if ref.startswith("#"))
 
     @property
     def conjecture(self) -> str | None:
@@ -186,7 +214,7 @@ def local_ticket(ref: str, text: str) -> Ticket:
         title=title,
         body=text,
         labels=labels,
-        is_open=not any(label.lower() in {"resolved", "closed", "done"} for label in labels),
+        is_open=not any(label.lower() in CLOSED_STATUSES for label in labels),
     )
 
 
@@ -231,7 +259,10 @@ def ready_label(root: Path) -> str:
 
 
 def slug_of(title: str, number: int | None) -> str:
-    words = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:SLUG_WIDTH].strip("-")
+    words = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    if len(words) > SLUG_WIDTH:
+        cut = words[: SLUG_WIDTH + 1]
+        words = cut.rsplit("-", 1)[0] if "-" in cut else cut[:SLUG_WIDTH]
     return words or (f"ticket-{number}" if number else "feature")
 
 
@@ -246,7 +277,7 @@ def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
         if states_a_conjecture(own):
             return None
         return f"{ticket.ref}: `{CONJECTURE}` states no conjecture"
-    parent_ref = ticket.parent
+    parent_ref = ticket.parent or beside_spec(ticket.ref, root)
     if parent_ref is None:
         return f"{ticket.ref} has no `{CONJECTURE}` section and names no parent"
     parent = fetch(parent_ref, root, gh)
@@ -256,6 +287,39 @@ def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     if inherited is not None and states_a_conjecture(inherited):
         return None
     return f"{ticket.ref} has no `{CONJECTURE}` section and its parent {parent_ref} states none"
+
+
+def beside_spec(ref: str, root: Path) -> str | None:
+    """The ``spec.md`` of a local ticket filed under ``<feature>/issues/``, when it exists."""
+    path = Path(ref)
+    if path.parent.name != "issues":
+        return None
+    spec = path.parent.parent / "spec.md"
+    return spec.as_posix() if (root / spec).is_file() else None
+
+
+def blocker_ref(ticket: Ticket, ref: str, root: Path) -> str:
+    """A blocker as a ref ``fetch`` reads: a sibling file for a local ticket, else a number."""
+    folder = Path(ticket.ref).parent
+    if ref.endswith(".md"):
+        return (folder / ref).as_posix()
+    if ref.startswith("#"):
+        return ref
+    siblings = sorted((root / folder).glob(f"{int(ref):02d}-*.md"))
+    return siblings[0].relative_to(root).as_posix() if siblings else ref
+
+
+def open_blockers(ticket: Ticket, root: Path, gh: Runner) -> list[str]:
+    """Each blocker that is still open or cannot be found, as a sentence."""
+    problems = []
+    for ref in ticket.blockers:
+        resolved = blocker_ref(ticket, ref, root)
+        blocker = fetch(resolved, root, gh)
+        if blocker is None:
+            problems.append(f"blocker {ref} was not found")
+        elif blocker.is_open:
+            problems.append(f"blocker {resolved} is still open")
+    return problems
 
 
 def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: Runner) -> None:
@@ -271,6 +335,8 @@ def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: 
         report.fail(
             "label", f"{ticket.ref} does not carry `{label}`; labels: {list(ticket.labels)}"
         )
+    for problem in open_blockers(ticket, root, gh):
+        report.fail("blocked", f"{ticket.ref}: {problem}")
 
 
 def check_checkout(report: Report, root: Path, *, base: str, branch: str | None) -> None:
@@ -289,9 +355,7 @@ def check_checkout(report: Report, root: Path, *, base: str, branch: str | None)
         report.fail("branch", f"`{branch}` is the base branch")
 
 
-def preflight(
-    ref: str, root: Path, *, base: str, branch: str | None, gh: Runner = run_gh
-) -> Report:
+def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner) -> Report:
     report = Report(ref=ref, label=ready_label(root))
     ticket = fetch(ref, root, gh)
     if ticket is None:
@@ -310,7 +374,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--branch", help="the working branch HEAD must be on")
     options = parser.parse_args(argv[1:])
     report = preflight(
-        options.ref, Path(options.root).resolve(), base=options.base, branch=options.branch
+        options.ref,
+        Path(options.root).resolve(),
+        base=options.base,
+        branch=options.branch,
+        gh=run_gh,
     )
     print(json.dumps(asdict(report), indent=2))
     for failure in report.failures:

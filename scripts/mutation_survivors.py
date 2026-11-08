@@ -309,18 +309,38 @@ def _closes_unit(line: str) -> bool:
     return bool(line.strip()) and line[0] in "})]"
 
 
+def stryker_patterns(root: Path) -> list[str]:
+    """The stryker config's ``mutate`` globs, or stryker's default."""
+    globs = _json(root / STRYKER_CONFIG).get("mutate")
+    if isinstance(globs, list):
+        return [g for g in globs if isinstance(g, str)]
+    return list(DEFAULT_STRYKER_MUTATE)
+
+
 def stryker_changed(root: Path, base: str | None) -> list[str]:
     """Changed files the stryker config's ``mutate`` globs keep, for ``--mutate``."""
-    config = _json(root / STRYKER_CONFIG)
-    globs = config.get("mutate")
-    patterns = (
-        [g for g in globs if isinstance(g, str)]
-        if isinstance(globs, list)
-        else list(DEFAULT_STRYKER_MUTATE)
-    )
+    patterns = stryker_patterns(root)
     before = gatelib.base_commit(root, base)
     changed = gatelib.changed_paths(root, before) if before else gatelib.tracked_paths(root)
-    return [path for path in changed if mutated_by(path, patterns)]
+    return [path for path in changed if mutated_by(path, patterns) and (root / path).is_file()]
+
+
+def nothing_to_mutate(root: Path, report: dict[str, object], scope: list[str]) -> bool:
+    """Whether stryker ran and had nothing to mutate: types or re-exports only, or no code yet.
+
+    The report lists no file. A scoped run was given files that exist, so stryker read them and
+    found no mutant. A full run passes only when the globs' includes reach tracked files and
+    its exclusions drop every one, as a skeleton's re-exporting index; an include that reaches
+    no tracked file is a glob that misses the code, and still fails as an empty run.
+    """
+    ran = "schemaVersion" in report and report.get("files") == {}
+    if scope:
+        return ran and all((root / path).is_file() for path in scope)
+    patterns = stryker_patterns(root)
+    includes = [p for p in patterns if not p.startswith("!")]
+    tracked = gatelib.tracked_paths(root)
+    reached = [path for path in tracked if mutated_by(path, includes)]
+    return ran and bool(reached) and not any(mutated_by(path, patterns) for path in reached)
 
 
 def mutated_by(path: str, patterns: list[str]) -> bool:
@@ -415,7 +435,12 @@ def check(options: argparse.Namespace, root: Path) -> list[str]:
         if not path.is_file():
             given = options.report or STRYKER_REPORT
             return [*problems, f"{given}: missing; run stryker with the json reporter first"]
-        mutants = stryker_mutants(_json(path))
+        report = _json(path)
+        given = [f for files in options.only or [] for f in files.split(",") if f]
+        if nothing_to_mutate(root, report, given):
+            print("stryker: no mutant in the files it was given; nothing to mutate yet")
+            return problems
+        mutants = stryker_mutants(report)
     return problems + judge(options.tool, mutants, found, scope=options.only or [])
 
 
@@ -434,7 +459,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--tool", choices=TOOLS, required=True)
     parser.add_argument("--results", help="mutmut: `mutmut results --all` output, `-` for stdin")
     parser.add_argument("--report", help="stryker: the json reporter's file")
-    parser.add_argument("--only", nargs="+", help="mutmut: the patterns the run was given")
+    parser.add_argument(
+        "--only", nargs="+", help="the run's scope: mutmut patterns, or stryker's `--mutate` files"
+    )
     parser.add_argument(
         "--changed", action="store_true", help="print the scope of a changed-code run"
     )
@@ -443,9 +470,11 @@ def main(argv: list[str]) -> int:
     root = Path(options.root).resolve()
     if options.changed:
         if options.tool == "mutmut":
-            print("\n".join(mutmut_changed(root, options.base)))
+            scope = "\n".join(mutmut_changed(root, options.base))
         else:
-            print(",".join(stryker_changed(root, options.base)))
+            scope = ",".join(stryker_changed(root, options.base))
+        if scope:
+            print(scope)
         return 0
     return gatelib.report("mutation", check(options, root))
 

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "project": [
+    "src/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "ignoreBinaries": [
+    "just"
+  ],
+  "ignoreDependencies": [
+    "@microsoft/api-extractor",
+    "dependency-cruiser",
+    "jscpd",
+    "license-checker-rseidelsohn",
+    "prettier",
+    "type-coverage",
+    "@axe-core/playwright",
+    "fast-check",
+    "@fast-check/vitest"
+  ]
+}

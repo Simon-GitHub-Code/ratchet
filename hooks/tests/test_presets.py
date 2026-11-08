@@ -2,12 +2,15 @@
 
 import json
 import re
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 
 import pytest
 
 import pins
+import suppressions
 
 ADOPT = Path(__file__).resolve().parents[2] / "skills/adopt"
 PRESETS = sorted(p for p in (ADOPT / "presets").iterdir() if p.is_dir())
@@ -123,7 +126,7 @@ def test_preset_mutation_recipes_go_through_the_register_gate(preset: Path) -> N
     assert "--changed" in text
     if preset.name == "python-uv":
         assert "rm -rf mutants" in text, "mutmut keeps verdicts a new test cannot change"
-        assert "mutmut results --all |" in text
+        assert "mutmut results --all true |" in text, "mutmut 3.8 takes `--all BOOLEAN`"
         assert "--paths-to-mutate" not in text, "not a mutmut 3 option"
         tools = tomllib.loads((preset / "tools/pyproject.toml").read_text())
         assert tools["tool"]["mutmut"]["source_paths"] == ["src/"]
@@ -131,3 +134,96 @@ def test_preset_mutation_recipes_go_through_the_register_gate(preset: Path) -> N
     else:
         assert 'stryker run --mutate "$files"' in text
         assert "--report reports/mutation/mutation.json" in text
+
+
+def test_the_template_justfile_never_relies_on_tilde_expansion() -> None:
+    # Why: `just` never expands `~`, so a quoted `~/...` fallback names a directory that does not
+    # exist and every shipped gate fails unless RATCHET_PLUGIN is set.
+    assert '"~/' not in TEMPLATE_JUSTFILE
+    assert "home_directory()" in TEMPLATE_JUSTFILE
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+def test_preset_diff_gates_work_without_a_remote(preset: Path) -> None:
+    # Why: `/ratchet:init` supports a local-only repository, which has no `origin/main`.
+    assert "origin/" not in (preset / "justfile").read_text(encoding="utf-8")
+    assert "merge_base :=" in TEMPLATE_JUSTFILE
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+def test_preset_text_trips_no_suppression_gate(preset: Path) -> None:
+    # Why: adopt copies the preset's prose into the repository, where the suppressions gate
+    # counts every match; a sentence that forbids a pragma by naming it counts as one.
+    for path in sorted(p for p in preset.rglob("*") if p.is_file()):
+        text = path.read_text(encoding="utf-8")
+        for kind, pattern in suppressions.KINDS.items():
+            assert not re.search(pattern, text), f"{path.relative_to(preset)}: {kind}"
+
+
+def test_python_test_counts_list_node_ids_despite_quiet_addopts() -> None:
+    # Why: a second `-q` turns `--collect-only` into per-file counts with no `::` to count,
+    # which made test-counts compare 0 with 0 and pass on any suite.
+    tools = tomllib.loads((ADOPT / "presets/python-uv/tools/pyproject.toml").read_text())
+    assert "-q" in tools["tool"]["pytest"]["ini_options"]["addopts"].split()
+    text = (ADOPT / "presets/python-uv/justfile").read_text(encoding="utf-8")
+    collects = re.findall(r"pytest --collect-only[^|]*", text)
+    assert collects
+    assert all("-o addopts=" in c for c in collects), collects
+
+
+def test_the_python_fitness_scaffold_is_clean_under_the_preset_s_own_ruff(tmp_path: Path) -> None:
+    ruff = shutil.which("ruff")
+    assert ruff, "ruff is a dev dependency of the plugin"
+    preset = ADOPT / "presets/python-uv"
+    shutil.copy(preset / "tools/pyproject.toml", tmp_path / "pyproject.toml")
+    (tmp_path / "tests/fitness").mkdir(parents=True)
+    shutil.copy(preset / "fitness/test_fitness.py", tmp_path / "tests/fitness/test_fitness.py")
+    for argv in (["check", "--no-cache", "."], ["format", "--check", "--no-cache", "."]):
+        run = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+            [ruff, *argv], cwd=tmp_path, capture_output=True, text=True, check=False
+        )
+        assert run.returncode == 0, run.stdout + run.stderr
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+def test_uvx_runs_only_python_packages(preset: Path) -> None:
+    # Why: gitleaks and trivy are not on PyPI, and actionlint and cyclonedx-py are executables
+    # of differently named packages, so a bare `uvx <tool>` failed to resolve in two adoptions.
+    text = (preset / "justfile").read_text(encoding="utf-8")
+    assert not re.search(r"uvx (actionlint|gitleaks|trivy|shellcheck|cyclonedx-py)\b", text)
+
+
+def test_the_typescript_fragments_work_under_pnpm_and_vitest() -> None:
+    preset = ADOPT / "presets/typescript-pnpm"
+    text = (preset / "justfile").read_text(encoding="utf-8")
+    assert "reportsDirectory=." not in text, "vitest refuses to clean the project root"
+    stryker = json.loads((preset / "tools/stryker.config.json").read_text())
+    assert "@stryker-mutator/vitest-runner" in stryker["plugins"], "pnpm hides unnamed plugins"
+    knip = json.loads((preset / "tools/knip.json").read_text())
+    dev = json.loads((preset / "tools/package.json").read_text())["devDependencies"]
+    assert set(knip["ignoreDependencies"]) <= set(dev)
+    assert "just" in knip["ignoreBinaries"]
+
+
+def body(justfile: str, recipe: str) -> str:
+    match = re.search(rf"^{recipe}:.*\n((?:    .*\n)+)", justfile, re.MULTILINE)
+    assert match, recipe
+    return match.group(1)
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+def test_coverage_measures_every_root_a_coverage_group_names(preset: Path) -> None:
+    # Why: coverage_groups.py skips a group no report measures, so a root left out of the run
+    # silently drops its group, `tests/fitness/**` in the absolute core included.
+    justfile = (preset / "justfile").read_text(encoding="utf-8")
+    thresholds = tomllib.loads((preset / "thresholds.toml").read_text(encoding="utf-8"))
+    (language,) = (k for k in thresholds if k != "ceilings")
+    named = {
+        path.split("/")[0]
+        for group in thresholds[language]["coverage"].values()
+        for path in group["paths"]
+    } - {"tools"}
+    run = body(justfile, "coverage").splitlines()[0]
+    measured = set(re.findall(r"--cov=([\w.-]+)|--coverage\.include='([\w.-]+)/", run))
+    assert named <= {a or b for a, b in measured}, run
+    assert body(justfile, "ratchet").splitlines()[0] == run, "the ratchet measures as coverage does"

@@ -15,9 +15,10 @@ The stages, in order; the first that does not hold is the answer:
 3. the tracker record ``docs/agents/issue-tracker.md`` (the mattpocock-skills setup);
 4. the binding ``docs/process/binding.md`` (``/ratchet:adopt``);
 5. a clean tree (finish the change: ``check``, commit, pull request);
-6. on a working branch: the pull request is open, else open it;
+6. on a working branch: the pull request is open, else open it; with no forge (no ``origin``)
+   the owner merges the branch once ``check`` is green;
 7. on the default branch: the glossary and design brief (``grill-with-docs``), then an
-   agent-ready ticket (``to-spec`` and ``to-tickets``), its conjecture
+   agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
    away, ``/pstack:poteto-mode`` when they stay).
 
@@ -58,6 +59,9 @@ FEATURE = "/ratchet:feature"
 POTETO = "/pstack:poteto-mode"
 PULL_REQUEST = "open the pull request (the `pr` skill fills the body); a human merges"
 WAIT = "nothing: wait for the review; a human merges"
+NEXT = "/ratchet:next"
+CHANGES = ".scratch/changes"
+BLOCKED_RUN = ": blocked run"
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,7 @@ class Checkout:
     branch: str | None
     default_branch: str
     dirty: bool
+    forge: bool = True
 
     @property
     def on_default(self) -> bool:
@@ -91,8 +96,17 @@ def observe(root: Path) -> Checkout | None:
     if status is None:
         return None
     branch = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    branch = None if branch == "HEAD" else branch
     default = gatelib.default_branches(root)[0].removeprefix("origin/")
-    return Checkout(root, branch or None, default, bool(status.strip()))
+    forge = gatelib.git(root, "remote", "get-url", "origin") is not None
+    return Checkout(root, branch or None, default, bool(status.strip()), forge)
+
+
+def review(checkout: Checkout) -> str:
+    """How a finished branch reaches the default branch: a pull request, or the owner's merge."""
+    if checkout.forge:
+        return PULL_REQUEST
+    return f"the owner merges it once `check` is green (no forge; {CHANGES}/<branch>.md)"
 
 
 def names_method(root: Path) -> bool:
@@ -154,42 +168,170 @@ def tracker_tickets(root: Path, gh: preflight.Runner) -> list[preflight.Ticket] 
     return sorted(tickets, key=lambda ticket: ticket.number or 0)
 
 
-def local_tickets(root: Path) -> list[preflight.Ticket]:
-    """The agent-ready tickets under ``.scratch``, where there is no tracker."""
+def local_tickets(root: Path, *, ready: bool = True) -> list[preflight.Ticket]:
+    """The open tickets under ``.scratch``, where there is no tracker: agent-ready, or not."""
     label = preflight.ready_label(root)
     tickets = []
     for path in sorted(root.glob(LOCAL_TICKETS)):
         ref = path.relative_to(root).as_posix()
         ticket = preflight.local_ticket(ref, path.read_text(encoding="utf-8", errors="replace"))
-        if ticket.is_open and label in ticket.labels:
+        if ticket.is_open and (label in ticket.labels) == ready:
             tickets.append(ticket)
     return tickets
+
+
+def triage_step(root: Path) -> Step | None:
+    """Open local tickets, none agent-ready: the first unblocked one is the owner's to agree."""
+    waiting = [
+        t
+        for t in local_tickets(root, ready=False)
+        if not preflight.open_blockers(t, root, lambda _args: None)
+    ]
+    waiting = [t for t in waiting if not any("info" in label for label in t.labels)]
+    for_agents = [t for t in waiting if not any("human" in label for label in t.labels)]
+    if not waiting:
+        return None
+    pick = (for_agents or waiting)[0]
+    return Step(
+        f'agree ticket {pick.ref} "{pick.title}": set its `Status:` to'
+        f" {preflight.ready_label(root)} if an agent may build it, or work it yourself",
+        f"{len(waiting)} unblocked open ticket(s) wait for triage, and none is agent-ready",
+        f"{CONJECTURE} {pick.ref}",
+        "triage",
+    )
 
 
 def has_conjecture(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> bool:
     return preflight.conjecture_failure(ticket, root, gh) is None
 
 
-def ticket_step(root: Path, gh: preflight.Runner | None) -> Step:
+def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) -> Step | None:
+    """When every agent-ready ticket waits on an open blocker: the blocker to finish first."""
+    for ticket in tickets:
+        for ref in ticket.blockers:
+            blocker = preflight.fetch(preflight.blocker_ref(ticket, ref, root), root, gh)
+            if blocker is not None and blocker.is_open:
+                return Step(
+                    f'finish ticket {blocker.ref} "{blocker.title}", then mark it resolved',
+                    f"every agent-ready ticket waits on an open blocker; {ticket.ref} waits on it",
+                    NEXT,
+                    "blocked",
+                )
+    return None
+
+
+def merged_features(root: Path, default_branch: str) -> list[str]:
+    """Feature branches merged into the default branch by a merge made on its own line.
+
+    Each tip is the second parent of a merge on the default branch's first-parent line, as
+    `git merge --no-ff` makes. A branch made and never built points at an old default commit,
+    which no merge on that line brings in. A fast-forward or squash merge leaves no such merge,
+    so the feature skill resolves the ticket in the branch itself.
+    """
+    merges = (
+        gatelib.git(root, "rev-list", "--merges", "--first-parent", "--parents", default_branch)
+        or ""
+    )
+    merged = {parent for line in merges.splitlines() for parent in line.split()[2:]}
+    heads = gatelib.git(
+        root, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/feature/"
+    )
+    pairs = [line.split(" ", 1) for line in (heads or "").splitlines()]
+    return [name for name, tip in pairs if tip in merged]
+
+
+def finished(tickets: list[preflight.Ticket], merged: list[str]) -> Step | None:
+    """An open ticket whose branch is already merged: it is done, so it is resolved, not rebuilt."""
+    for ticket in tickets:
+        branch = own_branch(ticket)
+        if branch in merged:
+            return Step(
+                f"mark ticket {ticket.ref} resolved (`Status: resolved` on a local ticket;"
+                " close the issue on a forge)",
+                f"branch `{branch}` is merged, yet {ticket.ref} is still open",
+                NEXT,
+                "resolve",
+            )
+    return None
+
+
+def blocked_runs(root: Path, default_branch: str) -> dict[str, str]:
+    """Branches whose last feature run blocked and whose block still stands, with its stash.
+
+    The feature skill stashes a blocked run as ``<branch>: blocked run``. The block stands while
+    the default branch has not moved past the run: the owner answers the ticket or lands the
+    guard edits there, so a newer default branch is the cue to build again.
+    """
+    listing = gatelib.git(root, "stash", "list", "--format=%gd%x09%gs") or ""
+    found: dict[str, str] = {}
+    for line in listing.splitlines():
+        ref, _, subject = line.partition("\t")
+        run = subject.split(": ", 1)[-1]
+        if run.endswith(BLOCKED_RUN) and (
+            gatelib.git(root, "merge-base", "--is-ancestor", default_branch, ref) is not None
+        ):
+            found.setdefault(run.removesuffix(BLOCKED_RUN), run)
+    return found
+
+
+def stalled(ticket: preflight.Ticket, runs: dict[str, str]) -> str | None:
+    """The stash of the blocked run that still holds ``ticket``, if one does.
+
+    Matched by the whole branch name: local ticket numbers repeat across features.
+    """
+    return runs.get(own_branch(ticket))
+
+
+def own_branch(ticket: preflight.Ticket) -> str:
+    """The branch the feature preflight names for ``ticket``."""
+    return preflight.branch_of(ticket, preflight.slug_of(ticket.title, ticket.number))
+
+
+def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
     """The step among the tickets: write one, give one its conjecture, or build one."""
     tickets = tracker_tickets(root, gh) if gh is not None else None
+    local = tickets is None
     if tickets is None:
         tickets = local_tickets(root)
     if not tickets:
-        return Step(
+        return (triage_step(root) if local else None) or Step(
             SPEC,
             "no open ticket carries the agent-ready label",
             f"{TICKETS}, then {CONJECTURE} <ticket>",
             "specify",
         )
+    done = finished(tickets, merged_features(root, checkout.default_branch))
+    if done is not None:
+        return done
     offline_gh = gh or (lambda _args: None)
+    unblocked = [t for t in tickets if not preflight.open_blockers(t, root, offline_gh)]
+    if not unblocked:
+        return blocking(tickets, root, offline_gh) or Step(
+            SPEC,
+            "every agent-ready ticket names a blocker that cannot be found",
+            f"{TICKETS}, then {CONJECTURE} <ticket>",
+            "specify",
+        )
+    runs = blocked_runs(root, checkout.default_branch)
+    tickets = [t for t in unblocked if not stalled(t, runs)]
+    if not tickets:
+        held = unblocked[0]
+        return Step(
+            f"answer the questions or land the guard edits the blocked run of {held.ref} named"
+            f" (stash `{stalled(held, runs)}`) on {checkout.default_branch}; an answer given"
+            " elsewhere, as an issue comment, releases it once you drop that stash",
+            f"the last {FEATURE} run on every agent-ready ticket blocked, and"
+            f" {checkout.default_branch} has not moved since; a rerun would block the same way",
+            f"{FEATURE} {held.ref}, or {POTETO} {held.ref} now to make the edits as the guard asks",
+            "blocked-run",
+        )
     for ticket in tickets:
         if has_conjecture(ticket, root, offline_gh):
             return Step(
                 f"{FEATURE} {ticket.ref}",
                 f'ticket {ticket.ref} "{ticket.title}" is agent-ready with a conjecture;'
                 f" {POTETO} {ticket.ref} instead when you stay at the keyboard",
-                PULL_REQUEST,
+                review(checkout),
                 "build",
             )
     first = tickets[0]
@@ -206,6 +348,15 @@ def ticket_step(root: Path, gh: preflight.Runner | None) -> Step:
 
 def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
     """On a working branch with a clean tree: wait for the review, or open the pull request."""
+    if not checkout.forge:
+        return Step(
+            f"merge `{checkout.branch}` once `check` is green:"
+            f" `git switch {checkout.default_branch} && git merge --no-ff {checkout.branch}`",
+            f"branch `{checkout.branch}` is clean and there is no forge; its change description"
+            f" is {CHANGES}/{checkout.branch.replace('/', '-') if checkout.branch else ''}.md",
+            NEXT,
+            "merge",
+        )
     output = None if gh is None else gh(["pr", "view", "--json", "state,url"])
     if output is not None:
         try:
@@ -240,7 +391,7 @@ def setup_step(root: Path) -> Step | None:
     return None
 
 
-def decide(root: Path, gh: preflight.Runner | None = preflight.run_gh) -> Step:
+def decide(root: Path, gh: preflight.Runner | None) -> Step:
     """The owner's next command for the checkout at ``root``; ``gh=None`` stays offline."""
     checkout = observe(root)
     if checkout is None:
@@ -252,7 +403,7 @@ def decide(root: Path, gh: preflight.Runner | None = preflight.run_gh) -> Step:
         return Step(
             f"run {check_command(root)}, then commit on branch `{checkout.branch}`",
             "the working tree has uncommitted changes",
-            PULL_REQUEST,
+            NEXT if checkout.on_default else review(checkout),
             "change",
         )
     if not checkout.on_default:
@@ -260,7 +411,7 @@ def decide(root: Path, gh: preflight.Runner | None = preflight.run_gh) -> Step:
     missing = records_missing(root)
     if missing:
         return Step(GRILL, missing, f"{SPEC}, then {TICKETS}", "records")
-    return ticket_step(root, gh)
+    return ticket_step(root, gh, checkout)
 
 
 def main(argv: list[str]) -> int:

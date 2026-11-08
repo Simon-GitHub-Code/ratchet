@@ -12,7 +12,7 @@ Adopt merges each section into `docs/process/binding.md`: the Runner paragraph r
 | --- | --- |
 | format | `prettier --check` |
 | lint, near-all rules | `eslint` with `typescript-eslint` `strictTypeChecked` and `--max-warnings 0`; each disable names its rule and a reason |
-| strict types | `tsc --noEmit` with `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`; `any` and `@ts-ignore` are banned by eslint |
+| strict types | `tsc --noEmit` with `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`; `any` and the TypeScript ignore directives are banned by eslint |
 | dependency direction | `dependency-cruiser` rules from the Layers table, plus the fitness test |
 | dead code and dependency hygiene | `knip` |
 | scripts and CI lint | `actionlint` and `shellcheck` |
@@ -52,7 +52,7 @@ Adopt merges each section into `docs/process/binding.md`: the Runner paragraph r
 
 ## Absolute paths
 
-`src/core/**` and `tests/fitness/**`: 100% line and branch coverage, no `istanbul ignore` or `c8 ignore`, no coverage exclude that reaches them. The `core` coverage group in `quality/thresholds.toml` is `absolute = true`.
+`src/core/**` and `tests/fitness/**`: 100% line and branch coverage, no coverage-ignore comment, no coverage exclude that reaches them. The `core` coverage group in `quality/thresholds.toml` is `absolute = true`.
 
 ## Limits
 
@@ -60,4 +60,4 @@ Cyclomatic complexity 10 (`complexity`); 400 lines per file (`max-lines`), 4 par
 
 ## Tool versions
 
-`pnpm-lock.yaml` pins every Node tool and `--frozen-lockfile` fails when it drifts from `package.json`; `packageManager` in `package.json` pins pnpm itself; `uvx` tools (`actionlint`, `gitleaks`, `trivy`, `semgrep`, `diff-cover`) are pinned by version in the `justfile` once the first run names them; GitHub actions by commit in the workflows.
+`pnpm-lock.yaml` pins every Node tool and `--frozen-lockfile` fails when it drifts from `package.json`; `packageManager` in `package.json` pins pnpm itself; `uvx` tools (`actionlint` from `actionlint-py`, `semgrep`, `diff-cover`) are pinned by version in the `justfile` once the first run names them; `gitleaks`, `trivy` and `shellcheck` are not Python packages, so they are binaries on `PATH` at the version named here, and a CI job that runs one installs it by pinned version first; GitHub actions by commit in the workflows.
