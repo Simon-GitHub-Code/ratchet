@@ -27,7 +27,10 @@ KINDS = {
     "eslint-disable": r"eslint-disable",
     "ts-ignore": r"@ts-(ignore|expect-error|nocheck)",
     "coverage-ignore": r"(istanbul|c8|v8)\s+ignore",
-    "skipped-test": r"(mark\.skip|@skip\b|\.skip\(|\bxit\(|\bxdescribe\(|\bxtest\()",
+    "skipped-test": (
+        r"(\b(it|test|describe|context|suite|bench)\.skip\(|mark\.skip|@skip\b"
+        r"|\bxit\(|\bxdescribe\(|\bxtest\(|#\[ignore|\b[tb]\.Skip\()"
+    ),
     "nolint": r"\bnolint\b",
     "allow": r"#!?\[(allow|expect)\(",
     "nosec": r"\b(nosec|NOSONAR)\b",

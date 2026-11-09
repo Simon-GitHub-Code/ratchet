@@ -73,6 +73,20 @@ DIRECTIVES = [
     ("ts-ignore", "a.ts", "// @ts-expect-error the fixture is partial"),
     ("coverage-ignore", "a.ts", "/* istanbul ignore next */"),
     ("skipped-test", "a.test.ts", "it.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "test.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "describe.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "context.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "suite.skip('x', () => {})"),
+    ("skipped-test", "a.bench.ts", "bench.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "xit('x', () => {})"),
+    ("skipped-test", "a.test.ts", "xdescribe('x', () => {})"),
+    ("skipped-test", "a.test.ts", "xtest('x', () => {})"),
+    ("skipped-test", "a.py", "@pytest.mark.skip(reason='x')"),
+    ("skipped-test", "A.java", "@skip"),
+    ("skipped-test", "a.rs", "#[ignore]"),
+    ("skipped-test", "b.rs", '#[ignore = "slow"]'),
+    ("skipped-test", "a_test.go", 't.Skip("flaky")'),
+    ("skipped-test", "b_test.go", 'b.Skip("slow")'),
     ("nolint", "a.go", "x := f() //nolint:errcheck"),
     ("allow", "a.rs", "#[allow(clippy::must_use_candidate)]"),
     ("allow", "lib.rs", "#![allow(dead_code)]"),
@@ -89,6 +103,21 @@ def test_every_suppression_kind_counts_its_directive(
     root = repository(tmp_path, {"README.md": "x\n"})
     write(root, name, line + "\n")
     assert suppressions.counts(root, None)[kind] == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "line"),
+    [
+        ("a.rs", "let rest: Vec<u32> = (0..9).skip(1).collect();"),
+        ("A.java", "stream.skip(2).forEach(print);"),
+        ("a.kt", "val tail = list.asSequence().drop(1).skip(3)"),
+        ("a.py", "def mark_skip(it_skip): return latest.skip(1)"),
+    ],
+)
+def test_an_iterator_skip_is_not_a_skipped_test(tmp_path: Path, name: str, line: str) -> None:
+    root = repository(tmp_path, {"README.md": "x\n"})
+    write(root, name, line + "\n")
+    assert suppressions.counts(root, None)["skipped-test"] == 0
 
 
 def test_suppressions_without_a_base_only_look_for_focus(tmp_path: Path) -> None:
