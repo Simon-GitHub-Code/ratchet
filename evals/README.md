@@ -18,7 +18,6 @@ Every case also carries two with-only indicators that the harness excludes from 
 ## Rerun it
 
 ```
-rm -rf .venv          # uv's hard links make the harness refuse every case; `just check` recreates it
 claude plugin eval . --ablation with-without --scaffold --runs 10 --model sonnet \
   --judge-model sonnet --allow-tools Edit Write --trust-plugin --keep-temp \
   --no-publish --max-cost-usd 40 --threshold 0 -j 4 --json /tmp/epistemology.json
