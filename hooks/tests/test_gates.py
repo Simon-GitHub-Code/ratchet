@@ -355,3 +355,22 @@ def test_change_size_ignores_non_integer_ceilings(tmp_path: Path) -> None:
     write(tmp_path, "quality/thresholds.toml", "[ceilings.change]\nfiles = true\nlines = 2.5\n")
     assert change_size.ceilings(tmp_path) == (None, None)
     assert json.dumps(change_size.ceilings(tmp_path)) == "[null, null]"
+
+
+def test_change_size_on_the_default_branch_reports_a_merge_it_cannot_reopen(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path, {"quality/thresholds.toml": "[ceilings.change]\nfiles = 1\nlines = 1\n"}
+    )
+    branch(root, "feature/1-big")
+    write(root, "a.py", "a = 1\nb = 2\nc = 3\n")
+    commit(root, "feat(core): big")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "-m", "Merge feature/1-big", "feature/1-big")
+    assert run(change_size, root) == 0
+    assert "already judged" in capsys.readouterr().out
+    write(root, "b.py", "x = 1\ny = 2\n")
+    assert run(change_size, root) == 1, "uncommitted work on the default branch is still judged"
+    commit(root, "feat(core): direct")
+    assert run(change_size, root) == 1, "a direct commit on the default branch is still judged"

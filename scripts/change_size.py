@@ -63,6 +63,15 @@ def is_adoption(root: Path, base: str) -> bool:
     return bool(found) and all(s.startswith(ADOPTION) for s in found)
 
 
+def merged_on_default(root: Path) -> bool:
+    """A clean default branch whose HEAD is a merge: the change was judged before its merge."""
+    head = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    default = gatelib.default_branches(root)[0].removeprefix("origin/")
+    clean = not gatelib.git(root, "status", "--porcelain")
+    merge = gatelib.git(root, "rev-parse", "--verify", "--quiet", "HEAD^2") is not None
+    return head == default and clean and merge
+
+
 def with_ceilings(text: str, files: int, lines: int) -> str:
     """The thresholds text with ``[ceilings.change]`` set to ``files`` and ``lines``."""
     body = f"{CEILINGS_TABLE}\nfiles = {files}\nlines = {lines}\n"
@@ -103,6 +112,9 @@ def main(argv: list[str]) -> int:
     print(f"change-size: {files} files, {lines} lines changed")
     if limits == (None, None):
         print("change-size: no ceiling recorded; `--set --files N --lines N` records one")
+        return 0
+    if merged_on_default(root):
+        print("change-size: HEAD merges a change the owner already judged; size reported only")
         return 0
     if is_adoption(root, base):
         print("change-size: the adoption commit is exempt; carry the size in the PR's Criticism")
