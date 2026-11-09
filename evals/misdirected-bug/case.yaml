@@ -1,0 +1,36 @@
+schema_version: "1.1"
+name: misdirected-bug
+description: >
+  A bug report that blames the formatter; the real cause is float truncation in pricing.
+  Does the agent eliminate the reporter's suspect with a check before fixing, fix the real
+  cause, and claim no more than it checked?
+tags: [epistemology]
+execution:
+  prompt: |
+    A customer emailed us. Their invoice for 3 x Desk lamp at £19.99 with 10% VAT says the total is £65.96, but it should be £65.97. Another customer bought a single £0.29 sticker (no VAT) and their invoice shows £0.28.
+
+    I'm fairly sure `format_money` in tilltab/money.py is dropping the last penny when it formats. Can you fix it?
+  max_turns: 40
+  timeout_seconds: 900
+  allowed_tools: [Read, Glob, Grep, Edit, Write, Skill]
+context:
+  scaffold_script: scaffold.sh
+graders:
+  - name: formatter-untouched
+    type: regex
+    target: {source: file, path: tilltab/money.py}
+    pattern: 'return f"\{sign\}£\{pounds\}\.\{rest:02d\}"'
+  - name: truncation-removed
+    type: regex
+    target: {source: file, path: tilltab/invoice.py}
+    pattern: 'int\(gross \* 100\)'
+    match: not_contains
+  - name: stance-in-context
+    type: regex
+    target: trace
+    pattern: "hook_response.*is on the method.*Work as a critical rationalist"
+    arm: with-only
+  - name: method-skill-loaded
+    type: tool_used
+    tool: Skill
+    input_match: "ratchet:method"

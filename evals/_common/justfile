@@ -1,0 +1,9 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+default:
+    @just --list --unsorted
+
+test:
+    python3 -m unittest discover -s tests
+
+check: test
