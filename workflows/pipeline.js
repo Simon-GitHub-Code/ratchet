@@ -412,7 +412,9 @@ does not decide it; a question the ADRs or GLOSSARY.md answer is not open.
 Guard edits stop it too. This run has no owner at the keyboard, so no agent in it can change a
 guard path. Before writing tests, check each criterion against \`guards/manifest.toml\`: when
 one cannot be met without changing a guard path (a new import contract, a shared test fixture,
-a Layers row, a glossary entry), list it in \`guardEdits\` with the concrete edit. The owner
+a Layers row, a glossary entry), list it in \`guardEdits\` with the concrete edit. A missing
+DESIGN.md is not one: the surface is built against PRODUCT.md and impeccable's \`shape\`, and the
+owner's \`/impeccable document\` writes DESIGN.md after the merge. The owner
 lands those first and re-runs; it costs one agent instead of a whole run that ends in
 disputes. A dependency the feature needs is not a guard edit: name it, with its reason, in the
 spec's placement section, and add it with the stack's package manager (\`uv add\`,

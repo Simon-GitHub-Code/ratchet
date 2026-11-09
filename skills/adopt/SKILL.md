@@ -10,7 +10,7 @@ Load the `ratchet:method` skill first; this skill assumes its vocabulary. Templa
 
 ## Steps
 
-1. **Check the ground.** The repository is a git repository with a default branch; `claude plugin list` shows `ratchet`, `mattpocock-skills`, `pstack` and `impeccable`; `python3` (3.11 or later) is installed for the plugin's own gates; `docs/agents/issue-tracker.md` exists, which `/mattpocock-skills:setup-matt-pocock-skills` writes and only the owner can run (stop and name that command when it is missing: the feature route reads the tracker it records). Done when all hold or you have told the owner which is missing.
+1. **Check the ground.** The repository is a git repository with a default branch; `claude plugin list` shows `ratchet`, `mattpocock-skills`, `pstack` and `impeccable`; `python3` (3.11 or later) is installed for the plugin's own gates; `docs/agents/issue-tracker.md` exists, which `/mattpocock-skills:setup-matt-pocock-skills` writes and only the owner can run (stop and name that command when it is missing: the feature route reads the tracker it records). When the only uncommitted files are the records that setup wrote (`docs/agents/**` and its `## Agent skills` section of `AGENTS.md`), commit them as `chore(tracker): record the issue tracker` before anything else, so adoption starts on a clean default branch. Done when all hold or you have told the owner which is missing.
 
 2. **Initialise.** Run `/ratchet:init` unless `AGENTS.md` already opens with its four-plugin stanza. Done when `AGENTS.md` exists and `CLAUDE.md` links to it.
 
