@@ -66,6 +66,15 @@ def _in_place(args: Sequence[str]) -> Touched:
     return Touched(written=options.operands if in_place else ())
 
 
+def _modes(args: Sequence[str]) -> Touched:
+    """``chmod``, ``chown``, ``chgrp``: every operand, the whole tree below it with ``-R``.
+
+    The mode or owner operand never names a guard path, so it needs no parsing out; clearing
+    the execute bit on a git hook switches it off as surely as deleting it.
+    """
+    return Touched(removed=scan(args, NO_VALUES).operands)
+
+
 def _dd(args: Sequence[str]) -> Touched:
     return Touched(written=tuple(arg.removeprefix("of=") for arg in args if arg.startswith("of=")))
 
@@ -85,6 +94,9 @@ WRITERS: dict[str, Callable[[Sequence[str]], Touched]] = {
     "sed": _in_place,
     "perl": _in_place,
     "dd": _dd,
+    "chmod": _modes,
+    "chown": _modes,
+    "chgrp": _modes,
 }
 
 

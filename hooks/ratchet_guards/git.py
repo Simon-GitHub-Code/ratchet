@@ -25,6 +25,14 @@ _PUSH = Spec("o", frozenset({"--push-option", "--repo", "--receive-pack", "--exe
 _PATHS = Spec("bBs", frozenset({"--source"}))
 _SWITCH = Spec("bBcC", frozenset({"--create", "--force-create"}))
 _SWITCH_FLAGS = ("-b", "-B", "-c", "-C", "--create", "--force-create")
+_NO_VERIFY = "--no-verify"
+# Why: git takes any unambiguous prefix of a long option; `--no-ver` is ambiguous with
+# `--no-verbose` and git refuses it, so `--no-veri` is the shortest spelling that skips hooks.
+_NO_VERIFY_SHORTEST = len("--no-veri")
+
+
+def _skips_verify(word: str) -> bool:
+    return len(word) >= _NO_VERIFY_SHORTEST and _NO_VERIFY.startswith(word)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +105,11 @@ def _reset(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     return []
 
 
+def _commit_tree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
+    del call, context, guard
+    return [Verdict("no-verify", "git commit-tree writes a commit no hook sees")]
+
+
 def _rewrite(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     del context, guard
     return [Verdict("rewrite-history", f"git {call.subcommand}")]
@@ -123,6 +136,7 @@ def _paths(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 _SUBCOMMANDS: dict[str, Callable[[Invocation, Context, Guard], list[Verdict]]] = {
     "commit": _commit,
+    "commit-tree": _commit_tree,
     "push": _push,
     "reset": _reset,
     "filter-branch": _rewrite,
@@ -139,8 +153,9 @@ def check(words: Sequence[str], context: Context, guard: Guard) -> list[Verdict]
     """Verdicts for one ``git`` command."""
     call = invocation(words, context.cwd)
     verdicts: list[Verdict] = []
-    if "--no-verify" in call.args:
-        verdicts.append(Verdict("no-verify", f"git {call.subcommand} --no-verify"))
+    skipping = next((arg for arg in call.args if _skips_verify(arg)), None)
+    if skipping is not None:
+        verdicts.append(Verdict("no-verify", f"git {call.subcommand} {skipping}"))
     if _hooks_redirected(call.configs):
         verdicts.append(Verdict("hooks-path", "git -c core.hooksPath"))
     rule = _SUBCOMMANDS.get(call.subcommand)
