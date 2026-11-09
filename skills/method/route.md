@@ -28,7 +28,7 @@ Debugging enters at stage 7: `diagnosing-bugs`, which an agent may call, or `/ps
 
 A `/ratchet:feature` run that blocks leaves a stash named `<branch>: blocked run`. The route holds that ticket while the default branch has not moved past the stash, and names the questions or guard edits instead, so `/ratchet:next` never offers a rerun that would block the same way. The owner answering the ticket or landing the edits on the default branch releases it; an answer that moves no commit, as an issue comment on a forge, releases it once the owner drops the stash.
 
-Two more states the route reads from the local tracker. A ticket whose `feature/<n>-*` branch is merged but which is still open is marked resolved before anything is built again. Open tickets of which none is agent-ready name the first unblocked one for the owner to agree, before a new spec is written.
+An `AGENTS.md` that still holds the purpose placeholder sends the owner back to `/ratchet:init`, which a dismissed dialog leaves unfinished. A local spec with no tickets beside it is split with `to-tickets` before another spec is written. Two more states the route reads from the local tracker. A ticket whose `feature/<n>-*` branch is merged but which is still open is marked resolved before anything is built again. Open tickets of which none is agent-ready name the first unblocked one for the owner to agree, before a new spec is written.
 
 ## Where poteto-mode meets the guard
 
