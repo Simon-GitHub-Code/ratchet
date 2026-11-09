@@ -156,7 +156,8 @@ def test_comments_start_only_at_a_word() -> None:
 
 def test_redirects_and_file_descriptors() -> None:
     commands = parse_shell("cmd 2>err >out 2>&1 >&- <in &>both 1>>more <<<here 12>fd x").commands
-    assert commands == (SimpleCommand(("cmd", "x"), ("err", "out", "both", "more", "fd")),)
+    writes = ("err", "out", "both", "more", "fd")
+    assert commands == (SimpleCommand(("cmd", "x"), writes, herestrings=("here",)),)
     assert parse_shell("echo 1&& ls").commands[0].words == ("echo", "1")
     assert words_of("a ) b") == ["a", "b"]
     assert parse_shell("a | b |& c; d").commands == (

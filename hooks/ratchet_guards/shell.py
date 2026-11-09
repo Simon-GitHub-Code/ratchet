@@ -10,6 +10,7 @@ fewer:
   file descriptor written against the operator (``2>``) is dropped;
 - ``$(...)`` and backticks, quoted or not, are lifted out as nested scripts and leave a
   placeholder word behind; a ``case`` pattern's ``)`` does not end a ``$(...)``;
+- the word after ``<<<`` is kept as a here-string, to be read as the stdin of its command;
 - heredoc bodies are lifted out too, so prose in a commit message is never read as commands;
   the operator leaves a numbered marker so a shell fed by the heredoc can be checked;
 - ``#`` at the start of a word begins a comment.
@@ -45,13 +46,15 @@ class Token:
 class SimpleCommand:
     """One command: its unquoted words, the paths it redirects into, the heredocs it reads.
 
-    ``piped`` is true when its output feeds the next command through ``|`` or ``|&``.
+    ``piped`` is true when its output feeds the next command through ``|`` or ``|&``;
+    ``herestrings`` are the words it reads through ``<<<``.
     """
 
     words: tuple[str, ...]
     writes: tuple[str, ...] = ()
     heredocs: tuple[int, ...] = ()
     piped: bool = False
+    herestrings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,12 +258,15 @@ class _Splitter:
     words: list[str] = field(default_factory=list)
     writes: list[str] = field(default_factory=list)
     heredocs: list[int] = field(default_factory=list)
+    herestrings: list[str] = field(default_factory=list)
     redirect: str | None = None
 
     def word(self, word: str) -> None:
         redirect, self.redirect = self.redirect, None
         if redirect is None:
             self.words.append(word)
+        elif redirect == "<<<":
+            self.herestrings.append(word)
         elif redirect.startswith("<<") and word.startswith(HEREDOC_MARK):
             self.heredocs.append(int(word.removeprefix(HEREDOC_MARK)))
         elif ">" in redirect and not _is_fd_target(redirect, word):
@@ -273,10 +279,15 @@ class _Splitter:
         if self.words or self.writes:
             piped = operator in {"|", "|&"}
             command = SimpleCommand(
-                tuple(self.words), tuple(self.writes), tuple(self.heredocs), piped
+                tuple(self.words),
+                tuple(self.writes),
+                tuple(self.heredocs),
+                piped,
+                tuple(self.herestrings),
             )
             self.commands.append(command)
         self.words, self.writes, self.heredocs, self.redirect = [], [], [], None
+        self.herestrings = []
 
 
 def split(tokens: list[Token]) -> list[SimpleCommand]:

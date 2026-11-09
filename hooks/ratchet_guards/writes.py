@@ -1,8 +1,13 @@
 """Shell commands that write, move or delete files, and the paths each one touches.
 
 The guarded channel for changing a guard path is the Edit tool, which asks the owner; the
-shell route is denied outright. Interpreters writing files themselves (``python -c``,
-``node -e``) are out of reach of any command-line check and are left to diff detection.
+shell route is denied outright. An interpreter writing files itself is judged by its program
+text, not by the paths on its command line (``ratchet_guards.interpreters``): ``python3 -c``,
+``python3 - <<'EOF'``, ``node -e``, ``perl -e``, ``ruby -e``, ``deno eval`` and ``bun -e`` are
+denied when the program names a guard path in a string literal and holds a write call.
+``perl -i`` and ``ruby -i`` rewrite the files named on the command line, so they are writers
+here. Still out of reach, and left to diff detection: a script file run by path, a path built
+at run time, a program fetched or decoded before it runs.
 """
 
 from collections.abc import Callable, Sequence
@@ -103,6 +108,7 @@ WRITERS: dict[str, Callable[[Sequence[str]], Touched]] = {
     "truncate": _remove,
     "sed": _in_place,
     "perl": _in_place,
+    "ruby": _in_place,
     "dd": _dd,
     "chmod": _modes,
     "chown": _modes,

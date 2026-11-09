@@ -4,7 +4,9 @@ A command line is lexed (``ratchet_guards.shell``), and each simple command is c
 order, tracking ``cd`` and branch switches. Command substitutions, ``bash -c`` strings,
 ``eval`` arguments, ``find -exec`` commands and heredocs fed to a shell are checked as
 scripts of their own. A wrapper (``sudo``, ``env``, ``xargs``, ``timeout`` ...) is checked
-from every later word that names a ruled command, so its own options cannot hide one.
+from every later word that names a ruled command, so its own options cannot hide one. An
+interpreter given an inline program (``python3 -c``, ``node -e``, or a heredoc, here-string
+or pipe on its stdin) is judged by the program text (``ratchet_guards.interpreters``).
 """
 
 import re
@@ -12,7 +14,7 @@ from collections.abc import Callable, Sequence
 from itertools import pairwise
 from pathlib import PurePosixPath
 
-from ratchet_guards import gh, git, writes
+from ratchet_guards import gh, git, interpreters, writes
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Options, Spec, scan
 from ratchet_guards.shell import SimpleCommand, parse
@@ -23,6 +25,7 @@ SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 WRAPPERS = frozenset(
     {"sudo", "doas", "env", "nohup", "time", "command", "builtin", "exec", "nice", "ionice"}
     | {"timeout", "stdbuf", "xargs", "unbuffer", "setsid", "chronic", "watch"}
+    | {"uv", "uvx", "poetry"}
 )
 RESERVED = frozenset(
     {"{", "}", "!", "if", "then", "else", "elif", "fi", "do", "done"} | {"while", "until"}
@@ -118,6 +121,33 @@ def _reads_script_from_stdin(words: Sequence[str]) -> bool:
         return False
     options = _shell_options(rest[shell + 1 :])
     return "-c" not in options.flags and ("-s" in options.flags or not options.operands)
+
+
+def _interpreter_call(words: Sequence[str]) -> interpreters.Invocation | None:
+    """The interpreter command in ``words``, perhaps behind wrappers."""
+    _, rest = _assignments(words)
+    if not rest:
+        return None
+    starts = range(len(rest)) if _name(rest[0]) in WRAPPERS else range(1)
+    calls = (interpreters.invocation(_name(rest[index]), rest[index + 1 :]) for index in starts)
+    return next((call for call in calls if call is not None), None)
+
+
+def _stdin_texts(pipeline: Sequence[SimpleCommand], heredocs: Sequence[str]) -> list[str]:
+    """What a pipeline's last command reads on stdin, as text.
+
+    The heredoc bodies and here-strings of every command in the pipeline, and every run of
+    trailing arguments of the commands upstream, so a wrapper or brace before ``echo`` cannot
+    hide what it prints.
+    """
+    texts = [heredocs[index] for command in pipeline for index in command.heredocs]
+    texts += [text for command in pipeline for text in command.herestrings]
+    texts += [
+        " ".join(command.words[start:])
+        for command in pipeline[:-1]
+        for start in range(len(command.words))
+    ]
+    return texts
 
 
 def _exec_commands(words: Sequence[str]) -> list[list[str]]:
@@ -226,6 +256,7 @@ class _Checker:
             pipeline.append(command)
             if _reads_script_from_stdin(command.words):
                 verdicts += self._fed(pipeline, parsed.heredocs, context)
+            verdicts += self._fed_interpreter(pipeline, parsed.heredocs, context)
             pipeline = pipeline if command.piped else []
             context = self._advance(command.words, context)
         return verdicts
@@ -233,19 +264,31 @@ class _Checker:
     def _fed(
         self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context
     ) -> list[Verdict]:
-        """Check what a pipeline feeds into a shell: heredoc bodies and upstream arguments.
-
-        Every run of trailing arguments counts, so a wrapper or brace before ``echo`` cannot
-        hide what it prints.
-        """
-        scripts = [heredocs[index] for command in pipeline for index in command.heredocs]
-        scripts += [
-            " ".join(command.words[start:])
-            for command in pipeline[:-1]
-            for start in range(len(command.words))
-        ]
+        """Check what a pipeline feeds into a shell as scripts of their own."""
         inner = _Checker(self.guard, self.depth + 1)
+        scripts = _stdin_texts(pipeline, heredocs)
         return [v for script in scripts for v in inner.script(script, context)]
+
+    def _fed_interpreter(
+        self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context
+    ) -> list[Verdict]:
+        """Check what a pipeline feeds into an interpreter that runs its stdin as a program."""
+        call = _interpreter_call(pipeline[-1].words)
+        if call is None or not call.reads_stdin:
+            return []
+        return self._programs(call, _stdin_texts(pipeline, heredocs), context)
+
+    def _programs(
+        self, call: interpreters.Invocation, programs: Sequence[str], context: Context
+    ) -> list[Verdict]:
+        """A write to a guard path from inline programs: one that names it and holds a write."""
+        verdicts: list[Verdict] = []
+        for program in filter(call.writes, programs):
+            names = interpreters.named_paths(program)
+            hits = self.guard.locator.words(names, context.cwd, destructive=call.removes(program))
+            details = (interpreters.detail(call.name, hit.path, hit.group.name) for hit in hits)
+            verdicts += [Verdict("guard-path-write", detail) for detail in details]
+        return verdicts
 
     def _writes(
         self, written: Sequence[str], removed: Sequence[str], context: Context, *, verb: str
@@ -286,6 +329,9 @@ class _Checker:
         verdicts = [
             v for script in _inner_scripts(head, words) for v in inner.script(script, context)
         ]
+        call = interpreters.invocation(head, words[1:])
+        if call is not None:
+            verdicts += self._programs(call, call.programs, context)
         commands = _exec_commands(words) if head == "find" else []
         verdicts += [v for command in commands for v in inner.words(command, context)]
         touched = writes.touched(head, words[1:])
