@@ -40,10 +40,14 @@ _NO_VERIFY = "--no-verify"
 # Why: git takes any unambiguous prefix of a long option; `--no-ver` is ambiguous with
 # `--no-verbose` and git refuses it, so `--no-veri` is the shortest spelling that skips hooks.
 _NO_VERIFY_SHORTEST = len("--no-veri")
+# `git am` has no `--verbose`, so `--no-v` is already unambiguous there.
+_AM_NO_VERIFY_SHORTEST = len("--no-v")
+_AM = Spec("Cp", frozenset({"--directory", "--exclude", "--include", "--whitespace"}))
 
 
-def _skips_verify(word: str) -> bool:
-    return len(word) >= _NO_VERIFY_SHORTEST and _NO_VERIFY.startswith(word)
+def _skips_verify(word: str, subcommand: str) -> bool:
+    shortest = _AM_NO_VERIFY_SHORTEST if subcommand == "am" else _NO_VERIFY_SHORTEST
+    return len(word) >= shortest and _NO_VERIFY.startswith(word)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +97,13 @@ def _commit(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     if "--amend" in options.flags and guard.repo.head_is_pushed(call.cwd):
         verdicts.append(Verdict("amend-pushed", "git commit --amend on a pushed HEAD"))
     return verdicts
+
+
+def _am(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
+    del context, guard
+    if "-n" in scan(call.args, _AM).flags:
+        return [Verdict("no-verify", "git am -n")]
+    return []
 
 
 def _destination(refspec: str, current: str | None) -> str | None:
@@ -167,6 +178,7 @@ def _paths(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 _SUBCOMMANDS: dict[str, Callable[[Invocation, Context, Guard], list[Verdict]]] = {
     "commit": _commit,
+    "am": _am,
     "commit-tree": _commit_tree,
     "push": _push,
     "reset": _reset,
@@ -184,7 +196,7 @@ def check(words: Sequence[str], context: Context, guard: Guard) -> list[Verdict]
     """Verdicts for one ``git`` command."""
     call = invocation(words, context.cwd)
     verdicts: list[Verdict] = []
-    skipping = next((arg for arg in call.args if _skips_verify(arg)), None)
+    skipping = next((arg for arg in call.args if _skips_verify(arg, call.subcommand)), None)
     if skipping is not None:
         verdicts.append(Verdict("no-verify", f"git {call.subcommand} {skipping}"))
     if _hooks_redirected(call.configs):
