@@ -223,6 +223,8 @@ DENIED: list[tuple[str, list[str]]] = [
     ("git --no-pager push --force", ["force-push"]),
     ("git -c core.hooksPath=/tmp/a=b commit -m x", ["hooks-path"]),
     ("git --config-env core.hooksPath=HOOKS commit -m x", ["hooks-path"]),
+    ("git --config-env=core.hooksPath=HOOKS commit -m x", ["hooks-path"]),
+    ("git -ccore.hooksPath=/dev/null commit -m x", ["hooks-path"]),
     ("git switch main && git status && git push", ["push-main"]),
     ("echo x >& CLAUDE.md", [W]),
     ("cd -P .claude && echo x > settings.json", [W]),
