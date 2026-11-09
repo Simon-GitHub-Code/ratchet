@@ -20,7 +20,7 @@ What this change claims, and the observation that would show it wrong. For a fix
 Critic findings and how each was resolved; review issues; disputes raised and their status. Links to the ticket and the spec where they exist.
 
 ## Guard paths
-Output of the guard-diff entry point, and for each path the upheld dispute or the owner's hand.
+Output of the guard-diff entry point, and for each path the upheld dispute, the dependency the spec named and why, or the owner's hand.
 
 ## Decisions
 ADRs written or superseded, new dependencies and why, or "none".
