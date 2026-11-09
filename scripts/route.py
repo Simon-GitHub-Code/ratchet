@@ -45,6 +45,11 @@ GLOSSARY = Path("GLOSSARY.md")
 GLOSSARY_PLACEHOLDER = "<project>"
 DESIGN_BRIEF = Path("docs/design-brief.md")
 LOCAL_TICKETS = ".scratch/*/issues/*.md"
+LOCAL_SPECS = ".scratch/*/spec.md"
+PURPOSE_PLACEHOLDER = "<One paragraph"
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+AGENTS_TEMPLATE = PLUGIN_ROOT / "skills/init/templates/AGENTS.md"
+PLUGIN_LINE = re.compile(r"^- \*\*([^*]+)\*\*")
 ENTRY_POINT_ROW = re.compile(r"^\|\s*check\s*\|\s*`([^`]+)`\s*\|", re.MULTILINE)
 CHECK_FALLBACK = "the binding's `check` entry point"
 
@@ -201,6 +206,20 @@ def triage_step(root: Path) -> Step | None:
     )
 
 
+def unsplit_spec(root: Path) -> Step | None:
+    """A local spec with no tickets beside it: ``to-tickets`` splits it before a new spec."""
+    for spec in sorted(root.glob(LOCAL_SPECS)):
+        if not any((spec.parent / "issues").glob("*.md")):
+            ref = spec.relative_to(root).as_posix()
+            return Step(
+                f"{TICKETS} {ref}",
+                f"{ref} has no tickets yet",
+                f"{CONJECTURE} <ticket>, then {FEATURE} <ticket>",
+                "specify",
+            )
+    return None
+
+
 def has_conjecture(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> bool:
     return preflight.conjecture_failure(ticket, root, gh) is None
 
@@ -294,7 +313,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
     if tickets is None:
         tickets = local_tickets(root)
     if not tickets:
-        return (triage_step(root) if local else None) or Step(
+        return (triage_step(root) or unsplit_spec(root) if local else None) or Step(
             SPEC,
             "no open ticket carries the agent-ready label",
             f"{TICKETS}, then {CONJECTURE} <ticket>",
@@ -375,10 +394,42 @@ def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
     )
 
 
+def _plugin_lines(text: str) -> dict[str, str]:
+    return {m.group(1): line for line in text.splitlines() if (m := PLUGIN_LINE.match(line))}
+
+
+def stale_plugin_lines(agents: Path) -> list[str]:
+    """The questions whose plugin line in ``agents`` differs from the init template's.
+
+    Init writes the four-plugin stanza once; a later ratchet changes what it says about the
+    other plugins, so an adopted repository keeps the old text until init runs again.
+    """
+    if not agents.is_file():
+        return []
+    template = _plugin_lines(AGENTS_TEMPLATE.read_text(encoding="utf-8"))
+    present = _plugin_lines(agents.read_text(errors="replace"))
+    return [q for q, line in present.items() if q in template and template[q] != line]
+
+
 def setup_step(root: Path) -> Step | None:
     """The step before adoption, or ``None`` once the repository is adopted."""
     if not names_method(root):
         return Step(INIT, "AGENTS.md does not name the method", TRACKER_SETUP, "init")
+    agents = root / "AGENTS.md"
+    if agents.is_file() and PURPOSE_PLACEHOLDER in agents.read_text(errors="replace"):
+        return Step(
+            INIT,
+            "AGENTS.md still holds the purpose placeholder, so init did not finish",
+            TRACKER_SETUP,
+            "init",
+        )
+    if stale := stale_plugin_lines(agents):
+        return Step(
+            INIT,
+            f"AGENTS.md's plugin lines for {', '.join(stale)} differ from this ratchet's",
+            NEXT,
+            "init",
+        )
     if not (root / TRACKER_RECORD).is_file():
         return Step(
             TRACKER_SETUP,

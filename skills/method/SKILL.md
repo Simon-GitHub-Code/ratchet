@@ -56,7 +56,7 @@ Work as a critical rationalist. Every claim about the software, yours included, 
 - Report a green run by what it attempted and what it did not; report "nothing found" with what you ran. Nothing found refutes only the attempts that would have hit.
 - Expect your best work to be wrong somewhere and say where you would look first. A rule of the method you think wrong is criticised in writing, as a dispute, never in action.
 
-The hook puts this section in every session's context in a repository on the method; the words behind it are in [epistemology.md](epistemology.md).
+The hook puts this section in every session's context in a repository on the method; the words behind it are on the merge-rule page of the `ratchet:method` skill.
 
 ## Working
 
@@ -75,7 +75,7 @@ The hook puts this section in every session's context in a repository on the met
 - A mutant survives: kill it with a test, or register it as equivalent with a reason of twenty characters or more.
 - A measured value is above its threshold: run `ratchet`, commit the result with the change that earned it.
 - A tier runs over its ceiling: make it faster in the same change (cache, split, shard, run less), never by quarantining a test or raising the ceiling; raising is an ADR.
-- The change touches a user interface: `impeccable` `shape` before you build the surface, `polish` before you open the pull request; `DESIGN.md` is the standard the review judges it against.
+- The change touches a user interface: load `impeccable:impeccable` yourself, `shape` before you build the surface, `polish` before you open the pull request; `DESIGN.md` is the standard the review judges it against.
 - You need a word the glossary lacks: add the entry with its *Avoid* list, through `domain-modeling`, before using it in code.
 - You need a dependency: that is a design decision. Say why in the pull request body, or in an ADR when it shapes the architecture.
 - A tool reports a finding you think is wrong: it is a criticism. Answer it in writing (a dispute, an ADR, a register entry with a reason) or fix the code.

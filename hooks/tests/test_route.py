@@ -354,3 +354,36 @@ def test_a_detached_head_counts_as_the_default_branch(tmp_path: Path) -> None:
     checkout = route.observe(root)
     assert checkout is not None
     assert checkout.on_default
+
+
+def test_an_unfinished_init_is_run_again(tmp_path: Path) -> None:
+    unfinished = STANZA + "\n## What this is\n\n<One paragraph: purpose, who it is for.>\n"
+    root = repository(tmp_path, {"AGENTS.md": unfinished})
+    step = route.decide(root, None)
+    assert step.command == route.INIT
+    assert "purpose" in step.why
+
+
+def test_a_local_spec_without_tickets_is_split_next(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, ".scratch/settle/spec.md": "# Settle\n"})
+    step = route.decide(root, None)
+    assert step.command == f"{route.TICKETS} .scratch/settle/spec.md"
+    assert step.stage == "specify"
+    write(root, ".scratch/settle/issues/01-parse.md", "# Parse\n\nStatus: resolved\n")
+    commit(root, "docs: tickets")
+    assert route.decide(root, None).command == route.SPEC, "a spec whose tickets exist is split"
+
+
+def test_plugin_lines_older_than_the_template_send_the_owner_to_init(tmp_path: Path) -> None:
+    template = (route.PLUGIN_ROOT / "skills/init/templates/AGENTS.md").read_text()
+    lines = [line for line in template.splitlines() if line.startswith("- **")][:4]
+    current = STANZA + "\n" + "\n".join(lines) + "\n"
+    root = repository(tmp_path, {**ADOPTED, "AGENTS.md": current})
+    assert route.decide(root, None).command != route.INIT
+    stale = current.replace(lines[1], lines[1].split("`poteto-mode`")[0] + "refused to an agent.")
+    write(root, "AGENTS.md", stale)
+    commit(root, "docs: an older stanza")
+    step = route.decide(root, None)
+    assert step.command == route.INIT
+    assert "In what style, with which levers?" in step.why
+    assert step.then == route.NEXT

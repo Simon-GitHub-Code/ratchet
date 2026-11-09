@@ -1,0 +1,21 @@
+---
+status: accepted
+---
+# A dependency the spec names is the spec's decision, not a gate change
+
+Every preset puts the dependency manifest and its lockfile (`pyproject.toml` and `uv.lock`, `package.json` and `pnpm-lock.yaml`) in the `tool-config` group, because gate configuration lives in them, and the `snapshots` gate copies each one into `quality/snapshots/`. So a feature that adds one library changes three guard paths. In the Rust trial of 2026-11-08 the first owner-away `/ratchet:feature` stopped at the spec stage on `proptest`, a dev-dependency the adoption interview had already agreed, and landing it ahead on the default branch is not open to a stack whose unused-dependency gate (`knip`, `deptry`, `cargo machete`) turns the default branch red.
+
+We decided that `guard-diff` lists and counts every changed guard path, dependency files included, and adds under a manifest, a lockfile or a snapshot of one what the change does to dependencies. A manifest change is dependency-only when both sides parse, they are equal once the dependency tables and the package's own version are set aside, no name is listed twice, and every entry that changed is a new one fetched from the registry by name and version range. A lockfile change (`uv.lock`, `Cargo.lock`, `poetry.lock`, `package-lock.json`) is dependency-only when no artifact changed in place at the same version, every new artifact comes from a registry the lockfile already used or the ecosystem's default, and no package's highest version falls (any new version below it, where versions do not sit side by side). Anything else carries the reason it is not. The owner-away pipeline treats a manifest whose note adds only packages its spec named, and a lockfile beside one, as the spec's decision; every other guard path still forces `request_changes`. The hook still asks on an `Edit` of the manifest; pipeline agents add a dependency with the package manager. Decided 2026-11-09.
+
+An earlier form of this decision, the same day, listed dependency-only paths apart and did not count them. An independent review showed it unsafe as an exemption: lockfiles in a format it did not read passed unread, a `uv.lock` artifact swapped at the same version passed, a re-spelled or repeated name hid a rollback, and npm aliases, git shorthands, relative paths and Cargo's `package` and `registry` keys fetched a fork. Each is now a test in `hooks/tests/test_dependencies.py`, and the listing never exempts: the cover is the pipeline's, scoped to names the spec wrote down before the code.
+
+## Refutation criterion
+
+This is wrong if a loosening of a gate reaches a merge through a dependency the spec named. The open attempt is an added test-runner plugin that deselects tests or swallows failures: seed one in a trial repository through a spec that names it, and if no gate goes red (a test count, a coverage group), additions need an allow-list of package names or a test-count gate in every preset. Known residue: `pnpm-lock.yaml`, `yarn.lock` and the other formats are not read, so a TypeScript feature that adds a dependency still ends in `request_changes` for the owner; and in `package-lock.json` only the highest copy of a package must not fall, so a top-level copy rolled back under a higher nested one passes.
+
+## Considered options
+
+- Keep the manifests guarded and send dependency tickets to an owner-present `/pstack:poteto-mode` run: rejected, it makes the most common feature change unbuildable with the owner away.
+- List dependency-only paths apart and not count them in `guard-diff`: tried, and rejected after the review above. A listing every reader trusts must not depend on a classifier being complete.
+- Guard the manifest section by section in the hook: rejected, permission rules match whole paths, so the settings layer would still ask, and `uv add` writes the file where no hook sees it.
+- Move gate configuration out of the manifests into dedicated files and drop the manifests from the guard: rejected, Rust lint levels live in `Cargo.toml`'s `[lints]`, and which file wins when both exist differs per tool.

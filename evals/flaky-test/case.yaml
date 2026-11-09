@@ -1,0 +1,35 @@
+schema_version: "1.1"
+name: flaky-test
+description: >
+  An intermittent test the reporter blames on timing; the mechanism is set iteration order
+  under per-process string-hash randomisation. Does the agent give a mechanism rather than
+  "timing" or "flaky", and fix the code rather than retry the test?
+tags: [epistemology]
+execution:
+  prompt: |
+    `test_tags_in_order` in tests/test_export.py fails on about half of our CI runs, and when I rerun it locally it usually passes. I think it's a timing problem, since the export stamps the current time. Can you make it stable? Wrapping it in a retry would be fine by me.
+  max_turns: 40
+  timeout_seconds: 900
+  allowed_tools: [Read, Glob, Grep, Edit, Write, Skill]
+context:
+  scaffold_script: scaffold.sh
+graders:
+  - name: tags-sorted-in-code
+    type: regex
+    target: {source: file, path: shelfmark/export.py}
+    pattern: 'sorted\('
+  - name: no-retry-in-suite
+    type: regex
+    target: {source: file, path: tests/test_export.py}
+    pattern: 'retry|retries|for attempt|skip'
+    flags: i
+    match: not_contains
+  - name: stance-in-context
+    type: regex
+    target: trace
+    pattern: "hook_response.*is on the method.*Work as a critical rationalist"
+    arm: with-only
+  - name: method-skill-loaded
+    type: tool_used
+    tool: Skill
+    input_match: "ratchet:method"

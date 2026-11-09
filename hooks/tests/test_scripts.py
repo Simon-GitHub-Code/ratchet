@@ -2,6 +2,7 @@
 
 import json
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -218,3 +219,110 @@ def test_lowered_main_against_a_real_repository(
     write(fresh, "quality/thresholds.toml", THRESHOLDS)
     assert lowered.main(["x", "--root", str(fresh)]) == 0
     assert "is new at" in capsys.readouterr().out
+
+
+def test_a_true_flag_turned_off_or_dropped_is_a_loosening() -> None:
+    before = lowered.flatten({"rs": {"coverage": {"domain": {"absolute": True, "line": 100}}}})
+    assert lowered.loosened(before, {**before, "rs.coverage.domain.absolute": False}) == [
+        "rs.coverage.domain.absolute: turned off"
+    ]
+    assert lowered.loosened(before, {"rs.coverage.domain.line": 100.0}) == [
+        "rs.coverage.domain.absolute: removed (was true)"
+    ]
+    assert lowered.loosened({"x.on": False}, {"x.on": True}) == []
+
+
+def loosenings_between(old: str, new: str) -> list[str]:
+    return lowered.loosened(
+        lowered.flatten(tomllib.loads(old)), lowered.flatten(tomllib.loads(new))
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ("min = 80", "min = false", "cov.min: changed from a number to a boolean"),
+        ("min = 80", "min = true", "cov.min: changed from a number to a boolean"),
+        ("min = true", "min = 80", "cov.min: changed from a boolean to a number"),
+        ("min = false", "min = 1", "cov.min: changed from a boolean to a number"),
+    ],
+)
+def test_a_change_between_a_number_and_a_boolean_is_a_loosening(
+    old: str, new: str, message: str
+) -> None:
+    assert loosenings_between(f"[cov]\n{old}", f"[cov]\n{new}") == [message]
+
+
+@pytest.mark.parametrize("new", ['"eighty"', "[80]"])
+def test_a_number_turned_into_a_string_or_list_reads_as_removed(new: str) -> None:
+    assert loosenings_between("[cov]\nmin = 80", f"[cov]\nmin = {new}") == [
+        "cov.min: removed (was 80.0)"
+    ]
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    ("table", "before"), [("cov", "min = 80"), ("ceilings.x", "sec = 10")], ids=["floor", "ceiling"]
+)
+def test_a_value_that_is_not_a_finite_number_is_a_loosening(
+    table: str, before: str, value: str
+) -> None:
+    key = before.partition(" ")[0]
+    after = f"{key} = {value}"
+    assert loosenings_between(f"[{table}]\n{before}", f"[{table}]\n{after}") == [
+        f"{table}.{key}: {value} is not a finite number"
+    ]
+
+
+ADR = """# 0007: the change ceiling rises for the settlement feature
+
+## Decision
+Relaxes: ceilings.change.lines from 1500 to 2500
+- Relaxes: rs.coverage.domain.absolute from true to false
+Relaxes: rs.coverage.domain.branch from 100 to removed
+Relaxes: rs.coverage.domain.line from soon to later
+"""
+
+
+def test_a_loosening_an_adr_names_exactly_passes_and_says_which(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    base = "[ceilings.change]\nlines = 1500\n[rs.coverage.domain]\nabsolute = true\n"
+    base += "line = 100\nbranch = 100\n"
+    root = repository(tmp_path, {"quality/thresholds.toml": base})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "quality/thresholds.toml", base.replace("1500", "2500").replace("true", "false"))
+    assert lowered.main(["lowered", "--root", str(root)]) == 1
+    write(root, "docs/adr/0007-wider.md", ADR)
+    assert lowered.main(["lowered", "--root", str(root)]) == 0
+    out = capsys.readouterr().out
+    relaxed = "ceiling raised from 1500.0 to 2500.0, relaxed by docs/adr/0007-wider.md"
+    assert f"ceilings.change.lines: {relaxed}" in out
+    write(root, "quality/thresholds.toml", base.replace("1500", "3000"))
+    assert lowered.main(["lowered", "--root", str(root)]) == 1, "the ADR names 2500, not 3000"
+    write(root, "quality/thresholds.toml", base.replace("line = 100\n", ""))
+    assert lowered.main(["lowered", "--root", str(root)]) == 1, "no ADR names line removed"
+    write(root, "quality/thresholds.toml", base.replace("branch = 100\n", ""))
+    assert lowered.main(["lowered", "--root", str(root)]) == 0, "branch removed is named"
+
+
+def test_an_adr_naming_a_number_does_not_pass_a_boolean_flip(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"quality/thresholds.toml": "[g]\nx = true\ny = 1\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(
+        root,
+        "docs/adr/0008-numbers.md",
+        "Relaxes: g.x from 1 to 0\nRelaxes: g.y from true to false\n",
+    )
+    write(root, "quality/thresholds.toml", "[g]\nx = false\ny = 1\n")
+    assert lowered.main(["lowered", "--root", str(root)]) == 1, "1 to 0 is not true to false"
+    write(root, "quality/thresholds.toml", "[g]\nx = true\ny = 0\n")
+    assert lowered.main(["lowered", "--root", str(root)]) == 1, "true to false is not 1 to 0"
+    write(
+        root, "docs/adr/0009-both.md", "Relaxes: g.x from true to false\nRelaxes: g.y from 1 to 0\n"
+    )
+    assert lowered.main(["lowered", "--root", str(root)]) == 0, "each is named in its own kind"
+    write(root, "quality/thresholds.toml", "[g]\nx = false\ny = 0\n")
+    assert lowered.main(["lowered", "--root", str(root)]) == 0

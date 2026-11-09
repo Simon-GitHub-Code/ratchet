@@ -41,13 +41,23 @@ def measure(root: Path, base: str) -> tuple[int, int]:
     return files, lines
 
 
+def _limit(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
 def ceilings(root: Path) -> tuple[int | None, int | None]:
     table = gatelib.table(gatelib.thresholds(root), "ceilings", "change")
-    files, lines = table.get("files"), table.get("lines")
-    return (
-        files if isinstance(files, int) and not isinstance(files, bool) else None,
-        lines if isinstance(lines, int) and not isinstance(lines, bool) else None,
-    )
+    return _limit(table.get("files")), _limit(table.get("lines"))
+
+
+def malformed(root: Path) -> list[str]:
+    """Each ``files`` or ``lines`` ceiling that is present but not a non-negative integer."""
+    table = gatelib.table(gatelib.thresholds(root), "ceilings", "change")
+    return [
+        f"ceilings.change.{name}: {table[name]!r} is not a non-negative integer"
+        for name in ("files", "lines")
+        if name in table and _limit(table[name]) is None
+    ]
 
 
 def over(measured: tuple[int, int], limits: tuple[int | None, int | None]) -> list[str]:
@@ -61,6 +71,24 @@ def over(measured: tuple[int, int], limits: tuple[int | None, int | None]) -> li
 def is_adoption(root: Path, base: str) -> bool:
     found = gatelib.subjects(root, base)
     return bool(found) and all(s.startswith(ADOPTION) for s in found)
+
+
+def merged_on_default(root: Path) -> bool:
+    """A clean default branch whose HEAD is a merge: the change was judged before its merge."""
+    head = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    default = gatelib.default_branches(root)[0].removeprefix("origin/")
+    clean = not gatelib.git(root, "status", "--porcelain")
+    merge = gatelib.git(root, "rev-parse", "--verify", "--quiet", "HEAD^2") is not None
+    return head == default and clean and merge
+
+
+def exemption(root: Path, base: str) -> str | None:
+    """Why the size is reported only, or ``None`` when it is judged."""
+    if merged_on_default(root):
+        return "HEAD merges a change the owner already judged; size reported only"
+    if is_adoption(root, base):
+        return "the adoption commit is exempt; carry the size in the PR's Criticism"
+    return None
 
 
 def with_ceilings(text: str, files: int, lines: int) -> str:
@@ -94,6 +122,8 @@ def main(argv: list[str]) -> int:
         if options.files is None or options.lines is None:
             parser.error("--set needs --files N and --lines N")
         return record(root, options.files, options.lines)
+    if problems := malformed(root):
+        return gatelib.report("change-size", problems)
     base = gatelib.base_commit(root, options.base)
     if base is None:
         print("change-size: no base commit yet")
@@ -104,8 +134,8 @@ def main(argv: list[str]) -> int:
     if limits == (None, None):
         print("change-size: no ceiling recorded; `--set --files N --lines N` records one")
         return 0
-    if is_adoption(root, base):
-        print("change-size: the adoption commit is exempt; carry the size in the PR's Criticism")
+    if reason := exemption(root, base):
+        print(f"change-size: {reason}")
         return 0
     return gatelib.report("change-size", over((files, lines), limits), base)
 

@@ -227,3 +227,124 @@ def test_coverage_measures_every_root_a_coverage_group_names(preset: Path) -> No
     measured = set(re.findall(r"--cov=([\w.-]+)|--coverage\.include='([\w.-]+)/", run))
     assert named <= {a or b for a, b in measured}, run
     assert body(justfile, "ratchet").splitlines()[0] == run, "the ratchet measures as coverage does"
+
+
+# Why: in the UI trial `eslint .` and `prettier --check .` went red on the agent worktrees
+# `/pstack:interrogate` leaves under .claude/worktrees/ and on impeccable's .impeccable/ files.
+COMPANION_DIRS = (".claude/", ".impeccable/")
+
+
+def test_whole_tree_tools_skip_the_companions_working_files() -> None:
+    justfile = (ADOPT / "presets/typescript-pnpm/justfile").read_text()
+    for line in (line for line in justfile.splitlines() if "eslint ." in line):
+        for directory in COMPANION_DIRS:
+            assert f"--ignore-pattern '{directory}'" in line, line
+    ignored = (ADOPT / "presets/typescript-pnpm/tools/.prettierignore").read_text().splitlines()
+    assert set(COMPANION_DIRS) <= set(ignored)
+    gitignore = (ADOPT.parent / "init/templates/gitignore").read_text().splitlines()
+    assert ".claude/worktrees/" in gitignore
+    assert ".impeccable/hook.cache.json" in gitignore
+
+
+def test_the_python_audit_exports_hashes_since_pip_audit_runs_without_pip() -> None:
+    """pip-audit refuses ``--disable-pip`` on a requirements file without hashes.
+
+    The recipe exits early while nothing ships, so the first runtime dependency is the
+    first time pip-audit reads the file; a trial on 2026-11-09 went red there.
+    """
+    text = (ADOPT / "presets/python-uv/justfile").read_text(encoding="utf-8")
+    recipe = text.split("\naudit:\n", 1)[1].split("\n\n", 1)[0]
+    exports = [line for line in recipe.splitlines() if "uv export" in line]
+    assert exports
+    assert "--disable-pip" in recipe
+    assert not any("--no-hashes" in line for line in exports), exports
+
+
+FAKE_RUNNERS = {
+    # The stand-in prints one test, collects none where NONE is set, and fails where FAIL is set;
+    # "base" means inside the merge-base worktree.
+    "python-uv": (
+        "uv",
+        (
+            'case "$PWD" in *.ratchet/base) where=base;; *) where=head;; esac\n'
+            '[ "${FAIL:-}" = "$where" ] && exit 2\n'
+            '[ "${NONE:-}" = "$where" ] && exit 5\n'
+            'echo "tests/test_a.py::test_a"\n'
+        ),
+    ),
+    "typescript-pnpm": (
+        "pnpm",
+        (
+            'case "$PWD" in *.ratchet/base) where=base;; *) where=head;; esac\n'
+            '[ "$1" = install ] && exit 0\n'
+            '[ "${FAIL:-}" = "$where" ] && exit 1\n'
+            '[ "${NONE:-}" = "$where" ] && exit 0\n'
+            'echo "src/a.test.ts > a"\n'
+        ),
+    ),
+}
+
+
+def _run_test_counts(preset: Path, tmp_path: Path, **env: str) -> subprocess.CompletedProcess[str]:
+    tool, body = FAKE_RUNNERS[preset.name]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / tool).write_text("#!/usr/bin/env bash\n" + body)
+    (bin_dir / tool).chmod(0o755)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = shutil.which("git")
+    assert git
+    for argv in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "base"]):
+        subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+            [git, "-c", "user.name=t", "-c", "user.email=t@t", *argv], cwd=repo, check=True
+        )
+    text = (preset / "justfile").read_text(encoding="utf-8")
+    recipe = text.split("\ntest-counts:\n", 1)[1].split("\n\n", 1)[0]
+    script = "\n".join(line.removeprefix("    ") for line in recipe.splitlines())
+    (repo / "test-counts.sh").write_text(script.replace("{{merge_base}}", "HEAD"))
+    bash = shutil.which("bash")
+    assert bash
+    return subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        [bash, "test-counts.sh"],
+        cwd=repo,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path), **env},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+def test_test_counts_is_green_when_both_sides_collect_the_same(
+    preset: Path, tmp_path: Path
+) -> None:
+    run = _run_test_counts(preset, tmp_path)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "tests: 1 at base, 1 at head" in run.stdout
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+@pytest.mark.parametrize("side", ["base", "head"])
+def test_test_counts_is_red_when_a_side_fails_to_collect(
+    preset: Path, side: str, tmp_path: Path
+) -> None:
+    """A trial on 2026-11-09 saw a base that could not install read as zero tests and pass."""
+    run = _run_test_counts(preset, tmp_path, FAIL=side)
+    assert run.returncode != 0, run.stdout
+    assert "test-counts:" in run.stderr
+    assert not (tmp_path / "repo/.ratchet/base").exists()
+
+
+@pytest.mark.parametrize("preset", PRESETS, ids=lambda p: p.name)
+def test_test_counts_reads_a_base_with_no_tests_as_zero(preset: Path, tmp_path: Path) -> None:
+    run = _run_test_counts(preset, tmp_path, NONE="base")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "tests: 0 at base, 1 at head" in run.stdout
+
+
+def test_python_deptry_scans_src_so_the_own_package_is_first_party() -> None:
+    """From the root, deptry read a src-layout package's own import as DEP003 (2026-11-09)."""
+    text = (ADOPT / "presets/python-uv/justfile").read_text(encoding="utf-8")
+    recipe = text.split("\ndeadcode:\n", 1)[1].split("\n\n", 1)[0]
+    assert "uv run deptry src" in recipe

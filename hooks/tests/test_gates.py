@@ -61,6 +61,65 @@ def test_suppressions_count_per_kind_and_a_focus_marker_fails(tmp_path: Path, ca
     assert suppressions.focused(tmp_path / "nowhere") == []
 
 
+# Why: `#[allow(` sat in KINDS for months while whole-word matching made it unmatchable, so
+# every kind is held to a directive written the way its tool's users write it.
+DIRECTIVES = [
+    ("noqa", "a.py", "x = 1  # noqa: E501"),
+    ("type-ignore", "a.py", "y = f()  # type: ignore[misc]"),
+    ("no-cover", "a.py", "if x:  # pragma: no cover"),
+    ("no-mutate", "a.py", "x = 1  # pragma: no mutate"),
+    ("pylint-disable", "a.py", "# pylint: disable=invalid-name"),
+    ("eslint-disable", "a.ts", "// eslint-disable-next-line no-console"),
+    ("ts-ignore", "a.ts", "// @ts-expect-error the fixture is partial"),
+    ("coverage-ignore", "a.ts", "/* istanbul ignore next */"),
+    ("skipped-test", "a.test.ts", "it.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "test.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "describe.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "context.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "suite.skip('x', () => {})"),
+    ("skipped-test", "a.bench.ts", "bench.skip('x', () => {})"),
+    ("skipped-test", "a.test.ts", "xit('x', () => {})"),
+    ("skipped-test", "a.test.ts", "xdescribe('x', () => {})"),
+    ("skipped-test", "a.test.ts", "xtest('x', () => {})"),
+    ("skipped-test", "a.py", "@pytest.mark.skip(reason='x')"),
+    ("skipped-test", "A.java", "@skip"),
+    ("skipped-test", "a.rs", "#[ignore]"),
+    ("skipped-test", "b.rs", '#[ignore = "slow"]'),
+    ("skipped-test", "a_test.go", 't.Skip("flaky")'),
+    ("skipped-test", "b_test.go", 'b.Skip("slow")'),
+    ("nolint", "a.go", "x := f() //nolint:errcheck"),
+    ("allow", "a.rs", "#[allow(clippy::must_use_candidate)]"),
+    ("allow", "lib.rs", "#![allow(dead_code)]"),
+    ("allow", "b.rs", "#[expect(clippy::too_many_lines)]"),
+    ("nosec", "a.py", "subprocess.call(x)  # nosec B603"),
+]
+
+
+@pytest.mark.parametrize("directive", DIRECTIVES, ids=[line for _, _, line in DIRECTIVES])
+def test_every_suppression_kind_counts_its_directive(
+    tmp_path: Path, directive: tuple[str, str, str]
+) -> None:
+    kind, name, line = directive
+    root = repository(tmp_path, {"README.md": "x\n"})
+    write(root, name, line + "\n")
+    assert suppressions.counts(root, None)[kind] == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "line"),
+    [
+        ("a.rs", "let rest: Vec<u32> = (0..9).skip(1).collect();"),
+        ("A.java", "stream.skip(2).forEach(print);"),
+        ("a.kt", "val tail = list.asSequence().drop(1).skip(3)"),
+        ("a.py", "def mark_skip(it_skip): return latest.skip(1)"),
+    ],
+)
+def test_an_iterator_skip_is_not_a_skipped_test(tmp_path: Path, name: str, line: str) -> None:
+    root = repository(tmp_path, {"README.md": "x\n"})
+    write(root, name, line + "\n")
+    assert suppressions.counts(root, None)["skipped-test"] == 0
+
+
 def test_suppressions_without_a_base_only_look_for_focus(tmp_path: Path) -> None:
     root = repository(tmp_path, {"a.py": "x = 1  # noqa\n"})
     assert run(suppressions, root) == 0
@@ -158,6 +217,54 @@ def test_prose_without_a_glossary_or_without_avoid_lists(tmp_path: Path) -> None
     write(root, "GLOSSARY.md", GLOSSARY)
     assert prose.problems(root) == ["docs/a.md:1: 'client' is on the Avoid list of 'Customer'"]
     assert run(prose, root) == 1
+
+
+def test_prose_judges_the_change_not_the_history(tmp_path: Path, capsys: Out) -> None:
+    """A word newly put on an Avoid list does not turn every earlier record red; new uses do."""
+    root = repository(tmp_path, {"GLOSSARY.md": GLOSSARY, "DESIGN.md": "A broken image.\n"})
+    commit(root, "docs(design): record")
+    branch(root)
+    avoid_broken = GLOSSARY + "\n**Unreadable**:\nA cover that fails.\n_Avoid_: broken\n"
+    write(root, "GLOSSARY.md", avoid_broken)
+    assert run(prose, root) == 0
+    assert "'broken'" not in capsys.readouterr().out
+    write(root, "DESIGN.md", "A broken image.\nA broken cover.\n")
+    assert run(prose, root) == 1
+    assert "DESIGN.md:2: 'broken' is on the Avoid list of 'Unreadable'" in capsys.readouterr().out
+    write(root, "DESIGN.md", "A broken image.\n")
+    write(root, "docs/new.md", "Still broken.\n")
+    assert run(prose, root) == 1, "a new file has no earlier uses to keep"
+
+
+NOTE = (
+    "A note about the ordering system.\nThe client.\nMore text so a rename keeps its similarity.\n"
+)
+
+
+def test_prose_follows_a_rename_to_the_earlier_uses(tmp_path: Path, capsys: Out) -> None:
+    """A pure rename keeps the earlier Avoid-word uses; a use added in the move still fails."""
+    root = repository(tmp_path, {"GLOSSARY.md": GLOSSARY, "docs/old.md": NOTE})
+    branch(root)
+    git(root, "mv", "docs/old.md", "docs/new.md")
+    assert run(prose, root) == 0
+    assert "client" not in capsys.readouterr().out
+    commit(root, "docs(core): move the note")
+    assert run(prose, root) == 0
+    write(root, "docs/new.md", NOTE + "Another client.\n")
+    assert run(prose, root) == 1
+    assert "docs/new.md:4: 'client' is on the Avoid list" in capsys.readouterr().out
+
+
+def test_prose_counts_uses_in_a_path_holding_a_quote(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"GLOSSARY.md": GLOSSARY, "docs/it's.md": "The client.\n"})
+    branch(root)
+    write(root, "docs/it's.md", "Intro.\nThe client.\n")
+    assert run(prose, root) == 0, "the earlier use only moved down a line"
+    write(root, "docs/it's.md", "Intro.\nThe client.\nThe Client again.\n")
+    assert prose.problems(root, "HEAD") == [
+        "docs/it's.md:2: 'client' is on the Avoid list of 'Customer'",
+        "docs/it's.md:3: 'Client' is on the Avoid list of 'Customer'",
+    ]
 
 
 # --- snapshots ------------------------------------------------------------------------------
@@ -325,3 +432,59 @@ def test_change_size_ignores_non_integer_ceilings(tmp_path: Path) -> None:
     write(tmp_path, "quality/thresholds.toml", "[ceilings.change]\nfiles = true\nlines = 2.5\n")
     assert change_size.ceilings(tmp_path) == (None, None)
     assert json.dumps(change_size.ceilings(tmp_path)) == "[null, null]"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("files = 9.5", "ceilings.change.files"),
+        ("lines = 2.5", "ceilings.change.lines"),
+        ("files = true", "ceilings.change.files"),
+        ("lines = false", "ceilings.change.lines"),
+        ("files = -1", "ceilings.change.files"),
+        ('lines = "9"', "ceilings.change.lines"),
+        ("files = 3\nlines = nan", "ceilings.change.lines"),
+    ],
+)
+def test_change_size_is_red_on_a_ceiling_that_is_not_a_non_negative_integer(
+    tmp_path: Path, capsys: Out, case: tuple[str, str]
+) -> None:
+    body, named = case
+    root = repository(tmp_path, {"quality/thresholds.toml": f"[ceilings.change]\n{body}\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "a.txt", "1\n")
+    assert run(change_size, root) == 1
+    out = capsys.readouterr().out
+    assert f"{named}: " in out
+    assert "not a non-negative integer" in out
+    assert "no ceiling recorded" not in out
+
+
+def test_change_size_without_a_change_ceiling_key_records_none(tmp_path: Path, capsys: Out) -> None:
+    root = repository(tmp_path, {"quality/thresholds.toml": "[ceilings.change]\nnote = 1\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "a.txt", "1\n")
+    assert run(change_size, root) == 0
+    assert "no ceiling recorded" in capsys.readouterr().out
+    assert change_size.malformed(root) == []
+
+
+def test_change_size_on_the_default_branch_reports_a_merge_it_cannot_reopen(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(
+        tmp_path, {"quality/thresholds.toml": "[ceilings.change]\nfiles = 1\nlines = 1\n"}
+    )
+    branch(root, "feature/1-big")
+    write(root, "a.py", "a = 1\nb = 2\nc = 3\n")
+    commit(root, "feat(core): big")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "-m", "Merge feature/1-big", "feature/1-big")
+    assert run(change_size, root) == 0
+    assert "already judged" in capsys.readouterr().out
+    write(root, "b.py", "x = 1\ny = 2\n")
+    assert run(change_size, root) == 1, "uncommitted work on the default branch is still judged"
+    commit(root, "feat(core): direct")
+    assert run(change_size, root) == 1, "a direct commit on the default branch is still judged"

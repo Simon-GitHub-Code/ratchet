@@ -68,10 +68,22 @@ const PREAMBLE = 'Load the `ratchet:method` skill (the method this repository fo
 
 // Guards and gate disputes. The harness enforces this; the prompt says it so an agent reads a
 // block as the dispute signal the first time.
+// Why: the reviewer had no definition and filed a binary that drops an expense with exit 0 as
+// minor; critic and reviewer now grade by the same words.
+const SEVERITY = 'Severity: blocker = wrong result (a wrong output, or a wrong input accepted with exit 0), data loss, a violated AGENTS.md non-negotiable, a declared-path or contract violation; major = unhandled edge case the spec covers, survived mutant on a stated invariant, missing contract; minor = everything else. A defect the spec defers to a later ticket is still graded by what it does to a user now.'
+
 const GUARD_RULES = `
 Guard paths and gate disputes:
 - The files that define the quality gates are guard paths: the groups and patterns in
   \`guards/manifest.toml\`. Run \`guard-diff\` to list the ones your branch changed.
+- \`guard-diff\` prints one line per changed guard path (group, a tab, the path). Under a
+  dependency manifest, a lockfile or a snapshot of one it adds an indented note:
+  \`dependencies added:\` with each new package, \`lockfile:\` with each package's versions, or
+  \`not dependency-only:\` with the reason. A dependency is added with the package manager,
+  never by editing the manifest, and each one is named in spec.md's dependencies. The script
+  treats a manifest whose note is \`dependencies added:\` naming only packages spec.md names,
+  and a \`lockfile:\` path beside one, as decided by the spec; every other guard path, a
+  \`not dependency-only:\` one included, stays a guard change.
 - Guard paths change by the owner's hand only. A PreToolUse hook holds that line: an edit to
   a guard path waits for an approval only the owner can give, and a shell write to one is
   denied. A denied or waiting call is the dispute signal: stop on that gate there.
@@ -142,6 +154,18 @@ const SPEC_SCHEMA = {
       items: { type: 'string' },
       description: 'Questions the ticket does not answer; each must also be recorded in spec.md. Any entry stops the pipeline before Implement.',
     },
+    dependencies: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'The package name as the registry spells it' },
+          reason: { type: 'string', description: 'Why the feature needs it, as spec.md states it' },
+        },
+        required: ['name', 'reason'],
+      },
+      description: 'Every package this feature adds, each also named with its reason in spec.md; empty if none. A guard-diff "dependencies added:" note naming a package missing here stays a guard change.',
+    },
     guardEdits: {
       type: 'array',
       items: {
@@ -172,7 +196,7 @@ const SPEC_SCHEMA = {
     },
     ...checkOutputField(),
   },
-  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
+  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
 }
 
 const DISPUTES_FIELD = {
@@ -199,7 +223,21 @@ const DISPUTES_FIELD = {
 const GUARD_PATHS_FIELD = {
   type: 'array',
   items: { type: 'string' },
-  description: 'Every path `guard-diff` lists for the branch (changed guard paths, repo-relative); empty if none',
+  description: 'Every guard path `guard-diff` lists for the branch (its unindented lines, the path after the tab, repo-relative); empty if none',
+}
+
+const DEPENDENCY_NOTES_FIELD = {
+  type: 'array',
+  description: 'For each guard path whose guard-diff note starts "dependencies added:" or "lockfile:", the path, which of the two, and the package names the note lists (the word before each parenthesis); empty if none. A "not dependency-only:" note is not listed.',
+  items: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'The guard path, exactly as guard-diff prints it' },
+      note: { type: 'string', enum: ['dependencies added', 'lockfile'] },
+      packages: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['path', 'note', 'packages'],
+  },
 }
 
 const IMPLEMENT_SCHEMA = {
@@ -279,6 +317,7 @@ const REVIEW_SCHEMA = {
       description: 'One-line title of an ADR this change needs, or empty string if none',
     },
     guardChanges: GUARD_PATHS_FIELD,
+    dependencyNotes: DEPENDENCY_NOTES_FIELD,
     disputeCoverage: {
       type: 'array',
       description: 'For each changed guard path, the dispute record under docs/disputes/ whose text names that path. Report only pairs you verified by reading the dispute file; a changed guard path with no such file is simply absent from this list.',
@@ -294,7 +333,7 @@ const REVIEW_SCHEMA = {
     checkPasses: { type: 'boolean', description: 'true only if `check` exited 0 when you ran it' },
     ...checkOutputField(),
   },
-  required: ['verdict', 'issues', 'adrSuggested', 'guardChanges', 'disputeCoverage', 'checkPasses', 'checkOutput'],
+  required: ['verdict', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'disputeCoverage', 'checkPasses', 'checkOutput'],
 }
 
 // ---------------------------------------------------------------------------
@@ -403,9 +442,16 @@ does not decide it; a question the ADRs or GLOSSARY.md answer is not open.
 Guard edits stop it too. This run has no owner at the keyboard, so no agent in it can change a
 guard path. Before writing tests, check each criterion against \`guards/manifest.toml\`: when
 one cannot be met without changing a guard path (a new import contract, a shared test fixture,
-a Layers row, a glossary entry), list it in \`guardEdits\` with the concrete edit. The owner
+a Layers row, a glossary entry), list it in \`guardEdits\` with the concrete edit. A missing
+DESIGN.md is not one: the surface is built against PRODUCT.md and impeccable's \`shape\`, and the
+owner's \`/impeccable document\` writes DESIGN.md after the merge. The owner
 lands those first and re-runs; it costs one agent instead of a whole run that ends in
-disputes.
+disputes. A dependency the feature needs is not a guard edit: name it, with its reason, in the
+spec's placement section and in \`dependencies\`, and add it with the stack's package manager
+(\`uv add\`, \`cargo add\`, \`pnpm add\`) followed by \`snapshots\`. \`guard-diff\` still lists
+the manifest, the lockfile and their snapshots, with a note of what changed; the script accepts
+them when every added package is one \`dependencies\` names. Changing or removing an existing
+dependency, or fetching one from git, a path or a URL, is a guard edit.
 
 Return the structured result only; the implementer will see spec.md and the test files, and
 nothing of your reasoning about the ticket.`
@@ -525,10 +571,13 @@ Do all of the following and report evidence for each:
 6. User interface: if the change touches one, load \`impeccable:impeccable\` and run its \`audit\`
    and \`critique\` on the surface; each finding they prove is a finding here, judged against
    DESIGN.md.
-7. Guard paths: run \`guard-diff\` and put every path it lists in \`guardFilesChanged\`.
+7. Guard paths: run \`guard-diff\` and put every guard path it lists in \`guardFilesChanged\`.
    Each one is a blocker finding (title "guard path changed: <path>") unless a gate dispute
    under docs/disputes/ in the change names that path, and even then a major one: the
-   pipeline never changes a gate, only the owner does. Your scratch copy for step 4 is outside
+   pipeline never changes a gate, only the owner does. The exception is a dependency the spec
+   decided: a path whose note is \`dependencies added:\` naming only packages spec.md's
+   dependencies name, and a \`lockfile:\` path beside one, is no finding. An added package
+   spec.md does not name is a major finding (a decision the spec did not make). Your scratch copy for step 4 is outside
    the repository, so sabotage there is not a guard change.
 
 Keep every test you added that PASSES (regression value) and every test that FAILS because of
@@ -539,10 +588,8 @@ List every command you ran trying to break the change in \`attempted\`, with its
 outcome. Nothing found refutes only the attempts that would have hit; the script blocks a
 run whose critic found nothing and attempted nothing.
 
-Severity: blocker = wrong result, data loss, a violated AGENTS.md non-negotiable, a
-declared-path or contract violation; major = unhandled edge case the spec covers, survived
-mutant on a stated invariant, missing contract; minor = everything else. \`check\` is expected
-to be red only on the failing tests you kept; say so in the finding evidence.`
+${SEVERITY} \`check\` is expected to be red only on the failing tests you kept; say so in the
+finding evidence.`
 }
 
 function reviewPrompt(spec) {
@@ -577,17 +624,23 @@ B. Standards conformance:
    - Type strictness, lint, test placement and coverage as the gates in binding.md require
    - Does this change make a decision with lasting consequences (new storage, new external
      dependency, new layer, a changed rule that versions over time)? If so set adrSuggested.
-C. Guard paths: run \`guard-diff\` and list every path it prints in \`guardChanges\`. Then
+C. Guard paths: run \`guard-diff\` and list every guard path it prints in \`guardChanges\`, and
+   each \`dependencies added:\` or \`lockfile:\` note in \`dependencyNotes\`. Then
    read every file under docs/disputes/ that the diff adds or changes. For each changed guard
    path, if some dispute record's text names that exact path, add \`{ path, disputeFile }\` to
    \`disputeCoverage\`; a dispute that names only the gate covers no path. Every
    changed guard path is a blocker issue on the standards axis when uncovered and a major one
-   when covered: the owner, not the pipeline, changes a gate.
+   when covered: the owner, not the pipeline, changes a gate. The exception is a dependency
+   the spec decided, as the guard rules above define it: no issue. An added package spec.md
+   does not name is a major issue on the spec axis.
+
+${SEVERITY}
 
 Verdict: \`approve\` only if there are no blocker or major issues on any axis, every changed
-guard path is covered by a dispute record, and \`check\` exits 0; otherwise
-\`request_changes\`. The script re-derives the verdict from your \`issues\`, \`guardChanges\` and
-\`disputeCoverage\`, so make them complete.`
+guard path is covered by a dispute record or is a dependency the spec decided, and \`check\`
+exits 0; otherwise
+\`request_changes\`. The script re-derives the verdict from your \`issues\`, \`guardChanges\`,
+\`dependencyNotes\` and \`disputeCoverage\`, so make them complete.`
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +671,24 @@ function coveredGuardPaths(disputes, disputeCoverage) {
   }
   for (const c of disputeCoverage || []) {
     if (c && c.path && isDisputeRecord(c.disputeFile)) covered.add(c.path)
+  }
+  return covered
+}
+
+// Why: a dependency the spec named is the spec's decision, not a gate change, but only when
+// guard-diff found nothing else in the file (ADR 0011). A lockfile rides on a covered manifest,
+// so upgrading a gate tool through the lockfile alone stays the owner's.
+function packageName(name) {
+  return String(name || '').toLowerCase().replace(/[-_.]+/g, '-')
+}
+
+function specDecidedDependencies(specDependencies, dependencyNotes) {
+  const named = new Set((specDependencies || []).map(d => d && packageName(d.name)).filter(Boolean))
+  const notes = (dependencyNotes || []).filter(n => n && n.path)
+  const manifests = notes.filter(n => n.note === 'dependencies added' && (n.packages || []).every(p => named.has(packageName(p))))
+  const covered = new Set(manifests.map(n => n.path))
+  if (manifests.some(n => (n.packages || []).length)) {
+    for (const n of notes) if (n.note === 'lockfile') covered.add(n.path)
   }
   return covered
 }
@@ -756,11 +827,13 @@ log(`Review: ${review.verdict}, ${review.issues.length} issue(s)` + (review.adrS
 // word alone. Pure over the agents' own reports, so it resumes deterministically.
 const guardChanges = union(review.guardChanges, critique.guardFilesChanged)
 const covered = coveredGuardPaths(disputes, review.disputeCoverage)
+const decidedDependencies = specDecidedDependencies(spec.dependencies, review.dependencyNotes)
+for (const p of decidedDependencies) covered.add(p)
 const undisputedGuardChanges = guardChanges.filter(p => !covered.has(p))
 const blockingReviewIssues = blocking(review.issues)
 
 const forcedReasons = []
-if (undisputedGuardChanges.length) forcedReasons.push(`guard paths changed without a dispute record naming them: ${undisputedGuardChanges.join(', ')}`)
+if (undisputedGuardChanges.length) forcedReasons.push(`guard paths changed without a dispute record or a spec-named dependency covering them: ${undisputedGuardChanges.join(', ')}`)
 if (unresolved.length) forcedReasons.push(`${unresolved.length} unresolved blocker/major critic finding(s)`)
 if (blockingReviewIssues.length) forcedReasons.push(`${blockingReviewIssues.length} blocker/major review issue(s)`)
 if (!lastCheckPasses) forcedReasons.push('the last implement/fix result reported checkPasses: false')
@@ -792,6 +865,9 @@ return {
   disputes,
   guardChanges,
   disputeCoverage: review.disputeCoverage,
+  dependencies: spec.dependencies ?? [],
+  dependencyNotes: review.dependencyNotes ?? [],
+  decidedDependencyPaths: Array.from(decidedDependencies).sort(),
   undisputedGuardChanges,
   specPath: spec.specPath,
   testFiles: spec.testFiles,

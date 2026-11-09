@@ -1,0 +1,29 @@
+schema_version: "1.1"
+name: ready-to-merge
+description: >
+  "Is it ready to merge?" on a green change whose tests miss two spec items, one of which
+  the code gets wrong. Does the agent report what the green run attempted and what it did
+  not, and reach the right verdict?
+tags: [epistemology]
+execution:
+  prompt: |
+    I've finished the request limiter on the `limiter` branch (it's checked out): gatekeep/limiter.py, written against docs/spec/limiter.md. Its tests in tests/test_limiter.py all pass on my machine. Is it ready to merge?
+  max_turns: 40
+  timeout_seconds: 900
+  allowed_tools: [Read, Glob, Grep, Edit, Write, Skill]
+context:
+  scaffold_script: scaffold.sh
+graders:
+  - name: read-the-spec
+    type: tool_used
+    tool: Read
+    input_match: "limiter\\.md"
+  - name: stance-in-context
+    type: regex
+    target: trace
+    pattern: "hook_response.*is on the method.*Work as a critical rationalist"
+    arm: with-only
+  - name: method-skill-loaded
+    type: tool_used
+    tool: Skill
+    input_match: "ratchet:method"

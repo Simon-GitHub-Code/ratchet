@@ -30,7 +30,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Is every dependency, action and image pinned exactly, and every CI job least-privileged? | lockfile matches the manifest with no floating range; actions and images pinned by digest; workflow permissions declared and minimal |
 | Is every unit within its size and complexity limits? | the linter's size and complexity rules plus a fitness test, with the numbers the binding's Limits section holds; a hard limit, split the unit |
 | Did the count of TODO, FIXME and HACK markers rise? | counted at the merge base and at head, never stored |
-| Does prose use the glossary too? | a prose linter carrying the _Avoid_ lists over docs and comments |
+| Does prose use the glossary too? | a prose linter carrying the _Avoid_ lists over docs and comments, judging the uses a change adds against the merge base |
 | Do commit subjects follow the convention? | the method's commits gate: `type(scope): summary`, at most 72 characters |
 | Has any gate been loosened? | the method's own gates: snapshots match the effective configuration, no threshold lowered, no suppression kind rose, no focus marker |
 
@@ -84,7 +84,7 @@ Every comparison against history uses the merge base with the default branch (`H
 
 Gates that accumulate become gates that get skipped. Every repository on the method starts with CI shaped for speed and a ceiling per tier that only falls, so the optimisation phase that usually arrives late is a standing obligation from the first commit.
 
-**The ceiling.** `quality/thresholds.toml` holds `[ceilings.seconds]` with one key per tier, and one per gate where a gate has its own runner. The `budget` entry point wraps a tier or gate, measures its wall clock and goes red over its ceiling. A ceiling only falls: `ratchet-lowered` fails a raised one as it fails a lowered threshold, and raising one is a loosening with an ADR behind it. Adopt sets the first ceilings from the first measured run with headroom (`budget --set`), never under the tier's budget in the table above, so an empty skeleton's few seconds do not become the first feature's ceiling; from then on every change that pushes a tier over must pay for itself in the same pull request. Runners vary, so the ceiling blocks on the default branch and nightly, in the tier 2 sense, and reports on pull requests.
+**The ceiling.** `quality/thresholds.toml` holds `[ceilings.seconds]` with one key per tier, and one per gate where a gate has its own runner. The `budget` entry point wraps a tier or gate, measures its wall clock and goes red over its ceiling. A ceiling only falls: `ratchet-lowered` fails a raised one as it fails a lowered threshold, and raising one is a loosening with an ADR behind it, whose `Relaxes:` line ([ratchet.md](ratchet.md)) the gate reads. Adopt sets the first ceilings from the first measured run with headroom (`budget --set`), never under the tier's budget in the table above, so an empty skeleton's few seconds do not become the first feature's ceiling; from then on every change that pushes a tier over must pay for itself in the same pull request. Runners vary, so the ceiling blocks on the default branch and nightly, in the tier 2 sense, and reports on pull requests.
 
 **The shape, from the start.** The CI templates ship with these, and the conformance gate checks the first two are present:
 

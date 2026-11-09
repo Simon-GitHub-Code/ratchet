@@ -13,6 +13,13 @@ it for every gate (the remote's ``HEAD``, the binding's, else ``main`` or ``mast
 check and the lowered gate never disagree about "before". ``--summary`` appends a Markdown report
 (CI passes ``$GITHUB_STEP_SUMMARY``), ``--annotate`` prints GitHub error annotations, and
 ``--fail-if-present`` exits 1 when any guard path changed; otherwise the exit is 0.
+
+Every changed guard path is listed and counted, dependency manifests and lockfiles included. Under
+a manifest, a lockfile or a snapshot of one, an indented line says what the change does to
+dependencies (``ratchet_guards.dependencies``): ``dependencies added:`` with each new entry, or
+``lockfile:`` with each package's old and new versions, when that is all it does; otherwise
+``not dependency-only:`` and why. The pipeline matches the added names against the ones its spec
+named (ADR 0011); the owner reads the versions.
 """
 
 import argparse
@@ -21,6 +28,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from ratchet_guards import dependencies
 from ratchet_guards.manifest import MANIFEST_PATH, Group, Manifest, ManifestError, parse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -99,17 +107,45 @@ def guarded(paths: Sequence[str], found: Sequence[Manifest]) -> list[tuple[str, 
     return matches
 
 
-def markdown(matches: Sequence[tuple[str, Group]], base: str) -> str:
+def dependency_notes(
+    git: Git, base: str, worktree: Path, *, paths: Sequence[str]
+) -> dict[str, str]:
+    """For each dependency manifest or lockfile in ``paths``, what its change does."""
+    merge_base = _required(git, ["merge-base", base, "HEAD"]).strip()
+    notes: dict[str, str] = {}
+    for path in paths:
+        if not dependencies.recognised(path):
+            continue
+        current = worktree / path
+        after = current.read_bytes().decode(errors="replace") if current.is_file() else None
+        try:
+            found = dependencies.changes(path, git(["show", f"{merge_base}:{path}"]), after)
+        except dependencies.NotDependencyOnlyError as reason:
+            notes[path] = f"not dependency-only: {reason}"
+            continue
+        lock = dependencies.file_name(path) in dependencies.LOCKFILES
+        heading = "lockfile" if lock else "dependencies added"
+        notes[path] = f"{heading}: " + ("; ".join(map(str, found)) or "none")
+    return notes
+
+
+def markdown(
+    matches: Sequence[tuple[str, Group]], base: str, notes: dict[str, str] | None = None
+) -> str:
     """The job summary."""
     if not matches:
         return f"## Guard paths\n\nNo guard path changed against the merge base with `{base}`.\n"
-    rows = "".join(f"| `{_code(path)}` | {group.name} |\n" for path, group in matches)
+    notes = notes or {}
+    rows = "".join(
+        f"| `{_code(path)}` | {group.name} | {_code(notes.get(path, ''))} |\n"
+        for path, group in matches
+    )
     return (
         f"## :warning: {len(matches)} guard path(s) changed\n\n"
         f"Against the merge base with `{base}`. Guard paths define the quality gates "
         "(guards/manifest.toml). Read each change, and its gate dispute in "
         "docs/disputes/ if an agent raised one, before merging.\n\n"
-        f"| Path | Group |\n| --- | --- |\n{rows}"
+        f"| Path | Group | Dependencies |\n| --- | --- | --- |\n{rows}"
     )
 
 
@@ -148,8 +184,11 @@ def main(argv: Sequence[str] | None = None, git: Git | None = None) -> int:
     worktree = Path(_required(git, ["rev-parse", "--show-toplevel"]).strip())
     found = manifests(git, base, worktree)
     matches = guarded(changed_paths(git, base), found)
+    notes = dependency_notes(git, base, worktree, paths=[path for path, _ in matches])
     for path, group in matches:
         print(f"{group.name}\t{path}")
+        if path in notes:
+            print(f"  {notes[path]}")
     if not matches:
         print(f"no guard path changed against the merge base with {base}")
     if arguments.annotate:
@@ -157,7 +196,7 @@ def main(argv: Sequence[str] | None = None, git: Git | None = None) -> int:
             print(line)
     if arguments.summary is not None:
         with arguments.summary.open("ab") as summary:
-            summary.write(markdown(matches, base).encode())
+            summary.write(markdown(matches, base, notes).encode())
     return 1 if arguments.fail_if_present and matches else 0
 
 

@@ -16,9 +16,10 @@ types:
 imports:
     uv run lint-imports
 
+# deptry scans src: from the root it reads the src-layout package as a transitive dependency.
 deadcode:
     uv run vulture src tests --min-confidence 80
-    uv run deptry .
+    uv run deptry src
 
 lint-workflows:
     uvx --from actionlint-py actionlint
@@ -55,11 +56,18 @@ test-counts:
     #!/usr/bin/env bash
     set -euo pipefail
     base="{{merge_base}}"
-    # Why: addopts carries -q, and a second -q prints per-file counts with no node ids to count.
-    now="$(uv run pytest --collect-only -q -o addopts= | grep -c '::' || true)"
-    rm -rf .ratchet/base && git worktree add -q --detach .ratchet/base "$base"
-    was="$(cd .ratchet/base && uv run pytest --collect-only -q -o addopts= | grep -c '::' || true)"
-    git worktree remove --force .ratchet/base
+    # Why: a collection that fails is red, never a count of zero; pytest exits 5 when it collects
+    # nothing. addopts carries -q, and a second -q prints per-file counts with no node ids to count.
+    count() {
+        local out rc=0
+        out="$(uv run pytest --collect-only -q -o addopts=)" || rc=$?
+        if [ "$rc" -ne 0 ] && [ "$rc" -ne 5 ]; then echo "test-counts: collection failed in $PWD (exit $rc)" >&2; return 1; fi
+        grep -c '::' <<<"$out" || true
+    }
+    now="$(count)"
+    rm -rf .ratchet/base && git worktree prune && git worktree add -q --detach .ratchet/base "$base"
+    trap 'git worktree remove --force .ratchet/base' EXIT
+    was="$(cd .ratchet/base && count)"
     echo "tests: $was at base, $now at head"
     test "$now" -ge "$was"
 
@@ -80,11 +88,12 @@ contracts-check:
     @echo "none: no generated contract artefacts in this stack; see the binding's ADR"; exit 0
 
 # The shipped dependencies only; `audit-all` audits the whole environment, dev tools included.
+# The export keeps its hashes: pip-audit refuses `--disable-pip` on a file without them.
 audit:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p .ratchet
-    uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt > .ratchet/shipped.txt
+    uv export --frozen --no-dev --no-emit-project --format requirements-txt > .ratchet/shipped.txt
     if ! grep -q '^[a-zA-Z]' .ratchet/shipped.txt; then echo "audit: no shipped dependency"; exit 0; fi
     uv run pip-audit --strict --disable-pip -r .ratchet/shipped.txt
 

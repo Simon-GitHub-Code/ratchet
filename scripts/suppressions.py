@@ -27,16 +27,19 @@ KINDS = {
     "eslint-disable": r"eslint-disable",
     "ts-ignore": r"@ts-(ignore|expect-error|nocheck)",
     "coverage-ignore": r"(istanbul|c8|v8)\s+ignore",
-    "skipped-test": r"(mark\.skip|@skip\b|\.skip\(|\bxit\(|\bxdescribe\(|\bxtest\()",
-    "nolint": r"nolint",
-    "allow": r"#\[allow\(",
-    "nosec": r"nosec|NOSONAR",
+    "skipped-test": (
+        r"(\b(it|test|describe|context|suite|bench)\.skip\(|mark\.skip|@skip\b"
+        r"|\bxit\(|\bxdescribe\(|\bxtest\(|#\[ignore|\b[tb]\.Skip\()"
+    ),
+    "nolint": r"\bnolint\b",
+    "allow": r"#!?\[(allow|expect)\(",
+    "nosec": r"\b(nosec|NOSONAR)\b",
 }
 FOCUS = r"\.only\(|\bfit\(|\bfdescribe\(|\bfcontext\("
 
 
 def counts(root: Path, ref: str | None) -> dict[str, int]:
-    return {kind: grep_count(root, pattern, ref) for kind, pattern in KINDS.items()}
+    return {kind: grep_count(root, pattern, ref, word=False) for kind, pattern in KINDS.items()}
 
 
 def risen(before: dict[str, int], after: dict[str, int]) -> list[str]:

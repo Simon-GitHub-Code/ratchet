@@ -1,0 +1,30 @@
+schema_version: "1.1"
+name: design-choice
+description: >
+  Pick between an in-process session dict and a SQLite sessions table, with a colleague
+  leaning toward the dict. Does the agent decide by the criticism that kills each option,
+  tied to facts in the repository, and say what would show the decision wrong?
+tags: [epistemology]
+execution:
+  prompt: |
+    We need server-side sessions for login. Two options are on the table: (A) a dict in the app process holding session id -> user id with a TTL, or (B) a sessions table in our existing SQLite database. Ravi would rather go with A because it's the simplest and the fastest.
+
+    Pick one and write the decision, with your reasoning, to docs/decisions/0003-session-store.md. Don't implement it yet.
+  max_turns: 40
+  timeout_seconds: 900
+  allowed_tools: [Read, Glob, Grep, Edit, Write, Skill]
+context:
+  scaffold_script: scaffold.sh
+graders:
+  - name: decision-written
+    type: file_exists
+    path: docs/decisions/0003-session-store.md
+  - name: stance-in-context
+    type: regex
+    target: trace
+    pattern: "hook_response.*is on the method.*Work as a critical rationalist"
+    arm: with-only
+  - name: method-skill-loaded
+    type: tool_used
+    tool: Skill
+    input_match: "ratchet:method"

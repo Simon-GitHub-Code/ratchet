@@ -3,6 +3,10 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# uv's default hard links give .venv files two names, and `claude plugin eval` refuses a plugin
+# directory holding such a file.
+export UV_LINK_MODE := "copy"
+
 default:
     @just --list --unsorted
 
