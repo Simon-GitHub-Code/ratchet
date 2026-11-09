@@ -61,6 +61,36 @@ def test_suppressions_count_per_kind_and_a_focus_marker_fails(tmp_path: Path, ca
     assert suppressions.focused(tmp_path / "nowhere") == []
 
 
+# Why: `#[allow(` sat in KINDS for months while whole-word matching made it unmatchable, so
+# every kind is held to a directive written the way its tool's users write it.
+DIRECTIVES = [
+    ("noqa", "a.py", "x = 1  # noqa: E501"),
+    ("type-ignore", "a.py", "y = f()  # type: ignore[misc]"),
+    ("no-cover", "a.py", "if x:  # pragma: no cover"),
+    ("no-mutate", "a.py", "x = 1  # pragma: no mutate"),
+    ("pylint-disable", "a.py", "# pylint: disable=invalid-name"),
+    ("eslint-disable", "a.ts", "// eslint-disable-next-line no-console"),
+    ("ts-ignore", "a.ts", "// @ts-expect-error the fixture is partial"),
+    ("coverage-ignore", "a.ts", "/* istanbul ignore next */"),
+    ("skipped-test", "a.test.ts", "it.skip('x', () => {})"),
+    ("nolint", "a.go", "x := f() //nolint:errcheck"),
+    ("allow", "a.rs", "#[allow(clippy::must_use_candidate)]"),
+    ("allow", "lib.rs", "#![allow(dead_code)]"),
+    ("allow", "b.rs", "#[expect(clippy::too_many_lines)]"),
+    ("nosec", "a.py", "subprocess.call(x)  # nosec B603"),
+]
+
+
+@pytest.mark.parametrize("directive", DIRECTIVES, ids=[line for _, _, line in DIRECTIVES])
+def test_every_suppression_kind_counts_its_directive(
+    tmp_path: Path, directive: tuple[str, str, str]
+) -> None:
+    kind, name, line = directive
+    root = repository(tmp_path, {"README.md": "x\n"})
+    write(root, name, line + "\n")
+    assert suppressions.counts(root, None)[kind] == 1
+
+
 def test_suppressions_without_a_base_only_look_for_focus(tmp_path: Path) -> None:
     root = repository(tmp_path, {"a.py": "x = 1  # noqa\n"})
     assert run(suppressions, root) == 0

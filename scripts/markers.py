@@ -19,9 +19,14 @@ import gatelib
 MARKERS = ("TODO", "FIXME", "HACK", "XXX")
 
 
-def grep_count(root: Path, pattern: str, ref: str | None) -> int:
-    """Occurrences of the extended regex ``pattern`` at ``ref`` (the work tree when ``None``)."""
-    args = ["grep", "-I", "-c", "-E", "-w"] + ([] if ref else ["--untracked"]) + [pattern]
+def grep_count(root: Path, pattern: str, ref: str | None, *, word: bool = True) -> int:
+    """Lines matching the extended regex ``pattern`` at ``ref`` (the work tree when ``None``).
+
+    ``word`` holds the match to whole words, which suits a marker; a pattern that starts or ends
+    in punctuation (``#[allow(``, ``.skip(``) can never match that way, so it passes ``False``.
+    """
+    args = ["grep", "-I", "-c", "-E", *(["-w"] if word else [])]
+    args += ([] if ref else ["--untracked"]) + [pattern]
     out = gatelib.git(root, *args, *([ref] if ref else []), "--", ".")
     return sum(int(line.rsplit(":", 1)[1]) for line in out.splitlines()) if out else 0
 
