@@ -39,7 +39,7 @@ Permission rules in the project's `.claude/settings.json` are a second, independ
 
 ## The diff check
 
-Some writes are out of the hook's reach: interpreters, `git apply`, merges, variable paths, edits made outside the harness. The `guard-diff` entry point (tier 1) and a CI job list every changed path that matches the manifest at the merge base or at head, with renames split so moving a guard file away is caught. The CI job fails when any guard path changed, as information for the owner's merge decision; it is not a required check.
+Some writes are out of the hook's reach: interpreters, `git apply`, merges, variable paths, edits made outside the harness. The `guard-diff` entry point (tier 1) and a CI job list every changed path that matches the manifest at the merge base or at head, with renames split so moving a guard file away is caught. The CI job fails when any guard path changed, as information for the owner's merge decision; it is not a required check. A change to a dependency manifest, a lockfile or a snapshot of one that changes only dependencies (the dependency tables and the package version; any other key, a parse failure, a created or deleted file stays a guard change) is listed apart with each package's old and new version, and is not a guard change: a dependency is a decision the pull request states ([code.md](code.md)), and the versions put a gate tool downgraded through its lockfile in front of the owner.
 
 ## What only the owner does
 

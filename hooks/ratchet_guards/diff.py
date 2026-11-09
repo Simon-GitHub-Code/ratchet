@@ -13,6 +13,10 @@ it for every gate (the remote's ``HEAD``, the binding's, else ``main`` or ``mast
 check and the lowered gate never disagree about "before". ``--summary`` appends a Markdown report
 (CI passes ``$GITHUB_STEP_SUMMARY``), ``--annotate`` prints GitHub error annotations, and
 ``--fail-if-present`` exits 1 when any guard path changed; otherwise the exit is 0.
+
+A guard path whose change only changes dependencies (``ratchet_guards.dependencies``) is listed
+apart, with each package's old and new version, and is not a guard change: adding a library is
+a decision the pull request states, and the owner reads the versions there.
 """
 
 import argparse
@@ -21,6 +25,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from ratchet_guards import dependencies
 from ratchet_guards.manifest import MANIFEST_PATH, Group, Manifest, ManifestError, parse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -99,6 +104,27 @@ def guarded(paths: Sequence[str], found: Sequence[Manifest]) -> list[tuple[str, 
     return matches
 
 
+def dependency_changes(
+    git: Git, base: str, worktree: Path, *, matches: Sequence[tuple[str, Group]]
+) -> tuple[list[tuple[str, Group]], dict[str, list[str]]]:
+    """``matches`` split into guard changes and dependency-only changes with their versions."""
+    merge_base = _required(git, ["merge-base", base, "HEAD"]).strip()
+    gate: list[tuple[str, Group]] = []
+    deps: dict[str, list[str]] = {}
+    for path, group in matches:
+        if not dependencies.recognised(path):
+            gate.append((path, group))
+            continue
+        current = worktree / path
+        after = current.read_bytes().decode(errors="replace") if current.is_file() else None
+        found = dependencies.changes(path, git(["show", f"{merge_base}:{path}"]), after)
+        if found is None:
+            gate.append((path, group))
+        else:
+            deps[path] = found
+    return gate, deps
+
+
 def markdown(matches: Sequence[tuple[str, Group]], base: str) -> str:
     """The job summary."""
     if not matches:
@@ -147,11 +173,17 @@ def main(argv: Sequence[str] | None = None, git: Git | None = None) -> int:
     base = arguments.base or default_base(git, root)
     worktree = Path(_required(git, ["rev-parse", "--show-toplevel"]).strip())
     found = manifests(git, base, worktree)
-    matches = guarded(changed_paths(git, base), found)
+    matches, deps = dependency_changes(
+        git, base, worktree, matches=guarded(changed_paths(git, base), found)
+    )
     for path, group in matches:
         print(f"{group.name}\t{path}")
     if not matches:
         print(f"no guard path changed against the merge base with {base}")
+    if deps:
+        print("dependency-only changes (state them in the pull request; not guard changes):")
+    for path, versions in deps.items():
+        print(f"  {path}: " + ("; ".join(versions) or "no version changed"))
     if arguments.annotate:
         for line in annotations(matches):
             print(line)

@@ -76,6 +76,11 @@ const GUARD_RULES = `
 Guard paths and gate disputes:
 - The files that define the quality gates are guard paths: the groups and patterns in
   \`guards/manifest.toml\`. Run \`guard-diff\` to list the ones your branch changed.
+- \`guard-diff\` lists, under its own heading, changes that only change dependencies (a
+  manifest's dependency tables, a lockfile, their snapshots) with each version. Those are not
+  guard changes: a dependency is added with the package manager, never by editing the
+  manifest, and each one must be named in spec.md; a dependency spec.md does not name is a
+  major finding or issue (a decision the spec did not make).
 - Guard paths change by the owner's hand only. A PreToolUse hook holds that line: an edit to
   a guard path waits for an approval only the owner can give, and a shell write to one is
   denied. A denied or waiting call is the dispute signal: stop on that gate there.
@@ -409,7 +414,10 @@ guard path. Before writing tests, check each criterion against \`guards/manifest
 one cannot be met without changing a guard path (a new import contract, a shared test fixture,
 a Layers row, a glossary entry), list it in \`guardEdits\` with the concrete edit. The owner
 lands those first and re-runs; it costs one agent instead of a whole run that ends in
-disputes.
+disputes. A dependency the feature needs is not a guard edit: name it, with its reason, in the
+spec's placement section, and add it with the stack's package manager (\`uv add\`,
+\`cargo add\`, \`pnpm add\`) followed by \`snapshots\`; \`guard-diff\` then lists the manifest,
+the lockfile and their snapshots as dependency-only, which is not a guard change.
 
 Return the structured result only; the implementer will see spec.md and the test files, and
 nothing of your reasoning about the ticket.`
