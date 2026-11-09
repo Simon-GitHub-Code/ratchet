@@ -1,7 +1,7 @@
 """Rules for ``git``: hook bypasses, history rewrites, pushes to main and guard-path writes."""
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ratchet_guards.context import MAIN_BRANCHES, Context, Guard
@@ -22,6 +22,17 @@ _COMMIT = Spec(
     ),
 )
 _PUSH = Spec("o", frozenset({"--push-option", "--repo", "--receive-pack", "--exec"}))
+# Why: git takes any unambiguous prefix of a long option. Each push flag the guard rules on maps
+# to the length of its shortest unambiguous spelling among push's options: `--al` (`--atomic`
+# shares `--a`), `--m`, `--force-w`, `--force-i` (`--force` and `--follow-tags` share the rest)
+# and `--b`. `--forc` is ambiguous, git refuses it, and it stays unrecognised here.
+_PUSH_SHORTEST = {
+    "--all": len("--al"),
+    "--branches": len("--b"),
+    "--mirror": len("--m"),
+    "--force-with-lease": len("--force-w"),
+    "--force-if-includes": len("--force-i"),
+}
 _PATHS = Spec("bBs", frozenset({"--source"}))
 _SWITCH = Spec("bBcC", frozenset({"--create", "--force-create"}))
 _SWITCH_FLAGS = ("-b", "-B", "-c", "-C", "--create", "--force-create")
@@ -91,8 +102,16 @@ def _destination(refspec: str, current: str | None) -> str | None:
     return target.removeprefix("refs/heads/")
 
 
+def _push_flag(flag: str) -> str:
+    for full, shortest in _PUSH_SHORTEST.items():
+        if len(flag) >= shortest and full.startswith(flag):
+            return full
+    return flag
+
+
 def _push(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    options = scan(call.args, _PUSH)
+    scanned = scan(call.args, _PUSH)
+    options = replace(scanned, flags=frozenset(_push_flag(flag) for flag in scanned.flags))
     refspecs = options.operands[1:]
     verdicts: list[Verdict] = []
     if options.flags & _FORCE or any(refspec.startswith("+") for refspec in refspecs):
