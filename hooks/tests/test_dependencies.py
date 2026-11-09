@@ -85,8 +85,8 @@ def test_package_json_dependencies_and_scripts() -> None:
 
 
 def test_lockfiles_report_versions_or_that_they_changed() -> None:
-    downgraded = UV_LOCK.replace("0.9.1", "0.5.0")
-    assert dependencies.changes("uv.lock", UV_LOCK, downgraded) == ["ruff: 0.9.1 -> 0.5.0"]
+    upgraded = UV_LOCK.replace("0.9.1", "0.10.0")
+    assert dependencies.changes("uv.lock", UV_LOCK, upgraded) == ["ruff: 0.9.1 -> 0.10.0"]
     assert dependencies.changes("pnpm-lock.yaml", "a: 1\n", "a: 2\n") == ["pnpm-lock.yaml: changed"]
 
 
@@ -101,6 +101,13 @@ def test_a_snapshot_is_judged_as_the_file_it_copies() -> None:
 @pytest.mark.parametrize(
     ("path", "before", "after"),
     [
+        ("uv.lock", UV_LOCK, UV_LOCK.replace("0.9.1", "0.5.0")),
+        ("uv.lock", UV_LOCK, UV_LOCK.replace("0.9.1", "unknown")),
+        ("pyproject.toml", PYPROJECT, PYPROJECT.replace("pytest>=8", "pytest @ git+https://x/p")),
+        ("Cargo.toml", CARGO, CARGO.replace('serde = "1"', 'serde = { git = "https://x/s" }')),
+        ("Cargo.toml", CARGO, CARGO.replace('serde = "1"', 'serde = { path = "../s" }')),
+        ("package.json", PACKAGE, PACKAGE.replace('"^3"', '"github:me/lit"')),
+        ("package.json", PACKAGE, PACKAGE.replace('"^3"', '"file:../lit"')),
         ("pyproject.toml", None, PYPROJECT),
         ("pyproject.toml", PYPROJECT, None),
         ("pyproject.toml", PYPROJECT, "broken ["),
@@ -108,7 +115,7 @@ def test_a_snapshot_is_judged_as_the_file_it_copies() -> None:
         ("ruff.toml", "a = 1\n", "a = 2\n"),
     ],
 )
-def test_created_deleted_broken_or_unknown_files_stay_guard_changes(
+def test_downgrades_direct_sources_and_unreadable_files_stay_guard_changes(
     path: str, before: str | None, after: str | None
 ) -> None:
     assert dependencies.changes(path, before, after) is None
