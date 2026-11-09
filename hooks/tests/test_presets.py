@@ -227,3 +227,20 @@ def test_coverage_measures_every_root_a_coverage_group_names(preset: Path) -> No
     measured = set(re.findall(r"--cov=([\w.-]+)|--coverage\.include='([\w.-]+)/", run))
     assert named <= {a or b for a, b in measured}, run
     assert body(justfile, "ratchet").splitlines()[0] == run, "the ratchet measures as coverage does"
+
+
+# Why: in the UI trial `eslint .` and `prettier --check .` went red on the agent worktrees
+# `/pstack:interrogate` leaves under .claude/worktrees/ and on impeccable's .impeccable/ files.
+COMPANION_DIRS = (".claude/", ".impeccable/")
+
+
+def test_whole_tree_tools_skip_the_companions_working_files() -> None:
+    justfile = (ADOPT / "presets/typescript-pnpm/justfile").read_text()
+    for line in (line for line in justfile.splitlines() if "eslint ." in line):
+        for directory in COMPANION_DIRS:
+            assert f"--ignore-pattern '{directory}'" in line, line
+    ignored = (ADOPT / "presets/typescript-pnpm/tools/.prettierignore").read_text().splitlines()
+    assert set(COMPANION_DIRS) <= set(ignored)
+    gitignore = (ADOPT.parent / "init/templates/gitignore").read_text().splitlines()
+    assert ".claude/worktrees/" in gitignore
+    assert ".impeccable/hook.cache.json" in gitignore

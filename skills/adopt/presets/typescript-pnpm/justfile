@@ -9,7 +9,7 @@ fmt-check:
     pnpm exec prettier --check .
 
 lint:
-    pnpm exec eslint . --max-warnings 0
+    pnpm exec eslint . --ignore-pattern '.claude/' --ignore-pattern '.impeccable/' --max-warnings 0
 
 types:
     pnpm exec tsc --noEmit
@@ -35,7 +35,7 @@ pins:
 # Size and complexity are eslint rules (complexity, max-lines, max-params, max-depth) with the
 # numbers from the binding's Limits; the fitness test checks the numbers are the binding's.
 limits:
-    pnpm exec eslint . --rule 'complexity: [error, 10]' --rule 'max-lines: [error, 400]' --rule 'max-params: [error, 4]' --rule 'max-depth: [error, 3]'
+    pnpm exec eslint . --ignore-pattern '.claude/' --ignore-pattern '.impeccable/' --rule 'complexity: [error, 10]' --rule 'max-lines: [error, 400]' --rule 'max-params: [error, 4]' --rule 'max-depth: [error, 3]'
     pnpm exec vitest run tests/fitness -t limits
 
 # --- tier 1 bodies ---------------------------------------------------------------
@@ -164,4 +164,4 @@ drift:
     uvx --from cyclonedx-bom cyclonedx-py environment -o .ratchet/sbom.json || pnpm exec cyclonedx-npm --output-file .ratchet/sbom.json
 
 reports:
-    pnpm exec eslint . --rule 'complexity: [warn, 1]' --format compact || true
+    pnpm exec eslint . --ignore-pattern '.claude/' --ignore-pattern '.impeccable/' --rule 'complexity: [warn, 1]' --format compact || true

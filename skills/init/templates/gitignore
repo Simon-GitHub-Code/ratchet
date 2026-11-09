@@ -1,0 +1,5 @@
+# Working files of the plugins composed here: no gate judges them, and no commit carries them.
+.claude/worktrees/
+.impeccable/hook.cache.json
+.impeccable/config.local.json
+.impeccable/live/sessions/
