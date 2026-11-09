@@ -190,6 +190,23 @@ def test_prose_without_a_glossary_or_without_avoid_lists(tmp_path: Path) -> None
     assert run(prose, root) == 1
 
 
+def test_prose_judges_the_change_not_the_history(tmp_path: Path, capsys: Out) -> None:
+    """A word newly put on an Avoid list does not turn every earlier record red; new uses do."""
+    root = repository(tmp_path, {"GLOSSARY.md": GLOSSARY, "DESIGN.md": "A broken image.\n"})
+    commit(root, "docs(design): record")
+    branch(root)
+    avoid_broken = GLOSSARY + "\n**Unreadable**:\nA cover that fails.\n_Avoid_: broken\n"
+    write(root, "GLOSSARY.md", avoid_broken)
+    assert run(prose, root) == 0
+    assert "'broken'" not in capsys.readouterr().out
+    write(root, "DESIGN.md", "A broken image.\nA broken cover.\n")
+    assert run(prose, root) == 1
+    assert "DESIGN.md:2: 'broken' is on the Avoid list of 'Unreadable'" in capsys.readouterr().out
+    write(root, "DESIGN.md", "A broken image.\n")
+    write(root, "docs/new.md", "Still broken.\n")
+    assert run(prose, root) == 1, "a new file has no earlier uses to keep"
+
+
 # --- snapshots ------------------------------------------------------------------------------
 
 MANIFEST = (

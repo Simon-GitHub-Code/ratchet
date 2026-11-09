@@ -8,6 +8,11 @@ word, case-insensitively. The check cannot see meaning, so the whole word is ban
 must use one carries ``glossary: allow`` and the reason, which is a record a review can read.
 The glossary files themselves are not scanned.
 
+Like the markers gate, it judges the change: a word fails a file only when its uses there rose
+against the merge base, read with today's glossary. So putting a word on an Avoid list never
+turns the records written before it red, and every new use of it is caught. Without a base
+commit every use counts.
+
 Usage: ``prose.py [--root DIR]``.
 """
 
@@ -16,6 +21,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 import gatelib
@@ -81,7 +87,11 @@ def scan(path: str, text: str, *, found: re.Pattern[str], words: dict[str, str])
     return hits
 
 
-def problems(root: Path) -> list[str]:
+def _word(hit: str) -> str:
+    return hit.split("'", 2)[1].lower()
+
+
+def problems(root: Path, base: str | None = None) -> list[str]:
     glossary = gatelib.read_text(root / GLOSSARY)
     if glossary is None:
         return [f"{GLOSSARY}: missing"]
@@ -94,8 +104,13 @@ def problems(root: Path) -> list[str]:
         if not (is_document(path) or is_source(path)):
             continue
         text = gatelib.read_text(root / path)
-        if text is not None:
-            hits += scan(path, text, found=found, words=words)
+        if text is None:
+            continue
+        now = scan(path, text, found=found, words=words)
+        before = gatelib.show(root, base, path) if base is not None and now else None
+        earlier = Counter(_word(hit) for hit in scan(path, before or "", found=found, words=words))
+        current = Counter(_word(hit) for hit in now)
+        hits += [hit for hit in now if current[_word(hit)] > earlier[_word(hit)]]
     return hits
 
 
@@ -103,7 +118,8 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
     options = parser.parse_args(argv[1:])
-    return gatelib.report("prose", problems(Path(options.root).resolve()))
+    root = Path(options.root).resolve()
+    return gatelib.report("prose", problems(root, gatelib.base_commit(root)))
 
 
 if __name__ == "__main__":
