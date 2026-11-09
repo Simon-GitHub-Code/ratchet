@@ -84,7 +84,7 @@ def _environment(words: Sequence[str]) -> list[Verdict]:
         if match is None:
             continue
         name = match.group("name")
-        if name == "SKIP" or assignment == "HUSKY=0":
+        if name == "SKIP":
             verdicts.append(Verdict("skip-hooks", assignment))
         elif name.startswith("GIT_CONFIG"):
             verdicts.append(Verdict("hooks-path", assignment))
