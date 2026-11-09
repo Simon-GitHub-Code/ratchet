@@ -218,3 +218,47 @@ def test_lowered_main_against_a_real_repository(
     write(fresh, "quality/thresholds.toml", THRESHOLDS)
     assert lowered.main(["x", "--root", str(fresh)]) == 0
     assert "is new at" in capsys.readouterr().out
+
+
+def test_a_true_flag_turned_off_or_dropped_is_a_loosening() -> None:
+    before = lowered.flatten({"rs": {"coverage": {"domain": {"absolute": True, "line": 100}}}})
+    assert lowered.loosened(before, {**before, "rs.coverage.domain.absolute": False}) == [
+        "rs.coverage.domain.absolute: turned off"
+    ]
+    assert lowered.loosened(before, {"rs.coverage.domain.line": 100.0}) == [
+        "rs.coverage.domain.absolute: removed (was true)"
+    ]
+    assert lowered.loosened({"x.on": False}, {"x.on": True}) == []
+
+
+ADR = """# 0007: the change ceiling rises for the settlement feature
+
+## Decision
+Relaxes: ceilings.change.lines from 1500 to 2500
+- Relaxes: rs.coverage.domain.absolute from true to false
+Relaxes: rs.coverage.domain.branch from 100 to removed
+Relaxes: rs.coverage.domain.line from soon to later
+"""
+
+
+def test_a_loosening_an_adr_names_exactly_passes_and_says_which(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    base = "[ceilings.change]\nlines = 1500\n[rs.coverage.domain]\nabsolute = true\n"
+    base += "line = 100\nbranch = 100\n"
+    root = repository(tmp_path, {"quality/thresholds.toml": base})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "quality/thresholds.toml", base.replace("1500", "2500").replace("true", "false"))
+    assert lowered.main(["lowered", "--root", str(root)]) == 1
+    write(root, "docs/adr/0007-wider.md", ADR)
+    assert lowered.main(["lowered", "--root", str(root)]) == 0
+    out = capsys.readouterr().out
+    relaxed = "ceiling raised from 1500.0 to 2500.0, relaxed by docs/adr/0007-wider.md"
+    assert f"ceilings.change.lines: {relaxed}" in out
+    write(root, "quality/thresholds.toml", base.replace("1500", "3000"))
+    assert lowered.main(["lowered", "--root", str(root)]) == 1, "the ADR names 2500, not 3000"
+    write(root, "quality/thresholds.toml", base.replace("line = 100\n", ""))
+    assert lowered.main(["lowered", "--root", str(root)]) == 1, "no ADR names line removed"
+    write(root, "quality/thresholds.toml", base.replace("branch = 100\n", ""))
+    assert lowered.main(["lowered", "--root", str(root)]) == 0, "branch removed is named"

@@ -20,7 +20,7 @@ coverage = 97.1
 
 - The `ratchet-lowered` entry point (tier 0) flattens the file to dotted keys at the merge base and at head and fails on any key that is lower or missing.
 - The `ratchet` entry point runs the suites, raises each value to the measured one (never lowers), reads the last full mutation runs for the scores, refreshes the snapshots. Commit the result with the change that earned it.
-- Relaxing a value is an owner's change with an ADR behind it.
+- Relaxing a value is an owner's change with an ADR behind it. The ADR names each loosening on a line of its own, `Relaxes: <key> from <old> to <new>` (`removed` for a dropped key, `true` and `false` for a flag such as `absolute`), and `ratchet-lowered` passes exactly the loosenings an ADR names and prints which ADR. `docs/adr/` is a guard path, so the line is the owner's.
 
 ## 2. Absolute paths
 
