@@ -2,6 +2,7 @@
 
 import json
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -229,6 +230,34 @@ def test_a_true_flag_turned_off_or_dropped_is_a_loosening() -> None:
         "rs.coverage.domain.absolute: removed (was true)"
     ]
     assert lowered.loosened({"x.on": False}, {"x.on": True}) == []
+
+
+def loosenings_between(old: str, new: str) -> list[str]:
+    return lowered.loosened(
+        lowered.flatten(tomllib.loads(old)), lowered.flatten(tomllib.loads(new))
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ("min = 80", "min = false", "cov.min: changed from a number to a boolean"),
+        ("min = 80", "min = true", "cov.min: changed from a number to a boolean"),
+        ("min = true", "min = 80", "cov.min: changed from a boolean to a number"),
+        ("min = false", "min = 1", "cov.min: changed from a boolean to a number"),
+    ],
+)
+def test_a_change_between_a_number_and_a_boolean_is_a_loosening(
+    old: str, new: str, message: str
+) -> None:
+    assert loosenings_between(f"[cov]\n{old}", f"[cov]\n{new}") == [message]
+
+
+@pytest.mark.parametrize("new", ['"eighty"', "[80]"])
+def test_a_number_turned_into_a_string_or_list_reads_as_removed(new: str) -> None:
+    assert loosenings_between("[cov]\nmin = 80", f"[cov]\nmin = {new}") == [
+        "cov.min: removed (was 80.0)"
+    ]
 
 
 ADR = """# 0007: the change ceiling rises for the settlement feature

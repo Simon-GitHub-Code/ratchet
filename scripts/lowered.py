@@ -57,8 +57,13 @@ def _loosenings(before: dict[str, Value], after: dict[str, Value]) -> list[Loose
         new = after.get(key)
         if new is None:
             found.append((key, old, None, f"{key}: removed (was {show(old)})"))
-        elif isinstance(old, bool) or isinstance(new, bool):
-            if old is True and new is not True:
+        elif isinstance(old, bool) != isinstance(new, bool):
+            kinds = (
+                ("a boolean", "a number") if isinstance(old, bool) else ("a number", "a boolean")
+            )
+            found.append((key, old, new, f"{key}: changed from {kinds[0]} to {kinds[1]}"))
+        elif isinstance(old, bool):
+            if old and not new:
                 found.append((key, old, new, f"{key}: turned off"))
         elif key.startswith(CEILINGS) and new > old:
             found.append((key, old, new, f"{key}: ceiling raised from {show(old)} to {show(new)}"))
