@@ -305,3 +305,24 @@ def test_a_loosening_an_adr_names_exactly_passes_and_says_which(
     assert lowered.main(["lowered", "--root", str(root)]) == 1, "no ADR names line removed"
     write(root, "quality/thresholds.toml", base.replace("branch = 100\n", ""))
     assert lowered.main(["lowered", "--root", str(root)]) == 0, "branch removed is named"
+
+
+def test_an_adr_naming_a_number_does_not_pass_a_boolean_flip(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"quality/thresholds.toml": "[g]\nx = true\ny = 1\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(
+        root,
+        "docs/adr/0008-numbers.md",
+        "Relaxes: g.x from 1 to 0\nRelaxes: g.y from true to false\n",
+    )
+    write(root, "quality/thresholds.toml", "[g]\nx = false\ny = 1\n")
+    assert lowered.main(["lowered", "--root", str(root)]) == 1, "1 to 0 is not true to false"
+    write(root, "quality/thresholds.toml", "[g]\nx = true\ny = 0\n")
+    assert lowered.main(["lowered", "--root", str(root)]) == 1, "true to false is not 1 to 0"
+    write(
+        root, "docs/adr/0009-both.md", "Relaxes: g.x from true to false\nRelaxes: g.y from 1 to 0\n"
+    )
+    assert lowered.main(["lowered", "--root", str(root)]) == 0, "each is named in its own kind"
+    write(root, "quality/thresholds.toml", "[g]\nx = false\ny = 0\n")
+    assert lowered.main(["lowered", "--root", str(root)]) == 0

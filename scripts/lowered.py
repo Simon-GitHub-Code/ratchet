@@ -84,20 +84,27 @@ def lowered(before: dict[str, Value], after: dict[str, Value]) -> list[str]:
     return loosened(before, after)
 
 
-def _parse(text: str) -> Value | None:
-    """A value as ``RELAXES`` spells it; ``None`` for ``removed``."""
-    if text == "removed":
-        return None
-    return text == "true" if text in {"true", "false"} else float(text)
+def _spelled(text: str) -> str:
+    """A value as ``RELAXES`` spells it, in the form ``show`` prints."""
+    if text in {"removed", "true", "false"}:
+        return text
+    return show(float(text))
 
 
-def relaxations(root: Path) -> dict[tuple[str, Value | None, Value | None], str]:
-    """Each loosening an ADR names, mapped to the ADR's path."""
-    named: dict[tuple[str, Value | None, Value | None], str] = {}
+def _named(value: Value | None) -> str:
+    return "removed" if value is None else show(value)
+
+
+def relaxations(root: Path) -> dict[tuple[str, str, str], str]:
+    """Each loosening an ADR names, mapped to the ADR's path.
+
+    Keyed on the shown values: ``1.0 == True`` in Python, so values would let a number pass a flag.
+    """
+    named: dict[tuple[str, str, str], str] = {}
     for adr in sorted((root / ADRS).glob("*.md")):
         for line in (gatelib.read_text(adr) or "").splitlines():
             if match := RELAXES.match(line):
-                key = (match["key"], _parse(match["old"]), _parse(match["new"]))
+                key = (match["key"], _spelled(match["old"]), _spelled(match["new"]))
                 named[key] = adr.relative_to(root).as_posix()
     return named
 
@@ -127,7 +134,7 @@ def main(argv: list[str]) -> int:
     named = relaxations(root)
     problems = []
     for key, old, new, message in found:
-        adr = named.get((key, old, new))
+        adr = named.get((key, show(old), _named(new)))
         if adr is None:
             problems.append(message)
         else:
