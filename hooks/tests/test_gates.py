@@ -236,6 +236,37 @@ def test_prose_judges_the_change_not_the_history(tmp_path: Path, capsys: Out) ->
     assert run(prose, root) == 1, "a new file has no earlier uses to keep"
 
 
+NOTE = (
+    "A note about the ordering system.\nThe client.\nMore text so a rename keeps its similarity.\n"
+)
+
+
+def test_prose_follows_a_rename_to_the_earlier_uses(tmp_path: Path, capsys: Out) -> None:
+    """A pure rename keeps the earlier Avoid-word uses; a use added in the move still fails."""
+    root = repository(tmp_path, {"GLOSSARY.md": GLOSSARY, "docs/old.md": NOTE})
+    branch(root)
+    git(root, "mv", "docs/old.md", "docs/new.md")
+    assert run(prose, root) == 0
+    assert "client" not in capsys.readouterr().out
+    commit(root, "docs(core): move the note")
+    assert run(prose, root) == 0
+    write(root, "docs/new.md", NOTE + "Another client.\n")
+    assert run(prose, root) == 1
+    assert "docs/new.md:4: 'client' is on the Avoid list" in capsys.readouterr().out
+
+
+def test_prose_counts_uses_in_a_path_holding_a_quote(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"GLOSSARY.md": GLOSSARY, "docs/it's.md": "The client.\n"})
+    branch(root)
+    write(root, "docs/it's.md", "Intro.\nThe client.\n")
+    assert run(prose, root) == 0, "the earlier use only moved down a line"
+    write(root, "docs/it's.md", "Intro.\nThe client.\nThe Client again.\n")
+    assert prose.problems(root, "HEAD") == [
+        "docs/it's.md:2: 'client' is on the Avoid list of 'Customer'",
+        "docs/it's.md:3: 'Client' is on the Avoid list of 'Customer'",
+    ]
+
+
 # --- snapshots ------------------------------------------------------------------------------
 
 MANIFEST = (
