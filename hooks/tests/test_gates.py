@@ -434,6 +434,43 @@ def test_change_size_ignores_non_integer_ceilings(tmp_path: Path) -> None:
     assert json.dumps(change_size.ceilings(tmp_path)) == "[null, null]"
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("files = 9.5", "ceilings.change.files"),
+        ("lines = 2.5", "ceilings.change.lines"),
+        ("files = true", "ceilings.change.files"),
+        ("lines = false", "ceilings.change.lines"),
+        ("files = -1", "ceilings.change.files"),
+        ('lines = "9"', "ceilings.change.lines"),
+        ("files = 3\nlines = nan", "ceilings.change.lines"),
+    ],
+)
+def test_change_size_is_red_on_a_ceiling_that_is_not_a_non_negative_integer(
+    tmp_path: Path, capsys: Out, case: tuple[str, str]
+) -> None:
+    body, named = case
+    root = repository(tmp_path, {"quality/thresholds.toml": f"[ceilings.change]\n{body}\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "a.txt", "1\n")
+    assert run(change_size, root) == 1
+    out = capsys.readouterr().out
+    assert f"{named}: " in out
+    assert "not a non-negative integer" in out
+    assert "no ceiling recorded" not in out
+
+
+def test_change_size_without_a_change_ceiling_key_records_none(tmp_path: Path, capsys: Out) -> None:
+    root = repository(tmp_path, {"quality/thresholds.toml": "[ceilings.change]\nnote = 1\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "a.txt", "1\n")
+    assert run(change_size, root) == 0
+    assert "no ceiling recorded" in capsys.readouterr().out
+    assert change_size.malformed(root) == []
+
+
 def test_change_size_on_the_default_branch_reports_a_merge_it_cannot_reopen(
     tmp_path: Path, capsys: Out
 ) -> None:
