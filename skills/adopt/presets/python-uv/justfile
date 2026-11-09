@@ -80,11 +80,12 @@ contracts-check:
     @echo "none: no generated contract artefacts in this stack; see the binding's ADR"; exit 0
 
 # The shipped dependencies only; `audit-all` audits the whole environment, dev tools included.
+# The export keeps its hashes: pip-audit refuses `--disable-pip` on a file without them.
 audit:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p .ratchet
-    uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt > .ratchet/shipped.txt
+    uv export --frozen --no-dev --no-emit-project --format requirements-txt > .ratchet/shipped.txt
     if ! grep -q '^[a-zA-Z]' .ratchet/shipped.txt; then echo "audit: no shipped dependency"; exit 0; fi
     uv run pip-audit --strict --disable-pip -r .ratchet/shipped.txt
 

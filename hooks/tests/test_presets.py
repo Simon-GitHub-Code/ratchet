@@ -244,3 +244,17 @@ def test_whole_tree_tools_skip_the_companions_working_files() -> None:
     gitignore = (ADOPT.parent / "init/templates/gitignore").read_text().splitlines()
     assert ".claude/worktrees/" in gitignore
     assert ".impeccable/hook.cache.json" in gitignore
+
+
+def test_the_python_audit_exports_hashes_since_pip_audit_runs_without_pip() -> None:
+    """pip-audit refuses ``--disable-pip`` on a requirements file without hashes.
+
+    The recipe exits early while nothing ships, so the first runtime dependency is the
+    first time pip-audit reads the file; a trial on 2026-11-09 went red there.
+    """
+    text = (ADOPT / "presets/python-uv/justfile").read_text(encoding="utf-8")
+    recipe = text.split("\naudit:\n", 1)[1].split("\n\n", 1)[0]
+    exports = [line for line in recipe.splitlines() if "uv export" in line]
+    assert exports
+    assert "--disable-pip" in recipe
+    assert not any("--no-hashes" in line for line in exports), exports
