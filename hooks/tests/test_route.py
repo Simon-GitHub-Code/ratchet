@@ -372,3 +372,18 @@ def test_a_local_spec_without_tickets_is_split_next(tmp_path: Path) -> None:
     write(root, ".scratch/settle/issues/01-parse.md", "# Parse\n\nStatus: resolved\n")
     commit(root, "docs: tickets")
     assert route.decide(root, None).command == route.SPEC, "a spec whose tickets exist is split"
+
+
+def test_plugin_lines_older_than_the_template_send_the_owner_to_init(tmp_path: Path) -> None:
+    template = (route.PLUGIN_ROOT / "skills/init/templates/AGENTS.md").read_text()
+    lines = [line for line in template.splitlines() if line.startswith("- **")][:4]
+    current = STANZA + "\n" + "\n".join(lines) + "\n"
+    root = repository(tmp_path, {**ADOPTED, "AGENTS.md": current})
+    assert route.decide(root, None).command != route.INIT
+    stale = current.replace(lines[1], lines[1].split("`poteto-mode`")[0] + "refused to an agent.")
+    write(root, "AGENTS.md", stale)
+    commit(root, "docs: an older stanza")
+    step = route.decide(root, None)
+    assert step.command == route.INIT
+    assert "In what style, with which levers?" in step.why
+    assert step.then == route.NEXT

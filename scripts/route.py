@@ -47,6 +47,9 @@ DESIGN_BRIEF = Path("docs/design-brief.md")
 LOCAL_TICKETS = ".scratch/*/issues/*.md"
 LOCAL_SPECS = ".scratch/*/spec.md"
 PURPOSE_PLACEHOLDER = "<One paragraph"
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+AGENTS_TEMPLATE = PLUGIN_ROOT / "skills/init/templates/AGENTS.md"
+PLUGIN_LINE = re.compile(r"^- \*\*([^*]+)\*\*")
 ENTRY_POINT_ROW = re.compile(r"^\|\s*check\s*\|\s*`([^`]+)`\s*\|", re.MULTILINE)
 CHECK_FALLBACK = "the binding's `check` entry point"
 
@@ -391,6 +394,23 @@ def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
     )
 
 
+def _plugin_lines(text: str) -> dict[str, str]:
+    return {m.group(1): line for line in text.splitlines() if (m := PLUGIN_LINE.match(line))}
+
+
+def stale_plugin_lines(agents: Path) -> list[str]:
+    """The questions whose plugin line in ``agents`` differs from the init template's.
+
+    Init writes the four-plugin stanza once; a later ratchet changes what it says about the
+    other plugins, so an adopted repository keeps the old text until init runs again.
+    """
+    if not agents.is_file():
+        return []
+    template = _plugin_lines(AGENTS_TEMPLATE.read_text(encoding="utf-8"))
+    present = _plugin_lines(agents.read_text(errors="replace"))
+    return [q for q, line in present.items() if q in template and template[q] != line]
+
+
 def setup_step(root: Path) -> Step | None:
     """The step before adoption, or ``None`` once the repository is adopted."""
     if not names_method(root):
@@ -401,6 +421,13 @@ def setup_step(root: Path) -> Step | None:
             INIT,
             "AGENTS.md still holds the purpose placeholder, so init did not finish",
             TRACKER_SETUP,
+            "init",
+        )
+    if stale := stale_plugin_lines(agents):
+        return Step(
+            INIT,
+            f"AGENTS.md's plugin lines for {', '.join(stale)} differ from this ratchet's",
+            NEXT,
             "init",
         )
     if not (root / TRACKER_RECORD).is_file():
