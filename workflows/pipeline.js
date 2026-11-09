@@ -68,6 +68,10 @@ const PREAMBLE = 'Load the `ratchet:method` skill (the method this repository fo
 
 // Guards and gate disputes. The harness enforces this; the prompt says it so an agent reads a
 // block as the dispute signal the first time.
+// Why: the reviewer had no definition and filed a binary that drops an expense with exit 0 as
+// minor; critic and reviewer now grade by the same words.
+const SEVERITY = 'Severity: blocker = wrong result (a wrong output, or a wrong input accepted with exit 0), data loss, a violated AGENTS.md non-negotiable, a declared-path or contract violation; major = unhandled edge case the spec covers, survived mutant on a stated invariant, missing contract; minor = everything else. A defect the spec defers to a later ticket is still graded by what it does to a user now.'
+
 const GUARD_RULES = `
 Guard paths and gate disputes:
 - The files that define the quality gates are guard paths: the groups and patterns in
@@ -539,10 +543,8 @@ List every command you ran trying to break the change in \`attempted\`, with its
 outcome. Nothing found refutes only the attempts that would have hit; the script blocks a
 run whose critic found nothing and attempted nothing.
 
-Severity: blocker = wrong result, data loss, a violated AGENTS.md non-negotiable, a
-declared-path or contract violation; major = unhandled edge case the spec covers, survived
-mutant on a stated invariant, missing contract; minor = everything else. \`check\` is expected
-to be red only on the failing tests you kept; say so in the finding evidence.`
+${SEVERITY} \`check\` is expected to be red only on the failing tests you kept; say so in the
+finding evidence.`
 }
 
 function reviewPrompt(spec) {
@@ -583,6 +585,8 @@ C. Guard paths: run \`guard-diff\` and list every path it prints in \`guardChang
    \`disputeCoverage\`; a dispute that names only the gate covers no path. Every
    changed guard path is a blocker issue on the standards axis when uncovered and a major one
    when covered: the owner, not the pipeline, changes a gate.
+
+${SEVERITY}
 
 Verdict: \`approve\` only if there are no blocker or major issues on any axis, every changed
 guard path is covered by a dispute record, and \`check\` exits 0; otherwise
