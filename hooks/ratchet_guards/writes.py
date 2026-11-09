@@ -14,6 +14,8 @@ from ratchet_guards.options import NO_VALUES, Options, Spec, scan
 _COPY = Spec("tSmog", frozenset({"--target-directory"}))
 _MOVE = Spec("tS", frozenset({"--target-directory"}))
 _REMOVE = Spec("s")
+# Why: `--rec` is the shortest unambiguous prefix of `--recursive` (`--reference` shares `--re`).
+_RECURSIVE_SHORTEST = len("--rec")
 _IN_PLACE = Spec("efl", frozenset({"--expression", "--file"}))
 
 
@@ -67,12 +69,20 @@ def _in_place(args: Sequence[str]) -> Touched:
 
 
 def _modes(args: Sequence[str]) -> Touched:
-    """``chmod``, ``chown``, ``chgrp``: every operand, the whole tree below it with ``-R``.
+    """``chmod``, ``chown``, ``chgrp``: each operand is written; with ``-R`` it is a whole tree.
 
     The mode or owner operand never names a guard path, so it needs no parsing out; clearing
-    the execute bit on a git hook switches it off as surely as deleting it.
+    the execute bit on a git hook switches it off as surely as deleting it. Without ``-R`` only
+    the named path changes, so ``chmod 755 .`` does not touch what lies below ``.``.
     """
-    return Touched(removed=scan(args, NO_VALUES).operands)
+    options = scan(args, NO_VALUES)
+    recursive = "-R" in options.flags or any(
+        len(flag) >= _RECURSIVE_SHORTEST and "--recursive".startswith(flag)
+        for flag in options.flags
+    )
+    if recursive:
+        return Touched(removed=options.operands)
+    return Touched(written=options.operands)
 
 
 def _dd(args: Sequence[str]) -> Touched:
