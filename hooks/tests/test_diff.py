@@ -90,7 +90,7 @@ def test_a_missing_or_broken_base_manifest_still_reads_the_work_tree(tmp_path: P
 def test_markdown_and_annotations() -> None:
     group = Group("ci", "r", ("x",))
     assert diff.markdown([("a", group), ("b", group)], "main").endswith(
-        "| `a` | ci |\n| `b` | ci |\n"
+        "| `a` | ci |  |\n| `b` | ci |  |\n"
     )
     assert diff.markdown([], "main") == (
         "## Guard paths\n\nNo guard path changed against the merge base with `main`.\n"
@@ -99,7 +99,7 @@ def test_markdown_and_annotations() -> None:
         "## :warning: 1 guard path(s) changed\n\nAgainst the merge base with `main`. Guard paths "
         "define the quality gates (guards/manifest.toml). Read each change, and its "
         "gate dispute in docs/disputes/ if an agent raised one, before merging.\n\n"
-        "| Path | Group |\n| --- | --- |\n| `a'b\\|c` | ci |\n"
+        "| Path | Group | Dependencies |\n| --- | --- | --- |\n| `a'b\\|c` | ci |  |\n"
     )
     assert diff.annotations([("a%b\nc\r", group)]) == [
         "::error title=Guard path changed (ci)::a%25b%0Ac%0D"

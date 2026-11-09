@@ -14,9 +14,12 @@ check and the lowered gate never disagree about "before". ``--summary`` appends 
 (CI passes ``$GITHUB_STEP_SUMMARY``), ``--annotate`` prints GitHub error annotations, and
 ``--fail-if-present`` exits 1 when any guard path changed; otherwise the exit is 0.
 
-A guard path whose change only changes dependencies (``ratchet_guards.dependencies``) is listed
-apart, with each package's old and new version, and is not a guard change: adding a library is
-a decision the pull request states, and the owner reads the versions there.
+Every changed guard path is listed and counted, dependency manifests and lockfiles included. Under
+a manifest, a lockfile or a snapshot of one, an indented line says what the change does to
+dependencies (``ratchet_guards.dependencies``): ``dependencies added:`` with each new entry, or
+``lockfile:`` with each package's old and new versions, when that is all it does; otherwise
+``not dependency-only:`` and why. The pipeline matches the added names against the ones its spec
+named (ADR 0011); the owner reads the versions.
 """
 
 import argparse
@@ -104,38 +107,45 @@ def guarded(paths: Sequence[str], found: Sequence[Manifest]) -> list[tuple[str, 
     return matches
 
 
-def dependency_changes(
-    git: Git, base: str, worktree: Path, *, matches: Sequence[tuple[str, Group]]
-) -> tuple[list[tuple[str, Group]], dict[str, list[str]]]:
-    """``matches`` split into guard changes and dependency-only changes with their versions."""
+def dependency_notes(
+    git: Git, base: str, worktree: Path, *, paths: Sequence[str]
+) -> dict[str, str]:
+    """For each dependency manifest or lockfile in ``paths``, what its change does."""
     merge_base = _required(git, ["merge-base", base, "HEAD"]).strip()
-    gate: list[tuple[str, Group]] = []
-    deps: dict[str, list[str]] = {}
-    for path, group in matches:
+    notes: dict[str, str] = {}
+    for path in paths:
         if not dependencies.recognised(path):
-            gate.append((path, group))
             continue
         current = worktree / path
         after = current.read_bytes().decode(errors="replace") if current.is_file() else None
-        found = dependencies.changes(path, git(["show", f"{merge_base}:{path}"]), after)
-        if found is None:
-            gate.append((path, group))
-        else:
-            deps[path] = found
-    return gate, deps
+        try:
+            found = dependencies.changes(path, git(["show", f"{merge_base}:{path}"]), after)
+        except dependencies.NotDependencyOnlyError as reason:
+            notes[path] = f"not dependency-only: {reason}"
+            continue
+        lock = dependencies.file_name(path) in dependencies.LOCKFILES
+        heading = "lockfile" if lock else "dependencies added"
+        notes[path] = f"{heading}: " + ("; ".join(map(str, found)) or "none")
+    return notes
 
 
-def markdown(matches: Sequence[tuple[str, Group]], base: str) -> str:
+def markdown(
+    matches: Sequence[tuple[str, Group]], base: str, notes: dict[str, str] | None = None
+) -> str:
     """The job summary."""
     if not matches:
         return f"## Guard paths\n\nNo guard path changed against the merge base with `{base}`.\n"
-    rows = "".join(f"| `{_code(path)}` | {group.name} |\n" for path, group in matches)
+    notes = notes or {}
+    rows = "".join(
+        f"| `{_code(path)}` | {group.name} | {_code(notes.get(path, ''))} |\n"
+        for path, group in matches
+    )
     return (
         f"## :warning: {len(matches)} guard path(s) changed\n\n"
         f"Against the merge base with `{base}`. Guard paths define the quality gates "
         "(guards/manifest.toml). Read each change, and its gate dispute in "
         "docs/disputes/ if an agent raised one, before merging.\n\n"
-        f"| Path | Group |\n| --- | --- |\n{rows}"
+        f"| Path | Group | Dependencies |\n| --- | --- | --- |\n{rows}"
     )
 
 
@@ -173,23 +183,20 @@ def main(argv: Sequence[str] | None = None, git: Git | None = None) -> int:
     base = arguments.base or default_base(git, root)
     worktree = Path(_required(git, ["rev-parse", "--show-toplevel"]).strip())
     found = manifests(git, base, worktree)
-    matches, deps = dependency_changes(
-        git, base, worktree, matches=guarded(changed_paths(git, base), found)
-    )
+    matches = guarded(changed_paths(git, base), found)
+    notes = dependency_notes(git, base, worktree, paths=[path for path, _ in matches])
     for path, group in matches:
         print(f"{group.name}\t{path}")
+        if path in notes:
+            print(f"  {notes[path]}")
     if not matches:
         print(f"no guard path changed against the merge base with {base}")
-    if deps:
-        print("dependency-only changes (state them in the pull request; not guard changes):")
-    for path, versions in deps.items():
-        print(f"  {path}: " + ("; ".join(versions) or "no version changed"))
     if arguments.annotate:
         for line in annotations(matches):
             print(line)
     if arguments.summary is not None:
         with arguments.summary.open("ab") as summary:
-            summary.write(markdown(matches, base).encode())
+            summary.write(markdown(matches, base, notes).encode())
     return 1 if arguments.fail_if_present and matches else 0
 
 
