@@ -42,6 +42,9 @@ _DISABLE_ALL_HOOKS = "disableallhooks"
 # Why: `claude plugin eval init --bare` writes a blank case template and starts no session.
 # Only that exact leading form is exempt, so `claude -p plugin eval init --bare` stays denied.
 _EVAL_TEMPLATE = frozenset({("plugin", "eval", "init"), ("plugins", "eval", "init")})
+# `--eval-dir` writes the template into any directory, so a command with any `--eval...` option
+# (spaced, `=` joined or shortened) is not exempt.
+_EVAL_DIR = "--eval"
 _PLUGIN_REMOVALS = frozenset({"disable", "uninstall", "remove"})
 _REMOVALS: dict[str, tuple[frozenset[str], str]] = {
     "plugin": (_PLUGIN_REMOVALS, "claude plugin"),
@@ -133,7 +136,9 @@ def _exec_commands(words: Sequence[str]) -> list[list[str]]:
 
 def _nested_claude(words: Sequence[str]) -> list[Verdict]:
     """A ``claude`` that loads other settings, runs without hooks or plugins, or removes one."""
-    template = tuple(words[1:4]) in _EVAL_TEMPLATE
+    template = tuple(words[1:4]) in _EVAL_TEMPLATE and not any(
+        word.lower().startswith(_EVAL_DIR) for word in words[4:]
+    )
     flags = [
         word
         for word in words[1:]
