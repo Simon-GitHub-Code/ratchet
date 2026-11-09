@@ -260,6 +260,20 @@ def test_a_number_turned_into_a_string_or_list_reads_as_removed(new: str) -> Non
     ]
 
 
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    ("table", "before"), [("cov", "min = 80"), ("ceilings.x", "sec = 10")], ids=["floor", "ceiling"]
+)
+def test_a_value_that_is_not_a_finite_number_is_a_loosening(
+    table: str, before: str, value: str
+) -> None:
+    key = before.partition(" ")[0]
+    after = f"{key} = {value}"
+    assert loosenings_between(f"[{table}]\n{before}", f"[{table}]\n{after}") == [
+        f"{table}.{key}: {value} is not a finite number"
+    ]
+
+
 ADR = """# 0007: the change ceiling rises for the settlement feature
 
 ## Decision

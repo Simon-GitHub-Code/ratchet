@@ -17,6 +17,7 @@ base without the file passes: that is the first adoption.
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 import tomllib
@@ -65,6 +66,8 @@ def _loosenings(before: dict[str, Value], after: dict[str, Value]) -> list[Loose
         elif isinstance(old, bool):
             if old and not new:
                 found.append((key, old, new, f"{key}: turned off"))
+        elif not math.isfinite(new):
+            found.append((key, old, new, f"{key}: {show(new)} is not a finite number"))
         elif key.startswith(CEILINGS) and new > old:
             found.append((key, old, new, f"{key}: ceiling raised from {show(old)} to {show(new)}"))
         elif not key.startswith(CEILINGS) and new < old:
