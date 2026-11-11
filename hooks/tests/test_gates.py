@@ -384,6 +384,22 @@ def test_a_merge_message_is_not_judged(tmp_path: Path) -> None:
     assert run(commits, root, "--message-file", message(root, "Merge branch 'change'\n")) == 0
 
 
+def test_the_number_a_squash_merge_appends_is_not_counted() -> None:
+    written = "feat: " + "x" * 66
+    assert len(written) == 72
+    assert commits.problems([written + " (#7)", written + " (#1234)"]) == [], (
+        "the forge writes the pull request number, so the author's 72 characters still pass"
+    )
+    assert commits.problems([written + "x (#7)"]) == [
+        f"'{written[:30]}...': 73 characters, at most 72, not counting ' (#7)'"
+    ]
+    assert commits.problems([written[:-6] + " (#7) x", written + "(#7)", written + " (#x)"]) == [
+        f"'{written[:30]}...': 73 characters, at most 72",
+        f"'{written[:30]}...': 76 characters, at most 72",
+        f"'{written[:30]}...': 77 characters, at most 72",
+    ], "only a number in brackets after a space, at the very end, is the forge's"
+
+
 # --- change size ----------------------------------------------------------------------------
 
 
