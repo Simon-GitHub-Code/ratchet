@@ -6,9 +6,9 @@ Grok installs Claude Code plugins as they are and speaks the same hook JSON, so 
 
 ```bash
 grok plugin install Simon-GitHub-Code/ratchet --trust
-grok plugin marketplace add cursor/plugins            # then install pstack from it
-grok plugin install anthropics/claude-plugins-official#mattpocock-skills --trust
-grok plugin install pbakaus/impeccable --trust
+grok plugin install "michael-denyer/pstack-claude#plugins/pstack" --trust
+grok plugin install mattpocock/skills --trust
+grok plugin install "pbakaus/impeccable#plugin" --trust
 ```
 
 `grok plugin list` shows what is installed. Grok has no dependency field, so `/ratchet:init` installs what is missing with the owner's consent. `--trust` activates a plugin's hooks; without it Grok shows the source and stops.

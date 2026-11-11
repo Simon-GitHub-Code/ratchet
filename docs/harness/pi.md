@@ -5,28 +5,41 @@ pi installs packages from git; a package is a directory with `extensions/` and `
 ## Install
 
 ```bash
+pi install git:github.com/michael-denyer/pstack-claude   # the pstack port; pstack itself ships no pi package
 pi install git:github.com/Simon-GitHub-Code/ratchet
-npx skills@latest add mattpocock/skills -a pi      # include setup-matt-pocock-skills
-pi install git:github.com/michael-denyer/pstack-claude   # a community port of pstack; pstack itself ships no pi package
+pi install git:github.com/mattpocock/skills
+pi install git:github.com/pbakaus/impeccable
 ```
 
-`pi list` shows installed packages. impeccable ships no pi package; its skill can be added through skills.sh when listed there, and otherwise is unavailable here.
+`pi list` shows installed packages. Two packages need a line in `~/.pi/agent/settings.json` after installing:
+
+- **mattpocock/skills** has no `pi` manifest, so pi loads every folder under `skills/`, drafts included, and two names (`tdd`, `teach`) collide with pstack's. pi skill names are not namespaced per plugin, so the first one loaded wins and the other is a warning. Narrow the package to the skills its Claude plugin ships (the `skills` list in its `.claude-plugin/plugin.json`), minus `tdd` and `teach`, with the object form: `{ "source": "git:github.com/mattpocock/skills", "skills": ["skills/engineering/ask-matt", ...] }`.
+- **impeccable** keeps its pi build in `.pi/skills/`, which pi does not look in for a package, so the install loads nothing. Add the folder to pi's own list: `"skills": ["~/.pi/agent/git/github.com/pbakaus/impeccable/.pi/skills"]`.
+
+pi reads frontmatter with a strict YAML parser: a `description` holding `: ` must be quoted, or the skill is skipped with "Nested mappings are not allowed in compact mappings".
 
 ## The guard
 
-`adapters/pi/ratchet-guard.ts` is a pi extension. On `tool_call` it maps pi's `bash`, `edit` and `write` to the guard's `Bash`, `Edit` and `Write`, runs `hooks/guard.py` with the Claude-shaped JSON and the session's `cwd`, and returns `{ block: true, reason }` on `deny`. On `ask` it uses `ctx.ui.confirm` when the session has a UI and blocks when it has none, since nobody can approve. On `before_agent_start` it appends `hooks/session.py`'s output to the system prompt, which is the stance in every session, as in Claude Code.
+`adapters/pi/ratchet-guard.ts` is a pi extension. On `tool_call` it maps pi's `bash`, `edit` and `write` to the guard's `Bash`, `Edit` and `Write`, runs `hooks/guard.py` with the Claude-shaped JSON and the session's `cwd`, and returns `{ block: true, reason }` on `deny`. On `ask` it uses `ctx.ui.confirm` when the session has a UI and blocks when it has none, since nobody can approve. On `before_agent_start` it appends `hooks/session.py`'s output to the system prompt, which is the stance in every session, as in Claude Code. Commands in that output are written Claude Code's way (`/ratchet:init`); the extension rewrites them to pi's `/skill:init` before appending.
 
 ## Names
 
 | In the skills | Here |
 | --- | --- |
 | `${CLAUDE_SKILL_DIR}` | the skill folder inside the installed package under `~/.pi/agent/` |
-| `disable-model-invocation: true` | pi has no such flag; the skill is listed, and the agent reads it as a document |
-| the question tool | `ctx.ui.confirm` and `ctx.ui.select` in extensions; the model asks in plain text |
-| subagents | the `pi-subagents` package when installed; otherwise the pipeline is run by hand from `pipeline.md` |
+| `disable-model-invocation: true` | honoured: the skill is left out of the model's list and runs only as the owner's `/skill:<name>` |
+| the question tool | `ctx.ui.confirm` and `ctx.ui.select` in extensions; pstack's pi extension adds a question tool |
+| subagents | pstack's pi extension adds a subagent tool; otherwise the pipeline is run by hand from `pipeline.md` |
 | `claude plugin list` | `pi list` |
-| `/ratchet:init` | the skill by name |
+| `/ratchet:init`, `/mattpocock-skills:setup-matt-pocock-skills` | `/skill:init`, `/skill:setup-matt-pocock-skills` |
 
 ## Verified
 
-On this machine: pi 1.3.0 with mattpocock's skills under `~/.pi/agent/skills/` and the pstack port installed as a git package. From its docs: `tool_call` can block with `{ block, reason }`, `ctx.ui.confirm` exists, `ctx.cwd` is the working directory, and a package declares extensions and skills under `pi` in `package.json`. Not yet run: the extension itself in a pi session. Its system-prompt injection uses the `before_agent_start` event and is the least certain part.
+pi 1.5.2, with the five packages above installed and filtered as described:
+
+- all six ratchet skills load, with no collisions;
+- the extension loads beside pstack's;
+- in `pi -p` sessions the extension blocked `git push --force` with the guard's reason, and let `git log` through;
+- the session text reached the model, which opened with the "nothing checks the code" notice.
+
+Not yet run: an `ask` decision with a UI (`ctx.ui.confirm`).

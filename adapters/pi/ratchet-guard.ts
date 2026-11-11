@@ -11,6 +11,12 @@ const TOOLS: Record<string, string> = { bash: "Bash", edit: "Edit", write: "Writ
 
 type Decision = { permissionDecision?: string; permissionDecisionReason?: string };
 
+// Why: session.py writes commands Claude Code's way (/ratchet:init, /mattpocock-skills:setup-matt-pocock-skills);
+// pi has no plugin namespaces and spells every skill command /skill:<name>.
+export function piCommands(text: string): string {
+  return text.replace(/(^|[\s(`'"])\/(?:ratchet|mattpocock-skills|pstack|impeccable):([a-z0-9][a-z0-9-]*)/g, "$1/skill:$2");
+}
+
 function run(script: string, payload: object): { ok: boolean; stdout: string; stderr: string } {
   const result = spawnSync("python3", [script], { input: JSON.stringify(payload), encoding: "utf8" });
   return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -52,7 +58,7 @@ export default function (pi: any) {
 
   pi.on("before_agent_start", async (event: any, ctx: any) => {
     const result = run(SESSION, { hook_event_name: "SessionStart", cwd: ctx.cwd ?? process.cwd() });
-    const context = result.stdout.trim();
+    const context = piCommands(result.stdout.trim());
     if (!result.ok || !context) return;
     const current = typeof event.systemPrompt === "string" ? event.systemPrompt : "";
     return { systemPrompt: `${current}\n\n${context}` };
