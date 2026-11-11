@@ -307,6 +307,9 @@ DENIED: list[tuple[str, list[str]]] = [
     ("python3 -c \"open('CLAUDE.md','w').write('x')\"", [W]),
     ("python3 -c \"from pathlib import Path; Path('config/lint.toml').unlink()\"", [W]),
     ("python3 -c \"import shutil; shutil.rmtree('scripts')\"", [W]),
+    ("python3 -c \"import shutil; shutil.rmtree('/')\"", [W]),
+    ("python3 -c \"import os; x = 'a / b'; os.unlink('scripts/run.py')\"", [W]),
+    ("python3 -c \"import os; os.system('echo x / y > CLAUDE.md')\"", [W]),
     ("python3 -c \"import os; os.system('echo x > CLAUDE.md')\"", [W]),
     ("python3 - <<'EOF'\np='CLAUDE.md'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF", [W]),
     ("python3 <<< \"open('CLAUDE.md','a').write('x')\"", [W]),
@@ -487,6 +490,12 @@ ALLOWED: list[str] = [
     "python3 -c \"import tomllib; print(tomllib.load(open('config/lint.toml','rb')))\"",
     "python3 -c \"print(open('CLAUDE.md').read().replace('a', 'b'))\"",
     "python3 -c \"open('/tmp/out.txt','w').write('x')\"",
+    "python3 -c \"import os; x = 'a / b'; os.unlink('/tmp/out.txt')\"",
+    (
+        "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('app/core/money.py')\n"
+        "s = p.read_text().replace('a', '''if not (root / F).is_file():\n"
+        "    (root / F).unlink()''')\np.write_text(s)\nEOF"
+    ),
     "python3 - <<'EOF'\nprint(open('CLAUDE.md').read())\nEOF",
     "python3 <<< \"print(open('CLAUDE.md').read())\"",
     "python3 scripts/tool.py CLAUDE.md",

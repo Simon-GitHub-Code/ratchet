@@ -228,12 +228,14 @@ def named_paths(program: str) -> list[str]:
     """The words a program's string literals could name a path with, each once.
 
     A literal is a candidate whole, and for a command string (``"echo x > DESIGN.md"``) so is
-    each word of it, with redirection and quoting characters cut away.
+    each word of it, with redirection and quoting characters cut away. A word of slashes alone
+    (``a / b``, ``root // x``) is an operator in the text around it, not the root directory,
+    which a literal that is exactly ``/`` still names.
     """
     found: list[str] = []
     for literal in _LITERAL.finditer(program):
         text = next(group for group in literal.groups() if group is not None)
-        found += [text, *_WORD.findall(text)]
+        found += [text, *(word for word in _WORD.findall(text) if word.strip("/"))]
     return list(dict.fromkeys(word for word in found if word))
 
 
