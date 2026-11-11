@@ -10,7 +10,7 @@ from ratchet_guards import bash
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.globs import matches
 from ratchet_guards.manifest import Manifest, parse, with_plugin_group
-from ratchet_guards.paths import Locator
+from ratchet_guards.paths import Checkout, Locator
 from ratchet_guards.verdict import Verdict
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -36,8 +36,13 @@ _VARIABLE = re.compile(r"\$(\w+)|\$\{(\w+)\}")
 
 @dataclass
 class FakeFilesystem:
-    """Checkouts at ``/repo`` and a worktree inside it carry the manifest; ``/elsewhere`` not."""
+    """Checkouts at ``/repo`` and a worktree inside it carry the manifest; ``/elsewhere`` not.
 
+    ``manifest`` is the one every guarded checkout carries, ``manifests`` overrides it per root.
+    """
+
+    manifest: Manifest = MANIFEST
+    manifests: dict[Path, Manifest] = field(default_factory=dict)
     home: Path = HOME
     guarded: tuple[Path, ...] = (ROOT, WORKTREE)
     unguarded: tuple[Path, ...] = (UNGUARDED,)
@@ -57,12 +62,14 @@ class FakeFilesystem:
     def canonical(self, path: Path) -> Path:
         return Path(posixpath.normpath(path))
 
-    def guarded_root(self, path: Path) -> Path | None:
+    def guarded_checkout(self, path: Path) -> Checkout | None:
         roots = [root for root in (*self.guarded, *self.unguarded) if path.is_relative_to(root)]
         if not roots:
             return None
         nearest = max(roots, key=lambda root: len(root.parts))
-        return nearest if nearest in self.guarded else None
+        if nearest not in self.guarded:
+            return None
+        return Checkout(nearest, self.manifests.get(nearest, self.manifest))
 
     def checkout(self, path: Path) -> Path | None:
         roots = [root for root in (*self.guarded, *self.unguarded) if path.is_relative_to(root)]
@@ -105,7 +112,9 @@ def make_guard(
     manifest: Manifest = MANIFEST,
 ) -> Guard:
     """A guard over the fakes, the fixture manifest and a plugin installed at ``/plugin``."""
-    locator = Locator(with_plugin_group(manifest, PLUGIN), filesystem or FakeFilesystem())
+    locator = Locator(
+        with_plugin_group(manifest, PLUGIN), filesystem or FakeFilesystem(manifest=manifest)
+    )
     return Guard(locator, repo or FakeRepo())
 
 

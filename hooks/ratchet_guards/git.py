@@ -11,7 +11,19 @@ from ratchet_guards.verdict import Verdict
 _GLOBAL_VALUES = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"})
 _FORCE = frozenset({"-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror"})
 _ALL_BRANCHES = frozenset({"--all", "--branches"})
-_READ_CONFIG = frozenset({"--get", "--get-all", "--get-regexp", "-l", "--list"})
+# Why: `git config <key>` alone reads and `git config <key> <value>` writes, so a flag is not
+# what tells them apart. A call reads when every flag is a known read action or modifier and
+# it names an action, the `get` verb of the newer syntax, or a lone key. Git takes
+# any unambiguous prefix of a long option, so `--unset-a` is `--unset-all`: a flag outside this
+# list, a prefix of a writing flag included, makes the call a write.
+_READ_CONFIG = frozenset({"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "--list"})
+_CONFIG_MODIFIERS = frozenset(
+    {"--show-origin", "--show-scope", "--global", "--system", "--local", "--worktree", "-z"}
+    | {"--null", "--name-only", "--includes", "--no-includes", "--all", "--regexp", "--value"}
+    | {"--fixed-value", "--show-names", "--no-show-names", "--type", "--bool", "--int", "--path"}
+    | {"--bool-or-int", "--expiry-date"}
+)
+_READ_VERB = "get"
 _HOOKS_PATH = "core.hookspath"
 _CONFIG_VALUES = frozenset({"-c", "--config-env"})
 _COMMIT = Spec(
@@ -161,9 +173,17 @@ def _config(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     del context, guard
     options = scan(call.args, NO_VALUES)
     keys = {operand.lower() for operand in options.operands}
-    if _HOOKS_PATH in keys and not options.flags & _READ_CONFIG:
+    if _HOOKS_PATH in keys and not _reads_config(options):
         return [Verdict("hooks-path", "git config core.hooksPath")]
     return []
+
+
+def _reads_config(options: Options) -> bool:
+    """Whether a ``git config`` call that names a key only reads."""
+    if not options.flags <= _READ_CONFIG | _CONFIG_MODIFIERS:
+        return False
+    verb = options.operands[0] if options.operands else ""
+    return bool(options.flags & _READ_CONFIG) or verb == _READ_VERB or len(options.operands) == 1
 
 
 def _paths(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:

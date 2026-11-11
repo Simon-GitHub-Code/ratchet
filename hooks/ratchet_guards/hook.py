@@ -25,10 +25,12 @@ One forge write is allowed by a record: ``gh label create <name>`` in a checkout
 is adopted, so the list is the owner's.
 
 The guard paths come from ``guards/manifest.toml`` as committed on the default branch of the
-nearest checkout holding the root (an ancestor with ``.git``, else the root itself), read from
-git (``ratchet_guards.committed``). An uncommitted manifest, or one committed only on a
-branch, guards nothing yet: that is the adoption in progress, and only the command rules
-apply until it merges. The plugin's own files are locked either way: ``PLUGIN_ROOT`` (two
+nearest checkout holding the path being judged (an ancestor with ``.git``), read from git
+(``ratchet_guards.committed``) once per checkout. The session's working directory does not
+choose the manifest: an edit from a subagent, a monorepo parent or a sibling checkout is
+judged by the manifest of the checkout it lands in. An uncommitted manifest, or one committed
+only on a branch, guards nothing yet: that is the adoption in progress, and only the command
+rules apply until it merges. The plugin's own files are locked either way: ``PLUGIN_ROOT`` (two
 parents above this package) and ``~/.claude/plugins/**``, together with
 ``~/.claude/settings.json`` and ``~/.claude/settings.local.json``.
 """
@@ -46,7 +48,7 @@ from ratchet_guards import bash, tickets
 from ratchet_guards.committed import committed_manifest
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.manifest import EMPTY, Manifest, parse, with_plugin_group
-from ratchet_guards.paths import Hit, Locator
+from ratchet_guards.paths import Checkout, Hit, Locator
 from ratchet_guards.verdict import Decision, Verdict, strictest
 
 EDIT_TOOLS = {
@@ -93,12 +95,26 @@ class LocalFilesystem:
         """``path`` with symlinks and ``..`` resolved."""
         return Path(os.path.realpath(path))
 
-    def guarded_root(self, path: Path) -> Path | None:
-        """The nearest ancestor holding ``.git``, if its default branch carries the manifest."""
+    def __init__(self) -> None:
+        """An empty cache of committed manifests, by checkout root."""
+        self._manifests: dict[Path, Manifest | None] = {}
+
+    def committed(self, root: Path) -> Manifest | None:
+        """The manifest committed on the default branch of the checkout at ``root``.
+
+        Read from git once per checkout per process. A manifest that does not parse raises
+        ``ManifestError`` and is not cached, so every judged path in that checkout asks.
+        """
+        if root not in self._manifests:
+            text = committed_manifest(root)
+            self._manifests[root] = None if text is None else parse(text)
+        return self._manifests[root]
+
+    def guarded_checkout(self, path: Path) -> Checkout | None:
+        """The nearest ancestor holding ``.git`` with its committed manifest, if it has one."""
         root = self.checkout(path)
-        if root is None:
-            return None
-        return root if committed_manifest(root) is not None else None
+        manifest = None if root is None else self.committed(root)
+        return None if root is None or manifest is None else Checkout(root, manifest)
 
     def checkout(self, path: Path) -> Path | None:
         """The nearest ancestor holding ``.git``."""
@@ -181,7 +197,7 @@ def _judge(
     if tool == "Bash":
         return strictest(bash.check(target, context, guard))
     path = context.cwd / target
-    label = tickets.check(tool, tool_input, path, context=context, guard=guard)
+    label = tickets.check(tool, tool_input, path, guard=guard)
     return strictest(v for v in (_edit(path, guard), label) if v is not None)
 
 
@@ -256,16 +272,22 @@ def repository_root(path: Path) -> Path:
     return next((c for c in (path, *path.parents) if (c / ".git").exists()), path)
 
 
-def read_manifest(root: Path) -> Manifest:
+def read_manifest(root: Path, filesystem: LocalFilesystem | None = None) -> Manifest:
     """The manifest committed on the default branch of the checkout holding ``root``."""
-    text = committed_manifest(repository_root(root))
-    return EMPTY if text is None else parse(text)
+    manifest = (filesystem or LocalFilesystem()).committed(repository_root(root))
+    return EMPTY if manifest is None else manifest
 
 
 def local_guard(root: Path, plugin_root: Path = PLUGIN_ROOT) -> Guard:
-    """The guard over the real filesystem and git, with the manifest under ``root``."""
-    manifest = with_plugin_group(read_manifest(root), plugin_root)
-    return Guard(Locator(manifest, LocalFilesystem()), GitRepoState())
+    """The guard over the real filesystem and git.
+
+    ``root`` is the session's working directory. Its checkout's manifest answers the home and
+    absolute patterns; a path in the repository is judged by the manifest of the checkout
+    holding that path, ``root``'s or not.
+    """
+    filesystem = LocalFilesystem()
+    manifest = with_plugin_group(read_manifest(root, filesystem), plugin_root)
+    return Guard(Locator(manifest, filesystem), GitRepoState())
 
 
 def main(root: Path, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> int:

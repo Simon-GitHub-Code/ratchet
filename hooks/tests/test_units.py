@@ -317,6 +317,23 @@ def test_locator_prefers_a_home_hit_and_falls_back_to_the_checkout() -> None:
     assert locator.classify(Path("/nowhere/CLAUDE.md"), destructive=False) is None
 
 
+def test_locator_judges_a_path_by_the_manifest_of_its_own_checkout() -> None:
+    other = Path("/other")
+    mine = parse('[[group]]\nname = "mine"\nreason = "r"\npaths = ["only-here.txt"]\n')
+    filesystem = FakeFilesystem(guarded=(ROOT, other), manifests={other: mine})
+    locator = Locator(MANIFEST, filesystem)
+    hit = locator.classify(other / "only-here.txt", destructive=False)
+    assert hit is not None
+    assert (hit.path, hit.group.name) == ("only-here.txt", "mine")
+    assert locator.classify(other / "CLAUDE.md", destructive=False) is None
+    assert locator.classify(other, destructive=True) is not None
+    assert locator.classify(ROOT / "only-here.txt", destructive=False) is None
+    session_hit = locator.classify(ROOT / "CLAUDE.md", destructive=False)
+    assert session_hit is not None
+    assert session_hit.group.name == "decisions"
+    assert locator.classify(UNGUARDED / "CLAUDE.md", destructive=False) is None
+
+
 def test_locator_skips_empty_words_and_expands_globs() -> None:
     locator = Locator(MANIFEST, FakeFilesystem())
     assert locator.words(["", "README.md"], ROOT, destructive=False) == []

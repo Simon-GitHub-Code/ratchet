@@ -1,5 +1,7 @@
 """The agent-ready status on a local ticket: an agent that writes it asks the owner."""
 
+from pathlib import Path
+
 import pytest
 
 from ratchet_guards import hook, tickets
@@ -102,3 +104,22 @@ def test_statuses_reads_every_spelling_the_preflight_reads() -> None:
     text = "Status: a\n**Status:** b\n**Status**: `c`\nstatus d\n"
     assert tickets.statuses(text) == {"a", "b", "c", "d"}
     assert tickets.after("Write", {}, "x") == ""
+
+
+def test_the_label_is_the_record_of_the_checkout_holding_the_ticket() -> None:
+    sibling = Path("/sibling")
+    record = LABELS_RECORD.replace("agent:ready", "go:build")
+    filesystem = FakeFilesystem(
+        guarded=(ROOT, sibling), contents={"/sibling/docs/agents/triage-labels.md": record}
+    )
+    guard = make_guard(filesystem=filesystem)
+    ticket = "/sibling/.scratch/f/issues/02-b.md"
+
+    def asked(label: str) -> str | None:
+        tool_input = {"file_path": ticket, "content": f"Status: {label}\n"}
+        payload = {"tool_name": "Write", "tool_input": tool_input, "cwd": str(ROOT)}
+        verdict = hook.decide(payload, guard)
+        return None if verdict is None else verdict.rule
+
+    assert asked("go:build") == "agent-ready-label"
+    assert asked("agent:ready") is None

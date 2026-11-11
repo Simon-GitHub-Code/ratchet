@@ -3,9 +3,11 @@
 A path is seen three ways, and the first that hits wins: as an absolute path, against the
 plugin group's own patterns; relative to the home directory, against the ``~/`` patterns;
 and relative to the nearest enclosing checkout (the closest ancestor holding ``.git``),
-against the repository patterns, only if that checkout carries ``guards/manifest.toml``. So
-a git worktree nested under ``.claude/worktrees/`` is judged as its own checkout, not as part
-of ``.claude/**``. Symlinks and ``..`` are resolved before matching.
+against that checkout's own repository patterns, only if it has a manifest committed on its
+default branch. The checkout is the path's, never the session's: an agent rooted in another
+directory is judged by the manifest of the checkout it edits. So a git worktree nested under
+``.claude/worktrees/`` is judged as its own checkout, not as part of ``.claude/**``. Symlinks
+and ``..`` are resolved before matching.
 """
 
 from collections.abc import Iterable, Iterator
@@ -30,8 +32,11 @@ class Filesystem(Protocol):
         """``path`` made absolute with symlinks and ``..`` resolved; it need not exist."""
         ...
 
-    def guarded_root(self, path: Path) -> Path | None:
-        """The nearest checkout holding ``path``, if that checkout carries the manifest."""
+    def guarded_checkout(self, path: Path) -> "Checkout | None":
+        """The nearest checkout holding ``path`` with the manifest committed on its default branch.
+
+        ``None`` when ``path`` is in no checkout, or its checkout has no committed manifest.
+        """
         ...
 
     def checkout(self, path: Path) -> Path | None:
@@ -52,6 +57,14 @@ class Filesystem(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class Checkout:
+    """A checkout and the manifest committed on its default branch."""
+
+    root: Path
+    manifest: Manifest
+
+
+@dataclass(frozen=True, slots=True)
 class Hit:
     """A guarded path as the human should read it, and its group."""
 
@@ -61,34 +74,44 @@ class Hit:
 
 @dataclass(frozen=True, slots=True)
 class Locator:
-    """Matches concrete paths against the manifest."""
+    """Matches concrete paths against the manifests.
+
+    ``manifest`` (the plugin group, and the session's checkout manifest) answers the absolute
+    and home views. The repository view is answered by the manifest of the checkout holding
+    the path, which ``filesystem`` supplies.
+    """
 
     manifest: Manifest
     filesystem: Filesystem
 
-    def _views(self, canonical: Path) -> Iterator[tuple[str, Scope]]:
-        """``canonical`` written relative to each scope it falls in, strictest scope first."""
-        yield canonical.as_posix(), Scope.ABSOLUTE
+    def _views(self, canonical: Path) -> Iterator[tuple[str, Scope, Manifest]]:
+        """``canonical`` written relative to each scope it falls in, with the manifest for it.
+
+        Strictest scope first.
+        """
+        yield canonical.as_posix(), Scope.ABSOLUTE, self.manifest
         home = self.filesystem.home
         if canonical.is_relative_to(home):
-            yield canonical.relative_to(home).as_posix(), Scope.HOME
-        root = self.filesystem.guarded_root(canonical)
-        if root is not None:
-            yield canonical.relative_to(root).as_posix(), Scope.REPOSITORY
+            yield canonical.relative_to(home).as_posix(), Scope.HOME, self.manifest
+        checkout = self.filesystem.guarded_checkout(canonical)
+        if checkout is not None:
+            relative = canonical.relative_to(checkout.root).as_posix()
+            yield relative, Scope.REPOSITORY, checkout.manifest
 
     def classify(self, path: Path, *, destructive: bool) -> Hit | None:
         """The hit for ``path``; ``destructive`` also catches guard paths below a directory."""
-        for relative, scope in self._views(self.filesystem.canonical(path)):
-            hit = self._match(relative, destructive=destructive, scope=scope)
+        for relative, scope, manifest in self._views(self.filesystem.canonical(path)):
+            hit = self._match(manifest, relative, destructive=destructive, scope=scope)
             if hit is not None:
                 return hit
         return None
 
-    def _match(self, relative: str, *, destructive: bool, scope: Scope) -> Hit | None:
+    @staticmethod
+    def _match(manifest: Manifest, relative: str, *, destructive: bool, scope: Scope) -> Hit | None:
         if destructive:
-            group = self.manifest.group_below(relative, scope=scope)
+            group = manifest.group_below(relative, scope=scope)
         else:
-            group = self.manifest.group_of(relative, scope=scope)
+            group = manifest.group_of(relative, scope=scope)
         if group is None:
             return None
         return Hit(f"~/{relative}" if scope is Scope.HOME else relative, group)

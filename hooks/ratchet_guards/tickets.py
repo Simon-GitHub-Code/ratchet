@@ -46,12 +46,15 @@ def after(tool: str, tool_input: Mapping[str, object], before: str) -> str:
 
 
 def check(
-    tool: str, tool_input: Mapping[str, object], path: Path, *, context: Context, guard: Guard
+    tool: str, tool_input: Mapping[str, object], path: Path, *, guard: Guard
 ) -> Verdict | None:
-    """``agent-ready-label`` when the call gives a local ticket the agent-ready status."""
+    """``agent-ready-label`` when the call gives a local ticket the agent-ready status.
+
+    The label's spelling is the record of the checkout holding the ticket, not the session's.
+    """
     if path.suffix != ".md" or TRACKER_DIRECTORY not in path.parts:
         return None
-    label = ready_label(context, guard)
+    label = ready_label(Context(path.parent), guard)
     before = guard.locator.filesystem.read_text(path) or ""
     if label in statuses(after(tool, tool_input, before)) and label not in statuses(before):
         return Verdict("agent-ready-label", f"{path.name} gets the status `{label}`")

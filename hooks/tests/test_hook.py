@@ -12,7 +12,8 @@ import pytest
 
 from ratchet_guards import hook
 from ratchet_guards.context import Guard
-from ratchet_guards.manifest import MANIFEST_PATH
+from ratchet_guards.manifest import MANIFEST_PATH, parse
+from ratchet_guards.paths import Checkout
 from ratchet_guards.verdict import Decision, Verdict
 from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, ROOT, FakeRepo, make_guard
 
@@ -169,14 +170,18 @@ def test_run_fails_closed() -> None:
     assert hook.run(json.dumps(payload("Bash", command="ls")), make_guard) == ""
 
 
-def checkout(tmp_path: Path, *, manifest: bool = True) -> Path:
-    """A repository on ``main`` under ``tmp_path``, the fixture manifest committed by default."""
-    root = tmp_path / "checkout"
+def checkout(tmp_path: Path, *, manifest: bool | str = True, name: str = "checkout") -> Path:
+    """A repository on ``main`` under ``tmp_path``.
+
+    The fixture manifest is committed by default; a string commits that text instead.
+    """
+    root = tmp_path / name
     root.mkdir(parents=True)
     _git(root, "init", "-q", "-b", "main")
     if manifest:
         (root / "guards").mkdir()
-        (root / MANIFEST_PATH).write_text(MANIFEST_TEXT, encoding="utf-8")
+        text = manifest if isinstance(manifest, str) else MANIFEST_TEXT
+        (root / MANIFEST_PATH).write_text(text, encoding="utf-8")
         _git(root, "add", "-A")
     _git(
         root,
@@ -220,9 +225,9 @@ def test_local_filesystem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     (root / "link").symlink_to(root / "a.toml")
     assert filesystem.home == Path.home()
     assert filesystem.canonical(root / "x/../link") == root / "a.toml"
-    assert filesystem.guarded_root(root / "deep/file") == root
-    assert filesystem.guarded_root(nested / "file") is None
-    assert filesystem.guarded_root(Path("/")) is None
+    assert filesystem.guarded_checkout(root / "deep/file") == Checkout(root, parse(MANIFEST_TEXT))
+    assert filesystem.guarded_checkout(nested / "file") is None
+    assert filesystem.guarded_checkout(Path("/")) is None
     assert filesystem.glob(root / "*.toml") == [root / ".hidden.toml", root / "a.toml"]
     monkeypatch.setenv("GUARD_TEST_DIR", "value")
     assert filesystem.expand("$GUARD_TEST_DIR/x") == "value/x"
@@ -345,3 +350,161 @@ def test_the_shim_is_an_executable_python3_script() -> None:
 
 def test_the_hook_reports_no_opinion_on_unknown_tools() -> None:
     assert hook.decide(payload("Glob", pattern="*"), make_guard(FakeRepo())) is None
+
+
+def edit_from(session: Path, file: Path, tool: str = "Edit") -> dict[str, object]:
+    """An edit of ``file`` by a session whose working directory is ``session``."""
+    tool_input = {"file_path": str(file), "old_string": "a", "new_string": "b"}
+    return {"tool_name": tool, "tool_input": tool_input, "cwd": str(session)}
+
+
+def bash_from(session: Path, command: str) -> dict[str, object]:
+    return {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(session)}
+
+
+def answer(root: Path, case: dict[str, object]) -> dict[str, str]:
+    """The decision ``hook.main`` prints for a session rooted at ``root``, or ``{}``."""
+    stdout = io.StringIO()
+    assert hook.main(root, io.StringIO(json.dumps(case)), stdout) == 0
+    return json.loads(stdout.getvalue())["hookSpecificOutput"] if stdout.getvalue() else {}
+
+
+@pytest.fixture
+def adopted(tmp_path: Path) -> Path:
+    return checkout(tmp_path, name="adopted")
+
+
+@pytest.fixture
+def session(tmp_path: Path) -> Path:
+    """A checkout with no committed manifest, where the agent's session is rooted."""
+    return checkout(tmp_path, manifest=False, name="session")
+
+
+def test_an_edit_is_judged_by_the_checkout_holding_the_file(adopted: Path, session: Path) -> None:
+    asked = answer(session, edit_from(session, adopted / "justfile"))
+    assert asked["permissionDecision"] == "ask"
+    assert "justfile is in guard group 'gate-commands'" in asked["permissionDecisionReason"]
+    locked = answer(session, edit_from(session, adopted / ".claude/settings.json", "Write"))
+    assert locked["permissionDecision"] == "deny"
+    assert answer(session, edit_from(session, adopted / "app/core/money.py")) == {}
+    assert answer(session, edit_from(session, session / "justfile")) == {}
+
+
+def test_an_edit_is_judged_when_the_session_is_in_no_checkout(
+    adopted: Path, tmp_path: Path
+) -> None:
+    elsewhere = tmp_path / "not-a-repository"
+    elsewhere.mkdir()
+    asked = answer(elsewhere, edit_from(elsewhere, adopted / "quality/thresholds.toml"))
+    assert asked["permissionDecision"] == "ask"
+
+
+def test_a_file_reached_through_a_symlink_is_judged_where_it_lives(
+    adopted: Path, session: Path
+) -> None:
+    (session / "link.toml").symlink_to(adopted / "quality/thresholds.toml")
+    asked = answer(session, edit_from(session, session / "link.toml"))
+    assert asked["permissionDecision"] == "ask"
+
+
+def test_each_checkout_is_judged_by_its_own_manifest(tmp_path: Path, adopted: Path) -> None:
+    own = (
+        '[[group]]\nname = "notes"\nreason = "The notes are the owner\'s."\npaths = ["NOTES.md"]\n'
+    )
+    sibling = checkout(tmp_path, manifest=own, name="sibling")
+    assert answer(adopted, edit_from(adopted, sibling / "NOTES.md"))["permissionDecision"] == "ask"
+    assert answer(adopted, edit_from(adopted, sibling / "justfile")) == {}
+    assert answer(sibling, edit_from(sibling, adopted / "justfile"))["permissionDecision"] == "ask"
+    assert answer(sibling, edit_from(sibling, adopted / "NOTES.md")) == {}
+
+
+def test_a_codex_patch_is_judged_by_the_checkout_it_names(adopted: Path, session: Path) -> None:
+    patch = f"*** Begin Patch\n*** Update File: {adopted}/justfile\n@@\n-a\n+b\n*** End Patch\n"
+    case = {"tool_name": "apply_patch", "tool_input": {"input": patch}, "cwd": str(session)}
+    assert answer(session, case)["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sed -i 's/a/b/' {adopted}/quality/thresholds.toml",
+        "echo x > {adopted}/justfile",
+        "cp /tmp/x {adopted}/scripts/gate.py",
+        "cd {adopted} && sed -i s/a/b/ quality/thresholds.toml",
+        "cd {adopted}/quality && sed -i s/a/b/ thresholds.toml",
+        "cd {adopted} && cd quality && rm thresholds.toml",
+        "git -C {adopted} rm quality/thresholds.toml",
+        "python3 -c \"open('{adopted}/justfile', 'w').write('x')\"",
+    ],
+)
+def test_a_shell_write_is_judged_by_the_checkout_it_lands_in(
+    command: str, adopted: Path, session: Path
+) -> None:
+    denied = answer(session, bash_from(session, command.format(adopted=adopted)))
+    assert denied["permissionDecision"] == "deny"
+    assert "guards/manifest.toml as committed" in denied["permissionDecisionReason"]
+
+
+def test_a_shell_write_outside_the_guard_paths_is_free_from_any_session(
+    adopted: Path, session: Path
+) -> None:
+    for command in (f"sed -i s/a/b/ {adopted}/app/core/money.py", f"cd {adopted} && ls"):
+        assert answer(session, bash_from(session, command)) == {}
+
+
+def test_a_path_built_at_run_time_is_out_of_reach(adopted: Path, session: Path) -> None:
+    command = f"D={adopted}; sed -i s/a/b/ $D/quality/thresholds.toml"
+    assert answer(session, bash_from(session, command)) == {}
+
+
+def test_a_manifest_that_does_not_parse_asks_for_a_path_in_its_checkout(
+    tmp_path: Path, session: Path
+) -> None:
+    broken = checkout(tmp_path, manifest="[[group]]\nname = 1\n", name="broken")
+    asked = answer(session, edit_from(session, broken / "justfile"))
+    assert asked["permissionDecision"] == "ask"
+    assert "ManifestError" in asked["permissionDecisionReason"]
+    assert answer(session, edit_from(session, session / "justfile")) == {}
+
+
+def test_the_session_manifest_is_still_read_when_it_does_not_parse(
+    tmp_path: Path, adopted: Path
+) -> None:
+    broken = checkout(tmp_path, manifest="[[group]]\nname = 1\n", name="broken")
+    asked = answer(broken, edit_from(broken, adopted / "app/core/money.py"))
+    assert asked["permissionDecision"] == "ask"
+    assert "ManifestError" in asked["permissionDecisionReason"]
+
+
+def test_the_shim_judges_a_file_by_its_checkout_not_the_session_directory(
+    adopted: Path, session: Path
+) -> None:
+    here = {**edit_from(adopted, adopted / "justfile")}
+    assert decision(run_shim(SHIM, here)) == "ask"
+    elsewhere = edit_from(session, adopted / "justfile")
+    assert decision(run_shim(SHIM, elsewhere)) == "ask"
+    sed = bash_from(session, f"sed -i s/a/b/ {adopted}/quality/thresholds.toml")
+    assert decision(run_shim(SHIM, sed)) == "deny"
+    free = edit_from(session, adopted / "app/core/money.py")
+    assert run_shim(SHIM, free).stdout == ""
+
+
+def test_the_manifest_of_a_checkout_is_read_from_git_once(
+    adopted: Path, session: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads: list[Path] = []
+    real = hook.committed_manifest
+
+    def counting(root: Path) -> str | None:
+        reads.append(root)
+        return real(root)
+
+    monkeypatch.setattr(hook, "committed_manifest", counting)
+    guard = hook.local_guard(session)
+    assert reads == [session]
+    for name in ("justfile", "CLAUDE.md", "quality/a.toml", "app/core/money.py"):
+        guard.locator.classify(adopted / name, destructive=False)
+        guard.locator.classify(session / name, destructive=True)
+    assert reads == [session, adopted]
+    assert hook.LocalFilesystem().guarded_checkout(adopted / "x") is not None
+    assert reads == [session, adopted, adopted]
