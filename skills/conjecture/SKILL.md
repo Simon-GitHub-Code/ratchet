@@ -18,7 +18,7 @@ disable-model-invocation: true
    - *Alternatives*: each alternative that was considered, and the criticism that killed it.
    - *Scope of the claim*: what this conjecture does not cover, when the ticket's Out of scope does not already say it.
 
-3. **One dialog.** Show the draft through the question tool: accept as drafted (recommended), or edit it. An alternative the owner names that the draft lacks goes in with its criticism; an approach the owner changes replaces the draft's.
+3. **One dialog, for the whole spec.** When the ticket's siblings share a parent spec, draft once for the spec and its tickets inherit it: the owner agrees one conjecture per spec, not one per ticket. Show the draft through the question tool: accept as drafted (recommended), or edit it. An alternative the owner names that the draft lacks goes in with its criticism; an approach the owner changes replaces the draft's. Skip the dialog when the owner typed the command with `accept` (`/ratchet:conjecture <ticket> accept`): write the draft, and print it in the reply so the owner reads what the label will agree to.
 
 4. **Write it.** Append `## Conjecture` with the agreed text to the ticket body: `gh issue edit <n> --body-file <file>` with the full body in one Bash call (no label flag; the agent-ready label is the owner's act and the guard asks on it), or, on a local tracker, edit the file and commit it alone (`git commit -m "docs(tracker): the conjecture of <ticket>" -- <file>`), since the preflight refuses a dirty tree and the ticket file is a record, not work in progress. When the ticket's tickets share one spec, write it on the spec and say that its tickets inherit it.
 

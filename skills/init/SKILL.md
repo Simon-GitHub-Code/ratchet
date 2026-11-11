@@ -32,7 +32,7 @@ The owner answers two dialogs in a default run, both through the question tool, 
 1. The one-paragraph purpose. With evidence (a README, a package manifest, existing code) the recommended option is your reading of it; on an empty directory the options are three shapes (a web application, a service or API, a library or command-line tool) and the owner types the paragraph through the free-text option.
 2. The primary user, their situation and the job they are doing.
 3. What the product makes possible that a neighbour could not truthfully claim.
-4. The defaults table: accept it (recommended), or run the rest interactively. The remote is created only from an accepting answer here; never from the tracker choice alone.
+4. The defaults table: accept it (recommended); accept it but keep the repository local, with no remote and local markdown as the tracker; or run the rest interactively. The remote is created only from the first answer; never from the tracker choice alone, and never from the local one.
 
 Questions 2 and 3 are `impeccable init`'s own first two; asked here, they are passed to it in step 5 so it does not ask again.
 

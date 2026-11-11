@@ -39,6 +39,27 @@ ENTRY_POINTS = (
     "budget",
 )
 SPEED_SECTION = "## Speed"
+# Why: ADR 0012. These questions are asked of every repository from the first commit; a binding
+# may answer one with `none` and a reason, but may not drop the row.
+OPERABILITY_QUESTIONS = (
+    "secrets",
+    "feature flags declared",
+    "shipped-dependency audit",
+    "static security analysis",
+    "configuration hardening",
+    "artefact and image scan",
+    "telemetry emitted",
+    "changed flags off and on",
+    "load smoke",
+    "dynamic security scan",
+    "active security scan",
+    "load",
+    "telemetry arrives",
+    "no flag past its removal date",
+)
+OPERABILITY_SECTIONS = ("## Telemetry", "## Feature flags")
+FLAG_REGISTRY = Path("flags.toml")
+FIRST_CELL = re.compile(r"^\|\s*([^|]+?)\s*\|", re.MULTILINE)
 WORKFLOWS = Path(".github/workflows")
 CI_SHAPE = (("concurrency:", "cancels superseded runs"), ("cache", "caches between runs"))
 ADR_STATUS = re.compile(r"^(proposed|accepted|deprecated|rejected|superseded( by ADR-\d{4})?)$")
@@ -66,6 +87,7 @@ DISPUTE_SECTIONS = (
 )
 PR_SECTIONS = (
     "## Conjecture",
+    "## Operability",
     "## Criticism",
     "## Guard paths",
     "## Decisions",
@@ -73,7 +95,9 @@ PR_SECTIONS = (
 )
 LOCKED_PATTERNS = {".claude/settings.json", ".claude/hooks/**", "guards/**"}
 TABLE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|")
-PR_TEMPLATE_LINE = re.compile(r"^- Pull request template: `([^`]+)`$", re.MULTILINE)
+# Why: a repository with no forge names a change template; adopt's own wording for it follows
+# the path with a clause, so the line is read up to the closing backtick.
+PR_TEMPLATE_LINE = re.compile(r"^- (?:Pull request|Change) template: `([^`]+)`", re.MULTILINE)
 DEFAULT_PR_TEMPLATE = ".github/pull_request_template.md"
 NONE_REASON = re.compile(r"^none\b[\s,:;-]*(.*)$")
 NUMBERED = re.compile(r"^(\d{4})-[a-z0-9-]+\.md$")
@@ -211,6 +235,19 @@ def check_binding(root: Path) -> Iterable[str]:
                 f"docs/process/binding.md: gate '{question}' is bound to none without a reason "
                 f"of {MIN_REASON}+ characters"
             )
+
+
+def check_operability(root: Path) -> Iterable[str]:
+    text = read(root / "docs/process/binding.md") or ""
+    asked = set(FIRST_CELL.findall(section(text, "## Gates")))
+    for question in OPERABILITY_QUESTIONS:
+        if text and question not in asked:
+            yield f"docs/process/binding.md: the Gates table has no '{question}' row"
+    for heading in OPERABILITY_SECTIONS:
+        if text and empty_body(text, heading):
+            yield f"docs/process/binding.md: has no '{heading}' section, or it is empty"
+    if not (root / FLAG_REGISTRY).is_file():
+        yield f"{FLAG_REGISTRY}: missing; an empty file declares no flags"
 
 
 def pr_template_path(root: Path) -> str:
@@ -363,6 +400,7 @@ CHECKS: tuple[Check, ...] = (
     check_brief,
     check_adrs,
     check_binding,
+    check_operability,
     check_speed,
     check_manifest,
     check_settings,
@@ -391,7 +429,13 @@ Mutation = tuple[str, Callable[[Path], None]]
 
 
 def mutations() -> list[Mutation]:
-    return [*artefact_mutations(), *hook_mutations(), *guard_mutations(), *record_mutations()]
+    return [
+        *artefact_mutations(),
+        *operability_mutations(),
+        *hook_mutations(),
+        *guard_mutations(),
+        *record_mutations(),
+    ]
 
 
 def artefact_mutations() -> list[Mutation]:
@@ -444,6 +488,25 @@ def artefact_mutations() -> list[Mutation]:
             ci_with_the_plugin_at_a_placeholder,
         ),
         ("glossary still naming <project>", glossary_naming_the_placeholder),
+    ]
+
+
+def operability_mutations() -> list[Mutation]:
+    def drop_row(root: Path) -> None:
+        path = root / "docs/process/binding.md"
+        path.write_text(path.read_text().replace("| telemetry emitted |", "| tracing |"))
+
+    def drop_section(root: Path) -> None:
+        path = root / "docs/process/binding.md"
+        path.write_text(path.read_text().replace("## Feature flags", "## Toggles"))
+
+    def drop_flag_registry(root: Path) -> None:
+        (root / FLAG_REGISTRY).unlink()
+
+    return [
+        ("binding without the telemetry row", drop_row),
+        ("binding without a Feature flags section", drop_section),
+        ("repository without the flag registry", drop_flag_registry),
     ]
 
 

@@ -1,0 +1,10 @@
+# The feature-flag registry (Ratchet method). One table per flag; `just flags` checks it on every
+# commit and `just flags-expired` on the default branch. A new flag defaults to false, so the
+# change that adds it ships off. An empty file declares no flags.
+#
+# [[flag]]
+# key = "new-checkout"
+# owner = "<who decides when it is turned on and removed>"
+# default = false
+# remove-by = 2027-02-01        # or: permanent = true, for a kill switch that stays
+# reason = "<why the behaviour is behind a flag, twenty characters or more>"

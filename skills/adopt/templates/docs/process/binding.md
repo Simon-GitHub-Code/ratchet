@@ -50,6 +50,7 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | dead code and dependency hygiene | | 0 | | `just deadcode` |
 | scripts and CI lint | | 0 | | `just lint-workflows` |
 | secrets | | 0 | | `just secrets` |
+| feature flags declared | `ratchet` plugin `scripts/flags.py` | 0 | `flags.toml`, and the merge base's copy | `just flags` |
 | pins and least privilege | `ratchet` plugin `scripts/pins.py` plus the lockfile check | 0 | | `just pins` |
 | size and complexity limits | | 0 | the Limits section below | `just limits` |
 | marker comments did not rise | `ratchet` plugin `scripts/markers.py` | 0 | the merge base's own counts | `just markers` |
@@ -68,11 +69,15 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | duplication | | 1 | | `just duplication` |
 | build | | 1 | | `just build` |
 | starts and answers | | 1 | | `just smoke` |
+| telemetry emitted | | 1 | the Telemetry section below | `just telemetry` |
+| changed flags off and on | | 1 | `flags.toml` against the merge base | `just flag-states` |
+| load smoke | | 1 | zero errors | `just load-smoke` |
 | every checker bites | `ratchet` plugin `scripts/bite.py` plus the project's own | 1 | | `just bite` |
 | public surface changed on purpose | | 1 | `quality/snapshots/` | `just api-check` |
 | old data still loads | | 1 | | `just data-compat` |
 | documentation examples run | | 1 | | `just doctests` |
 | static security analysis | | 1 | | `just sast` |
+| configuration hardening | | 1 | | `just iac` |
 | artefact and image scan | | 1 | | `just artefact-scan` |
 | type coverage, ratcheted | | 1 | `quality/thresholds.toml` | `just type-coverage` |
 | documentation coverage, ratcheted | | 1 | `quality/thresholds.toml` | `just doc-coverage` |
@@ -90,6 +95,10 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | race and memory detectors | | 2 | | `just sanitizers` |
 | performance budget | | 2 | the Limits section below | `just perf` |
 | dynamic security scan | | 2 | | `just dast` |
+| active security scan | | 2 | | `just pentest` |
+| load | | 2 | the Limits section below | `just load` |
+| telemetry arrives | | 2 | the Telemetry section below | `just telemetry-e2e` |
+| no flag past its removal date | `ratchet` plugin `scripts/flags.py --expired` | 2 | `flags.toml` | `just flags-expired` |
 | accessibility | | 2 | | `just a11y` |
 | formal verification | | 2 | the project-local verification skill | `just formal` |
 
@@ -99,7 +108,15 @@ One row per question the method asks. The Tool cell names the tool for this stac
 
 ## Limits
 
-<The ceilings the gates hold, per path group where they differ: size and complexity (cognitive and cyclomatic complexity, nesting depth, unit and file length); change size per pull request; performance (latency, allocation, bundle size). Hard limits: split the unit rather than raise one.>
+<The ceilings the gates hold, per path group where they differ: size and complexity (cognitive and cyclomatic complexity, nesting depth, unit and file length); change size per pull request; performance (latency, allocation, bundle size); load (the arrival rate the `load` gate drives, the percentile latency and the error rate it must hold, the concurrency and seconds of the `load-smoke`). Hard limits: split the unit rather than raise one.>
+
+## Telemetry
+
+<The signals every entry point emits and where they go: the OpenTelemetry SDK (or the stack's equivalent) and the one module that starts it; the seam through which every route, job and command is registered, so none can be added uninstrumented; the attributes a span must carry (the route template, the outcome, never a secret or a personal identifier); the metrics and the log fields; the exporter and the collector the end-to-end environment runs. A feature's spec names the signal that shows each criterion working in production.>
+
+## Feature flags
+
+<The registry is `flags.toml`. Name the one module through which a flag is read (OpenFeature, or the stack's equivalent, behind it), the override it honours so the `flag-states` gate can force a flag off and on (an environment variable such as `FLAG_OVERRIDES=key=true`), and who may turn a flag on in production. New behaviour ships behind a flag that defaults to off; a spec that ships none says why.>
 
 ## Speed
 
@@ -107,7 +124,7 @@ One row per question the method asks. The Tool cell names the tool for this stac
 
 ## Weekly and advisory
 
-`just audit-all`, `just licenses` and `just drift` run weekly and block nothing; a finding gets its own pull request. `just reports` prints hotspots, coupling, cohesion and complexity. They inform and never gate.
+`just audit-all`, `just licenses`, `just drift` and `just load-soak` run weekly and block nothing; a finding gets its own pull request. `just reports` prints hotspots, coupling, cohesion and complexity. They inform and never gate.
 
 ## Tool versions
 

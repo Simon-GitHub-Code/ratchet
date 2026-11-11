@@ -152,7 +152,20 @@ const SPEC_SCHEMA = {
     openQuestions: {
       type: 'array',
       items: { type: 'string' },
-      description: 'Questions the ticket does not answer; each must also be recorded in spec.md. Any entry stops the pipeline before Implement.',
+      description: 'Only the questions no safe default answers: a wrong guess would lose data, fix a public contract that cannot be changed back, spend money or open a security hole. Each must also be recorded in spec.md. Any entry stops the pipeline before Implement. Everything else is an assumption.',
+    },
+    assumptions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'What the ticket and the records leave undecided' },
+          assumed: { type: 'string', description: 'The conservative answer the spec and its tests are built on' },
+          refuter: { type: 'string', description: 'What would show the assumption wrong, and what changing it later would cost' },
+        },
+        required: ['question', 'assumed', 'refuter'],
+      },
+      description: 'Every undecided point the spec answered with a reversible default instead of stopping; each also recorded in spec.md under Assumptions. The pull request lists them for the owner to counter at the merge. Empty if the ticket decided everything.',
     },
     dependencies: {
       type: 'array',
@@ -196,7 +209,7 @@ const SPEC_SCHEMA = {
     },
     ...checkOutputField(),
   },
-  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
+  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'assumptions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
 }
 
 const DISPUTES_FIELD = {
@@ -419,8 +432,19 @@ Your tasks, in order:
      the names AGENTS.md and binding.md define, or the module when none are declared) and why
    - Seams under test: the public interfaces the tests observe behaviour through, one line
      each on what it catches and what it misses
-   - Test plan: the list of test files you will create, mapped to acceptance criteria
-   - Open questions the ticket does not answer (do not resolve them yourself; record them)
+   - Telemetry: for each acceptance criterion, the signal that shows it working in production
+     (the span, its attributes, the metric, the log field), named as binding.md's Telemetry
+     section names them; a criterion with no entry point to observe says so
+   - Feature flag: the key in \`flags.toml\` that gates the new behaviour, declared there with
+     \`default = false\`, and what the system does with it off (the merge base's behaviour); or
+     "none" with the reason, when the change adds no behaviour a user could meet (a fix that
+     restores the specified behaviour, a refactoring, a change with nothing to turn off)
+   - Test plan: the list of test files you will create, mapped to acceptance criteria; it
+     includes the telemetry tests under the directory binding.md names and, when there is a
+     flag, a test of the behaviour with the flag off
+   - Assumptions: each point the ticket leaves undecided that you answered with a reversible
+     default, with the answer and what would show it wrong
+   - Open questions: only those no safe default answers (see below)
    - Out of scope (copied from the ticket)
 2. Write the failing tests at those seams, with the test frameworks and directories binding.md
    names. Write a property test for every invariant you can state. Follow every AGENTS.md
@@ -435,9 +459,16 @@ Your tasks, in order:
    test plan, so the reviewer sees what each test refuted.
 4. Run \`check\` and capture its tail. It is expected to be red only on your new tests.
 
-Open questions stop the pipeline: if \`openQuestions\` is non-empty the orchestrator asks the
-owner, who answers on the ticket, and re-runs. So record a question only when the ticket truly
-does not decide it; a question the ADRs or GLOSSARY.md answer is not open.
+An undecided point is an assumption unless a wrong guess cannot be taken back. This run has no
+owner at the keyboard, and a stopped run costs them a round trip, so decide what can be
+decided: take the conservative answer (the one that refuses, reserves or keeps more, and that
+a later change can relax), build the spec and the tests on it, and return it in
+\`assumptions\` with what would refute it. The pull request lists every assumption, and the
+owner counters one at the merge if it is wrong. An open question is what is left: a wrong
+guess would lose or corrupt stored data, fix a public contract others will depend on, spend
+money, or weaken a security or privacy rule. Those stop the pipeline: the orchestrator asks the
+owner, who answers on the ticket, and re-runs. A question the ADRs or GLOSSARY.md answer is
+neither.
 
 Guard edits stop it too. This run has no owner at the keyboard, so no agent in it can change a
 guard path. Before writing tests, check each criterion against \`guards/manifest.toml\`: when
@@ -565,7 +596,15 @@ Do all of the following and report evidence for each:
    that copy and confirm they FAIL. Then delete the copy. Set fitnessSabotageConfirmed only
    if they failed, and describe it in \`fitnessSabotageSummary\`. The sabotage lives in the copy
    and nowhere else.
-5. Non-negotiables and vocabulary: check every AGENTS.md non-negotiable holds in the change,
+5. Attack and overload: for every entry point the change adds or alters, try to get in without
+   the credential or as the wrong caller, send hostile input (injection strings, oversized and
+   malformed bodies, path traversal, a URL that points inward), and call it concurrently
+   (twenty callers at once, the same write twice) looking for a lost update, a duplicate or an
+   error. Run the \`sast\` and \`load-smoke\` entry points when binding.md binds them. Read
+   what the in-memory exporter recorded and report a secret or a personal identifier in any
+   span, metric or log. Flip the feature flag spec.md names and show the flag-off behaviour is
+   the merge base's. Each attempt goes in \`attempted\`, each success is a finding.
+5a. Non-negotiables and vocabulary: check every AGENTS.md non-negotiable holds in the change,
    the glossary's banned words are absent from new identifiers, and any generated contract
    artefact binding.md names matches the code that it describes.
 6. User interface: if the change touches one, load \`impeccable:impeccable\` and run its \`audit\`
@@ -622,6 +661,15 @@ B. Standards conformance:
    - Contracts: the pre/postcondition mechanism binding.md names, where the spec states them;
      generated contract artefacts match the code they describe
    - Type strictness, lint, test placement and coverage as the gates in binding.md require
+   - Telemetry: every entry point the change adds or alters is registered through the seam
+     binding.md's Telemetry section names and emits the signal spec.md names, with a test that
+     reads it from the in-memory exporter; a span attribute or log field carrying a secret or
+     a personal identifier is a blocker
+   - Feature flag: new behaviour is reachable only through the flag spec.md names, read through
+     the seam binding.md's Feature flags section names, declared in \`flags.toml\` with
+     \`default = false\`, and tested with the flag off; behaviour shipped on with no flag, where
+     spec.md does not say "none" with a reason, is a major issue
+   - Assumptions: each one spec.md lists is what the tests and the code actually do
    - Does this change make a decision with lasting consequences (new storage, new external
      dependency, new layer, a changed rule that versions over time)? If so set adrSuggested.
 C. Guard paths: run \`guard-diff\` and list every guard path it prints in \`guardChanges\`, and
@@ -872,6 +920,7 @@ return {
   specPath: spec.specPath,
   testFiles: spec.testFiles,
   openQuestions: spec.openQuestions,
+  assumptions: spec.assumptions ?? [],
   fitnessSabotageConfirmed: critique.fitnessSabotageConfirmed,
   fitnessSabotageSummary: critique.fitnessSabotageSummary,
   specFailures: spec.failures,
@@ -885,5 +934,6 @@ return {
     'checkOutput tail shows check green and checkPasses is true',
     'undisputedGuardChanges is empty; every entry in disputes has been relayed to the owner, who decides',
     'adrSuggested, if set, is written in docs/adr/ in the same PR',
+    'every entry in assumptions is listed in the pull request under Conjecture, with its refuter, for the owner to counter at the merge',
   ],
 }

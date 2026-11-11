@@ -14,7 +14,10 @@
 **Blast Radius:** <one-word description>
 
 ## Conjecture
-What this change claims, and the observation that would show it wrong. For a fix: the alternative explanation considered, and the check that eliminated it.
+What this change claims, and the observation that would show it wrong. Each assumption made where the ticket was silent, with its refuter: the owner counters one here if it is wrong. For a fix: the alternative explanation considered, and the check that eliminated it.
+
+## Operability
+The feature flag that gates the new behaviour and its default, or why there is none. The telemetry added: the span, metric or log that shows this working in production. What the security and load gates ran against it.
 
 ## Criticism
 Critic findings and how each was resolved; review issues; disputes raised and their status. Links to the ticket and the spec where they exist.

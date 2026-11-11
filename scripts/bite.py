@@ -25,6 +25,7 @@ import change_size
 import commits
 import coverage_groups
 import feature_preflight
+import flags
 import lowered
 import markers
 import mutation_survivors
@@ -57,6 +58,10 @@ TICKET = (
     "# 01: Add the thing\n\n**Status:** `ready-for-agent`\n\n## What to build\n\nThe thing.\n\n"
     "## Conjecture\n\nOne function in src/a.py; the refuter is a failing call with two operands."
     " Alternatives: a class (killed: nothing holds state).\n"
+)
+FLAG = (
+    '[[flag]]\nkey = "new-sum"\nowner = "core"\ndefault = {default}\n'
+    'remove-by = {due}\nreason = "Ships the new sum dark until it is measured."\n'
 )
 RESULTS = "    a.x_f__mutmut_1: killed\n    a.x_f__mutmut_2: {status}\n"
 REGISTER = (
@@ -100,6 +105,7 @@ def scratch(root: Path) -> None:
     write(root, "mutants.txt", RESULTS.format(status="killed"))
     write(root, "quality/mutation-register.toml", "# Mutation register\n")
     write(root, "tickets/01-add-the-thing.md", TICKET)
+    write(root, "flags.toml", "# No flags yet.\n")
     settings_rules.write(root)
     snapshots.write(root, snapshots.GROUP)
     git(root, "add", "-A")
@@ -137,6 +143,14 @@ def no_conjecture(root: Path) -> None:
 def not_agent_ready(root: Path) -> None:
     write(root, "tickets/01-add-the-thing.md", TICKET.replace("ready-for-agent", "needs-info"))
     commit(root, "docs(tickets): back to triage")
+
+
+def flag_born_on(root: Path) -> None:
+    write(root, "flags.toml", FLAG.format(default="true", due="2999-01-01"))
+
+
+def flag_overdue(root: Path) -> None:
+    write(root, "flags.toml", FLAG.format(default="false", due="2000-01-01"))
 
 
 def add_focus(root: Path) -> None:
@@ -199,6 +213,8 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("feature-preflight: no conjecture", feature_preflight.main, no_conjecture, TICKET_REF),
     ("feature-preflight: not agent-ready", feature_preflight.main, not_agent_ready, TICKET_REF),
     ("settings-check", settings_rules.main, foreign_deny, ["--check"]),
+    ("flags: a new flag that is on", flags.main, flag_born_on, []),
+    ("flags-expired", flags.main, flag_overdue, ["--expired"]),
 ]
 
 
@@ -209,13 +225,13 @@ def run(gate: Gate, root: Path, flags: list[str]) -> int:
 
 def bite(scratch_dir: Path) -> int:
     failures = 0
-    for label, gate, violate, flags in SCENARIOS:
+    for label, gate, violate, options in SCENARIOS:
         root = scratch_dir / label.replace(" ", "-").replace(":", "")
         root.mkdir()
         scratch(root)
-        green = run(gate, root, flags) == 0
+        green = run(gate, root, options) == 0
         violate(root)
-        red = run(gate, root, flags) != 0
+        red = run(gate, root, options) != 0
         verdict = "bites" if red and green else "DOES NOT BITE" if green else "RED ON CLEAN STATE"
         print(f"bite: {label}: {verdict}")
         failures += not (red and green)

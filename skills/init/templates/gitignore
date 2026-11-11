@@ -3,3 +3,18 @@
 .impeccable/hook.cache.json
 .impeccable/config.local.json
 .impeccable/live/sessions/
+
+# Gate outputs (python-uv): reports, caches, mutation copy, build output. No commit carries them.
+.ratchet/
+mutants/
+coverage.xml
+.coverage
+dist/
+.benchmarks/
+.hypothesis/
+__pycache__/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/

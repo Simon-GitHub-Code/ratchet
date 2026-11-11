@@ -20,11 +20,11 @@ tier0: pre-commit commits
 
 # Tier 0 less the history gate: what the pre-commit hook runs, since `commits` there would judge
 # the commit an amend replaces. The commit-msg hook checks the new subject with `commit-msg`.
-pre-commit: fmt-check lint types imports deadcode lint-workflows secrets pins limits markers prose snapshots-check ratchet-lowered suppressions
+pre-commit: fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions
 
-tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke bite api-check data-compat doctests sast artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance
+tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance
 
-tier2: mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast a11y formal
+tier2: mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal
 
 check: tier0 tier1
 
@@ -71,6 +71,14 @@ snapshots-check:
 
 suppressions:
     python3 "{{ratchet_plugin}}/scripts/suppressions.py"
+
+# The flag registry: declared, owned, off when new. `flags-expired` asks the calendar, in tier 2.
+# Add `--used-in <source dir>` once the stack is bound, so a flag leaves the registry with its code.
+flags:
+    python3 "{{ratchet_plugin}}/scripts/flags.py"
+
+flags-expired:
+    python3 "{{ratchet_plugin}}/scripts/flags.py" --expired
 
 commits:
     python3 "{{ratchet_plugin}}/scripts/commits.py"
@@ -147,6 +155,16 @@ build:
 smoke:
     @echo "bind: start the deliverable, hit its health probe, stop it"; exit 1
 
+telemetry:
+    @echo "bind: the telemetry tests against an in-memory exporter; red when there are none"; exit 1
+
+# `flags.py --changed` prints one key per line; no changed flag means no extra run.
+flag-states:
+    @echo "bind: for each key of flags.py --changed, the suite with the flag forced off, then on"; exit 1
+
+load-smoke:
+    @echo "bind: seconds of concurrent requests at the booted deliverable; any error fails"; exit 1
+
 bite:
     python3 "{{ratchet_plugin}}/scripts/bite.py"
     @echo "bind: run every project fitness test and gate tool against its synthetic violation"; exit 1
@@ -162,6 +180,9 @@ doctests:
 
 sast:
     @echo "bind: static security analysis with the stack's rule set"; exit 1
+
+iac:
+    @echo "bind: configuration scanner over the Dockerfile, manifests and infrastructure code"; exit 1
 
 artefact-scan:
     @echo "bind: scan the shipped artefact or base image for known vulnerabilities"; exit 1
@@ -207,6 +228,15 @@ perf:
 dast:
     @echo "bind: dynamic security scan against the end-to-end environment"; exit 1
 
+pentest:
+    @echo "bind: active scan with a session, and contract-driven attacks on every route"; exit 1
+
+load:
+    @echo "bind: load test against the end-to-end environment, thresholds from the binding's Limits"; exit 1
+
+telemetry-e2e:
+    @echo "bind: read a request's trace, metrics and logs back from the collector"; exit 1
+
 a11y:
     @echo "bind: accessibility checks inside the end-to-end suite"; exit 1
 
@@ -223,6 +253,9 @@ licenses:
 
 drift:
     @echo "bind: outdated dependencies and the software bill of materials; advisory"; exit 1
+
+load-soak:
+    @echo "bind: hold the load for an hour, then raise it to the breaking point; advisory"; exit 1
 
 reports:
     @echo "bind: hotspots, coupling, complexity; advisory only"; exit 1
