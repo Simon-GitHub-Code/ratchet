@@ -8,7 +8,7 @@ Codex installs plugins from git marketplaces that carry `.claude-plugin/plugin.j
 codex plugin marketplace add Simon-GitHub-Code/ratchet
 codex plugin add ratchet@ratchet
 codex plugin marketplace add mattpocock/skills && codex plugin add mattpocock-skills@mattpocock
-codex plugin marketplace add cursor/plugins && codex plugin add pstack@cursor-plugins
+codex plugin marketplace add michael-denyer/pstack-claude && codex plugin add pstack@pstack-claude
 codex plugin marketplace add pbakaus/impeccable && codex plugin add impeccable@impeccable
 ```
 

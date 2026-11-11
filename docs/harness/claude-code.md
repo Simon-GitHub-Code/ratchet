@@ -5,9 +5,9 @@ The home harness. Everything in the plugin is written for it; the other harness 
 ## Install
 
 ```bash
-claude plugin marketplace add claude-plugins-official   # mattpocock-skills
-claude plugin marketplace add cursor/plugins            # pstack
-claude plugin marketplace add pbakaus/impeccable        # impeccable
+claude plugin marketplace add mattpocock/skills             # mattpocock-skills
+claude plugin marketplace add michael-denyer/pstack-claude  # pstack, ported for Claude Code
+claude plugin marketplace add pbakaus/impeccable            # impeccable
 claude plugin marketplace add Simon-GitHub-Code/ratchet
 claude plugin install ratchet@ratchet
 ```
