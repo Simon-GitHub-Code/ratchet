@@ -5,8 +5,7 @@ from pathlib import Path
 from typing import Protocol
 
 from ratchet_guards.paths import Locator
-
-MAIN_BRANCHES = frozenset({"main", "master"})
+from ratchet_guards.refs import MAIN_BRANCHES
 
 
 class RepoState(Protocol):

@@ -6,8 +6,13 @@ method is still writing the manifest and the files it names, and not a flag, whi
 could set. Until the adoption merges, only the command rules apply; after it, the manifest
 the owner merged is the one every path is judged against, whatever the work tree says.
 
-The default branch is the remote's ``HEAD`` when there is one, else the first of ``origin/main``,
-``origin/master``, ``main`` and ``master`` that exists.
+The default branch is the remote's ``HEAD`` when there is one and it names a commit, else the first
+of ``refs/remotes/origin/main``, ``refs/remotes/origin/master``, ``refs/heads/main`` and
+``refs/heads/master`` that exists. Every name is spelled in full and checked with ``show-ref
+--verify``, which takes no other spelling: git looks a short name such as ``main`` up in
+``.git/main``, ``refs/main`` and ``refs/tags/main`` before ``refs/heads/main``, so a tag or a ref an
+agent made under the short name would be read in place of the branch. ``ratchet_guards.refmoves``
+refuses the commands that move these refs (ADR 0016).
 """
 
 import subprocess
@@ -15,10 +20,11 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from ratchet_guards.manifest import MANIFEST_PATH
+from ratchet_guards.refs import LOCAL, REMOTE_HEAD, TRACKING
 
 Git = Callable[[Path, Sequence[str]], str | None]
 GIT_TIMEOUT_SECONDS = 5
-FALLBACK_BRANCHES = ("origin/main", "origin/master", "main", "master")
+FALLBACK_BRANCHES = (*TRACKING, *LOCAL)
 
 
 def run_git(cwd: Path, args: Sequence[str]) -> str | None:
@@ -37,12 +43,10 @@ def run_git(cwd: Path, args: Sequence[str]) -> str | None:
 
 
 def default_branch(checkout: Path, git: Git = run_git) -> str | None:
-    """The ref the default branch's tip is read from, or ``None`` when none exists yet."""
-    remote_head = git(checkout, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
-    if remote_head:
-        return remote_head
-    for ref in FALLBACK_BRANCHES:
-        if git(checkout, ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"]):
+    """The full name of the ref the default branch's tip is read from, else ``None``."""
+    remote_head = git(checkout, ["symbolic-ref", REMOTE_HEAD])
+    for ref in (*([remote_head] if remote_head else []), *FALLBACK_BRANCHES):
+        if git(checkout, ["show-ref", "--verify", "--hash", ref]):
             return ref
     return None
 

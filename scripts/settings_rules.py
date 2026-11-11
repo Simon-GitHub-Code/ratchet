@@ -8,7 +8,8 @@ the hook lets through, and the hook is the one layer on those paths (ADR 0014). 
 repository-relative pattern becomes ``Edit(/pattern)``
 (Claude Code reads a leading ``/`` as the project root) and a ``~/`` pattern stays as it is. The
 command rules are fixed here: the gate bypasses, history rewrites and forge changes the hook
-denies, and ``gh pr merge`` as an ask. ``gh label create`` is not denied, because the hook lets a
+denies, the commands that write the default branch's ref in their plain spellings (ADR 0016),
+and ``gh pr merge`` as an ask. ``gh label create`` is not denied, because the hook lets a
 recorded label through and a settings deny would refuse that one too (ADR 0006).
 
 A group's ``exclude`` has no permission-rule equivalent, so a manifest that uses it is reported:
@@ -31,6 +32,42 @@ from pathlib import Path
 MANIFEST = Path("guards/manifest.toml")
 SETTINGS = Path(".claude/settings.json")
 SCHEMA = "https://json.schemastore.org/claude-code-settings.json"
+# Why: a permission rule matches a command's words, so it can name only the plain spelling of a
+# command that writes a default branch, and only a command the hook refuses whole: `git branch`,
+# `update-ref`, `checkout` and `switch` are denied here only for a default branch's name. The hook
+# reads every spelling (ADR 0016); these rules are the second layer for the common ones.
+DEFAULT_BRANCHES = ("main", "master")
+DEFAULT_BRANCH_DENIES = (
+    tuple(
+        f"Bash(git {command} {name}:*)"
+        for name in DEFAULT_BRANCHES
+        for command in ("branch -f", "branch -d", "branch -D", "branch -m", "branch -M")
+    )
+    + tuple(
+        f"Bash(git {command}{name}:*)"
+        for name in DEFAULT_BRANCHES
+        for command in ("update-ref refs/heads/", "update-ref -d refs/heads/")
+    )
+    + tuple(
+        f"Bash(git {command} {name}:*)"
+        for name in DEFAULT_BRANCHES
+        for command in ("checkout -B", "switch -C")
+    )
+)
+OTHER_REF_DENIES = (
+    "Bash(git update-ref refs/remotes/*)",
+    "Bash(git replace:*)",
+    "Bash(git fast-import:*)",
+    "Bash(git send-pack:*)",
+    "Bash(git receive-pack:*)",
+    "Bash(git remote add origin:*)",
+    "Bash(git remote set-url:*)",
+    "Bash(git remote set-head:*)",
+    "Bash(git remote set-branches:*)",
+    "Bash(git remote rename:*)",
+    "Bash(git remote remove:*)",
+    "Bash(git remote rm:*)",
+)
 COMMAND_DENIES = (
     "Bash(git push --force:*)",
     "Bash(git push * --force*)",
@@ -49,6 +86,8 @@ COMMAND_DENIES = (
     "Bash(gh label delete:*)",
     "Bash(gh label clone:*)",
     "Bash(gh run delete:*)",
+    *DEFAULT_BRANCH_DENIES,
+    *OTHER_REF_DENIES,
 )
 COMMAND_ASKS = ("Bash(gh pr merge:*)",)
 APPEND = "append"

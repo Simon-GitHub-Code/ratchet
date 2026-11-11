@@ -1,6 +1,6 @@
 """Getopt-style option scanning, just enough to tell flags from operands."""
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 
 
@@ -72,3 +72,23 @@ def scan(args: Sequence[str], spec: Spec) -> Options:
     for arg in args:
         state.take(arg)
     return Options(frozenset(state.flags), state.values, tuple(state.operands))
+
+
+def expand_long(args: Sequence[str], options: Collection[str]) -> list[str]:
+    """``args`` with each long option spelled as a prefix of exactly one of ``options`` made whole.
+
+    Git takes any unambiguous prefix of a long option, and an exact name wins over a longer one
+    that it prefixes (``--force`` is not ``--force-create``). ``options`` names the options a
+    rule looks at. A prefix of two of them, which git refuses as ambiguous, stays as written, and
+    so does everything after ``--``.
+    """
+    expanded: list[str] = []
+    for index, arg in enumerate(args):
+        if arg == "--":
+            return [*expanded, *args[index:]]
+        name, equals, value = arg.partition("=")
+        matches = [option for option in options if option.startswith(name)]
+        long = name.startswith("--") and len(name) > len("--")
+        unique = long and name not in options and len(matches) == 1
+        expanded.append(matches[0] + equals + value if unique else arg)
+    return expanded

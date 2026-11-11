@@ -1,14 +1,19 @@
-"""Rules for ``git``: hook bypasses, history rewrites, pushes to main and guard-path writes."""
+"""Rules for ``git``: hook bypasses, history rewrites, pushes to main and guard-path writes.
+
+The commands that write the default branch's ref are ``ratchet_guards.refmoves``'s.
+"""
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
-from ratchet_guards.context import MAIN_BRANCHES, Context, Guard
+from ratchet_guards import refmoves
+from ratchet_guards.context import Context, Guard
+from ratchet_guards.gitcall import Invocation, invocation
 from ratchet_guards.options import NO_VALUES, Options, Spec, scan
+from ratchet_guards.refs import MAIN_BRANCHES
 from ratchet_guards.verdict import Verdict
 
-_GLOBAL_VALUES = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"})
 _FORCE = frozenset({"-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror"})
 _ALL_BRANCHES = frozenset({"--all", "--branches"})
 # Why: `git config <key>` alone reads and `git config <key> <value>` writes, so a flag is not
@@ -25,7 +30,6 @@ _CONFIG_MODIFIERS = frozenset(
 )
 _READ_VERB = "get"
 _HOOKS_PATH = "core.hookspath"
-_CONFIG_VALUES = frozenset({"-c", "--config-env"})
 _COMMIT = Spec(
     "mFcCt",
     frozenset(
@@ -45,7 +49,7 @@ _PUSH_SHORTEST = {
     "--force-with-lease": len("--force-w"),
     "--force-if-includes": len("--force-i"),
 }
-_PATHS = Spec("bBs", frozenset({"--source"}))
+_PATHS = Spec("bBs", frozenset({"--source", "--orphan"}))
 _SWITCH = Spec("bBcC", frozenset({"--create", "--force-create"}))
 _SWITCH_FLAGS = ("-b", "-B", "-c", "-C", "--create", "--force-create")
 _NO_VERIFY = "--no-verify"
@@ -60,42 +64,6 @@ _AM = Spec("Cp", frozenset({"--directory", "--exclude", "--include", "--whitespa
 def _skips_verify(word: str, subcommand: str) -> bool:
     shortest = _AM_NO_VERIFY_SHORTEST if subcommand == "am" else _NO_VERIFY_SHORTEST
     return len(word) >= shortest and _NO_VERIFY.startswith(word)
-
-
-@dataclass(frozen=True, slots=True)
-class Invocation:
-    """A git command line split around its subcommand."""
-
-    cwd: Path
-    configs: tuple[str, ...]
-    subcommand: str
-    args: tuple[str, ...]
-
-
-def _joined_config(option: str) -> str | None:
-    """The config of ``-cNAME=VALUE`` or ``--config-env=NAME=ENV``, else ``None``."""
-    if option.startswith("--config-env="):
-        return option.partition("=")[2]
-    if option.startswith("-c") and not option.startswith("--") and len(option) > len("-c"):
-        return option[len("-c") :]
-    return None
-
-
-def invocation(words: Sequence[str], cwd: Path) -> Invocation:
-    """Parse ``git [global options] <subcommand> args``; ``-C`` moves the working directory."""
-    configs: list[str] = []
-    rest = list(words[1:])
-    while rest and rest[0].startswith("-"):
-        option = rest.pop(0)
-        joined = _joined_config(option)
-        if joined is not None:
-            configs.append(joined)
-        elif option in _GLOBAL_VALUES and rest:
-            value = rest.pop(0)
-            cwd = cwd / value if option == "-C" else cwd
-            configs.extend([value] if option in _CONFIG_VALUES else [])
-    subcommand = rest.pop(0) if rest else ""
-    return Invocation(cwd, tuple(configs), subcommand, tuple(rest))
 
 
 def _hooks_redirected(configs: Sequence[str]) -> bool:
@@ -141,7 +109,7 @@ def _push(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
         verdicts.append(Verdict("force-push", "git push " + " ".join(call.args)))
     if _pushes_main(options, context, guard, cwd=call.cwd):
         verdicts.append(Verdict("push-main", "git push " + " ".join(call.args)))
-    return verdicts
+    return verdicts + refmoves.pushes(call, refspecs)
 
 
 def _pushes_main(options: Options, context: Context, guard: Guard, *, cwd: Path) -> bool:
@@ -151,12 +119,6 @@ def _pushes_main(options: Options, context: Context, guard: Guard, *, cwd: Path)
     current = guard.branch(context, cwd)
     destinations = [_destination(refspec, current) for refspec in refspecs] or [current]
     return any(destination in MAIN_BRANCHES for destination in destinations)
-
-
-def _reset(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    if "--hard" in scan(call.args, NO_VALUES).flags and guard.on_main(context, call.cwd):
-        return [Verdict("reset-main", "git reset --hard on main")]
-    return []
 
 
 def _commit_tree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -173,9 +135,13 @@ def _config(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     del context, guard
     options = scan(call.args, NO_VALUES)
     keys = {operand.lower() for operand in options.operands}
-    if _HOOKS_PATH in keys and not _reads_config(options):
-        return [Verdict("hooks-path", "git config core.hooksPath")]
-    return []
+    if _reads_config(options):
+        return []
+    verdicts = [Verdict("hooks-path", "git config core.hooksPath")] if _HOOKS_PATH in keys else []
+    if refmoves.edits_config(options.flags) and not verdicts:
+        return [Verdict("default-ref", "git config --edit")]
+    trusted = sorted(filter(refmoves.trusted_key, keys))
+    return verdicts + ([Verdict("default-ref", f"git config {trusted[0]}")] if trusted else [])
 
 
 def _reads_config(options: Options) -> bool:
@@ -196,19 +162,42 @@ def _paths(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     ]
 
 
-_SUBCOMMANDS: dict[str, Callable[[Invocation, Context, Guard], list[Verdict]]] = {
+Rule = Callable[[Invocation, Context, Guard], list[Verdict]]
+
+
+def _all(*rules: Rule) -> Rule:
+    def check(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
+        return [verdict for rule in rules for verdict in rule(call, context, guard)]
+
+    return check
+
+
+_SUBCOMMANDS: dict[str, Rule] = {
     "commit": _commit,
     "am": _am,
     "commit-tree": _commit_tree,
     "push": _push,
-    "reset": _reset,
+    "reset": refmoves.reset,
     "filter-branch": _rewrite,
     "filter-repo": _rewrite,
     "config": _config,
     "rm": _paths,
     "mv": _paths,
     "restore": _paths,
-    "checkout": _paths,
+    "checkout": _all(_paths, refmoves.creates),
+    "switch": refmoves.creates,
+    "branch": refmoves.branch,
+    "update-ref": refmoves.update_ref,
+    "symbolic-ref": refmoves.symbolic_ref,
+    "worktree": refmoves.worktree,
+    "fetch": refmoves.fetch,
+    "pull": refmoves.fetch,
+    "rebase": refmoves.rebase,
+    "remote": refmoves.remote,
+    "replace": refmoves.refused,
+    "fast-import": refmoves.refused,
+    "send-pack": refmoves.refused,
+    "receive-pack": refmoves.refused,
 }
 
 
@@ -221,13 +210,22 @@ def check(words: Sequence[str], context: Context, guard: Guard) -> list[Verdict]
         verdicts.append(Verdict("no-verify", f"git {call.subcommand} {skipping}"))
     if _hooks_redirected(call.configs):
         verdicts.append(Verdict("hooks-path", "git -c core.hooksPath"))
+    verdicts += refmoves.configured(call)
     rule = _SUBCOMMANDS.get(call.subcommand)
     return verdicts + (rule(call, context, guard) if rule is not None else [])
+
+
+def _pointed_head(call: Invocation) -> str | None:
+    """The branch ``git symbolic-ref HEAD refs/heads/<branch>`` checks out without a switch."""
+    head, *target = scan(call.args, Spec("m")).operands or ("",)
+    return target[0].removeprefix("refs/heads/") if head == "HEAD" and len(target) == 1 else None
 
 
 def switched_branch(words: Sequence[str], cwd: Path) -> str | None:
     """The branch ``git switch`` or ``git checkout`` moves to, if the command names one."""
     call = invocation(words, cwd)
+    if call.subcommand == "symbolic-ref":
+        return _pointed_head(call)
     if call.subcommand not in {"switch", "checkout"} or "--" in call.args:
         return None
     options = scan(call.args, _SWITCH)

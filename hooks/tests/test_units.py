@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ratchet_guards import bash, gh, git
+from ratchet_guards import bash, gh, git, gitcall
 from ratchet_guards.context import Context
 from ratchet_guards.manifest import EditRule, Group, ManifestError, Scope, parse
 from ratchet_guards.options import NO_VALUES, Spec, scan
@@ -30,6 +30,10 @@ from tests.support import (
     verdicts,
 )
 
+DEFAULT_REF_BECAUSE = (
+    "moves, deletes or re-points the default branch, or a ref or setting it is read through"
+)
+
 
 def test_the_rule_catalogue_is_pinned() -> None:
     catalogue = {rule: (spec.decision.name, spec.because) for rule, spec in RULES.items()}
@@ -45,7 +49,8 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "hooks-path": ("DENY", "redirects git hooks or overrides git config"),
         "force-push": ("DENY", "force-pushes, which rewrites published history"),
         "push-main": ("DENY", "pushes to main; changes reach main through a reviewed PR"),
-        "reset-main": ("DENY", "hard-resets main"),
+        "reset-main": ("DENY", "moves main back or sideways with a reset"),
+        "default-ref": ("DENY", DEFAULT_REF_BECAUSE),
         "amend-pushed": ("DENY", "amends a commit that is already pushed"),
         "rewrite-history": ("DENY", "rewrites history"),
         "merge-pr": ("ASK", "merges a pull request; only the owner merges"),
@@ -393,12 +398,12 @@ def test_writers() -> None:
 
 
 def test_git_invocation_parses_global_options() -> None:
-    call = git.invocation(
+    call = gitcall.invocation(
         ["git", "-C", "sub", "-c", "a=b", "--no-pager", "--git-dir=x", "log", "-1"], ROOT
     )
-    assert call == git.Invocation(ROOT / "sub", ("a=b",), "log", ("-1",))
-    assert git.invocation(["git", "-C"], ROOT) == git.Invocation(ROOT, (), "", ())
-    assert git.invocation(["git"], ROOT).subcommand == ""
+    assert call == gitcall.Invocation(ROOT / "sub", ("a=b",), "log", ("-1",))
+    assert gitcall.invocation(["git", "-C"], ROOT) == gitcall.Invocation(ROOT, (), "", ())
+    assert gitcall.invocation(["git"], ROOT).subcommand == ""
 
 
 @pytest.mark.parametrize(
@@ -412,6 +417,12 @@ def test_git_invocation_parses_global_options() -> None:
         (["git", "switch", "-C", "v"], "v"),
         (["git", "switch", "--force-create", "u"], "u"),
         (["git", "switch", "main", "-c", "topic"], "topic"),
+        (["git", "symbolic-ref", "HEAD", "refs/heads/x"], "x"),
+        (["git", "symbolic-ref", "-m", "why", "HEAD", "refs/heads/y"], "y"),
+        (["git", "symbolic-ref", "HEAD"], None),
+        (["git", "symbolic-ref", "--short", "HEAD"], None),
+        (["git", "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/x"], None),
+        (["git", "symbolic-ref"], None),
         (["git", "checkout", "--", "file"], None),
         (["git", "checkout"], None),
         (["git", "status"], None),

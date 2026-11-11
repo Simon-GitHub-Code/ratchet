@@ -63,6 +63,27 @@ PLUGIN_HOME_PATTERNS = (
 )
 
 
+GIT_STATE_GROUP = "git-state"
+GIT_STATE_REASON = (
+    "The refs, packed refs, HEAD, grafts and object-store pointers of a checkout's git "
+    "directory: the path guards and the additive-records check read the default branch through "
+    "them, so a write to one can switch the guards off, and git writes them itself (ADR 0016)."
+)
+# Why: the guard reads the default branch through these files, so the hook protects them in every
+# checkout, adopted or not. The template manifest's `local-git` group lists them too, so that
+# `just settings` writes an `Edit` rule for each; a test keeps the two in step.
+GIT_STATE_PATTERNS = (
+    ".git/refs",
+    ".git/refs/**",
+    ".git/packed-refs",
+    ".git/HEAD",
+    ".git/info/grafts",
+    ".git/shallow",
+    ".git/objects/info",
+    ".git/objects/info/**",
+)
+
+
 class Scope(Enum):
     """What a pattern's path is relative to."""
 
@@ -151,6 +172,9 @@ class Manifest:
 
 
 EMPTY = Manifest(())
+
+
+GIT_STATE = Manifest((Group(GIT_STATE_GROUP, GIT_STATE_REASON, GIT_STATE_PATTERNS, EditRule.DENY),))
 
 
 def plugin_group(plugin_root: Path) -> Group:

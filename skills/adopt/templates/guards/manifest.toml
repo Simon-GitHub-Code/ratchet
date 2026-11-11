@@ -58,11 +58,19 @@ paths = [
 
 [[group]]
 name = "local-git"
-reason = "Git hooks and repository config run the tier 0 gates on every commit; only the hook can see them."
+reason = "Git hooks and repository config run the tier 0 gates on every commit, and the refs, HEAD, grafts and object-store pointers are what the path guards read the default branch through; none is versioned, so only the hook can see them."
 edit = "deny"
 paths = [
     ".git/hooks/**",
     ".git/config",
+    ".git/refs",
+    ".git/refs/**",
+    ".git/packed-refs",
+    ".git/HEAD",
+    ".git/info/grafts",
+    ".git/shallow",
+    ".git/objects/info",
+    ".git/objects/info/**",
 ]
 
 [[group]]

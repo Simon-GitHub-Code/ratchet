@@ -8,11 +8,16 @@ argument that introduces a program, and the table of write calls of its language
 read from stdin (a heredoc, a here-string, a pipe) is the caller's to find; this module says
 only that the interpreter reads one.
 
+A program that runs ``git`` is read for the command it runs (``git_commands``), so that a
+ref-moving or hook-skipping command is refused the same way through ``subprocess`` or
+``child_process`` as at the prompt.
+
 Out of reach, left to diff detection: a script file run by path, a path built at run time,
 a program fetched or decoded before it runs.
 """
 
 import re
+import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -35,6 +40,17 @@ _LITERAL = re.compile(
     re.DOTALL,
 )
 _WORD = re.compile(r"""[^\s'"`<>|;&(),=]+""")
+# `'git', 'branch', '-f', name`: the quoted program name and the arguments that follow, in an
+# argument list, a call's argument list or a bare run of arguments, as every language here
+# spells an argv. A bare name or call stands for an argument the program computes.
+_ARGS_OPTION = re.compile(r"\{\s*args\s*:")
+_ARGV = re.compile(
+    r"""(['"])(?:[^'"\n]*/)?git\1(?P<rest>(?:\s*,\s*(?:\{\s*args\s*:\s*)?\[?\s*"""
+    r"""(?:'[^'\n]*'|"[^"\n]*"|[\w.]+(?:\([^()]*\))?))*)"""
+)
+_ARGV_ITEM = re.compile(r"""'(?P<a>[^'\n]*)'|"(?P<b>[^"\n]*)"|(?P<c>[\w.]+(?:\([^()]*\))?)""")
+_COMMAND_STRING = re.compile(r"(?:^|[\s;&|(/])git\s")
+UNKNOWN = "$ratchet_unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +253,29 @@ def named_paths(program: str) -> list[str]:
         text = next(group for group in literal.groups() if group is not None)
         found += [text, *(word for word in _WORD.findall(text) if word.strip("/"))]
     return list(dict.fromkeys(word for word in found if word))
+
+
+def git_commands(program: str) -> list[str]:
+    """Shell command lines in ``program`` that run ``git``, for the shell rules to judge.
+
+    A string literal holding ``git`` and a space is a command line (``os.system("git ...")``),
+    and an argv that starts with the literal ``git`` is joined into one, with ``UNKNOWN`` where
+    an argument is not a literal. Nothing is run or evaluated.
+    """
+    commands = [
+        text
+        for literal in _LITERAL.finditer(program)
+        for text in [next(group for group in literal.groups() if group is not None)]
+        if _COMMAND_STRING.search(text)
+    ]
+    for argv in _ARGV.finditer(program):
+        words = [
+            next((group for group in (item["a"], item["b"]) if group is not None), UNKNOWN)
+            for item in _ARGV_ITEM.finditer(_ARGS_OPTION.sub("", argv["rest"]))
+        ]
+        if words:
+            commands.append(shlex.join(["git", *words]).replace(f"'{UNKNOWN}'", UNKNOWN))
+    return commands
 
 
 def detail(name: str, path: str, group: str) -> str:

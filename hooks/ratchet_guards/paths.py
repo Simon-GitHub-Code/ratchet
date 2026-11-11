@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from ratchet_guards.manifest import Group, Manifest, Scope
+from ratchet_guards.manifest import GIT_STATE, Group, Manifest, Scope
 from ratchet_guards.records import Before
 
 _GLOB_CHARS = frozenset("*?[")
@@ -95,7 +95,9 @@ class Locator:
     def _views(self, canonical: Path) -> Iterator[tuple[str, Scope, Manifest]]:
         """``canonical`` written relative to each scope it falls in, with the manifest for it.
 
-        Strictest scope first.
+        Strictest scope first. The last view is the checkout's git directory, which no manifest
+        has to name (``GIT_STATE``); the checkout itself is not in it, so that removing a whole
+        scratch repository is not a write to its refs.
         """
         yield canonical.as_posix(), Scope.ABSOLUTE, self.manifest
         home = self.filesystem.home
@@ -105,6 +107,9 @@ class Locator:
         if checkout is not None:
             relative = canonical.relative_to(checkout.root).as_posix()
             yield relative, Scope.REPOSITORY, checkout.manifest
+        root = self.filesystem.checkout(canonical)
+        if root is not None and canonical != root:
+            yield canonical.relative_to(root).as_posix(), Scope.REPOSITORY, GIT_STATE
 
     def classify(self, path: Path, *, destructive: bool) -> Hit | None:
         """The hit for ``path``; ``destructive`` also catches guard paths below a directory."""

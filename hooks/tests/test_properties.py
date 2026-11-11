@@ -18,7 +18,7 @@ def _one_line(command: str) -> bool:
 
 
 def _context_free(command: str) -> bool:
-    return not any(word in command for word in ("cd ", "cd", "switch", "checkout"))
+    return not any(word in command for word in ("cd ", "cd", "switch", "checkout", "symbolic-ref"))
 
 
 FLAGGED = [(command, expected) for command, expected in DENIED + ASKED if _one_line(command)]

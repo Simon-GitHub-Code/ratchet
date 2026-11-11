@@ -282,9 +282,12 @@ class _Checker:
     def _programs(
         self, call: interpreters.Invocation, programs: Sequence[str], context: Context
     ) -> list[Verdict]:
-        """A write to a guard path from inline programs: one that names it and holds a write."""
+        """What inline programs do: write a guard path they name, or run a ``git`` command."""
         verdicts: list[Verdict] = []
+        inner = _Checker(self.guard, self.depth + 1)
         for program in filter(call.writes, programs):
+            for command in interpreters.git_commands(program):
+                verdicts += inner.script(command, context)
             names = interpreters.named_paths(program)
             hits = self.guard.locator.words(names, context.cwd, destructive=call.removes(program))
             details = (interpreters.detail(call.name, hit.path, hit.group.name) for hit in hits)

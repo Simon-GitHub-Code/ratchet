@@ -43,7 +43,11 @@ RULES: dict[str, Rule] = {
     "hooks-path": Rule(Decision.DENY, "redirects git hooks or overrides git config"),
     "force-push": Rule(Decision.DENY, "force-pushes, which rewrites published history"),
     "push-main": Rule(Decision.DENY, "pushes to main; changes reach main through a reviewed PR"),
-    "reset-main": Rule(Decision.DENY, "hard-resets main"),
+    "reset-main": Rule(Decision.DENY, "moves main back or sideways with a reset"),
+    "default-ref": Rule(
+        Decision.DENY,
+        "moves, deletes or re-points the default branch, or a ref or setting it is read through",
+    ),
     "amend-pushed": Rule(Decision.DENY, "amends a commit that is already pushed"),
     "rewrite-history": Rule(Decision.DENY, "rewrites history"),
     "merge-pr": Rule(Decision.ASK, "merges a pull request; only the owner merges"),

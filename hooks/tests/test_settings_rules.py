@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import settings_rules
+from tests.support import rules
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
 MANIFEST = """
@@ -170,3 +171,13 @@ def test_main_reports_and_exits(tmp_path: Path, capsys: pytest.CaptureFixture[st
     assert "written from guards/manifest.toml" in capsys.readouterr().out
     assert settings_rules.main(["x", "--root", str(root)]) == 0
     assert capsys.readouterr().out == "settings-check: green\n"
+
+
+@pytest.mark.parametrize(
+    "rule", [*settings_rules.DEFAULT_BRANCH_DENIES, *settings_rules.OTHER_REF_DENIES]
+)
+def test_each_default_ref_permission_rule_is_a_command_the_hook_refuses(rule: str) -> None:
+    # Why: a settings deny that the hook allows would refuse a command the hook lets through
+    # (ADR 0006); every rule here names a spelling the hook already denies.
+    command = rule.removeprefix("Bash(").removesuffix(")").replace(":*", " x").replace("*", "x")
+    assert rules(command) == ["default-ref"]
