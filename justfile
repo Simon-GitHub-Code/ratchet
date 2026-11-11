@@ -28,13 +28,15 @@ types:
 validate:
     claude plugin validate .
 
+# The Workflow runtime runs this script as the body of an async function, where its top-level
+# `return` is legal; `node --check` reads a file as a module or script and rejects it on Node 24.
+# scripts/parse-js.mjs compiles it the way the runtime does. Node 22.13 or later.
 parse-workflow:
-    node --check workflows/pipeline.js
+    node --no-warnings scripts/parse-js.mjs workflow workflows/pipeline.js
 
-# Node strips types, so a syntax check of the pi and OpenCode adapters needs no toolchain.
+# Types are stripped explicitly: `node --check` does not strip them on Node 24. Node 22.13 or later.
 parse-adapters:
-    node --check adapters/pi/ratchet-guard.ts
-    node --check adapters/opencode/ratchet-guard.ts
+    node --no-warnings scripts/parse-js.mjs adapter adapters/pi/ratchet-guard.ts adapters/opencode/ratchet-guard.ts
 
 test:
     uv run pytest -q hooks/tests
