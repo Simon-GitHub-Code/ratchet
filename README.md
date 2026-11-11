@@ -18,6 +18,7 @@ It composes with three other plugins and competes with none. `mattpocock-skills`
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
 | `workflows/pipeline.js` | the four-role pipeline (preflight, spec, implement, critic, review) the feature skill runs |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
+| `scripts/hooks_installed.py` | would a commit here run tier 0? Runs the commit hooks with a probe the template recipes answer; red with the owner's one command when not. Asked by the preflight, the route and `just ratchet`, not by CI |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |
 | `scripts/conformance.py` | tier 1 gate: the repository still carries the method's artefacts; `--self-test` shows it bites |
 | `scripts/lowered.py` | tier 0 gate: no threshold lowered and no ceiling raised against the merge base |

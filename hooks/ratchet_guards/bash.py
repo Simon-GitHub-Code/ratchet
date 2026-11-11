@@ -68,6 +68,7 @@ _HARNESS_REMOVALS: dict[str, dict[str, tuple[frozenset[str], str]]] = {
 }
 _PI_REMOVALS = frozenset({"remove", "uninstall"})
 _MOVERS = frozenset({"cd", "pushd", "git"})
+_HOOK_SKIPS = frozenset({"SKIP", "RATCHET_HOOK_PROBE"})
 _SHELL = Spec("oO", frozenset({"--rcfile", "--init-file"}))
 
 
@@ -90,7 +91,7 @@ def _environment(words: Sequence[str]) -> list[Verdict]:
         if match is None:
             continue
         name = match.group("name")
-        if name == "SKIP":
+        if name in _HOOK_SKIPS:
             verdicts.append(Verdict("skip-hooks", assignment))
         elif name.startswith("GIT_CONFIG"):
             verdicts.append(Verdict("hooks-path", assignment))

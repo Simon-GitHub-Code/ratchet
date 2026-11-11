@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import feature_preflight as preflight
-from tests.repos import git, repository, write
+from tests.repos import git, install_hooks, repository, write
 
 Out = pytest.CaptureFixture[str]
 Gh = Callable[[Sequence[str]], str | None]
@@ -361,3 +361,21 @@ def test_a_forge_ticket_is_held_by_an_open_blocking_issue(tmp_path: Path) -> Non
     for state, expected in (("OPEN", ["blocked"]), ("CLOSED", [])):
         blocker = json.dumps({"number": 12, "title": "B", "body": "", "labels": [], "state": state})
         assert checks(run(root, "4", ParentGh(child, blocker))) == expected
+
+
+def test_an_adopted_repository_without_commit_hooks_is_red_with_the_owners_command(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path, {"docs/process/binding.md": "# Binding\n"})
+    report = run(root, "4", gh_returning(issue(labels=("ready-for-agent",))))
+    assert checks(report) == ["hooks"]
+    assert "a commit here would skip tier 0" in report.failures[0].detail
+    assert report.failures[0].produce.startswith("the owner: run `")
+    assert "pre-commit install" in report.failures[0].produce
+    install_hooks(root)
+    assert run(root, "4", gh_returning(issue(labels=("ready-for-agent",)))).ok
+
+
+def test_a_repository_that_is_not_adopted_is_not_asked_for_hooks(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    assert run(root, "4", gh_returning(issue(labels=("ready-for-agent",)))).ok

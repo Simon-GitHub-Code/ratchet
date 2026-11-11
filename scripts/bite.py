@@ -20,12 +20,14 @@ import tempfile
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import change_size
 import commits
 import coverage_groups
 import feature_preflight
 import flags
+import hooks_installed
 import lowered
 import markers
 import mutation_survivors
@@ -63,6 +65,8 @@ FLAG = (
     '[[flag]]\nkey = "new-sum"\nowner = "core"\ndefault = {default}\n'
     'remove-by = {due}\nreason = "Ships the new sum dark until it is measured."\n'
 )
+BINDING = "# Binding\n\n- Default branch: `main`\n"
+HOOK = '#!/bin/sh\n[ -n "$RATCHET_HOOK_PROBE" ] && echo {name} > "$RATCHET_HOOK_PROBE"\nexit 0\n'
 RESULTS = "    a.x_f__mutmut_1: killed\n    a.x_f__mutmut_2: {status}\n"
 REGISTER = (
     '# Mutation register\n\n[[survivor]]\ntool = "mutmut"\nidentity = "a.x_f__mutmut_1"\n'
@@ -106,11 +110,21 @@ def scratch(root: Path) -> None:
     write(root, "quality/mutation-register.toml", "# Mutation register\n")
     write(root, "tickets/01-add-the-thing.md", TICKET)
     write(root, "flags.toml", "# No flags yet.\n")
+    write(root, "docs/process/binding.md", BINDING)
+    install_hooks(root)
     settings_rules.write(root)
     snapshots.write(root, snapshots.GROUP)
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "feat(core): the clean state")
     git(root, "checkout", "-q", "-b", "change")
+
+
+def install_hooks(root: Path) -> None:
+    """Hooks that answer the probe as the template's recipes do: a commit here would run tier 0."""
+    for name in hooks_installed.HOOKS:
+        hook = root / ".git/hooks" / name
+        hook.write_text(HOOK.format(name=name), encoding="utf-8")
+        hook.chmod(0o755)
 
 
 def commit(root: Path, subject: str) -> None:
@@ -188,6 +202,15 @@ def lowered_threshold(root: Path) -> None:
     commit(root, "chore(quality): raise the ceiling")
 
 
+def remove_hooks(root: Path) -> None:
+    for name in hooks_installed.HOOKS:
+        (root / ".git/hooks" / name).unlink()
+
+
+def hooks_path_elsewhere(root: Path) -> None:
+    git(root, "config", "core.hooksPath", str(root / "no-hooks"))
+
+
 def foreign_deny(root: Path) -> None:
     path = root / ".claude/settings.json"
     path.write_text(
@@ -215,6 +238,9 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("settings-check", settings_rules.main, foreign_deny, ["--check"]),
     ("flags: a new flag that is on", flags.main, flag_born_on, []),
     ("flags-expired", flags.main, flag_overdue, ["--expired"]),
+    ("hooks-installed: no hooks", hooks_installed.main, remove_hooks, []),
+    ("hooks-installed: a hooks path elsewhere", hooks_installed.main, hooks_path_elsewhere, []),
+    ("feature-preflight: no hooks", feature_preflight.main, remove_hooks, TICKET_REF),
 ]
 
 
@@ -224,6 +250,19 @@ def run(gate: Gate, root: Path, flags: list[str]) -> int:
 
 
 def bite(scratch_dir: Path) -> int:
+    """Every scenario, with the machine's git config set aside.
+
+    A hooks path in it would change which hooks a scratch repository runs.
+    """
+    with mock.patch.dict(
+        os.environ,
+        {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+    ):
+        os.environ.pop("RATCHET_HOOK_PROBE", None)
+        return scenarios(scratch_dir)
+
+
+def scenarios(scratch_dir: Path) -> int:
     failures = 0
     for label, gate, violate, options in SCENARIOS:
         root = scratch_dir / label.replace(" ", "-").replace(":", "")

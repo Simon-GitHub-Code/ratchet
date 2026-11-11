@@ -16,11 +16,21 @@ default:
 
 # --- tiers -----------------------------------------------------------------
 
-tier0: pre-commit commits
+tier0: tier0-tree commits
 
 # Tier 0 less the history gate: what the pre-commit hook runs, since `commits` there would judge
 # the commit an amend replaces. The commit-msg hook checks the new subject with `commit-msg`.
-pre-commit: fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions
+tier0-tree: fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions
+
+# The two recipes the commit hooks call. RATCHET_HOOK_PROBE names a file: `hooks-installed` sets it
+# to learn that a commit would reach the recipe, and the recipe answers with its own name before
+# any gate runs. A file, because pre-commit hides the output of a hook that passes. Only these two
+# recipes answer it, so `tier0` and `check` never skip a gate for it.
+pre-commit:
+    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo pre-commit > "$RATCHET_HOOK_PROBE"; else just tier0-tree; fi
+
+commit-msg file:
+    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo commit-msg > "$RATCHET_HOOK_PROBE"; else python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"; fi
 
 tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance
 
@@ -56,11 +66,18 @@ budget key *flags:
 
 # --- ratchet maintenance ------------------------------------------------------
 
-# Raise every threshold to its measured value and refresh the snapshots.
+# Raise every threshold to its measured value and refresh the snapshots. Red first when a commit
+# would not run tier 0: the gate prints the owner's one command.
 ratchet:
+    just hooks-installed
     @echo "bind: run the suites with a Cobertura report at coverage.xml, then the mutation run"; exit 1
     python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml --write
     just snapshots
+
+# Would a commit here run tier 0? Red, with the owner's command, when it would not. CI has no
+# commit hooks, so no CI job and not `conformance` runs it.
+hooks-installed:
+    python3 "{{ratchet_plugin}}/scripts/hooks_installed.py"
 
 # The files of the manifest's tool-config group, copied into quality/snapshots/ (a ratchet path).
 snapshots:
@@ -82,9 +99,6 @@ flags-expired:
 
 commits:
     python3 "{{ratchet_plugin}}/scripts/commits.py"
-
-commit-msg file:
-    python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"
 
 # --- tier 0 bodies ---------------------------------------------------------------
 

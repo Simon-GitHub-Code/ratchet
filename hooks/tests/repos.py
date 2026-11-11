@@ -40,3 +40,35 @@ def commit(root: Path, subject: str) -> str:
 
 def branch(root: Path, name: str = "change") -> None:
     git(root, "checkout", "-q", "-b", name)
+
+
+def hook_script(directory: Path, name: str, body: str) -> Path:
+    """An executable hook ``name`` in ``directory``."""
+    path = directory / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def answering(name: str) -> str:
+    """A hook body that answers the probe as the template recipe ``name`` does."""
+    return f'[ -n "$RATCHET_HOOK_PROBE" ] && echo {name} > "$RATCHET_HOOK_PROBE"\nexit 0'
+
+
+def install_hooks(root: Path) -> None:
+    """The repository's own hooks, as ``pre-commit install`` leaves them: both answer the probe."""
+    for name in ("pre-commit", "commit-msg"):
+        hook_script(root / ".git/hooks", name, answering(name))
+
+
+CHAIN = (
+    'local="$(git rev-parse --git-common-dir)/hooks/{name}"\n'
+    '[ -x "$local" ] && exec "$local" "$@"\nexit 0'
+)
+
+
+def chaining_hooks(directory: Path) -> None:
+    """Global hooks that run the repository's own, as the machine's global hooks do."""
+    for name in ("pre-commit", "commit-msg"):
+        hook_script(directory, name, CHAIN.format(name=name))

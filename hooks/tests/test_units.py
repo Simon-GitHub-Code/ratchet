@@ -419,6 +419,7 @@ def test_details_name_the_offending_command() -> None:
         "gh api DELETE repos/o/r/actions/runs/1"
     ]
     assert details("SKIP=x git commit") == ["SKIP=x"]
+    assert details("RATCHET_HOOK_PROBE=x git commit") == ["RATCHET_HOOK_PROBE=x"]
     assert details("git commit --no-verify") == ["git commit --no-verify"]
     assert details("git commit -n -m x") == ["git commit -n"]
     assert details("git push origin main") == ["git push origin main"]

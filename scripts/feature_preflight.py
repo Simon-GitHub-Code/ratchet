@@ -17,7 +17,10 @@ failure and the skill that produces the missing piece:
 - it carries the owner's agent-ready label, the ``ready-for-agent`` role as
   ``docs/agents/triage-labels.md`` maps it (a local ticket: a ``Status:`` line with that label);
 - the working tree is clean;
-- with ``--branch``, ``HEAD`` is that branch and it is not the base branch.
+- with ``--branch``, ``HEAD`` is that branch and it is not the base branch;
+- in an adopted repository (``docs/process/binding.md``), a commit would run tier 0:
+  ``hooks_installed.py`` proves it by running the commit hooks, and its failure carries the
+  owner's command as the ``produce``, since the guard refuses hook installs from an agent.
 
 The output is JSON: ``ok``, ``failures`` (each with ``check``, ``detail`` and ``produce``, the
 skill or action that supplies it), the ticket's ``number``, ``title`` and ``slug``, and the
@@ -40,6 +43,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import gatelib
+import hooks_installed
 
 CONJECTURE = "## Conjecture"
 READY_ROLE = "ready-for-agent"
@@ -150,10 +154,10 @@ class Report:
     branch: str = ""
     label: str = READY_ROLE
 
-    def fail(self, check: str, detail: str) -> None:
+    def fail(self, check: str, detail: str, produce: str = "") -> None:
         """Record one failed check."""
         self.ok = False
-        self.failures.append(Failure(check, detail))
+        self.failures.append(Failure(check, detail, produce))
 
 
 # --- the ticket ------------------------------------------------------------------------------
@@ -355,6 +359,15 @@ def check_checkout(report: Report, root: Path, *, base: str, branch: str | None)
         report.fail("branch", f"`{branch}` is the base branch")
 
 
+def check_hooks(report: Report, root: Path) -> None:
+    """Red when the repository is adopted and a commit would skip tier 0."""
+    if not (root / gatelib.BINDING).is_file():
+        return
+    problem = hooks_installed.check(root)
+    if problem is not None:
+        report.fail("hooks", problem.detail, f"the owner: {problem.fix}")
+
+
 def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner) -> Report:
     report = Report(ref=ref, label=ready_label(root))
     ticket = fetch(ref, root, gh)
@@ -363,6 +376,7 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
     else:
         check_ticket(report, ticket, report.label, root=root, gh=gh)
     check_checkout(report, root, base=base, branch=branch)
+    check_hooks(report, root)
     return report
 
 

@@ -16,6 +16,7 @@ import tomllib
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+import hooks_installed
 import settings_rules
 
 ENTRY_POINTS = (
@@ -321,6 +322,13 @@ def check_commit_hooks(root: Path) -> Iterable[str]:
             f"{COMMIT_HOOKS}: a hook runs the whole tier0, whose history gate judges the commit "
             "an amend replaces; run `pre-commit` and `commit-msg` instead"
         )
+    justfile = read(root / "justfile")
+    if justfile is not None and hooks_installed.PROBE_ENV not in justfile:
+        yield (
+            f"justfile: the `pre-commit` and `commit-msg` recipes do not answer "
+            f"{hooks_installed.PROBE_ENV}, so `hooks_installed.py` cannot tell whether a commit "
+            f"would run tier 0; copy them from {hooks_installed.TEMPLATE}"
+        )
 
 
 def check_settings(root: Path) -> Iterable[str]:
@@ -519,9 +527,14 @@ def hook_mutations() -> list[Mutation]:
         path = root / COMMIT_HOOKS
         path.write_text(path.read_text().replace("entry: just pre-commit", "entry: just tier0"))
 
+    def recipes_that_cannot_answer_the_probe(root: Path) -> None:
+        path = root / "justfile"
+        path.write_text(path.read_text().replace(hooks_installed.PROBE_ENV, "NO_PROBE"))
+
     return [
         ("commit hooks without the commit-msg stage", hooks_without_commit_msg),
         ("commit hooks running the whole tier0", hooks_running_the_whole_tier),
+        ("hook recipes that cannot answer the probe", recipes_that_cannot_answer_the_probe),
     ]
 
 

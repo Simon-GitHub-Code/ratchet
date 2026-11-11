@@ -5,6 +5,8 @@
 # The tree gates run before the commit. The subject is checked on the message being written:
 # `commits` over history at the pre-commit stage would judge the commit an amend replaces and could
 # never see the new subject. CI and `just check` still run the whole `tier0`, history included.
+# `just hooks-installed` runs these two hooks with a probe that the `pre-commit` and `commit-msg`
+# recipes answer before any gate runs; it is red until a commit here would run tier 0.
 default_install_hook_types: [pre-commit, commit-msg]
 repos:
   - repo: local

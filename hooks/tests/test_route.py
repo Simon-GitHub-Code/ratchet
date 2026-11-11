@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 
+import hooks_installed
 import route
-from tests.repos import branch, commit, git, repository, write
+from tests.repos import branch, commit, git, install_hooks, repository, write
 
 Out = pytest.CaptureFixture[str]
+REAL_CHECK = hooks_installed.check
 STANZA = "# P\n\nLoad the `ratchet:method` skill first.\n"
 CONJECTURE = (
     "\n\n## Conjecture\n\nOne script decides the route; the refuter is a wrong command on a"
@@ -26,6 +28,12 @@ ADOPTED = {
     "GLOSSARY.md": "# Glossary\n\n**Customer**: who pays.\n",
     "docs/design-brief.md": "# Brief\n",
 }
+
+
+@pytest.fixture(autouse=True)
+def hooks_are_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every stage below is asked with the commit hooks in place; the hooks stage has its tests."""
+    monkeypatch.setattr(hooks_installed, "check", lambda _root: None)
 
 
 class FakeGh:
@@ -387,3 +395,26 @@ def test_plugin_lines_older_than_the_template_send_the_owner_to_init(tmp_path: P
     assert step.command == route.INIT
     assert "In what style, with which levers?" in step.why
     assert step.then == route.NEXT
+
+
+def test_missing_hooks_come_before_everything_a_commit_would_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hooks_installed, "check", REAL_CHECK)
+    root = repository(tmp_path, ADOPTED)
+    write(root, "src/x.py", "x = 1\n")
+    step = route.decide(root, None)
+    assert step.stage == "hooks"
+    assert "pre-commit install" in step.command
+    assert step.then == route.NEXT
+    assert "skip tier 0" in step.why
+    install_hooks(root)
+    assert route.decide(root, None).stage == "change"
+
+
+def test_a_repository_not_yet_adopted_is_not_asked_for_hooks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hooks_installed, "check", REAL_CHECK)
+    root = repository(tmp_path, {"README.md": "# A\n"})
+    assert route.decide(root, None).stage == "init"

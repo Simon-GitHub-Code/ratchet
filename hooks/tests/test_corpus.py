@@ -97,6 +97,8 @@ DENIED: list[tuple[str, list[str]]] = [
     ("export SKIP=types", ["skip-hooks"]),
     ("SKIP=types", ["skip-hooks"]),
     ("env SKIP=types git commit -m x", ["skip-hooks"]),
+    ("RATCHET_HOOK_PROBE=/tmp/x git commit -m x", ["skip-hooks"]),
+    ("export RATCHET_HOOK_PROBE=/tmp/x", ["skip-hooks"]),
     ("pre-commit uninstall", ["skip-hooks"]),
     ("git filter-branch --tree-filter 'rm x' HEAD", ["rewrite-history"]),
     ("git filter-repo --path x --invert-paths", ["rewrite-history"]),

@@ -14,10 +14,12 @@ The stages, in order; the first that does not hold is the answer:
 2. ``AGENTS.md`` naming the method (``/ratchet:init``);
 3. the tracker record ``docs/agents/issue-tracker.md`` (the mattpocock-skills setup);
 4. the binding ``docs/process/binding.md`` (``/ratchet:adopt``);
-5. a clean tree (finish the change: ``check``, commit, pull request);
-6. on a working branch: the pull request is open, else open it; with no forge (no ``origin``)
+5. the commit hooks, which run tier 0 on every commit (``hooks_installed.py`` proves they would;
+   the step is the owner's command, since the guard refuses hook installs from an agent);
+6. a clean tree (finish the change: ``check``, commit, pull request);
+7. on a working branch: the pull request is open, else open it; with no forge (no ``origin``)
    the owner merges the branch once ``check`` is green;
-7. on the default branch: the glossary and design brief (``grill-with-docs``), then an
+8. on the default branch: the glossary and design brief (``grill-with-docs``), then an
    agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
    away, ``/pstack:poteto-mode`` when they stay).
@@ -36,6 +38,7 @@ from pathlib import Path
 
 import feature_preflight as preflight
 import gatelib
+import hooks_installed
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
 STANZA = "ratchet:method"
@@ -412,7 +415,7 @@ def stale_plugin_lines(agents: Path) -> list[str]:
 
 
 def setup_step(root: Path) -> Step | None:
-    """The step before adoption, or ``None`` once the repository is adopted."""
+    """The step before the work: adoption, then the commit hooks; ``None`` once both hold."""
     if not names_method(root):
         return Step(INIT, "AGENTS.md does not name the method", TRACKER_SETUP, "init")
     agents = root / "AGENTS.md"
@@ -439,7 +442,8 @@ def setup_step(root: Path) -> Step | None:
         )
     if not (root / BINDING).is_file():
         return Step(ADOPT, f"{BINDING} is missing, so no gate is bound", GRILL, "adopt")
-    return None
+    hooks = hooks_installed.check(root)
+    return None if hooks is None else Step(hooks.fix, hooks.detail, NEXT, "hooks")
 
 
 def decide(root: Path, gh: preflight.Runner | None) -> Step:
