@@ -2,7 +2,9 @@
 
 ``hooks/guard.py`` puts ``hooks/`` on ``sys.path`` and calls ``main`` with the repository
 root. For Edit, Write, MultiEdit and NotebookEdit on a guard path, and for a Codex ``apply_patch``
-whose headers name one, the hook answers ``ask``,
+whose headers name one, the hook answers ``ask``. Grok's own tool names
+(``run_terminal_command``, ``search_replace``, ``write``, ...) are judged as the Claude tools
+they stand for. It answers ``ask``,
 which needs a human at the permission prompt, or ``deny`` in a group whose ``edit`` is
 ``"deny"`` (paths Claude Code's bypass mode would let through an ``ask``); for a Bash
 command that bypasses a gate, rewrites history, removes a plugin or writes a guard path it
@@ -53,6 +55,20 @@ EDIT_TOOLS = {
     "MultiEdit": "file_path",
     "NotebookEdit": "notebook_path",
 }
+# Why: Grok fires the hook through its matcher aliases but reports its own tool names, and the
+# Cursor preset's tools name the file in `path`. Judged as the Claude tool they stand for; an
+# unknown name would otherwise pass every rule.
+HARNESS_TOOLS = {
+    "run_terminal_command": "Bash",
+    "Shell": "Bash",
+    "search_replace": "Edit",
+    "hashline_edit": "Edit",
+    "write": "Write",
+    "StrReplace": "Edit",
+    "EditNotebook": "NotebookEdit",
+}
+# Where an edit tool names its file when not under the Claude tool's own key.
+PATH_KEYS = ("file_path", "path", "notebook_path", "target_notebook")
 # Why: Codex edits through apply_patch, whose input is the patch text; the paths are its headers.
 PATCH_TOOL = "apply_patch"
 PATCH_HEADER = re.compile(
@@ -145,10 +161,15 @@ def decide(payload: object, guard: Guard) -> Verdict | None:
         return _unreadable("the hook input lacks tool_name, tool_input or cwd")
     if tool == PATCH_TOOL:
         return _patch(tool_input, Path(cwd), guard)
+    tool = HARNESS_TOOLS.get(tool, tool)
     key = "command" if tool == "Bash" else EDIT_TOOLS.get(tool)
     if key is None:
         return None
     target = tool_input.get(key)
+    if not isinstance(target, str) and key != "command":
+        target = next(
+            (tool_input[k] for k in PATH_KEYS if isinstance(tool_input.get(k), str)), None
+        )
     if not isinstance(target, str):
         return _unreadable(f"{tool} input has no {key}")
     return _judge(tool, target, Context(Path(cwd)), guard=guard, tool_input=tool_input)
