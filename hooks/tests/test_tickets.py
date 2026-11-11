@@ -102,3 +102,42 @@ def test_statuses_reads_every_spelling_the_preflight_reads() -> None:
     text = "Status: a\n**Status:** b\n**Status**: `c`\nstatus d\n"
     assert tickets.statuses(text) == {"a", "b", "c", "d"}
     assert tickets.after("Write", {}, "x") == ""
+
+
+@pytest.mark.parametrize(
+    ("name", "args", "existing"),
+    [
+        ("write_to_file", {"TargetFile": TICKET, "CodeContent": "Status: agent:ready\n"}, None),
+        (
+            "replace_file_content",
+            {
+                "TargetFile": TICKET,
+                "TargetContent": "needs-triage",
+                "ReplacementContent": "agent:ready",
+                "AllowMultiple": True,
+            },
+            TRIAGED,
+        ),
+        (
+            "multi_replace_file_content",
+            {
+                "TargetFile": TICKET,
+                "ReplacementChunks": [
+                    "not a chunk",
+                    {"TargetContent": "needs-triage", "ReplacementContent": "agent:ready"},
+                ],
+            },
+            TRIAGED,
+        ),
+    ],
+)
+def test_antigravity_edits_that_give_the_status_ask(
+    name: str, args: dict[str, object], existing: str | None
+) -> None:
+    contents = {"/repo/docs/agents/triage-labels.md": LABELS_RECORD}
+    if existing is not None:
+        contents[TICKET] = existing
+    payload = {"toolCall": {"name": name, "args": args}, "cwd": str(ROOT)}
+    verdict = hook.decide(payload, make_guard(filesystem=FakeFilesystem(contents=contents)))
+    assert verdict is not None
+    assert verdict.rule == "agent-ready-label"

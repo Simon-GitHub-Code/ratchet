@@ -74,6 +74,7 @@ def test_without_a_manifest_only_the_command_rules_apply(tmp_path: Path) -> None
         ("claude plugin disable ratchet", "plugin-removal"),
         ("grok plugin uninstall ratchet", "plugin-removal"),
         ("codex plugin remove ratchet@ratchet", "plugin-removal"),
+        ("agy plugin uninstall ratchet", "plugin-removal"),
         ("pi remove git:github.com/o/ratchet", "plugin-removal"),
     ]:
         verdict = hook.decide(bash(command, root), guard)
@@ -177,6 +178,10 @@ def test_the_plugin_group_is_prepended_and_locked() -> None:
             "~/.config/opencode/plugins",
             "~/.config/opencode/plugins/**",
             "~/.config/opencode/opencode.json",
+            "~/.gemini/config/plugins",
+            "~/.gemini/config/plugins/**",
+            "~/.gemini/config/hooks.json",
+            "~/.gemini/config/config.json",
         ),
         locked=True,
     )
@@ -214,6 +219,11 @@ def _scope(pattern: str) -> Scope:
         HOME / ".pi/agent/settings.json",
         HOME / ".config/opencode/plugins/ratchet-guard.ts",
         HOME / ".config/opencode/opencode.json",
+        HOME / ".gemini/config/plugins/ratchet/hooks/guard.py",
+        HOME / ".gemini/config/plugins/ratchet/hooks.json",
+        HOME / ".gemini/config/plugins",
+        HOME / ".gemini/config/hooks.json",
+        HOME / ".gemini/config/config.json",
     ],
 )
 def test_plugin_files_are_locked_with_or_without_a_manifest(path: Path) -> None:
@@ -417,3 +427,74 @@ def test_an_edit_without_any_path_key_is_unreadable(tmp_path: Path) -> None:
     )
     assert verdict is not None
     assert verdict.rule == "unreadable"
+
+
+def agy(name: str, cwd: Path, **args: object) -> dict[str, object]:
+    """Antigravity's PreToolUse input (agy 1.5.6 hooks guide): CamelCase arguments."""
+    call = {"id": "toolu_01", "name": name, "args": args}
+    return {"toolCall": call, "stepIdx": 3, "hookEventName": "PreToolUse", "cwd": str(cwd)}
+
+
+# Antigravity's tools and argument keys, from its hooks guide and the matcher `agy plugin
+# install` stages for this plugin.
+@pytest.mark.parametrize(
+    ("name", "args", "rule"),
+    [
+        ("run_command", {"CommandLine": "git push --force"}, "force-push"),
+        ("run_command", {"CommandLine": "agy plugin disable ratchet"}, "plugin-removal"),
+        ("write_to_file", {"TargetFile": "CLAUDE.md", "CodeContent": "x"}, "guard-path-edit"),
+        ("write_file", {"TargetFile": ".claude/settings.json"}, "guard-path-locked"),
+        (
+            "replace_file_content",
+            {"TargetFile": "CLAUDE.md", "TargetContent": "a", "ReplacementContent": "b"},
+            "guard-path-edit",
+        ),
+        ("edit_file", {"TargetFile": "CLAUDE.md"}, "guard-path-edit"),
+        (
+            "multi_replace_file_content",
+            {"TargetFile": ".claude/settings.json", "ReplacementChunks": []},
+            "guard-path-locked",
+        ),
+        ("write_to_file", {"CodeContent": "x"}, "unreadable"),
+        ("run_command", {"Cwd": "/"}, "unreadable"),
+    ],
+)
+def test_antigravity_calls_are_judged_as_claude_tools(
+    tmp_path: Path, *, name: str, args: dict[str, object], rule: str
+) -> None:
+    root = checkout(tmp_path, manifest=True)
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    verdict = hook.decide(agy(name, root, **args), guard)
+    assert verdict is not None
+    assert verdict.rule == rule
+
+
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("run_command", {"CommandLine": "git status"}),
+        ("write_to_file", {"TargetFile": "notes.md", "CodeContent": "x"}),
+        ("view_file", {"AbsolutePath": "CLAUDE.md"}),
+    ],
+)
+def test_antigravity_calls_pass_when_no_rule_fires(
+    tmp_path: Path, name: str, args: dict[str, object]
+) -> None:
+    root = checkout(tmp_path, manifest=True)
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    assert hook.decide(agy(name, root, **args), guard) is None
+
+
+def test_an_antigravity_command_runs_where_its_own_cwd_says(tmp_path: Path) -> None:
+    root = checkout(tmp_path, manifest=True)
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    elsewhere = agy("run_command", tmp_path, CommandLine="echo x > CLAUDE.md", Cwd=str(root))
+    assert hook.decide(elsewhere, guard) == Verdict(W, "redirects into CLAUDE.md (decisions)")
+    unset = agy("run_command", root, CommandLine="echo x > CLAUDE.md", Cwd="")
+    assert hook.decide(unset, guard) == Verdict(W, "redirects into CLAUDE.md (decisions)")
+
+
+def test_a_shapeless_antigravity_call_is_unreadable() -> None:
+    for payload in ({"toolCall": None, "cwd": "/"}, {"toolCall": {"name": "run_command"}}):
+        verdict = hook.decide(payload, make_guard())
+        assert verdict == Verdict("unreadable", "the hook input lacks tool_name, tool_input or cwd")
