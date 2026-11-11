@@ -1,6 +1,12 @@
 # Mutation register (Ratchet method). Every surviving mutant is killed or listed here with a
-# stable identity, a reason of twenty characters or more and the review date. An entry whose
+# stable identity, a reason of twenty characters or more and the review date. An entry excuses
+# one mutant: a second survivor in the same function needs an entry of its own. An entry whose
 # mutant is killed, gone or whose function hash changed is stale and fails the gate.
+#
+# The gate prints the entry to paste for every unregistered survivor. For stryker the identity
+# ends in the mutant's place inside its unit (`@<line>:<column>-<line>:<column>`); an entry
+# without it is the old identity and is red until replaced by one entry per mutant you review.
+# A registered mutant that timed out is not a verdict: rerun it with less load.
 
 # [[survivor]]
 # tool = "<mutation tool>"

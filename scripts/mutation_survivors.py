@@ -10,15 +10,24 @@ tool found and ``quality/mutation-register.toml``, and goes red on:
   so the equivalence claim is stale and is reviewed again;
 - a mutant the run did not decide (``not checked``, ``Pending``), or a run that reported no
   mutant at all: a cache that hid the run is a run that did not happen;
+- a mutant that timed out and has a register entry: the run could not tell it from a survivor.
+  A timeout nobody registered counts as a kill, as both tools count it;
 - an entry without the tool, the identity, a ``sha256:`` hash, a reason of twenty characters or
   more and a date.
 
+An entry excuses one mutant. Entries and live mutants match one to one, so a register with fewer
+entries than live mutants is red and names the unmatched ones, and an entry listed twice is stale
+the second time.
+
 The identity is the mutant's name as the tool prints it (mutmut), or
-``<file>:<mutator>:<replacement>`` where the tool numbers mutants per run (stryker). The
-function hash is the SHA-256 of the enclosing function's AST (mutmut; the same recipe mutmut
-uses for its own cache), or of the enclosing top-level declaration's text (stryker, from the
-``source`` the report carries). For every unregistered survivor the gate prints the entry to
-paste, hash included.
+``<file>:<mutator>:<replacement>@<l>:<c>-<l>:<c>`` where the tool numbers mutants per run
+(stryker). The suffix is the mutant's start and end inside its unit, lines counted from the unit's
+first line (1), so an edit elsewhere in the file leaves the entry valid, and an edit inside the
+unit changes the hash. A stryker entry without the suffix is the old identity: it is red, named,
+and lists the live mutants it matched. The function hash is the SHA-256 of the enclosing
+function's AST (mutmut; the same recipe mutmut uses for its own cache), or of the enclosing
+top-level declaration's text (stryker, from the ``source`` the report carries). For every
+unregistered survivor the gate prints the entry to paste, hash included.
 
 A partial run judges only its scope: for mutmut, the ``--only`` patterns the run was given
 (``fnmatch`` over mutant names, as ``mutmut run`` takes them); for stryker, the files in the
@@ -47,6 +56,7 @@ import json
 import re
 import sys
 import tomllib
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,7 +69,9 @@ PYPROJECT = Path("pyproject.toml")
 MIN_REASON = 20
 LIVE = {"mutmut": {"survived", "no tests"}, "stryker": {"Survived", "NoCoverage"}}
 UNDECIDED = {"mutmut": {"not checked"}, "stryker": {"Pending"}}
-KILLED = {"mutmut": {"killed", "timeout"}, "stryker": {"Killed", "Timeout"}}
+TIMED_OUT = {"mutmut": {"timeout"}, "stryker": {"Timeout"}}
+KILLED = {"mutmut": {"killed", *TIMED_OUT["mutmut"]}, "stryker": {"Killed", *TIMED_OUT["stryker"]}}
+POSITION = re.compile(r"@(?:\d+:\d+-\d+:\d+|\?)$")
 TOOLS = tuple(LIVE)
 MUTMUT_LINE = re.compile(
     r"^\s*(?P<name>\S.*?): "
@@ -271,25 +283,48 @@ def stryker_mutants(report: dict[str, object]) -> list[Mutant]:
             if not isinstance(mutant, dict):
                 continue
             replacement = " ".join(str(mutant.get("replacement", "")).split())[:REPLACEMENT_WIDTH]
-            identity = f"{path}:{mutant.get('mutatorName', '?')}:{replacement}"
-            line = _start_line(mutant)
-            found.append(Mutant(identity, str(mutant.get("status", "")), unit_hash(source, line)))
+            start, _ = unit_bounds(source, _start_line(mutant))
+            identity = (
+                f"{path}:{mutant.get('mutatorName', '?')}:{replacement}"
+                f"@{_place(mutant, first_line=start + 1)}"
+            )
+            found.append(
+                Mutant(
+                    identity, str(mutant.get("status", "")), unit_hash(source, _start_line(mutant))
+                )
+            )
     return found
 
 
 def _start_line(mutant: dict[str, object]) -> int:
-    location = mutant.get("location")
-    start = location.get("start") if isinstance(location, dict) else None
-    line = start.get("line") if isinstance(start, dict) else None
+    start = _point(mutant, "start")
+    line = start.get("line")
     return line if isinstance(line, int) and line > 0 else 1
 
 
-def unit_hash(lines: list[str], line: int) -> str:
-    """``sha256:`` of the top-level declaration enclosing ``line`` (1-based), trailing space cut."""
+def _point(mutant: dict[str, object], end: str) -> dict[str, object]:
+    """The ``start`` or ``end`` position the report gives for a mutant; empty when it gives none."""
+    location = mutant.get("location")
+    point = location.get(end) if isinstance(location, dict) else None
+    return point if isinstance(point, dict) else {}
+
+
+def _place(mutant: dict[str, object], *, first_line: int) -> str:
+    """``line:column-line:column`` of the mutant, lines counted from its unit's first line (1)."""
+    given = [_point(mutant, end).get(key) for end in ("start", "end") for key in ("line", "column")]
+    numbers = [n for n in given if isinstance(n, int)]
+    if len(numbers) != len(given):
+        return "?"
+    start_line, start_column, end_line, end_column = numbers
+    shift = first_line - 1
+    return f"{start_line - shift}:{start_column}-{end_line - shift}:{end_column}"
+
+
+def unit_bounds(lines: list[str], line: int) -> tuple[int, int]:
+    """Zero-based ``[start, end)`` rows of the top-level declaration enclosing 1-based ``line``."""
     if not lines:
-        return "unknown"
-    index = min(line, len(lines)) - 1
-    start = index
+        return 0, 0
+    start = min(line, len(lines)) - 1
     while start > 0 and not _opens_unit(lines[start]):
         start -= 1
     end = start + 1
@@ -297,6 +332,14 @@ def unit_hash(lines: list[str], line: int) -> str:
         end += 1
     if end < len(lines) and _closes_unit(lines[end]):
         end += 1
+    return start, end
+
+
+def unit_hash(lines: list[str], line: int) -> str:
+    """``sha256:`` of the top-level declaration enclosing ``line`` (1-based), trailing space cut."""
+    if not lines:
+        return "unknown"
+    start, end = unit_bounds(lines, line)
     text = "\n".join(line.rstrip() for line in lines[start:end])
     return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
@@ -377,35 +420,71 @@ def judge(tool: str, mutants: list[Mutant], found: list[Entry], *, scope: list[s
     if not mutants:
         return [f"{tool}: no mutant reported; the run did not happen or its results were not read"]
     problems = []
-    live = {(m.identity, m.function_hash) for m in mutants if m.status in LIVE[tool]}
+    live = [m for m in mutants if m.status in LIVE[tool]]
     mine = [
         e
         for e in found
         if e.tool == tool and in_scope(e.identity, tool, scope=scope, mutants=mutants)
     ]
-    registered = {(e.identity, e.function_hash) for e in mine}
+    unclaimed = Counter(_key(e) for e in mine)
     for mutant in mutants:
         if mutant.status in UNDECIDED[tool]:
             problems.append(f"{mutant.identity}: {mutant.status}; the run did not decide it")
-        elif (
-            mutant.status in LIVE[tool]
-            and (mutant.identity, mutant.function_hash) not in registered
-        ):
+        elif mutant.status in LIVE[tool] and not _claim(unclaimed, mutant):
             problems.append(
                 f"{mutant.identity}: {mutant.status} and not in {REGISTER}; to register:\n"
                 f"{stanza(tool, mutant)}"
             )
     problems.extend(
-        f"{entry.identity}: register entry is stale; the mutant is killed, gone or its function"
-        " changed"
-        for entry in mine
-        if (entry.identity, entry.function_hash) not in live
+        f"{mutant.identity}: {mutant.status}; the run could not tell it from a survivor, and the"
+        " register has an entry for it; rerun it with less load, and if it times out again on its"
+        " own, remove the entry"
+        for mutant in mutants
+        if mutant.status in TIMED_OUT[tool] and _claim(unclaimed, mutant)
     )
+    problems.extend(_stale(tool, entry, live) for entry in mine if _claim(unclaimed, entry))
     killed = sum(m.status in KILLED[tool] for m in mutants)
     print(
         f"{tool}: {killed}/{len(mutants)} killed, {len(live)} live, {len(mine)} registered in scope"
     )
     return problems
+
+
+def _key(item: Mutant | Entry) -> tuple[str, str]:
+    return item.identity, item.function_hash
+
+
+def _claim(unclaimed: Counter[tuple[str, str]], item: Mutant | Entry) -> bool:
+    """Take one register entry for ``item`` if one is left: an entry excuses one mutant."""
+    if unclaimed[_key(item)] <= 0:
+        return False
+    unclaimed[_key(item)] -= 1
+    return True
+
+
+def _stale(tool: str, entry: Entry, live: list[Mutant]) -> str:
+    """Why an entry that no mutant claimed is red: the old identity form, or stale as ever."""
+    if tool == "stryker" and POSITION.search(entry.identity) is None:
+        matched = [
+            m.identity
+            for m in live
+            if POSITION.sub("", m.identity) == entry.identity
+            and m.function_hash == entry.function_hash
+        ]
+        outcome = (
+            f"it matched {', '.join(matched)}; replace it by one entry for each of those you"
+            " judge equivalent"
+            if matched
+            else "it matched nothing live; remove it"
+        )
+        return (
+            f"{entry.identity}: register entry has the old identity, without a position, so it"
+            f" cannot say which mutant it excuses; {outcome}"
+        )
+    return (
+        f"{entry.identity}: register entry is stale; the mutant is killed, gone, its function"
+        " changed, or the register lists it more than once"
+    )
 
 
 def in_scope(identity: str, tool: str, *, scope: list[str], mutants: list[Mutant]) -> bool:

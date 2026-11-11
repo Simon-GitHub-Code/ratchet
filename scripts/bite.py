@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import http.server
 import io
+import json
 import os
 import shlex
 import subprocess
@@ -80,11 +81,10 @@ FLAG = (
 BINDING = "# Binding\n\n- Default branch: `main`\n"
 HOOK = '#!/bin/sh\n[ -n "$RATCHET_HOOK_PROBE" ] && echo {name} > "$RATCHET_HOOK_PROBE"\nexit 0\n'
 RESULTS = "    a.x_f__mutmut_1: killed\n    a.x_f__mutmut_2: {status}\n"
-REGISTER = (
-    '# Mutation register\n\n[[survivor]]\ntool = "mutmut"\nidentity = "a.x_f__mutmut_1"\n'
-    'function_hash = "{function_hash}"\n'
-    'reason = "Equivalent: the operands commute at every call site."\ndate = 2026-11-07\n'
-)
+REGISTER_PATH = "quality/mutation-register.toml"
+REGISTER = "# Mutation register\n\n{entry}\n"
+STRYKER_REPORT = "reports/mutation/mutation.json"
+TS = "export function f(a: number) {\n  return a > 0 && a < 9;\n}\n"
 REPORT = (
     '<?xml version="1.0"?><coverage><sources><source>{root}</source></sources><packages>'
     '<package><classes><class filename="src/a.py"><lines>'
@@ -119,7 +119,8 @@ def scratch(root: Path) -> None:
     write(root, WORKFLOW, PINNED)
     write(root, "coverage.xml", REPORT.format(root=root, hits=1, cond=100, total=1))
     write(root, "mutants.txt", RESULTS.format(status="killed"))
-    write(root, "quality/mutation-register.toml", "# Mutation register\n")
+    write(root, REGISTER_PATH, "# Mutation register\n")
+    stryker_report(root, "Killed")
     write(root, "tickets/01-add-the-thing.md", TICKET)
     write(root, "flags.toml", "# No flags yet.\n")
     write(root, "docs/process/binding.md", BINDING)
@@ -156,9 +157,68 @@ def survivor(root: Path) -> None:
     write(root, "mutants.txt", RESULTS.format(status="survived"))
 
 
+def entry(tool: str, identity: str, function_hash: str) -> str:
+    return (
+        f'[[survivor]]\ntool = "{tool}"\nidentity = "{identity}"\n'
+        f'function_hash = "{function_hash}"\n'
+        'reason = "Equivalent: the operands commute at every call site."\ndate = 2026-11-07\n'
+    )
+
+
 def stale_entry(root: Path) -> None:
     function_hash = mutation_survivors.python_function_hash(root, "a", "x_f")
-    write(root, "quality/mutation-register.toml", REGISTER.format(function_hash=function_hash))
+    write(
+        root,
+        REGISTER_PATH,
+        REGISTER.format(entry=entry("mutmut", "a.x_f__mutmut_1", function_hash)),
+    )
+
+
+def stryker_report(root: Path, *statuses: str) -> list[mutation_survivors.Mutant]:
+    """The json report with one mutant per status, all of one mutator and replacement."""
+    mutants = [
+        {
+            "id": str(n),
+            "mutatorName": "ConditionalExpression",
+            "replacement": "true",
+            "status": status,
+            "location": {
+                "start": {"line": 2, "column": 10 * n},
+                "end": {"line": 2, "column": 10 * n + 5},
+            },
+        }
+        for n, status in enumerate(statuses, 1)
+    ]
+    report: dict[str, object] = {
+        "files": {"src/a.ts": {"language": "typescript", "source": TS, "mutants": mutants}}
+    }
+    write(root, STRYKER_REPORT, json.dumps(report))
+    return mutation_survivors.stryker_mutants(report)
+
+
+def register_stryker(root: Path, *identities: tuple[str, str]) -> None:
+    write(
+        root,
+        REGISTER_PATH,
+        REGISTER.format(entry="\n".join(entry("stryker", *pair) for pair in identities)),
+    )
+
+
+def twin_survivors(root: Path) -> None:
+    first, _ = stryker_report(root, "Survived", "Survived")
+    register_stryker(root, (first.identity, first.function_hash))
+
+
+def entry_without_position(root: Path) -> None:
+    (only,) = stryker_report(root, "Survived")
+    old = mutation_survivors.POSITION.sub("", only.identity)
+    register_stryker(root, (old, only.function_hash))
+
+
+def timed_out_entry(root: Path) -> None:
+    (only,) = stryker_report(root, "Survived")
+    register_stryker(root, (only.identity, only.function_hash))
+    stryker_report(root, "Timeout")
 
 
 def no_conjecture(root: Path) -> None:
@@ -240,6 +300,7 @@ def foreign_deny(root: Path) -> None:
 
 
 MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
+STRYKER = ["--tool", "stryker"]
 TICKET_REF = ["tickets/01-add-the-thing.md"]
 ADDITIVE = ["--fail-unless-additive"]
 SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
@@ -254,6 +315,19 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("coverage", coverage_groups.main, uncovered, []),
     ("mutation: a survivor", mutation_survivors.main, survivor, MUTMUT),
     ("mutation: a stale entry", mutation_survivors.main, stale_entry, MUTMUT),
+    ("mutation: two survivors, one entry", mutation_survivors.main, twin_survivors, STRYKER),
+    (
+        "mutation: an entry without a position",
+        mutation_survivors.main,
+        entry_without_position,
+        STRYKER,
+    ),
+    (
+        "mutation: a registered survivor that timed out",
+        mutation_survivors.main,
+        timed_out_entry,
+        STRYKER,
+    ),
     ("ratchet-lowered", lowered.main, lowered_threshold, []),
     ("feature-preflight: no conjecture", feature_preflight.main, no_conjecture, TICKET_REF),
     ("feature-preflight: not agent-ready", feature_preflight.main, not_agent_ready, TICKET_REF),

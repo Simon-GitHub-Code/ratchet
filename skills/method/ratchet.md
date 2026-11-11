@@ -49,9 +49,12 @@ reason = "Equivalent: the branch rounds a value that is already integral here."
 date = 2026-11-06
 ```
 
-- The identity is stable: the mutant's name plus a hash of its enclosing function (or file, mutator and replacement plus a hash of the enclosing unit where the tool numbers mutants per run). The plugin's `scripts/mutation_survivors.py` computes both and prints the entry to paste for every unregistered survivor; a partial run judges only its scope.
+- The identity is stable: the mutant's name plus a hash of its enclosing function. Where the tool numbers mutants per run (stryker), it is the file, the mutator, the replacement and the mutant's place in its unit, `@<line>:<column>-<line>:<column>` counted from the unit's first line, plus a hash of the unit. An edit elsewhere in the file leaves the entry valid; an edit inside the unit changes the hash. The plugin's `scripts/mutation_survivors.py` computes both and prints the entry to paste for every unregistered survivor; a partial run judges only its scope.
+- An entry excuses one mutant. Entries and live survivors match one to one: a register with fewer entries than live survivors is red and names the unmatched ones, so a second survivor added to a function with a registered one needs an entry of its own.
 - The reason has twenty characters or more. The honesty of the reason is for the owner's review; the register is a guard path.
 - An entry whose mutant is now killed, gone, or whose function hash changed is stale and fails. Editing a function forces its equivalents to be reviewed again.
+- A mutant that timed out counts as killed, as both tools count it, unless the register holds an entry for it. Then the run cannot tell it from a survivor: the gate is red and says so, and the answer is to rerun it with less load. If it times out again on its own, it is killed: remove the entry.
+- Registers written before the place was part of the identity hold stryker entries without the `@` suffix. Each is red until replaced: the gate names it as the old identity, lists the live mutants it matched, and prints an entry to paste for each unregistered survivor. The owner reviews them and writes one entry per mutant they judge equivalent, with a reason of their own. Nothing carries over unreviewed. Entries for mutmut keep their identity.
 - Pull requests mutate changed functions (tier 1). The default branch mutates everything on the absolute paths (tier 2).
 
 ## 5. Effective configuration is snapshotted
