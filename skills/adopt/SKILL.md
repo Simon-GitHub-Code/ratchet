@@ -1,6 +1,6 @@
 ---
 name: adopt
-description: Bring a repository onto the Ratchet method: initialise it, copy the method's artefacts, write the binding for this runner, forge and stack, and leave the entry points red until every gate is bound or accepted as none.
+description: "Bring a repository onto the Ratchet method: initialise it, copy the method's artefacts, write the binding for this runner, forge and stack, and leave the entry points red until every gate is bound or accepted as none."
 disable-model-invocation: true
 ---
 

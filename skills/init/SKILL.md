@@ -1,6 +1,6 @@
 ---
 name: init
-description: Lay down the bare bones any repository needs before agents build in it: a git repository, an AGENTS.md that names the four plugins composed here and what each owns, CLAUDE.md as a symlink to it, the pstack and impeccable one-time setups, the first commit and the remote; then the next command for the owner to type. Two owner dialogs by default; `interactive` asks everything.
+description: "Lay down the bare bones any repository needs before agents build in it: a git repository, an AGENTS.md that names the four plugins composed here and what each owns, CLAUDE.md as a symlink to it, the pstack and impeccable one-time setups, the first commit and the remote; then the next command for the owner to type. Two owner dialogs by default; `interactive` asks everything."
 disable-model-invocation: true
 ---
 
