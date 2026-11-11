@@ -12,13 +12,16 @@ Usage: ``bite.py``. Exits 1 when any gate fails to bite or fails to pass.
 
 from __future__ import annotations
 
+import http.server
 import io
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
-from contextlib import redirect_stderr, redirect_stdout
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -28,6 +31,7 @@ import coverage_groups
 import feature_preflight
 import flags
 import hooks_installed
+import load_smoke
 import lowered
 import markers
 import mutation_survivors
@@ -36,6 +40,8 @@ import prose
 import settings_rules
 import snapshots
 import suppressions
+import telemetry_sink
+import with_service
 
 # Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -261,9 +267,88 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
 ]
 
 
+SERVE = (
+    "import os, http.server as h; "
+    "h.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), "
+    "h.SimpleHTTPRequestHandler).serve_forever()"
+)
+EXPORT = (
+    "import json, os, urllib.request as u; "
+    "body = {'resourceSpans': [{'resource': {'attributes': [{'key': 'service.name', "
+    "'value': {'stringValue': 'bite'}}]}, 'scopeSpans': [{'spans': [{}]}]}]}; "
+    "u.urlopen(u.Request(os.environ['OTEL_EXPORTER_OTLP_ENDPOINT'] + '/v1/traces', "
+    "json.dumps(body).encode(), {'Content-Type': 'application/json'})).close()"
+)
+
+
+def python(code: str) -> str:
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
+
+
+READY = "http://127.0.0.1:{port}/"
+LOAD = ["--seconds", "0.5", "--concurrency", "2", "--min-requests", "1"]
+SINK = ["--service", "bite", "--require", "traces"]
+SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
+    (
+        "smoke: a service that never answers",
+        with_service.main,
+        ["--boot", python(SERVE), "--ready", READY],
+        ["--boot", python("import time; time.sleep(30)"), "--ready", READY, "--timeout", "0.5"],
+    ),
+    (
+        "load-smoke: a 500 under load",
+        load_smoke.main,
+        ["--url", "{stub}/ok", *LOAD],
+        ["--url", "{stub}/boom", *LOAD],
+    ),
+    (
+        "telemetry-sink: no telemetry",
+        telemetry_sink.main,
+        [*SINK, "--wait", "5", "--", sys.executable, "-c", EXPORT],
+        [*SINK, "--wait", "0.3", "--", sys.executable, "-c", ""],
+    ),
+]
+
+
+@contextmanager
+def stub_service() -> Iterator[str]:
+    """A loopback server that answers 200, and 500 on ``/boom``; its base URL."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(500 if self.path == "/boom" else 200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002 # -- the override
+            """Say nothing."""
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_address[1]}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join()
+
+
+def run_service(gate: Gate, arguments: list[str], stub: str) -> int:
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        return gate(["gate", *(argument.replace("{stub}", stub) for argument in arguments)])
+
+
 def run(gate: Gate, root: Path, flags: list[str]) -> int:
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         return gate(["gate", "--root", str(root), *flags])
+
+
+def verdict(label: str, *, green: bool, red: bool) -> bool:
+    """Print the scenario's line; whether the gate bit and passed."""
+    text = "bites" if red and green else "DOES NOT BITE" if green else "RED ON CLEAN STATE"
+    print(f"bite: {label}: {text}")
+    return red and green
 
 
 def bite(scratch_dir: Path) -> int:
@@ -288,9 +373,12 @@ def scenarios(scratch_dir: Path) -> int:
         green = run(gate, root, options) == 0
         violate(root)
         red = run(gate, root, options) != 0
-        verdict = "bites" if red and green else "DOES NOT BITE" if green else "RED ON CLEAN STATE"
-        print(f"bite: {label}: {verdict}")
-        failures += not (red and green)
+        failures += not verdict(label, green=green, red=red)
+    with stub_service() as url:
+        for label, gate, healthy, violating in SERVICE_SCENARIOS:
+            green = run_service(gate, healthy, url) == 0
+            red = run_service(gate, violating, url) != 0
+            failures += not verdict(label, green=green, red=red)
     return 1 if failures else 0
 
 

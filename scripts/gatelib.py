@@ -9,12 +9,24 @@ is the merge base, before is ``HEAD~1``. ``lowered``, ``guard-diff`` and the gat
 
 from __future__ import annotations
 
+import contextlib
 import fnmatch
+import os
 import re
+import signal
+import socket
 import subprocess
+import time
 import tomllib
 from functools import lru_cache
+from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from types import FrameType
 
 FALLBACK_BRANCHES = ("main", "master")
 BINDING = Path("docs/process/binding.md")
@@ -202,3 +214,123 @@ def report(name: str, problems: list[str], against: str | None = None) -> int:
     where = f" against {against[:12]}" if against else ""
     print(f"{name}: {'red' if problems else 'green'}{where}")
     return 1 if problems else 0
+
+
+class Interrupted(Exception):  # noqa: N818 # -- a signal, not a fault
+    """A signal the gate was asked to stop on; ``signum`` says which."""
+
+    def __init__(self, signum: int) -> None:
+        """Remember the signal number."""
+        super().__init__(f"interrupted by signal {signum}")
+        self.signum = signum
+
+
+@contextlib.contextmanager
+def interrupts_raise() -> Iterator[None]:
+    """Turn SIGINT, SIGTERM and SIGHUP into ``Interrupted`` once, so ``finally`` blocks run.
+
+    The first signal raises; later ones are ignored, so a second Ctrl-C cannot cut the cleanup
+    short. The previous handlers come back on exit. SIGKILL cannot be caught by anything.
+    """
+    fired = False
+
+    def handler(signum: int, frame: FrameType | None) -> None:
+        nonlocal fired
+        del frame
+        if not fired:
+            fired = True
+            raise Interrupted(signum)
+
+    names = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    previous = [(name, signal.signal(name, handler)) for name in names]
+    try:
+        yield
+    finally:
+        for name, old in previous:
+            signal.signal(name, old)
+
+
+def free_port() -> int:
+    """A TCP port nothing listens on now, picked by the kernel on the loopback interface."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]
+    return port
+
+
+def listening(url: str) -> bool:
+    """Whether something accepts a TCP connection at the host and port of ``url``."""
+    parts = urlsplit(url)
+    default = 443 if parts.scheme == "https" else 80
+    try:
+        socket.create_connection((parts.hostname or "", parts.port or default), timeout=1).close()
+    except OSError:
+        return False
+    return True
+
+
+def stop_group(process: subprocess.Popen[bytes], grace: float = 5.0, settle: float = 1.0) -> None:
+    """Stop a process started with ``start_new_session=True`` and everything it forked.
+
+    SIGTERM goes to the whole process group. The leader gets ``grace`` seconds to exit, any
+    other member ``settle`` more, then SIGKILL ends what is left. Returns with the leader reaped.
+    """
+
+    def signal_group(signum: int) -> bool:
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            return False
+        return True
+
+    signal_group(signal.SIGTERM)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=grace)
+    deadline = time.monotonic() + settle
+    while process.poll() is not None and signal_group(0) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    signal_group(signal.SIGKILL)
+    process.wait()
+
+
+def run_command(command: list[str], env: dict[str, str]) -> tuple[int, list[str]]:
+    """Run ``command`` in a session of its own: its exit code, and what went wrong.
+
+    A command ended by a signal exits 128 plus the signal, as a shell reports it.
+
+    A signal that interrupts the wait stops the command's whole process group before it
+    propagates.
+    """
+    try:
+        inner = subprocess.Popen(command, env=env, start_new_session=True)
+    except OSError as error:
+        return 1, [f"cannot run {command[0]}: {error}"]
+    try:
+        code = inner.wait()
+    except BaseException:
+        stop_group(inner)
+        raise
+    code = 128 - code if code < 0 else code
+    return code, ([] if code == 0 else [f"the command exited with code {code}"])
+
+
+def http_status(method: str, url: str, *, body: bytes | None = None, timeout: float = 5.0) -> int:
+    """The status of one request, redirects not followed; raises ``OSError`` or ``HTTPException``.
+
+    ``http`` and ``https`` only. A body is sent as JSON.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        message = f"not an http(s) URL with a host: {url}"
+        raise ValueError(message)
+    connect = HTTPSConnection if parts.scheme == "https" else HTTPConnection
+    connection = connect(parts.hostname, parts.port, timeout=timeout)
+    target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+    headers = {"Content-Type": "application/json"} if body is not None else {}
+    try:
+        connection.request(method, target, body=body, headers=headers)
+        response = connection.getresponse()
+        response.read()
+        return response.status
+    finally:
+        connection.close()

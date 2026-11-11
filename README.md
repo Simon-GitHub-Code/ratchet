@@ -24,6 +24,9 @@ It composes with three other plugins and competes with none. `mattpocock-skills`
 | `scripts/lowered.py` | tier 0 gate: no threshold lowered and no ceiling raised against the merge base |
 | `scripts/flags.py` | tier 0 gate: every feature flag in `flags.toml` is declared once, owned and off when new; `--expired` asks the calendar in tier 2 |
 | `scripts/budget.py` | the speed gate: a tier or gate against its ceiling in seconds; `--set` records the first ceiling |
+| `scripts/with_service.py` | boots a deliverable by any command, waits until a URL answers, runs a command against it and stops the whole process tree; with no command it is the `smoke` gate |
+| `scripts/load_smoke.py` | tier 1 gate: seconds of concurrent requests against a running service, judged on errors only, never on latency |
+| `scripts/telemetry_sink.py` | an OTLP/HTTP receiver that is green only when traces, metrics and logs arrived non-empty for the expected `service.name`; no collector to install |
 | `scripts/adapter.py` | wires the guard into Codex or OpenCode when the harness does not load the plugin's hooks |
 | `adapters/` | the pi extension and the OpenCode plugin that translate a tool call into the guard's JSON |
 | `docs/harness/` | one page per harness: install commands, how the guard is wired, the names mapped, what was verified |
