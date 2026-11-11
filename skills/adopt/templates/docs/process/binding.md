@@ -39,7 +39,9 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 
 ## Gates
 
-One row per question the method asks. The Tool cell names the tool for this stack, or `none` with the reason and the ADR that accepts the gap; an accepted `none` is green and stays a standing criticism of the binding. An empty Tool cell is an unfinished binding.
+- Application types: <one or more of `service`, `web-ui`, `app`, `cli`, `job`, `library`>
+
+One row per question the method asks. The application types decide which rows apply (`skills/method/application-types.toml` in the `ratchet` plugin); they never decide the tool. A row that applies names the tool for this stack, or `none` with the reason and the ADR that accepts the gap: green, and a standing criticism of the binding. A row that does not apply says `none: not a <type>`, naming a type the question is asked of, and needs no ADR. A row is never dropped, and an empty Tool cell is an unfinished binding: the conformance gate is red on both.
 
 | Question | Tool | Tier | Threshold source | Entry point |
 | --- | --- | --- | --- | --- |
@@ -68,10 +70,10 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | shipped-dependency audit | | 1 | any advisory fails | `just audit` |
 | duplication | | 1 | | `just duplication` |
 | build | | 1 | | `just build` |
-| starts and answers | | 1 | | `just smoke` |
+| starts and answers | `ratchet` plugin `scripts/with_service.py` on the runner's `boot` and `ready` | 1 | | `just smoke` |
 | telemetry emitted | | 1 | the Telemetry section below | `just telemetry` |
 | changed flags off and on | | 1 | `flags.toml` against the merge base | `just flag-states` |
-| load smoke | | 1 | zero errors | `just load-smoke` |
+| load smoke | `ratchet` plugin `scripts/load_smoke.py` inside `with_service.py` | 1 | zero errors; the Limits section below | `just load-smoke` |
 | every checker bites | `ratchet` plugin `scripts/bite.py` plus the project's own | 1 | | `just bite` |
 | public surface changed on purpose | | 1 | `quality/snapshots/` | `just api-check` |
 | old data still loads | | 1 | | `just data-compat` |
@@ -97,7 +99,7 @@ One row per question the method asks. The Tool cell names the tool for this stac
 | dynamic security scan | | 2 | | `just dast` |
 | active security scan | | 2 | | `just pentest` |
 | load | | 2 | the Limits section below | `just load` |
-| telemetry arrives | | 2 | the Telemetry section below | `just telemetry-e2e` |
+| telemetry arrives | `ratchet` plugin `scripts/telemetry_sink.py` around `with_service.py` | 2 | the Telemetry section below | `just telemetry-e2e` |
 | no flag past its removal date | `ratchet` plugin `scripts/flags.py --expired` | 2 | `flags.toml` | `just flags-expired` |
 | accessibility | | 2 | | `just a11y` |
 | formal verification | | 2 | the project-local verification skill | `just formal` |
@@ -120,7 +122,14 @@ One row per question the method asks. The Tool cell names the tool for this stac
 
 ## Speed
 
-<The ceilings: `quality/thresholds.toml` `[ceilings.seconds]`, one per tier, set by `just budget <tier> --set` from the first green run and only lowered since. The cache keys: the lockfile(s) and tool configs each CI job's cache is keyed on, and the tool caches it restores. The shard counts: each suite over the budget below, its tool and its runner count. The affected-only tool, if any, and the path filters. The budget: the seconds a single gate may take before it is sharded.>
+How this repository stays fast, from the first commit ([tiers.md](../../../skills/method/tiers.md#speed)). One line per concept, each saying how this stack meets it; the conformance gate is red while a line is missing or unfilled. The `Shards` line holds a whole number and nothing else: the CI workflows read it and run each long gate as that many jobs, so adding runners is this one number.
+
+- Parallel: <how the suite uses every core on a developer's machine and in CI, what keeps the tests isolated enough for that, and how a tier's gates run at once>
+- One pipeline: <CI calls the entry points above and nothing else, so a red job is reproduced by its one command; or the pipeline engine that runs the same definition in both places>
+- Shards: 1
+- Cache: <the lockfiles and tool configs each CI cache is keyed on, the tool caches it restores, and the caches the tools keep locally>
+- Affected only: <what a pull request does not run: the changed-code gates, the path filters, the affected-only tool of a monorepo; the default branch runs everything>
+- Ceilings: <`quality/thresholds.toml` `[ceilings.seconds]`, one per tier, set by `just budget <tier> --set` from the first green run and only lowered since; the seconds one gate may take before it is sharded>
 
 ## Weekly and advisory
 

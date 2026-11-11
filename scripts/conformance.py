@@ -16,6 +16,7 @@ import tomllib
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+import application_types
 import hooks_installed
 import settings_rules
 
@@ -40,6 +41,13 @@ ENTRY_POINTS = (
     "budget",
 )
 SPEED_SECTION = "## Speed"
+# Why: ADR 0019. Speed is asked by concept from the first commit; the binding says how this
+# stack meets each one, and CI reads the shard count from the `- Shards:` line.
+SPEED_PARTS = ("Parallel", "One pipeline", "Shards", "Cache", "Affected only", "Ceilings")
+SPEED_PART = re.compile(r"^- ([A-Z][a-z ]+):[ \t]*(.*)$", re.MULTILINE)
+SHARD_COUNT = re.compile(r"[1-9]\d*")
+TIER_WORKFLOWS = ("ci.yml", "deep.yml")
+SHARD_MATRIX = "matrix.shard"
 # Why: ADR 0012. These questions are asked of every repository from the first commit; a binding
 # may answer one with `none` and a reason, but may not drop the row.
 OPERABILITY_QUESTIONS = (
@@ -100,7 +108,6 @@ TABLE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|")
 # the path with a clause, so the line is read up to the closing backtick.
 PR_TEMPLATE_LINE = re.compile(r"^- (?:Pull request|Change) template: `([^`]+)`", re.MULTILINE)
 DEFAULT_PR_TEMPLATE = ".github/pull_request_template.md"
-NONE_REASON = re.compile(r"^none\b[\s,:;-]*(.*)$")
 NUMBERED = re.compile(r"^(\d{4})-[a-z0-9-]+\.md$")
 MIN_REASON = 10
 MIN_REGISTER_REASON = 20
@@ -189,7 +196,7 @@ def check_adr(number: int, path: Path, rel: Path) -> Iterable[str]:
     if number == 1:
         for placeholder in ADR_PLACEHOLDERS:
             if placeholder in text:
-                yield f"{rel}: still carries '{placeholder}'; adopt step 9 fills the plugin version"
+                yield f"{rel}: still carries '{placeholder}'; adopt fills the plugin version"
 
 
 def section(text: str, heading: str) -> str:
@@ -208,10 +215,11 @@ def empty_body(text: str, heading: str) -> bool:
 
 
 def table_cells(body: str) -> list[tuple[str, str]]:
+    """The first two cells of every row under the header; an empty second cell is kept."""
     rows = []
     for line in body.splitlines():
         match = TABLE_ROW.match(line)
-        if match and not set(match.group(2)) <= set("-: ") and match.group(1) != "---":
+        if match and not set(match.group(1)) <= set("-: "):
             rows.append((match.group(1), match.group(2)))
     return rows[1:]
 
@@ -229,13 +237,12 @@ def check_binding(root: Path) -> Iterable[str]:
     gates = section(text, "## Gates")
     if not gates:
         yield "docs/process/binding.md: has no '## Gates' section"
-    for question, tool in table_cells(gates):
-        match = NONE_REASON.match(tool)
-        if match and len(match.group(1)) < MIN_REASON:
-            yield (
-                f"docs/process/binding.md: gate '{question}' is bound to none without a reason "
-                f"of {MIN_REASON}+ characters"
-            )
+        return
+    # Why: ADR 0017. The types decide which rows apply; a row that applies is bound or an
+    # accepted gap, and one that does not may say which type the repository is not.
+    adrs = {number for number, _ in numbered_files(root / "docs/adr")}
+    for failure in application_types.load().failures(text, table_cells(gates), adrs):
+        yield f"docs/process/binding.md: {failure}"
 
 
 def check_operability(root: Path) -> Iterable[str]:
@@ -261,6 +268,8 @@ def check_speed(root: Path) -> Iterable[str]:
     text = read(root / "docs/process/binding.md") or ""
     if text and SPEED_SECTION not in text:
         yield f"docs/process/binding.md: has no '{SPEED_SECTION}' section (ceilings, shards)"
+    elif text:
+        yield from check_speed_parts(section(text, SPEED_SECTION))
     workflows = root / WORKFLOWS
     if not workflows.is_dir():
         return
@@ -269,6 +278,24 @@ def check_speed(root: Path) -> Iterable[str]:
         for marker, meaning in CI_SHAPE:
             if marker not in content:
                 yield f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)"
+        if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
+            yield (
+                f"{path.relative_to(root)}: no long gate runs over the binding's shard count "
+                f"('{SHARD_MATRIX}' absent)"
+            )
+
+
+def check_speed_parts(body: str) -> Iterable[str]:
+    stated = dict(SPEED_PART.findall(body))
+    for part in SPEED_PARTS:
+        value = stated.get(part, "")
+        if part == "Shards" and not SHARD_COUNT.fullmatch(value):
+            yield (
+                "docs/process/binding.md: the Speed section needs '- Shards: N', a whole "
+                "number alone on its line, 1 on day one; CI reads it"
+            )
+        elif not value or value.startswith("<"):
+            yield f"docs/process/binding.md: the Speed section does not say how '{part}' is met"
 
 
 def check_manifest(root: Path) -> Iterable[str]:
@@ -306,7 +333,7 @@ def check_plugin_checkout(root: Path) -> Iterable[str]:
         if text is not None and PLUGIN_CHECKOUT_PLACEHOLDER in text:
             yield (
                 f"{WORKFLOWS / name}: checks the plugin out at '{PLUGIN_CHECKOUT_PLACEHOLDER}'; "
-                "adopt step 10 fills the commit ADR 0001 names"
+                "adopt fills the commit ADR 0001 names"
             )
 
 
@@ -439,6 +466,8 @@ Mutation = tuple[str, Callable[[Path], None]]
 def mutations() -> list[Mutation]:
     return [
         *artefact_mutations(),
+        *type_mutations(),
+        *speed_mutations(),
         *operability_mutations(),
         *hook_mutations(),
         *guard_mutations(),
@@ -455,25 +484,9 @@ def artefact_mutations() -> list[Mutation]:
         path = root / "docs/process/binding.md"
         path.write_text(path.read_text().replace("| conformance |", "| conform |"))
 
-    def none_without_reason(root: Path) -> None:
-        path = root / "docs/process/binding.md"
-        path.write_text(path.read_text().replace("| format | |", "| format | none |"))
-
     def drop_pr_section(root: Path) -> None:
         path = root / DEFAULT_PR_TEMPLATE
         path.write_text(path.read_text().replace("## Guard paths", "## Guards"))
-
-    def drop_speed_section(root: Path) -> None:
-        path = root / "docs/process/binding.md"
-        path.write_text(path.read_text().replace(SPEED_SECTION, "## Slowness"))
-
-    def ci_without_concurrency(root: Path) -> None:
-        path = root / WORKFLOWS / "ci.yml"
-        path.write_text(path.read_text().replace("concurrency:", "serial:"))
-
-    def ci_without_cache(root: Path) -> None:
-        path = root / WORKFLOWS / "deep.yml"
-        path.write_text(path.read_text().replace("cache", "store"))
 
     def ci_with_the_plugin_at_a_placeholder(root: Path) -> None:
         path = root / WORKFLOWS / "ci.yml"
@@ -486,16 +499,88 @@ def artefact_mutations() -> list[Mutation]:
     return [
         ("AGENTS.md without the method stanza", strip_stanza),
         ("binding without the conformance entry point", drop_entry_point),
-        ("binding with a gate bound to none and no reason", none_without_reason),
         ("pull-request template missing a section", drop_pr_section),
-        ("binding without a Speed section", drop_speed_section),
-        ("CI workflow without concurrency control", ci_without_concurrency),
-        ("CI workflow without a cache", ci_without_cache),
         (
             "CI workflow checking the plugin out at a placeholder",
             ci_with_the_plugin_at_a_placeholder,
         ),
         ("glossary still naming <project>", glossary_naming_the_placeholder),
+    ]
+
+
+def rebind(old: str, new: str) -> Callable[[Path], None]:
+    """A mutation that rewrites one piece of the binding."""
+
+    def mutate(root: Path) -> None:
+        path = root / "docs/process/binding.md"
+        text = path.read_text()
+        if old not in text:
+            message = f"the self-test's binding has no {old!r} to mutate"
+            raise SystemExit(message)
+        path.write_text(text.replace(old, new))
+
+    return mutate
+
+
+def type_mutations() -> list[Mutation]:
+    """The filled binding is a `cli`: `contract drift` is the one row its type leaves out."""
+    types = "- Application types: cli"
+    return [
+        ("binding without an Application types line", rebind(types, "- Kind: cli")),
+        ("binding naming an unknown application type", rebind(types, f"{types}, website")),
+        ("binding with an empty Tool cell", rebind("| format | a tool |", "| format | |")),
+        (
+            "binding with a gate bound to none and no reason",
+            rebind("| format | a tool |", "| format | none |"),
+        ),
+        (
+            "binding with a gate that applies bound to none under no ADR",
+            rebind("| format | a tool |", "| format | none: no formatter exists for it |"),
+        ),
+        (
+            "binding with a gate bound to none under an ADR the repository lacks",
+            rebind("| format | a tool |", "| format | none: no formatter; ADR 0042 |"),
+        ),
+        (
+            "binding saying 'not a service' of a row a service is asked",
+            rebind(types, "- Application types: service"),
+        ),
+        (
+            "binding saying 'not a' type the row is not asked of",
+            rebind("none: not a service |", "none: not a library |"),
+        ),
+        (
+            "binding that drops the row its type leaves out",
+            rebind("| contract drift | none: not a service | 1 | | `just contracts-check` |\n", ""),
+        ),
+    ]
+
+
+def speed_mutations() -> list[Mutation]:
+    def ci_without_concurrency(root: Path) -> None:
+        path = root / WORKFLOWS / "ci.yml"
+        path.write_text(path.read_text().replace("concurrency:", "serial:"))
+
+    def ci_without_cache(root: Path) -> None:
+        path = root / WORKFLOWS / "deep.yml"
+        path.write_text(path.read_text().replace("cache", "store"))
+
+    def ci_without_a_shard_matrix(root: Path) -> None:
+        path = root / WORKFLOWS / "ci.yml"
+        path.write_text(path.read_text().replace(SHARD_MATRIX, "matrix.part"))
+
+    stated = "stated for this stack"
+    return [
+        ("binding without a Speed section", rebind(SPEED_SECTION, "## Slowness")),
+        ("Speed section without a part", rebind("- Cache: ", "- Store: ")),
+        (
+            "Speed section with a part left unfilled",
+            rebind(f"- Parallel: {stated}", "- Parallel: <how>"),
+        ),
+        ("Speed section with no shard count", rebind("- Shards: 1", "- Shards: a few")),
+        ("CI workflow without concurrency control", ci_without_concurrency),
+        ("CI workflow without a cache", ci_without_cache),
+        ("CI workflow without a shard matrix", ci_without_a_shard_matrix),
     ]
 
 
@@ -610,13 +695,26 @@ def record_mutations() -> list[Mutation]:
 
 
 UNBOUND_GROUP = re.compile(r"paths = \[\n(?:\s*# bind:[^\n]*\n)+\]")
+TYPES_PLACEHOLDER = re.compile(r"^- Application types: <[^\n]*>$", re.MULTILINE)
+EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
+SPEED_PLACEHOLDER = re.compile(r"^(- [A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
+
+
+def fill_binding(text: str) -> str:
+    """A command line tool's binding: one row its type leaves out, a tool in every other."""
+    text = TYPES_PLACEHOLDER.sub("- Application types: cli", text)
+    text = text.replace("| contract drift | |", "| contract drift | none: not a service |")
+    text = EMPTY_TOOL_CELL.sub(r"\1 a tool |", text)
+    return SPEED_PLACEHOLDER.sub(r"\1stated for this stack", text)
 
 
 def fill_placeholders(root: Path) -> None:
-    """Stand in for adopt on a template copy: bind every group adopt would have bound."""
+    """Stand in for adopt on a template copy: bind every group and row adopt would have bound."""
     path = root / "guards/manifest.toml"
     path.write_text(UNBOUND_GROUP.sub('paths = [\n    "bound/**",\n]', path.read_text()))
     settings_rules.write(root)
+    binding = root / "docs/process/binding.md"
+    binding.write_text(fill_binding(binding.read_text()))
     fills = {
         "docs/adr/0001-adopt-the-ratchet-method.md": {
             "<X.Y.Z>": "0.0.0",

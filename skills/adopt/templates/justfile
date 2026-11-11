@@ -1,6 +1,7 @@
 # The `just` example of the method's entry points. `just` lists every recipe; CI runs these same
 # recipes. Bodies are the binding's job: fill each with the tool docs/process/binding.md names. A
-# gate the binding binds to `none` with a reason becomes `@echo "none: <reason>"` and exits 0.
+# gate the binding binds to `none` becomes `@echo "none: <reason>"` and exits 0. Any other gate
+# with nothing to run is red: no test, no benchmark or no fuzz target is a failure, never a pass.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -10,6 +11,24 @@ ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", home_directory() / ".clau
 # What the diff gates compare against: the remote default branch, else the local one when the
 # repository has no remote.
 merge_base := `git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || true`
+
+# The deliverable as a running thing, for the three service gates the plugin ships (`smoke`,
+# `load-smoke`, `telemetry-e2e`): the command that starts it in the foreground, the URL that
+# answers below 400 once it is up, the seconds it may take to get there, and the `service.name` its
+# telemetry carries. `{port}` becomes a free port, exported as PORT, so parallel runs never
+# collide. The boot command builds what it runs: in CI each gate is a job of its own, with nothing
+# another recipe built. A repository with nothing to boot sets `boot`, `ready` and `service` to
+# "none" and binds those three recipes as its application types say.
+boot := "bind: the command that builds and starts the deliverable in the foreground, such as ./server --port {port}"
+ready := "bind: the URL that answers once it is up, such as http://127.0.0.1:{port}/health"
+boot_timeout := "30"
+service := "bind: the service.name every signal carries"
+booted := 'python3 "' + ratchet_plugin + '/scripts/with_service.py" --boot "' + boot + '" --ready "' + ready + '" --timeout ' + boot_timeout
+
+# Which shard of how many this run is. CI's long-gate jobs export both from the `- Shards:` line of
+# the binding's Speed section; a local run is shard 1 of 1, the whole suite.
+shard := env_var_or_default("SHARD", "1")
+shards := env_var_or_default("SHARDS", "1")
 
 default:
     @just --list --unsorted
@@ -139,7 +158,7 @@ prose:
 # --- tier 1 bodies ---------------------------------------------------------------
 
 test:
-    @echo "bind: unit, property and fitness tests"; exit 1
+    @echo "bind: unit, property and fitness tests on every core, shard {{shard}} of {{shards}}; red when none is collected"; exit 1
 
 coverage:
     @echo "bind: run the suite with a Cobertura report at coverage.xml"; exit 1
@@ -152,7 +171,7 @@ test-counts:
     @echo "bind: collected test count at head >= merge base"; exit 1
 
 mutation-changed:
-    @echo "bind: mutate changed functions; zero unregistered survivors"; exit 1
+    @echo "bind: mutate changed functions, shard {{shard}} of {{shards}}; zero unregistered survivors"; exit 1
 
 contracts-check:
     @echo "bind: regenerate contract artefacts and diff"; exit 1
@@ -166,8 +185,9 @@ duplication:
 build:
     @echo "bind: build the deliverable"; exit 1
 
+# Shipped: boot the deliverable, wait until `ready` answers, stop the whole process tree.
 smoke:
-    @echo "bind: start the deliverable, hit its health probe, stop it"; exit 1
+    {{booted}}
 
 telemetry:
     @echo "bind: the telemetry tests against an in-memory exporter; red when there are none"; exit 1
@@ -176,8 +196,11 @@ telemetry:
 flag-states:
     @echo "bind: for each key of flags.py --changed, the suite with the flag forced off, then on"; exit 1
 
+# Shipped: seconds of concurrent requests at the booted deliverable, judged on errors only. Add
+# one `--url "METHOD URL STATUS BODY"` per route worth overlapping; the binding's Limits hold the
+# `--concurrency` and `--seconds`.
 load-smoke:
-    @echo "bind: seconds of concurrent requests at the booted deliverable; any error fails"; exit 1
+    {{booted}} -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --url "{{ready}}"
 
 bite:
     python3 "{{ratchet_plugin}}/scripts/bite.py"
@@ -190,7 +213,7 @@ data-compat:
     @echo "bind: load golden fixtures from earlier versions; apply and reverse migrations"; exit 1
 
 doctests:
-    @echo "bind: run the documentation's examples"; exit 1
+    @echo "bind: run the documentation's examples; red when there are none"; exit 1
 
 sast:
     @echo "bind: static security analysis with the stack's rule set"; exit 1
@@ -213,7 +236,7 @@ change-size:
 # --- tier 2 bodies ---------------------------------------------------------------
 
 mutation:
-    @echo "bind: full mutation run over absolute layers"; exit 1
+    @echo "bind: full mutation run over the absolute paths, shard {{shard}} of {{shards}}"; exit 1
 
 api-deep:
     @echo "bind: deep and stateful interface conformance"; exit 1
@@ -222,13 +245,13 @@ symbolic:
     @echo "bind: symbolic checker over contracts"; exit 1
 
 fuzz seconds="600":
-    @echo "bind: fuzz for {{seconds}} seconds"; exit 1
+    @echo "bind: fuzz for {{seconds}} seconds; red when there is no fuzz target"; exit 1
 
 e2e:
-    @echo "bind: end-to-end suite"; exit 1
+    @echo "bind: end-to-end suite, shard {{shard}} of {{shards}}; red when it holds no test"; exit 1
 
 test-stability:
-    @echo "bind: run the suite shuffled and repeated with fresh seeds"; exit 1
+    @echo "bind: run the suite shuffled and repeated, each run a fresh seed that is printed"; exit 1
 
 reproducible:
     @echo "bind: build twice and compare hashes"; exit 1
@@ -237,7 +260,7 @@ sanitizers:
     @echo "bind: race detector and sanitizers where the stack has them"; exit 1
 
 perf:
-    @echo "bind: benchmarks against the binding's performance ceilings"; exit 1
+    @echo "bind: benchmarks against the binding's performance ceilings; red when there is no benchmark"; exit 1
 
 dast:
     @echo "bind: dynamic security scan against the end-to-end environment"; exit 1
@@ -246,13 +269,16 @@ pentest:
     @echo "bind: active scan with a session, and contract-driven attacks on every route"; exit 1
 
 load:
-    @echo "bind: load test against the end-to-end environment, thresholds from the binding's Limits"; exit 1
+    @echo "bind: load test against the end-to-end environment, thresholds from the binding's Limits; red when there is no scenario"; exit 1
 
+# Shipped: an OTLP receiver the booted deliverable exports to; green only when a request's
+# traces, metrics and logs arrive for `service`. `--require traces` narrows it to what is emitted.
 telemetry-e2e:
-    @echo "bind: read a request's trace, metrics and logs back from the collector"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/telemetry_sink.py" --service "{{service}}" -- {{booted}} -- \
+        python3 -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1]).close()' "{{ready}}"
 
 a11y:
-    @echo "bind: accessibility checks inside the end-to-end suite"; exit 1
+    @echo "bind: accessibility checks inside the end-to-end suite; red when no surface is checked"; exit 1
 
 formal:
     @echo "bind: run the project-local formal verification skill's command"; exit 1

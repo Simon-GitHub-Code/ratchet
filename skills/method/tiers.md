@@ -1,6 +1,23 @@
 # Tiers and the questions each answers
 
-The method asks questions; the binding names the tool that answers each one for this stack. A question with no tool in the stack is bound to `none` with the reason and the ADR that accepts the gap: that row is green, and a standing criticism of the binding until a tool exists. A question is never advisory because its tool is inconvenient; advisory is for reports that inform a choice rather than judge a change.
+The method asks questions; the binding names the tool that answers each one for this stack. The method ships the questions and never the tools: which questions apply is decided by what kind of software the repository is, and which tool answers one is chosen at adoption, from what is current then (ADR 0017). A question that applies and has no tool in the stack is bound to `none` with the reason and the ADR that accepts the gap: that row is green, and a standing criticism of the binding until a tool exists. A question is never advisory because its tool is inconvenient; advisory is for reports that inform a choice rather than judge a change.
+
+## Application types
+
+A binding declares what the repository is, on one line: `- Application types: service, web-ui`. There are six types, and a repository may be several.
+
+| Type | What it is |
+| --- | --- |
+| `service` | answers requests over a network: an HTTP or gRPC API, a web backend |
+| `web-ui` | runs in a browser |
+| `app` | an installed client with a user interface: mobile, desktop |
+| `cli` | a command a person or a script runs |
+| `job` | runs unattended on a schedule, a queue or a stream: a worker, a batch, a pipeline |
+| `library` | code other code imports; nothing to boot |
+
+A type decides which questions apply. It never decides the tool. Every question applies to every type unless [application-types.toml](application-types.toml) narrows it, and that file is the single source: the conformance gate reads it, and `python3 scripts/application_types.py <type>...` in the plugin prints the rows a set of types leaves out. Contract drift, for example, is asked only of a service, accessibility only of a web interface or an app, and a library is not asked whether it starts, emits telemetry or holds under load. The weekly `load-soak` follows `load`.
+
+A row is never dropped. One that applies names a tool or is an accepted gap, as above. One that applies to none of the declared types says `none: not a <type>`, naming a type the question is asked of, and needs no ADR: the type line is the reason. The conformance gate is red on a missing or unknown type, on an empty Tool cell, on a row that applies bound to `none` without a reason and an ADR the repository holds, and on a dropped row.
 
 ## When each tier runs
 
@@ -50,10 +67,10 @@ Every comparison against history uses the merge base with the default branch (`H
 | Does anything shipped carry a known advisory? | a dependency audit |
 | Does the code repeat itself past the ceiling? | a clone detector |
 | Does the deliverable build? | the build |
-| Does the deliverable start and answer? | boot it, hit a health probe, stop it |
+| Does the deliverable start and answer? | for a service, the method's `scripts/with_service.py`: boot it by any command, wait until a URL answers, stop the whole process tree; another type runs its own deliverable once |
 | Does every entry point emit the telemetry the binding names? | tests against an in-memory OpenTelemetry exporter: each route, job and command yields a span with the attributes the binding requires, a failure is recorded on its span, a log line carries the trace id; a fitness test fails an entry point registered outside the instrumented seam; the signal names are snapshotted beside the tests, so the telemetry surface changes on purpose |
 | Does the code hold with each changed flag off and on? | the suite once per state of every flag the change adds or touches, through the override the flag seam honours; off is the merge base's behaviour |
-| Does the deliverable stay correct under concurrent requests? | a load smoke: seconds of concurrent requests against the booted deliverable, zero errors; latency is printed, not judged, since a pull-request runner is no benchmark host |
+| Does the deliverable stay correct under concurrent requests? | the method's `scripts/load_smoke.py` inside `with_service.py`: seconds of concurrent requests against the booted deliverable, zero errors and a floor on requests answered; latency is printed, not judged, since a pull-request runner is no benchmark host |
 | Does every home-grown checker still bite? | each fitness test and gate tool carries a synthetic violation it must fail on, run as a suite |
 | Did the public surface change on purpose? | a snapshot of exported symbols, routes or flags, diffed; a change needs a version bump or a changelog line |
 | Does old persisted data still load? | golden fixtures from earlier versions read cleanly; migrations apply and reverse |
@@ -84,7 +101,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Does the running system resist a dynamic scan? | a passive baseline scan against the end-to-end environment: headers, cookies, transport, disclosure |
 | Can an attacker's toolkit break in? | an active scan with a signed-in session, and requests generated from the published contract that try each route's authentication, authorisation and input handling; a finding fails |
 | Does it hold its latency and throughput under the load the binding names? | a load test against the end-to-end environment with the thresholds the binding's Limits hold: the arrival rate, the percentile latency, the error rate; the owner's `/pstack:benchmark-checklist` before a number is trusted |
-| Does the telemetry arrive? | the end-to-end environment exports to a collector, and a request's trace, its metrics and its logs are read back from it |
+| Does the telemetry arrive? | the method's `scripts/telemetry_sink.py`: an OTLP receiver the booted deliverable exports to, green only when a request's traces, metrics and logs arrive under the service's name; a project with a collector reads them back from it instead |
 | Is any flag past its removal date? | the method's flags gate with `--expired`; it goes red by the calendar, so it is asked here and never on a pull request |
 | Is the interface usable by everyone? | accessibility checks inside the end-to-end suite, for user interfaces; `impeccable audit` is the agent-side pass, the gate is the deterministic one |
 | Does the model still hold, and does the code still mirror it? | the project-local formal verification skill: the owner's `/pstack:create-formal-verification-skill` writes it where a bug costs most and tests reach least, their `/pstack:maintain-formal-verification-skill` keeps it true to the code. The model and the skill are guard paths |
@@ -95,24 +112,25 @@ Every comparison against history uses the merge base with the default branch (`H
 
 ## Speed
 
-Gates that accumulate become gates that get skipped. Every repository on the method starts with CI shaped for speed and a ceiling per tier that only falls, so the optimisation phase that usually arrives late is a standing obligation from the first commit.
+Gates that accumulate become gates that get skipped. So speed is a property the method asks for and measures from the first commit: the local run and the CI run are built to be fast before anything in them is slow, and the optimisation that usually arrives late is a standing obligation. The method names the concepts. The tools in brackets are examples; the binding's Speed section says how this stack meets each one (ADR 0019).
 
-**The ceiling.** `quality/thresholds.toml` holds `[ceilings.seconds]` with one key per tier, and one per gate where a gate has its own runner. The `budget` entry point wraps a tier or gate, measures its wall clock and goes red over its ceiling. A ceiling only falls: `ratchet-lowered` fails a raised one as it fails a lowered threshold, and raising one is a loosening with an ADR behind it, whose `Relaxes:` line ([ratchet.md](ratchet.md)) the gate reads. Adopt sets the first ceilings from the first measured run with headroom (`budget --set`), never under the tier's budget in the table above, so an empty skeleton's few seconds do not become the first feature's ceiling; from then on every change that pushes a tier over must pay for itself in the same pull request. Runners vary, so the ceiling blocks on the default branch and nightly, in the tier 2 sense, and reports on pull requests.
+**Parallel by default.** The test suite uses every core, on a developer's machine as well as in CI, from the first test (`pytest-xdist`, vitest's worker pool, `cargo nextest`, `go test -p`). That forces each test to own its state: no shared file, port, database or clock. The tier 2 order-independence gate keeps them so. A tier's gates run at once as well, wherever they share no state, so the wall clock is the slowest gate and never the sum: in CI each gate is its own job.
 
-**The shape, from the start.** The CI templates ship with these, and the conformance gate checks the first two are present:
+**One pipeline, the same everywhere.** A CI job runs one entry point and nothing else, so a red job is reproduced on a developer's machine by one command, and CI cannot drift from the local run. A project that wants hermetic, cached steps puts a pipeline engine under the entry points (Dagger, Earthly, Bazel); the entry points stay the interface.
 
-| Technique | Where | Why from day one |
-| --- | --- | --- |
-| Cancel superseded runs (`concurrency`, cancel-in-progress on pull requests) | every workflow | a pushed fix should not wait behind the run it replaces |
-| Cache dependencies and tool caches (type checker, linter, test and mutation caches), keyed on the lockfile and the tool's config, with fallback keys | every job | a cold toolchain is the first minute of every job |
-| Split a tier into one job per gate (a matrix over the recipes), `fail-fast: false` | tier 1 and tier 2 | wall clock is the slowest gate, not the sum, and one run shows every red |
-| Shard any suite over the budget the binding names (`pytest-split`, `vitest --shard`, `cargo nextest partition`, the mutation tool's shards) | the long gates | the ceiling is reached by adding runners, not by removing tests |
-| Run only what the change can affect (path filters; `turbo`, `nx`, `pants` for a monorepo), with the full run on the default branch | tier 0 and 1 on pull requests | a docs change should not run the mutation suite |
-| Incremental where the tool allows (changed-function mutation, incremental type checking, a build cache) | tier 1 | the pull request pays for its diff |
-| Pin the toolchain and use the setup action's own cache | every job | installs are the slow, flaky part |
-| Publish the timings (`budget --report`, uploaded as an artefact) and read them in `reports` | every job | the slowest gate is always named |
+**Shard before you need to.** The long gates (the suite, mutation, end to end) run in CI as a matrix over a shard count, and the count is one line of the binding, `- Shards: 1` on day one. Each job receives `SHARD` and `SHARDS`, and the recipe hands them to its tool (`pytest-split`, `vitest --shard`, `cargo nextest --partition`, the mutation tool's own shards); a local run is shard 1 of 1. Adding runners later is that one number, never a restructuring.
 
-What speed never buys: a quarantined test (a failure here is a bug, never "flaky"), a tier 2 gate moved to on-demand to hide its cost, or a `timeout-minutes` so generous it never fires. The binding's Speed section records the ceilings, the cache keys, the shard counts and the affected-only tool.
+**Cache everything, keyed on what it depends on.** Dependencies and every tool cache (type checker, linter, test, mutation, build), keyed on the lockfile and the tool's config with fallback keys; the toolchain pinned, with the setup action's own cache on. Locally the tools' incremental caches stay on.
+
+**Run only what the change can affect.** Mutation of changed functions, coverage of changed lines, the flag states of changed flags, incremental type checking and builds; path filters, and an affected-only tool in a monorepo (`turbo`, `nx`, `pants`). The default branch runs everything.
+
+**Fail fast locally, report everything in CI.** Locally the cheapest gates run first and the run stops at the first red. In CI a matrix never stops early (`fail-fast: false`), so one run shows every red, and a pushed fix cancels the run it replaces.
+
+**Measured, not hoped.** `quality/thresholds.toml` holds `[ceilings.seconds]` with one key per tier, and one per gate where a gate has its own runner. The `budget` entry point wraps a tier or gate, measures its wall clock and goes red over its ceiling. A ceiling only falls: `ratchet-lowered` fails a raised one as it fails a lowered threshold, and raising one is a loosening with an ADR behind it, whose `Relaxes:` line ([ratchet.md](ratchet.md)) the gate reads. Adopt sets the first ceilings from the first measured run with headroom (`budget --set`), never under the tier's budget in the table above, so an empty skeleton's few seconds do not become the first feature's ceiling; from then on every change that pushes a tier over must pay for itself in the same pull request. Runners vary, so the ceiling blocks on the default branch and nightly, in the tier 2 sense, and reports on pull requests. Every CI job appends its timing (`budget --report`) and uploads it, so the slowest gate is always named.
+
+The conformance gate checks what a machine can: the binding's Speed section has a line for `Parallel`, `One pipeline`, `Shards`, `Cache`, `Affected only` and `Ceilings`, none of them left unfilled; `Shards` is a whole number; every workflow cancels superseded runs and caches; and the tier workflows run their long gates over the shard count.
+
+What speed never buys: a quarantined test (a failure here is a bug, never "flaky"), a tier 2 gate moved to on-demand to hide its cost, or a `timeout-minutes` so generous it never fires.
 
 ## Choosing a tier for a new question
 
@@ -131,4 +149,20 @@ Four things are usually bolted on after the first incident: telemetry, feature f
 
 A pull request pays only for what it changed: the flag gate reruns the suite for the flags the change touches and for none when it touches none, the load smoke is seconds long, and the telemetry tests are unit tests with an exporter that keeps spans in memory. What needs a running environment, a clock or a network waits for tier 2. The binding's Telemetry and Feature flags sections name the seams: the one module that starts the telemetry SDK and through which every entry point is registered, and the one module through which a flag is read.
 
-A repository with no entry point to instrument, no behaviour to flag and nothing to serve (a library) binds these rows to `none` with the reason, as any other question; the rows themselves stay, and the conformance gate checks they are there.
+A repository whose application types leave a row out (a library has nothing to boot, to load or to scan from outside) binds it `none: not a <type>`; the rows themselves stay, and the conformance gate checks they are there.
+
+## What a recipe must get right
+
+A tool is chosen per repository, so no recipe is shipped for it. These hold for any tool, and each was learnt on a binding where a gate passed while judging nothing or failed for a reason that was not the code's.
+
+- **A gate with nothing to run is red.** A suite that collects no test, a performance gate with no benchmark, a fuzz gate with no target, a telemetry gate with no telemetry test: each fails, on every stack. `none` is for a property the project will never have, and it is written in the binding, never printed by a recipe that found nothing.
+- **A gate over the change may find nothing to judge, and says so.** Mutation of changed functions, coverage of changed lines and the flag states of changed flags are green when the change touches nothing in their scope, and only when the tool itself reports zero items: a tool that fails for another reason is red.
+- **A failed collection is red, never a count of zero.** The test-count gate compares two counts; an install, an import or a listing that fails at either side is a failure, not a smaller number.
+- **Mutation is judged by the register, never the score.** The score is a trend. Clear the tool's cache of verdicts before a run, so a new test meets the old survivors again.
+- **A rule set for a framework is judged only when the framework is a dependency.** Static-analysis packs bundle rules for frameworks the project does not use, and one of them firing on a look-alike call is noise; the language and runtime rules always apply, and the recipe prints how many it left out.
+- **A generated artefact that is not committed fails its drift gate.** Comparing with the index alone passes an untracked report.
+- **Every tool runs through the package manager that locks it**, so the lockfile pins the gate as it pins the product, and the audit of shipped dependencies leaves the development tools to the weekly `audit-all`.
+- **Each coverage group is measured by a report that reaches it.** Two suites write two reports and one judgement reads both; a fitness test's logic lives where coverage measures it.
+- **A repeated run takes a fresh seed and prints it**, so a failure in the order-independence gate replays.
+- **A recipe builds what it runs.** In CI each gate is a job of its own, so the boot command of a service gate compiles first, and nothing depends on what another recipe left behind.
+- **A tool that walks the tree is pointed at the source.** `quality/snapshots/` holds copies of the tool configs, a dependency manifest among them, which reads as a second package to a tool that searches for manifests.

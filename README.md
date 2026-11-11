@@ -1,8 +1,73 @@
 # ratchet
 
-The Ratchet method: what must be true before a merge, when software is built by agents. Tiered deterministic gates that only tighten, guard paths the harness protects, disputes, records, a four-role feature pipeline, and the merge rule of critical rationalism. Packaged as one plugin that runs in Claude Code, Grok, Codex, pi and OpenCode, so every repository reads one copy of the method and keeps only its own binding.
+The checks and balances of a software factory, in your own repository. Ratchet is a method: what must be true before a merge, when software is built by agents. Tiered deterministic gates that only tighten, guard paths the harness protects, disputes, records, a four-role feature pipeline, and the merge rule of critical rationalism. Packaged as one plugin that runs in Claude Code, Grok, Codex, pi and OpenCode, so every repository reads one copy of the method and keeps only its own binding.
+
+The method enforces concepts, and the repository chooses the stack that carries them. It ships the questions a change must answer and the gates that need no stack. It ships no tool, recipe or template for any language.
 
 It composes with three other plugins and competes with none. `mattpocock-skills` says how the work is done (`tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grill-with-docs`, `pr`, `research`). `pstack` says in what style and with which levers (`poteto-mode`, `architect`, `interrogate`, `arena`, `correct`, the formal verification skills). `impeccable` says how anything a person sees is designed, and its `PRODUCT.md` and `DESIGN.md` are records. Ratchet's roles call those skills by name; its records use their formats and add a section each.
+
+## The eleven commitments
+
+Every repository on the method keeps all eleven. `skills/method/SKILL.md` states them in full; each has a reference page beside it.
+
+1. **One set of entry points.** The binding's table is the only list of gates, CI runs the same entry points, and a gate with nothing to run is red.
+2. **Three tiers, two aggregates.** Tier 0 on every commit, tier 1 on every pull request, tier 2 on the default branch and nightly; `check` and `check-deep`.
+3. **The ratchet.** Thresholds only rise, checked against the merge base; each gate's effective configuration is snapshotted; mutation testing gates on zero unexplained survivors.
+4. **Guards.** The files that define, run or record a gate are guard paths, enforced by the harness, which the model cannot override.
+5. **Disputes.** An agent that believes a gate is wrong writes a dispute and stops on that gate; the owner decides.
+6. **Records.** A design brief, a glossary whose _Avoid_ lists are banned identifiers, one ADR per lasting decision with its refutation criterion, a brief per feature.
+7. **The pipeline.** A feature is built by four roles with fixed sight lines: spec, implement, critic, review.
+8. **Verifiable shape.** Logic sits where every verifier reaches it; declared layers, absolute paths at 100%, hard limits.
+9. **Speed.** Fast local runs and fast CI are asked from the first commit: the suite on every core, one pipeline that runs the same locally and in CI, the long gates sharded over a count the binding holds, everything cached, only what the change can affect run. Each tier has a ceiling in seconds that only falls.
+10. **The merge rule.** A change is merged when no criticism of it is open.
+11. **Operable from the first commit.** Telemetry, feature flags, security testing and load testing are asked of every change, each split across the tiers so the pull request pays only for the cheap part.
+
+## Application types
+
+What kind of software a repository is decides which questions the method asks of it. A binding declares one or more of six types on one line, `- Application types: service, web-ui`:
+
+| Type | What it is |
+| --- | --- |
+| `service` | answers requests over a network: an HTTP or gRPC API, a web backend |
+| `web-ui` | runs in a browser |
+| `app` | an installed client with a user interface: mobile, desktop |
+| `cli` | a command a person or a script runs |
+| `job` | runs unattended on a schedule, a queue or a stream: a worker, a batch, a pipeline |
+| `library` | code other code imports; nothing to boot |
+
+Every question applies to every type unless `skills/method/application-types.toml` narrows it: contract drift is asked only of a service, accessibility only of a web interface or an app, and a library is not asked whether it boots or holds under load. A row that applies names a tool, or `none` with a reason and the ADR that accepts the gap. A row that does not apply says `none: not a service` and needs no ADR. No row is dropped, and the conformance gate checks all of it.
+
+## No presets
+
+A type decides which questions apply. It never decides the tool. There is no Python preset and no TypeScript one: at adoption the agent recognises the stack, chooses a current tool for each question that applies, checks the choice against the tool's documentation, takes versions from the package registry, and asks the owner one question, accept these or name your own. A tool named in a plugin ages at the plugin's pace; one chosen at adoption is current that day, on any stack (ADR 0017). What earlier bindings taught is kept as rules any recipe must keep, in `skills/method/tiers.md`: above all, that a gate with nothing to run is red.
+
+## The gates that ship
+
+These need no stack, so the plugin ships them as code and proves them in its own `just check`: `scripts/bite.py` runs a gate against a synthetic violation, red with it and green without, `conformance.py --self-test` does the same for the conformance gate, and the tests cover the rest.
+
+| Gate | Tier | The question it answers |
+| --- | --- | --- |
+| `scripts/commits.py` | 0 | does every commit subject follow the convention? |
+| `scripts/markers.py` | 0 | did the count of TODO, FIXME and HACK markers rise? |
+| `scripts/suppressions.py` | 0 | did any kind of suppression rise, or a focus marker appear? |
+| `scripts/prose.py` | 0 | do the documents and comments keep to the glossary? |
+| `scripts/snapshots.py` | 0 | does each gate's recorded configuration match the one in force? |
+| `scripts/lowered.py` | 0 | was a threshold lowered, or a ceiling raised? |
+| `scripts/flags.py` | 0 and 2 | is every feature flag declared once, owned and off when new; with `--expired`, is one past its removal date? |
+| `scripts/pins.py` | 0 | is every action pinned by commit, every image by digest, every workflow least-privileged? |
+| `scripts/coverage_groups.py` | 1 | is each coverage group at its ratchet, and each absolute path at 100%? Fed by the suite's Cobertura report |
+| `scripts/mutation_survivors.py` | 1 and 2 | is every surviving mutant registered, and no entry stale? Fed by the mutation tool's output |
+| `scripts/change_size.py` | 1 | is the change within its files and lines ceiling? |
+| `ratchet_guards.diff` | 1 | which guard paths changed? |
+| `scripts/settings_rules.py` | 1 | do the permission rules still mirror the manifest? |
+| `scripts/conformance.py` | 1 | does the repository still carry the method: its records, its binding, its application types, its Speed section, its CI shape? `--self-test` shows it bites |
+| `scripts/with_service.py` | 1 | does the deliverable start and answer? Boots a service by any command, waits until a URL answers, stops the whole process tree; with a command after `--` it holds the service up for that command |
+| `scripts/load_smoke.py` | 1 | does a running service stay correct under seconds of concurrent requests? Judged on errors only, never on latency |
+| `scripts/telemetry_sink.py` | 2 | does the telemetry arrive? An OTLP/HTTP receiver that is green only when traces, metrics and logs arrived non-empty for the expected `service.name`; no collector to install |
+| `scripts/budget.py` | every tier | did a tier or gate finish under its ceiling in seconds? `--set` records the first ceiling |
+| `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the owner's one command when not; asked by the preflight, the route and `just ratchet`, not by CI |
+
+Every other gate is the repository's: a tool it chose, behind an entry point the binding names.
 
 ## What is in the plugin
 
@@ -10,27 +75,21 @@ It composes with three other plugins and competes with none. `mattpocock-skills`
 | --- | --- |
 | `skills/method/SKILL.md` | the founding document: the words, the eleven commitments, how work runs |
 | `skills/method/*.md` | the reference behind each commitment: the merge rule, tiers as questions, the ratchet, guards and disputes, the pipeline, records, verifiable shape |
+| `skills/method/application-types.toml` | the six application types and the questions each is asked; `scripts/application_types.py <type>...` prints the rows a set of types leaves out |
 | `skills/init/` | `/ratchet:init`: the bare bones for any repository: `git init` where needed, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it, the other three plugins' one-time setup, the first commit, the remote and the triage labels |
-| `skills/adopt/` | `/ratchet:adopt`: steps and templates that bind the method to a repository's runner, forge and stack |
+| `skills/adopt/` | `/ratchet:adopt`: the steps and the stack-neutral templates that bind the method to a repository's runner, forge and stack |
 | `skills/feature/` | `/ratchet:feature <ticket>`: the feature preflight on an agent-ready ticket, the branch, then the pipeline |
 | `skills/conjecture/` | `/ratchet:conjecture <ticket>`: the method's one addition to a ticket, drafted from the conversation that produced it |
 | `skills/next/` | `/ratchet:next`: the command the owner types next, decided from the checkout and the tracker |
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
 | `workflows/pipeline.js` | the four-role pipeline (preflight, spec, implement, critic, review) the feature skill runs |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
-| `scripts/hooks_installed.py` | would a commit here run tier 0? Runs the commit hooks with a probe the template recipes answer; red with the owner's one command when not. Asked by the preflight, the route and `just ratchet`, not by CI |
+| `scripts/` | the gates that ship, in the table above |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |
-| `scripts/conformance.py` | tier 1 gate: the repository still carries the method's artefacts; `--self-test` shows it bites |
-| `scripts/lowered.py` | tier 0 gate: no threshold lowered and no ceiling raised against the merge base |
-| `scripts/flags.py` | tier 0 gate: every feature flag in `flags.toml` is declared once, owned and off when new; `--expired` asks the calendar in tier 2 |
-| `scripts/budget.py` | the speed gate: a tier or gate against its ceiling in seconds; `--set` records the first ceiling |
-| `scripts/with_service.py` | boots a deliverable by any command, waits until a URL answers, runs a command against it and stops the whole process tree; with no command it is the `smoke` gate |
-| `scripts/load_smoke.py` | tier 1 gate: seconds of concurrent requests against a running service, judged on errors only, never on latency |
-| `scripts/telemetry_sink.py` | an OTLP/HTTP receiver that is green only when traces, metrics and logs arrived non-empty for the expected `service.name`; no collector to install |
 | `scripts/adapter.py` | wires the guard into Codex or OpenCode when the harness does not load the plugin's hooks |
 | `adapters/` | the pi extension and the OpenCode plugin that translate a tool call into the guard's JSON |
 | `docs/harness/` | one page per harness: install commands, how the guard is wired, the names mapped, what was verified |
-| `docs/adr/` | the plugin's own decisions; 0004 is the five-harness decision |
+| `docs/adr/` | the plugin's own decisions; 0004 is the five-harness decision, 0017 the one that removed the presets |
 | `docs/research/` | the sources behind the stance |
 
 ## Install
@@ -51,13 +110,13 @@ Updates arrive when `version` in `.claude-plugin/plugin.json` rises. To develop 
 
 ## Use in a repository
 
-Run `/ratchet:init` in any repository for the bare bones. Run `/ratchet:adopt` when the owner wants the gates: it copies the templates, interviews the owner for the binding, and leaves the entry points red until every gate is bound to a tool or accepted as `none` with a reason. The `justfile` and `.github/` templates are the `just` and GitHub examples; any runner and any forge can carry the entry points.
+Run `/ratchet:init` in any repository for the bare bones. Run `/ratchet:adopt` when the owner wants the gates. It copies the templates, asks the owner two things about the binding (what kind of software this is, and whether to accept the tools it proposes or name others), binds every gate against a walking skeleton, and leaves the entry points red until every question that applies is bound to a tool or accepted as `none` with a reason. The `justfile` and `.github/` templates are the `just` and GitHub examples; any runner and any forge can carry the entry points.
 
 ## Develop the plugin
 
 The guard hook locks the installed plugin's root with or without a manifest, and a directory marketplace is read in place, so an agent cannot edit this checkout while the plugin is enabled. Disable it for the session (`claude plugin disable ratchet`, then `/reload-plugins`) and re-enable it afterwards, or install the plugin from a separate clone.
 
-`just check` here runs the hook's tests, lint and types, the conformance self-test, a parse of the workflow and `claude plugin validate`. The method says gates are themselves gated; this is where that applies to the method.
+`just check` here runs the hook's tests, lint and types, the conformance self-test, every shipped gate against its synthetic violation, a parse of the workflow and `claude plugin validate`. The method says gates are themselves gated; this is where that applies to the method.
 
 ## Change the method
 

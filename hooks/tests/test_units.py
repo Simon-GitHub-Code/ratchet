@@ -203,7 +203,7 @@ def test_exclude_carves_paths_out_of_a_group() -> None:
 
 
 def test_a_group_with_no_paths_yet_matches_nothing() -> None:
-    # Why: the adopt template ships `paths = []` behind `# bind:` comments until step 8 fills
+    # Why: the adopt template ships `paths = []` behind `# bind:` comments until adopt fills
     # them; a manifest that failed to parse would turn every tool call into an ask meanwhile.
     unbound = parse(GOOD.replace('paths = ["a/**", "b.txt", "~/.x/*.json"]', "paths = []"))
     assert unbound.groups[0].patterns == ()

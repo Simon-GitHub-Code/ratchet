@@ -1,0 +1,96 @@
+# Application types (Ratchet method): which questions the method asks of which kind of software.
+# A type decides which questions apply. It never decides which tool answers one: the binding does.
+# `scripts/application_types.py` reads this file for the conformance gate, and the adopt skill
+# reads it to propose the binding. tiers.md explains it; this file is the single source.
+#
+# A binding declares its types on one line: `- Application types: service, web-ui`.
+# A question applies to a repository when it applies to any type the binding declares.
+#   - A row that applies names a tool, or `none` with a reason and the ADR that accepts the gap.
+#   - A row that does not apply may say `none: not a <type>`, naming a type the question is asked
+#     of, and needs no ADR.
+#   - The row itself always stays in the binding's Gates table.
+
+[types]
+service = "answers requests over a network: an HTTP or gRPC API, a web backend"
+web-ui = "runs in a browser"
+app = "an installed client with a user interface: mobile, desktop"
+cli = "a command a person or a script runs"
+job = "runs unattended on a schedule, a queue or a stream: a worker, a batch, a pipeline"
+library = "code other code imports; nothing to boot"
+
+# One [[question]] per question this file says something about. A question it does not list
+# applies to all six types and judges no collection.
+#   name        the question, as the binding's Gates table spells it
+#   applies-to  the types the question is asked of; absent means all six
+#   collection  true when the gate judges a set of things the project writes (tests, benchmarks,
+#               fuzz targets, scenarios). Such a gate is red when the set is empty, and the
+#               repository proves it: its `bite` entry point removes the set and expects red.
+
+[[question]]
+name = "unit, property and fitness tests"
+collection = true
+
+[[question]]
+name = "contract drift"
+applies-to = ["service"]
+
+[[question]]
+name = "starts and answers"
+applies-to = ["service", "web-ui", "app", "cli", "job"]
+
+[[question]]
+name = "telemetry emitted"
+applies-to = ["service", "web-ui", "app", "job"]
+collection = true
+
+[[question]]
+name = "changed flags off and on"
+applies-to = ["service", "web-ui", "app", "cli", "job"]
+
+[[question]]
+name = "load smoke"
+applies-to = ["service", "job"]
+
+[[question]]
+name = "documentation examples run"
+collection = true
+
+[[question]]
+name = "deep interface conformance"
+applies-to = ["service", "library"]
+
+[[question]]
+name = "fuzzing"
+collection = true
+
+[[question]]
+name = "end to end"
+applies-to = ["service", "web-ui", "app", "cli", "job"]
+collection = true
+
+[[question]]
+name = "performance budget"
+collection = true
+
+[[question]]
+name = "dynamic security scan"
+applies-to = ["service", "web-ui"]
+
+[[question]]
+name = "active security scan"
+applies-to = ["service", "web-ui"]
+
+# The weekly `load-soak` entry point follows this row: where `load` does not apply, neither does it.
+[[question]]
+name = "load"
+applies-to = ["service", "job"]
+collection = true
+
+[[question]]
+name = "telemetry arrives"
+applies-to = ["service", "web-ui", "app", "job"]
+
+[[question]]
+name = "accessibility"
+applies-to = ["web-ui", "app"]
+collection = true

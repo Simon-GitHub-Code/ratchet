@@ -5,6 +5,22 @@ from pathlib import Path
 
 SKILLS = Path(__file__).resolve().parents[2] / "skills"
 INIT = (SKILLS / "init/SKILL.md").read_text(encoding="utf-8")
+ADOPT = (SKILLS / "adopt/SKILL.md").read_text(encoding="utf-8")
+
+
+def test_adopt_asks_two_dialogs_and_chooses_tools_itself() -> None:
+    # Why: ADR 0017. The owner is asked what the software is and whether to accept the tools,
+    # then about the brief; a third dialog, or a tool the plugin ships, is a regression.
+    dialogs = re.findall(r"\*\*Dialog (\d), ([^.]+)\.", ADOPT)
+    assert dialogs == [("1", "what this is and what judges it"), ("2", "the design brief")]
+    assert "Dialog 3" not in ADOPT
+    assert "`/ratchet:adopt interactive`" in ADOPT
+    assert not (SKILLS / "adopt/presets").exists()
+    assert "preset" not in ADOPT
+    assert 'scripts/application_types.py" <type>...' in ADOPT
+    assert "never from this plugin" in ADOPT
+    assert "**A gate with nothing to run is red.**" in ADOPT
+    assert "the `bite` entry point" in ADOPT
 
 
 def test_init_asks_two_dialogs_by_default_and_everything_under_interactive() -> None:
