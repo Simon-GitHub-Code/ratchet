@@ -37,6 +37,10 @@ import settings_rules
 import snapshots
 import suppressions
 
+# Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+from ratchet_guards import diff as guard_paths
+
 Gate = Callable[[list[str]], int]
 Violation = Callable[[Path], None]
 WORKFLOW = ".github/workflows/ci.yml"
@@ -50,7 +54,9 @@ MANIFEST = (
     '[[group]]\nname = "tool-config"\nreason = "Rule sets of every gate."\n'
     'paths = ["lint.toml"]\n\n'
     '[[group]]\nname = "harness"\nreason = "Settings enforce the guards."\nedit = "deny"\n'
-    'paths = [".claude/settings.json"]\n'
+    'paths = [".claude/settings.json"]\n\n'
+    '[[group]]\nname = "records"\nreason = "An agent adds a term; the owner changes one."\n'
+    'edit = "append"\npaths = ["GLOSSARY.md", "docs/adr/**"]\n'
 )
 THRESHOLDS = (
     '[python.coverage.core]\npaths = ["src/**"]\nabsolute = true\n\n'
@@ -211,6 +217,15 @@ def hooks_path_elsewhere(root: Path) -> None:
     git(root, "config", "core.hooksPath", str(root / "no-hooks"))
 
 
+def guard_diff(argv: list[str]) -> int:
+    return guard_paths.main(argv[1:])
+
+
+def drop_avoid_item(root: Path) -> None:
+    added = "\n**Order**:\nWhat a customer buys.\n_Avoid_: basket\n"
+    write(root, "GLOSSARY.md", GLOSSARY.replace("client, buyer", "client") + added)
+
+
 def foreign_deny(root: Path) -> None:
     path = root / ".claude/settings.json"
     path.write_text(
@@ -220,6 +235,7 @@ def foreign_deny(root: Path) -> None:
 
 MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
 TICKET_REF = ["tickets/01-add-the-thing.md"]
+ADDITIVE = ["--fail-unless-additive"]
 SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("markers", markers.main, add_marker, []),
     ("suppressions: a count rose", suppressions.main, add_suppression, []),
@@ -236,6 +252,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("feature-preflight: no conjecture", feature_preflight.main, no_conjecture, TICKET_REF),
     ("feature-preflight: not agent-ready", feature_preflight.main, not_agent_ready, TICKET_REF),
     ("settings-check", settings_rules.main, foreign_deny, ["--check"]),
+    ("guard-diff: a record loses an Avoid item", guard_diff, drop_avoid_item, ADDITIVE),
     ("flags: a new flag that is on", flags.main, flag_born_on, []),
     ("flags-expired", flags.main, flag_overdue, ["--expired"]),
     ("hooks-installed: no hooks", hooks_installed.main, remove_hooks, []),

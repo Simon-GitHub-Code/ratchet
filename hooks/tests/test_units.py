@@ -9,7 +9,7 @@ import pytest
 
 from ratchet_guards import bash, gh, git
 from ratchet_guards.context import Context
-from ratchet_guards.manifest import Group, ManifestError, Scope, parse
+from ratchet_guards.manifest import EditRule, Group, ManifestError, Scope, parse
 from ratchet_guards.options import NO_VALUES, Spec, scan
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.shell import HEREDOC_MARK, PLACEHOLDER, SimpleCommand, lex, unquote
@@ -222,9 +222,21 @@ def test_edit_decides_whether_a_group_is_locked() -> None:
     assert asked.groups[0].locked is False
     assert parse(GOOD).groups[0].locked is False
     with pytest.raises(
-        ManifestError, match="group 'edit' must be one of \\['ask', 'deny'\\], not 'never'"
+        ManifestError,
+        match="group 'edit' must be one of \\['append', 'ask', 'deny'\\], not 'never'",
     ):
         parse(GOOD.replace('reason = "because"', 'reason = "because"\nedit = "never"'))
+    with pytest.raises(ManifestError, match=r"group 'edit' must be one of .*, not True"):
+        parse(GOOD.replace('reason = "because"', 'reason = "because"\nedit = true'))
+
+
+def test_edit_append_marks_a_group_additive_and_not_locked() -> None:
+    group = parse(GOOD.replace('reason = "because"', 'reason = "because"\nedit = "append"')).groups[
+        0
+    ]
+    assert (group.additive, group.locked, group.edit) == (True, False, EditRule.APPEND)
+    assert parse(GOOD).groups[0].additive is False
+    assert [group.name for group in MANIFEST.groups if group.additive] == ["records"]
 
 
 def test_manifest_matches_repository_and_home_patterns_separately() -> None:

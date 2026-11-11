@@ -67,7 +67,7 @@ The hook puts this section in every session's context in a repository on the met
 
 **A feature.** The owner types the ticket into being with `mattpocock-skills` (`/mattpocock-skills:wayfinder` when the effort is too big for one session, `/mattpocock-skills:grill-with-docs` to decide, `/mattpocock-skills:to-spec` and `to-tickets` to write it, `/mattpocock-skills:triage` for an issue that arrived), then `/ratchet:conjecture <ticket>` for the `## Conjecture` [records.md](records.md) describes; the agent-ready label those skills apply is the agreement. Then `/ratchet:feature <ticket>` when the owner steps away, or `/pstack:poteto-mode <ticket>` when they stay: the preflight refuses anything less before an agent exists. [route.md](route.md), [pipeline.md](pipeline.md)
 
-**A decision with lasting consequences** (a layer, a dependency, a representation, a tool, a rule). Write the ADR first, with the options considered and the criterion that would show the decision wrong. A change that contradicts an ADR needs a superseding ADR first. [records.md](records.md)
+**A decision with lasting consequences** (a layer, a dependency, a representation, a tool, a rule). Write the ADR first, under the next free number, with the options considered and the criterion that would show the decision wrong. A new ADR is yours to write. A change that contradicts an ADR needs a superseding ADR first, and superseding or editing an ADR is the owner's: the guard asks. [records.md](records.md)
 
 **Branches you will meet.**
 - A gate goes red: fix the code. Split the unit, write the test, narrow the change.
@@ -79,7 +79,7 @@ The hook puts this section in every session's context in a repository on the met
 - A measured value is above its threshold: run `ratchet`, commit the result with the change that earned it.
 - A tier runs over its ceiling: make it faster in the same change (cache, split, shard, run less), never by quarantining a test or raising the ceiling; raising is an ADR.
 - The change touches a user interface: load `impeccable:impeccable` yourself, `shape` before you build the surface, `polish` before you open the pull request; `DESIGN.md` is the standard the review judges it against.
-- You need a word the glossary lacks: add the entry with its *Avoid* list, through `domain-modeling`, before using it in code.
+- You need a word the glossary lacks: read the glossary for the concept under another name first, then add the entry with its *Avoid* list, through `domain-modeling`, before using it in code. The guard lets an added term and an added *Avoid* item through; if it asks, your edit changed or removed something that was there, and that is the owner's. [records.md](records.md)
 - You need a dependency: that is a design decision. Say why in the pull request body, or in an ADR when it shapes the architecture.
 - A tool reports a finding you think is wrong: it is a criticism. Answer it in writing (a dispute, an ADR, a register entry with a reason) or fix the code.
 - A bug: `mattpocock-skills:diagnosing-bugs` builds the loop; the method asks that the diagnosis name an alternative explanation before the fix and that the fix ship with the test that was red.

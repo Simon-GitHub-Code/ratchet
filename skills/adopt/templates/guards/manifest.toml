@@ -1,7 +1,9 @@
 # Guard paths (Ratchet method): the single list of files that define, run or record the quality gates.
 # Globs are matched against repository-relative paths; `*` stays within a segment, `**` spans any.
 # A `~/` pattern matches against the home directory. `edit = "deny"` locks a group: the owner edits
-# those files by hand. The hook, `just guard-diff` and a fitness test all read this file.
+# those files by hand. `edit = "append"` marks records an agent may add to: a new glossary term, a
+# new `_Avoid_` item or a new ADR passes, and changing or removing what is there asks the owner.
+# The hook, `just guard-diff` and a fitness test all read this file.
 
 [[group]]
 name = "tool-config"
@@ -86,15 +88,22 @@ paths = [
 ]
 
 [[group]]
-name = "decisions"
-reason = "ADRs, the agent instructions, the vocabulary, the design records, the process documents and the skills' records (tracker, labels, doc layout) are the standards every review judges against."
+name = "records"
+reason = "The ADRs and the vocabulary are standards every review judges against: an agent adds a term, an Avoid item or a new ADR, and what is already there changes by the owner's hand."
+edit = "append"
 paths = [
     "docs/adr/**",
+    "GLOSSARY.md",
+]
+
+[[group]]
+name = "decisions"
+reason = "The agent instructions, the glossary map, the design records, the process documents and the skills' records (tracker, labels, doc layout) are the standards every review judges against."
+paths = [
     "docs/agents/**",
     "docs/process/**",
     "AGENTS.md",
     "CLAUDE.md",
-    "GLOSSARY.md",
     "GLOSSARY-MAP.md",
     "PRODUCT.md",
     "DESIGN.md",

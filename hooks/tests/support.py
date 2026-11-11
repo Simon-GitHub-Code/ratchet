@@ -11,6 +11,7 @@ from ratchet_guards.context import Context, Guard
 from ratchet_guards.globs import matches
 from ratchet_guards.manifest import Manifest, parse, with_plugin_group
 from ratchet_guards.paths import Checkout, Locator
+from ratchet_guards.records import Before
 from ratchet_guards.verdict import Verdict
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +40,8 @@ class FakeFilesystem:
     """Checkouts at ``/repo`` and a worktree inside it carry the manifest; ``/elsewhere`` not.
 
     ``manifest`` is the one every guarded checkout carries, ``manifests`` overrides it per root.
+    ``merged`` is what every checkout's merge base with its default branch holds, by path
+    relative to the checkout; ``None`` stands for a checkout with no such commit.
     """
 
     manifest: Manifest = MANIFEST
@@ -58,6 +61,7 @@ class FakeFilesystem:
     variables: dict[str, str] = field(
         default_factory=lambda: {"HOME": str(HOME), "CLAUDE_PROJECT_DIR": str(ROOT)}
     )
+    merged: dict[str, str] | None = field(default_factory=dict)
 
     def canonical(self, path: Path) -> Path:
         return Path(posixpath.normpath(path))
@@ -77,6 +81,14 @@ class FakeFilesystem:
 
     def read_text(self, path: Path) -> str | None:
         return self.contents.get(str(path))
+
+    def merge_base(self, checkout: Path, relative: str) -> Before | None:
+        del checkout
+        if self.merged is None:
+            return None
+        directory = posixpath.dirname(relative)
+        beside = (name for name in self.merged if posixpath.dirname(name) == directory)
+        return Before(self.merged.get(relative), tuple(map(posixpath.basename, beside)))
 
     def glob(self, pattern: Path) -> list[Path]:
         return [Path(name) for name in self.files if matches(name, str(pattern))]

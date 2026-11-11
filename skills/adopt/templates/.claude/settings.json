@@ -41,12 +41,10 @@
       "Edit(/quality/**)",
       "Edit(/.github/**)",
       "Edit(/formal/**)",
-      "Edit(/docs/adr/**)",
       "Edit(/docs/agents/**)",
       "Edit(/docs/process/**)",
       "Edit(/AGENTS.md)",
       "Edit(/CLAUDE.md)",
-      "Edit(/GLOSSARY.md)",
       "Edit(/GLOSSARY-MAP.md)",
       "Edit(/PRODUCT.md)",
       "Edit(/DESIGN.md)"

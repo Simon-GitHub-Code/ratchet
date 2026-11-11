@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Protocol
 
 from ratchet_guards.manifest import Group, Manifest, Scope
+from ratchet_guards.records import Before
 
 _GLOB_CHARS = frozenset("*?[")
 
@@ -45,6 +46,13 @@ class Filesystem(Protocol):
 
     def read_text(self, path: Path) -> str | None:
         """The text of the file at ``path``, or ``None`` when there is no readable file."""
+        ...
+
+    def merge_base(self, checkout: Path, relative: str) -> Before | None:
+        """The file at ``relative`` as the merge base of ``HEAD`` and the default branch has it.
+
+        ``None`` when ``checkout`` has no such commit to read: no default branch, no ``HEAD``.
+        """
         ...
 
     def glob(self, pattern: Path) -> list[Path]:

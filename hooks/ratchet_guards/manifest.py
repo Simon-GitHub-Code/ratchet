@@ -6,7 +6,9 @@ stay within one segment and ``**`` spans any number of segments. Its ``Scope`` i
 its first characters: ``~/`` is matched relative to the user's home directory, ``/`` against
 the absolute path (only the implicit plugin group uses these; the file may not), and
 anything else relative to the repository. A group's optional ``edit`` is ``"ask"`` (the
-default) or ``"deny"``, for paths Claude Code's bypass mode would otherwise let through. Its
+default), ``"deny"``, for paths Claude Code's bypass mode would otherwise let through, or
+``"append"``, for records an agent may add to and only the owner changes: an edit that
+``ratchet_guards.records`` finds additive passes, and every other one asks (ADR 0014). Its
 optional ``exclude`` lists patterns its ``paths`` do not cover, such as agent worktrees under
 ``.claude/worktrees/``, which are checkouts of their own. A group whose ``paths`` list is
 empty matches nothing: the adopt template ships such groups behind ``# bind:`` comments until
@@ -31,7 +33,6 @@ from ratchet_guards.globs import matches
 MANIFEST_PATH = "guards/manifest.toml"
 HOME_PREFIX = "~/"
 ABSOLUTE_PREFIX = "/"
-EDIT_DECISIONS = frozenset({"ask", "deny"})
 PLUGIN_GROUP = "plugin"
 PLUGIN_REASON = (
     "The guard's own code, the installed plugins and the user settings that enable them: "
@@ -83,15 +84,33 @@ class ManifestError(ValueError):
     """The manifest does not have the documented shape."""
 
 
+class EditRule(Enum):
+    """What the hook answers to an edit of a group's paths."""
+
+    ASK = "ask"
+    DENY = "deny"
+    APPEND = "append"
+
+
 @dataclass(frozen=True, slots=True)
 class Group:
-    """Guard paths that share a reason; ``locked`` (``edit = "deny"``) denies edits outright."""
+    """Guard paths that share a reason, and the answer an edit of one gets."""
 
     name: str
     reason: str
     patterns: tuple[str, ...]
-    locked: bool = False
+    edit: EditRule = EditRule.ASK
     excluded: tuple[str, ...] = ()
+
+    @property
+    def locked(self) -> bool:
+        """Whether an edit is denied outright (``edit = "deny"``)."""
+        return self.edit is EditRule.DENY
+
+    @property
+    def additive(self) -> bool:
+        """Whether an edit that only adds passes without asking (``edit = "append"``)."""
+        return self.edit is EditRule.APPEND
 
     def excludes(self, path: PurePosixPath) -> bool:
         """Whether one of the group's ``exclude`` patterns matches ``path``."""
@@ -138,7 +157,7 @@ def plugin_group(plugin_root: Path) -> Group:
     """The locked group over the plugin at ``plugin_root`` (absolute) and the user's plugins."""
     root = plugin_root.as_posix()
     return Group(
-        PLUGIN_GROUP, PLUGIN_REASON, (root, f"{root}/**", *PLUGIN_HOME_PATTERNS), locked=True
+        PLUGIN_GROUP, PLUGIN_REASON, (root, f"{root}/**", *PLUGIN_HOME_PATTERNS), EditRule.DENY
     )
 
 
@@ -162,6 +181,14 @@ def _pattern(value: object) -> str:
     return value
 
 
+def _edit_rule(value: object) -> EditRule:
+    rules = {rule.value: rule for rule in EditRule}
+    if not isinstance(value, str) or value not in rules:
+        msg = f"group 'edit' must be one of {sorted(rules)}, not {value!r}"
+        raise ManifestError(msg)
+    return rules[value]
+
+
 def _group(table: object) -> Group:
     if not isinstance(table, dict):
         msg = "every [[group]] must be a table"
@@ -174,14 +201,10 @@ def _group(table: object) -> Group:
     if not isinstance(excluded, list):
         msg = "group 'exclude' must be a list"
         raise ManifestError(msg)
-    edit = table.get("edit", "ask")
-    if edit not in EDIT_DECISIONS:
-        msg = f"group 'edit' must be one of {sorted(EDIT_DECISIONS)}, not {edit!r}"
-        raise ManifestError(msg)
     patterns = tuple(map(_pattern, paths))
     name, reason = _text(table, "name"), _text(table, "reason")
     excludes = tuple(map(_pattern, excluded))
-    return Group(name, reason, patterns, locked=edit == "deny", excluded=excludes)
+    return Group(name, reason, patterns, _edit_rule(table.get("edit", "ask")), excludes)
 
 
 def parse(text: str) -> Manifest:

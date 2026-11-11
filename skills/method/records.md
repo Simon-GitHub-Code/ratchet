@@ -26,6 +26,8 @@ An unlisted capability is out by default. A listed exclusion needs a document ch
 
 The format is domain-modeling's `GLOSSARY-FORMAT.md`: one concept, one name, the synonyms under _Avoid_. The method adds enforcement where the stack allows it: a fitness test scans every identifier defined on the absolute and declared paths, splits at word boundaries, and fails on any _Avoid_ term as consecutive whole words. The check cannot see meaning, so the whole word is banned; a collision is allow-listed with a `Why:` and an ADR.
 
+An agent adds to the glossary and does not change it. A new term with its _Avoid_ list, and a new _Avoid_ item on an existing term, pass the guard; a changed definition, a renamed or removed term and a shortened _Avoid_ list ask the owner ([guards.md](guards.md), ADR 0014). The check reads lines, not meaning: before you add a term, read the glossary for the concept under another word, and add the word to that term's _Avoid_ list instead of defining it twice.
+
 ## Architecture decision records: `docs/adr/NNNN-<slug>.md`
 
 The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for when to write one (hard to reverse, surprising without context, a real trade-off) holds. The method adds:
@@ -34,6 +36,7 @@ The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for whe
 - Numbering without gaps. The title states the decision as a sentence.
 - A change that contradicts an ADR needs the superseding ADR first: `status: superseded` with `superseded-by: NNNN`, or domain-modeling's `superseded by ADR-NNNN`.
 - Every machine-enforced rule cites its ADR: a policy constant in a fitness test carries an `ADR NNNN` comment, and a fitness test checks the number exists.
+- An agent writes a new ADR, under the next free number, and edits no ADR the default branch holds. The guard passes a new record and asks the owner for an edit of an existing one, for a record that speaks of superseding another, and for one carrying a `Relaxes:` line ([ratchet.md](ratchet.md)). A new ADR that contradicts an old one without superseding it passes the guard and is a finding for the review, so read the titles in `docs/adr/` first.
 - A rejection is a decision too. The title states the negative; the body gives the scope, the claims checked against evidence, the experiment run through the gates with its numbers, the revisit triggers, and the seam that keeps the option cheap. Link the document `mattpocock-skills:research` wrote.
 
 ## Product and design: `PRODUCT.md`, `DESIGN.md`
@@ -57,4 +60,4 @@ The template and lifecycle are in [guards.md](guards.md).
 
 ## Pull request
 
-The body follows the repository's template at the path the binding names. `mattpocock-skills:pr` supplies Summary, Evidence and Merge Danger; the method adds Conjecture (the claim, its refuter, the assumptions the spec made where the ticket was silent, and for a fix the alternative explanation and the check that eliminated it), Operability (the flag and its default, the signals added, what the security and load gates ran), Criticism, Guard paths, Decisions and Gates, and the conformance gate checks the template carries them. Every section is filled: an empty section is an open criticism of the pull request.
+The body follows the repository's template at the path the binding names. `mattpocock-skills:pr` supplies Summary, Evidence and Merge Danger; the method adds Conjecture (the claim, its refuter, the assumptions the spec made where the ticket was silent, and for a fix the alternative explanation and the check that eliminated it), Operability (the flag and its default, the signals added, what the security and load gates ran), Criticism, Guard paths, Decisions (each ADR and each glossary term or _Avoid_ item the change added, as `guard-diff` lists them under `additions:`, with new dependencies and why) and Gates, and the conformance gate checks the template carries them. Every section is filled: an empty section is an open criticism of the pull request.

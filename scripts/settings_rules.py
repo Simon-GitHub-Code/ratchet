@@ -2,7 +2,10 @@
 """Permission rules from the guard manifest: ``.claude/settings.json`` mirrors the manifest.
 
 Every pattern in ``guards/manifest.toml`` becomes one ``Edit`` rule: ``deny`` in a group with
-``edit = "deny"``, ``ask`` in the rest. A repository-relative pattern becomes ``Edit(/pattern)``
+``edit = "deny"``, ``ask`` in the rest. A group with ``edit = "append"`` gets none: a permission
+rule matches a path and cannot read the edit, so an ``ask`` there would prompt for the additions
+the hook lets through, and the hook is the one layer on those paths (ADR 0014). A
+repository-relative pattern becomes ``Edit(/pattern)``
 (Claude Code reads a leading ``/`` as the project root) and a ``~/`` pattern stays as it is. The
 command rules are fixed here: the gate bypasses, history rewrites and forge changes the hook
 denies, and ``gh pr merge`` as an ask. ``gh label create`` is not denied, because the hook lets a
@@ -48,6 +51,7 @@ COMMAND_DENIES = (
     "Bash(gh run delete:*)",
 )
 COMMAND_ASKS = ("Bash(gh pr merge:*)",)
+APPEND = "append"
 Rules = tuple[list[str], list[str]]
 
 
@@ -73,6 +77,8 @@ def rules(manifest: dict[str, object]) -> tuple[Rules, list[str]]:
             )
         paths = group.get("paths")
         patterns = [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
+        if group.get("edit") == APPEND:
+            continue
         target = deny if group.get("edit") == "deny" else ask
         target.extend(map(edit_rule, patterns))
     return (deny + list(COMMAND_DENIES), list(COMMAND_ASKS) + ask), problems

@@ -93,12 +93,19 @@ paths = [
 ]
 
 [[group]]
-name = "decisions"
-reason = "Decision records, the agent instructions, the vocabulary and the process documents are the standards every review judges against."
+name = "records"
+reason = "Decision records and the vocabulary: an agent adds to them, the owner changes them."
+edit = "append"
 paths = [
     "docs/adr/**",
+    "GLOSSARY.md",
+]
+
+[[group]]
+name = "decisions"
+reason = "The agent instructions and the process documents are the standards every review judges against."
+paths = [
     "docs/agents/**",
     "docs/process/**",
     "CLAUDE.md",
-    "GLOSSARY.md",
 ]
