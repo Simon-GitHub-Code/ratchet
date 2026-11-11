@@ -290,7 +290,10 @@ def test_hooks_json_registers_the_session_shim_for_sessions_and_subagents(event:
 def test_hooks_json_registers_the_shim_for_edits_and_bash() -> None:
     registered = json.loads((PLUGIN_ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
     [entry] = registered["hooks"]["PreToolUse"]
-    assert entry["matcher"] == "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch"
+    assert entry["matcher"] == (
+        "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch"
+        "|run_terminal_command|search_replace|hashline_edit|write"
+    )
     [command] = entry["hooks"]
     assert command == {
         "type": "command",
@@ -357,3 +360,60 @@ def test_apply_patch_is_judged_by_the_paths_in_its_headers(tmp_path: Path) -> No
     assert (
         hook.decide({"tool_name": "apply_patch", "tool_input": {}, "cwd": str(root)}, guard) is None
     )
+
+
+# Grok reports its own tool names (captured from Grok 1.0.77's PreToolUse input); the Cursor
+# preset's tools name the file in `path`.
+@pytest.mark.parametrize(
+    ("tool", "tool_input", "rule"),
+    [
+        ("run_terminal_command", {"command": "git push --force"}, "force-push"),
+        (
+            "search_replace",
+            {"file_path": "CLAUDE.md", "old_string": "a", "new_string": "b"},
+            "guard-path-edit",
+        ),
+        ("hashline_edit", {"file_path": "CLAUDE.md"}, "guard-path-edit"),
+        ("write", {"file_path": ".claude/settings.json", "content": "{}"}, "guard-path-locked"),
+        ("Shell", {"command": "git push -f origin feat/work"}, "force-push"),
+        ("StrReplace", {"path": "CLAUDE.md"}, "guard-path-edit"),
+        ("Write", {"path": ".claude/settings.json", "contents": "{}"}, "guard-path-locked"),
+    ],
+)
+def test_other_harness_tool_names_are_judged_as_claude_tools(
+    tmp_path: Path, *, tool: str, tool_input: dict[str, object], rule: str
+) -> None:
+    root = checkout(tmp_path, manifest=True)
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    verdict = hook.decide({"tool_name": tool, "tool_input": tool_input, "cwd": str(root)}, guard)
+    assert verdict is not None
+    assert verdict.rule == rule
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input"),
+    [
+        ("run_terminal_command", {"command": "git status"}),
+        ("search_replace", {"file_path": "app/main.py", "old_string": "a", "new_string": "b"}),
+        ("write", {"file_path": "notes.md", "content": "x"}),
+        ("read_file", {"target_file": "CLAUDE.md"}),
+    ],
+)
+def test_other_harness_tool_names_pass_when_no_rule_fires(
+    tmp_path: Path, tool: str, tool_input: dict[str, object]
+) -> None:
+    root = checkout(tmp_path, manifest=True)
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    assert (
+        hook.decide({"tool_name": tool, "tool_input": tool_input, "cwd": str(root)}, guard) is None
+    )
+
+
+def test_an_edit_without_any_path_key_is_unreadable(tmp_path: Path) -> None:
+    root = checkout(tmp_path, manifest=True)
+    guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
+    verdict = hook.decide(
+        {"tool_name": "write", "tool_input": {"content": "x"}, "cwd": str(root)}, guard
+    )
+    assert verdict is not None
+    assert verdict.rule == "unreadable"
