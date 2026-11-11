@@ -3,7 +3,9 @@
 
 A subject is ``type(scope): summary`` or ``type: summary``, with a type from the conventional
 set, a lower-case scope, a summary that starts with a non-space character, no trailing full
-stop, and at most 72 characters. Merge commits are skipped.
+stop, and at most 72 characters. The `` (#12)`` a forge appends to a squash merge's subject is
+not counted: the author wrote the rest, and the number is added after the last gate has run.
+Merge commits are skipped.
 
 With ``--message-file`` it checks the one message being written instead, as git's ``commit-msg``
 hook: the history check at the ``pre-commit`` stage would judge the commit an amend replaces, and
@@ -36,14 +38,20 @@ TYPES = (
 )
 SUBJECT = re.compile(rf"^(?:{'|'.join(TYPES)})(?:\([a-z0-9][a-z0-9/._-]*\))?!?: \S.*$")
 MAX_SUBJECT = 72
+# The pull request number a forge's squash merge writes after the title, at the very end.
+SQUASH_NUMBER = re.compile(r" \(#\d+\)$")
 
 
 def faults(subject: str) -> list[str]:
     found = []
     if not SUBJECT.match(subject):
         found.append(f"'{subject}': not `type(scope): summary` with a type in {', '.join(TYPES)}")
-    if len(subject) > MAX_SUBJECT:
-        found.append(f"'{subject[:30]}...': {len(subject)} characters, at most {MAX_SUBJECT}")
+    written, number = SQUASH_NUMBER.sub("", subject), SQUASH_NUMBER.search(subject)
+    if len(written) > MAX_SUBJECT:
+        uncounted = f", not counting '{number.group()}'" if number else ""
+        found.append(
+            f"'{subject[:30]}...': {len(written)} characters, at most {MAX_SUBJECT}{uncounted}"
+        )
     if subject.endswith("."):
         found.append(f"'{subject}': ends with a full stop")
     return found
