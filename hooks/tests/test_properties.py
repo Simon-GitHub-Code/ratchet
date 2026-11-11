@@ -75,7 +75,7 @@ def test_harmless_commands_stay_harmless_together(commands: list[str], separator
 
 
 @given(
-    left=st.sampled_from([c for c, _ in FLAGGED] + HARMLESS_CONTEXT_FREE),
+    left=st.sampled_from([c for c, _ in FLAGGED if _context_free(c)] + HARMLESS_CONTEXT_FREE),
     right=st.sampled_from([c for c, _ in FLAGGED] + HARMLESS),
     separator=SEPARATORS,
 )
