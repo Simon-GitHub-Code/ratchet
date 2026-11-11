@@ -4,7 +4,9 @@
 root. For Edit, Write, MultiEdit and NotebookEdit on a guard path, and for a Codex ``apply_patch``
 whose headers name one, the hook answers ``ask``. Grok's own tool names
 (``run_terminal_command``, ``search_replace``, ``write``, ...) are judged as the Claude tools
-they stand for. It answers ``ask``,
+they stand for. Antigravity's input (``toolCall`` with ``name`` and ``args``) is translated to
+Claude's shape first, and the answer goes back in Antigravity's (``decision`` and ``reason``).
+It answers ``ask``,
 which needs a human at the permission prompt, or ``deny`` in a group whose ``edit`` is
 ``"deny"`` (paths Claude Code's bypass mode would let through an ``ask``); for a Bash
 command that bypasses a gate, rewrites history, removes a plugin or writes a guard path it
@@ -30,7 +32,8 @@ git (``ratchet_guards.committed``). An uncommitted manifest, or one committed on
 branch, guards nothing yet: that is the adoption in progress, and only the command rules
 apply until it merges. The plugin's own files are locked either way: ``PLUGIN_ROOT`` (two
 parents above this package) and ``~/.claude/plugins/**``, together with
-``~/.claude/settings.json`` and ``~/.claude/settings.local.json``.
+``~/.claude/settings.json`` and ``~/.claude/settings.local.json``, and the same switches of
+the other harnesses (``ratchet_guards.manifest.PLUGIN_HOME_PATTERNS``).
 """
 
 import json
@@ -66,9 +69,36 @@ HARNESS_TOOLS = {
     "write": "Write",
     "StrReplace": "Edit",
     "EditNotebook": "NotebookEdit",
+    "run_command": "Bash",
+    "write_to_file": "Write",
+    "write_file": "Write",
+    "replace_file_content": "Edit",
+    "edit_file": "Edit",
+    "multi_replace_file_content": "MultiEdit",
+    "notebook_edit": "NotebookEdit",
 }
 # Where an edit tool names its file when not under the Claude tool's own key.
 PATH_KEYS = ("file_path", "path", "notebook_path", "target_notebook")
+# Why: Antigravity (agy) sends `{"toolCall": {"name", "args"}}` with CamelCase arguments and
+# reads `{"decision", "reason"}` back; none of Claude Code's fields are in its input.
+ANTIGRAVITY_CALL = "toolCall"
+ANTIGRAVITY_ARGS = {
+    "CommandLine": "command",
+    "TargetFile": "file_path",
+    "CodeContent": "content",
+    "TargetContent": "old_string",
+    "ReplacementContent": "new_string",
+    "AllowMultiple": "replace_all",
+}
+ANTIGRAVITY_CHUNKS = "ReplacementChunks"
+# Why: ratchet's `ask` means the owner approves this one call. Antigravity's `ask` honours a
+# cached "Always Allow", which would let a later guard-path edit through unseen; `force_ask`
+# always prompts. It never answers `allow`, which would skip Antigravity's own prompts.
+ANTIGRAVITY_DECISIONS = {Decision.DENY: "deny", Decision.ASK: "force_ask"}
+# Why: Antigravity documents `decision` as required and says nothing of empty stdout. An object
+# with no decision is valid JSON that its permission manager treats as no opinion (agy 1.5.6
+# changelog: empty decision strings are handled safely), so its own rules decide.
+ANTIGRAVITY_SILENT = "{}"
 # Why: Codex edits through apply_patch, whose input is the patch text; the paths are its headers.
 PATCH_TOOL = "apply_patch"
 PATCH_HEADER = re.compile(
@@ -152,10 +182,41 @@ def _unreadable(detail: str) -> Verdict:
     return Verdict("unreadable", detail)
 
 
+def is_antigravity(payload: object) -> bool:
+    """Whether ``payload`` is Antigravity's PreToolUse input rather than Claude Code's."""
+    return isinstance(payload, dict) and ANTIGRAVITY_CALL in payload
+
+
+def _claude_args(args: dict[str, object]) -> dict[str, object]:
+    renamed = {ANTIGRAVITY_ARGS.get(key, key): value for key, value in args.items()}
+    chunks = args.get(ANTIGRAVITY_CHUNKS)
+    if isinstance(chunks, list):
+        renamed["edits"] = [_claude_args(chunk) for chunk in chunks if isinstance(chunk, dict)]
+    return renamed
+
+
+def from_antigravity(payload: dict[str, object]) -> dict[str, object]:
+    """Antigravity's PreToolUse input in Claude Code's shape; what is missing stays missing.
+
+    The command's own ``Cwd`` is where it runs, so it wins over the agent's ``cwd``.
+    """
+    call = payload.get(ANTIGRAVITY_CALL)
+    call = call if isinstance(call, dict) else {}
+    args = call.get("args")
+    own = args.get("Cwd") if isinstance(args, dict) else None
+    return {
+        "tool_name": call.get("name"),
+        "tool_input": _claude_args(args) if isinstance(args, dict) else args,
+        "cwd": own if isinstance(own, str) and own else payload.get("cwd"),
+    }
+
+
 def decide(payload: object, guard: Guard) -> Verdict | None:
     """The strictest verdict for one PreToolUse payload, or ``None`` when no rule fires."""
     if not isinstance(payload, dict):
         return _unreadable("the hook input is not a JSON object")
+    if is_antigravity(payload):
+        payload = from_antigravity(payload)
     tool, tool_input, cwd = payload.get("tool_name"), payload.get("tool_input"), payload.get("cwd")
     if not isinstance(tool, str) or not isinstance(tool_input, dict) or not isinstance(cwd, str):
         return _unreadable("the hook input lacks tool_name, tool_input or cwd")
@@ -229,8 +290,13 @@ def reason(verdict: Verdict) -> str:
     )
 
 
-def respond(verdict: Verdict | None) -> str:
-    """The hook's stdout: a PreToolUse decision, or nothing."""
+def respond(verdict: Verdict | None, *, antigravity: bool = False) -> str:
+    """The hook's stdout: a PreToolUse decision, or nothing (``{}`` for Antigravity)."""
+    if antigravity:
+        if verdict is None:
+            return ANTIGRAVITY_SILENT
+        answer = {"decision": ANTIGRAVITY_DECISIONS[verdict.decision], "reason": reason(verdict)}
+        return json.dumps(answer)
     if verdict is None:
         return ""
     decision = "deny" if verdict.decision is Decision.DENY else "ask"
@@ -243,12 +309,14 @@ def respond(verdict: Verdict | None) -> str:
 
 
 def run(text: str, make_guard: Callable[[], Guard]) -> str:
-    """Answer one hook call; every failure becomes an ``ask``."""
+    """Answer one hook call in its harness's form; every failure becomes an ``ask``."""
+    payload: object = None
     try:
-        verdict = decide(json.loads(text), make_guard())
+        payload = json.loads(text)
+        verdict = decide(payload, make_guard())
     except Exception as error:  # noqa: BLE001 # -- fail closed: any failure must reach a human
         verdict = _unreadable(f"{type(error).__name__}: {error}")
-    return respond(verdict)
+    return respond(verdict, antigravity=is_antigravity(payload))
 
 
 def repository_root(path: Path) -> Path:

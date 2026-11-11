@@ -13,6 +13,7 @@ prints it so a session never opens without one.
 
 ``SessionStart`` reads plain stdout as context; ``SubagentStart`` reads the JSON field
 ``hookSpecificOutput.additionalContext``. ``render`` picks the form from the event name.
+Antigravity reads neither: its ``SessionStart`` takes ``injectSteps``, a system message.
 """
 
 import json
@@ -121,17 +122,19 @@ def message(cwd: Path, plugin_root: Path = PLUGIN_ROOT, run: Runner = run_route)
     return "\n\n".join(part for part in parts if part)
 
 
-def render(event: str, text: str) -> str:
+def render(event: str, text: str, *, antigravity: bool = False) -> str:
     """``text`` in the form the hook event reads: JSON for a subagent, plain text otherwise."""
+    if antigravity:
+        return json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]})
     if event == SUBAGENT_EVENT:
         output = {"hookEventName": event, "additionalContext": text}
         return json.dumps({"hookSpecificOutput": output})
     return text
 
 
-def main(root: Path, event: str) -> int:
+def main(root: Path, event: str, *, antigravity: bool = False) -> int:
     """Print the context for ``root`` in the form ``event`` reads, or nothing."""
     text = message(root)
     if text:
-        print(render(event, text))
+        print(render(event, text, antigravity=antigravity))
     return 0
