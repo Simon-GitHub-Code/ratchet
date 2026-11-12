@@ -9,6 +9,7 @@ would, and runs the command only if the hook let it through (ADR 0016).
 
 import io
 import json
+import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -20,6 +21,7 @@ from tests.repos import commit, git, repository, write
 from tests.support import MANIFEST_TEXT
 
 PROBE = "scripts/gate.py"
+EDITORS = frozenset({"GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "VISUAL", "EDITOR"})
 
 
 def local(tmp_path: Path) -> Path:
@@ -39,6 +41,13 @@ def on_main(tmp_path: Path) -> Path:
     root = local(tmp_path)
     git(root, "switch", "-q", "main")
     return root
+
+
+def linked(tmp_path: Path) -> Path:
+    """A work tree on ``feature/x`` beside the checkout of ``main``, which is ``../local``."""
+    root = on_main(tmp_path)
+    git(root, "worktree", "add", "-q", str(tmp_path / "wt"), "feature/x")
+    return tmp_path / "wt"
 
 
 def cloned(tmp_path: Path) -> Path:
@@ -67,8 +76,14 @@ def probe(root: Path) -> str:
 
 
 def run(root: Path, command: str) -> None:
-    done = subprocess.run(  # noqa: S602 # -- the attack under test, in a temporary repository
-        command, shell=True, cwd=root, capture_output=True, text=True, check=False
+    """Run ``command`` in bash, the shell an agent's tool call is run in.
+
+    The editors this machine's environment names are left out, so that the one a command names
+    is the one git runs.
+    """
+    env = {name: value for name, value in os.environ.items() if name not in EDITORS}
+    done = subprocess.run(  # noqa: S603 # -- the attack under test, in a temporary repository
+        ["/bin/bash", "-c", command], cwd=root, env=env, capture_output=True, text=True, check=False
     )
     assert done.returncode == 0, done.stderr
 
@@ -87,6 +102,12 @@ ATTACKS: dict[Scenario, list[str]] = {
         "git checkout -B main old",
         "git switch -C main old",
         "git push . +old:main",
+        "git push . :heads/main",
+        "git push --delete . heads/main",
+        "git push . --delete heads/main",
+        "git push -d . heads/main",
+        "git push . +old:heads/main",
+        "git fetch . +old:heads/main",
         "git fetch . +old:main",
         "git fetch . +refs/heads/old:refs/heads/main",
         "git worktree add -B main ../elsewhere old",
@@ -100,6 +121,15 @@ ATTACKS: dict[Scenario, list[str]] = {
         "env git branch -f main old",
         "echo main | xargs -I{} git branch -f main old",
         "eval 'git branch -f main old'",
+        "git rebase -q -x 'git branch -f main old' HEAD~1",
+        "git -c alias.x='!git branch -f main old' x",
+        (
+            "printf 'protocol=https\\nhost=x.invalid\\n' | git -c credential.helper="
+            "'!git branch -f main old; echo username=u; echo password=p;:' credential fill"
+        ),
+        "git -c core.editor='git branch -f main old;:' commit -q --amend --allow-empty",
+        "EDITOR='git branch -f main old;:' git commit -q --amend --allow-empty",
+        "GIT_EDITOR='git branch -f main old;:' git commit -q --amend --allow-empty",
     ],
     on_main: [
         "git reset --soft old",
@@ -111,12 +141,38 @@ ATTACKS: dict[Scenario, list[str]] = {
         "git rebase --onto old main",
         "git branch -m gone",
         "git update-ref HEAD old",
+        "git switch nope; git reset --soft old",
+        "git checkout README.md && git reset --soft old",
+        "git switch -q -c feature/z old && git switch -q - && git reset --soft old",
+        "git -C /nonexistent switch feature/x; git reset --soft old",
+        "cd /nonexistent; git reset --soft old",
+        "(cd /tmp); git reset --soft old",
+        "cd /tmp | cat; git reset --soft old",
+        "cd /tmp && cd - > /dev/null && git reset --soft old",
+        "git log -1 --format=%H old --output=.git/refs/heads/main",
+    ],
+    linked: [
+        "git --git-dir=../local/.git reset --soft old",
+        "git --git-dir ../local/.git reset --soft old",
+        "git --git-dir=../local/.git --work-tree=../local reset --keep old",
+        "GIT_DIR=../local/.git git reset --soft old",
+        "export GIT_DIR=../local/.git; git reset --soft old",
+        "declare -x GIT_DIR=../local/.git; git reset --soft old",
+        "typeset -x GIT_DIR=../local/.git; git reset --soft old",
+        "GIT_DIR=../local/.git; export GIT_DIR; git reset --soft old",
+        "env GIT_DIR=../local/.git git reset --soft old",
+        "GIT_COMMON_DIR=../local/.git GIT_DIR=../local/.git git reset --soft old",
+        "git --git-dir=../local/.git update-ref HEAD old",
     ],
     cloned: [
         "git update-ref refs/remotes/origin/main origin/old",
         "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/old",
         "git remote set-head origin old",
         "git fetch . +refs/remotes/origin/old:refs/remotes/origin/main",
+        "git fetch . +origin/old:remotes/origin/main",
+        "git push . +origin/old:remotes/origin/main",
+        "git push . +origin/old:origin/main",
+        "git push . +origin/old:origin",
         "git replace origin/main origin/old",
         (
             "git config remote.origin.fetch +refs/heads/old:refs/remotes/origin/main"

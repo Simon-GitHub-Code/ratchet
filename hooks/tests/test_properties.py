@@ -89,7 +89,7 @@ def test_the_strictest_verdict_matches_the_rules(flagged: tuple[str, list[str]])
     command, expected = flagged
     verdict = strictest(bash.check(command, Context(ROOT), make_guard()))
     assert verdict is not None
-    asks = (["merge-pr"], ["agent-ready-label"])
+    asks = (["merge-pr"], ["agent-ready-label"], ["unreadable"])
     want = Decision.ASK if expected in asks else Decision.DENY
     assert verdict.decision is want
 

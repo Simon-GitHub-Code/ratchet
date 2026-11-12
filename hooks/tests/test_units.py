@@ -177,15 +177,18 @@ def test_comments_start_only_at_a_word() -> None:
 def test_redirects_and_file_descriptors() -> None:
     commands = parse_shell("cmd 2>err >out 2>&1 >&- <in &>both 1>>more <<<here 12>fd x").commands
     writes = ("err", "out", "both", "more", "fd")
-    assert commands == (SimpleCommand(("cmd", "x"), writes, herestrings=("here",)),)
+    assert commands == (SimpleCommand(("cmd", "x"), writes, herestrings=("here",), then="\n"),)
     assert parse_shell("echo 1&& ls").commands[0].words == ("echo", "1")
     assert words_of("a ) b") == ["a", "b"]
     assert parse_shell("a | b |& c; d").commands == (
-        SimpleCommand(("a",), piped=True),
-        SimpleCommand(("b",), piped=True),
-        SimpleCommand(("c",)),
-        SimpleCommand(("d",)),
+        SimpleCommand(("a",), piped=True, then="|"),
+        SimpleCommand(("b",), piped=True, then="|&"),
+        SimpleCommand(("c",), then=";"),
+        SimpleCommand(("d",), then="\n"),
     )
+    ends = [command.then for command in parse_shell("a && b || c & (d) ; e").commands]
+    assert ends == ["&&", "||", "&", ")", "\n"]
+    assert [c.then for c in parse_shell("f() { g; }").commands] == ["(", ";", "\n"]
 
 
 def test_unquote_falls_back_to_dropping_quotes() -> None:
@@ -476,35 +479,77 @@ def test_git_invocation_parses_global_options() -> None:
     call = gitcall.invocation(
         ["git", "-C", "sub", "-c", "a=b", "--no-pager", "--git-dir=x", "log", "-1"], ROOT
     )
-    assert call == gitcall.Invocation(ROOT / "sub", ("a=b",), "log", ("-1",))
+    assert call == gitcall.Invocation(ROOT / "sub", ("a=b",), "log", ("-1",), redirected=True)
+    assert not gitcall.invocation(["git", "-C", "sub", "--no-pager", "log"], ROOT).redirected
     assert gitcall.invocation(["git", "-C"], ROOT) == gitcall.Invocation(ROOT, (), "", ())
     assert gitcall.invocation(["git"], ROOT).subcommand == ""
 
 
+SURE = True
+MAYBE = False
+ANYWHERE = (frozenset({"main", "master"}), MAYBE)
+
+
 @pytest.mark.parametrize(
-    ("words", "branch"),
+    ("words", "expected"),
     [
-        (["git", "switch", "main"], "main"),
-        (["git", "switch", "-c", "x"], "x"),
-        (["git", "switch", "--create", "y"], "y"),
-        (["git", "checkout", "-b", "z", "origin/main"], "z"),
-        (["git", "checkout", "-B", "w"], "w"),
-        (["git", "switch", "-C", "v"], "v"),
-        (["git", "switch", "--force-create", "u"], "u"),
-        (["git", "switch", "main", "-c", "topic"], "topic"),
-        (["git", "symbolic-ref", "HEAD", "refs/heads/x"], "x"),
-        (["git", "symbolic-ref", "-m", "why", "HEAD", "refs/heads/y"], "y"),
+        (["git", "switch", "main"], ({"main"}, SURE)),
+        (["git", "switch", "-c", "x"], ({"x"}, SURE)),
+        (["git", "switch", "--create", "y"], ({"y"}, SURE)),
+        (["git", "switch", "--creat", "y"], ({"y"}, SURE)),
+        (["git", "checkout", "-b", "z", "origin/main"], ({"z"}, SURE)),
+        (["git", "checkout", "-B", "w"], ({"w"}, SURE)),
+        (["git", "switch", "-C", "v"], ({"v"}, SURE)),
+        (["git", "switch", "--force-create", "u"], ({"u"}, SURE)),
+        (["git", "switch", "--orphan", "t"], ({"t"}, SURE)),
+        (["git", "switch", "main", "-c", "topic"], ({"topic"}, SURE)),
+        (["git", "switch", "-f", "feat/x"], ({"feat/x"}, SURE)),
+        (["git", "checkout", "feat/x"], ({"feat/x"}, SURE)),
+        (["git", "checkout", "main"], ({"main"}, SURE)),
+        (["git", "checkout", "README.md"], ({"README.md"}, MAYBE)),
+        (["git", "checkout", "origin/main"], ({"origin/main"}, MAYBE)),
+        (["git", "checkout", "unknown"], ({"unknown"}, MAYBE)),
+        (["git", "-C", "sub", "switch", "feat/x"], ({"feat/x"}, MAYBE)),
+        (["git", "--git-dir=x", "switch", "feat/x"], ({"feat/x"}, MAYBE)),
+        (["git", "--work-tree", "x", "switch", "-c", "feat/x"], ({"feat/x"}, MAYBE)),
+        (["git", "-C", "sub", "symbolic-ref", "HEAD", "refs/heads/x"], ({"x"}, MAYBE)),
+        (["git", "switch", "-"], ANYWHERE),
+        (["git", "checkout", "-"], ANYWHERE),
+        (["git", "switch", "@{-1}"], ANYWHERE),
+        (["git", "checkout", "@{-2}"], ANYWHERE),
+        (["git", "switch", "-t", "origin/main"], ANYWHERE),
+        (["git", "checkout", "--track", "origin/master"], ANYWHERE),
+        (["git", "switch", "--tr", "origin/main"], ANYWHERE),
+        (["git", "bisect", "reset", "main"], ANYWHERE),
+        (["git", "bisect", "start"], ANYWHERE),
+        (["git", "symbolic-ref", "HEAD", "refs/heads/x"], ({"x"}, SURE)),
+        (["git", "symbolic-ref", "-m", "why", "HEAD", "refs/heads/y"], ({"y"}, SURE)),
         (["git", "symbolic-ref", "HEAD"], None),
         (["git", "symbolic-ref", "--short", "HEAD"], None),
         (["git", "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/x"], None),
         (["git", "symbolic-ref"], None),
         (["git", "checkout", "--", "file"], None),
+        (["git", "checkout", "main", "--", "file"], None),
         (["git", "checkout"], None),
+        (["git", "switch", "--detach", "main"], None),
+        (["git", "switch", "-d", "main"], None),
+        (["git", "checkout", "--det", "main"], None),
         (["git", "status"], None),
     ],
 )
-def test_switched_branch(words: list[str], branch: str | None) -> None:
-    assert git.switched_branch(words, ROOT) == branch
+def test_where_a_command_moves_head(
+    words: list[str], expected: tuple[set[str], bool] | None
+) -> None:
+    move = git.switch(words, Context(ROOT), make_guard())
+    assert (None if move is None else (move.branches, move.certain)) == expected
+
+
+@pytest.mark.parametrize("name", ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "PATH", "CDPATH"])
+def test_a_switch_is_not_certain_under_a_variable_that_redirects_it(name: str) -> None:
+    context = Context(ROOT).exporting([name])
+    move = git.switch(["git", "switch", "feat/x"], context, make_guard())
+    assert move == git.Switch(frozenset({"feat/x"}), certain=False)
+    assert git.switch(["git", "switch", "feat/x"], Context(ROOT).exporting(["FOO"]), make_guard())
 
 
 def test_details_name_the_offending_command() -> None:

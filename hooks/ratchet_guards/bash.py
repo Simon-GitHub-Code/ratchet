@@ -1,23 +1,31 @@
 """Judge a Bash command line: every simple command, every nested script, every wrapper.
 
 A command line is lexed (``ratchet_guards.shell``), and each simple command is checked in
-order, tracking ``cd`` and branch switches. Command substitutions, ``bash -c`` strings,
-``eval`` arguments, ``find -exec`` commands and heredocs fed to a shell are checked as
-scripts of their own. A wrapper (``sudo``, ``env``, ``xargs``, ``timeout`` ...) is checked
-from every later word that names a ruled command, so its own options cannot hide one. An
-interpreter given an inline program (``python3 -c``, ``node -e``, or a heredoc, here-string
-or pipe on its stdin) is judged by the program text (``ratchet_guards.interpreters``).
+order. Command substitutions, ``bash -c`` strings, ``eval`` arguments, ``find -exec`` commands
+and heredocs fed to a shell are checked as scripts of their own. A wrapper (``sudo``, ``env``,
+``xargs``, ``timeout`` ...) is checked from every later word that names a ruled command, so its
+own options cannot hide one. An interpreter given an inline program (``python3 -c``, ``node
+-e``, or a heredoc, here-string or pipe on its stdin) is judged by the program text
+(``ratchet_guards.interpreters``).
+
+The line is judged before any of it runs, so a ``cd`` or a ``git switch`` on it is a claim, not
+a fact: the directory may not exist, the command may sit in a subshell, a pipeline or the far
+side of ``||``. A later command is therefore judged in every state the line may have left it
+in, and what any of them refuses is refused. One state is dropped only when the shell itself
+guarantees it: the command is chained with ``&&`` to a plain ``cd <directory>`` or to a ``git``
+command that must have moved ``HEAD`` (``ratchet_guards.git.switch``), and nothing on the line
+redefines what those words do (ADR 0024).
 """
 
-import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import replace
 from itertools import pairwise
 from pathlib import PurePosixPath
 
-from ratchet_guards import gh, git, interpreters, writes
+from ratchet_guards import environment, gh, git, interpreters, writes
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Options, Spec, scan
-from ratchet_guards.shell import SimpleCommand, parse
+from ratchet_guards.shell import PLACEHOLDER, SimpleCommand, parse
 from ratchet_guards.verdict import Verdict
 
 MAX_DEPTH = 8
@@ -32,7 +40,6 @@ RESERVED = frozenset(
 )
 _EXEC_FLAGS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 _EXEC_ENDS = frozenset({";", "+"})
-_ASSIGNMENT = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)=")
 _NESTED_SETTINGS = (
     "--settings",
     "--setting-sources",
@@ -67,8 +74,23 @@ _HARNESS_REMOVALS: dict[str, dict[str, tuple[frozenset[str], str]]] = {
     },
 }
 _PI_REMOVALS = frozenset({"remove", "uninstall"})
-_MOVERS = frozenset({"cd", "pushd", "git"})
-_HOOK_SKIPS = frozenset({"SKIP", "RATCHET_HOOK_PROBE"})
+MAX_STATES = 64
+_DIRECTORY_MOVERS = frozenset({"cd", "pushd", "popd"})
+_MOVERS = _DIRECTORY_MOVERS | {"git"}
+# Why: a `cd` to one of these goes where only the shell knows: the previous directory, a stack
+# entry, another user's home, a variable, a substitution, a glob.
+_UNREADABLE_STARTS = ("-", "+", "~")
+_UNREADABLE_MARKS = ("$", "*", "?", "[", PLACEHOLDER)
+_POPD = "popd"
+_CDPATH = "CDPATH"
+# Why: after one of these the words `cd` and `git` may name a function, an alias or a trap's
+# command, so a move read from the line is no longer certain to be the one that happens.
+_REDEFINERS = frozenset({"function", "alias", "enable", "shopt", "eval", "source", ".", "trap"})
+_DEFINITION = "("
+_AND = "&&"
+# After `||` the command may have been skipped; in a pipeline it runs in a subshell.
+_UNSURE_AFTER = frozenset({"||", "|", "|&"})
+_CROWDED = Verdict("unreadable", "the command line moves between too many directories")
 _SHELL = Spec("oO", frozenset({"--rcfile", "--init-file"}))
 
 
@@ -79,23 +101,52 @@ def _name(word: str) -> str:
 def _assignments(words: Sequence[str]) -> tuple[list[str], list[str]]:
     """Split leading assignments and reserved words from the command they prefix."""
     index = 0
-    while index < len(words) and (words[index] in RESERVED or _ASSIGNMENT.match(words[index])):
+    while index < len(words) and (
+        words[index] in RESERVED or environment.is_assignment(words[index])
+    ):
         index += 1
     return list(words[:index]), list(words[index:])
 
 
-def _environment(words: Sequence[str]) -> list[Verdict]:
+def _assigned(words: Iterable[str]) -> dict[str, str]:
+    """The variables the assignments among ``words`` set, each with its assignment."""
+    return {name: word for word in words if (name := environment.assigned(word)) is not None}
+
+
+def _variables(names: Mapping[str, str]) -> list[Verdict]:
+    """Verdicts for the variables a command sets: a hook skip, or git configuration."""
     verdicts: list[Verdict] = []
-    for assignment in words:
-        match = _ASSIGNMENT.match(assignment)
-        if match is None:
-            continue
-        name = match.group("name")
-        if name in _HOOK_SKIPS:
-            verdicts.append(Verdict("skip-hooks", assignment))
-        elif name.startswith("GIT_CONFIG"):
-            verdicts.append(Verdict("hooks-path", assignment))
+    for name, word in names.items():
+        if name in environment.HOOK_SKIPS:
+            verdicts.append(Verdict("skip-hooks", word))
+        elif name.startswith(environment.CONFIG_PREFIX):
+            verdicts.append(Verdict("hooks-path", word))
     return verdicts
+
+
+def _distinct(contexts: Iterable[Context]) -> list[Context]:
+    return list(dict.fromkeys(contexts))
+
+
+def _levelled(contexts: Sequence[Context]) -> list[Context]:
+    """``contexts`` with what the line has set so far carried by every one of them.
+
+    A variable set and a name unsettled are facts about the line, not about where it stands.
+    """
+    exported = frozenset(name for context in contexts for name in context.exported)
+    unsettled = any(context.unsettled for context in contexts)
+    return _distinct(replace(c, exported=exported, unsettled=unsettled) for c in contexts)
+
+
+def _redefines(command: SimpleCommand) -> bool:
+    """Whether a command may change what ``cd`` or ``git`` means: a definition, ``eval``, a trap."""
+    _, rest = _assignments(command.words)
+    defines = command.then == _DEFINITION and len(rest) == 1
+    return defines or bool(rest and {rest[0], _name(rest[0])} & _REDEFINERS)
+
+
+def _unreadable(target: str) -> bool:
+    return target.startswith(_UNREADABLE_STARTS) or any(m in target for m in _UNREADABLE_MARKS)
 
 
 def _shell_options(args: Sequence[str]) -> Options:
@@ -208,17 +259,12 @@ def _pre_commit(words: Sequence[str]) -> list[Verdict]:
     return [Verdict("skip-hooks", "pre-commit uninstall")] if "uninstall" in words else []
 
 
-def _export(words: Sequence[str]) -> list[Verdict]:
-    return _environment(words[1:])
-
-
 _DIRECT: dict[str, Callable[[Sequence[str]], list[Verdict]]] = {
     "pre-commit": _pre_commit,
     "claude": _nested_claude,
     "grok": _harness("grok"),
     "codex": _harness("codex"),
     "pi": _pi,
-    "export": _export,
 }
 
 
@@ -249,18 +295,44 @@ class _Checker:
             return [Verdict("unreadable", "the command nests scripts too deeply")]
         inner = _Checker(self.guard, self.depth + 1)
         parsed = parse(text)
-        verdicts = [v for nested in parsed.nested for v in inner.script(nested, context)]
+        trusted = not any(map(_redefines, parsed.commands))
+        now = chain = seen = [context]
+        previous = ""
+        crowded = False
+        verdicts: list[Verdict] = []
         pipeline: list[SimpleCommand] = []
         for command in parsed.commands:
-            verdicts += self._writes(command.writes, (), context, verb="redirects into")
-            verdicts += self.words(command.words, context)
             pipeline.append(command)
-            if _reads_script_from_stdin(command.words):
-                verdicts += self._fed(pipeline, parsed.heredocs, context)
-            verdicts += self._fed_interpreter(pipeline, parsed.heredocs, context)
+            for place in now:
+                verdicts += self._command(pipeline, parsed.heredocs, place)
             pipeline = pipeline if command.piped else []
-            context = self._advance(command.words, context)
-        return verdicts
+            chained = command.then == _AND
+            sure = trusted and chained and previous not in _UNSURE_AFTER
+            after = [
+                a for place in now for a in self._advance(command.words, place, seen, sure=sure)
+            ]
+            chain = _distinct([*chain, *after])
+            states = _levelled(after if chained else chain)
+            crowded = crowded or len(states) > MAX_STATES
+            now = states[:MAX_STATES]
+            chain = chain if chained else now
+            seen = _distinct([*seen, *now])
+            previous = command.then
+        verdicts += [_CROWDED] if crowded else []
+        nested = [(script, place) for script in parsed.nested for place in seen[:MAX_STATES]]
+        inside = [v for script, place in nested for v in inner.script(script, place)]
+        return list(dict.fromkeys([*inside, *verdicts]))
+
+    def _command(
+        self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context
+    ) -> list[Verdict]:
+        """Every verdict on the last command of ``pipeline``, run in ``context``."""
+        command = pipeline[-1]
+        verdicts = self._writes(command.writes, (), context, verb="redirects into")
+        verdicts += self.words(command.words, context)
+        if _reads_script_from_stdin(command.words):
+            verdicts += self._fed(pipeline, heredocs, context)
+        return verdicts + self._fed_interpreter(pipeline, heredocs, context)
 
     def _fed(
         self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context
@@ -306,29 +378,41 @@ class _Checker:
 
     def words(self, words: Sequence[str], context: Context) -> list[Verdict]:
         assignments, rest = _assignments(words)
-        verdicts = _environment(assignments)
+        names = _assigned(assignments)
+        verdicts = _variables(names) + self._scripts(environment.commands(names), context)
         if not rest:
             return verdicts
+        context = context.exporting(names)
         head = _name(rest[0])
         if head in WRAPPERS:
             return verdicts + self._wrapped(rest, context)
         return verdicts + self._ruled(head, rest, context)
 
+    def _scripts(self, scripts: Sequence[str], context: Context) -> list[Verdict]:
+        inner = _Checker(self.guard, self.depth + 1)
+        return [v for script in scripts for v in inner.script(script, context)]
+
     def _wrapped(self, words: Sequence[str], context: Context) -> list[Verdict]:
-        verdicts = _environment([word for word in words if _ASSIGNMENT.match(word)])
+        names = _assigned(words)
+        verdicts = _variables(names) + self._scripts(environment.commands(names), context)
+        context = context.exporting(names)
         for index in range(len(words)):
-            if _name(words[index]) not in WRAPPERS and not _ASSIGNMENT.match(words[index]):
+            if _name(words[index]) not in WRAPPERS and not environment.is_assignment(words[index]):
                 verdicts += self.words(words[index:], context)
         return verdicts
 
     def _ruled(self, head: str, words: Sequence[str], context: Context) -> list[Verdict]:
         if head == "git":
-            return git.check(words, context, self.guard)
+            ran = self._scripts(git.scripts(words, context.cwd), context)
+            return ran + git.check(words, context, self.guard)
         if head == "gh":
             return gh.check(words, context, self.guard)
         direct = _DIRECT.get(head)
         if direct is not None:
             return direct(words)
+        declared = environment.declared(words)
+        if declared:
+            return _variables(declared) + self._scripts(environment.commands(declared), context)
         inner = _Checker(self.guard, self.depth + 1)
         verdicts = [
             v for script in _inner_scripts(head, words) for v in inner.script(script, context)
@@ -341,18 +425,43 @@ class _Checker:
         touched = writes.touched(head, words[1:])
         return verdicts + self._writes(touched.written, touched.removed, context, verb=head)
 
-    def _advance(self, words: Sequence[str], context: Context) -> Context:
+    def _advance(
+        self, words: Sequence[str], context: Context, seen: Sequence[Context], *, sure: bool
+    ) -> list[Context]:
+        """The states ``words`` may leave ``context`` in for the command after it.
+
+        ``sure`` says that command runs only when this one succeeded. Then a plain ``cd`` or
+        ``git`` leaves one state; in every other case the state before it stays possible.
+        """
+        context = context.exporting(environment.carried(words))
         rest = _mover(words)
-        if not rest:
-            return context
-        head = _name(rest[0])
-        if head in {"cd", "pushd"}:
-            target = self.guard.locator.filesystem.expand(rest[-1] if len(rest) > 1 else "~")
-            return context.moved_to(context.cwd / target)
-        if head == "git":
-            branch = git.switched_branch(rest, context.cwd)
-            return context if branch is None else context.switched_to(branch)
-        return context
+        head = _name(rest[0]) if rest else ""
+        bare = bool(rest) and list(words) == rest and rest[0] == head
+        quiet = head in _DIRECTORY_MOVERS or (head == "git" and git.settled(rest, context.cwd))
+        still = bare and quiet
+        context = context if still else context.unsettling()
+        if head not in _MOVERS:
+            return [context]
+        plain = sure and bare
+        if head in _DIRECTORY_MOVERS:
+            return self._moved(rest, context, seen, plain=plain)
+        move = git.switch(rest, context, self.guard)
+        if move is None:
+            return [context]
+        if plain and move.certain:
+            return [context.switched_to(*move.branches)]
+        return [context.claiming(move.branches)]
+
+    def _moved(
+        self, words: Sequence[str], context: Context, seen: Sequence[Context], *, plain: bool
+    ) -> list[Context]:
+        """Where a ``cd``, ``pushd`` or ``popd`` may leave the commands after it."""
+        target = self.guard.locator.filesystem.expand(words[-1] if len(words) > 1 else "~")
+        hidden = _name(words[0]) == _POPD or _unreadable(target) or _CDPATH in context.exported
+        if hidden:
+            return _distinct([context, *(context.moved_to(place.cwd) for place in seen)])
+        moved = context.moved_to(context.cwd / target)
+        return [moved] if plain else [context, moved]
 
 
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:

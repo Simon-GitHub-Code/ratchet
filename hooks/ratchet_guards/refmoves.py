@@ -7,21 +7,23 @@ protected. What these rules cannot see is a ref name that a variable, a file or 
 (ADR 0016).
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from itertools import pairwise
 
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gitcall import Invocation
 from ratchet_guards.options import Spec, expand_long, scan
-from ratchet_guards.refs import REMOTE, protects
+from ratchet_guards.refs import REMOTE, default_branch, protected, protects, pushed
 from ratchet_guards.verdict import Verdict
 
 # Why: a config key that decides what a fetch writes into a remote-tracking ref (`remote.*`,
-# `url.*.insteadOf`), what a command line means (`alias.*`), or which file git reads more config
-# from (`include.*`) re-points the default branch as surely as a ref write does.
+# `url.*.insteadOf`), what a command line means (`alias.*`), which file git reads more config
+# from (`include.*`), or which branch a push of another lands on (`push.default`) re-points the
+# default branch as surely as a ref write does.
 TRUSTED_KEYS = ("alias.", "remote.", "url.", "include.", "includeif.", "extensions.")
 TRUSTED_CORE_KEYS = frozenset(
     {"core.usereplacerefs", "core.alternaterefscommand", "core.alternaterefsprefixes"}
-    | {"core.worktree", "core.bare"}
+    | {"core.worktree", "core.bare", "push.default"}
 )
 _BRANCH_VALUES = frozenset(
     {"--set-upstream-to", "--contains", "--no-contains", "--merged", "--no-merged"}
@@ -73,15 +75,34 @@ _REMOTE_LONG = frozenset({"--mirror", "--master", "--track", "--tags", "--no-tag
 _REMOTE_ADD_REDIRECTS = frozenset({"-m", "--master", "--mirror"})
 _REMOTE = Spec("tm", frozenset({"--track", "--master"}))
 _HEAD = frozenset({"HEAD", "@"})
+_TAG_VALUES = frozenset(
+    {"--message", "--file", "--local-user", "--cleanup", "--sort", "--format", "--contains"}
+    | {"--no-contains", "--merged", "--no-merged", "--points-at"}
+)
+_TAG = Spec("mFu", _TAG_VALUES)
+_TAG_LONG = _TAG_VALUES | {"--list", "--delete", "--verify", "--force", "--column", "--annotate"}
+# Why: with any of these a `git tag` call lists, verifies or deletes, and creates nothing.
+_TAG_READS = _TAG_VALUES - {"--message", "--file", "--local-user", "--cleanup"} | {
+    "-l",
+    "-n",
+    "-d",
+    "-v",
+    "--list",
+    "--delete",
+    "--verify",
+    "--column",
+}
+_MATCHING = ":"
+_EVERY_BRANCH = "refs/heads/*"
 
 
 def _refused(call: Invocation, because: str = "") -> list[Verdict]:
     return [Verdict("default-ref", because or " ".join(("git", call.subcommand, *call.args)))]
 
 
-def _writes(call: Invocation, names: Sequence[str | None], *, heads: bool = True) -> list[Verdict]:
+def _writes(call: Invocation, names: Sequence[str | None]) -> list[Verdict]:
     """A verdict when any of ``names`` is a ref the call writes and the guard reads."""
-    return _refused(call) if any(protects(n, heads=heads) for n in names if n) else []
+    return _refused(call) if any(protects(n) for n in names if n) else []
 
 
 def trusted_key(key: str) -> bool:
@@ -110,8 +131,8 @@ def _branch_names(call: Invocation, context: Context, guard: Guard) -> list[str]
         prefix = "refs/remotes/" if flags & {"-r", "--remotes"} else ""
         return [prefix + name for name in operands]
     if flags & {"-m", "-M", "--move"}:
-        renamed = [guard.branch(context, call.cwd)] if len(operands) == 1 else []
-        return [*operands, *filter(None, renamed)]
+        renamed = sorted(guard.branches(context, call.cwd)) if len(operands) == 1 else []
+        return [*operands, *renamed]
     if flags & {"-c", "-C", "--copy"}:
         return operands[-1:]
     return [] if flags & _BRANCH_READS else operands[:1]
@@ -158,20 +179,59 @@ def worktree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 
 def fetch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git fetch`` and ``git pull`` with a refspec whose destination is a protected ref."""
+    """``git fetch`` and ``git pull`` with a refspec whose destination is a protected ref.
+
+    ``tag <name>`` is ``refs/tags/<name>`` on both sides.
+    """
     del context, guard
     options = scan(expand_long(call.args, _FETCH_LONG), _FETCH)
     refspecs = [*options.operands[1:], options.values.get("--refmap", "")]
-    return _writes(call, [spec.removeprefix("+").partition(":")[2] for spec in refspecs])
+    tags = [f"refs/tags/{name}" for word, name in pairwise(refspecs) if word == "tag"]
+    return _writes(call, [*tags, *(spec.removeprefix("+").partition(":")[2] for spec in refspecs)])
 
 
-def pushes(call: Invocation, refspecs: Sequence[str]) -> list[Verdict]:
-    """A push whose destination is a remote-tracking or replace ref, which ``git push .`` writes.
+def tag(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
+    """``git tag`` creating a tag named as a default branch; listing and deleting are fine."""
+    del context, guard
+    options = scan(expand_long(call.args, _TAG_LONG), _TAG)
+    reads = bool(options.flags & _TAG_READS)
+    return [] if reads else _writes(call, [f"refs/tags/{name}" for name in options.operands[:1]])
 
-    Pushes to the default branch's own name are ``push-main``'s.
+
+def push_targets(refspecs: Sequence[str]) -> Iterator[str | None]:
+    """What each refspec of a push writes, as git would name it; ``None`` is the current branch.
+
+    The destination follows the colon. With no colon the source names it, ``tag <name>`` is
+    ``refs/tags/<name>``, and a lone ``:`` pushes every branch both sides hold.
     """
-    targets = [spec.removeprefix("+").rpartition(":")[2] for spec in refspecs]
-    return _writes(call, targets, heads=False)
+    words = iter(refspecs)
+    for word in words:
+        spec = word.removeprefix("+")
+        source, _, destination = spec.partition(":")
+        if spec == "tag":
+            yield f"refs/tags/{next(words, '')}"
+        elif spec == _MATCHING:
+            yield _EVERY_BRANCH
+        else:
+            target = destination or source
+            yield None if target in _HEAD else target
+
+
+def pushes(call: Invocation, targets: Sequence[str]) -> list[Verdict]:
+    """A push that writes a remote-tracking ref, a replace ref or a tag named as a default branch.
+
+    ``git push .`` writes this repository's own refs, and a short destination reaches them by
+    every rule ``ratchet_guards.refs.pushed`` lists. A push to a default branch itself is
+    ``push-main``'s.
+    """
+    names = [pushed(target) for target in targets]
+    strays = [full for full in names if not any(map(default_branch, full))]
+    return _refused(call) if any(protected(name) for full in strays for name in full) else []
+
+
+def pushes_default(targets: Sequence[str]) -> bool:
+    """Whether a push to ``targets`` writes a default branch, in any spelling git matches."""
+    return any(default_branch(name) for target in targets for name in pushed(target))
 
 
 def rebase(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:

@@ -6,6 +6,8 @@ from pathlib import Path
 
 _GLOBAL_VALUES = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"})
 _CONFIG_VALUES = frozenset({"-c", "--config-env"})
+# Why: with one of these git works on a repository other than the one in the working directory.
+_REPOSITORIES = frozenset({"--git-dir", "--work-tree", "--namespace"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +18,7 @@ class Invocation:
     configs: tuple[str, ...]
     subcommand: str
     args: tuple[str, ...]
+    redirected: bool = False
 
 
 def _joined_config(option: str) -> str | None:
@@ -28,11 +31,17 @@ def _joined_config(option: str) -> str | None:
 
 
 def invocation(words: Sequence[str], cwd: Path) -> Invocation:
-    """Parse ``git [global options] <subcommand> args``; ``-C`` moves the working directory."""
+    """Parse ``git [global options] <subcommand> args``; ``-C`` moves the working directory.
+
+    ``redirected`` is set by ``--git-dir``, ``--work-tree`` and ``--namespace``, joined to their
+    value or apart from it.
+    """
     configs: list[str] = []
     rest = list(words[1:])
+    redirected = False
     while rest and rest[0].startswith("-"):
         option = rest.pop(0)
+        redirected = redirected or option.partition("=")[0] in _REPOSITORIES
         joined = _joined_config(option)
         if joined is not None:
             configs.append(joined)
@@ -41,4 +50,4 @@ def invocation(words: Sequence[str], cwd: Path) -> Invocation:
             cwd = cwd / value if option == "-C" else cwd
             configs.extend([value] if option in _CONFIG_VALUES else [])
     subcommand = rest.pop(0) if rest else ""
-    return Invocation(cwd, tuple(configs), subcommand, tuple(rest))
+    return Invocation(cwd, tuple(configs), subcommand, tuple(rest), redirected)

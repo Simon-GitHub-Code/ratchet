@@ -11,7 +11,17 @@ What still passes there is the sync with the remote's own default branch: ``git 
 pull origin``, ``git pull origin main``, and ``git merge --ff-only`` of ``origin/main`` or the
 upstream. So does finishing or abandoning a merge already begun. The entry point passes because
 no rule here names it: the script's own git calls are not tool calls.
+
+A sync is what git says it is, not what it is called. ``@{u}`` is whatever ``git branch -u``
+last set, ``origin/main`` is a local branch or a tag of that name before it is the tracking ref,
+and a bare ``git pull`` merges what ``branch.main.merge`` names. So the rule asks git for the
+full name each spelling resolves to and passes only ``refs/remotes/origin/main`` or
+``refs/remotes/origin/master``. The answer describes the repository before the command line
+runs, so the sync passes only on a line whose earlier commands cannot have changed it
+(``ratchet_guards.git.settled``), and never in a repository the guard does not read (ADR 0024).
 """
+
+from collections.abc import Sequence
 
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gitcall import Invocation
@@ -37,9 +47,8 @@ _PULL_VALUES = _MERGE_VALUES | frozenset(
     | {"--server-option", "--upload-pack", "--negotiation-tip", "--recurse-submodules"}
 )
 _PULL = Spec("josX", _PULL_VALUES)
-_UPSTREAMS = frozenset(
-    {"@{u}", "@{upstream}", *TRACKING, *(f"{REMOTE}/{name}" for name in MAIN_BRANCHES)}
-)
+_UPSTREAMS = frozenset({"@{u}", "@{upstream}"})
+_UPSTREAM = "@{upstream}"
 _REMOTE_DEFAULTS = MAIN_BRANCHES | {"HEAD"}
 
 
@@ -47,23 +56,48 @@ def _asks(call: Invocation) -> list[Verdict]:
     return [Verdict("merge-default", " ".join(("git", call.subcommand, *call.args)))]
 
 
+def _tracks(names: Sequence[str], call: Invocation, context: Context, *, guard: Guard) -> bool:
+    """Whether git reads every one of ``names`` as the remote's default branch, here and now.
+
+    The upstream is asked for each default branch the command may run on.
+    """
+    if context.unread or context.unsettled:
+        return False
+    mains = sorted(guard.branches(context, call.cwd) & MAIN_BRANCHES)
+    spelled = [
+        f"{branch}{_UPSTREAM}" if name in _UPSTREAMS else name for name in names for branch in mains
+    ]
+    return all(guard.repo.full_name(call.cwd, name) in TRACKING for name in spelled)
+
+
 def merge(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     """``git merge`` on a default branch, other than a fast-forward to the remote's own."""
     if not guard.on_main(context, call.cwd):
         return []
     options = scan(expand_long(call.args, _MERGE_LONG), _MERGE)
-    synced = "--ff-only" in options.flags and all(name in _UPSTREAMS for name in options.operands)
-    return [] if synced or options.flags & _RESUMES else _asks(call)
+    if options.flags & _RESUMES:
+        return []
+    names = options.operands or (_UPSTREAM,)
+    synced = "--ff-only" in options.flags and _tracks(names, call, context, guard=guard)
+    return [] if synced else _asks(call)
 
 
 def pull(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git pull`` on a default branch that names another repository or another branch."""
+    """``git pull`` on a default branch that names another repository or another branch.
+
+    With no branch named it merges the upstream, which must be the remote's default branch.
+    """
     if not guard.on_main(context, call.cwd):
         return []
     repository, *refspecs = scan(call.args, _PULL).operands or (REMOTE,)
     sources = [spec.removeprefix("+").partition(":")[0] for spec in refspecs]
     named = {source.removeprefix("refs/heads/") for source in sources}
-    return [] if repository == REMOTE and named <= _REMOTE_DEFAULTS else _asks(call)
+    remote = repository == REMOTE and named <= _REMOTE_DEFAULTS
+    return (
+        []
+        if remote and (named or _tracks([_UPSTREAM], call, context, guard=guard))
+        else _asks(call)
+    )
 
 
 def cherry_pick(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:

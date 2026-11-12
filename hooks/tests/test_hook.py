@@ -257,6 +257,14 @@ def test_git_repo_state(tmp_path: Path) -> None:
     )
     assert state.current_branch(tmp_path) == "trunk"
     assert state.head_is_pushed(tmp_path) is False
+    assert state.full_name(tmp_path, "trunk") == "refs/heads/trunk"
+    assert state.full_name(tmp_path, "HEAD") == "refs/heads/trunk"
+    assert state.full_name(tmp_path, "nope") is None
+    assert state.full_name(tmp_path, "trunk@{upstream}") is None
+    _git(tmp_path, "tag", "trunk")
+    assert state.current_branch(tmp_path) == "trunk"
+    assert state.full_name(tmp_path, "trunk") is None
+    _git(tmp_path, "tag", "-d", "trunk")
     _git(tmp_path, "update-ref", "refs/remotes/origin/trunk", "HEAD")
     assert state.head_is_pushed(tmp_path) is True
     _git(

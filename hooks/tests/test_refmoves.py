@@ -8,7 +8,7 @@ import pytest
 from ratchet_guards import interpreters, refmoves
 from ratchet_guards.manifest import GIT_STATE, GIT_STATE_GROUP, GIT_STATE_PATTERNS, Scope
 from ratchet_guards.options import expand_long
-from ratchet_guards.refs import protects
+from ratchet_guards.refs import protects, pushed
 from tests.support import ROOT, UNGUARDED, FakeFilesystem, FakeRepo, details, make_guard, rules
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "skills/adopt/templates/guards/manifest.toml"
@@ -16,52 +16,110 @@ LONG = frozenset({"--delete", "--force", "--force-create", "--create", "--remote
 
 
 @pytest.mark.parametrize(
-    ("ref", "heads", "expected"),
+    ("ref", "expected"),
     [
-        ("main", True, True),
-        ("master", True, True),
-        ("+main", True, True),
-        ("heads/main", True, True),
-        ("refs/heads/main", True, True),
-        ("refs/heads/master", True, True),
-        ("refs/remotes/origin/main", True, True),
-        ("refs/remotes/origin/HEAD", True, True),
-        ("refs/remotes/upstream/feature", True, True),
-        ("refs/replace/0123abcd", True, True),
-        ("refs/heads/*", True, True),
-        ("heads/*", True, True),
-        ("*", True, True),
-        ("refs/remotes/*", True, True),
-        ("refs/replace/*", True, True),
-        ("refs/*", True, True),
-        ("+refs/heads/*", True, True),
-        ("refs/heads/main", False, False),
-        ("main", False, False),
-        ("refs/heads/*", False, False),
-        ("heads/*", False, False),
-        ("refs/remotes/origin/main", False, True),
-        ("refs/remotes/*", False, True),
-        ("refs/replace/x", False, True),
-        ("refs/*", False, True),
-        ("feature/x", True, False),
-        ("refs/heads/feature/x", True, False),
-        ("feature/main", True, False),
-        ("main-old", True, False),
-        ("mainline", True, False),
-        ("refs/tags/main", True, False),
-        ("refs/tags/v1", True, False),
-        ("refs/stash", True, False),
-        ("origin/main", True, False),
-        ("replace/x", True, False),
-        ("remotes/origin/main", True, False),
-        ("refs/tags/*", True, False),
-        ("refs/heads/feature/*", True, False),
-        ("HEAD", True, False),
-        ("", True, False),
+        ("main", True),
+        ("master", True),
+        ("+main", True),
+        ("heads/main", True),
+        ("refs/heads/main", True),
+        ("refs/heads/master", True),
+        ("refs/remotes/origin/main", True),
+        ("refs/remotes/origin/HEAD", True),
+        ("refs/remotes/upstream/feature", True),
+        ("remotes/origin/main", True),
+        ("+remotes/origin/main", True),
+        ("remotes/upstream/x", True),
+        ("refs/replace/0123abcd", True),
+        ("refs/tags/main", True),
+        ("refs/tags/master", True),
+        ("tags/main", True),
+        ("refs/heads/*", True),
+        ("heads/*", True),
+        ("*", True),
+        ("refs/remotes/*", True),
+        ("remotes/*", True),
+        ("refs/replace/*", True),
+        ("refs/*", True),
+        ("+refs/heads/*", True),
+        ("feature/x", False),
+        ("refs/heads/feature/x", False),
+        ("feature/main", False),
+        ("main-old", False),
+        ("mainline", False),
+        ("refs/tags/v1", False),
+        ("tags/v1", False),
+        ("refs/tags/feature/main", False),
+        ("refs/stash", False),
+        ("refs/main", False),
+        ("origin/main", False),
+        ("replace/x", False),
+        ("refs/tags/*", False),
+        ("refs/heads/feature/*", False),
+        ("HEAD", False),
+        ("", False),
     ],
 )
-def test_protected_names(ref: str, heads: bool, expected: bool) -> None:  # noqa: FBT001 # -- a parametrized test argument
-    assert protects(ref, heads=heads) is expected
+def test_protected_names(ref: str, expected: bool) -> None:  # noqa: FBT001 # -- a parametrized test argument
+    assert protects(ref) is expected
+
+
+@pytest.mark.parametrize(
+    ("destination", "expected"),
+    [
+        ("refs/heads/main", ("refs/heads/main",)),
+        ("+refs/x", ("refs/x",)),
+        ("main", ("refs/main", "refs/tags/main", "refs/heads/main")),
+        ("heads/main", ("refs/heads/main", "refs/tags/heads/main", "refs/heads/heads/main")),
+        (
+            "origin/main",
+            (
+                "refs/origin/main",
+                "refs/tags/origin/main",
+                "refs/heads/origin/main",
+                "refs/remotes/origin/main",
+                "refs/remotes/origin/main/HEAD",
+            ),
+        ),
+        (
+            "origin",
+            (
+                "refs/origin",
+                "refs/tags/origin",
+                "refs/heads/origin",
+                "refs/remotes/origin",
+                "refs/remotes/origin/HEAD",
+            ),
+        ),
+        ("originals/x", ("refs/originals/x", "refs/tags/originals/x", "refs/heads/originals/x")),
+    ],
+)
+def test_a_push_destination_is_every_ref_git_may_match_it_to(
+    destination: str, expected: tuple[str, ...]
+) -> None:
+    assert pushed(destination) == expected
+
+
+@pytest.mark.parametrize(
+    ("refspecs", "expected"),
+    [
+        (["main"], ["main"]),
+        (["a:b"], ["b"]),
+        (["+a:b"], ["b"]),
+        ([":b"], ["b"]),
+        (["HEAD"], [None]),
+        (["@"], [None]),
+        (["a:HEAD"], [None]),
+        (["tag", "v1"], ["refs/tags/v1"]),
+        (["tag", "v1", "a:main"], ["refs/tags/v1", "main"]),
+        (["tag"], ["refs/tags/"]),
+        ([":"], ["refs/heads/*"]),
+        (["+:"], ["refs/heads/*"]),
+        ([], []),
+    ],
+)
+def test_what_each_push_refspec_writes(refspecs: list[str], expected: list[str | None]) -> None:
+    assert list(refmoves.push_targets(refspecs)) == expected
 
 
 @pytest.mark.parametrize(

@@ -183,17 +183,33 @@ def _git(cwd: Path, *args: str) -> str | None:
     return None if output is None else output.strip()
 
 
+_HEADS = "refs/heads/"
+
+
 class GitRepoState:
     """Git state read with the ``git`` command."""
 
     def current_branch(self, cwd: Path) -> str | None:
-        """The checked-out branch, or ``None`` when detached or not a repository."""
-        return _git(cwd, "symbolic-ref", "--short", "HEAD") or None
+        """The checked-out branch, or ``None`` when detached or not a repository.
+
+        Read by its full name: ``--short`` prints ``heads/main`` when a tag is also named
+        ``main``, which no rule would read as the default branch.
+        """
+        head = _git(cwd, "symbolic-ref", "HEAD")
+        return head.removeprefix(_HEADS) if head else None
 
     def head_is_pushed(self, cwd: Path) -> bool | None:
         """Whether any remote-tracking branch contains ``HEAD`` (``--contains`` defaults to it)."""
         listed = _git(cwd, "branch", "--remotes", "--contains")
         return None if listed is None else bool(listed)
+
+    def full_name(self, cwd: Path, name: str) -> str | None:
+        """The full name of the one ref git reads ``name`` as, or ``None``.
+
+        ``None`` covers a name git does not know, one it reads as two refs (a branch and a tag
+        named alike), and one that is a commit and no ref.
+        """
+        return _git(cwd, "rev-parse", "--verify", "--quiet", "--symbolic-full-name", name) or None
 
 
 def _unreadable(detail: str) -> Verdict:

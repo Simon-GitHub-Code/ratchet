@@ -32,6 +32,20 @@ LABELS_RECORD = """# Triage Labels
 | `ready-for-agent` | `agent:ready` | Fully specified, ready for an AFK agent |
 | `wontfix` | `wontfix` | Will not be actioned |
 """
+# What git reads each name as in the fake repository: a clone whose ``main`` and ``master``
+# track the remote's, with the local branches the corpus switches between.
+NAMES = {
+    "origin/main": "refs/remotes/origin/main",
+    "origin/master": "refs/remotes/origin/master",
+    "refs/remotes/origin/main": "refs/remotes/origin/main",
+    "refs/remotes/origin/master": "refs/remotes/origin/master",
+    "main@{upstream}": "refs/remotes/origin/main",
+    "master@{upstream}": "refs/remotes/origin/master",
+    "main": "refs/heads/main",
+    "master": "refs/heads/master",
+    "feat/x": "refs/heads/feat/x",
+    "feat/work": "refs/heads/feat/work",
+}
 _VARIABLE = re.compile(r"\$(\w+)|\$\{(\w+)\}")
 
 
@@ -108,6 +122,7 @@ class FakeRepo:
     branch: str | None = "feat/work"
     pushed: bool | None = False
     asked: list[str] = field(default_factory=list)
+    names: dict[str, str] = field(default_factory=lambda: dict(NAMES))
 
     def current_branch(self, cwd: Path) -> str | None:
         self.asked.append(f"branch {cwd}")
@@ -116,6 +131,10 @@ class FakeRepo:
     def head_is_pushed(self, cwd: Path) -> bool | None:
         self.asked.append(f"pushed {cwd}")
         return self.pushed
+
+    def full_name(self, cwd: Path, name: str) -> str | None:
+        self.asked.append(f"name {cwd} {name}")
+        return self.names.get(name)
 
 
 def make_guard(
