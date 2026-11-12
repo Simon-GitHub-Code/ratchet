@@ -91,7 +91,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/project_bite.py` | 1 and 2 | does every gate the repository bound go red on its fault, and on an empty collection? Plants each fault of `quality/bites.toml` in a scratch copy; with `--changed`, only when the change touches a gate |
 | `scripts/merge_ready.py` | after tier 1 | may this change reach the default branch without the owner? The merge judge: guard paths, one-way doors, new surface with no flag, disputes and the pipeline's verdict record, read from the commits |
 | `scripts/merge.py` | with no forge | judge a branch, run `check` on the merge result, and merge it when both pass |
-| `scripts/budget.py` | every tier | did a tier or gate finish under its ceiling in seconds? `--set` records the first ceiling |
+| `scripts/budget.py` | every tier | did a tier or gate finish under its ceiling in seconds? `--set` records the first ceiling, `--tier` also holds a CI job to its tier's ceiling, and `--over report` reports without blocking on a pull request |
 | `scripts/parallel.py` | every tier | not a gate: runs a tier's gates at once through the repository's own runner, each gate's output whole, every red one named, so local wall clock is the slowest gate and not the sum |
 | `scripts/plugin_pin.py` | every tier | is the plugin this run uses the version and commit the binding pins, the one CI checks out? Red with both ways out when not |
 | `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the owner's one command when not; asked by the preflight, the route and `just ratchet`, not by CI |

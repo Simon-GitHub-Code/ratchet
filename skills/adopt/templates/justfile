@@ -128,7 +128,9 @@ conformance:
     python3 "{{ratchet_plugin}}/scripts/conformance.py" .
 
 # Time one tier or gate against its ceiling in quality/thresholds.toml; `just budget tier1 --set`
-# records the first ceiling. CI wraps every matrix job in it and uploads the report.
+# records the first ceiling. CI wraps every job in it, holds each to its tier's ceiling
+# (`--tier`), reports a ceiling passed on a pull request without blocking (`--over report`)
+# and uploads the report.
 budget key *flags:
     python3 "{{ratchet_plugin}}/scripts/budget.py" {{key}} --report .ratchet/timing.jsonl {{flags}} -- just {{key}}
 

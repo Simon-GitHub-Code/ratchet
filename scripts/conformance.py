@@ -65,6 +65,12 @@ MERGE_SHAPE = (
 )
 DOOR_KINDS = ("change", "rewrite", "removal")
 SHARD_MATRIX = "matrix.shard"
+HELD_TO_TIER = "holds a gate's job to its tier's ceiling"
+CEILING_SHAPE = (
+    ("ci.yml", "--over", "says that a ceiling reports on a pull request and blocks elsewhere"),
+    ("ci.yml", "--tier", HELD_TO_TIER),
+    ("deep.yml", "--tier", HELD_TO_TIER),
+)
 # Why: ADR 0012. These questions are asked of every repository from the first commit; a binding
 # may answer one with `none` and a reason, but may not drop the row.
 OPERABILITY_QUESTIONS = (
@@ -292,6 +298,9 @@ def check_speed(root: Path) -> Iterable[str]:
         for marker, meaning in CI_SHAPE:
             builds = path.name != MERGE_WORKFLOW or marker != "cache"
             if builds and marker not in content:
+                yield f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)"
+        for name, marker, meaning in CEILING_SHAPE:
+            if path.name == name and marker not in content:
                 yield f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)"
         if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
             yield (
@@ -702,7 +711,10 @@ def speed_mutations() -> list[Mutation]:
         path.write_text(path.read_text().replace(SHARD_MATRIX, "matrix.part"))
 
     stated = "stated for this stack"
+    ci, deep = str(WORKFLOWS / "ci.yml"), str(WORKFLOWS / "deep.yml")
     return [
+        ("CI whose ceilings block a pull request", rewrite(ci, ' --over "$OVER"', "")),
+        ("nightly that holds no job to its tier's ceiling", rewrite(deep, " --tier tier2", "")),
         ("binding without a Speed section", rebind(SPEED_SECTION, "## Slowness")),
         ("Speed section without a part", rebind("- Cache: ", "- Store: ")),
         (

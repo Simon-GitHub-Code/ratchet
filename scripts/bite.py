@@ -27,6 +27,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import budget
 import change_size
 import commits
 import coverage_groups
@@ -388,6 +389,11 @@ def plugin_moved_on(root: Path) -> None:
     write(root, PLUGIN_MANIFEST, '{"version": "1.1.0"}\n')
 
 
+def tier_ceiling_passed(root: Path) -> None:
+    path = root / "quality/thresholds.toml"
+    path.write_text(budget.with_ceiling(path.read_text(), "tier1", 0.0))
+
+
 def commit_after_the_review(root: Path) -> None:
     write(root, "src/b.py", "B = 2\n")
     commit(root, "fix(core): one more thing")
@@ -429,6 +435,7 @@ PARALLEL = [
     *("--runner", f"{shlex.quote(sys.executable)} -c", "--jobs", "2"),
     *("--", "pass", shlex.quote(GATE_READS_RED), "0"),
 ]
+IN_TIER = ["lint", "--tier", "tier1", "--", sys.executable, "-c", "pass"]
 SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("markers", markers.main, add_marker, []),
     ("suppressions: a count rose", suppressions.main, add_suppression, []),
@@ -475,6 +482,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("merge-ready: new surface with no flag", merge_judge, new_surface, []),
     ("queue: a ticket behind an open blocker", queue_gate, behind_an_open_blocker, []),
     ("plugin-pin: a plugin at another version", pin_gate, plugin_moved_on, []),
+    ("budget: a gate over its tier's ceiling", budget.main, tier_ceiling_passed, IN_TIER),
 ]
 
 

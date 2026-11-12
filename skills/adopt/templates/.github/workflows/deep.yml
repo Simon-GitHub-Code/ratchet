@@ -67,7 +67,7 @@ jobs:
           restore-keys: |
             tier2-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
-      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier2 --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
@@ -97,7 +97,7 @@ jobs:
           restore-keys: |
             tier2-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
-      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier2 --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
         env:
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ needs.shape.outputs.count }}

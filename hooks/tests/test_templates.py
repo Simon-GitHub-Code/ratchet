@@ -242,6 +242,18 @@ def test_the_ci_templates_are_green_on_the_pins_gate() -> None:
         assert "RATCHET_PLUGIN: ${{ github.workspace }}/ratchet" in text
 
 
+def test_ci_reports_a_ceiling_on_a_pull_request_and_holds_each_job_to_its_tier() -> None:
+    # Why: tiers.md, Speed. Runners vary, so a ceiling blocks on the default branch and nightly.
+    ci, deep = WORKFLOWS["ci.yml"], WORKFLOWS["deep.yml"]
+    assert "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n" in ci
+    assert ci.count('budget.py" tier0 --over "$OVER" --report') == 1
+    assert ci.count('budget.py" "${{ matrix.gate }}" --tier tier1 --over "$OVER" --report') == 2
+    assert ci.count("budget.py") == 3
+    assert deep.count('budget.py" "${{ matrix.gate }}" --tier tier2 --report') == 2
+    assert "--over" not in deep, "the nightly and the default branch block"
+    assert deep.count("budget.py") == 2
+
+
 def test_the_plugin_version_has_one_home_the_binding() -> None:
     text = (TEMPLATES / "docs/adr/0001-adopt-the-ratchet-method.md").read_text(encoding="utf-8")
     assert "\n- Ratchet plugin: <X.Y.Z> at <ratchet-sha>\n" in BINDING

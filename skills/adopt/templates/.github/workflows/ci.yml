@@ -11,6 +11,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   RATCHET_PLUGIN: ${{ github.workspace }}/ratchet
+  # Why: runners vary, so a ceiling reports on a pull request and blocks on the default branch.
+  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}
 jobs:
   tier0:
     runs-on: ubuntu-latest
@@ -29,7 +31,7 @@ jobs:
           restore-keys: |
             tier0-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
-      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" tier0 --report .ratchet/timing.jsonl -- just tier0
+      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" tier0 --over "$OVER" --report .ratchet/timing.jsonl -- just tier0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with: { name: timing-tier0, path: .ratchet/timing.jsonl }
@@ -85,7 +87,7 @@ jobs:
           restore-keys: |
             tier1-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
-      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier1 --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
@@ -115,7 +117,7 @@ jobs:
           restore-keys: |
             tier1-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
-      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier1 --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
         env:
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ needs.shape.outputs.count }}
