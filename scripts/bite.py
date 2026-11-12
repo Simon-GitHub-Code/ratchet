@@ -396,8 +396,8 @@ def pin_gate(argv: list[str]) -> int:
     return plugin_pin.main([*argv, "--plugin", str(Path(argv[2]) / PLUGIN_COPY)])
 
 
-def plugin_moved_on(root: Path) -> None:
-    write(root, PLUGIN_MANIFEST, '{"version": "1.1.0"}\n')
+def plugin_older_than_the_pin(root: Path) -> None:
+    write(root, PLUGIN_MANIFEST, '{"version": "0.9.0"}\n')
 
 
 def tier_ceiling_passed(root: Path) -> None:
@@ -499,7 +499,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("merge-ready: a commit after the review", merge_judge, commit_after_the_review, []),
     ("merge-ready: new surface with no flag", merge_judge, new_surface, []),
     ("queue: a ticket behind an open blocker", queue_gate, behind_an_open_blocker, []),
-    ("plugin-pin: a plugin at another version", pin_gate, plugin_moved_on, []),
+    ("plugin-pin: a plugin older than the pin", pin_gate, plugin_older_than_the_pin, []),
     ("budget: a gate over its tier's ceiling", budget.main, tier_ceiling_passed, IN_TIER),
 ]
 

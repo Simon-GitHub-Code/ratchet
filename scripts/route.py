@@ -28,8 +28,9 @@ The stages, in order; the first that does not hold is the answer:
    away, ``/pstack:poteto-mode`` when they stay). With more than one ticket ready the build is
    the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0023).
 
-After the three lines come the ``also:`` lines, when there are any: each is a question the owner
-has answered with the recommendation three times running, offered as a standing answer
+After the three lines come the ``also:`` lines, when there are any: the upgrade, when the plugin
+in use is newer than the one the binding pins (ADR 0027), and each question the owner has
+answered with the recommendation three times running, offered as a standing answer
 (``questions.py``, ADR 0022). They are proposals and change nothing.
 
 Usage: ``route.py [--root DIR] [--offline] [--json]``.
@@ -47,6 +48,7 @@ from pathlib import Path
 import feature_preflight as preflight
 import gatelib
 import hooks_installed
+import plugin_pin
 import questions
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
@@ -518,6 +520,24 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
     return ticket_step(root, gh, checkout)
 
 
+def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
+    """The upgrade, offered when the plugin in use is newer than the one the binding pins.
+
+    Why: a newer plugin is green at every tier and says so in each tier's output, which an owner
+    rarely reads; the route is what the owner reads (ADR 0027).
+    """
+    pin = plugin_pin.pinned(gatelib.read_text(root / BINDING))
+    if pin is None or plugin_pin.relation(pin, plugin) is not plugin_pin.Relation.NEWER:
+        return []
+    return [
+        (
+            f"the Ratchet plugin in use is {plugin_pin.version_of(plugin)}, newer than the"
+            f" {pin.version} the binding pins: run `python3 {plugin / 'scripts/upgrade.py'}`, then"
+            " change the binding's pin line"
+        )
+    ]
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
@@ -526,7 +546,7 @@ def main(argv: list[str]) -> int:
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
     step = decide(root, None if options.offline else preflight.run_gh)
-    also = questions.proposals(root)
+    also = pin_proposals(root) + questions.proposals(root)
     if options.as_json:
         print(json.dumps({**asdict(step), "also": also}, indent=2))
     else:

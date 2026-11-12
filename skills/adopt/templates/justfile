@@ -91,7 +91,8 @@ parallel := 'python3 "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + 
 changed := 'python3 "' + ratchet_plugin + '/scripts/changed.py"'
 
 # Every tier starts here: the plugin the recipes run is the version docs/process/binding.md pins,
-# the commit CI checks out. Red before any gate runs when it is another, or when nothing is there.
+# the commit CI checks out. Red before any gate runs when it is older, another commit of the same
+# version, or not there; a newer one is green and says on every run what to change.
 plugin-pin:
     @test -f "{{ratchet_plugin}}/scripts/plugin_pin.py" || { echo "plugin-pin: no Ratchet plugin at {{ratchet_plugin}}, or one older than the pin check; set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins"; exit 1; }
     @python3 "{{ratchet_plugin}}/scripts/plugin_pin.py"

@@ -41,18 +41,24 @@ EDITORS = {
 
 
 def pin_finding(root: Path, plugin: Path) -> Finding | None:
-    """The pin line to write when the binding pins a plugin other than the one in use."""
+    """What to do about the pin when the binding pins a plugin other than the one in use."""
     pin = plugin_pin.pinned(gatelib.read_text(root / gatelib.BINDING))
-    _, problem = plugin_pin.judged(pin, plugin)
-    if pin is None or not problem:
+    standing = plugin_pin.relation(pin, plugin)
+    if pin is None or standing is plugin_pin.Relation.PINNED:
         return None
     used = plugin_pin.version_of(plugin) or "an unknown version"
+    pinned = f"{pin.version} at {pin.commit}"
+    if standing is plugin_pin.Relation.OLDER:
+        return Finding(
+            str(gatelib.BINDING),
+            f"pins {pinned}, newer than the plugin in use, {used}; update the plugin and run this"
+            " report again, since it reads the rules of the plugin it runs from",
+        )
     line = plugin_pin.line_for(plugin)
     return Finding(
         str(gatelib.BINDING),
-        f"pins {pin.version} at {pin.commit}, and the plugin in use is {used}; replace the pin"
-        " line with the one below, and every workflow `ref` that checks the plugin out with its"
-        " commit",
+        f"pins {pinned}, and the plugin in use is {used}; replace the pin line with the one"
+        " below, and every workflow `ref` that checks the plugin out with its commit",
         (line,),
     )
 

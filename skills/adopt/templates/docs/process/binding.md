@@ -8,7 +8,7 @@ This repository's binding of the Ratchet method (`ratchet:method`; `skills/metho
 
 - Ratchet plugin: <X.Y.Z> at <ratchet-sha>
 
-The plugin version has this one home. Every workflow checks the plugin out at this commit, and a local tier is red when the plugin it runs from is at another (`plugin-pin`). To upgrade, change this line and every workflow `ref` to the new commit in one change.
+The plugin version has this one home. Every workflow checks the plugin out at this commit. A local tier is red when the plugin it runs from is older than this pin, or another commit of the same version, and says on every run when it is newer (`plugin-pin`). To upgrade, run the plugin's `scripts/upgrade.py`, make the edits it names, and change this line and every workflow `ref` to the new commit in one change.
 
 ## Forge
 

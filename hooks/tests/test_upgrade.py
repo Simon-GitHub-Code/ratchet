@@ -117,3 +117,15 @@ def test_without_arguments_it_reads_the_working_directory(
     monkeypatch.chdir(repo)
     assert upgrade.main(["upgrade.py"]) in (0, 1)
     assert capsys.readouterr().out.startswith("upgrade: ")
+
+
+def test_a_plugin_older_than_the_pin_is_told_to_update_first(
+    repo: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    replace(BINDING, PIN, f"- Ratchet plugin: 0.1.0 at {'0' * 40}")(repo)
+    code, out = report(repo, plugin, capsys)
+    assert code == 1
+    assert out.split("\n\n")[1].splitlines()[1] == (
+        f"  - pins 0.1.0 at {'0' * 40}, newer than the plugin in use, 0.0.0; update the plugin"
+        " and run this report again, since it reads the rules of the plugin it runs from"
+    )

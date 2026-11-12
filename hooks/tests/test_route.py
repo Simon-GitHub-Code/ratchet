@@ -471,3 +471,16 @@ def test_an_answer_that_became_a_habit_is_offered_after_the_three_lines(
     assert out[3].startswith("also: you have taken the recommendation for `adopt.tools` 3 times")
     assert route.main(["route", "--root", str(root), "--offline", "--json"]) == 0
     assert len(json.loads(capsys.readouterr().out)["also"]) == 1
+
+
+def test_a_plugin_newer_than_the_pin_is_offered_as_the_upgrade(tmp_path: Path, capsys: Out) -> None:
+    pin = f"- Ratchet plugin: 0.0.1 at {'0' * 40}\n"
+    root = repository(tmp_path, {**ADOPTED, "docs/process/binding.md": BINDING + pin})
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[3].startswith("also: the Ratchet plugin in use is ")
+    assert ", newer than the 0.0.1 the binding pins: run `python3 " in out[3]
+    assert out[3].endswith("/scripts/upgrade.py`, then change the binding's pin line")
+    write(root, "docs/process/binding.md", BINDING)
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 3
