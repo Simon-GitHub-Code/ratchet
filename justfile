@@ -56,8 +56,8 @@ parse-workflow:
 parse-adapters:
     node --no-warnings scripts/parse-js.mjs adapter adapters/pi/ratchet-guard.ts adapters/opencode/ratchet-guard.ts
 
-# The suite once, across every core and in random order, under coverage. The gate scripts and
-# their library are absolute paths: every line and branch must run under test, and
+# The suite once, across every core and in random order, under coverage. The gate scripts, the
+# guard hook and its two shims are absolute paths: every line and branch must run under test, and
 # `fail_under = 100` in pyproject.toml makes this run red when one does not.
 test:
     uv run pytest -n auto --cov --cov-report=term-missing:skip-covered hooks/tests

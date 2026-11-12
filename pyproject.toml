@@ -21,12 +21,16 @@ dev = [
 [tool.uv]
 package = false
 
-# Why: the gate scripts are the method's own checkers; a line of them nobody ran is a gate that
-# may never fire, so they are held at 100% by the tool, not by a number that could be lowered.
+# Why: the gate scripts and the guard hook (the package, `hooks/guard.py` and `hooks/session.py`)
+# are the method's own checkers; a line of them nobody ran is a gate that may never fire, so they
+# are held at 100% by the tool, not by a number that could be lowered. Nothing is omitted but the
+# tests; `patch = ["subprocess"]` measures the shims the tests run as the hook runs them.
 [tool.coverage.run]
 branch = true
-source = ["scripts"]
-omit = ["scripts/conformance.py", "scripts/budget.py"]
+source = ["scripts", "hooks"]
+omit = ["*/hooks/tests/*"]
+parallel = true
+patch = ["subprocess"]
 
 [tool.coverage.report]
 fail_under = 100

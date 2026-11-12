@@ -1,5 +1,6 @@
 """The committed manifest: which ref is the default branch, and what it carries."""
 
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -62,6 +63,20 @@ def test_the_manifest_is_shown_from_the_default_branch() -> None:
 def test_run_git_answers_none_when_git_fails(tmp_path: Path) -> None:
     assert committed.run_git(tmp_path, ["rev-parse", "--verify", "--quiet", "nope"]) is None
     assert committed.run_git(tmp_path / "missing", ["status"]) is None
+
+
+def test_run_git_answers_none_when_git_is_missing_or_hangs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert committed.run_git(tmp_path, ["status"]) is None
+    monkeypatch.undo()
+
+    def hang(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(["git"], committed.GIT_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    assert committed.run_git(tmp_path, ["status"]) is None
 
 
 @pytest.mark.parametrize("shadow", ["tags/main", "heads/refs/heads/main", "refs/heads/main"])

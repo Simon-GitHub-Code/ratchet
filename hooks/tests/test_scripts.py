@@ -123,6 +123,8 @@ def test_main_times_a_command_reports_and_sets(
     assert record["key"] == "tier0"
     assert record["status"] == "unbounded", "the first adoption has no ceiling yet"
     assert budget.ceiling_of((tmp_path / "quality/thresholds.toml").read_text(), "tier0") == 60.0
+    assert budget.main(argv) == 0
+    assert "set to" not in capsys.readouterr().out, "a ceiling is set only when it lowers"
     failing = [
         "budget",
         "tier0",

@@ -399,3 +399,57 @@ def test_guard_diff_lists_and_counts_dependency_files_with_what_they_change(
     assert "| `uv.lock` | tool-config | lockfile: attrs (lockfile) (none) -> 24.2.0 |" in (
         summary.read_text()
     )
+
+
+def test_an_optional_dependency_group_is_read_like_the_others() -> None:
+    before = PYPROJECT + '\n[project.optional-dependencies]\nweb = ["flask>=3"]\n'
+    after = before.replace('"flask>=3"', '"flask>=3", "jinja2>=3"')
+    assert _shown("pyproject.toml", before, after) == [
+        "jinja2 (optional-dependencies.web) (none) -> jinja2>=3"
+    ]
+    assert "removes flask" in _reason("pyproject.toml", before, before.replace('"flask>=3"', ""))
+
+
+def _poetry_pkg(name: str, version: str, source: str = "") -> str:
+    return (
+        f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
+        f'files = [{{file = "{name}-{version}.whl", hash = "sha256:a"}}]\n{source}'
+    )
+
+
+def test_poetry_lock_takes_the_default_index_and_a_legacy_index_but_not_a_vcs_source() -> None:
+    before = _poetry_pkg("attrs", "24.1.0")
+    legacy = '\n[package.source]\ntype = "legacy"\nurl = "https://pypi.org/simple"\n'
+    after = "\n".join([before, _poetry_pkg("idna", "3.7", legacy)])
+    assert _shown("poetry.lock", before, after) == ["idna (lockfile) (none) -> 3.7"]
+    vcs = '\n[package.source]\ntype = "git"\nurl = "https://x/idna"\n'
+    swapped = "\n".join([before, _poetry_pkg("idna", "3.7", vcs)])
+    assert "idna 3.7 comes from" in _reason("poetry.lock", before, swapped)
+
+
+def test_a_lock_entry_that_is_not_a_named_table_is_not_counted() -> None:
+    odd = 'version = 1\npackage = [1, {version = "9"}]\n'
+    assert _shown("uv.lock", odd, odd + "\n") == []
+
+
+def test_package_lock_keeps_links_and_workspace_packages_as_local_paths() -> None:
+    data = json.loads(NPM_LOCK)
+    data["packages"]["node_modules/app"] = {"resolved": "packages/app", "link": True}
+    data["packages"]["packages/app"] = {"version": "1.0.0"}
+    before = json.dumps(data)
+    data["packages"]["node_modules/lit"]["version"] = "3.2.0"
+    data["packages"]["node_modules/lit"]["integrity"] = "sha512-b"
+    assert _shown("package-lock.json", before, json.dumps(data)) == [
+        "lit (lockfile) 3.1.0 -> 3.2.0"
+    ]
+
+
+def test_a_version_with_no_release_number_sorts_below_every_numbered_one() -> None:
+    after = UV_BEFORE.replace('"0.9.1"', '"nightly"')
+    assert "ruff falls from 0.9.1 to nightly" in _reason("uv.lock", UV_BEFORE, after)
+
+
+def test_dropping_the_highest_of_two_side_by_side_versions_is_a_rollback() -> None:
+    older = CARGO_LOCK.replace('"2.0.1"', '"1.0.109"').replace('"aa"', '"bb"').split("\n\n", 2)[2]
+    both = CARGO_LOCK + "\n" + older
+    assert "syn falls from 2.0.1 to 1.0.109" in _reason("Cargo.lock", both, older)
