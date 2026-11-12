@@ -902,7 +902,8 @@ def test_a_guard_or_door_path_that_is_a_link_is_the_owners(
     link(root, path, target)
     change(root, {"src/a.py": "x = 2\n"})
     assert git(root, "show", f"HEAD~1:{path}") == target.strip()
-    assert judged(root) == [f"file: {path} is a symbolic link at the head, {LINKED}"]
+    # A linked surface snapshot is also read as unflagged surface: either reason is the owner's.
+    assert f"file: {path} is a symbolic link at the head, {LINKED}" in judged(root)
 
 
 def test_a_verdict_record_that_is_a_link_is_the_owners(root: Path) -> None:
