@@ -1,10 +1,34 @@
 # ratchet
 
-The checks and balances of a software factory, in your own repository. Ratchet is a method: what must be true before a merge, when software is built by agents. Tiered deterministic gates that only tighten, guard paths the harness protects, disputes, records, a four-role feature pipeline, and the merge rule of critical rationalism. Packaged as one plugin that runs in Claude Code, Grok, Codex, pi and OpenCode, so every repository reads one copy of the method and keeps only its own binding.
+Ratchet is a plugin for coding agents that holds every change to the same standard before it merges. It installs a method in your repository: deterministic gates in three tiers that only tighten, paths the agent cannot edit without you, written records of each decision, and a four-role pipeline that builds a ticket while you are away. A change the gates can judge merges without you; one that touches a guarded path, goes through a one-way door or has an open finding waits for you.
 
-The method enforces concepts, and the repository chooses the stack that carries them. It ships the questions a change must answer and the gates that need no stack. It ships no tool, recipe or template for any language.
+It is for one developer, or a small team, who has agents write most of the code and wants the checks a software factory would give them without approving every pull request. It enforces concepts, not a stack: it ships the questions a change must answer and the gates that need no stack, and at adoption the agent chooses a current tool for every other question, on any language.
 
-It composes with three other plugins and competes with none. `mattpocock-skills` says how the work is done (`tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grill-with-docs`, `pr`, `research`). `pstack` says in what style and with which levers (`poteto-mode`, `architect`, `interrogate`, `arena`, `correct`, the formal verification skills). `impeccable` says how anything a person sees is designed, and its `PRODUCT.md` and `DESIGN.md` are records. Ratchet's roles call those skills by name; its records use their formats and add a section each.
+## What it costs
+
+- **Four plugins.** Ratchet composes with `mattpocock-skills` (how the work is done: `tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grilling`, `pr`, `research`), `pstack` (style and levers: `poteto-mode`, `architect`, `interrogate`, `arena`, `correct`) and `impeccable` (how anything a person sees is designed). In Claude Code they install with it.
+- **Tools on the machine.** `git` 2.36 or later, `python3` 3.11 or later, `just` (or another task runner, rebuilt by hand), the `pre-commit` framework, and `gh` signed in when the repository is on GitHub. Each tool your stack's gates use is chosen and installed at adoption.
+- **Agents.** A ticket built while you are away takes at most nine agents, and two more when it is judged again behind another merge. A drain of N tickets takes at most 11N - 2, and says the number before it starts.
+- **Your keystrokes.** Up to two dialogs at init, one setup command, two dialogs at adoption, and one merge: the adoption's pull request changes guarded paths, so you merge it yourself. After that you write tickets, apply the agent-ready label, answer the questions that shape the product, and merge what the gates leave to you.
+
+The feature pipeline runs on Claude Code's Workflow tool. The method, its gates and its guard also run in Grok, Codex, pi and OpenCode, each with a page under `docs/harness/`.
+
+## First run
+
+1. Install, in Claude Code:
+
+   ```bash
+   claude plugin marketplace add mattpocock/skills
+   claude plugin marketplace add michael-denyer/pstack-claude
+   claude plugin marketplace add pbakaus/impeccable
+   claude plugin marketplace add Simon-GitHub-Code/ratchet
+   claude plugin install ratchet@ratchet
+   ```
+
+2. In the repository, empty or not, type `/ratchet:init`. It asks what the product is (and on an empty directory what it is built with), then writes `AGENTS.md` with `CLAUDE.md` linked to it, runs the pstack and impeccable setups, makes the first commit and, with your consent, the remote.
+3. Type `/mattpocock-skills:setup-matt-pocock-skills`. It records the issue tracker and its labels.
+4. Type `/ratchet:adopt`. It asks what kind of software this is and whether to accept the tools it proposes, then the design brief; it binds every gate against a walking skeleton, shows each gate fail on a planted fault, and opens the adoption pull request for you to merge. If your git configuration sets `core.hooksPath`, it also names one command for you to run so that every commit runs tier 0.
+5. From then on `/ratchet:next` prints the command to type next: a spec and tickets with `/mattpocock-skills:to-spec` and `to-tickets`, `/ratchet:conjecture <ticket>`, the agent-ready label, then `/ratchet:feature` to build every ready ticket.
 
 ## The eleven commitments
 
@@ -48,7 +72,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | Gate | Tier | The question it answers |
 | --- | --- | --- |
 | `scripts/commits.py` | 0 | does every commit subject follow the convention? |
-| `scripts/markers.py` | 0 | did the count of TODO, FIXME and HACK markers rise? |
+| `scripts/markers.py` | 0 | did the count of TODO, FIXME, HACK and XXX markers rise? |
 | `scripts/suppressions.py` | 0 | did any kind of suppression rise, or a focus marker appear? |
 | `scripts/prose.py` | 0 | do the documents and comments keep to the glossary? |
 | `scripts/snapshots.py` | 0 | does each gate's recorded configuration match the one in force? |
@@ -80,7 +104,7 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 | `skills/method/SKILL.md` | the founding document: the words, the eleven commitments, how work runs |
 | `skills/method/*.md` | the reference behind each commitment: the merge rule, tiers as questions, the ratchet, guards and disputes, the pipeline, records, verifiable shape |
 | `skills/method/application-types.toml` | the six application types and the questions each is asked; `scripts/application_types.py <type>...` prints the rows a set of types leaves out |
-| `skills/init/` | `/ratchet:init`: the bare bones for any repository: `git init` where needed, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it, the other three plugins' one-time setup, the first commit, the remote and the triage labels |
+| `skills/init/` | `/ratchet:init`: the bare bones for any repository: `git init` where needed, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it, the pstack and impeccable one-time setups, the first commit and the remote; the mattpocock-skills setup is the owner's command after it, and a rerun of init creates the triage labels that setup recorded |
 | `skills/adopt/` | `/ratchet:adopt`: the steps and the stack-neutral templates that bind the method to a repository's runner, forge and stack |
 | `skills/feature/` | `/ratchet:feature <ticket>`: the feature preflight on an agent-ready ticket, the branch, then the pipeline. With no ticket: every agent-ready ticket at once, each in a work tree of its own, merged one at a time, one report |
 | `skills/conjecture/` | `/ratchet:conjecture <ticket>`: the method's one addition to a ticket, drafted from the conversation that produced it |
@@ -98,25 +122,11 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 | `docs/adr/` | the plugin's own decisions; 0004 is the five-harness decision, 0017 the one that removed the presets |
 | `docs/research/` | the sources behind the stance |
 
-## Install
-
-In Claude Code:
-
-```bash
-claude plugin marketplace add mattpocock/skills
-claude plugin marketplace add michael-denyer/pstack-claude
-claude plugin marketplace add pbakaus/impeccable
-claude plugin marketplace add Simon-GitHub-Code/ratchet
-claude plugin install ratchet@ratchet
-```
+## Install notes
 
 The marketplace entry declares `mattpocock-skills`, `pstack` and `impeccable` as dependencies, so the last line installs all four once their marketplaces are known. pstack comes from `michael-denyer/pstack-claude`, the port with Cursor's tool names already translated for Claude Code and the other harnesses, not from `cursor/plugins`, the Cursor original. Grok, Codex, pi and OpenCode each have a page under `docs/harness/` with their commands; none has a dependency field, so `/ratchet:init` installs what is missing with the owner's consent.
 
 Updates arrive when `version` in `.claude-plugin/plugin.json` rises. To develop the plugin, add the checkout as a local marketplace instead (`claude plugin marketplace add /path/to/ratchet`): it is read in place, so edits apply at the next session or `/reload-plugins`.
-
-## Use in a repository
-
-Run `/ratchet:init` in any repository for the bare bones. Run `/ratchet:adopt` when the owner wants the gates. It copies the templates, asks the owner two things about the binding (what kind of software this is, and whether to accept the tools it proposes or name others), binds every gate against a walking skeleton, and leaves the entry points red until every question that applies is bound to a tool or accepted as `none` with a reason. The `justfile` and `.github/` templates are the `just` and GitHub examples; any runner and any forge can carry the entry points.
 
 ## Develop the plugin
 
