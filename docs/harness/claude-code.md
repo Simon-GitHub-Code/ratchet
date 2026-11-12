@@ -23,6 +23,7 @@ The ratchet marketplace entry declares `mattpocock-skills`, `pstack` and `impecc
 | In the skills | Here |
 | --- | --- |
 | `${CLAUDE_SKILL_DIR}` | set by Claude Code to the skill's folder |
+| `${CLAUDE_PLUGIN_ROOT}` | set by Claude Code to the plugin's install folder; `hooks/hooks.json` and the script commands in the skills rely on it |
 | `disable-model-invocation: true` | the Skill tool refuses it to an agent, in the main session and in every subagent, with the instruction not to reproduce it another way; the command is the owner's keystroke and the route names it (`skills/method/route.md`). pstack's own adapter lets a pstack skill read another pstack skill's file; that holds between pstack skills only |
 | the question tool | `AskUserQuestion`, up to four questions per dialog |
 | subagents | `Agent`; `pstack:poteto-agent` and friends by name |

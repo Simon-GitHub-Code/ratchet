@@ -27,6 +27,7 @@ pi reads frontmatter with a strict YAML parser: a `description` holding `: ` mus
 | In the skills | Here |
 | --- | --- |
 | `${CLAUDE_SKILL_DIR}` | the skill folder inside the installed package under `~/.pi/agent/` |
+| `${CLAUDE_PLUGIN_ROOT}` | the installed package, `~/.pi/agent/git/github.com/Simon-GitHub-Code/ratchet`. The guard extension works out its own root from its file location and sets no variable, and pi is not known to set one. Export `CLAUDE_PLUGIN_ROOT="$HOME/.pi/agent/git/github.com/Simon-GitHub-Code/ratchet"` before starting a session, so the commands in the skills resolve. The path is inferred from where pi puts the impeccable package; this mapping is unverified |
 | `disable-model-invocation: true` | honoured: the skill is left out of the model's list and runs only as the owner's `/skill:<name>` |
 | the question tool | `ctx.ui.confirm` and `ctx.ui.select` in extensions; pstack's pi extension adds a question tool |
 | subagents | pstack's pi extension adds a subagent tool; otherwise the pipeline is run by hand from `pipeline.md` |
@@ -35,7 +36,7 @@ pi reads frontmatter with a strict YAML parser: a `description` holding `: ` mus
 
 ## Verified
 
-pi 1.5.2, with the five packages above installed and filtered as described:
+pi 1.5.2, with the four packages above installed and filtered as described:
 
 - all six ratchet skills load, with no collisions;
 - the extension loads beside pstack's;
