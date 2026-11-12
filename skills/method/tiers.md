@@ -92,7 +92,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Would the tests notice any wrong code at all? | full mutation over the absolute paths |
 | Does the interface hold under every sequence of calls? | stateful property tests against the published contract |
 | Can a solver find an input that breaks a contract? | symbolic checking |
-| Can random input crash it? | time-boxed fuzzing with a kept corpus; a crash is a bug |
+| Can random input crash it? | fuzzing with a kept corpus, each target for a fixed time under a cap on the total; a crash is a bug |
 | Does the real system work through its real interface? | an end-to-end suite, the thin top of the pyramid |
 | Does the suite pass in any order, twice? | shuffled order, repeated runs, fresh seeds; a failure here is a bug, never "flaky" |
 | Is the build reproducible? | build twice, compare hashes |
@@ -158,6 +158,7 @@ A tool is chosen per repository, so no recipe is shipped for it. These hold for 
 
 - **A gate with nothing to run is red.** A suite that collects no test, a performance gate with no benchmark, a fuzz gate with no target, a telemetry gate with no telemetry test: each fails, on every stack. `none` is for a property the project will never have, and it is written in the binding, never printed by a recipe that found nothing.
 - **A gate over the change may find nothing to judge, and says so.** Mutation of changed functions, coverage of changed lines and the flag states of changed flags are green when the change touches nothing in their scope, and only when the tool itself reports zero items: a tool that fails for another reason is red.
+- **A time box is per thing judged, under a cap.** A fuzz run gives each target a fixed number of seconds and stops at a cap on the total, and a soak or a repeated run scales the same way. The cost of a gate then follows the code: a skeleton with one target pays for one, and the cap is what the tier's ceiling allows. A single fixed box makes an empty project wait as long as a large one.
 - **A failed collection is red, never a count of zero.** The test-count gate compares two counts; an install, an import or a listing that fails at either side is a failure, not a smaller number.
 - **Mutation is judged by the register, never the score.** The score is a trend. Clear the tool's cache of verdicts before a run, so a new test meets the old survivors again.
 - **A rule set for a framework is judged only when the framework is a dependency.** Static-analysis packs bundle rules for frameworks the project does not use, and one of them firing on a look-alike call is noise; the language and runtime rules always apply, and the recipe prints how many it left out.

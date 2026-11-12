@@ -22,7 +22,7 @@ Two dialogs, one round each, through the question tool, and nothing else. A ques
 
 ## What it costs
 
-Adoption installs every tool, runs every gate, plants each gate's fault in a scratch copy, and runs tier 2 in full once, in step 13: at least the fuzz time box (600 seconds by default) plus the full mutation run. Tell the owner before step 1; it is not a question.
+Adoption installs every tool, runs every gate, plants each gate's fault in a scratch copy, and runs tier 2 in full once, in step 13: the fuzz run (30 seconds a target by default, so seconds on a skeleton) plus the full mutation run. Tell the owner before step 1; it is not a question.
 
 ## Steps
 

@@ -314,8 +314,10 @@ api-deep:
 symbolic:
     @echo "bind: symbolic checker over contracts"; exit 1
 
-fuzz seconds="600":
-    @echo "bind: fuzz for {{seconds}} seconds; red when there is no fuzz target"; exit 1
+# Why: fuzz time grows with what there is to fuzz. Each target gets `each` seconds and the run
+# stops at `cap` in total, so a skeleton with one target costs seconds, not the whole box.
+fuzz each="30" cap="600":
+    @echo "bind: fuzz each target for {{each}} seconds, {{cap}} at most in total; red when there is no fuzz target"; exit 1
 
 e2e:
     @echo "bind: end-to-end suite, shard {{shard}} of {{shards}}; red when it holds no test"; exit 1

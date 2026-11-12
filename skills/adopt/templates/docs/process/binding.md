@@ -104,7 +104,7 @@ One row per question the method asks. The application types decide which rows ap
 | full mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 2 | `quality/mutation-register.toml` | `just mutation` |
 | deep interface conformance | | 2 | | `just api-deep` |
 | symbolic checking | | 2 | | `just symbolic` |
-| fuzzing | | 2 | the recipe's `seconds` parameter | `just fuzz` |
+| fuzzing | | 2 | the recipe's `each` (seconds a target) and `cap` (seconds in total) | `just fuzz` |
 | end to end | | 2 | | `just e2e` |
 | suite order-independent and repeatable | | 2 | | `just test-stability` |
 | reproducible build | | 2 | | `just reproducible` |

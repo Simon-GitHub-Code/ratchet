@@ -40,6 +40,7 @@ A change the gates can judge now merges without the owner, and the owner is aske
 - The weekly gates run: a new `weekly` entry point and `weekly.yml` workflow, where a red run opens one issue or comments on the open one.
 - A ceiling reports on a pull request and blocks on the default branch and nightly (`budget.py --over report`), and CI holds each gate's job to its tier's ceiling (`--tier`).
 - Local tiers and CI run the plugin at one commit. The binding's `- Ratchet plugin: <version> at <commit>` line is the pin, every workflow `ref` must equal it, and `scripts/plugin_pin.py` is red at the start of each tier when the plugin in use is another commit.
+- Fuzz time follows the code. The template `fuzz` recipe takes `each` (seconds a target, 30) and `cap` (seconds in total, 600) in place of one fixed 600 second box, so tier 2 on a new project takes seconds. An adoption with `fuzz seconds="600"` keeps working; rebind it to the two parameters to get the saving.
 
 ### Guard hardening
 
