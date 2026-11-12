@@ -27,7 +27,7 @@ def plugin(tmp_path: Path) -> Path:
 
 
 def report(repo: Path, plugin: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
-    code = upgrade.main(["upgrade.py", str(repo), "--plugin", str(plugin)])
+    code = upgrade.main(["upgrade.py", "--root", str(repo), "--plugin", str(plugin)])
     return code, capsys.readouterr().out
 
 

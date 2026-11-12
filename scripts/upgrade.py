@@ -12,8 +12,8 @@ updates.
 It changes nothing. An agent makes the edits it lists, and the guard asks the owner for each
 edit of a guard path; a script that wrote them would be a way round the guard.
 
-Usage: ``upgrade.py [ROOT] [--plugin DIR]``. The plugin is the one this script runs from unless
-``--plugin`` names another. Exit status: 0 when nothing is missing, 1 otherwise.
+Usage: ``upgrade.py [--root DIR] [--plugin DIR]``. The plugin is the one this script runs from
+unless ``--plugin`` names another. Exit status: 0 when nothing is missing, 1 otherwise.
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ def render(root: Path, plugin: Path, found: list[Finding]) -> str:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="upgrade.py")
-    parser.add_argument("root", nargs="?", type=Path, default=Path())
+    parser.add_argument("--root", type=Path, default=Path())
     parser.add_argument("--plugin", type=Path, default=plugin_pin.PLUGIN)
     options = parser.parse_args(argv[1:])
     root = options.root.resolve()
