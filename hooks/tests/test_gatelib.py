@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -168,6 +169,30 @@ def test_interrupts_raise_once_then_ignore_and_restore_the_handlers() -> None:
     assert signal.getsignal(signal.SIGTERM) is before
 
 
+def test_a_signal_inside_signals_held_waits_for_the_end_of_the_block() -> None:
+    reached = []
+
+    def hold() -> None:
+        with gatelib.signals_held():
+            signal.raise_signal(signal.SIGTERM)
+            signal.raise_signal(signal.SIGINT)
+            reached.append("the block ran on")
+        reached.append("not reached")
+
+    with gatelib.interrupts_raise(), pytest.raises(gatelib.Interrupted) as caught:
+        hold()
+    assert reached == ["the block ran on"]
+    assert caught.value.signum == signal.SIGTERM
+
+
+def test_signals_held_without_a_signal_raises_nothing_and_forgets_the_last_one() -> None:
+    with gatelib.interrupts_raise():
+        with gatelib.signals_held():
+            pass
+        with pytest.raises(gatelib.Interrupted):
+            signal.raise_signal(signal.SIGHUP)
+
+
 def start(code: str, tmp_path: Path) -> subprocess.Popen[bytes]:
     return subprocess.Popen(  # noqa: S603 # -- a fixed argv, no shell
         [sys.executable, "-c", code, str(tmp_path)], start_new_session=True
@@ -205,7 +230,7 @@ def test_stop_group_ends_the_leader_and_the_worker_that_ignores_sigterm(tmp_path
     assert servers.alive(child)
     gatelib.stop_group(leader, grace=5, settle=0.3)
     assert leader.returncode == -signal.SIGTERM
-    assert not servers.alive(child)
+    assert servers.gone(child)
 
 
 def test_stop_group_kills_a_leader_that_ignores_sigterm(tmp_path: Path) -> None:
@@ -236,3 +261,24 @@ def test_run_command_reports_the_exit_code_and_a_command_that_cannot_run() -> No
     code, problems = gatelib.run_command(["/nonexistent/command"], {})
     assert code == 1
     assert problems[0].startswith("cannot run /nonexistent/command: ")
+    with pytest.raises(ValueError, match="null"):
+        gatelib.run_command(["bad\0name"], {})
+
+
+def test_a_signal_just_after_the_command_starts_still_stops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[subprocess.Popen[bytes]] = []
+    real = subprocess.Popen
+
+    def start_then_signal(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:  # noqa: ANN401
+        process = real(*args, **kwargs)
+        started.append(process)
+        signal.raise_signal(signal.SIGTERM)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", start_then_signal)
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    with gatelib.interrupts_raise(), pytest.raises(gatelib.Interrupted):
+        gatelib.run_command(sleeper, {})
+    assert started[0].poll() is not None

@@ -5,6 +5,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,6 +32,20 @@ def alive(pid: int) -> bool:
         check=False,
     ).stdout.strip()
     return bool(state) and not state.startswith("Z")
+
+
+def gone(pid: int, wait: float = 10.0) -> bool:
+    """Whether the process is gone within ``wait`` seconds.
+
+    A killed process takes a moment to die, and longer when the machine is busy; the tests that
+    kill one run beside many others.
+    """
+    deadline = time.monotonic() + wait
+    while alive(pid):
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.02)
+    return True
 
 
 def pid_of(path: Path) -> int:

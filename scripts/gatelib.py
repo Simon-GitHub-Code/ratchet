@@ -225,6 +225,21 @@ class Interrupted(Exception):  # noqa: N818 # -- a signal, not a fault
         self.signum = signum
 
 
+class _Signals:
+    """What the signal handler shares with ``signals_held``: whether it fired, is held or waits."""
+
+    fired = False
+    holding = False
+    pending: int | None = None
+
+    def reset(self, *, holding: bool) -> None:
+        """Forget any signal kept; ``holding`` says whether the next ones are to wait."""
+        self.holding, self.pending = holding, None
+
+
+_SIGNALS = _Signals()
+
+
 @contextlib.contextmanager
 def interrupts_raise() -> Iterator[None]:
     """Turn SIGINT, SIGTERM and SIGHUP into ``Interrupted`` once, so ``finally`` blocks run.
@@ -232,14 +247,18 @@ def interrupts_raise() -> Iterator[None]:
     The first signal raises; later ones are ignored, so a second Ctrl-C cannot cut the cleanup
     short. The previous handlers come back on exit. SIGKILL cannot be caught by anything.
     """
-    fired = False
+    _SIGNALS.fired = False
+    _SIGNALS.reset(holding=False)
 
     def handler(signum: int, frame: FrameType | None) -> None:
-        nonlocal fired
         del frame
-        if not fired:
-            fired = True
-            raise Interrupted(signum)
+        if _SIGNALS.fired:
+            return
+        if _SIGNALS.holding:
+            _SIGNALS.pending = _SIGNALS.pending or signum
+            return
+        _SIGNALS.fired = True
+        raise Interrupted(signum)
 
     names = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
     previous = [(name, signal.signal(name, handler)) for name in names]
@@ -248,6 +267,26 @@ def interrupts_raise() -> Iterator[None]:
     finally:
         for name, old in previous:
             signal.signal(name, old)
+
+
+@contextlib.contextmanager
+def signals_held() -> Iterator[None]:
+    """Start a child and record it inside this block; a signal waits for the block to end.
+
+    A handler that raises can run between the call that starts a child and the line that
+    records it, and the child is then never stopped. A signal that lands inside the block is
+    kept and raised as ``Interrupted`` when the block ends, by which time the child is recorded.
+    Put the block inside the ``try`` that stops what was recorded. Outside ``interrupts_raise``
+    it holds nothing.
+    """
+    _SIGNALS.reset(holding=True)
+    try:
+        yield
+    finally:
+        _SIGNALS.holding = False
+        if _SIGNALS.pending is not None:
+            _SIGNALS.fired = True
+            raise Interrupted(_SIGNALS.pending)
 
 
 def free_port() -> int:
@@ -298,17 +337,19 @@ def run_command(command: list[str], env: dict[str, str]) -> tuple[int, list[str]
 
     A command ended by a signal exits 128 plus the signal, as a shell reports it.
 
-    A signal that interrupts the wait stops the command's whole process group before it
-    propagates.
+    A signal that interrupts the start or the wait stops the command's whole process group
+    before it propagates.
     """
+    inner: subprocess.Popen[bytes] | None = None
     try:
-        inner = subprocess.Popen(command, env=env, start_new_session=True)
-    except OSError as error:
-        return 1, [f"cannot run {command[0]}: {error}"]
-    try:
+        with signals_held():
+            inner = subprocess.Popen(command, env=env, start_new_session=True)
         code = inner.wait()
-    except BaseException:
-        stop_group(inner)
+    except BaseException as error:
+        if inner is not None:
+            stop_group(inner)
+        elif isinstance(error, OSError):
+            return 1, [f"cannot run {command[0]}: {error}"]
         raise
     code = 128 - code if code < 0 else code
     return code, ([] if code == 0 else [f"the command exited with code {code}"])

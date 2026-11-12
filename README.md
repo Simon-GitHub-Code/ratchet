@@ -65,6 +65,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/load_smoke.py` | 1 | does a running service stay correct under seconds of concurrent requests? Judged on errors only, never on latency |
 | `scripts/telemetry_sink.py` | 2 | does the telemetry arrive? An OTLP/HTTP receiver that is green only when traces, metrics and logs arrived non-empty for the expected `service.name`; no collector to install |
 | `scripts/budget.py` | every tier | did a tier or gate finish under its ceiling in seconds? `--set` records the first ceiling |
+| `scripts/parallel.py` | every tier | not a gate: runs a tier's gates at once through the repository's own runner, each gate's output whole, every red one named, so local wall clock is the slowest gate and not the sum |
 | `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the owner's one command when not; asked by the preflight, the route and `just ratchet`, not by CI |
 
 Every other gate is the repository's: a tool it chose, behind an entry point the binding names.

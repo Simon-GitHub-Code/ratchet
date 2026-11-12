@@ -36,6 +36,7 @@ import load_smoke
 import lowered
 import markers
 import mutation_survivors
+import parallel
 import pins
 import prose
 import settings_rules
@@ -283,6 +284,10 @@ def hooks_path_elsewhere(root: Path) -> None:
     git(root, "config", "core.hooksPath", str(root / "no-hooks"))
 
 
+def one_gate_goes_red(root: Path) -> None:
+    write(root, "red", "")
+
+
 def guard_diff(argv: list[str]) -> int:
     return guard_paths.main(argv[1:])
 
@@ -303,6 +308,11 @@ MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
 STRYKER = ["--tool", "stryker"]
 TICKET_REF = ["tickets/01-add-the-thing.md"]
 ADDITIVE = ["--fail-unless-additive"]
+GATE_READS_RED = "import pathlib, sys; sys.exit(pathlib.Path('red').is_file())"
+PARALLEL = [
+    *("--runner", f"{shlex.quote(sys.executable)} -c", "--jobs", "2"),
+    *("--", "pass", shlex.quote(GATE_READS_RED), "0"),
+]
 SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("markers", markers.main, add_marker, []),
     ("suppressions: a count rose", suppressions.main, add_suppression, []),
@@ -338,6 +348,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("hooks-installed: no hooks", hooks_installed.main, remove_hooks, []),
     ("hooks-installed: a hooks path elsewhere", hooks_installed.main, hooks_path_elsewhere, []),
     ("feature-preflight: no hooks", feature_preflight.main, remove_hooks, TICKET_REF),
+    ("parallel: a red gate among green ones", parallel.main, one_gate_goes_red, PARALLEL),
 ]
 
 
