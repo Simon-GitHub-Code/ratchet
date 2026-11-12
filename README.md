@@ -64,11 +64,12 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/with_service.py` | 1 | does the deliverable start and answer? Boots a service by any command, waits until a URL answers, stops the whole process tree; with a command after `--` it holds the service up for that command |
 | `scripts/load_smoke.py` | 1 | does a running service stay correct under seconds of concurrent requests? Judged on errors only, never on latency |
 | `scripts/telemetry_sink.py` | 2 | does the telemetry arrive? An OTLP/HTTP receiver that is green only when traces, metrics and logs arrived non-empty for the expected `service.name`; no collector to install |
+| `scripts/project_bite.py` | 1 and 2 | does every gate the repository bound go red on its fault, and on an empty collection? Plants each fault of `quality/bites.toml` in a scratch copy; with `--changed`, only when the change touches a gate |
 | `scripts/budget.py` | every tier | did a tier or gate finish under its ceiling in seconds? `--set` records the first ceiling |
 | `scripts/parallel.py` | every tier | not a gate: runs a tier's gates at once through the repository's own runner, each gate's output whole, every red one named, so local wall clock is the slowest gate and not the sum |
 | `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the owner's one command when not; asked by the preflight, the route and `just ratchet`, not by CI |
 
-Every other gate is the repository's: a tool it chose, behind an entry point the binding names.
+Every other gate is the repository's: a tool it chose, behind an entry point the binding names. The plugin cannot vouch for a tool it did not choose, so the repository does: `quality/bites.toml` holds a fault for each such gate, `just bite-all` plants each one and requires the gate red, and the conformance gate is red on a bound gate with no fault (ADR 0020).
 
 ## What is in the plugin
 

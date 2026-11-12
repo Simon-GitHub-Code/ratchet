@@ -59,6 +59,24 @@ Two dialogs in a default run, one round each, through the question tool. Nothing
 
     **A gate with nothing to run is red.** No test, no benchmark, no fuzz target, no scenario: the recipe fails, on every stack, and says what is missing. Check each tool's exit code on an empty collection before you trust it, and make the recipe fail where the tool would pass. The other rules a recipe must keep are in [tiers.md](../method/tiers.md#what-a-recipe-must-get-right); read them before you write the first recipe.
 
+    **A bite for every gate you bind.** As you fill a recipe, add its `[[bite]]` to `quality/bites.toml`: the smallest fault this gate exists to catch, and `expect`, the words the gate prints for that fault (the rule's code, the name of what is missing). A gate that judges a collection gets a second bite, whose fault is the collection removed. The two kinds:
+
+    ```toml
+    [[bite]]
+    gate = "lint"
+    name = "an unused import"
+    write = { path = "src/<package>/_bite.<ext>", content = "<an import nothing uses>\n" }
+    expect = "<the rule's code>"
+
+    [[bite]]
+    gate = "perf"
+    name = "no benchmark"
+    remove = ["<the benchmarks' glob>"]
+    expect = "<the recipe's words for nothing to run>"
+    ```
+
+    `just bite-one lint` proves one gate while you write it, in a scratch copy: green without the fault, red with it. The copy holds what git sees and nothing ignored, so put this stack's frozen, offline install in `setup` at the top of the registry. A verdict other than `bites` is a defect of the recipe or of the fault ([tiers.md](../method/tiers.md#every-bound-gate-is-shown-to-bite)); fix that, and never loosen `expect` until it matches. A fault for a gate that compares with the merge base (a test count, the coverage of changed lines) is large enough to show whatever the branch holds. A gate you cannot plant a fault for is bound `none`, with its reason and ADR.
+
     Run `just snapshots` once the tool configs exist, so `snapshots-check` has something to compare. Every bound entry point runs green on the skeleton before you move to the next: tier 0, then tier 1, then tier 2. A tier 2 recipe that is red on the skeleton is a defect of the binding, fixed now, never left for the first feature. Then run `just ratchet` once and commit what it writes: the first thresholds and the public-surface report. It is red, by design, while a commit here would not run tier 0: deal with the command it prints as step 15 says, and where that command is the owner's, the thresholds stay at the values you wrote until their first `just ratchet`. Done when `tier0`, `tier1` and `tier2` are green and no `bind:` body is left.
 
 11. **Speed.** Build it in now, while nothing is slow ([tiers.md](../method/tiers.md#speed)). Turn the test runner's parallel mode on in the committed configuration, so every core is used locally and in CI without a flag anyone must remember. Have each long gate's recipe hand `{{shard}}` and `{{shards}}` to its tool; a local run is shard 1 of 1. Keep the CI templates' shape when you bind them: one job per gate, the long gates over the shard count, superseded runs cancelled; fill each `bind:` cache line with this stack's dependency directory and tool caches, keyed on its lockfiles and tool configs. Fill the binding's Speed section, one line per concept, saying how this stack meets it; leave `- Shards: 1`. Run `just budget tier0 --set` and `just budget tier1 --set` once on the skeleton: they record the first ceilings with headroom, never under the tier's budget, and the ceilings only fall from here. Done when the Speed section has no placeholder, the suite runs in parallel, and `[ceilings.seconds]` has a key per tier.
@@ -67,7 +85,7 @@ Two dialogs in a default run, one round each, through the question tool. Nothing
 
 13. **CI.** Put the commit ADR 0001 names into every `ref: "<ratchet-sha>"` of `ci.yml` and `deep.yml`, so CI runs the plugin's gates at the version this repository adopted; `RATCHET_PLUGIN` already points the recipes at that checkout. Add the toolchain setup, pinned, with its own cache on. The template's actions are pinned and `just pins` is green on it; keep it so for every step you add: a commit SHA with the version in a trailing comment, images by digest. Done when the workflows parse and name no placeholder.
 
-14. **Prove it.** Run `conformance` and fix each failure it names. Run `check`, then `check-deep`. Adoption ends with every bound gate shown to bite: the `bite` entry point plants a fault for each gate the binding names, the empty collection among them, and is green only when each gate went red on its fault. Done when `conformance`, `check-deep` and `bite` exit 0.
+14. **Prove it.** Run `conformance` and fix each failure it names; it is red on a bound gate with no bite. Run `check`, then `check-deep`. Adoption ends with every bound gate shown to bite: the `bite-all` entry point plants each fault of `quality/bites.toml` in a scratch copy, the empty collection among them, and is green only when each gate was green without its fault and red with it. Done when `conformance` and `check-deep`, whose last gate is `bite-all`, exit 0.
 
 15. **Hand over.** Commit on the branch as `chore(method): adopt the ratchet method` (the `commits` gate accepts it, and the change-size gate exempts a range made only of such commits and prints the size instead), push, and open a pull request (with no forge, the change description at `.scratch/changes/<branch>.md`) with every template section filled, the `tier0` tail under Gates, and under Criticism, as standing criticisms of the binding: every `none` row that applies, every tool you could not check against its documentation, every assumption of step 5, every answer you could not act on, and the adoption's measured size, which is the counter to the change-size gate for this one change. The tier 0 commit hooks: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hooks_installed.py"` in one Bash call. It is green only when a commit here would run tier 0, and red with the one command that makes it so. Run that command yourself when it is a plain `pre-commit install` or `uvx pre-commit install`, which the guard allows, then run the gate again. Any other command (it unsets or sets aside a `core.hooksPath`, which the guard refuses from an agent as a hook-path change) is the owner's: name it in the hand-over and under Criticism, do not run it, and say that `just ratchet`, the route and the feature preflight stay red until the owner has. Merging is the owner's too. Say also that the guard's path rules switch on when this pull request merges, since the hook reads the manifest from the default branch.
 

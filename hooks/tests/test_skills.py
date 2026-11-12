@@ -20,7 +20,9 @@ def test_adopt_asks_two_dialogs_and_chooses_tools_itself() -> None:
     assert 'scripts/application_types.py" <type>...' in ADOPT
     assert "never from this plugin" in ADOPT
     assert "**A gate with nothing to run is red.**" in ADOPT
-    assert "the `bite` entry point" in ADOPT
+    # Why: ADR 0020. The plugin ships no tool, so the adopting agent writes a fault per gate.
+    assert "**A bite for every gate you bind.**" in ADOPT
+    assert "the `bite-all` entry point plants each fault of `quality/bites.toml`" in ADOPT
 
 
 def test_init_asks_two_dialogs_by_default_and_everything_under_interactive() -> None:

@@ -1,0 +1,45 @@
+# Bites (Ratchet method): the faults that show every gate this repository bound can fail.
+# One `[[bite]]` or more per Gates row of the binding whose Tool cell names a tool the repository
+# chose. `just bite-all` plants each fault in a scratch copy of the work tree and requires the
+# gate red with it and green without it; `just bite` does so on a pull request that changes a
+# gate. The conformance gate is red on a tool-bound row with no bite. This file is a guard path:
+# `quality/**` is the manifest's `ratchets` group, so dropping a bite asks the owner (ADR 0020).
+#
+# Before the first `[[bite]]`, both optional:
+#   setup    commands run once in each scratch copy, in order. A copy holds what git sees and
+#            nothing ignored, so no virtualenv, no node_modules, no build output: rebuild here
+#            what the gates do not build themselves, from the lockfile.
+#   include  ignored paths a gate needs that setup cannot rebuild; copied when present.
+#
+# Each `[[bite]]`:
+#   gate     the entry point: the last word of the row's Entry point cell (`just lint` is `lint`)
+#   name     the fault, in a few words; unique within its gate
+#   expect   words the gate prints because of this fault: the rule's code, the name of what is
+#            missing. They occur more often in the red run's output than in the green run's (a
+#            recipe's own text is echoed on both). Red without them is red for another reason.
+#   and exactly one fault:
+#   write    { path = "...", content = "..." } creates or replaces one file. `content` may be a
+#            list of strings, joined, so a planted secret can be split and no scanner reads this
+#            file as a leak.
+#   patch    a diff under quality/bites/, applied with `git apply`, for a fault in several files
+#            or in the middle of one
+#   remove   globs; every file they match is deleted. A gate that judges a collection (tests,
+#            benchmarks, fuzz targets, examples, scenarios) carries one such bite, since a gate
+#            with nothing to run is red.
+#   args     optional words appended to the gate's command, such as the seconds a fuzz run takes
+#   commit   optional; true commits the fault in the copy first, for a gate that reads history
+#            or the index (a secret scanner over commits, a linter over tracked files)
+#
+# setup = ["<the package manager's frozen, offline install>"]
+#
+# [[bite]]
+# gate = "lint"
+# name = "an unused import"
+# write = { path = "src/<package>/_bite.<ext>", content = "<a line the linter flags>\n" }
+# expect = "<the rule's code>"
+#
+# [[bite]]
+# gate = "perf"
+# name = "no benchmark"
+# remove = ["<the benchmarks' glob>"]
+# expect = "<the recipe's words for nothing to run>"

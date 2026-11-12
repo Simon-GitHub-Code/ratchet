@@ -27,14 +27,14 @@ Use these words, in code, tests, records and prose. Each one is a hook for the b
 - **record**: the design brief, the glossary, an ADR, a feature brief, a dispute, and for a user interface `PRODUCT.md` and `DESIGN.md`. Records are the standards a review judges against.
 - **owner**: the human. Merges, decides disputes, changes gates by hand.
 - **red**, **green**: a test or gate's observable state. A test that was never red proves nothing.
-- **bite**: a checker proven to fail on a synthetic violation. A gate nobody tests is a gate nobody can trust.
+- **bite**: a gate shown to go red on a planted fault, and on an empty collection when it judges one. `quality/bites.toml` holds the faults. A gate nobody has seen fail is a gate nobody can trust.
 - **conjecture**, **alternative**, **refuter**, **criticism**, **open**, **stands**: the merge rule's six words. [epistemology.md](epistemology.md)
 
 ## The contract
 
 Every repository on the method keeps all eleven. The conformance gate checks the artefacts; the owner reads for the rest.
 
-1. **One set of entry points.** The binding's table is the only list of gates: one row per question, the application types deciding which rows apply and the repository choosing each tool at adoption. CI runs the same entry points, a red `check` names the one that failed, and a gate with nothing to run is red. [tiers.md](tiers.md#application-types)
+1. **One set of entry points.** The binding's table is the only list of gates: one row per question, the application types deciding which rows apply and the repository choosing each tool at adoption. CI runs the same entry points, a red `check` names the one that failed, and a gate with nothing to run is red. Every gate the repository bound to a tool carries a fault in `quality/bites.toml` that shows it red. [tiers.md](tiers.md#application-types)
 2. **Three tiers, two aggregates.** `check` is tier 0 plus tier 1 and runs before every pull request. `check-deep` adds tier 2 and runs on the default branch and nightly. A red tier 2 there is the next piece of work. A question that applies and has no tool in the stack is bound to `none` with a reason and an ADR: green, and a standing criticism of the binding. A question the application types leave out is bound `none: not a <type>`; its row stays. [tiers.md](tiers.md)
 3. **The ratchet.** Thresholds live in `quality/thresholds.toml` and only rise, checked against the merge base. Absolute paths need 100%. Counts that could be gamed (suppressions, test counts) are computed from both trees on every run, never stored. Each gate's effective configuration is snapshotted, so loosening shows as a reviewed diff. Mutation testing gates on zero unexplained survivors: kill the mutant, or register it with a reason tied to the function's hash. [ratchet.md](ratchet.md)
 4. **Guards.** Guard paths are enforced by the harness, which the model cannot override, and surfaced in the diff for whatever slips past. A denial is the dispute signal. [guards.md](guards.md)

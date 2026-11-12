@@ -18,6 +18,7 @@ from pathlib import Path
 
 import application_types
 import hooks_installed
+import project_bite
 import settings_rules
 
 ENTRY_POINTS = (
@@ -396,6 +397,12 @@ def check_register(data: dict[str, object]) -> Iterable[str]:
             )
 
 
+def check_bites(root: Path) -> Iterable[str]:
+    # Why: ADR 0020. The method ships no tool, so the repository shows each gate it bound going
+    # red on a planted fault; a gate with no bite, or a collection never shown empty, is unproven.
+    return project_bite.failures(root)
+
+
 def check_disputes(root: Path) -> Iterable[str]:
     directory = root / "docs/disputes"
     if not directory.is_dir():
@@ -442,6 +449,7 @@ CHECKS: tuple[Check, ...] = (
     check_commit_hooks,
     check_plugin_checkout,
     check_quality,
+    check_bites,
     check_disputes,
     check_features,
     check_pr_template,
@@ -467,6 +475,7 @@ def mutations() -> list[Mutation]:
     return [
         *artefact_mutations(),
         *type_mutations(),
+        *bite_mutations(),
         *speed_mutations(),
         *operability_mutations(),
         *hook_mutations(),
@@ -552,6 +561,42 @@ def type_mutations() -> list[Mutation]:
         (
             "binding that drops the row its type leaves out",
             rebind("| contract drift | none: not a service | 1 | | `just contracts-check` |\n", ""),
+        ),
+    ]
+
+
+def reregister(old: str, new: str) -> Callable[[Path], None]:
+    """A mutation that rewrites one piece of the bite registry."""
+
+    def mutate(root: Path) -> None:
+        path = root / project_bite.REGISTRY
+        text = path.read_text()
+        if old not in text:
+            message = f"the self-test's registry has no {old!r} to mutate"
+            raise SystemExit(message)
+        path.write_text(text.replace(old, new, 1))
+
+    return mutate
+
+
+def bite_mutations() -> list[Mutation]:
+    """The filled registry plants one fault per bound gate, and empties each collection."""
+
+    def no_registry(root: Path) -> None:
+        (root / project_bite.REGISTRY).unlink()
+
+    lint = 'gate = "lint"\nname = "a fault"\n'
+    empty = 'gate = "perf"\nname = "nothing to run"\nremove = ["collection/**"]\n'
+    slow = 'gate = "perf"\nname = "slow"\nwrite = { path = "a", content = "b" }\n'
+    return [
+        ("repository without the bite registry", no_registry),
+        ("bound gate with no bite", reregister(lint, 'gate = "fmt-check"\nname = "another"\n')),
+        ("collection gate never shown red when empty", reregister(empty, slow)),
+        ("bite that does not say why the gate is red", reregister('expect = "a fault"\n', "")),
+        ("bite naming a gate the binding lacks", reregister(lint, 'gate = "lnit"\nname = "x"\n')),
+        (
+            "bite planting two faults",
+            reregister(empty, empty + 'write = { path = "a", content = "b" }\n'),
         ),
     ]
 
@@ -708,6 +753,22 @@ def fill_binding(text: str) -> str:
     return SPEED_PLACEHOLDER.sub(r"\1stated for this stack", text)
 
 
+def fill_registry(binding: str) -> str:
+    """A fault per gate the filled binding binds to a tool, and each collection gate's emptied."""
+    collections = application_types.load().collections
+    entries = []
+    for row in project_bite.gate_rows(binding):
+        if not row.bound:
+            continue
+        head = f'[[bite]]\ngate = "{row.gate}"\n'
+        fault = 'write = { path = "src/bite", content = "a fault" }\nexpect = "a fault"\n'
+        entries.append(f'{head}name = "a fault"\n{fault}')
+        if row.question in collections:
+            emptied = 'remove = ["collection/**"]\nexpect = "nothing to run"\n'
+            entries.append(f'{head}name = "nothing to run"\n{emptied}')
+    return "\n".join(entries)
+
+
 def fill_placeholders(root: Path) -> None:
     """Stand in for adopt on a template copy: bind every group and row adopt would have bound."""
     path = root / "guards/manifest.toml"
@@ -715,6 +776,8 @@ def fill_placeholders(root: Path) -> None:
     settings_rules.write(root)
     binding = root / "docs/process/binding.md"
     binding.write_text(fill_binding(binding.read_text()))
+    registry = root / project_bite.REGISTRY
+    registry.write_text(registry.read_text() + fill_registry(binding.read_text()))
     fills = {
         "docs/adr/0001-adopt-the-ratchet-method.md": {
             "<X.Y.Z>": "0.0.0",

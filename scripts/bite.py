@@ -4,8 +4,9 @@
 A gate nobody has seen fail is a gate that may never fire. For each gate this plugin ships,
 ``bite.py`` builds a scratch repository on ``main`` with one commit, applies a violation on a
 branch, runs the gate and expects red; then runs it on the clean state and expects green. The
-adopted repository's ``bite`` entry point runs this beside its own fitness tests' self-tests,
-and the plugin's own ``just check`` runs it too.
+adopted repository's ``bite-all`` entry point runs this, and the plugin's own ``just check``
+runs it too. ``project_bite.py`` is the other half: the gates a repository bound to its own tools,
+against the faults its ``quality/bites.toml`` plants. It is a shipped gate, so it is bitten here.
 
 Usage: ``bite.py``. Exits 1 when any gate fails to bite or fails to pass.
 """
@@ -38,6 +39,7 @@ import markers
 import mutation_survivors
 import parallel
 import pins
+import project_bite
 import prose
 import settings_rules
 import snapshots
@@ -79,7 +81,23 @@ FLAG = (
     '[[flag]]\nkey = "new-sum"\nowner = "core"\ndefault = {default}\n'
     'remove-by = {due}\nreason = "Ships the new sum dark until it is measured."\n'
 )
-BINDING = "# Binding\n\n- Default branch: `main`\n"
+# A repository's own two gates, as one shell script, and the faults that show each one bites.
+LINT_RULE = 'if grep -rq planted src; then echo "L001 a planted word"; exit 1; fi'
+TESTS_RULE = 'ls tests/test_*.py >/dev/null 2>&1 || { echo "no test to run"; exit 1; }'
+OWN_GATES = f'#!/bin/sh\ncase "$1" in\nlint) {LINT_RULE} ;;\ntests) {TESTS_RULE} ;;\nesac\n'
+LINT_BITE = (
+    '[[bite]]\ngate = "lint"\nname = "a planted word"\n'
+    'write = { path = "src/b.py", content = "planted = 1\\n" }\nexpect = "L001"\n'
+)
+TESTS_BITE = (
+    '[[bite]]\ngate = "tests"\nname = "no test"\nremove = ["tests/**"]\nexpect = "no test to run"\n'
+)
+BINDING = (
+    "# Binding\n\n- Default branch: `main`\n\n## Gates\n\n"
+    "| Question | Tool | Tier | Threshold source | Entry point |\n|---|---|---|---|---|\n"
+    "| lint | a linter | 0 | | `sh own-gates.sh lint` |\n"
+    "| unit, property and fitness tests | a test runner | 1 | | `sh own-gates.sh tests` |\n"
+)
 HOOK = '#!/bin/sh\n[ -n "$RATCHET_HOOK_PROBE" ] && echo {name} > "$RATCHET_HOOK_PROBE"\nexit 0\n'
 RESULTS = "    a.x_f__mutmut_1: killed\n    a.x_f__mutmut_2: {status}\n"
 REGISTER_PATH = "quality/mutation-register.toml"
@@ -125,6 +143,9 @@ def scratch(root: Path) -> None:
     write(root, "tickets/01-add-the-thing.md", TICKET)
     write(root, "flags.toml", "# No flags yet.\n")
     write(root, "docs/process/binding.md", BINDING)
+    write(root, "own-gates.sh", OWN_GATES)
+    write(root, "tests/test_a.py", "def test_f():\n    assert True\n")
+    write(root, str(project_bite.REGISTRY), LINT_BITE + TESTS_BITE)
     install_hooks(root)
     settings_rules.write(root)
     snapshots.write(root, snapshots.GROUP)
@@ -144,6 +165,18 @@ def install_hooks(root: Path) -> None:
 def commit(root: Path, subject: str) -> None:
     git(root, "add", "-A")
     git(root, "commit", "-q", "--allow-empty", "-m", subject)
+
+
+def lint_green_on_its_fault(root: Path) -> None:
+    write(root, "own-gates.sh", OWN_GATES.replace(LINT_RULE, "true"))
+
+
+def tests_green_on_nothing(root: Path) -> None:
+    write(root, "own-gates.sh", OWN_GATES.replace(TESTS_RULE, "true"))
+
+
+def bite_dropped(root: Path) -> None:
+    write(root, str(project_bite.REGISTRY), TESTS_BITE)
 
 
 def add_marker(root: Path) -> None:
@@ -349,6 +382,9 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("hooks-installed: a hooks path elsewhere", hooks_installed.main, hooks_path_elsewhere, []),
     ("feature-preflight: no hooks", feature_preflight.main, remove_hooks, TICKET_REF),
     ("parallel: a red gate among green ones", parallel.main, one_gate_goes_red, PARALLEL),
+    ("project-bite: a gate green on its fault", project_bite.main, lint_green_on_its_fault, []),
+    ("project-bite: a gate green on nothing to run", project_bite.main, tests_green_on_nothing, []),
+    ("project-bite: a bound gate with no bite", project_bite.main, bite_dropped, []),
 ]
 
 
@@ -446,6 +482,8 @@ def bite(scratch_dir: Path) -> int:
         {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
     ):
         os.environ.pop("RATCHET_HOOK_PROBE", None)
+        # Why: run as a gate inside a scratch copy, this script still bites the runner itself.
+        os.environ.pop(project_bite.BITING, None)
         return scenarios(scratch_dir)
 
 

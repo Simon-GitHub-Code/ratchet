@@ -71,7 +71,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Does every entry point emit the telemetry the binding names? | tests against an in-memory OpenTelemetry exporter: each route, job and command yields a span with the attributes the binding requires, a failure is recorded on its span, a log line carries the trace id; a fitness test fails an entry point registered outside the instrumented seam; the signal names are snapshotted beside the tests, so the telemetry surface changes on purpose |
 | Does the code hold with each changed flag off and on? | the suite once per state of every flag the change adds or touches, through the override the flag seam honours; off is the merge base's behaviour |
 | Does the deliverable stay correct under concurrent requests? | the method's `scripts/load_smoke.py` inside `with_service.py`: seconds of concurrent requests against the booted deliverable, zero errors and a floor on requests answered; latency is printed, not judged, since a pull-request runner is no benchmark host |
-| Does every home-grown checker still bite? | each fitness test and gate tool carries a synthetic violation it must fail on, run as a suite |
+| Does every gate the change touches still bite? | the method's `scripts/project_bite.py --changed`: when the change touches a path that defines a gate (a tool's config, the command contract, a fitness test, a gate tool, the binding, the bite registry), each fault `quality/bites.toml` holds for a tier 0 or tier 1 gate is planted in a scratch copy and the gate must go red; a change that touches none proves nothing, and says so |
 | Did the public surface change on purpose? | a snapshot of exported symbols, routes or flags, diffed; a change needs a version bump or a changelog line |
 | Does old persisted data still load? | golden fixtures from earlier versions read cleanly; migrations apply and reverse |
 | Do the documentation's examples run? | doctests, or extracted snippets executed |
@@ -105,6 +105,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Is any flag past its removal date? | the method's flags gate with `--expired`; it goes red by the calendar, so it is asked here and never on a pull request |
 | Is the interface usable by everyone? | accessibility checks inside the end-to-end suite, for user interfaces; `impeccable audit` is the agent-side pass, the gate is the deterministic one |
 | Does the model still hold, and does the code still mirror it? | the project-local formal verification skill: the owner's `/pstack:create-formal-verification-skill` writes it where a bug costs most and tests reach least, their `/pstack:maintain-formal-verification-skill` keeps it true to the code. The model and the skill are guard paths |
+| Does every gate bite, and is it red with nothing to run? | the method's `scripts/bite.py` for the gates the plugin ships, then `scripts/project_bite.py` for the gates the repository bound: every fault of `quality/bites.toml`, and the emptied collection of each gate that judges one, green without the fault and red with it |
 
 ## Weekly and advisory
 
@@ -164,5 +165,19 @@ A tool is chosen per repository, so no recipe is shipped for it. These hold for 
 - **Every tool runs through the package manager that locks it**, so the lockfile pins the gate as it pins the product, and the audit of shipped dependencies leaves the development tools to the weekly `audit-all`.
 - **Each coverage group is measured by a report that reaches it.** Two suites write two reports and one judgement reads both; a fitness test's logic lives where coverage measures it.
 - **A repeated run takes a fresh seed and prints it**, so a failure in the order-independence gate replays.
-- **A recipe builds what it runs.** In CI each gate is a job of its own, so the boot command of a service gate compiles first, and nothing depends on what another recipe left behind.
+- **A recipe builds what it runs, every time.** In CI each gate is a job of its own, so the boot command of a service gate compiles first, and nothing depends on what another recipe left behind: a coverage report, a build directory, a cache. A recipe that skips the build when its output is already there judges the last build.
+- **A red gate says what is wrong.** A recipe that ends on a bare comparison or a tool's exit code prints nothing a reader, or a bite's `expect`, can tell from any other failure. It prints the rule and the number.
+- **A threshold starts at the measured value.** A ratchet recorded as zero is a gate that cannot fail.
 - **A tool that walks the tree is pointed at the source.** `quality/snapshots/` holds copies of the tool configs, a dependency manifest among them, which reads as a second package to a tool that searches for manifests.
+
+## Every bound gate is shown to bite
+
+The method ships no tool, so it cannot promise that a repository's recipes work. The repository shows it. `quality/bites.toml` holds one `[[bite]]` or more for each Gates row whose Tool cell names a tool the repository chose, a row that pairs a plugin script with a tool of the stack included. A row bound `none`, and a row bound to the plugin's scripts alone, needs none: `scripts/bite.py` proves those.
+
+A bite names its `gate` (the last word of the row's entry point), the fault in a few words, exactly one fault, and `expect`: words the gate prints when it is red on this fault. The fault is `write` (create or replace one file), `patch` (a diff under `quality/bites/`) or `remove` (delete what the globs match). A gate that judges a collection, which `application-types.toml` marks, carries a `remove` bite as well: the collection emptied, and the gate red. `args` are appended to the gate's command, and `commit = true` commits the fault first, for a gate that reads history.
+
+`scripts/project_bite.py` makes a scratch copy of the work tree as git sees it, runs the registry's `setup` there, and for each bite runs the gate (green), plants the fault, and runs it again. `bites` is the one green verdict. `DOES NOT BITE` is a gate that cannot fail on what it is for. `RED BEFORE THE FAULT` is a gate that is red on a fresh checkout, usually because it leans on what another recipe left behind. `RED FOR ANOTHER REASON` is a gate red without the words the bite expects, or a bite whose words the gate prints as often when it is green. Each is fixed in the recipe or the fault, never by loosening `expect` until it matches. The real work tree is never written, and nothing git ignores is copied, so a gate is judged as a CI job would run it.
+
+The whole proof is `bite-all`, in tier 2. On a pull request `bite` asks whether the change touches a path that defines a gate, and proves the tier 0 and tier 1 gates only then. The conformance gate is red on a bound gate with no bite and on a collection gate with no `remove` bite, so a gate cannot be added unproven. The registry and its patches sit under `quality/`, a guard path: dropping a bite asks the owner.
+
+One fault shows that a gate is alive and wired to the thing it judges. It does not show that the tool's rule set is complete. A gate nobody can plant a fault for is not a gate: its row is bound `none`, with the reason and an ADR.

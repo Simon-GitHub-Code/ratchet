@@ -74,7 +74,7 @@ One row per question the method asks. The application types decide which rows ap
 | telemetry emitted | | 1 | the Telemetry section below | `just telemetry` |
 | changed flags off and on | | 1 | `flags.toml` against the merge base | `just flag-states` |
 | load smoke | `ratchet` plugin `scripts/load_smoke.py` inside `with_service.py` | 1 | zero errors; the Limits section below | `just load-smoke` |
-| every checker bites | `ratchet` plugin `scripts/bite.py` plus the project's own | 1 | | `just bite` |
+| every changed gate still bites | `ratchet` plugin `scripts/project_bite.py --changed` | 1 | `quality/bites.toml` | `just bite` |
 | public surface changed on purpose | | 1 | `quality/snapshots/` | `just api-check` |
 | old data still loads | | 1 | | `just data-compat` |
 | documentation examples run | | 1 | | `just doctests` |
@@ -103,6 +103,7 @@ One row per question the method asks. The application types decide which rows ap
 | no flag past its removal date | `ratchet` plugin `scripts/flags.py --expired` | 2 | `flags.toml` | `just flags-expired` |
 | accessibility | | 2 | | `just a11y` |
 | formal verification | | 2 | the project-local verification skill | `just formal` |
+| every gate bites | `ratchet` plugin `scripts/bite.py` and `scripts/project_bite.py` | 2 | `quality/bites.toml` | `just bite-all` |
 
 ## Absolute paths
 

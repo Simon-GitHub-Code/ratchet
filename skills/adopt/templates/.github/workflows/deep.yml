@@ -38,7 +38,7 @@ jobs:
       fail-fast: false
       # Why: one job per gate, so the wall clock is the slowest gate and one run shows every red.
       matrix:
-        gate: [api-deep, symbolic, fuzz, reproducible, sanitizers, perf, dast, pentest, load, telemetry-e2e, flags-expired, a11y, formal]
+        gate: [api-deep, symbolic, fuzz, reproducible, sanitizers, perf, dast, pentest, load, telemetry-e2e, flags-expired, a11y, formal, bite-all]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }

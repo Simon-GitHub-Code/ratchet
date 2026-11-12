@@ -24,7 +24,8 @@ library = "code other code imports; nothing to boot"
 #   applies-to  the types the question is asked of; absent means all six
 #   collection  true when the gate judges a set of things the project writes (tests, benchmarks,
 #               fuzz targets, scenarios). Such a gate is red when the set is empty, and the
-#               repository proves it: its `bite` entry point removes the set and expects red.
+#               repository proves it: a `remove` bite in `quality/bites.toml` empties the set
+#               and its `bite-all` entry point expects red.
 
 [[question]]
 name = "unit, property and fitness tests"

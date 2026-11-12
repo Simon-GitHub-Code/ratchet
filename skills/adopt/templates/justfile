@@ -2,6 +2,7 @@
 # recipes. Bodies are the binding's job: fill each with the tool docs/process/binding.md names. A
 # gate the binding binds to `none` becomes `@echo "none: <reason>"` and exits 0. Any other gate
 # with nothing to run is red: no test, no benchmark or no fuzz target is a failure, never a pass.
+# Each body you fill gets a fault in quality/bites.toml that `just bite-all` shows it red on.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -53,7 +54,7 @@ commit-msg file:
 
 tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance
 
-tier2: mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal
+tier2: mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all
 
 check: tier0 tier1
 
@@ -202,9 +203,12 @@ flag-states:
 load-smoke:
     {{booted}} -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --url "{{ready}}"
 
+# Shipped: the pull-request half of the proof that every bound gate bites. It proves nothing, at
+# the cost of a few git calls, unless the change touches a path that defines a gate; then it
+# plants each fault of quality/bites.toml for the tier 0 and tier 1 gates. `bite-all` is the
+# whole proof.
 bite:
-    python3 "{{ratchet_plugin}}/scripts/bite.py"
-    @echo "bind: run every project fitness test and gate tool against its synthetic violation"; exit 1
+    python3 "{{ratchet_plugin}}/scripts/project_bite.py" --changed
 
 api-check:
     @echo "bind: snapshot the public surface and diff; a change needs a version bump or changelog line"; exit 1
@@ -279,6 +283,17 @@ telemetry-e2e:
 
 a11y:
     @echo "bind: accessibility checks inside the end-to-end suite; red when no surface is checked"; exit 1
+
+# Shipped: every gate against its fault. The plugin's own gates first, then each `[[bite]]` of
+# quality/bites.toml in a scratch copy: green without the fault, red with it, red when the
+# collection it judges is empty.
+bite-all:
+    python3 "{{ratchet_plugin}}/scripts/bite.py"
+    python3 "{{ratchet_plugin}}/scripts/project_bite.py"
+
+# Not a gate: the bites of one gate alone, while you write its recipe. `just bite-one lint`.
+bite-one gate:
+    python3 "{{ratchet_plugin}}/scripts/project_bite.py" --gate {{gate}}
 
 formal:
     @echo "bind: run the project-local formal verification skill's command"; exit 1
