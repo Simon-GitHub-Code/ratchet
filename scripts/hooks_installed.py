@@ -27,7 +27,8 @@ chain to the repository's hooks is bypassed by pointing this repository at its o
 The hooks run one after the other, as git runs them. A hook that exits non-zero before it answers
 has run and failed, so it is not read as "not installed": the red quotes its exit code and the end
 of its output. The usual cause is the ``pre-commit`` framework failing on its cache database while
-another process holds it. A hook still running after 20 seconds is killed and reported as unknown.
+another process holds it. A hook still running after 20 seconds is killed and reported as
+unknown.
 
 Forging a green means writing ``.git/hooks/*`` (the ``local-git`` guard group refuses it) or
 changing the recipes (``justfile`` is a ``gate-commands`` guard path). Setting
@@ -169,8 +170,8 @@ def run_hooks(root: Path, git_options: Sequence[str]) -> Probe:
     with tempfile.TemporaryDirectory(prefix="ratchet-hooks-") as scratch:
         message = Path(scratch) / "message"
         message.write_text("probe\n", encoding="utf-8")
-        deadline = time.monotonic() + TIMEOUT
         for hook in HOOKS:
+            deadline = time.monotonic() + TIMEOUT
             token, log = Path(scratch) / hook, Path(scratch) / f"{hook}.log"
             argv = ["git", "-C", str(root), *git_options, "hook", "run", "--ignore-missing", hook]
             if hook == "commit-msg":

@@ -311,6 +311,9 @@ def test_the_command_the_gate_prints_installs_hooks_that_a_global_path_still_run
     pre_commit, just = shutil.which("pre-commit"), shutil.which("just")
     if pre_commit is None or just is None:
         pytest.skip("pre-commit and just are not installed")
+    # Why: this case is about the command the gate prints, not about how long a hook may take; the
+    # limit is tested on its own, and a real pre-commit on a heavily loaded machine can exceed it.
+    monkeypatch.setattr(hooks_installed, "TIMEOUT", 600.0)
     monkeypatch.setenv("PRE_COMMIT_HOME", str(tmp_path / "cache"))
     monkeypatch.setenv("PATH", f"{Path(just).parent}:{Path(pre_commit).parent}:/usr/bin:/bin")
     chaining_hooks(tmp_path / "global-hooks")
