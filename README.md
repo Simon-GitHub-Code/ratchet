@@ -27,7 +27,7 @@ The feature pipeline runs on Claude Code's Workflow tool. The method, its gates 
 
 2. In the repository, empty or not, type `/ratchet:init`. It asks what the product is (and on an empty directory what it is built with), then writes `AGENTS.md` with `CLAUDE.md` linked to it, runs the pstack and impeccable setups, makes the first commit and, with your consent, the remote.
 3. Type `/mattpocock-skills:setup-matt-pocock-skills`. It records the issue tracker and its labels.
-4. Type `/ratchet:adopt`. It asks what kind of software this is and whether to accept the tools it proposes, then the design brief; it binds every gate against a walking skeleton, shows each gate fail on a planted fault, and opens the adoption pull request for you to merge. If your git configuration sets `core.hooksPath`, it also names one command for you to run so that every commit runs tier 0.
+4. Type `/ratchet:adopt`. It asks what kind of software this is and whether to accept the tools it proposes, then the design brief; it binds every gate against a walking skeleton, shows each gate fail on a planted fault, and opens the adoption pull request for you to merge. It installs the commit hooks itself; if your git configuration sets a `core.hooksPath` whose hooks do not run the repository's own, it names one command for you to run so that every commit runs tier 0.
 5. From then on `/ratchet:next` prints the command to type next: a spec and tickets with `/mattpocock-skills:to-spec` and `to-tickets`, `/ratchet:conjecture <ticket>`, the agent-ready label, then `/ratchet:feature` to build every ready ticket.
 
 ## The eleven commitments
@@ -94,7 +94,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/budget.py` | every tier | did a tier or gate finish under its ceiling in seconds? `--set` records the first ceiling, `--tier` also holds a CI job to its tier's ceiling, and `--over report` reports without blocking on a pull request |
 | `scripts/parallel.py` | every tier | not a gate: runs a tier's gates at once through the repository's own runner, each gate's output whole, every red one named, so local wall clock is the slowest gate and not the sum |
 | `scripts/plugin_pin.py` | every tier | is the plugin this run uses the version and commit the binding pins, the one CI checks out? Red with both ways out when not |
-| `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the owner's one command when not; asked by the preflight, the route and `just ratchet`, not by CI |
+| `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the repair when not: the `hooks-install` entry point (`scripts/hooks_install.py`) where the repository's own hooks are missing, the owner's one command where git config must change; asked by the preflight, the route and `just ratchet`, not by CI |
 
 Every other gate is the repository's: a tool it chose, behind an entry point the binding names. The plugin cannot vouch for a tool it did not choose, so the repository does: `quality/bites.toml` holds a fault for each such gate, `just bite-all` plants each one and requires the gate red, and the conformance gate is red on a bound gate with no fault (ADR 0020).
 

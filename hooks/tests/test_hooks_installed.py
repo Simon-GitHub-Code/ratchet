@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import hooks_install
 import hooks_installed
 from tests.repos import (
     answering,
@@ -21,6 +22,7 @@ from tests.repos import (
 Out = pytest.CaptureFixture[str]
 TEMPLATE_JUSTFILE = hooks_installed.TEMPLATE
 INSTALL = "pre-commit install"
+SCRIPT = hooks_installed.PLUGIN_ROOT / "scripts/hooks_install.py"
 ANSWERING_JUSTFILE = "pre-commit:\n    @echo $RATCHET_HOOK_PROBE\n"
 
 
@@ -67,17 +69,22 @@ def test_hooks_that_answer_are_green(root: Path, capsys: Out) -> None:
     assert capsys.readouterr().out == "hooks: green\n"
 
 
-def test_no_hooks_is_red_and_names_the_install(
-    root: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    on_the_path(monkeypatch, found=True)
+def test_no_hooks_is_red_and_names_the_entry_point_an_agent_runs(root: Path, capsys: Out) -> None:
     found = problem(root)
-    assert found.fix.startswith(f"run `{INSTALL}`")
+    assert found.fix == f'run `python3 "{SCRIPT}"`'
+    assert not found.owner
+    assert found.produce == found.fix
     assert "not installed" in found.detail
     assert hooks_installed.main(["hooks_installed", "--root", str(root)]) == 1
     out = capsys.readouterr().out
-    assert f"owner: {found.fix}" in out
+    assert f"  fix: {found.fix}\n" in out
+    assert "owner" not in out
     assert out.endswith("hooks: red\n")
+
+
+def test_the_binding_names_the_entry_point_when_it_has_one(root: Path) -> None:
+    write(root, "docs/process/binding.md", "| hooks-install | `just hooks-install` |\n")
+    assert problem(root).fix == "run `just hooks-install`"
 
 
 def test_another_hook_mechanism_is_probed_alike_and_a_red_names_its_install(root: Path) -> None:
@@ -86,17 +93,24 @@ def test_another_hook_mechanism_is_probed_alike_and_a_red_names_its_install(root
     write(root, binding, "- Commit hooks: `lefthook.yml`, installed by `lefthook install`\n")
     assert hooks_installed.mechanism(root) == ("lefthook.yml", "lefthook install")
     assert problem(root).fix == "run `lefthook install`"
+    assert not problem(root).owner
     write(root, binding, "- Commit hooks: `hooks` (plain scripts)\n")
     assert problem(root).fix == "run `<the command that installs the hooks of hooks>`"
+    assert problem(root).owner
     install_hooks(root)
     assert hooks_installed.check(root) is None
 
 
 def test_without_pre_commit_on_the_path_the_install_runs_through_uvx(
-    root: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     on_the_path(monkeypatch, found=False)
-    assert f"`uvx {INSTALL}`" in problem(root).fix
+    assert hooks_installed.installer() == ["uvx", "pre-commit", "install"]
+    assert (
+        hooks_installed.install_command(["global"]) == f"GIT_CONFIG_GLOBAL=/dev/null uvx {INSTALL}"
+    )
+    on_the_path(monkeypatch, found=True)
+    assert hooks_installed.install_command([]) == INSTALL
 
 
 def test_one_hook_alone_is_red(root: Path) -> None:
@@ -110,14 +124,17 @@ def test_a_hook_that_answers_as_the_other_one_is_red(root: Path) -> None:
     assert hooks_installed.check(root) is not None
 
 
-def test_a_local_hooks_path_elsewhere_is_red_and_names_the_unset(
-    root: Path, tmp_path: Path
+def test_a_local_hooks_path_elsewhere_is_the_owners_to_unset(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     git(root, "config", "core.hooksPath", str(elsewhere))
+    on_the_path(monkeypatch, found=True)
     found = problem(root)
-    assert "`git config --unset core.hooksPath && " in found.fix
+    assert found.fix == f"run `git config --unset core.hooksPath && {INSTALL}`"
+    assert found.owner
+    assert found.produce == f"the owner: {found.fix}"
     assert "set in the local git config" in found.detail
 
 
@@ -127,6 +144,7 @@ def test_a_local_hooks_path_beside_installed_hooks_needs_only_the_unset(
     install_hooks(root)
     git(root, "config", "core.hooksPath", str(tmp_path))
     assert problem(root).fix == "run `git config --unset core.hooksPath`"
+    assert problem(root).owner
 
 
 def test_a_worktree_hooks_path_is_unset_in_its_own_scope(root: Path, tmp_path: Path) -> None:
@@ -144,23 +162,16 @@ def test_a_global_hooks_path_chaining_to_installed_hooks_is_green(
     assert hooks_installed.check(root) is None
 
 
-def test_a_global_hooks_path_with_the_repository_hooks_missing_is_stepped_around(
-    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("variable", ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"])
+def test_a_hooks_path_outside_with_the_repository_hooks_missing_is_an_agents_install(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, variable: str
 ) -> None:
     chaining_hooks(tmp_path / "global-hooks")
-    config(monkeypatch, tmp_path, hooks_path(tmp_path / "global-hooks"))
-    on_the_path(monkeypatch, found=True)
+    config(monkeypatch, tmp_path, hooks_path(tmp_path / "global-hooks"), variable=variable)
     found = problem(root)
-    assert found.fix.startswith("run `GIT_CONFIG_GLOBAL=/dev/null pre-commit install`")
+    assert found.fix == f'run `python3 "{SCRIPT}"`'
+    assert not found.owner
     assert "not installed" in found.detail
-
-
-def test_a_system_hooks_path_is_set_aside_the_same_way(
-    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config(monkeypatch, tmp_path, hooks_path(tmp_path), variable="GIT_CONFIG_SYSTEM")
-    on_the_path(monkeypatch, found=True)
-    assert "`GIT_CONFIG_SYSTEM=/dev/null pre-commit install`" in problem(root).fix
 
 
 def test_a_global_hooks_path_that_does_not_chain_is_red(
@@ -173,6 +184,7 @@ def test_a_global_hooks_path_that_does_not_chain_is_red(
     found = problem(root)
     assert "do not run the repository's own" in found.detail
     assert f"git config core.hooksPath {root / '.git/hooks'}" in found.fix
+    assert found.owner
 
 
 def test_a_hooks_path_from_the_environment_is_named_by_its_scope(
@@ -195,8 +207,10 @@ def test_a_hook_that_never_answers_is_killed_at_the_timeout(
     hook_script(root / ".git/hooks", "commit-msg", f"exec sleep {nap}")
     monkeypatch.setattr(hooks_installed, "TIMEOUT", 0.5)
     found = problem(root)
-    assert "still running after 0.5 seconds" in found.detail
-    assert "slow global hook" in found.fix
+    assert "had not finished after 0.5 seconds" in found.detail
+    assert "A busy machine is the usual cause" in found.detail
+    assert found.fix.startswith("run this again when the machine is quieter")
+    assert not found.owner
     left = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
         ["pgrep", "-f", f"sleep {nap}"],  # noqa: S607 # -- pgrep is resolved from PATH
         capture_output=True,
@@ -317,8 +331,8 @@ def test_the_template_recipes_answer_the_probe_and_nothing_else_does(tmp_path: P
     assert not probe.exists()
 
 
-def test_the_command_the_gate_prints_installs_hooks_that_a_global_path_still_runs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_the_entry_point_installs_the_real_hooks_that_a_global_path_still_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
 ) -> None:
     pre_commit, just = shutil.which("pre-commit"), shutil.which("just")
     if pre_commit is None or just is None:
@@ -340,9 +354,15 @@ def test_the_command_the_gate_prints_installs_hooks_that_a_global_path_still_run
         [pre_commit, "install"], cwd=adopted, capture_output=True, check=False
     )
     assert refused.returncode != 0
-    printed = problem(adopted).fix.split("`")[1]
-    assert printed == "GIT_CONFIG_GLOBAL=/dev/null pre-commit install"
-    subprocess.run(printed, shell=True, cwd=adopted, check=True, capture_output=True)  # noqa: S602
+    assert problem(adopted).fix == f'run `python3 "{SCRIPT}"`'
+    before = git(adopted, "config", "--list", "--show-origin")
+    assert hooks_install.main(["hooks_install", "--root", str(adopted)]) == 0
+    assert capsys.readouterr().out == "hooks: green\n"
+    assert git(adopted, "config", "--list", "--show-origin") == before
+    assert sorted(path.name for path in (tmp_path / "global-hooks").iterdir()) == [
+        "commit-msg",
+        "pre-commit",
+    ]
     assert hooks_installed.check(adopted) is None
     (adopted / ".git/hooks/commit-msg").unlink()
     assert hooks_installed.check(adopted) is not None

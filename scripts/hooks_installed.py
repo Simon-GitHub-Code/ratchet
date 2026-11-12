@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Would a commit in this checkout run tier 0? Red, with the owner's command, when it would not.
+"""Would a commit in this checkout run tier 0? Red, with the command that repairs it, when not.
 
 Tier 0 runs on every commit through the commit hooks: ``pre-commit`` runs ``just pre-commit`` on
 the tree and ``commit-msg`` runs ``just commit-msg`` on the message. A hook that is not installed
 fails silently: the commit goes through and nothing says tier 0 never ran. The usual cause is a
-``core.hooksPath`` in the git config, which makes ``pre-commit install`` refuse. The guard
-refuses hook installs and hook-path changes from an agent, so the repair is the owner's one
-command, and the method stays red until they run it.
+``core.hooksPath`` in the git config, which makes ``pre-commit install`` refuse. The method stays
+red until the hooks answer. Where the repository's own hooks are missing, the repair is the
+``hooks-install`` entry point (``hooks_install.py``), which an agent runs; a change of git config
+is the owner's, since the guard refuses it from an agent (ADR 0026).
 
 The gate proves the answer instead of inferring it. It runs the hooks git would run for a commit
 (``git hook run``, so every ``core.hooksPath``, local or global, and every chain from a global
@@ -19,16 +20,16 @@ passes. Tier 0 itself never runs. The hooks run as for a commit, so ``pre-commit
 unstaged changes while the probe runs, exactly as it does at every commit, and the probe needs git
 2.36 or later.
 
-A red names the command. A local ``core.hooksPath`` is unset; a global or system one is stepped
-around when the repository's own hooks are installed (``GIT_CONFIG_GLOBAL=/dev/null pre-commit
-install``, since ``pre-commit`` refuses while the variable is set); a global hook that does not
-chain to the repository's hooks is bypassed by pointing this repository at its own hooks.
+A red names the command and says when it is the owner's. Hooks missing from the repository's own
+directory are installed by ``hooks-install``, or by the binding's install command for another
+mechanism. A local ``core.hooksPath`` is unset by the owner; a global hook that does not chain to
+the repository's hooks is bypassed by the owner pointing this repository at its own hooks.
 
 The hooks run one after the other, as git runs them. A hook that exits non-zero before it answers
 has run and failed, so it is not read as "not installed": the red quotes its exit code and the end
 of its output. The usual cause is the ``pre-commit`` framework failing on its cache database while
-another process holds it. A hook still running after 20 seconds is killed and reported as
-unknown.
+another process holds it. A hook still running after two minutes is killed and reported as
+unknown, with the advice to run the gate again: a busy machine is the usual cause.
 
 The hooks need not come from the ``pre-commit`` framework. The binding's ``- Commit hooks:``
 line names the file or directory another mechanism (lefthook, husky, a directory of plain
@@ -70,7 +71,7 @@ HOOKS = ("pre-commit", "commit-msg")
 COMMIT_HOOKS = ".pre-commit-config.yaml"
 MECHANISM = re.compile(r"^- Commit hooks: `([^`]+)`(?:, installed by `([^`]+)`)?", re.MULTILINE)
 Mechanism = tuple[str, str | None]
-TIMEOUT = 20.0
+TIMEOUT = 120.0
 OUTPUT_LINES = 3
 JUSTFILES = ("justfile", "Justfile", ".justfile")
 MIN_GIT = (2, 36)
@@ -102,10 +103,16 @@ class Probe:
 
 @dataclass(frozen=True)
 class Problem:
-    """Why a commit would not run tier 0, and what the owner does about it."""
+    """Why a commit would not run tier 0, what repairs it, and whether only the owner may."""
 
     detail: str
     fix: str
+    owner: bool = True
+
+    @property
+    def produce(self) -> str:
+        """The repair as a failure's ``produce`` line reads it."""
+        return f"the owner: {self.fix}" if self.owner else self.fix
 
 
 def hooks_dir(root: Path) -> Path | None:
@@ -212,8 +219,18 @@ def mechanism(root: Path) -> Mechanism:
     return (match.group(1), match.group(2)) if match else (COMMIT_HOOKS, None)
 
 
+def installer() -> list[str]:
+    """The ``pre-commit`` framework's install, through ``uvx`` when it is not on the path."""
+    return [*([] if shutil.which("pre-commit") else ["uvx"]), "pre-commit", "install"]
+
+
+def set_aside(outside: Sequence[str]) -> dict[str, str]:
+    """The variables that hide the git config scopes in ``outside`` from one command."""
+    return {f"GIT_CONFIG_{scope.upper()}": os.devnull for scope in outside}
+
+
 def install_command(outside: Sequence[str], source: Mechanism = (COMMIT_HOOKS, None)) -> str:
-    """The command that installs the hooks.
+    """The command that installs the hooks, as the owner types it.
 
     The binding's own for another mechanism. For the ``pre-commit`` framework,
     ``pre-commit install`` with the git config scopes that set a hooks path set aside.
@@ -221,9 +238,18 @@ def install_command(outside: Sequence[str], source: Mechanism = (COMMIT_HOOKS, N
     path, named = source
     if path != COMMIT_HOOKS:
         return named or f"<the command that installs the hooks of {path}>"
-    installer = "pre-commit" if shutil.which("pre-commit") else "uvx pre-commit"
-    prefix = "".join(f"GIT_CONFIG_{scope.upper()}=/dev/null " for scope in outside)
-    return f"{prefix}{installer} install"
+    prefix = "".join(f"{name}={value} " for name, value in set_aside(outside).items())
+    return prefix + " ".join(installer())
+
+
+def install_entry(root: Path) -> str:
+    """The command that installs the framework's hooks with no change of git config.
+
+    The binding's ``hooks-install`` entry point, else the script behind it, so a repository
+    adopted before the entry point existed is told a command it has.
+    """
+    script = f'python3 "{PLUGIN_ROOT / "scripts/hooks_install.py"}"'
+    return gatelib.entry_point(root, "hooks-install") or script
 
 
 def diagnose(
@@ -232,17 +258,24 @@ def diagnose(
     repo_installed: bool,
     hooks: Path,
     source: Mechanism = (COMMIT_HOOKS, None),
+    entry: str = "",
 ) -> Problem:
-    """The reasons the effective hooks stay silent and the commands that remove them."""
+    """The reasons the effective hooks stay silent and the commands that remove them.
+
+    Only the owner changes git config. Hooks missing from the repository's own directory are
+    installed by ``entry``, or by the command the binding names, which the guard judges.
+    """
     local = [scope for scope in UNSET if scope in scopes]
     outside = [scope for scope in OUTSIDE if scope in scopes]
     reasons = [
         f"core.hooksPath is set in the {scope} git config to {scopes[scope]}" for scope in local
     ]
     commands = [UNSET[scope] for scope in local]
+    path, named = source
+    install = "" if local else (entry if path == COMMIT_HOOKS else named or "")
     if not repo_installed:
         reasons.append(f"the repository's own hooks are not installed in {hooks}")
-        commands.append(install_command(outside, source))
+        commands.append(install or install_command(outside, source))
     elif not local:
         scope, path = next(iter(scopes.items()))
         reasons.append(
@@ -253,6 +286,7 @@ def diagnose(
     return Problem(
         "a commit here would skip tier 0: " + "; ".join(reasons),
         f"run `{' && '.join(commands)}`",
+        owner=repo_installed or not install,
     )
 
 
@@ -285,17 +319,21 @@ def unanswered(root: Path, hooks: Path, probe: Probe) -> Problem:
         )
     if probe.answer is Answer.TIMED_OUT:
         return Problem(
-            f"a hook was still running after {TIMEOUT:g} seconds, so whether a commit would run"
-            " tier 0 is not known",
-            "find what the hooks run before they reach the repository's own (a slow global hook"
-            " is the usual cause), then run the gate again",
+            f"a commit hook had not finished after {TIMEOUT:g} seconds, so whether a commit would"
+            " run tier 0 is not known. A busy machine is the usual cause",
+            "run this again when the machine is quieter. If it happens on a quiet machine, time"
+            " `git hook run pre-commit`: something the hooks run before they reach the"
+            " repository's own (a global hook, as a rule) is slow",
+            owner=False,
         )
     scopes = hooks_path_scopes(root)
     # Why: without a hooksPath the effective hooks are the repository's own, which just failed.
     own = bool(scopes) and run_hooks(root, ("-c", f"core.hooksPath={hooks}")).answer is (
         Answer.ANSWERED
     )
-    return diagnose(scopes, repo_installed=own, hooks=hooks, source=mechanism(root))
+    return diagnose(
+        scopes, repo_installed=own, hooks=hooks, source=mechanism(root), entry=install_entry(root)
+    )
 
 
 def check(root: Path) -> Problem | None:
@@ -310,18 +348,22 @@ def check(root: Path) -> Problem | None:
     return None if probe.answer is Answer.ANSWERED else unanswered(root, hooks, probe)
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--root", default=".")
-    options = parser.parse_args(argv[1:])
-    problem = check(Path(options.root).resolve())
+def report(problem: Problem | None) -> int:
+    """Print the verdict and return the exit code; a repair only the owner may run says so."""
     if problem is None:
         print("hooks: green")
         return 0
     print(f"hooks: {problem.detail}")
-    print(f"  owner: {problem.fix}")
+    print(f"  {'owner' if problem.owner else 'fix'}: {problem.fix}")
     print("hooks: red")
     return 1
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", default=".")
+    options = parser.parse_args(argv[1:])
+    return report(check(Path(options.root).resolve()))
 
 
 if __name__ == "__main__":

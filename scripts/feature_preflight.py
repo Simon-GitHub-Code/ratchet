@@ -367,7 +367,7 @@ def check_hooks(report: Report, root: Path) -> None:
         return
     problem = hooks_installed.check(root)
     if problem is not None:
-        report.fail("hooks", problem.detail, f"the owner: {problem.fix}")
+        report.fail("hooks", problem.detail, problem.produce)
 
 
 def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner) -> Report:

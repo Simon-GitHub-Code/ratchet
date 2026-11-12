@@ -5,7 +5,8 @@
 decides everything about a drain that needs no judgement, and keeps what must outlive a session.
 
 - ``plan`` prints, as JSON, what each open agent-ready ticket is to this drain, in the order
-  their ``Blocked by`` lines give: ``buildable`` (the preflight passes and nothing is built),
+  their ``Blocked by`` lines give: ``buildable`` (the ticket passes the preflight and nothing
+  is built; while the checkout is not fit to build on, its ``why`` says what is missing),
   ``building`` (its work tree exists), ``built`` (its branch holds commits and is not merged, so
   the judge is asked), ``waiting`` (blocked only by tickets this drain can still merge), ``held``
   (its last run parked or was not approved, and the ticket has not changed since), ``merged``
@@ -450,6 +451,12 @@ def plan(drain: Drain) -> Plan:
     queued = frozenset(key(ticket.ref) for ticket in tickets)
     seen = Seen(base, frozenset(route.merged_features(root, base)), worktrees(root), queued)
     entries = ordered(settled([classify(ticket, drain, seen) for ticket in tickets]))
+    blocked = tuple(f"{f.check}: {f.detail} -> {f.produce}" for f in checkout.failures)
+    # Why: a row that says `buildable` beside a red preflight of the same ticket misleads.
+    unfit = tuple(f"not started, the checkout is not fit: {line}" for line in blocked)
+    entries = [
+        replace(entry, why=unfit) if entry.state == BUILDABLE else entry for entry in entries
+    ]
     building = sum(entry.state == BUILDING for entry in entries)
     buildable = [entry.ref for entry in entries if entry.state == BUILDABLE]
     to_build = sum(entry.state in {BUILDABLE, WAITING} for entry in entries)
@@ -457,7 +464,7 @@ def plan(drain: Drain) -> Plan:
         base=base,
         forge=gatelib.git(root, "remote", "get-url", "origin") is not None,
         concurrency=drain.concurrency,
-        blocked=tuple(f"{f.check}: {f.detail} -> {f.produce}" for f in checkout.failures),
+        blocked=blocked,
         tickets=tuple(entries),
         start=() if checkout.failures else tuple(buildable[: max(0, drain.concurrency - building)]),
         agents_at_most=max(0, to_build * (PIPELINE_AGENTS + UPDATE_AGENTS) - UPDATE_AGENTS),

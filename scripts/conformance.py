@@ -28,6 +28,7 @@ ENTRY_POINTS = (
     "pre-commit",
     "commit-msg",
     "hooks-installed",
+    "hooks-install",
     "tier1",
     "tier2",
     "check",

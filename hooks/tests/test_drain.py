@@ -158,9 +158,14 @@ def test_a_checkout_that_is_not_fit_starts_nothing(
     (root / "src/b.py").unlink()
     problem = hooks_installed.Problem("no hook runs tier 0", "pre-commit install")
     monkeypatch.setattr(hooks_installed, "check", lambda _root: problem)
-    assert drain.plan(offline(root)).blocked == (
-        "hooks: no hook runs tier 0 -> the owner: pre-commit install",
-    )
+    unfit = drain.plan(offline(root))
+    assert unfit.blocked == ("hooks: no hook runs tier 0 -> the owner: pre-commit install",)
+    assert unfit.start == ()
+    assert [(entry.state, entry.why) for entry in unfit.tickets] == [
+        ("buildable", ("not started, the checkout is not fit: " + unfit.blocked[0],)),
+        ("buildable", ("not started, the checkout is not fit: " + unfit.blocked[0],)),
+        ("waiting", ()),
+    ]
 
 
 def test_the_preflight_refuses_a_ticket_and_says_what_produces_the_piece(tmp_path: Path) -> None:

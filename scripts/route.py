@@ -15,7 +15,8 @@ The stages, in order; the first that does not hold is the answer:
 3. the tracker record ``docs/agents/issue-tracker.md`` (the mattpocock-skills setup);
 4. the binding ``docs/process/binding.md`` (``/ratchet:adopt``);
 5. the commit hooks, which run tier 0 on every commit (``hooks_installed.py`` proves they would;
-   the step is the owner's command, since the guard refuses hook installs from an agent);
+   the step is the ``hooks-install`` entry point, which an agent runs, or the owner's command
+   where git config must change, since the guard refuses that from an agent);
 6. a clean tree (finish the change: ``check``, commit, pull request);
 7. on a working branch: the pull request is open, else open it, and its merge job merges what
    the merge judge passes (ADR 0021); with no forge (no ``origin``) the binding's ``merge``

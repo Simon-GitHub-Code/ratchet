@@ -149,17 +149,23 @@ merge branch:
 # --- ratchet maintenance ------------------------------------------------------
 
 # Raise every threshold to its measured value and refresh the snapshots. Red first when a commit
-# would not run tier 0: the gate prints the owner's one command.
+# would not run tier 0: the gate prints the repair, which is `just hooks-install` or the owner's
+# one command.
 ratchet:
     just hooks-installed
     @echo "bind: run the suites with a Cobertura or LCOV report, named in --report below, then the mutation run"; exit 1
     python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml --write
     just snapshots
 
-# Would a commit here run tier 0? Red, with the owner's command, when it would not. CI has no
-# commit hooks, so no CI job and not `conformance` runs it.
+# Would a commit here run tier 0? Red, with the repair, when it would not. CI has no commit
+# hooks, so no CI job and not `conformance` runs it.
 hooks-installed:
     python3 "{{ratchet_plugin}}/scripts/hooks_installed.py"
+
+# Install the repository's own commit hooks, then ask `hooks-installed`. An agent runs it: it
+# changes no git config and moves no hook somebody else wrote. What is left is the owner's.
+hooks-install:
+    python3 "{{ratchet_plugin}}/scripts/hooks_install.py"
 
 # The files of the manifest's tool-config group, copied into quality/snapshots/ (a ratchet path).
 snapshots:

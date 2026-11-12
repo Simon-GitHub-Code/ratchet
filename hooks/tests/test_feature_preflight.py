@@ -363,15 +363,19 @@ def test_a_forge_ticket_is_held_by_an_open_blocking_issue(tmp_path: Path) -> Non
         assert checks(run(root, "4", ParentGh(child, blocker))) == expected
 
 
-def test_an_adopted_repository_without_commit_hooks_is_red_with_the_owners_command(
+def test_an_adopted_repository_without_commit_hooks_is_red_with_the_repair(
     tmp_path: Path,
 ) -> None:
     root = repository(tmp_path, {"docs/process/binding.md": "# Binding\n"})
     report = run(root, "4", gh_returning(issue(labels=("ready-for-agent",))))
     assert checks(report) == ["hooks"]
     assert "a commit here would skip tier 0" in report.failures[0].detail
-    assert report.failures[0].produce.startswith("the owner: run `")
-    assert "pre-commit install" in report.failures[0].produce
+    assert report.failures[0].produce.startswith("run `python3 ")
+    assert "hooks_install.py" in report.failures[0].produce
+    git(root, "config", "core.hooksPath", str(tmp_path / "elsewhere"))
+    owners = run(root, "4", gh_returning(issue(labels=("ready-for-agent",))))
+    assert owners.failures[0].produce.startswith("the owner: run `git config --unset")
+    git(root, "config", "--unset", "core.hooksPath")
     install_hooks(root)
     assert run(root, "4", gh_returning(issue(labels=("ready-for-agent",)))).ok
 

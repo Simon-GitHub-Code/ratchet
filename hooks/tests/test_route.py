@@ -412,7 +412,7 @@ def test_missing_hooks_come_before_everything_a_commit_would_do(
     write(root, "src/x.py", "x = 1\n")
     step = route.decide(root, None)
     assert step.stage == "hooks"
-    assert "pre-commit install" in step.command
+    assert "hooks_install.py" in step.command
     assert step.then == route.NEXT
     assert "skip tier 0" in step.why
     install_hooks(root)

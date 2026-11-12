@@ -20,7 +20,7 @@ The plugin version has this one home. Every workflow checks the plugin out at th
 
 ## Entry points
 
-Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. `tier0-tree` is tier 0 less the history gate, which the pre-commit hook runs; `hooks-installed` is red while a commit would not run tier 0; `settings` writes the permission rules from the manifest; `bite-one <gate>` shows one gate's bites while its recipe is written. The method's skills and hooks call every entry point below by name, and the conformance gate requires each. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
+Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. `tier0-tree` is tier 0 less the history gate, which the pre-commit hook runs; `hooks-installed` is red while a commit would not run tier 0, and `hooks-install` installs the repository's own hooks and asks it again; `settings` writes the permission rules from the manifest; `bite-one <gate>` shows one gate's bites while its recipe is written. The method's skills and hooks call every entry point below by name, and the conformance gate requires each. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
 
 | Entry point | Command |
 | --- | --- |
@@ -29,6 +29,7 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | pre-commit | `just pre-commit` |
 | commit-msg | `just commit-msg .git/COMMIT_EDITMSG` |
 | hooks-installed | `just hooks-installed` |
+| hooks-install | `just hooks-install` |
 | tier1 | `just tier1` |
 | tier2 | `just tier2` |
 | check | `just check` |
