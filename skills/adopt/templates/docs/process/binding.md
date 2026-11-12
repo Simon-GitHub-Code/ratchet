@@ -1,6 +1,6 @@
 # Binding
 
-This repository's binding of the Ratchet method (`ratchet:method`; [tiers.md](../../../skills/method/tiers.md) lists the questions each tier answers). The binding names the runner, the forge, the tool behind each gate and the paths held absolute. CI runs the same entry points.
+This repository's binding of the Ratchet method (`ratchet:method`; `skills/method/tiers.md` in the `ratchet` plugin lists the questions each tier answers). The binding names the runner, the forge, the tool behind each gate and the paths held absolute. CI runs the same entry points.
 
 ## Runner
 
@@ -15,13 +15,15 @@ This repository's binding of the Ratchet method (`ratchet:method`; [tiers.md](..
 
 ## Entry points
 
-Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
+Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. `tier0-tree` is tier 0 less the history gate, which the pre-commit hook runs; `hooks-installed` is red while a commit would not run tier 0; `settings` writes the permission rules from the manifest; `bite-one <gate>` shows one gate's bites while its recipe is written. The method's skills and hooks call every entry point below by name, and the conformance gate requires each. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
 
 | Entry point | Command |
 | --- | --- |
 | tier0 | `just tier0` |
+| tier0-tree | `just tier0-tree` |
 | pre-commit | `just pre-commit` |
 | commit-msg | `just commit-msg .git/COMMIT_EDITMSG` |
+| hooks-installed | `just hooks-installed` |
 | tier1 | `just tier1` |
 | tier2 | `just tier2` |
 | check | `just check` |
@@ -34,12 +36,14 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | commits | `just commits` |
 | suppressions | `just suppressions` |
 | guard-diff | `just guard-diff` |
+| settings | `just settings` |
 | settings-check | `just settings-check` |
 | conformance | `just conformance` |
 | merge-ready | `just merge-ready` |
 | merge | `just merge` |
 | budget | `just budget tier1` |
 | reports | `just reports` |
+| bite-one | `just bite-one` |
 
 ## Gates
 
@@ -94,7 +98,7 @@ One row per question the method asks. The application types decide which rows ap
 | full mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 2 | `quality/mutation-register.toml` | `just mutation` |
 | deep interface conformance | | 2 | | `just api-deep` |
 | symbolic checking | | 2 | | `just symbolic` |
-| fuzzing | | 2 | `FUZZ_SECONDS` | `just fuzz` |
+| fuzzing | | 2 | the recipe's `seconds` parameter | `just fuzz` |
 | end to end | | 2 | | `just e2e` |
 | suite order-independent and repeatable | | 2 | | `just test-stability` |
 | reproducible build | | 2 | | `just reproducible` |
@@ -127,7 +131,7 @@ One row per question the method asks. The application types decide which rows ap
 
 ## Speed
 
-How this repository stays fast, from the first commit ([tiers.md](../../../skills/method/tiers.md#speed)). One line per concept, each saying how this stack meets it; the conformance gate is red while a line is missing or unfilled. The `Shards` line holds a whole number and nothing else: the CI workflows read it and run each long gate as that many jobs, so adding runners is this one number.
+How this repository stays fast, from the first commit (the Speed section of `skills/method/tiers.md` in the `ratchet` plugin). One line per concept, each saying how this stack meets it; the conformance gate is red while a line is missing or unfilled. The `Shards` line holds a whole number and nothing else: the CI workflows read it and run each long gate as that many jobs, so adding runners is this one number.
 
 - Parallel: <how the suite uses every core on a developer's machine and in CI, what keeps the tests isolated enough for that, and which gates share state and so run one after another (the `justfile`'s `serial` variables; none until a tier's gates run red in parallel and green alone)>
 - One pipeline: <CI calls the entry points above and nothing else, so a red job is reproduced by its one command; or the pipeline engine that runs the same definition in both places>

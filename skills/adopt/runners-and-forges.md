@@ -1,6 +1,6 @@
 # Another runner, another forge, or no forge
 
-The templates are the `just` and GitHub examples. Step 7 of the adopt skill sends you here when the repository is something else. The entry points, their names and what each must do stay the same in every case.
+The templates are the `just` and GitHub examples. Step 6 of the adopt skill sends you here when the repository is something else. The entry points, their names and what each must do stay the same in every case.
 
 ## A runner other than `just`
 
@@ -9,6 +9,8 @@ Delete the `justfile`, create the same entry points in the repository's runner, 
 ## A forge other than GitHub
 
 Move the pull request template to the path the forge reads and name it on the Forge section's template line. Replace `.github/workflows/` with the forge's CI, running the same entry points in the same shape: tier 0 first, one job per gate, the long gates as one job per shard of the count the binding's `- Shards:` line holds, superseded runs cancelled, caches keyed on the lockfiles. Put those paths in the manifest's `ci` group.
+
+The `merge` workflow has no counterpart in another forge's templates. Where the forge's CI can run a job when the `ci` pipeline of a merge request finishes, write one that does what `merge.yml` does: check out the default branch and the plugin at the commit ADR 0001 names, run `merge_ready.py` on each merge request whose pipeline is green, merge the ones it passes at the commit it judged, and comment its reasons on the rest. Until that job exists, the owner merges every change, and the hand-over says so; the binding's Forge section names which of the two holds.
 
 ## No forge
 

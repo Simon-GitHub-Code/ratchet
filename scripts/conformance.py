@@ -23,11 +23,14 @@ import settings_rules
 
 ENTRY_POINTS = (
     "tier0",
+    "tier0-tree",
     "pre-commit",
     "commit-msg",
+    "hooks-installed",
     "tier1",
     "tier2",
     "check",
+    "check-fast",
     "check-deep",
     "ratchet",
     "ratchet-lowered",
@@ -36,12 +39,14 @@ ENTRY_POINTS = (
     "suppressions",
     "commits",
     "guard-diff",
+    "settings",
     "settings-check",
     "conformance",
     "merge-ready",
     "merge",
     "reports",
     "budget",
+    "bite-one",
 )
 SPEED_SECTION = "## Speed"
 # Why: ADR 0019. Speed is asked by concept from the first commit; the binding says how this

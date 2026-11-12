@@ -9,10 +9,6 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # `just` never expands `~`, so the fallback is built from the home directory.
 ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", home_directory() / ".claude/plugins/marketplaces/ratchet")
 
-# What the diff gates compare against: the remote default branch, else the local one when the
-# repository has no remote.
-merge_base := `git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || true`
-
 # The deliverable as a running thing, for the three service gates the plugin ships (`smoke`,
 # `load-smoke`, `telemetry-e2e`): the command that starts it in the foreground, the URL that
 # answers below 400 once it is up, the seconds it may take to get there, and the `service.name` its

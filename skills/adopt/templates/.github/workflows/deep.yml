@@ -3,7 +3,8 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "0 16 * * *"
+    # The adopter sets the hour: one when nobody works on the repository. Cron reads UTC.
+    - cron: "0 3 * * *"
   workflow_dispatch:
 permissions:
   contents: read
