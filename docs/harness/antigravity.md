@@ -37,14 +37,16 @@ The session hook answers `SessionStart` with `{"injectSteps": [{"systemMessage":
 
 | In the skills | Here |
 | --- | --- |
+| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | export it as `~/.gemini/config/plugins/ratchet`, the folder the install made |
 | `${CLAUDE_SKILL_DIR}` | the skill folder under `~/.gemini/config/plugins/<plugin>/skills/<name>/` |
+| `${CLAUDE_PLUGIN_ROOT}` | the plugin folder, `~/.gemini/config/plugins/ratchet`. Hooks run with it as their working directory; whether Antigravity sets this variable in the shell of a skill's command is not verified. Export `CLAUDE_PLUGIN_ROOT="$HOME/.gemini/config/plugins/ratchet"` before starting a session, so the commands in the skills resolve |
 | `disable-model-invocation: true` | read the `SKILL.md` and follow it |
 | the question tool | ask in plain text |
 | `claude plugin list` | `agy plugin list` |
 
 ## Verified
 
-On this machine, with agy 1.5.6:
+agy 1.5.6:
 
 - `agy plugin install` of this repository staged the `PreToolUse` and `SessionStart` hooks shown above and skipped `SubagentStart`.
 - Antigravity-shaped input fed to `hooks/guard.py` and `hooks/session.py` gave the answers in the table.

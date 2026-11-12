@@ -96,6 +96,47 @@ def test_outcome_status_and_verdict(outcome: budget.Outcome, status: str, verdic
     assert outcome.line().endswith(status)
 
 
+def test_a_ceiling_passed_on_a_pull_request_is_reported_and_does_not_block() -> None:
+    over = budget.Outcome("tier0", 61.0, 60.0, 0, blocks=False)
+    assert (over.status, over.verdict) == ("red", 0)
+    assert over.line() == (
+        "ratchet-budget: tier0 took 61.0s (ceiling 60s): red, reported and not blocking"
+        " (--over report)"
+    )
+    failed = budget.Outcome("tier0", 61.0, 60.0, 3, blocks=False)
+    assert (failed.verdict, failed.line().endswith(": failed")) == (3, True)
+    under = budget.Outcome("tier0", 10.0, 60.0, 0, blocks=False)
+    assert (under.verdict, under.line().endswith(": green")) == (0, True)
+
+
+def test_a_gate_in_ci_is_held_to_the_lower_of_its_own_ceiling_and_its_tier_s() -> None:
+    assert budget.held(THRESHOLDS, "test", "tier1") == (600.0, "tier1")
+    assert budget.held(THRESHOLDS, "test", None) == (None, None)
+    assert budget.held(THRESHOLDS, "test", "tier2") == (None, None)
+    own = budget.with_ceiling(THRESHOLDS, "test", 90.0)
+    assert budget.held(own, "test", "tier1") == (90.0, None)
+    assert budget.held(budget.with_ceiling(own, "tier1", 30.0), "test", "tier1") == (30.0, "tier1")
+
+
+def test_main_holds_a_gate_to_its_tier_and_only_reports_when_told(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "quality").mkdir()
+    thresholds = tmp_path / "quality/thresholds.toml"
+    thresholds.write_text(budget.with_ceiling(THRESHOLDS, "tier1", 0.0), encoding="utf-8")
+    argv = ["budget", "test", "--root", str(tmp_path), "--tier", "tier1", "--report", "t.jsonl"]
+    command = ["--", sys.executable, "-c", "pass"]
+    assert budget.main([*argv, *command]) == 1
+    assert "(ceiling 0s of tier1): red\n" in capsys.readouterr().out
+    assert budget.main([*argv, "--over", "report", *command]) == 0
+    assert "(ceiling 0s of tier1): red, reported and not blocking" in capsys.readouterr().out
+    records = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text().splitlines()]
+    assert [(r["ceiling"], r["status"], r["exit"]) for r in records] == [(0.0, "red", 0)] * 2
+    assert budget.main([*argv, "--set", *command]) == 1
+    assert "ceilings.seconds.test set to" in capsys.readouterr().out, "--set records the gate's own"
+    assert budget.ceiling_of(thresholds.read_text(), "tier1") == 0.0
+
+
 def test_main_times_a_command_reports_and_sets(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -123,6 +164,8 @@ def test_main_times_a_command_reports_and_sets(
     assert record["key"] == "tier0"
     assert record["status"] == "unbounded", "the first adoption has no ceiling yet"
     assert budget.ceiling_of((tmp_path / "quality/thresholds.toml").read_text(), "tier0") == 60.0
+    assert budget.main(argv) == 0
+    assert "set to" not in capsys.readouterr().out, "a ceiling is set only when it lowers"
     failing = [
         "budget",
         "tier0",

@@ -28,6 +28,12 @@ paths = ["DESIGN.md", "pyproject.toml", "scripts/**"]
 )
 T4 = "python3 - <<'EOF'\np='DESIGN.md'\ns=open(p).read()\n...\nopen(p,'w').write(s)\nEOF"
 
+TEXT_WITH_SLASHES = (
+    "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('notes.py')\ns = p.read_text()\n"
+    's = s.replace(\'a\', """if not (root / FLAG).is_file():\n    (root / FLAG).unlink()""")\n'
+    "p.write_text(s)\nEOF"
+)
+
 PYTHON_WRITES = [
     T4,
     "python3 - <<'EOF'\nwith open('DESIGN.md', 'w', encoding='utf-8') as f:\n    f.write('x')\nEOF",
@@ -57,6 +63,10 @@ PYTHON_WRITES = [
     "python3 -c \"import shutil; shutil.copy('/tmp/x', 'DESIGN.md')\"",
     "python3 -c \"import shutil; shutil.move('DESIGN.md', '/tmp/x')\"",
     "python3 -c \"import shutil; shutil.rmtree('scripts')\"",
+    "python3 -c \"import shutil; shutil.rmtree('/')\"",
+    "python3 -c \"import os; x = 'a / b'; os.unlink('scripts')\"",
+    "python3 -c \"import os; os.unlink('DESIGN.md'); x = 'a / b'\"",
+    "python3 -c \"import os; os.system('rm scripts/x.py / y')\"",
     "python3 -c \"import subprocess; subprocess.run(['sed', '-i', 's/a/b/', 'DESIGN.md'])\"",
     "python3 -c \"import os; os.system('echo x > DESIGN.md')\"",
     "python3 -c \"import fileinput; fileinput.input('DESIGN.md', inplace=True)\"",
@@ -173,6 +183,10 @@ ALLOWED = [
     "python3 -c \"import json; print(json.loads('{}'), 'DESIGN.md')\"",
     "python3 -c \"open('/tmp/out.txt','w').write('x')\"",
     "python3 -c \"open('notes.txt','w').write('x')\"",
+    "python3 -c \"import os; x = 'a / b'; os.unlink('notes.txt')\"",
+    "python3 -c \"import os; os.system('echo a / b'); os.unlink('notes.txt')\"",
+    "python3 -c \"import os; os.unlink('notes.txt'); x = '(root // y).unlink()'\"",
+    TEXT_WITH_SLASHES,
     "python3 -c \"import subprocess; subprocess.run(['git', 'status'])\"",
     "python3 -c \"import shutil; shutil.copy('a.txt', '/tmp/b.txt')\"",
     "python3 -c \"open('/tmp/x','w')  # DESIGN.md\"",
@@ -396,3 +410,11 @@ def test_the_literals_of_a_program_are_the_candidates() -> None:
     ]
     assert interpreters.named_paths("`DESIGN.md`") == ["DESIGN.md"]
     assert interpreters.named_paths("# don't\np = 'DESIGN.md'") == ["DESIGN.md"]
+
+
+def test_a_separator_word_of_a_command_string_is_not_a_path() -> None:
+    assert interpreters.named_paths("s = 'a / b'") == ["a / b", "a", "b"]
+    assert interpreters.named_paths("s = 'a // b /'") == ["a // b /", "a", "b"]
+    assert interpreters.named_paths("p = '/'") == ["/"]
+    assert interpreters.named_paths("p = '//'") == ["//"]
+    assert interpreters.named_paths("p = '/ '") == ["/ "]

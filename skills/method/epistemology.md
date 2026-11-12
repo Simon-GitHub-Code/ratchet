@@ -2,7 +2,7 @@
 
 A change is merged when no criticism of it is open. Everything else in the method is machinery for raising criticisms early, deterministically where possible, and recording the fate of each.
 
-Six words carry the rule; the stance in [SKILL.md](SKILL.md) says how to work by it. The words come from Popper and Deutsch by way of the `conjecture:lexicon` skill, which defines the full set; the model already knows them, so the method uses each word and never re-explains it.
+Six words carry the rule; the stance in [SKILL.md](SKILL.md) says how to work by it. The words come from Popper and Deutsch; the model already knows them, so the method uses each word and never re-explains it.
 
 - **conjecture**: a bold guess that answers a problem, stated so it can be wrong. A change, a design, a diagnosis and a test are each one.
 - **alternative**: the strongest competing answer, put the way its best supporter would put it. A diagnosis with no alternative on the table has refuted nothing yet.
@@ -19,7 +19,7 @@ Six words carry the rule; the stance in [SKILL.md](SKILL.md) says how to work by
 | alternative | the Considered options of an ADR; the alternative explanation a diagnosis names before the fix | the reviewer |
 | criticism | a red gate, a critic finding, a review issue, a tool finding | the gates, the critic, the reviewer |
 | counter | a dispute against a gate; a register entry with its reason; an answer in the pull request's Criticism section | the owner |
-| open, stands | the pipeline's forced verdict; the merge | the script, then a human |
+| open, stands | the pipeline's forced verdict; the merge | the script, then the merge judge, and the owner for what it does not pass |
 
 ## Three cautions
 

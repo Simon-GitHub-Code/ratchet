@@ -47,7 +47,9 @@ class SimpleCommand:
     """One command: its unquoted words, the paths it redirects into, the heredocs it reads.
 
     ``piped`` is true when its output feeds the next command through ``|`` or ``|&``;
-    ``herestrings`` are the words it reads through ``<<<``.
+    ``herestrings`` are the words it reads through ``<<<``; ``then`` is the operator that ends
+    it (``&&``, ``;``, ``|``, a parenthesis, a newline), which says whether the next command
+    runs only when this one succeeded.
     """
 
     words: tuple[str, ...]
@@ -55,6 +57,7 @@ class SimpleCommand:
     heredocs: tuple[int, ...] = ()
     piped: bool = False
     herestrings: tuple[str, ...] = ()
+    then: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +287,7 @@ class _Splitter:
                 tuple(self.heredocs),
                 piped,
                 tuple(self.herestrings),
+                operator,
             )
             self.commands.append(command)
         self.words, self.writes, self.heredocs, self.redirect = [], [], [], None

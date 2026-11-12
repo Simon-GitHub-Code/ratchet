@@ -99,7 +99,8 @@ def test_markdown_and_annotations() -> None:
         "## :warning: 1 guard path(s) changed\n\nAgainst the merge base with `main`. Guard paths "
         "define the quality gates (guards/manifest.toml). Read each change, and its "
         "gate dispute in docs/disputes/ if an agent raised one, before merging.\n\n"
-        "| Path | Group | Dependencies |\n| --- | --- | --- |\n| `a'b\\|c` | ci |  |\n"
+        "| Path | Group | What the change does |\n| --- | --- | --- |\n"
+        "| `a'b\\|c` | ci |  |\n"
     )
     assert diff.annotations([("a%b\nc\r", group)]) == [
         "::error title=Guard path changed (ci)::a%25b%0Ac%0D"

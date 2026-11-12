@@ -2,15 +2,24 @@
 """The speed gate: a tier or gate must finish under its recorded ceiling, and ceilings only fall.
 
 Usage: ``budget.py KEY [--root DIR] [--file quality/thresholds.toml] [--report PATH]
-[--set [HEADROOM]] -- COMMAND...``. Runs ``COMMAND``, measures its wall-clock seconds, and
-compares them with ``ceilings.seconds.KEY`` in the thresholds file. Exit status: the command's
-own when it fails; 1 when it passed but ran over its ceiling; 0 otherwise. A missing ceiling
-reports and passes: that is the first adoption. ``--report`` appends one JSON line per run so
-CI can publish the timings. ``--set`` records the measured time times ``HEADROOM`` (default
-1.5) as the ceiling when none exists or the new value is lower; it never raises one, because
-raising a ceiling is a loosening and needs an ADR, like lowering a threshold. A tier's ceiling is
-never set under the tier's budget in the method (tier 0 about a minute, tier 1 fifteen minutes):
-a skeleton's few seconds would otherwise become the first feature's ceiling.
+[--tier TIER] [--over block|report] [--set [HEADROOM]] -- COMMAND...``. Runs ``COMMAND``,
+measures its wall-clock seconds, and compares them with ``ceilings.seconds.KEY`` in the
+thresholds file. Exit status: the command's own when it fails; 1 when it passed but ran over
+its ceiling; 0 otherwise. A missing ceiling reports and passes: that is the first adoption.
+``--report`` appends one JSON line per run so CI can publish the timings.
+
+``--tier TIER`` is for CI, where a tier is one job per gate and its wall clock is therefore its
+slowest gate: the gate is also held to ``ceilings.seconds.TIER``, and the lower of the two
+ceilings is the one judged. So the tier ceilings adopt sets are measured in CI with no job that
+adds the gates up. ``--over report`` is for a pull request, whose runner varies: a run over its
+ceiling is printed and recorded as red and exits 0. The default, ``--over block``, is what the
+default branch, the nightly and a local run use.
+
+``--set`` records the measured time times ``HEADROOM`` (default 1.5) as the key's own ceiling
+when none exists or the new value is lower; it never raises one, because raising a ceiling is a
+loosening and needs an ADR, like lowering a threshold. A tier's ceiling is never set under the
+tier's budget in the method (tier 0 about a minute, tier 1 fifteen minutes): a skeleton's few
+seconds would otherwise become the first feature's ceiling.
 """
 
 from __future__ import annotations
@@ -41,6 +50,8 @@ class Outcome:
     seconds: float
     ceiling: float | None
     exit_code: int
+    tier: str | None = None
+    blocks: bool = True
 
     @property
     def over(self) -> bool:
@@ -58,13 +69,25 @@ class Outcome:
 
     @property
     def verdict(self) -> int:
-        """The exit status: the command's own failure, else 1 when over the ceiling, else 0."""
-        return self.exit_code if self.exit_code != 0 else int(self.over)
+        """The exit status: the command's own failure, else 1 when over a ceiling that blocks."""
+        return self.exit_code if self.exit_code != 0 else int(self.over and self.blocks)
 
     def line(self) -> str:
         """The one line the gate prints."""
+        whose = f" of {self.tier}" if self.tier else ""
         bound = "no ceiling recorded" if self.ceiling is None else f"ceiling {self.ceiling:g}s"
-        return f"ratchet-budget: {self.key} took {self.seconds:.1f}s ({bound}): {self.status}"
+        reported = self.status == "red" and not self.blocks
+        tail = "red, reported and not blocking (--over report)" if reported else self.status
+        return f"ratchet-budget: {self.key} took {self.seconds:.1f}s ({bound}{whose}): {tail}"
+
+
+def held(text: str, key: str, tier: str | None) -> tuple[float | None, str | None]:
+    """The ceiling ``key`` is judged against, and the tier it belongs to when it is the tier's."""
+    own = ceiling_of(text, key)
+    shared = ceiling_of(text, tier) if tier else None
+    if shared is not None and (own is None or shared < own):
+        return shared, tier
+    return own, None
 
 
 def ceiling_of(text: str, key: str) -> float | None:
@@ -129,6 +152,8 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--root", default=".")
     parser.add_argument("--file", default="quality/thresholds.toml")
     parser.add_argument("--report")
+    parser.add_argument("--tier")
+    parser.add_argument("--over", choices=("block", "report"), default="block")
     parser.add_argument("--set", nargs="?", const=DEFAULT_HEADROOM, type=float, dest="headroom")
     if "--" not in argv:
         parser.error("the command to time follows '--'")
@@ -145,13 +170,15 @@ def main(argv: list[str]) -> int:
     thresholds = root / options.file
     text = thresholds.read_text(encoding="utf-8") if thresholds.is_file() else ""
     seconds, exit_code = timed(command, root)
-    outcome = Outcome(options.key, seconds, ceiling_of(text, options.key), exit_code)
+    ceiling, tier = held(text, options.key, options.tier)
+    outcome = Outcome(options.key, seconds, ceiling, exit_code, tier, options.over == "block")
     print(outcome.line())
     if options.report:
         report(root / options.report, outcome)
     if options.headroom is not None and exit_code == 0:
         floor = TIER_BUDGETS.get(options.key, 0.0)
-        new = lowered_ceiling(outcome.ceiling, seconds, options.headroom, floor=floor)
+        own = ceiling_of(text, options.key)
+        new = lowered_ceiling(own, seconds, options.headroom, floor=floor)
         if new is not None:
             thresholds.parent.mkdir(parents=True, exist_ok=True)
             thresholds.write_text(with_ceiling(text, options.key, new), encoding="utf-8")

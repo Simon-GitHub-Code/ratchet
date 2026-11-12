@@ -18,7 +18,7 @@ def _one_line(command: str) -> bool:
 
 
 def _context_free(command: str) -> bool:
-    return not any(word in command for word in ("cd ", "cd", "switch", "checkout"))
+    return not any(word in command for word in ("cd ", "cd", "switch", "checkout", "symbolic-ref"))
 
 
 FLAGGED = [(command, expected) for command, expected in DENIED + ASKED if _one_line(command)]
@@ -89,7 +89,8 @@ def test_the_strictest_verdict_matches_the_rules(flagged: tuple[str, list[str]])
     command, expected = flagged
     verdict = strictest(bash.check(command, Context(ROOT), make_guard()))
     assert verdict is not None
-    want = Decision.ASK if expected in (["merge-pr"], ["agent-ready-label"]) else Decision.DENY
+    asks = (["merge-pr"], ["agent-ready-label"], ["unreadable"])
+    want = Decision.ASK if expected in asks else Decision.DENY
     assert verdict.decision is want
 
 

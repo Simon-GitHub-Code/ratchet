@@ -1,7 +1,9 @@
 # Guard paths (Ratchet method): the single list of files that define, run or record the quality gates.
 # Globs are matched against repository-relative paths; `*` stays within a segment, `**` spans any.
 # A `~/` pattern matches against the home directory. `edit = "deny"` locks a group: the owner edits
-# those files by hand. The hook, `just guard-diff` and a fitness test all read this file.
+# those files by hand. `edit = "append"` marks records an agent may add to: a new glossary term, a
+# new `_Avoid_` item or a new ADR passes, and changing or removing what is there asks the owner.
+# The hook, `just guard-diff` and a fitness test all read this file.
 
 [[group]]
 name = "tool-config"
@@ -28,7 +30,7 @@ paths = [
 
 [[group]]
 name = "ci"
-reason = "CI config and the pull-request template decide what runs before the owner merges."
+reason = "CI config and the pull-request template decide what runs before a change merges, and the merge job is the one agent path to the default branch."
 paths = [
     ".github/**",
     # bind: the CI config paths of another forge
@@ -56,11 +58,19 @@ paths = [
 
 [[group]]
 name = "local-git"
-reason = "Git hooks and repository config run the tier 0 gates on every commit; only the hook can see them."
+reason = "Git hooks and repository config run the tier 0 gates on every commit, and the refs, HEAD, grafts and object-store pointers are what the path guards read the default branch through; none is versioned, so only the hook can see them."
 edit = "deny"
 paths = [
     ".git/hooks/**",
     ".git/config",
+    ".git/refs",
+    ".git/refs/**",
+    ".git/packed-refs",
+    ".git/HEAD",
+    ".git/info/grafts",
+    ".git/shallow",
+    ".git/objects/info",
+    ".git/objects/info/**",
 ]
 
 [[group]]
@@ -86,16 +96,55 @@ paths = [
 ]
 
 [[group]]
-name = "decisions"
-reason = "ADRs, the agent instructions, the vocabulary, the design records, the process documents and the skills' records (tracker, labels, doc layout) are the standards every review judges against."
+name = "records"
+reason = "The ADRs and the vocabulary are standards every review judges against: an agent adds a term, an Avoid item or a new ADR, and what is already there changes by the owner's hand."
+edit = "append"
 paths = [
     "docs/adr/**",
+    "GLOSSARY.md",
+]
+
+[[group]]
+name = "decisions"
+reason = "The agent instructions, the glossary map, the design records, the process documents and the skills' records (tracker, labels, doc layout) are the standards every review judges against."
+paths = [
     "docs/agents/**",
     "docs/process/**",
     "AGENTS.md",
     "CLAUDE.md",
-    "GLOSSARY.md",
     "GLOSSARY-MAP.md",
     "PRODUCT.md",
     "DESIGN.md",
+]
+
+# One-way doors: paths whose change cannot be taken back once it ships. A door is no guard: an
+# agent edits these paths without a prompt. The merge judge (`just merge-ready`) reads the doors,
+# and a change that goes through one waits for the owner. `on` says what shuts a door: "change"
+# is any change, "rewrite" a change to or deletion of a file the default branch holds, "removal"
+# a deletion or a change that does more than add. An addition behind a "removal" door is new
+# surface: it merges without the owner only when the change also declares or names a flag that is
+# off (`unflagged`, ADR 0025 of the plugin). A door this repository has no path for keeps
+# `paths = []` and says why: `none = "<the reason>"`.
+
+[[door]]
+name = "one-way"
+reason = "A migration, a schema change or an infrastructure change cannot be taken back once it has run."
+paths = [
+    # bind: migrations, schema definitions, infrastructure code
+]
+
+[[door]]
+name = "stored-data"
+reason = "Fixtures of data that earlier versions wrote: rewriting one hides that old data no longer loads."
+on = "rewrite"
+paths = [
+    # bind: the golden fixtures the data-compat gate loads
+]
+
+[[door]]
+name = "contracts"
+reason = "Contract artefacts and public-surface snapshots: a line removed is a consumer broken."
+on = "removal"
+paths = [
+    # bind: the artefacts the contracts-check and api-check gates diff
 ]

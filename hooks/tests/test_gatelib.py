@@ -1,10 +1,17 @@
 """The gate library: one merge base for every gate, the changed paths, the thresholds file."""
 
+import http.server
+import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import gatelib
+from tests import servers
 from tests.repos import branch, commit, git, repository, write
 
 
@@ -103,3 +110,211 @@ def test_report_prints_each_problem_and_the_verdict(capsys: pytest.CaptureFixtur
     assert capsys.readouterr().out == "x: green\n"
     assert gatelib.report("x", ["one", "two"], "abcdef0123456789") == 1
     assert capsys.readouterr().out == "one\ntwo\nx: red against abcdef012345\n"
+
+
+def test_a_free_port_can_be_bound_and_then_listens() -> None:
+    port = gatelib.free_port()
+    assert 0 < port < 65536
+    with servers.server(lambda handler: servers.reply(handler, 200)) as url:
+        assert gatelib.listening(url)
+    assert not gatelib.listening(url), "closed again"
+    assert not gatelib.listening(f"http://127.0.0.1:{port}"), "nothing took the free port"
+    assert not gatelib.listening(f"https://127.0.0.1:{port}"), "https defaults to 443 otherwise"
+
+
+def test_http_status_reads_the_status_and_sends_a_json_body() -> None:
+    seen: list[tuple[str, str, bytes, str]] = []
+
+    def handle(handler: http.server.BaseHTTPRequestHandler) -> None:
+        seen.append(
+            (
+                handler.command,
+                handler.path,
+                getattr(handler, "body", b""),
+                handler.headers.get("Content-Type", ""),
+            )
+        )
+        servers.reply(handler, 201 if handler.command == "POST" else 302)
+
+    with servers.server(handle) as url:
+        assert gatelib.http_status("GET", f"{url}?a=1") == 302, "redirects are not followed"
+        assert gatelib.http_status("POST", f"{url}/x", body=b"{}") == 201
+    assert seen == [("GET", "/?a=1", b"", ""), ("POST", "/x", b"{}", "application/json")]
+
+
+def test_http_status_refuses_what_is_not_an_http_url_and_raises_for_a_dead_port() -> None:
+    with pytest.raises(ValueError, match="not an http"):
+        gatelib.http_status("GET", "ftp://127.0.0.1/")
+    with pytest.raises(ValueError, match="not an http"):
+        gatelib.http_status("GET", "http:///path")
+    port = gatelib.free_port()
+    with pytest.raises(ConnectionRefusedError):
+        gatelib.http_status("GET", f"http://127.0.0.1:{port}/")
+    with (
+        servers.server(lambda handler: servers.reply(handler, 200)) as url,
+        pytest.raises(OSError),  # noqa: PT011 # -- TLS to a plain port: a reset or a timeout
+    ):
+        gatelib.http_status("GET", url.replace("http:", "https:"), timeout=0.5)
+
+
+def test_interrupts_raise_once_then_ignore_and_restore_the_handlers() -> None:
+    before = signal.getsignal(signal.SIGTERM)
+    with gatelib.interrupts_raise():
+        with pytest.raises(gatelib.Interrupted) as caught:
+            signal.raise_signal(signal.SIGTERM)
+        assert caught.value.signum == signal.SIGTERM
+        assert "signal" in str(caught.value)
+        signal.raise_signal(signal.SIGTERM)
+        signal.raise_signal(signal.SIGINT)
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_a_signal_inside_signals_held_waits_for_the_end_of_the_block() -> None:
+    reached = []
+
+    def hold() -> None:
+        with gatelib.signals_held():
+            signal.raise_signal(signal.SIGTERM)
+            signal.raise_signal(signal.SIGINT)
+            reached.append("the block ran on")
+        reached.append("not reached")
+
+    with gatelib.interrupts_raise(), pytest.raises(gatelib.Interrupted) as caught:
+        hold()
+    assert reached == ["the block ran on"]
+    assert caught.value.signum == signal.SIGTERM
+
+
+def test_signals_held_without_a_signal_raises_nothing_and_forgets_the_last_one() -> None:
+    with gatelib.interrupts_raise():
+        with gatelib.signals_held():
+            pass
+        with pytest.raises(gatelib.Interrupted):
+            signal.raise_signal(signal.SIGHUP)
+
+
+def start(code: str, tmp_path: Path) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(  # noqa: S603 # -- a fixed argv, no shell
+        [sys.executable, "-c", code, str(tmp_path)], start_new_session=True
+    )
+
+
+def wait_for(path: Path) -> int:
+    deadline = time.monotonic() + 30
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return servers.pid_of(path)
+
+
+LEADER_AND_STUBBORN_CHILD = """
+import signal, subprocess, sys, time, os
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+child = subprocess.Popen(["sleep", "60"])
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+open(sys.argv[1] + "/child.tmp", "w").write(str(child.pid))
+os.rename(sys.argv[1] + "/child.tmp", sys.argv[1] + "/child")
+time.sleep(60)
+"""
+IGNORES_TERM = """
+import signal, sys, time, os
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+open(sys.argv[1] + "/leader.tmp", "w").write(str(os.getpid()))
+os.rename(sys.argv[1] + "/leader.tmp", sys.argv[1] + "/leader")
+time.sleep(60)
+"""
+
+
+def test_stop_group_ends_the_leader_and_the_worker_that_ignores_sigterm(tmp_path: Path) -> None:
+    leader = start(LEADER_AND_STUBBORN_CHILD, tmp_path)
+    child = wait_for(tmp_path / "child")
+    assert servers.alive(child)
+    gatelib.stop_group(leader, grace=5, settle=0.3)
+    assert leader.returncode == -signal.SIGTERM
+    assert servers.gone(child)
+
+
+def test_stop_group_kills_a_leader_that_ignores_sigterm(tmp_path: Path) -> None:
+    leader = start(IGNORES_TERM, tmp_path)
+    wait_for(tmp_path / "leader")
+    gatelib.stop_group(leader, grace=0.3, settle=0.3)
+    assert leader.returncode == -signal.SIGKILL
+
+
+def test_stop_group_on_a_process_that_already_ended(tmp_path: Path) -> None:
+    done = start("pass", tmp_path)
+    done.wait()
+    gatelib.stop_group(done, grace=1, settle=0.1)
+    assert done.returncode == 0
+
+
+def test_run_command_reports_the_exit_code_and_a_command_that_cannot_run() -> None:
+    assert gatelib.run_command([sys.executable, "-c", "pass"], {}) == (0, [])
+    assert gatelib.run_command([sys.executable, "-c", "exit(7)"], {}) == (
+        7,
+        ["the command exited with code 7"],
+    )
+    killed = "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
+    assert gatelib.run_command([sys.executable, "-c", killed], {}) == (
+        128 + signal.SIGKILL,
+        [f"the command exited with code {128 + signal.SIGKILL}"],
+    )
+    code, problems = gatelib.run_command(["/nonexistent/command"], {})
+    assert code == 1
+    assert problems[0].startswith("cannot run /nonexistent/command: ")
+    with pytest.raises(ValueError, match="null"):
+        gatelib.run_command(["bad\0name"], {})
+
+
+def test_a_signal_just_after_the_command_starts_still_stops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[subprocess.Popen[bytes]] = []
+    real = subprocess.Popen
+
+    def start_then_signal(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:  # noqa: ANN401
+        process = real(*args, **kwargs)
+        started.append(process)
+        signal.raise_signal(signal.SIGTERM)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", start_then_signal)
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    with gatelib.interrupts_raise(), pytest.raises(gatelib.Interrupted):
+        gatelib.run_command(sleeper, {})
+    assert started[0].poll() is not None
+
+
+def test_the_state_directory_is_made_once_and_ignores_itself(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    state = gatelib.state_dir(root)
+    assert state == root / ".ratchet"
+    (state / "timing.jsonl").write_text("{}\n", encoding="utf-8")
+    assert git(root, "status", "--porcelain") == ""
+    (state / ".gitignore").write_text("*\n!kept\n", encoding="utf-8")
+    assert gatelib.state_dir(root) == state
+    assert (state / ".gitignore").read_text(encoding="utf-8") == "*\n!kept\n", "it is the owner's"
+
+
+def test_a_process_run_from_a_tree_is_ended_and_every_other_one_is_left(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    inside = servers.sleeper(tree)
+    outside = start("import time\ntime.sleep(60)\n", tmp_path)
+    try:
+        assert gatelib.end_running_from(tree.resolve()) == [inside.pid]
+        assert inside.wait(timeout=5) == -signal.SIGKILL
+        assert outside.poll() is None
+    finally:
+        for process in (inside, outside):
+            process.kill()
+            process.wait()
+
+
+def test_a_process_that_is_gone_or_cannot_be_read_is_passed_over(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    proc = tmp_path / "proc"
+    gone = proc / "999999999"
+    gone.mkdir(parents=True)
+    (gone / "exe").symlink_to(tree / "target" / "service")
+    (proc / "12").mkdir()
+    assert gatelib.end_running_from(tree, proc) == []
+    assert gatelib.end_running_from(tree, tmp_path / "no-such-directory") == []

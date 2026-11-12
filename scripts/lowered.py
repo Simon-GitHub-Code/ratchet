@@ -6,8 +6,10 @@ the keys under ``ceilings`` (the speed gate's seconds per tier and gate, the cha
 ceiling), which only fall. A flag that is ``true`` (``absolute``) stays ``true``.
 
 Relaxing a value is the owner's change with an ADR behind it, so a loosening passes when an ADR
-under ``docs/adr/`` (a guard path only the owner writes) names it exactly, on a line of its own:
-``Relaxes: <key> from <old> to <new>``, with ``removed`` as the new value of a dropped key.
+under ``docs/adr/`` names it exactly, on a line of its own:
+``Relaxes: <key> from <old> to <new>``, with ``removed`` as the new value of a dropped key. An
+agent may add that ADR (ADR 0014), but ``quality/thresholds.toml`` is a guard path, so the
+loosening itself is the owner's edit.
 
 Usage: ``lowered.py [--root DIR] [--base REF] [--file PATH]``. The base is ``gatelib.base_commit``:
 the merge base of HEAD with the default branch, or ``HEAD~1`` on the default branch itself. A

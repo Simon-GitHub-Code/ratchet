@@ -11,6 +11,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   RATCHET_PLUGIN: ${{ github.workspace }}/ratchet
+  # Why: runners vary, so a ceiling reports on a pull request and blocks on the default branch.
+  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}
 jobs:
   tier0:
     runs-on: ubuntu-latest
@@ -19,7 +21,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit ADR 0001 names; adopt step 10 fills it
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit the binding pins; adopt fills it
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -29,26 +31,53 @@ jobs:
           restore-keys: |
             tier0-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
-      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" tier0 --report .ratchet/timing.jsonl -- just tier0
+      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" tier0 --over "$OVER" --report .ratchet/timing.jsonl -- just tier0
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with: { name: timing-tier0, path: .ratchet/timing.jsonl }
+  # Why: the gates of a tier are the lists at the top of the `justfile`, the lists a local run is
+  # built from, and this job turns them into matrices: adding a gate is one word there and never a
+  # change to this file. The long gates run as one job per shard, and the count is the binding's
+  # `- Shards:` line, 1 on day one. Adding runners is that one number.
+  shape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      shards: ${{ steps.shards.outputs.list }}
+      count: ${{ steps.shards.outputs.count }}
+      tier1: ${{ steps.shards.outputs.tier1 }}
+      tier1_long: ${{ steps.shards.outputs.tier1_long }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { sparse-checkout: "justfile\ndocs/process/binding.md", sparse-checkout-cone-mode: false }
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - id: shards
+        run: |
+          count="$(sed -n 's/^- Shards: *\([1-9][0-9]*\) *$/\1/p' docs/process/binding.md)"
+          if [ -z "$count" ]; then echo "docs/process/binding.md: no '- Shards: N' line"; exit 1; fi
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "list=[$(seq -s, 1 "$count")]" >> "$GITHUB_OUTPUT"
+          json() { out=""; for item in $1; do out="$out,\"$item\""; done; echo "[${out#,}]"; }
+          long="$(just --evaluate tier1_sharded)"; short=""
+          for gate in $(just --evaluate tier1_gates); do
+            case " $long " in *" $gate "*) ;; *) short="$short $gate" ;; esac
+          done
+          echo "tier1=$(json "$short")" >> "$GITHUB_OUTPUT"
+          echo "tier1_long=$(json "$long")" >> "$GITHUB_OUTPUT"
   tier1:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: tier0
+    needs: [tier0, shape]
     strategy:
       fail-fast: false
       # Why: one job per gate, so the wall clock is the slowest gate and one run shows every red.
       matrix:
-        gate: [test, coverage, diff-coverage, test-counts, mutation-changed, contracts-check, audit, duplication, build, smoke, bite, api-check, data-compat, doctests, sast, artefact-scan, type-coverage, doc-coverage, change-size, guard-diff, conformance]
-        # bind: shard a suite over its budget: replace its entry with include rows such as
-        #   - { gate: test, shard: 1/4 }  ... and pass ${{ matrix.shard }} to the recipe
+        gate: ${{ fromJSON(needs.shape.outputs.tier1) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit ADR 0001 names; adopt step 10 fills it
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit the binding pins; adopt fills it
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -58,17 +87,40 @@ jobs:
           restore-keys: |
             tier1-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
-      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier1 --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
-  guard-changes-present:
-    if: github.event_name == 'pull_request'
+  # Why: a matrix with no values is an error GitHub raises before the job exists, so a project with
+  # no long gate (an empty `*_sharded` list in the `justfile`) skips the job instead.
+  tier1-long:
+    if: needs.shape.outputs.tier1_long != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
+    needs: [tier0, shape]
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: ${{ fromJSON(needs.shape.outputs.tier1_long) }}
+        shard: ${{ fromJSON(needs.shape.outputs.shards) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit ADR 0001 names; adopt step 10 fills it
-      - run: PYTHONPATH=ratchet/hooks python3 -m ratchet_guards.diff --root . --fail-if-present
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit the binding pins; adopt fills it
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: | # bind: the dependency directory and every tool cache tier 1 writes
+            .cache
+          key: tier1-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('pyproject.toml', 'package.json') }} # bind: lockfiles and tool configs
+          restore-keys: |
+            tier1-${{ runner.os }}-
+      # bind: toolchain setup, pinned, with the setup action's own cache on
+      - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier1 --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.shape.outputs.count }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with: { name: "timing-${{ matrix.gate }}-${{ matrix.shard }}", path: .ratchet/timing.jsonl }

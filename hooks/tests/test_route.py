@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 
+import hooks_installed
 import route
-from tests.repos import branch, commit, git, repository, write
+from tests.repos import branch, commit, git, install_hooks, repository, write
 
 Out = pytest.CaptureFixture[str]
+REAL_CHECK = hooks_installed.check
 STANZA = "# P\n\nLoad the `ratchet:method` skill first.\n"
 CONJECTURE = (
     "\n\n## Conjecture\n\nOne script decides the route; the refuter is a wrong command on a"
@@ -18,6 +20,7 @@ CONJECTURE = (
 BINDING = (
     "# Binding\n\n- Default branch: `main`\n\n| Entry point | Command |\n| --- | --- |\n"
     "| check | `just check` |\n"
+    "| merge | `just merge` |\n"
 )
 ADOPTED = {
     "AGENTS.md": STANZA,
@@ -26,6 +29,12 @@ ADOPTED = {
     "GLOSSARY.md": "# Glossary\n\n**Customer**: who pays.\n",
     "docs/design-brief.md": "# Brief\n",
 }
+
+
+@pytest.fixture(autouse=True)
+def hooks_are_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every stage below is asked with the commit hooks in place; the hooks stage has its tests."""
+    monkeypatch.setattr(hooks_installed, "check", lambda _root: None)
 
 
 class FakeGh:
@@ -135,6 +144,20 @@ def test_tickets_on_the_tracker_route_to_conjecture_then_feature(tmp_path: Path)
     assert route.decide(root, inherited).command == f"{route.FEATURE} 7"
 
 
+def test_a_ticket_that_does_not_say_how_it_is_operated_routes_to_conjecture(
+    tmp_path: Path,
+) -> None:
+    typed = BINDING + "\n## Gates\n\n- Application types: cli\n"
+    root = repository(tmp_path, ADOPTED | {"docs/process/binding.md": typed})
+    step = route.decide(root, FakeGh(issues=issues((5, "Five", "X." + CONJECTURE))))
+    assert step.command == f"{route.CONJECTURE} 5"
+    assert step.why == 'ticket 5 "Five" is agent-ready but does not say how it is operated'
+    said = "X." + CONJECTURE + "\n## Operability\n\n- Flag: none: the command only reads\n"
+    assert route.decide(root, FakeGh(issues=issues((5, "Five", said)))).command == (
+        f"{route.FEATURE} 5"
+    )
+
+
 def test_tracker_answers_are_read_defensively(tmp_path: Path) -> None:
     root = repository(tmp_path, ADOPTED)
     assert route.tracker_tickets(root, FakeGh(issues=None)) is None
@@ -181,11 +204,17 @@ def test_without_a_forge_the_owner_merges_the_branch(tmp_path: Path) -> None:
     assert route.decide(root, None).then == route.NEXT
     branch(root, "feature/4-x")
     write(root, "src/x.py", "x = 1\n")
-    assert "the owner merges it" in route.decide(root, None).then
+    assert route.decide(root, None).then.startswith("`just merge <branch>` merges it when")
     commit(root, "feat(x): x")
     step = route.decide(root, FakeGh(pr=None))
     assert step.stage == "merge"
-    assert "git switch main && git merge --no-ff feature/4-x" in step.command
+    assert step.command == "`just merge feature/4-x`"
+    write(root, "docs/process/binding.md", BINDING.replace("| merge | `just merge` |\n", ""))
+    commit(root, "docs(process): a binding from before the merge entry point")
+    assert (
+        route.decide(root, None).command == "the binding's `merge` entry point with `feature/4-x`"
+    )
+    assert "then: `git switch main && git merge --no-ff feature/4-x`" in step.why
     assert ".scratch/changes/feature-4-x.md" in step.why
 
 
@@ -387,3 +416,71 @@ def test_plugin_lines_older_than_the_template_send_the_owner_to_init(tmp_path: P
     assert step.command == route.INIT
     assert "In what style, with which levers?" in step.why
     assert step.then == route.NEXT
+
+
+def test_missing_hooks_come_before_everything_a_commit_would_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hooks_installed, "check", REAL_CHECK)
+    root = repository(tmp_path, ADOPTED)
+    write(root, "src/x.py", "x = 1\n")
+    step = route.decide(root, None)
+    assert step.stage == "hooks"
+    assert "hooks_install.py" in step.command
+    assert step.then == route.NEXT
+    assert "skip tier 0" in step.why
+    install_hooks(root)
+    assert route.decide(root, None).stage == "change"
+
+
+def test_a_repository_not_yet_adopted_is_not_asked_for_hooks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hooks_installed, "check", REAL_CHECK)
+    root = repository(tmp_path, {"README.md": "# A\n"})
+    assert route.decide(root, None).stage == "init"
+
+
+def test_several_tickets_with_a_conjecture_route_to_the_drain(tmp_path: Path) -> None:
+    files = {
+        **ADOPTED,
+        ".scratch/f/issues/01-a.md": "# 01: A\n\nStatus: ready-for-agent" + CONJECTURE,
+        ".scratch/f/issues/02-b.md": "# 02: B\n\nBlocked by: 01\n\nStatus: ready-for-agent"
+        + CONJECTURE,
+        ".scratch/f/issues/03-c.md": "# 03: C\n\nStatus: ready-for-agent\n\nBody.\n",
+    }
+    root = repository(tmp_path, files)
+    step = route.decide(root, None)
+    assert (step.command, step.stage) == (route.FEATURE, "drain")
+    assert step.why.startswith("2 agent-ready tickets state a conjecture")
+    assert step.then.startswith("the drain's one report")
+    (root / ".scratch/f/issues/02-b.md").unlink()
+    commit(root, "docs(tracker): one ticket left with a conjecture")
+    assert route.decide(root, None).command == f"{route.FEATURE} .scratch/f/issues/01-a.md"
+
+
+def test_an_answer_that_became_a_habit_is_offered_after_the_three_lines(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(tmp_path, {"README.md": "# A\n"})
+    row = "2026-11-12\tadopt\tadopt.tools\ttooling\tyes\n"
+    write(root, ".ratchet/questions.tsv", "date\tskill\tkey\tkind\trecommended\n" + row * 3)
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert len(out) == 4
+    assert out[3].startswith("also: you have taken the recommendation for `adopt.tools` 3 times")
+    assert route.main(["route", "--root", str(root), "--offline", "--json"]) == 0
+    assert len(json.loads(capsys.readouterr().out)["also"]) == 1
+
+
+def test_a_plugin_newer_than_the_pin_is_offered_as_the_upgrade(tmp_path: Path, capsys: Out) -> None:
+    pin = f"- Ratchet plugin: 0.0.1 at {'0' * 40}\n"
+    root = repository(tmp_path, {**ADOPTED, "docs/process/binding.md": BINDING + pin})
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[3].startswith("also: the Ratchet plugin in use is ")
+    assert ", newer than the 0.0.1 the binding pins: run `python3 " in out[3]
+    assert out[3].endswith("/scripts/upgrade.py`, then change the binding's pin line")
+    write(root, "docs/process/binding.md", BINDING)
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 3

@@ -8,18 +8,23 @@ from the manifest still reports the paths that pattern guarded.
 
 Usage, with the plugin's ``hooks/`` directory on the path: ``PYTHONPATH="$RATCHET_PLUGIN/hooks"
 python3 -m ratchet_guards.diff [--root DIR] [--base REF] [--summary FILE] [--annotate]
-[--fail-if-present]``. The base defaults to the default branch as ``scripts/gatelib.py`` resolves
-it for every gate (the remote's ``HEAD``, the binding's, else ``main`` or ``master``), so this
-check and the lowered gate never disagree about "before". ``--summary`` appends a Markdown report
-(CI passes ``$GITHUB_STEP_SUMMARY``), ``--annotate`` prints GitHub error annotations, and
-``--fail-if-present`` exits 1 when any guard path changed; otherwise the exit is 0.
+[--fail-if-present] [--fail-unless-additive]``. The base defaults to the default branch as
+``scripts/gatelib.py`` resolves it for every gate (the remote's ``HEAD``, the binding's, else
+``main`` or ``master``), so this check and the lowered gate never disagree about "before".
+``--summary`` appends a Markdown report (CI passes ``$GITHUB_STEP_SUMMARY``), ``--annotate``
+prints GitHub error annotations, ``--fail-if-present`` exits 1 when any guard path changed, and
+``--fail-unless-additive`` exits 1 when any guard path changed other than by an addition to a
+record; otherwise the exit is 0.
 
-Every changed guard path is listed and counted, dependency manifests and lockfiles included. Under
+Every changed guard path is listed and counted, dependency files and records included. Under
 a manifest, a lockfile or a snapshot of one, an indented line says what the change does to
 dependencies (``ratchet_guards.dependencies``): ``dependencies added:`` with each new entry, or
 ``lockfile:`` with each package's old and new versions, when that is all it does; otherwise
 ``not dependency-only:`` and why. The pipeline matches the added names against the ones its spec
-named (ADR 0011); the owner reads the versions.
+named (ADR 0011); the owner reads the versions. Under a path in a group marked
+``edit = "append"`` the line says what the change adds (``ratchet_guards.records``):
+``additions:`` with each new term, ``_Avoid_`` item and decision record, when adding is all it
+does; otherwise ``not additive:`` and why (ADR 0014).
 """
 
 import argparse
@@ -28,7 +33,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from ratchet_guards import dependencies
+from ratchet_guards import dependencies, records
 from ratchet_guards.manifest import MANIFEST_PATH, Group, Manifest, ManifestError, parse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -129,6 +134,26 @@ def dependency_notes(
     return notes
 
 
+def record_notes(
+    git: Git, base: str, worktree: Path, *, matches: Sequence[tuple[str, Group]]
+) -> dict[str, str]:
+    """For each changed path in a group marked ``edit = "append"``, what its change adds."""
+    merge_base = _required(git, ["merge-base", base, "HEAD"]).strip()
+    notes: dict[str, str] = {}
+    for path, group in matches:
+        if not group.additive:
+            continue
+        current = worktree / path
+        after = current.read_bytes().decode(errors="replace") if current.is_file() else None
+        notes[path] = records.note(path, records.before(git, merge_base, path), after)
+    return notes
+
+
+def additive(note: str | None) -> bool:
+    """Whether a path's note says its change only adds to a record."""
+    return note is not None and note.startswith(records.ADDITIONS)
+
+
 def markdown(
     matches: Sequence[tuple[str, Group]], base: str, notes: dict[str, str] | None = None
 ) -> str:
@@ -145,7 +170,7 @@ def markdown(
         f"Against the merge base with `{base}`. Guard paths define the quality gates "
         "(guards/manifest.toml). Read each change, and its gate dispute in "
         "docs/disputes/ if an agent raised one, before merging.\n\n"
-        f"| Path | Group | Dependencies |\n| --- | --- | --- |\n{rows}"
+        f"| Path | Group | What the change does |\n| --- | --- | --- |\n{rows}"
     )
 
 
@@ -172,6 +197,7 @@ def _arguments(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--annotate", action="store_true")
     parser.add_argument("--fail-if-present", action="store_true")
+    parser.add_argument("--fail-unless-additive", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -184,7 +210,8 @@ def main(argv: Sequence[str] | None = None, git: Git | None = None) -> int:
     worktree = Path(_required(git, ["rev-parse", "--show-toplevel"]).strip())
     found = manifests(git, base, worktree)
     matches = guarded(changed_paths(git, base), found)
-    notes = dependency_notes(git, base, worktree, paths=[path for path, _ in matches])
+    notes = record_notes(git, base, worktree, matches=matches)
+    notes |= dependency_notes(git, base, worktree, paths=[path for path, _ in matches])
     for path, group in matches:
         print(f"{group.name}\t{path}")
         if path in notes:
@@ -197,7 +224,10 @@ def main(argv: Sequence[str] | None = None, git: Git | None = None) -> int:
     if arguments.summary is not None:
         with arguments.summary.open("ab") as summary:
             summary.write(markdown(matches, base, notes).encode())
-    return 1 if arguments.fail_if_present and matches else 0
+    if arguments.fail_if_present and matches:
+        return 1
+    more = [path for path, _ in matches if not additive(notes.get(path))]
+    return 1 if arguments.fail_unless_additive and more else 0
 
 
 if __name__ == "__main__":

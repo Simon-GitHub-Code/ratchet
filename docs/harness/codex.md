@@ -30,7 +30,9 @@ which merges PreToolUse and SessionStart entries pointing at the installed plugi
 
 | In the skills | Here |
 | --- | --- |
+| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | export it as `~/.codex/plugins/cache/<marketplace>/ratchet/<version>/` |
 | `${CLAUDE_SKILL_DIR}` | the skill folder under `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/skills/<name>/` |
+| `${CLAUDE_PLUGIN_ROOT}` | the plugin folder, `~/.codex/plugins/cache/<marketplace>/ratchet/<version>/`. Whether Codex sets this variable is not verified. Export it to that folder before starting a session, so the commands in the skills resolve. `adapter.py codex --apply` writes absolute paths into the hooks and needs no variable |
 | `disable-model-invocation: true` | read the `SKILL.md` and follow it |
 | the question tool | Codex's question tool when present; otherwise ask in plain text |
 | subagents | `spawn_agent` (hook alias `Agent`) |
@@ -39,4 +41,4 @@ which merges PreToolUse and SessionStart entries pointing at the installed plugi
 
 ## Verified
 
-On this machine: Codex 0.164 has pstack and mattpocock-skills installed from Claude-shaped manifests, `~/.codex/hooks.json` with a Claude-shaped SessionStart entry and trust hashes. From its source: PreToolUse with `permissionDecision` deny/ask, the `Bash` and `apply_patch` names, and a `hooks` path in the plugin manifest. Not yet run: the plugin's hooks loading from a Codex install, and the corpus through its hook runner.
+Codex 0.164 installs pstack and mattpocock-skills from Claude-shaped manifests, and its `~/.codex/hooks.json` takes a Claude-shaped SessionStart entry with trust hashes. From its source: PreToolUse with `permissionDecision` deny/ask, the `Bash` and `apply_patch` names, and a `hooks` path in the plugin manifest. Not yet run: the plugin's hooks loading from a Codex install, and the corpus through its hook runner.

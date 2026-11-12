@@ -1,0 +1,63 @@
+name: weekly
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+# Why: a weekly run still going when the next starts is two; the newer one wins.
+concurrency:
+  group: weekly
+  cancel-in-progress: true
+env:
+  RATCHET_PLUGIN: ${{ github.workspace }}/ratchet
+jobs:
+  # Why: the weekly gates block nothing, so a red run nobody opens is a finding nobody sees. This
+  # job keeps one issue: it opens it on the first red run and comments on it while it stays open.
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit the binding pins; adopt fills it
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: | # bind: the dependency directory and every tool cache the weekly gates write
+            .cache
+          key: weekly-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('pyproject.toml', 'package.json') }} # bind: lockfiles and tool configs
+          restore-keys: |
+            weekly-${{ runner.os }}-
+      # bind: toolchain setup, pinned, with the setup action's own cache on
+      - name: Run the weekly gates
+        # Why: a step that pipes fails with `just` only under `shell: bash`, which sets pipefail.
+        shell: bash
+        run: just weekly 2>&1 | tee weekly.txt
+      - name: Open or update the one issue a finding gets
+        if: failure()
+        run: |
+          title="Weekly gates: a finding"
+          {
+            echo "The weekly gates were red in $RUN. Each finding gets its own pull request; close this issue when a run is green."
+            echo
+            echo '```'
+            # Why: the end of the log is the last gates to finish, which are usually green. The
+            # report holds each red gate's own output; with none to find, the end of the log.
+            python3 "$RATCHET_PLUGIN/scripts/red_gates.py" weekly.txt 2>/dev/null \
+              || tail -n 60 weekly.txt 2>/dev/null || echo "the run failed before the gates started"
+            echo '```'
+          } > finding.md
+          number="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file finding.md
+          else
+            gh issue create --title "$title" --body-file finding.md
+          fi

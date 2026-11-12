@@ -1,0 +1,151 @@
+"""Application types: which Gates rows apply to a repository, and what a row may then say."""
+
+import re
+import tomllib
+from pathlib import Path
+
+import pytest
+
+import application_types
+from application_types import Catalogue
+
+Out = pytest.CaptureFixture[str]
+SKILLS = Path(__file__).resolve().parents[2] / "skills"
+TEMPLATE_BINDING = (SKILLS / "adopt/templates/docs/process/binding.md").read_text(encoding="utf-8")
+QUESTION = re.compile(r"^\| ([^|]+?) \| ", re.MULTILINE)
+SHIPPED = application_types.load()
+CATALOGUE = Catalogue(
+    types={"service": "answers requests", "app": "has a screen", "library": "is imported"},
+    narrowed={"load": frozenset({"service"}), "a11y": frozenset({"service", "app"})},
+    collections=frozenset({"tests"}),
+)
+ROWS = [("load", "k6"), ("a11y", "axe"), ("tests", "pytest"), ("lint", "ruff")]
+ADRS = {1, 2}
+
+
+def failures(types: str | None, rows: list[tuple[str, str]] | None = None) -> list[str]:
+    binding = "# Binding\n\n" + ("" if types is None else f"- Application types: {types}\n")
+    return list(CATALOGUE.failures(binding, ROWS if rows is None else rows, ADRS))
+
+
+def bound(question: str, tool: str) -> list[tuple[str, str]]:
+    return [(name, tool if name == question else cell) for name, cell in ROWS]
+
+
+def test_the_shipped_catalogue_names_six_types_and_only_rows_of_the_binding_template() -> None:
+    # Why: a question the catalogue misspells would apply to every type again, silently.
+    rows = set(QUESTION.findall(TEMPLATE_BINDING))
+    assert list(SHIPPED.types) == ["service", "web-ui", "app", "cli", "job", "library"]
+    assert SHIPPED.questions <= rows, sorted(SHIPPED.questions - rows)
+    for question, asked_of in SHIPPED.narrowed.items():
+        assert asked_of < set(SHIPPED.types), question
+    assert SHIPPED.asked_of("contract drift") == {"service"}
+    assert SHIPPED.asked_of("format") == set(SHIPPED.types)
+    assert {"fuzzing", "performance budget", "end to end"} <= SHIPPED.collections
+    assert "contract drift" not in SHIPPED.collections
+
+
+def test_the_catalogue_file_lists_each_question_once() -> None:
+    data = tomllib.loads(application_types.CATALOGUE.read_text(encoding="utf-8"))
+    names = [question["name"] for question in data["question"]]
+    assert len(names) == len(set(names))
+    keys = {"name", "applies-to", "collection", "proofs"}
+    assert all(set(question) <= keys for question in data["question"])
+
+
+def test_every_proof_a_question_requires_is_described_and_every_description_is_required() -> None:
+    required = {proof for proofs in SHIPPED.proofs.values() for proof in proofs}
+    assert required == set(SHIPPED.meanings)
+    assert SHIPPED.proofs == {
+        "telemetry emitted": ("outside-the-seam",),
+        "changed flags off and on": ("broken-flag-state",),
+        "load smoke": ("erroring-route",),
+    }
+    assert set(SHIPPED.proofs) <= SHIPPED.questions
+    assert Catalogue({}, {}, frozenset(), proofs={"only proofs": ("x",)}).questions == {
+        "only proofs"
+    }
+
+
+def test_a_binding_declares_its_types_on_one_line() -> None:
+    assert application_types.declared("# Binding\n") is None
+    assert application_types.declared("- Application types: service, `app`\n") == ["service", "app"]
+    assert application_types.declared("- Application types:\n") == []
+    assert failures("service, app") == []
+
+
+def test_a_missing_line_an_empty_one_and_an_unknown_type_are_red() -> None:
+    known = "name one or more of service, app, library"
+    assert failures(None) == [f"has no '- Application types:' line; {known}"]
+    assert failures("") == [f"'- Application types:' names nothing; {known}"]
+    assert failures("service, website") == [f"'- Application types:' names 'website'; {known}"]
+    assert failures("<one or more of service, app>")[0].startswith("'- Application types:' names")
+
+
+def test_a_row_the_catalogue_names_is_never_dropped() -> None:
+    assert failures("library", [("lint", "ruff")]) == [
+        f"the Gates table has no '{question}' row; a row is bound or none, never dropped"
+        for question in ("a11y", "load", "tests")
+    ]
+
+
+def test_an_empty_tool_cell_is_red() -> None:
+    assert failures("service", bound("lint", "")) == [
+        "gate 'lint' names no tool: an empty Tool cell is an unfinished binding"
+    ]
+
+
+def test_a_row_that_applies_needs_a_reason_and_an_adr_the_repository_holds() -> None:
+    assert failures("service", bound("load", "none")) == [
+        "gate 'load' is bound to none without a reason of 10+ characters"
+    ]
+    assert failures("service", bound("load", "none: nothing to load here")) == [
+        "gate 'load' is bound to none and names no ADR that accepts the gap"
+    ]
+    assert failures("service", bound("load", "none: not a service")) == [
+        "gate 'load' is bound to none and names no ADR that accepts the gap"
+    ]
+    assert failures("service", bound("load", "none: no load tool yet; ADR 0007")) == [
+        "gate 'load' is bound to none under ADR 0007, which docs/adr does not hold"
+    ]
+    assert failures("service", bound("load", "none: no load tool yet; ADR 0002 accepts it")) == []
+    assert failures("service", bound("lint", "none until a linter exists, ADR-0001")) == []
+    assert failures("service", bound("lint", "nonesuch, a linter")) == []
+
+
+def test_a_row_that_does_not_apply_may_say_which_type_it_is_not() -> None:
+    assert failures("library", bound("load", "none: not a service")) == []
+    assert failures("library", bound("a11y", "none: not an app")) == []
+    assert failures("app, library", bound("load", "none: not a service")) == []
+    # Why: the reason names a type the question is asked of, never just any type.
+    hint = "; it is not asked of these types, so write `none: not a service`"
+    assert failures("library", bound("load", "none: not an app")) == [
+        f"gate 'load' is bound to none and names no ADR that accepts the gap{hint}"
+    ]
+    assert failures("library", bound("load", "none")) == [
+        f"gate 'load' is bound to none without a reason of 10+ characters{hint}"
+    ]
+    assert failures("library", bound("load", "none: not a serviceable thing")) == [
+        f"gate 'load' is bound to none and names no ADR that accepts the gap{hint}"
+    ]
+    assert failures("library", bound("load", "none: load is out of scope; ADR 0001")) == []
+    assert failures("library", bound("load", "k6 anyway")) == []
+
+
+def test_the_command_prints_the_types_then_the_rows_they_leave_out(capsys: Out) -> None:
+    assert application_types.main(["application_types"]) == 0
+    assert (
+        capsys.readouterr().out.splitlines()[5]
+        == "library: code other code imports; nothing to boot"
+    )
+    assert application_types.main(["application_types", "cli", "library"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "contract drift: none: not a service" in lines
+    assert "deep interface conformance: applies" in lines
+    assert "accessibility: none: not a web-ui or an app" in lines
+    assert "telemetry emitted: none: not a service, a web-ui, an app or a job" in lines
+    assert len(lines) == len(SHIPPED.narrowed)
+    assert application_types.main(["application_types", "website"]) == 2
+    assert capsys.readouterr().out == (
+        "application_types: 'website' is not one of service, web-ui, app, cli, job, library\n"
+    )

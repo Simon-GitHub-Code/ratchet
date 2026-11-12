@@ -2,7 +2,7 @@
 """The grouped coverage gate: per-group line and branch coverage against the ratchet.
 
 Reads a Cobertura report (``coverage.xml``, which coverage.py, c8, vitest, Jest and most tools
-emit) and the coverage groups in ``quality/thresholds.toml``::
+emit) or an LCOV tracefile, and the coverage groups in ``quality/thresholds.toml``::
 
     [python.coverage.core]
     paths = ["src/core/**"]
@@ -22,6 +22,15 @@ group's recorded line and branch to the measured value and never lowers one.
 A group whose paths match no measured file is not measured, not 100%: it is skipped, said so, and
 ``--write`` leaves it alone. Several ``--report`` arguments are tallied together, so a repository
 with one suite per stack judges every group against the merged view in one run.
+
+The format is read from the report's content, never its name. An LCOV tracefile counts a
+``DA`` record as a line and a ``BRDA`` record as a branch, hit when its count is above zero,
+which is what a Cobertura ``line`` and its ``condition-coverage`` say. A file that several
+records name is tallied once. Between them the two formats are native to most stacks:
+Cobertura to Python, JavaScript, PHP, .NET and C or C++ through gcovr; LCOV to Dart, Swift,
+Elixir and anything built on llvm-cov or gcov; Rust's cargo-llvm-cov writes both. A stack that
+writes neither converts in its coverage recipe: Go's cover profile through ``gcov2lcov`` or
+``gocover-cobertura``, JaCoCo's XML through ``cover2cover``.
 
 Usage: ``coverage_groups.py [--root DIR] [--report FILE]... [--write]``.
 """
@@ -102,6 +111,10 @@ def groups(thresholds: dict[str, object]) -> list[Group]:
     return found
 
 
+class UnreadableError(ValueError):
+    """A report in neither format this gate reads."""
+
+
 def _number(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
@@ -111,20 +124,61 @@ def measured(report: Path, root: Path, tallies: dict[str, Tally] | None = None) 
 
     Passing ``tallies`` adds this report's files to it, so several reports merge into one view.
     """
+    tallies = {} if tallies is None else tallies
+    if report.read_bytes().lstrip().startswith(b"<"):
+        cobertura(report, root, tallies)
+    elif not lcov(report.read_text(encoding="utf-8", errors="replace"), root, tallies):
+        message = f"{report}: neither a Cobertura report nor an LCOV tracefile naming a source file"
+        raise UnreadableError(message)
+    return tallies
+
+
+def cobertura(report: Path, root: Path, tallies: dict[str, Tally]) -> None:
+    """Add a Cobertura report's classes to ``tallies``: each class's lines and their branches."""
     tree = ET.parse(report)  # noqa: S314 # -- see the import
     sources = [s.text.strip() for s in tree.iter("source") if s.text and s.text.strip()]
-    tallies = {} if tallies is None else tallies
     for cls in tree.iter("class"):
         path = relative(cls.get("filename", ""), sources, root)
         tally = tallies.setdefault(path, Tally())
         tally.files = [path]
-        for line in cls.iter("line"):
+        # Why: Istanbul and llvm-cov repeat a function's first line under <methods>; every
+        # descendant `line` would count it twice.
+        for line in cls.findall("lines/line"):
             tally.lines += 1
             tally.lines_hit += int(line.get("hits", "0")) > 0
             if match := CONDITION.search(line.get("condition-coverage", "")):
                 tally.branches_hit += int(match.group(1))
                 tally.branches += int(match.group(2))
-    return tallies
+
+
+def lcov(text: str, root: Path, tallies: dict[str, Tally]) -> int:
+    """Add an LCOV tracefile's records to ``tallies``; how many source files it names.
+
+    A file that several records name, one per test, is tallied once: a line or a branch is hit
+    when any record hit it.
+    """
+    files: dict[str, dict[tuple[str, str], bool]] = {}
+    marks: dict[tuple[str, str], bool] = {}
+    for record in text.splitlines():
+        kind, _, value = record.strip().partition(":")
+        if kind == "SF":
+            marks = files.setdefault(relative(value, [], root), {})
+        elif kind == "DA":
+            line, hits = value.split(",")[:2]
+            marks[kind, line] = marks.get((kind, line), False) or int(hits) > 0
+        elif kind == "BRDA":
+            where, _, taken = value.rpartition(",")
+            marks[kind, where] = marks.get((kind, where), False) or taken not in {"-", "0"}
+    for path, found in files.items():
+        tally = tallies.setdefault(path, Tally())
+        tally.files = [path]
+        lines = [hit for (kind, _), hit in found.items() if kind == "DA"]
+        branches = [hit for (kind, _), hit in found.items() if kind == "BRDA"]
+        tally.lines += len(lines)
+        tally.lines_hit += sum(lines)
+        tally.branches += len(branches)
+        tally.branches_hit += sum(branches)
+    return len(files)
 
 
 def relative(filename: str, sources: list[str], root: Path) -> str:
@@ -230,7 +284,7 @@ def write(root: Path, found: list[Group], totals: dict[str, Tally]) -> None:
 
 def problems(root: Path, reports: list[Path], *, write_back: bool = False) -> list[str]:
     missing = [
-        f"{r}: missing; run the suite with a Cobertura report first"
+        f"{r}: missing; run the suite with a Cobertura or LCOV report first"
         for r in reports
         if not r.is_file()
     ]
@@ -240,8 +294,11 @@ def problems(root: Path, reports: list[Path], *, write_back: bool = False) -> li
     if not found:
         return [f"{gatelib.THRESHOLDS}: no [<language>.coverage.<group>] table with paths"]
     files: dict[str, Tally] = {}
-    for report in reports:
-        measured(report, root, files)
+    try:
+        for report in reports:
+            measured(report, root, files)
+    except UnreadableError as unreadable:
+        return [str(unreadable)]
     totals, orphans = tally_groups(found, files)
     if write_back:
         write(root, found, totals)

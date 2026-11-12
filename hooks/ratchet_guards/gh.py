@@ -1,8 +1,10 @@
 """Rules for the GitHub CLI: merges, branch protection, repository settings, labels and runs.
 
 The agent's ``gh`` runs as the owner, so GitHub cannot tell the two apart; these rules are
-where the difference is drawn. Reads pass: ``gh label list`` and a ``GET`` on a labels
-endpoint are how an agent learns what the owner has set up.
+where the difference is drawn. A merge asks: the pull request's merge job merges what the
+merge judge passes, with the workflow's own token, and the owner merges the rest (ADR 0021),
+so an agent's ``gh pr merge``, in any spelling, is neither. Reads pass: ``gh label list``
+and a ``GET`` on a labels endpoint are how an agent learns what the owner has set up.
 
 Label creation has one sanctioned path. ``gh label create <name>`` on the current checkout's
 own repository passes when ``docs/agents/triage-labels.md`` at the checkout root lists
@@ -26,6 +28,7 @@ from pathlib import Path
 
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Spec, scan
+from ratchet_guards.refs import MAIN_BRANCHES
 from ratchet_guards.verdict import Verdict
 
 _REPO_FLAGS = frozenset({"-R", "--repo", "--hostname"})
@@ -69,11 +72,25 @@ _API = Spec(
 _BODY_FLAGS = frozenset({"-f", "-F", "--field", "--raw-field", "--input"})
 _PROTECTION = re.compile(r"branches/[^/\s]+/protection|rulesets?\b|branchprotectionrule")
 _MERGE_ENDPOINT = re.compile(r"pulls/\d+/merge/?$")
-_MERGE_MUTATION = re.compile(r"mergepullrequest|enablepullrequestautomerge")
+_MERGE_MUTATION = re.compile(r"mergepullrequest|enablepullrequestautomerge|mergebranch")
 _LABELS = re.compile(r"(^|/)labels(/|$)")
 _REPOSITORY = re.compile(r"^/?repos/[^/]+/[^/]+/?$")
 _SETTINGS = re.compile(r"actions/(secrets|variables|permissions)|actions/workflows/.+/disable")
 _RUN_CANCEL = re.compile(r"actions/runs/.*cancel/?$")
+# Why: the forge's API writes a ref with no push, so the default branch and a tag named as it are
+# guarded here as `ratchet_guards.refs` guards them in `git` (ADR 0024). A body read from a file
+# names a ref the guard cannot see, and a GraphQL ref mutation names it by an opaque id.
+_DEFAULT_NAMES = "|".join(sorted(MAIN_BRANCHES))
+_REFS_ENDPOINT = re.compile(r"/git/refs(/|$)")
+_DEFAULT_REF = re.compile(rf"\b(heads|tags)/({_DEFAULT_NAMES})(?![\w./-])")
+_RELEASES_ENDPOINT = re.compile(r"/releases(/\d+)?/?$")
+_DEFAULT_TAG = re.compile(rf"\btag_name=({_DEFAULT_NAMES})(?![\w./-])")
+_REF_MUTATION = re.compile(r"\b(createref|updaterefs?|deleteref|createcommitonbranch)\b")
+_BRANCH_MERGE = re.compile(r"/merges/?$")
+_CONTENTS_ENDPOINT = re.compile(r"/contents/")
+_OTHER_BRANCH = re.compile(rf"\bbranch=(?!({_DEFAULT_NAMES})(\s|$))\S")
+_BODY_FILE = "--input"
+_RELEASE_CREATE = ("release", "create")
 
 
 def _operands(words: Sequence[str]) -> list[str]:
@@ -105,14 +122,34 @@ class _Call:
         return self.method != "GET"
 
 
+def _writes_default_ref(call: _Call) -> bool:
+    """A ref write through the API on a default branch or a tag named as one."""
+    if _REF_MUTATION.search(call.text):
+        return True
+    if not call.writes:
+        return False
+    if _REFS_ENDPOINT.search(call.endpoint):
+        return _BODY_FILE in call.text or bool(_DEFAULT_REF.search(call.text))
+    return bool(_RELEASES_ENDPOINT.search(call.endpoint) and _DEFAULT_TAG.search(call.text))
+
+
+def _commits_to_default(call: _Call) -> bool:
+    """A write through the contents API, which commits to the default branch unless told."""
+    writes = call.writes and bool(_CONTENTS_ENDPOINT.search(call.endpoint))
+    return writes and not _OTHER_BRANCH.search(call.text)
+
+
 _API_RULES: list[tuple[str, Callable[[_Call], bool]]] = [
     ("branch-protection", lambda c: bool(_PROTECTION.search(c.endpoint + " " + c.text))),
     (
         "merge-pr",
         lambda c: bool(
-            (c.writes and _MERGE_ENDPOINT.search(c.endpoint)) or _MERGE_MUTATION.search(c.text)
+            (c.writes and (_MERGE_ENDPOINT.search(c.endpoint) or _BRANCH_MERGE.search(c.endpoint)))
+            or _MERGE_MUTATION.search(c.text)
         ),
     ),
+    ("default-ref", _writes_default_ref),
+    ("push-main", _commits_to_default),
     (
         "workflow-runs",
         lambda c: (
@@ -247,6 +284,8 @@ def check(words: Sequence[str], context: Context, guard: Guard) -> list[Verdict]
         return (
             [] if label is None else [Verdict("agent-ready-label", f"gh {group} {action} {label}")]
         )
+    elif (group, action) == _RELEASE_CREATE and operands[2:3] and operands[2] in MAIN_BRANCHES:
+        rule = "default-ref"
     else:
         rule = _COMMANDS.get((group, action))
     return [] if rule is None else [Verdict(rule, f"gh {group} {action}")]

@@ -14,13 +14,24 @@ The stages, in order; the first that does not hold is the answer:
 2. ``AGENTS.md`` naming the method (``/ratchet:init``);
 3. the tracker record ``docs/agents/issue-tracker.md`` (the mattpocock-skills setup);
 4. the binding ``docs/process/binding.md`` (``/ratchet:adopt``);
-5. a clean tree (finish the change: ``check``, commit, pull request);
-6. on a working branch: the pull request is open, else open it; with no forge (no ``origin``)
-   the owner merges the branch once ``check`` is green;
-7. on the default branch: the glossary and design brief (``grill-with-docs``), then an
+5. the commit hooks, which run tier 0 on every commit (``hooks_installed.py`` proves they would;
+   the step is the ``hooks-install`` entry point, which an agent runs, or the owner's command
+   where git config must change, since the guard refuses that from an agent);
+6. a clean tree (finish the change: ``check``, commit, pull request);
+7. on a working branch: the pull request is open, else open it, and its merge job merges what
+   the merge judge passes (ADR 0021); with no forge (no ``origin``) the binding's ``merge``
+   entry point judges the branch, runs ``check`` on the merge result and merges it, or says
+   why the merge is the owner's;
+8. on the default branch: the glossary and design brief (``grill-with-docs``), then an
    agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
-   away, ``/pstack:poteto-mode`` when they stay).
+   away, ``/pstack:poteto-mode`` when they stay). With more than one ticket ready the build is
+   the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0023).
+
+After the three lines come the ``also:`` lines, when there are any: the upgrade, when the plugin
+in use is newer than the one the binding pins (ADR 0027), and each question the owner has
+answered with the recommendation three times running, offered as a standing answer
+(``questions.py``, ADR 0022). They are proposals and change nothing.
 
 Usage: ``route.py [--root DIR] [--offline] [--json]``.
 """
@@ -36,6 +47,9 @@ from pathlib import Path
 
 import feature_preflight as preflight
 import gatelib
+import hooks_installed
+import plugin_pin
+import questions
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
 STANZA = "ratchet:method"
@@ -50,7 +64,6 @@ PURPOSE_PLACEHOLDER = "<One paragraph"
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 AGENTS_TEMPLATE = PLUGIN_ROOT / "skills/init/templates/AGENTS.md"
 PLUGIN_LINE = re.compile(r"^- \*\*([^*]+)\*\*")
-ENTRY_POINT_ROW = re.compile(r"^\|\s*check\s*\|\s*`([^`]+)`\s*\|", re.MULTILINE)
 CHECK_FALLBACK = "the binding's `check` entry point"
 
 INIT = "/ratchet:init"
@@ -62,8 +75,12 @@ TICKETS = "/mattpocock-skills:to-tickets"
 CONJECTURE = "/ratchet:conjecture"
 FEATURE = "/ratchet:feature"
 POTETO = "/pstack:poteto-mode"
-PULL_REQUEST = "open the pull request (the `pr` skill fills the body); a human merges"
-WAIT = "nothing: wait for the review; a human merges"
+PULL_REQUEST = (
+    "open the pull request (the `pr` skill fills the body); its merge job merges it when the"
+    " merge judge passes it, and comments why when the merge is yours"
+)
+WAIT = "nothing: the merge job merges it once `ci` is green, or comments why the merge is yours"
+MERGE_FALLBACK = "the binding's `merge` entry point"
 NEXT = "/ratchet:next"
 CHANGES = ".scratch/changes"
 BLOCKED_RUN = ": blocked run"
@@ -108,10 +125,13 @@ def observe(root: Path) -> Checkout | None:
 
 
 def review(checkout: Checkout) -> str:
-    """How a finished branch reaches the default branch: a pull request, or the owner's merge."""
+    """How a finished branch reaches the default branch: a pull request, or the entry point."""
     if checkout.forge:
         return PULL_REQUEST
-    return f"the owner merges it once `check` is green (no forge; {CHANGES}/<branch>.md)"
+    return (
+        f"{merge_command(checkout.root, '<branch>')} merges it when the merge judge and `check`"
+        f" pass it, and says why when the merge is yours (no forge; {CHANGES}/<branch>.md)"
+    )
 
 
 def names_method(root: Path) -> bool:
@@ -124,9 +144,14 @@ def names_method(root: Path) -> bool:
 
 def check_command(root: Path) -> str:
     """The command behind the binding's ``check`` entry point, as its table names it."""
-    text = (root / BINDING).read_text(encoding="utf-8", errors="replace")
-    match = ENTRY_POINT_ROW.search(text)
-    return f"`{match.group(1)}`" if match else CHECK_FALLBACK
+    command = gatelib.entry_point(root, "check")
+    return f"`{command}`" if command else CHECK_FALLBACK
+
+
+def merge_command(root: Path, branch: str) -> str:
+    """The binding's ``merge`` entry point for ``branch``, as its table names the command."""
+    command = gatelib.entry_point(root, "merge")
+    return f"`{command} {branch}`" if command else f"{MERGE_FALLBACK} with `{branch}`"
 
 
 def records_missing(root: Path) -> str | None:
@@ -220,8 +245,13 @@ def unsplit_spec(root: Path) -> Step | None:
     return None
 
 
-def has_conjecture(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> bool:
-    return preflight.conjecture_failure(ticket, root, gh) is None
+def unstated(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> str | None:
+    """What `/ratchet:conjecture` has still to write on the ticket; ``None`` when nothing."""
+    if preflight.conjecture_failure(ticket, root, gh) is not None:
+        return "states no conjecture"
+    if preflight.operability_failure(ticket, root, gh) is not None:
+        return "does not say how it is operated"
+    return None
 
 
 def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) -> Step | None:
@@ -306,12 +336,39 @@ def own_branch(ticket: preflight.Ticket) -> str:
     return preflight.branch_of(ticket, preflight.slug_of(ticket.title, ticket.number))
 
 
-def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
-    """The step among the tickets: write one, give one its conjecture, or build one."""
+def agent_ready(root: Path, gh: preflight.Runner | None) -> tuple[list[preflight.Ticket], bool]:
+    """The open agent-ready tickets, and whether they are local files or the tracker's."""
     tickets = tracker_tickets(root, gh) if gh is not None else None
-    local = tickets is None
-    if tickets is None:
-        tickets = local_tickets(root)
+    return (local_tickets(root), True) if tickets is None else (tickets, False)
+
+
+def build_step(ready: list[preflight.Ticket], queue: int, checkout: Checkout) -> Step | None:
+    """The build among the tickets that state a conjecture: the drain for several, else the one."""
+    if not ready:
+        return None
+    if queue > 1:
+        return Step(
+            FEATURE,
+            f"{queue} agent-ready tickets state a conjecture: with no ticket named the command"
+            " builds them at once, each in a work tree of its own, and merges what the merge judge"
+            f" passes; {FEATURE} <ticket> builds one, and {POTETO} <ticket> when you stay at the"
+            " keyboard",
+            "the drain's one report: what merged, what waits for you and why, every assumption",
+            "drain",
+        )
+    ticket = ready[0]
+    return Step(
+        f"{FEATURE} {ticket.ref}",
+        f'ticket {ticket.ref} "{ticket.title}" is agent-ready with a conjecture;'
+        f" {POTETO} {ticket.ref} instead when you stay at the keyboard",
+        review(checkout),
+        "build",
+    )
+
+
+def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
+    """The step among the tickets: write one, give one its conjecture, or build them."""
+    tickets, local = agent_ready(root, gh)
     if not tickets:
         return (triage_step(root) or unsplit_spec(root) if local else None) or Step(
             SPEC,
@@ -332,6 +389,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             "specify",
         )
     runs = blocked_runs(root, checkout.default_branch)
+    stated = [t for t in tickets if not stalled(t, runs) and not unstated(t, root, offline_gh)]
     tickets = [t for t in unblocked if not stalled(t, runs)]
     if not tickets:
         held = unblocked[0]
@@ -344,19 +402,13 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             f"{FEATURE} {held.ref}, or {POTETO} {held.ref} now to make the edits as the guard asks",
             "blocked-run",
         )
-    for ticket in tickets:
-        if has_conjecture(ticket, root, offline_gh):
-            return Step(
-                f"{FEATURE} {ticket.ref}",
-                f'ticket {ticket.ref} "{ticket.title}" is agent-ready with a conjecture;'
-                f" {POTETO} {ticket.ref} instead when you stay at the keyboard",
-                review(checkout),
-                "build",
-            )
     first = tickets[0]
-    return Step(
+    # Why: a ticket blocked only by another in the queue is built by the same drain (ADR 0023).
+    ready = [ticket for ticket in tickets if ticket in stated]
+    return build_step(ready, len(stated), checkout) or Step(
         f"{CONJECTURE} {first.ref}",
-        f'ticket {first.ref} "{first.title}" is agent-ready but states no conjecture',
+        f'ticket {first.ref} "{first.title}" is agent-ready but'
+        f" {unstated(first, root, offline_gh)}",
         f"{FEATURE} {first.ref}",
         "conjecture",
     )
@@ -369,9 +421,11 @@ def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
     """On a working branch with a clean tree: wait for the review, or open the pull request."""
     if not checkout.forge:
         return Step(
-            f"merge `{checkout.branch}` once `check` is green:"
-            f" `git switch {checkout.default_branch} && git merge --no-ff {checkout.branch}`",
-            f"branch `{checkout.branch}` is clean and there is no forge; its change description"
+            merge_command(checkout.root, checkout.branch or ""),
+            f"branch `{checkout.branch}` is clean and there is no forge: the entry point merges"
+            " it when the merge judge and `check` pass it, and prints why when the merge is"
+            f" yours (then: `git switch {checkout.default_branch} && git merge --no-ff"
+            f" {checkout.branch}`); its change description"
             f" is {CHANGES}/{checkout.branch.replace('/', '-') if checkout.branch else ''}.md",
             NEXT,
             "merge",
@@ -412,7 +466,7 @@ def stale_plugin_lines(agents: Path) -> list[str]:
 
 
 def setup_step(root: Path) -> Step | None:
-    """The step before adoption, or ``None`` once the repository is adopted."""
+    """The step before the work: adoption, then the commit hooks; ``None`` once both hold."""
     if not names_method(root):
         return Step(INIT, "AGENTS.md does not name the method", TRACKER_SETUP, "init")
     agents = root / "AGENTS.md"
@@ -439,7 +493,8 @@ def setup_step(root: Path) -> Step | None:
         )
     if not (root / BINDING).is_file():
         return Step(ADOPT, f"{BINDING} is missing, so no gate is bound", GRILL, "adopt")
-    return None
+    hooks = hooks_installed.check(root)
+    return None if hooks is None else Step(hooks.fix, hooks.detail, NEXT, "hooks")
 
 
 def decide(root: Path, gh: preflight.Runner | None) -> Step:
@@ -465,19 +520,41 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
     return ticket_step(root, gh, checkout)
 
 
+def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
+    """The upgrade, offered when the plugin in use is newer than the one the binding pins.
+
+    Why: a newer plugin is green at every tier and says so in each tier's output, which an owner
+    rarely reads; the route is what the owner reads (ADR 0027).
+    """
+    pin = plugin_pin.pinned(gatelib.read_text(root / BINDING))
+    if pin is None or plugin_pin.relation(pin, plugin) is not plugin_pin.Relation.NEWER:
+        return []
+    return [
+        (
+            f"the Ratchet plugin in use is {plugin_pin.version_of(plugin)}, newer than the"
+            f" {pin.version} the binding pins: run `python3 {plugin / 'scripts/upgrade.py'}`, then"
+            " change the binding's pin line"
+        )
+    ]
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
     parser.add_argument("--offline", action="store_true", help="read no tracker")
     parser.add_argument("--json", action="store_true", dest="as_json")
     options = parser.parse_args(argv[1:])
-    step = decide(Path(options.root).resolve(), None if options.offline else preflight.run_gh)
+    root = Path(options.root).resolve()
+    step = decide(root, None if options.offline else preflight.run_gh)
+    also = pin_proposals(root) + questions.proposals(root)
     if options.as_json:
-        print(json.dumps(asdict(step), indent=2))
+        print(json.dumps({**asdict(step), "also": also}, indent=2))
     else:
         print(f"next: {step.command}")
         print(f"why: {step.why}")
         print(f"then: {step.then}")
+        for line in also:
+            print(f"also: {line}")
     return 0
 
 

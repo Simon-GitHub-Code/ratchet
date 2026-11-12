@@ -12,6 +12,7 @@ from ratchet_guards import hook
 from ratchet_guards.manifest import (
     EMPTY,
     MANIFEST_PATH,
+    EditRule,
     Group,
     Scope,
     plugin_group,
@@ -183,7 +184,7 @@ def test_the_plugin_group_is_prepended_and_locked() -> None:
             "~/.gemini/config/hooks.json",
             "~/.gemini/config/config.json",
         ),
-        locked=True,
+        EditRule.DENY,
     )
     assert with_plugin_group(EMPTY, PLUGIN).groups == (group,)
     assert with_plugin_group(MANIFEST, PLUGIN).groups == (group, *MANIFEST.groups)

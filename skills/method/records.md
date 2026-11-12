@@ -26,6 +26,8 @@ An unlisted capability is out by default. A listed exclusion needs a document ch
 
 The format is domain-modeling's `GLOSSARY-FORMAT.md`: one concept, one name, the synonyms under _Avoid_. The method adds enforcement where the stack allows it: a fitness test scans every identifier defined on the absolute and declared paths, splits at word boundaries, and fails on any _Avoid_ term as consecutive whole words. The check cannot see meaning, so the whole word is banned; a collision is allow-listed with a `Why:` and an ADR.
 
+An agent adds to the glossary and does not change it. A new term with its _Avoid_ list, and a new _Avoid_ item on an existing term, pass the guard; a changed definition, a renamed or removed term and a shortened _Avoid_ list ask the owner ([guards.md](guards.md), ADR 0014). The check reads lines, not meaning: before you add a term, read the glossary for the concept under another word, and add the word to that term's _Avoid_ list instead of defining it twice.
+
 ## Architecture decision records: `docs/adr/NNNN-<slug>.md`
 
 The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for when to write one (hard to reverse, surprising without context, a real trade-off) holds. The method adds:
@@ -34,6 +36,7 @@ The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for whe
 - Numbering without gaps. The title states the decision as a sentence.
 - A change that contradicts an ADR needs the superseding ADR first: `status: superseded` with `superseded-by: NNNN`, or domain-modeling's `superseded by ADR-NNNN`.
 - Every machine-enforced rule cites its ADR: a policy constant in a fitness test carries an `ADR NNNN` comment, and a fitness test checks the number exists.
+- An agent writes a new ADR, under the next free number, and edits no ADR the default branch holds. The guard passes a new record and asks the owner for an edit of an existing one, for a record that speaks of superseding another, and for one carrying a `Relaxes:` line ([ratchet.md](ratchet.md)). A new ADR that contradicts an old one without superseding it passes the guard and is a finding for the review, so read the titles in `docs/adr/` first.
 - A rejection is a decision too. The title states the negative; the body gives the scope, the claims checked against evidence, the experiment run through the gates with its numbers, the revisit triggers, and the seam that keeps the option cheap. Link the document `mattpocock-skills:research` wrote.
 
 ## Product and design: `PRODUCT.md`, `DESIGN.md`
@@ -42,14 +45,44 @@ The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for whe
 
 ## Feature input: a tracker ticket
 
-A feature starts as the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` writes: on the tracker (`gh issue view <n>`), or a local file under `.scratch/<slug>/issues/` where there is no tracker. Its sections are those skills' (What to build, Acceptance criteria, Blocked by; or Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope). The method adds one section and reads one label:
+A feature starts as the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` writes: on the tracker (`gh issue view <n>`), or a local file under `.scratch/<slug>/issues/` where there is no tracker. Its sections are those skills' (What to build, Acceptance criteria, Blocked by; or Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope). The method adds two sections and reads one label:
 
 ```markdown
 ## Conjecture
 The one approach expected to work, stated so it can be shown wrong: what would refute it. The alternatives considered and the criticism that kills each.
+
+## Operability
+- Flag: the flag the behaviour ships behind
+- Signal: the span, metric or log that shows it working
+- Load: the route or input the load gates gain
+- Security: the surface it adds: routes, inputs, who may call
 ```
 
-The agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The skill the owner typed applies it; the guard asks when an agent tries to. `/ratchet:conjecture <ticket>` drafts the section from the conversation that produced the ticket and writes it after one dialog. `scripts/feature_preflight.py` refuses a ticket that is closed, has no stated conjecture or lacks the label, and names the skill that produces each missing piece; `/ratchet:feature <ticket>` runs it before any agent exists, and the pipeline runs it again as its first stage. The spec role writes `docs/features/<slug>/spec.md` from the ticket.
+A line of `## Operability` is asked when the binding declares an application type its question is asked of (`application-types.toml`), so a library's ticket carries none; a line that does not apply says `none` and why. A ticket inherits both sections from its parent spec.
+
+The agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The skill the owner typed applies it; the guard asks when an agent tries to, once for a call, so one call that gives every ticket of a spec the label is one ask, which names each. `/ratchet:conjecture <ticket>` drafts both sections from the conversation that produced the ticket, writes it and prints it; it asks only where the record leaves two different products open. `scripts/feature_preflight.py` refuses a ticket that is closed, has no stated conjecture, leaves out an operability line it is asked or lacks the label, and names the skill that produces each missing piece; `/ratchet:feature <ticket>` runs it before any agent exists, and the pipeline runs it again as its first stage. The spec role writes `docs/features/<slug>/spec.md` from the ticket, starting from its `## Operability` lines, and adds what the ticket need not carry: the telemetry that shows each criterion working in production, the feature flag that gates the new behaviour (or why there is none), and the assumptions it made where the ticket was silent, each with its refuter.
+
+The owner's answers to a run's open questions are a section of the ticket too, written by the skill that asked:
+
+```markdown
+## Answers
+- Does an expired link say so, or send the visitor home? A page that says it expired.
+```
+
+The spec role reads each line as decided. A changed ticket is also what releases one the drain parked.
+
+## Questions and standing answers
+
+A skill asks the owner for a choice that shapes the product (`direction`), one that cannot be taken back (`irreversible`), or a tooling preference the owner said they want (`tooling`), and for nothing it would do anyway (ADR 0022). Each answer is one line of `.ratchet/questions.tsv`, written by `scripts/questions.py record`: the date, the skill, the question's key, its kind and whether the recommended option was taken. The file is one clone's and no commit carries it. A key is stable, so the same question asked again has the same key (`adopt.tools`); a question about one ticket carries its slug (`feature.<slug>.1`).
+
+When a key's last three answers all took the recommendation the route prints an `also:` line that offers a standing answer. The owner says yes, and the key goes into `AGENTS.md`, a guard path, so the edit asks them once:
+
+```markdown
+## Standing answers
+- `adopt.tools`: accept the proposed tools.
+```
+
+A skill that finds a question's key there does not ask it, takes the answer, and says so in its hand-over. A `direction` key is never proposed.
 
 ## Dispute: `docs/disputes/NNNN-<slug>.md`
 
@@ -57,4 +90,8 @@ The template and lifecycle are in [guards.md](guards.md).
 
 ## Pull request
 
-The body follows the repository's template at the path the binding names. `mattpocock-skills:pr` supplies Summary, Evidence and Merge Danger; the method adds Conjecture (the claim, its refuter, and for a fix the alternative explanation and the check that eliminated it), Criticism, Guard paths, Decisions and Gates, and the conformance gate checks the template carries them. Every section is filled: an empty section is an open criticism of the pull request.
+The body follows the repository's template at the path the binding names. `mattpocock-skills:pr` supplies Summary, Evidence and Merge Danger; the method adds Conjecture (the claim, its refuter, the assumptions the spec made where the ticket was silent, and for a fix the alternative explanation and the check that eliminated it), Operability (the flag and its default, the signals added, what the security and load gates ran), Criticism, Guard paths, Decisions (each ADR and each glossary term or _Avoid_ item the change added, as `guard-diff` lists them under `additions:`, with new dependencies and why) and Gates, and the conformance gate checks the template carries them. Every section is filled: an empty section is an open criticism of the pull request.
+
+## Verdict record: `docs/features/<slug>/verdict.json`
+
+What the pipeline concluded, for the merge judge to read: the slug, the ticket, the forced verdict and what forced it, each unresolved blocker or major finding by title, each open question, each assumption, and the tree the review saw. The orchestrator writes it from the result's `verdictRecord` with the `merge-ready` entry point's `record` form, which adds the tree, and commits it alone, as the last commit of the change. The tree is the head's with the record set aside, so the record cannot name itself and a commit after it shows. An agent writes this record and an agent can forge it; [guards.md](guards.md) says what the judge reads that does not depend on it.

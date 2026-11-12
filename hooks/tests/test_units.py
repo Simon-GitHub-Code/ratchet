@@ -7,9 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from ratchet_guards import bash, gh, git
+from ratchet_guards import bash, gh, git, gitcall
 from ratchet_guards.context import Context
-from ratchet_guards.manifest import Group, ManifestError, Scope, parse
+from ratchet_guards.manifest import (
+    DoorRule,
+    EditRule,
+    Group,
+    ManifestError,
+    Scope,
+    parse,
+    with_plugin_group,
+)
 from ratchet_guards.options import NO_VALUES, Spec, scan
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.shell import HEREDOC_MARK, PLACEHOLDER, SimpleCommand, lex, unquote
@@ -30,6 +38,10 @@ from tests.support import (
     verdicts,
 )
 
+DEFAULT_REF_BECAUSE = (
+    "moves, deletes or re-points the default branch, or a ref or setting it is read through"
+)
+
 
 def test_the_rule_catalogue_is_pinned() -> None:
     catalogue = {rule: (spec.decision.name, spec.because) for rule, spec in RULES.items()}
@@ -45,10 +57,18 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "hooks-path": ("DENY", "redirects git hooks or overrides git config"),
         "force-push": ("DENY", "force-pushes, which rewrites published history"),
         "push-main": ("DENY", "pushes to main; changes reach main through a reviewed PR"),
-        "reset-main": ("DENY", "hard-resets main"),
+        "reset-main": ("DENY", "moves main back or sideways with a reset"),
+        "default-ref": ("DENY", DEFAULT_REF_BECAUSE),
         "amend-pushed": ("DENY", "amends a commit that is already pushed"),
         "rewrite-history": ("DENY", "rewrites history"),
-        "merge-pr": ("ASK", "merges a pull request; only the owner merges"),
+        "merge-pr": (
+            "ASK",
+            "merges a pull request; the merge job or the owner merges one",
+        ),
+        "merge-default": (
+            "ASK",
+            "merges into the default branch; the `merge` entry point or the owner does",
+        ),
         "branch-protection": ("DENY", "reads or changes branch protection or rulesets"),
         "repo-settings": ("DENY", "changes repository, secret, variable or workflow settings"),
         "labels": ("DENY", "manages labels"),
@@ -157,15 +177,18 @@ def test_comments_start_only_at_a_word() -> None:
 def test_redirects_and_file_descriptors() -> None:
     commands = parse_shell("cmd 2>err >out 2>&1 >&- <in &>both 1>>more <<<here 12>fd x").commands
     writes = ("err", "out", "both", "more", "fd")
-    assert commands == (SimpleCommand(("cmd", "x"), writes, herestrings=("here",)),)
+    assert commands == (SimpleCommand(("cmd", "x"), writes, herestrings=("here",), then="\n"),)
     assert parse_shell("echo 1&& ls").commands[0].words == ("echo", "1")
     assert words_of("a ) b") == ["a", "b"]
     assert parse_shell("a | b |& c; d").commands == (
-        SimpleCommand(("a",), piped=True),
-        SimpleCommand(("b",), piped=True),
-        SimpleCommand(("c",)),
-        SimpleCommand(("d",)),
+        SimpleCommand(("a",), piped=True, then="|"),
+        SimpleCommand(("b",), piped=True, then="|&"),
+        SimpleCommand(("c",), then=";"),
+        SimpleCommand(("d",), then="\n"),
     )
+    ends = [command.then for command in parse_shell("a && b || c & (d) ; e").commands]
+    assert ends == ["&&", "||", "&", ")", "\n"]
+    assert [c.then for c in parse_shell("f() { g; }").commands] == ["(", ";", "\n"]
 
 
 def test_unquote_falls_back_to_dropping_quotes() -> None:
@@ -198,7 +221,7 @@ def test_exclude_carves_paths_out_of_a_group() -> None:
 
 
 def test_a_group_with_no_paths_yet_matches_nothing() -> None:
-    # Why: the adopt template ships `paths = []` behind `# bind:` comments until step 8 fills
+    # Why: the adopt template ships `paths = []` behind `# bind:` comments until adopt fills
     # them; a manifest that failed to parse would turn every tool call into an ask meanwhile.
     unbound = parse(GOOD.replace('paths = ["a/**", "b.txt", "~/.x/*.json"]', "paths = []"))
     assert unbound.groups[0].patterns == ()
@@ -222,9 +245,21 @@ def test_edit_decides_whether_a_group_is_locked() -> None:
     assert asked.groups[0].locked is False
     assert parse(GOOD).groups[0].locked is False
     with pytest.raises(
-        ManifestError, match="group 'edit' must be one of \\['ask', 'deny'\\], not 'never'"
+        ManifestError,
+        match="group 'edit' must be one of \\['append', 'ask', 'deny'\\], not 'never'",
     ):
         parse(GOOD.replace('reason = "because"', 'reason = "because"\nedit = "never"'))
+    with pytest.raises(ManifestError, match=r"group 'edit' must be one of .*, not True"):
+        parse(GOOD.replace('reason = "because"', 'reason = "because"\nedit = true'))
+
+
+def test_edit_append_marks_a_group_additive_and_not_locked() -> None:
+    group = parse(GOOD.replace('reason = "because"', 'reason = "because"\nedit = "append"')).groups[
+        0
+    ]
+    assert (group.additive, group.locked, group.edit) == (True, False, EditRule.APPEND)
+    assert parse(GOOD).groups[0].additive is False
+    assert [group.name for group in MANIFEST.groups if group.additive] == ["records"]
 
 
 def test_manifest_matches_repository_and_home_patterns_separately() -> None:
@@ -293,6 +328,66 @@ def test_malformed_manifests_are_rejected(text: str, message: str) -> None:
         parse(text)
 
 
+DOORS = """
+[[door]]
+name = "one-way"
+reason = "A migration cannot be taken back."
+paths = ["migrations/**", "infra/*.tf"]
+
+[[door]]
+name = "stored-data"
+reason = "Old data must still load."
+paths = ["tests/data/**"]
+on = "rewrite"
+
+[[door]]
+name = "contracts"
+reason = "A consumer depends on every line."
+paths = []
+on = "removal"
+"""
+
+
+def test_one_way_doors_are_read_beside_the_groups_and_guard_nothing() -> None:
+    manifest = parse(GOOD + DOORS)
+    assert [(door.name, door.on) for door in manifest.doors] == [
+        ("one-way", DoorRule.CHANGE),
+        ("stored-data", DoorRule.REWRITE),
+        ("contracts", DoorRule.REMOVAL),
+    ]
+    assert [door.name for door in manifest.doors_of("migrations/0002_more.sql")] == ["one-way"]
+    assert manifest.doors_of("infra/main.tf")[0].reason == "A migration cannot be taken back."
+    assert manifest.doors_of("src/app.py") == []
+    assert manifest.doors_of("tests/contract/api.json") == [], "a door with no paths yet"
+    assert manifest.group_of("migrations/0002_more.sql") is None, "a door is no guard group"
+    assert parse(GOOD).doors == ()
+    assert with_plugin_group(manifest, Path("/plugin")).doors == manifest.doors
+
+
+@pytest.mark.parametrize(
+    ("door", "message"),
+    [
+        ('door = "migrations"', "'door' must be an array of tables; write [[door]]"),
+        ("door = [1]", "every [[door]] must be a table"),
+        ('[[door]]\nname = "d"\nreason = "r"', "door 'paths' must be a list"),
+        ('[[door]]\nname = "d"\npaths = []', "door 'reason' must be a non-empty string"),
+        ('[[door]]\nreason = "r"\npaths = []', "door 'name' must be a non-empty string"),
+        (
+            '[[door]]\nname = "d"\nreason = "r"\npaths = []\non = "never"',
+            "door 'on' must be one of ['change', 'removal', 'rewrite'], not 'never'",
+        ),
+        (
+            '[[door]]\nname = "d"\nreason = "r"\npaths = ["/abs"]',
+            "pattern '/abs' must be a non-empty relative glob without '..'",
+        ),
+    ],
+)
+def test_malformed_doors_are_rejected(door: str, message: str) -> None:
+    text = f"{door}\n{GOOD}" if door.startswith("door") else f"{GOOD}\n{door}\n"
+    with pytest.raises(ManifestError, match=f"^{re.escape(message)}"):
+        parse(text)
+
+
 def test_the_fixture_manifest_guards_the_required_paths() -> None:
     for path in [
         "config/lint.toml",
@@ -315,6 +410,23 @@ def test_locator_prefers_a_home_hit_and_falls_back_to_the_checkout() -> None:
     assert hit == Hit("CLAUDE.md", MANIFEST.groups[-1])
     assert locator.classify(HOME / "notes.txt", destructive=True) is None
     assert locator.classify(Path("/nowhere/CLAUDE.md"), destructive=False) is None
+
+
+def test_locator_judges_a_path_by_the_manifest_of_its_own_checkout() -> None:
+    other = Path("/other")
+    mine = parse('[[group]]\nname = "mine"\nreason = "r"\npaths = ["only-here.txt"]\n')
+    filesystem = FakeFilesystem(guarded=(ROOT, other), manifests={other: mine})
+    locator = Locator(MANIFEST, filesystem)
+    hit = locator.classify(other / "only-here.txt", destructive=False)
+    assert hit is not None
+    assert (hit.path, hit.group.name) == ("only-here.txt", "mine")
+    assert locator.classify(other / "CLAUDE.md", destructive=False) is None
+    assert locator.classify(other, destructive=True) is not None
+    assert locator.classify(ROOT / "only-here.txt", destructive=False) is None
+    session_hit = locator.classify(ROOT / "CLAUDE.md", destructive=False)
+    assert session_hit is not None
+    assert session_hit.group.name == "decisions"
+    assert locator.classify(UNGUARDED / "CLAUDE.md", destructive=False) is None
 
 
 def test_locator_skips_empty_words_and_expands_globs() -> None:
@@ -364,32 +476,80 @@ def test_writers() -> None:
 
 
 def test_git_invocation_parses_global_options() -> None:
-    call = git.invocation(
+    call = gitcall.invocation(
         ["git", "-C", "sub", "-c", "a=b", "--no-pager", "--git-dir=x", "log", "-1"], ROOT
     )
-    assert call == git.Invocation(ROOT / "sub", ("a=b",), "log", ("-1",))
-    assert git.invocation(["git", "-C"], ROOT) == git.Invocation(ROOT, (), "", ())
-    assert git.invocation(["git"], ROOT).subcommand == ""
+    assert call == gitcall.Invocation(ROOT / "sub", ("a=b",), "log", ("-1",), redirected=True)
+    assert not gitcall.invocation(["git", "-C", "sub", "--no-pager", "log"], ROOT).redirected
+    assert gitcall.invocation(["git", "-C"], ROOT) == gitcall.Invocation(ROOT, (), "", ())
+    assert gitcall.invocation(["git"], ROOT).subcommand == ""
+
+
+SURE = True
+MAYBE = False
+ANYWHERE = (frozenset({"main", "master"}), MAYBE)
 
 
 @pytest.mark.parametrize(
-    ("words", "branch"),
+    ("words", "expected"),
     [
-        (["git", "switch", "main"], "main"),
-        (["git", "switch", "-c", "x"], "x"),
-        (["git", "switch", "--create", "y"], "y"),
-        (["git", "checkout", "-b", "z", "origin/main"], "z"),
-        (["git", "checkout", "-B", "w"], "w"),
-        (["git", "switch", "-C", "v"], "v"),
-        (["git", "switch", "--force-create", "u"], "u"),
-        (["git", "switch", "main", "-c", "topic"], "topic"),
+        (["git", "switch", "main"], ({"main"}, SURE)),
+        (["git", "switch", "-c", "x"], ({"x"}, SURE)),
+        (["git", "switch", "--create", "y"], ({"y"}, SURE)),
+        (["git", "switch", "--creat", "y"], ({"y"}, SURE)),
+        (["git", "checkout", "-b", "z", "origin/main"], ({"z"}, SURE)),
+        (["git", "checkout", "-B", "w"], ({"w"}, SURE)),
+        (["git", "switch", "-C", "v"], ({"v"}, SURE)),
+        (["git", "switch", "--force-create", "u"], ({"u"}, SURE)),
+        (["git", "switch", "--orphan", "t"], ({"t"}, SURE)),
+        (["git", "switch", "main", "-c", "topic"], ({"topic"}, SURE)),
+        (["git", "switch", "-f", "feat/x"], ({"feat/x"}, SURE)),
+        (["git", "checkout", "feat/x"], ({"feat/x"}, SURE)),
+        (["git", "checkout", "main"], ({"main"}, SURE)),
+        (["git", "checkout", "README.md"], ({"README.md"}, MAYBE)),
+        (["git", "checkout", "origin/main"], ({"origin/main"}, MAYBE)),
+        (["git", "checkout", "unknown"], ({"unknown"}, MAYBE)),
+        (["git", "-C", "sub", "switch", "feat/x"], ({"feat/x"}, MAYBE)),
+        (["git", "--git-dir=x", "switch", "feat/x"], ({"feat/x"}, MAYBE)),
+        (["git", "--work-tree", "x", "switch", "-c", "feat/x"], ({"feat/x"}, MAYBE)),
+        (["git", "-C", "sub", "symbolic-ref", "HEAD", "refs/heads/x"], ({"x"}, MAYBE)),
+        (["git", "switch", "-"], ANYWHERE),
+        (["git", "checkout", "-"], ANYWHERE),
+        (["git", "switch", "@{-1}"], ANYWHERE),
+        (["git", "checkout", "@{-2}"], ANYWHERE),
+        (["git", "switch", "-t", "origin/main"], ANYWHERE),
+        (["git", "checkout", "--track", "origin/master"], ANYWHERE),
+        (["git", "switch", "--tr", "origin/main"], ANYWHERE),
+        (["git", "bisect", "reset", "main"], ANYWHERE),
+        (["git", "bisect", "start"], ANYWHERE),
+        (["git", "symbolic-ref", "HEAD", "refs/heads/x"], ({"x"}, SURE)),
+        (["git", "symbolic-ref", "-m", "why", "HEAD", "refs/heads/y"], ({"y"}, SURE)),
+        (["git", "symbolic-ref", "HEAD"], None),
+        (["git", "symbolic-ref", "--short", "HEAD"], None),
+        (["git", "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/x"], None),
+        (["git", "symbolic-ref"], None),
         (["git", "checkout", "--", "file"], None),
+        (["git", "checkout", "main", "--", "file"], None),
         (["git", "checkout"], None),
+        (["git", "switch", "--detach", "main"], None),
+        (["git", "switch", "-d", "main"], None),
+        (["git", "checkout", "--det", "main"], None),
         (["git", "status"], None),
     ],
 )
-def test_switched_branch(words: list[str], branch: str | None) -> None:
-    assert git.switched_branch(words, ROOT) == branch
+def test_where_a_command_moves_head(
+    words: list[str], expected: tuple[set[str], bool] | None
+) -> None:
+    move = git.switch(words, Context(ROOT), make_guard())
+    assert (None if move is None else (move.branches, move.certain)) == expected
+
+
+@pytest.mark.parametrize("name", ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "PATH", "CDPATH"])
+def test_a_switch_is_not_certain_under_a_variable_that_redirects_it(name: str) -> None:
+    context = Context(ROOT).exporting([name])
+    move = git.switch(["git", "switch", "feat/x"], context, make_guard())
+    assert move == git.Switch(frozenset({"feat/x"}), certain=False)
+    assert git.switch(["git", "switch", "feat/x"], Context(ROOT).exporting(["FOO"]), make_guard())
 
 
 def test_details_name_the_offending_command() -> None:
@@ -402,6 +562,7 @@ def test_details_name_the_offending_command() -> None:
         "gh api DELETE repos/o/r/actions/runs/1"
     ]
     assert details("SKIP=x git commit") == ["SKIP=x"]
+    assert details("RATCHET_HOOK_PROBE=x git commit") == ["RATCHET_HOOK_PROBE=x"]
     assert details("git commit --no-verify") == ["git commit --no-verify"]
     assert details("git commit -n -m x") == ["git commit -n"]
     assert details("git push origin main") == ["git push origin main"]

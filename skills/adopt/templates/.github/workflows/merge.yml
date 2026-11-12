@@ -1,0 +1,108 @@
+name: merge
+# Why: ADR 0021 of the ratchet plugin. A pull request merges itself when `ci` is green on it and
+# the merge judge finds nothing the owner must see; everything else gets one comment saying why.
+# `workflow_run` runs this file as the default branch holds it, with the default branch checked
+# out, so a pull request cannot change the judge, the manifest it reads or this job. The job never
+# checks out or runs anything a pull request holds: it fetches each head commit and reads it.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+permissions:
+  contents: read
+# Why: one merge at a time, each judged against the default branch the last one left. A run in
+# flight finishes; of the runs waiting behind it GitHub keeps the newest and cancels the rest. A
+# cancelled run loses nothing: every run judges every pull request whose `ci` is green.
+concurrency:
+  group: merge
+  cancel-in-progress: false
+env:
+  RATCHET_PLUGIN: ${{ github.workspace }}/ratchet
+jobs:
+  merge:
+    # Why: only a green `ci` run of this repository's own `ci.yml`, on a pull request from a
+    # branch of this repository. A fork's pull request is the owner's to merge.
+    if: >-
+      github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.path == '.github/workflows/ci.yml'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { fetch-depth: 0 }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit the binding pins; adopt fills it
+      # Why: `sha` makes the forge refuse the merge when the branch moved after the judge read it.
+      # A merge commit, never a squash: the route reads a finished feature from one. The token's
+      # push starts no workflow, so tier 2 on the default branch is started here. The default
+      # branch is fetched again before each judgement, so a pull request behind what the one
+      # before it merged is told so. Which runs count is `forge_runs.py`'s to say (ADR 0024): a
+      # `ci` run counts for a pull request only when it tested that one against the default
+      # branch, and a `deep` run only on a commit of the default branch. It also says which
+      # reasons a run does not count are the owner's, and the job writes those as the same
+      # comment; a `ci` that is red or still running is the pull request's own checks' to say.
+      - name: Judge every green pull request, say what was found, merge what passed
+        run: |
+          fetch() { git fetch --no-tags -q origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" "$@"; }
+          runs() { gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$1/runs" -f per_page=100 "${@:2}" || true; }
+          counted() { python3 "$RATCHET_PLUGIN/scripts/forge_runs.py" "$@" --repository "$GITHUB_REPOSITORY"; }
+          comment() {
+            id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$1/comments" --paginate \
+              --jq '.[] | select(.body | startswith("<!-- ratchet:merge -->")) | .id' | head -n 1)"
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F "body=@$2" --silent
+            else
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$1/comments" -F "body=@$2" --silent
+            fi
+          }
+          fetch
+          tier2="$(runs deep.yml -f "branch=$DEFAULT_BRANCH" -f status=completed | counted deep --tip "origin/$DEFAULT_BRANCH")"
+          gh pr list --state open --limit 100 --json number,headRefOid,headRefName,baseRefName,isCrossRepository \
+            --jq '.[] | select(.isCrossRepository | not) | "\(.number) \(.headRefOid) \(.headRefName) \(.baseRefName)"' > "$RUNNER_TEMP/open.txt"
+          failed=0; merged=0
+          while read -r number sha branch target; do
+            gh api -X GET "repos/$GITHUB_REPOSITORY/pulls" -f state=all -f "head=${GITHUB_REPOSITORY%%/*}:$branch" -f per_page=100 > "$RUNNER_TEMP/pulls.json" || true
+            gh api "repos/$GITHUB_REPOSITORY/issues/$number/events?per_page=100" --paginate > "$RUNNER_TEMP/events.json" || true
+            left="$RUNNER_TEMP/left-$number.md"
+            if ! ci="$(runs ci.yml -f "head_sha=$sha" -f event=pull_request | counted ci --pulls "$RUNNER_TEMP/pulls.json" \
+              --events "$RUNNER_TEMP/events.json" --number "$number" --sha "$sha" --branch "$branch" --base "$DEFAULT_BRANCH" \
+              --report "$left")"; then
+              echo "#$number: $ci: left alone"
+              if [ -s "$left" ]; then comment "$number" "$left"; echo "#$number: merge: owner"; fi
+              continue
+            fi
+            fetch "$sha"
+            report="$RUNNER_TEMP/merge-$number.md"
+            verdict=owner
+            if python3 "$RATCHET_PLUGIN/scripts/merge_ready.py" --base "origin/$DEFAULT_BRANCH" --head "$sha" \
+              --target "$target" --current --tier2 "$tier2" --report "$report"; then verdict=agent; fi
+            if [ ! -s "$report" ]; then echo "#$number: the judge wrote no report"; failed=1; continue; fi
+            comment "$number" "$report"
+            echo "#$number: merge: $verdict"
+            if [ "$verdict" = agent ]; then
+              now="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '"\(.state) \(.head.sha) \(.base.ref)"' || true)"
+              if [ "$now" != "open $sha $DEFAULT_BRANCH" ]; then
+                echo "::error::#$number: its head or its base changed while it was judged"; failed=1
+              elif gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$number/merge" -f "sha=$sha" -f merge_method=merge --jq .message; then
+                merged=1
+                # Why: the name goes into a URL, so one with a character a URL reads is left.
+                case "$branch" in
+                  *[!A-Za-z0-9._/-]*) echo "branch $branch stays" ;;
+                  *) gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" --silent || echo "branch $branch stays" ;;
+                esac
+              else
+                echo "::error::#$number: the forge refused the merge"; failed=1
+              fi
+            fi
+          done < "$RUNNER_TEMP/open.txt"
+          if [ "$merged" = 1 ]; then gh workflow run deep.yml --ref "$DEFAULT_BRANCH"; fi
+          exit "$failed"

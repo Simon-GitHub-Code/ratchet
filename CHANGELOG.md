@@ -1,0 +1,126 @@
+# Changelog
+
+## 0.10.0
+
+A change the gates can judge now merges without the owner, and the owner is asked only what shapes the product or cannot be taken back. Ratchet ships the questions the method asks of each application type and no tool for any stack, and an adopted repository proves that each gate it binds can go red. The ADR numbers below are the plugin's own, in `docs/adr/`.
+
+### Licence
+
+- Ratchet is released under the MIT licence.
+
+### Merging
+
+- A pull request merges without the owner when its gates are green, the review approves, no blocker or major finding is open, no guard path changed other than by an addition to a record or a tightened threshold, it goes through no one-way door and tier 2 is not red on the default branch. Everything else waits for the owner, with the reasons written on the pull request. (ADR 0021)
+- `scripts/merge_ready.py`, behind the new `merge-ready` entry point, is the judge. It reads commits only and prints `merge: agent` or `merge: owner` with one reason per line.
+- On GitHub the new `merge.yml` workflow runs after `ci` from the default branch and merges each pull request the judge passes. With no forge, the new `merge <branch>` entry point judges the branch, runs `check` on the merge result and merges it. When the judge leaves the merge to the owner, it prints the command the owner types and the `check-deep` to run after it.
+- One-way doors are `[[door]]` tables in `guards/manifest.toml`, of three kinds: `change`, `rewrite` and `removal`. A door guards nothing; only the judge reads it.
+- The guard hook asks on `git merge`, `git cherry-pick` and a pull of another branch on the default branch, and refuses any command that moves, deletes or re-points the default branch's ref. (ADR 0016, ADR 0021)
+
+### Records and questions
+
+- An agent may add a glossary term, an `_Avoid_` item or a new ADR without asking. Changing or removing what the default branch holds still asks the owner. A guard group marked `edit = "append"` gets this treatment, and `guard-diff --fail-unless-additive` enforces it. The pull request lists every addition. (ADR 0014)
+- An open question is `direction` (the options are different products) or `irreversible` (a wrong guess loses data, fixes a public contract, spends money or weakens a security rule). Everything else is assumed, given a refuter and listed in the pull request. Questions are asked after the work, and each answer is written on the ticket under `## Answers`. (ADR 0013, ADR 0022)
+- `/ratchet:conjecture` no longer asks the owner to accept its draft.
+- `scripts/questions.py` logs each answer in `.ratchet/questions.tsv`. When a question's last three answers took the recommendation, the route proposes a standing answer for `AGENTS.md`. It never proposes one for a `direction` question. (ADR 0022)
+- Questions arrive as dialogs. The stance in every session and the `AGENTS.md` template tell agents to ask through the question tool, one decision per question with the recommended option first, whichever plugin's skill is asking. An existing adoption gets the stance from the plugin, and the conformance gate names the `## Asking the owner` section while `AGENTS.md` lacks it.
+
+### The drain
+
+- `/ratchet:feature` with no ticket builds every agent-ready ticket, each in its own git work tree, branch and pull request, at most three at once by default. Changes merge one at a time: a branch the default branch moved under is rebased and reviewed again. A ticket that cannot go on is parked and the rest continue. The run ends in one report of what merged, what waits and why, and every assumption made. `scripts/drain.py` holds the steps that need no judgement. (ADR 0023)
+- The fix loop also runs for a finding whose test the critic kept failing, whatever its severity: such a test leaves `check` red, and the review could only refuse it.
+- A change with no room left under the change-size ceiling stops early. The spec and implement roles report the gate's two numbers, and a change over two thirds of the ceiling ends `blocked` as too large, for the owner to split, before the stages that could only push it over.
+- The orchestrator commits everything an approved run left in the work tree, not only the files the roles listed, and names an added term without quoting its _Avoid_ words.
+- The change-size gate no longer counts the method's own records of a change (the spec and verdict record under `docs/features/`, tickets and change descriptions under `.scratch/`), which the pipeline writes after the review.
+
+### Gates
+
+- A gate with nothing to run is red on every stack. `none` is only for a property the project will never have. (ADR 0020)
+- `scripts/hooks_installed.py` runs the commit hooks git would run. The feature preflight, the route and the template `ratchet` recipe are red until a commit would run tier 0, and print the repair. The new `hooks-install` entry point (`scripts/hooks_install.py`) installs the repository's own hooks from an agent, under a global `core.hooksPath` too, with no change of git config; a change of git config stays the owner's one command. The probe waits two minutes for a hook, not 20 seconds, and a hook that has not finished says a busy machine is the usual cause. A `buildable` ticket in `drain.py plan` says when the checkout is not fit to build on. (ADR 0015, ADR 0026)
+- Every repository is asked about telemetry, feature flags, security testing and load testing, split across the tiers by cost. New rows include `feature flags declared`, `telemetry emitted`, `load smoke`, `configuration hardening`, `active security scan`, `load` and `telemetry arrives`. Flags are declared in `flags.toml`, checked by the shipped `scripts/flags.py`. (ADR 0012)
+- Three shipped gates work for any service, in any language: `with_service.py` boots it and is the `smoke` gate, `load_smoke.py` sends concurrent requests and judges errors only (`load-smoke`), and `telemetry_sink.py` is an OTLP/HTTP receiver that is green only when each required signal arrived (`telemetry-e2e`). (ADR 0012)
+- Every gate a repository binds to a tool of its own is shown to bite. `quality/bites.toml` holds a fault for each such gate, and an emptied collection for each gate that judges one. `scripts/project_bite.py` plants each fault in a scratch copy and requires the gate green without it and red with it. The tier 1 `bite` runs only when a change touches a gate; the tier 2 `bite-all` runs every bite. (ADR 0020)
+- A stryker survivor's identity now ends in its place inside its unit, and a register entry excuses one mutant. An entry in the old form is red and names the entries to paste. (ADR 0018)
+- New surface ships behind a flag or goes to the owner. The judge gives the reason `unflagged` when a change adds to a contract artefact or public-surface snapshot and declares no flag that is off, for the application types the flag question is asked of. (ADR 0025)
+- A question may require a proof by name. `application-types.toml` lists three (`outside-the-seam` for telemetry, `broken-flag-state` for flags, `erroring-route` for the load smoke), a `[[bite]]` claims one with `proof`, and conformance is red while a bound row lacks one. (ADR 0025)
+- `load_smoke.py` is red when every URL it requests is the readiness URL. A skeleton with no other route passes `--health-only`, and the smoke says so on every run.
+- `mutation_survivors.py` judges any mutation tool through `--tool NAME --mutants FILE`, one JSON record per mutant. mutmut and Stryker output is still read directly.
+- `coverage_groups.py` reads LCOV as well as Cobertura, and counts a Cobertura line once where a report repeats it under `<methods>`. A ratcheted group measured on such a report may read slightly lower on its next run.
+- The binding's `- Commit hooks:` line may name a hook mechanism other than the pre-commit framework. The probe of `hooks_installed.py` is still the proof.
+- A gate over the change runs through the new `scripts/changed.py`, which hands it the base and judges nothing on the adoption, the change whose base holds no binding; `bite --changed` proves nothing there, and in a scratch copy of the bite proof the change is the planted fault. `mutation_survivors.py` takes the status `unviable`, counts it apart and is red when no mutant was tested. `parallel.py` takes `--alone` for gates that judge elapsed time, `RATCHET_JOBS` caps the gates at once and the bite proof's scratch copies alike, and the runner and the bite proof end what a gate left running. The first scratch copy is set up alone. The drain ends any process whose program is a file of a work tree it removes, and prints its id: a service an agent started by hand is in no gate's process group.
+- A gate that requests the deliverable's routes from outside (interface conformance, the scans, the load smoke and the load test) boots it with every flag due for removal on: `flags.py --temporary` prints those keys, and the template's `flags_on` and `probed` hand them to the flag seam's override. `smoke`, the end-to-end suite and the off half of `flag-states` judge the defaults. A scan is fed the contract's routes and its bite plants the fault on one of them. Adopt names the bite each shipped service gate needs.
+- The guard asks once for a call that gives local tickets the agent-ready status, and names each: a command line or a patch that names the label and writes a ticket now asks, where a shell write passed unseen. `/ratchet:conjecture` writes an `## Operability` block (flag, signal, load, security surface) and the feature preflight refuses a ticket that leaves out a line its application types are asked. A line counts as unfilled only when it is blank, a bare `none`, the template's own words or nothing but `<...>` placeholders, so real text that quotes angle brackets passes, and the red says which of these it found. The fork test has one wording in `pipeline.md`, which the Spec role's prompt carries and the conjecture skill cites.
+- The Antigravity page names `RATCHET_PLUGIN` and the plugin root as the other five do, and every list of harnesses names all six. A service that exits before it answers now reports the command as it ran, where, for how long, and that it printed nothing when it did. A pinned image that fetches at run time is not pinned.
+- The weekly gates run: a new `weekly` entry point and `weekly.yml` workflow, where a red run opens one issue or comments on the open one.
+- The weekly issue holds the output of each red gate, read from the runner's log by the new `scripts/red_gates.py`, where it held the last 60 lines of the whole log, which the green gates' output could fill. A log it cannot read as a `parallel.py` log still gets those 60 lines.
+- A ceiling reports on a pull request and blocks on the default branch and nightly (`budget.py --over report`), and CI holds each gate's job to its tier's ceiling (`--tier`).
+- Local tiers and CI run the plugin at one commit. The binding's `- Ratchet plugin: <version> at <commit>` line is the pin, every workflow `ref` must equal it, and `scripts/plugin_pin.py` runs at the start of each tier. It is red when the plugin in use is older than the pin, or another commit of the same version. A newer plugin is green and says on every run that the tier judges by its gates and CI by the pinned one's, with the line to change; the route offers the upgrade, and the newer plugin's conformance gate is red while the repository lacks something it needs. (ADR 0027)
+- The conformance gate names a tier list the CI templates read and the `justfile` lacks: `tier1_gates`, `tier1_sharded`, `tier2_gates` or `tier2_sharded`, each with the template's line to paste. Without them the `shape` job fails with "does not contain variable".
+- `scripts/upgrade.py` reports an upgrade: what this plugin version needs that the repository lacks, file by file, the pin first, with the text to add and who may edit each file. It reads the conformance gate's rules and changes nothing.
+- The conformance gate says what to add. A missing entry point names the template's row, and the recipe when the `justfile` lacks it. A missing pin prints the line for the plugin in use. It now also names the `## Asking the owner` section of `AGENTS.md`, and in a `justfile` the `changed` wrapper, `RATCHET_JOBS`, `--alone`, the temporary-flags boot and `hooks-installed` at the top of `ratchet`.
+- Fuzz time follows the code. The template `fuzz` recipe takes `each` (seconds a target, 30) and `cap` (seconds in total, 600) in place of one fixed 600 second box, so tier 2 on a new project takes seconds. An adoption with `fuzz seconds="600"` keeps working; rebind it to the two parameters to get the saving.
+
+### Guard hardening
+
+- The hook reads a ref name, a repository and a sync the way git does. It refuses a push or fetch that deletes or re-points the default branch under any spelling git resolves, a tag named as a default branch, and a `git` aimed at another repository through `--git-dir`, `GIT_DIR` or their siblings. A sync on the default branch passes only when git resolves its source to the remote's default branch. (ADR 0024)
+- The merge workflow counts a `ci` run only when it tested this pull request against the default branch, and tier 2 only from runs on a commit of the default branch; `scripts/forge_runs.py` decides both. A pull request that was retargeted, or whose branch had a pull request against another base, is the owner's to merge.
+- The merge job writes its `merge: owner` comment on a pull request it leaves alone for a reason the owner must act on, where it wrote only a line in its log: a pull request from the same branch against another base, a base that was changed, a pull request against another branch, or a finished `ci` run that names none. A red or pending `ci` stays a log line, since the pull request's own checks say it. `forge_runs.py ci --report` decides which reasons are the owner's. (ADR 0024)
+- The judge gives the reason `file` when a guard, door or record path is a symbolic link or a submodule.
+- A glossary addition is refused when its term mixes scripts or looks like an existing term, or when the new text holds a setext underline or raw HTML.
+- The drain's queue directory is the user's own, mode 0700, and `clean` removes only registered work trees inside it.
+
+### Application types, no presets
+
+- A binding declares one or more of six application types (`service`, `web-ui`, `app`, `cli`, `job`, `library`) on a `- Application types:` line. `skills/method/application-types.toml` says which questions apply to each type. A row that does not apply says `none: not a <type>`. A row that applies names a tool, or `none` with a reason and an ADR that accepts the gap. A row is never dropped, and an empty Tool cell is red. (ADR 0017)
+- Tools are chosen at adoption, by the agent or by the owner when they have an opinion, and checked against their documentation.
+
+### Speed
+
+- The binding's Speed section states six concepts: Parallel, One pipeline, Shards, Cache, Affected only and Ceilings. Tools are named only as examples. (ADR 0019)
+- `scripts/parallel.py` runs a tier's gates at once, prints seconds per gate, appends timings to `.ratchet/timing.jsonl` and names every red gate. The template adds `check-fast`, which stops at the first red.
+- The feature preflight and the pipeline read the default branch from the checkout and the binding instead of assuming `main`.
+- The CI templates read the tier lists from the `justfile` and the shard count from the binding's `- Shards: N` line, and run the long gates as gate by shard. Adding runners is that one number. The per-tier ceilings in seconds still only fall. (ADR 0019)
+
+### Removed
+
+- The stack presets under `skills/adopt/presets/` (`python-uv` and `typescript-pnpm`). What they taught is kept as rules any recipe must keep, in `skills/method/tiers.md`. (ADR 0017)
+- The `guard-changes-present` job of the template `ci.yml`. It failed on every guard path, an added glossary term included; the merge judge now reports guard changes with reasons. (ADR 0021)
+- The binding row `every checker bites`. It is replaced by `every changed gate still bites` (`bite`, tier 1) and `every gate bites` (`bite-all`, tier 2).
+
+### Upgrading an 0.8 or 0.9 adoption
+
+Update the plugin to 0.10.0 first. Then run `python3 <plugin>/scripts/upgrade.py` in the repository. It changes nothing: it prints each item below that the repository lacks, file by file with the pin first, with the text or template lines to add and who may edit each file, and exits 1 while anything is missing. It reads the conformance gate's rules, so `just conformance` names the same items one line each. Neither names the items under "Worth doing, not checked", nor three items that another gate names. The mutation gate names a stryker register entry in the old form (step 12), the load smoke names a smoke that requests only the readiness URL (step 14), and the feature preflight names a ticket without its `## Operability` lines (step 17). In a repository whose runner is not `just`, the conformance gate reads no recipe, so the `justfile` parts of steps 1, 2, 7, 10, 13, 15 and 16 are yours to check against the template. Files in the manifest's `edit = "deny"` groups (`guards/**`, `.claude/settings.json`) are the owner's to edit by hand.
+
+An adoption made from a commit between two releases already carries some of these steps. Do only the steps whose items `upgrade.py` and the gates name; each item names its file, which maps it to a step below.
+
+1. In `docs/process/binding.md`, under `## Runner`, add the pin line the conformance gate prints for the plugin in use, `- Ratchet plugin: <version> at <commit>`. From now on that line is the one home of the plugin's version: every later step that needs the commit reads it there. An ADR 0001 that names an older version stays as it is: it is an accepted record of the adoption, and the pin line, not the ADR, says what the gates run. Add `plugin-pin` to the `justfile` from the template, as the first dependency of each tier. With Claude Code the `justfile` falls back to the marketplace clone, and when the plugin updates, the clone moves past the pin: the tiers stay green, say so on every run, and print the line to change (ADR 0027).
+2. In `docs/process/binding.md`, add the rows the template's Entry points table has and yours lacks: `tier0-tree`, `hooks-installed`, `hooks-install`, `check-fast`, `settings`, `merge-ready`, `merge`, `weekly` and `bite-one`. Every skill and hook of the method calls them by name, and the conformance gate now requires each. Add their recipes, with `bite` and `bite-all`, from the plugin's `skills/adopt/templates/justfile`.
+3. In `docs/process/binding.md`, add `- Application types: <types>` under `## Gates`. Run `python3 <plugin>/scripts/application_types.py <type> [<type> ...]`, which prints `applies` or the Tool cell to write for each row a type can leave out. Write `none: not a <type>` on each row that does not apply. Give every remaining `none` an ADR number that exists in `docs/adr/`, and fill every empty Tool cell.
+4. In the same Gates table, add the nine operability rows with their tiers and entry points, as the template binding has them: `feature flags declared`, `configuration hardening`, `telemetry emitted`, `changed flags off and on`, `load smoke`, `active security scan`, `load`, `telemetry arrives` and `no flag past its removal date`. Add their recipes from the template `justfile`. Add a `## Telemetry` and a `## Feature flags` section to the binding, and commit a `flags.toml` (an empty file declares no flags).
+5. Replace the `every checker bites` row with the template's `every changed gate still bites` and `every gate bites` rows. Copy `quality/bites.toml` from the template, and add one `[[bite]]` for each row bound to a tool you chose, plus a `remove` bite for each gate that judges a collection. Then run `just bite-all`.
+6. Rewrite the binding's `## Speed` section as the six lines of the template (`- Parallel:`, `- One pipeline:`, `- Shards: 1`, `- Cache:`, `- Affected only:`, `- Ceilings:`), each saying how this stack meets it.
+7. In the `justfile`, replace the `tier0`, `tier0-tree`, `pre-commit` and `commit-msg` recipes with the template's, so the hook recipes answer `RATCHET_HOOK_PROBE`, and add the call to `hooks-installed` at the top of `ratchet`. Then run `just hooks-install`, which installs the commit hooks or prints the owner's command.
+8. In `guards/manifest.toml` (owner), add the three `[[door]]` tables from the template. Bind each to its paths, or say why the repository has none with `none = "<reason>"`. To let agents add records, move `docs/adr/**` and `GLOSSARY.md` from `decisions` into a `records` group with `edit = "append"`, as the template does.
+9. Regenerate `.claude/settings.json` (owner) with `just settings`. 0.10 denies the commands that move the default branch's ref, and an `append` group gets no Edit rule.
+10. With a forge, copy `.github/workflows/merge.yml` and `weekly.yml` from the template and replace each `<ratchet-sha>` with the commit of the binding's `- Ratchet plugin:` line (step 1). Replace `ci.yml` and `deep.yml` with the template's too: the 0.8 copies keep the `guard-changes-present` job and do not read the shard count, and the template's pass `--over` and `--tier` to `budget.py`. Make every other workflow `ref` that checks the plugin out equal that commit. The `shape` job of `ci.yml` and `deep.yml` reads the gates of each tier from the `justfile` with `just --evaluate`, so add the template's `tier1_gates`, `tier1_sharded`, `tier2_gates` and `tier2_sharded` variables. Each `_gates` list names the gates your tier's recipe runs, and each `_sharded` list the gates of that tier whose tool can run one `SHARD` of `SHARDS`, or `""` for none; run the tier from its list, as the template's `tier1` and `tier2` do, so a local run and CI read one list. Without the variables `shape` fails with "does not contain variable", and the conformance gate names each missing one. With no forge, skip this step: the local recipes need only the variables they use.
+11. Add a `## Operability` section to the change template: `.github/pull_request_template.md`, or with no forge the file the binding's `- Change template:` line names. It holds the flag, the telemetry, and what the security and load gates ran.
+12. If `quality/mutation-register.toml` holds stryker entries, run the mutation gate. Each entry in the old identity form is red and names the entries to paste, one per mutant you judge equivalent. Replace them, then run `just mutation`.
+13. Add the `weekly` recipe to the `justfile` from the template, with its four gates.
+14. In `quality/bites.toml`, claim each proof the conformance gate names with `proof = "<name>"` on a bite that plants that fault. If the load smoke requests only the readiness URL, give it a real route, or `--health-only` while the service has none.
+15. In the `justfile`, copy the template's `changed`, `jobs` and `alone` variables and its `parallel` line. The cap on the gates at once is now read from `RATCHET_JOBS`: a machine that set another variable, such as `JOBS`, sets `RATCHET_JOBS` instead. Run each gate over the change as `{{changed}} -- <command>`, with `{base}` where the command names the commit it compares with, in place of a merge-base variable of your own.
+16. For a service, copy the template's `flags_on` and `probed` variables, bind `flags_on` to the override your flag seam reads, and boot `load-smoke`, `api-deep`, `dast`, `pentest`, `load` and `load-soak` through `{{probed}}`. `smoke` and `telemetry-e2e` keep `{{booted}}` and judge the defaults. If your `booted` passes a flag override of its own, such as every flag on, move it into `flags_on` and drop it from `booted`; otherwise `smoke` and `telemetry-e2e` go on judging the flags on while the method says they judge what ships.
+17. Run `/ratchet:conjecture <ticket>` on each open agent-ready ticket, or once on their spec: the feature preflight now asks the `## Operability` lines of the application types the binding declares.
+18. Add the `## Asking the owner` section of the plugin's `skills/init/templates/AGENTS.md` to `AGENTS.md`.
+
+Then run `just conformance`.
+
+#### Worth doing, not checked
+
+No gate reads these. Each is safe to leave, and each is worth doing.
+
+- Rebind `fuzz seconds="600"` to the template's `fuzz each="30" cap="600"`, so tier 2 on a small project takes seconds.
+- When step 16 moves a flag override out of `booted`, rewrite the binding's `## Feature flags` section to say which gates boot with which flags.
+- With no forge, have the machine's scheduler run `just weekly` (step 13).
+
+## Earlier versions
+
+Versions before 0.10.0 have no changelog entries. Their history is in the git log.

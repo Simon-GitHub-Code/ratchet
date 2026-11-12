@@ -20,7 +20,7 @@ coverage = 97.1
 
 - The `ratchet-lowered` entry point (tier 0) flattens the file to dotted keys at the merge base and at head and fails on any key that is lower or missing.
 - The `ratchet` entry point runs the suites, raises each value to the measured one (never lowers), reads the last full mutation runs for the scores, refreshes the snapshots. Commit the result with the change that earned it.
-- Relaxing a value is an owner's change with an ADR behind it. The ADR names each loosening on a line of its own, `Relaxes: <key> from <old> to <new>` (`removed` for a dropped key, `true` and `false` for a flag such as `absolute`), and `ratchet-lowered` passes exactly the loosenings an ADR names and prints which ADR. `docs/adr/` is a guard path, so the line is the owner's.
+- Relaxing a value is an owner's change with an ADR behind it. The ADR names each loosening on a line of its own, `Relaxes: <key> from <old> to <new>` (`removed` for a dropped key, `true` and `false` for a flag such as `absolute`), and `ratchet-lowered` passes exactly the loosenings an ADR names and prints which ADR. An agent may write a new ADR, never one with this line: the guard asks the owner for any record that carries `Relaxes:`, so the line is the owner's ([guards.md](guards.md)).
 
 ## 2. Absolute paths
 
@@ -49,9 +49,13 @@ reason = "Equivalent: the branch rounds a value that is already integral here."
 date = 2026-11-06
 ```
 
-- The identity is stable: the mutant's name plus a hash of its enclosing function (or file, mutator and replacement plus a hash of the enclosing unit where the tool numbers mutants per run). The plugin's `scripts/mutation_survivors.py` computes both and prints the entry to paste for every unregistered survivor; a partial run judges only its scope.
+- The identity is stable: the mutant's name plus a hash of its enclosing function. Where the tool numbers mutants per run, as most do, it is the file, the mutator, the replacement and the mutant's place in its unit, `@<line>:<column>-<line>:<column>` counted from the unit's first line, plus a hash of the unit. An edit elsewhere in the file leaves the entry valid; an edit inside the unit changes the hash. The plugin's `scripts/mutation_survivors.py` computes both and prints the entry to paste for every unregistered survivor; a partial run judges only its scope.
+- Any mutation tool feeds the gate. Its report is converted to one JSON line per mutant: the file, the mutator, the replacement, the status, the start and end of the mutated text, and the lines of the enclosing unit when the tool gives them. The converter is a few lines the repository keeps as a gate tool, and the script's docstring gives the format and a worked one. The reports of mutmut and Stryker are read as they are.
+- An entry excuses one mutant. Entries and live survivors match one to one: a register with fewer entries than live survivors is red and names the unmatched ones, so a second survivor added to a function with a registered one needs an entry of its own.
 - The reason has twenty characters or more. The honesty of the reason is for the owner's review; the register is a guard path.
 - An entry whose mutant is now killed, gone, or whose function hash changed is stale and fails. Editing a function forces its equivalents to be reviewed again.
+- A mutant that timed out counts as killed, as mutation tools count it, unless the register holds an entry for it. Then the run cannot tell it from a survivor: the gate is red and says so, and the answer is to rerun it with less load. If it times out again on its own, it is killed: remove the entry.
+- Registers written before the place was part of the identity hold stryker entries without the `@` suffix. Each is red until replaced: the gate names it as the old identity, lists the live mutants it matched, and prints an entry to paste for each unregistered survivor. The owner reviews them and writes one entry per mutant they judge equivalent, with a reason of their own. Nothing carries over unreviewed. Entries for mutmut keep their identity.
 - Pull requests mutate changed functions (tier 1). The default branch mutates everything on the absolute paths (tier 2).
 
 ## 5. Effective configuration is snapshotted
@@ -60,7 +64,7 @@ date = 2026-11-06
 
 ## 6. Ceilings only fall
 
-`[ceilings.seconds]` in the same file holds the wall-clock ceiling of each tier, and of any gate with its own runner. The `budget` entry point wraps the run and goes red over the ceiling; `ratchet-lowered` fails a raised ceiling exactly as it fails a lowered threshold; `budget --set` records the first ceiling from a measured run with headroom, no lower than the tier's budget, and afterwards only lowers it. A ceiling is paid for by caching, splitting, sharding or running less, never by a quarantined test. [tiers.md](tiers.md#speed)
+`[ceilings.seconds]` in the same file holds the wall-clock ceiling of each tier, and of any gate with its own runner. The `budget` entry point wraps the run and goes red over the ceiling, which blocks everywhere but on a pull request, where the runner varies and CI asks it to report (`--over report`); `ratchet-lowered` fails a raised ceiling exactly as it fails a lowered threshold; `budget --set` records the first ceiling from a measured run with headroom, no lower than the tier's budget, and afterwards only lowers it. A ceiling is paid for by caching, splitting, sharding or running less, never by a quarantined test. [tiers.md](tiers.md#speed)
 
 ## Limits versus ratchets
 

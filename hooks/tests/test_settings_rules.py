@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import settings_rules
+from tests.support import rules
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
 MANIFEST = """
@@ -64,6 +65,47 @@ def test_write_then_check_round_trips_and_keeps_other_keys(tmp_path: Path) -> No
     assert written["env"] == {"X": "1"}
     assert written["permissions"]["allow"] == ["Bash(ls:*)"]
     assert "old" not in written["permissions"]["ask"]
+
+
+APPEND = """
+[[group]]
+name = "records"
+reason = "r"
+edit = "append"
+paths = ["docs/adr/**", "GLOSSARY.md"]
+"""
+
+
+def test_an_append_group_gets_no_edit_rule_and_one_written_by_hand_is_foreign(
+    tmp_path: Path,
+) -> None:
+    # Why: a permission rule matches the path and cannot read the edit, so an ask there would
+    # prompt for the very additions the hook lets through (ADR 0014).
+    (deny, ask), problems = settings_rules.rules(settings_rules.tomllib.loads(MANIFEST + APPEND))
+    assert problems == []
+    assert ask == ["Bash(gh pr merge:*)", "Edit(/docs/adr/**)", "Edit(/GLOSSARY-MAP.md)"]
+    assert not [rule for rule in deny + ask if "GLOSSARY.md" in rule]
+    only = settings_rules.tomllib.loads(APPEND)
+    assert settings_rules.rules(only) == (
+        (list(settings_rules.COMMAND_DENIES), list(settings_rules.COMMAND_ASKS)),
+        [],
+    )
+    root = repository(tmp_path, APPEND)
+    assert settings_rules.write(root) == []
+    path = root / ".claude/settings.json"
+    settings = json.loads(path.read_text())
+    settings["permissions"]["ask"].append("Edit(/GLOSSARY.md)")
+    path.write_text(json.dumps(settings))
+    assert settings_rules.drift(root) == [
+        ".claude/settings.json: 'Edit(/GLOSSARY.md)' in ask mirrors no manifest pattern"
+    ]
+
+
+def test_the_template_asks_on_no_record_path() -> None:
+    settings = json.loads((TEMPLATES / ".claude/settings.json").read_text())
+    rules = settings["permissions"]["ask"] + settings["permissions"]["deny"]
+    assert "Edit(/GLOSSARY-MAP.md)" in rules
+    assert not {"Edit(/GLOSSARY.md)", "Edit(/docs/adr/**)"} & set(rules)
 
 
 def test_write_creates_the_settings_file_with_the_schema(tmp_path: Path) -> None:
@@ -129,3 +171,13 @@ def test_main_reports_and_exits(tmp_path: Path, capsys: pytest.CaptureFixture[st
     assert "written from guards/manifest.toml" in capsys.readouterr().out
     assert settings_rules.main(["x", "--root", str(root)]) == 0
     assert capsys.readouterr().out == "settings-check: green\n"
+
+
+@pytest.mark.parametrize(
+    "rule", [*settings_rules.DEFAULT_BRANCH_DENIES, *settings_rules.OTHER_REF_DENIES]
+)
+def test_each_default_ref_permission_rule_is_a_command_the_hook_refuses(rule: str) -> None:
+    # Why: a settings deny that the hook allows would refuse a command the hook lets through
+    # (ADR 0006); every rule here names a spelling the hook already denies.
+    command = rule.removeprefix("Bash(").removesuffix(")").replace(":*", " x").replace("*", "x")
+    assert rules(command) == ["default-ref"]

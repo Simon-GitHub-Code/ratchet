@@ -1,0 +1,32 @@
+---
+status: accepted
+---
+# The owner is asked what shapes the product, and nothing they would only confirm
+
+ADR 0013 drew one line for a run with no owner at the keyboard: a point is an open question when a wrong guess cannot be taken back, and an assumption otherwise. The owner then said where that line is wrong, in two sentences. "I actually don't mind answering questions about the direction and intention of the product, it's the approving of every PR and approving of every ADR and Glossary update that gets tiresome." And: "I don't want to cut back on questions asked of the user that are genuinely going to help shape the product direction, albeit I do find myself selecting the recommended option quite a bit."
+
+So the line had two faults. It let the spec role assume a product decision whenever a later change could reverse it, which is most of them. And it said nothing about the questions the skills ask outside the pipeline, some of which only ask the owner to agree with what the agent would do anyway.
+
+We decided five things.
+
+1. **An open question has one of two kinds.** `irreversible` is ADR 0013's: a wrong guess would lose stored data, fix a public contract, spend money or weaken a security or privacy rule. `direction` is new: the options are different products. The spec role's test is to describe the product to one of its users after each option, in the user's words and with no code in the sentence. When the descriptions differ in what the user sees, what they can do, who may do it or what becomes of something that is theirs, the owner chooses. When the user could not tell which option was built, the role chooses, and returns the choice as an assumption with its refuter. The prompt carries three examples each way. Each question carries its kind, two to four options with the recommended one first, and a sentence on why.
+2. **A confirmation is not a question.** A skill asks the owner only for a `direction` or `irreversible` choice, or for a tooling preference where the owner said they want one: the tools question of `/ratchet:adopt`. Everything else it does and reports. The skills were read with that rule. `/ratchet:conjecture` lost its dialog, which offered "accept as drafted (recommended), or edit": the draft restates what the owner decided, so it is written and printed, and the skill asks only where the record leaves two different products open. `/ratchet:feature` no longer sends the owner back to type the command after they answer. The drain of ADR 0023 states its cost and starts.
+3. **A question waits for the end of the work.** A ticket with an open question is parked and its siblings go on. After the report the questions go to the owner one at a time through the question tool, the recommended option first. Each answer is written on the ticket under `## Answers`, where the next spec agent reads it as decided.
+4. **Each answer is logged, and a habit is proposed, never applied.** `scripts/questions.py record` appends one line per answer to `.ratchet/questions.tsv`: the date, the skill, a stable key, the kind and whether the recommended option was taken. `questions.py report` lists each key whose last three answers or more all took the recommendation, and the route prints each as an `also:` line. Nothing changes until the owner says yes. Then the key and its answer go under `## Standing answers` in `AGENTS.md`, and a skill that finds a key there does not ask. A `direction` key is never proposed: a product question is a new question each time.
+5. **The log is one clone's and no commit carries it.** `.ratchet/` ignores itself. A log under `docs/process/` would be a guard path, so each answer would ask the owner a second time; with ADR 0014's append-only treatment it would still dirty the work tree after every answer, which the feature preflight refuses, need a pull request per answer on a forge, be sent to the owner by the merge judge, and conflict between branches built at once. The standing answer is the record, and it is in `AGENTS.md`, a guard path the owner is asked about once, when it is written.
+
+This narrows ADR 0013. Its three decisions stand; its sentence "only a point where a wrong guess loses data, fixes a public contract, spends money or weakens a security or privacy rule is an open question" now names one of two kinds. Decided 2026-11-12.
+
+## Refutation criterion
+
+This is wrong if the test sorts badly in either direction. Read the first ten questions that parked a ticket: if the owner says of more than two that they did not need to be asked, the test is too loose, and the prompt's examples are replaced by those questions. Read the assumptions of the same runs: ADR 0013's count holds, and more than one in five countered means the test is too tight. It is also wrong if the log is paperwork: if twenty answers produce no proposal, or the owner declines each one, `questions.py` and the `also:` line go and the skills stop recording.
+
+Known residue. The log is per clone and per repository. A question a skill asks once in a repository's life (init's, and adopt's on its first run) never reaches three, so a habit that spans repositories is not seen; in one repository the count runs on questions a rerun repeats, of which the tools question of adopt is the one that exists today. The kind is set by the agent that asks, so a product question recorded as `tooling` could be proposed; the proposal still needs the owner's yes. A question the spec role wrongly assumes reaches the owner only as an assumption in the report, after a merge that ADR 0021 may already have made.
+
+## Considered options
+
+- Keep ADR 0013's line: rejected by the owner. A product decision that can be reversed in code is still theirs, and they want to be asked.
+- Ask when the question arises: rejected, it needs the owner at the keyboard during a run they started in order to leave, and one question would stop every ticket built beside it.
+- The log in `docs/process/questions.tsv`: rejected for the four costs in decision 5.
+- Apply a standing answer after three recommended answers: rejected. Three answers are evidence of a habit, and the owner said they do not want fewer questions that shape the product. The route proposes and the owner decides.
+- A log shared by every repository of one owner: rejected for now, the plugin writes nothing outside a repository and its temporary directory. The residue above is the cost.

@@ -7,6 +7,10 @@ Four plugins build software here, and each owns one question. `CLAUDE.md` is a s
 - **How is anything a person sees designed?** `impeccable`: every user interface, web or native, goes through it. `shape` before building a surface, `init` for `PRODUCT.md`, `document` for `DESIGN.md`, `critique` and `audit` to evaluate, `polish` before shipping. Any agent whose work touches a surface loads `impeccable:impeccable` itself and runs these; none of them waits for the owner. `PRODUCT.md` and `DESIGN.md` are records: the design standards a review judges against.
 - **What must be true before a merge?** `ratchet`: load the `ratchet:method` skill before any work. It is the contract this file assumes: tiered deterministic gates, a ratchet that only rises, guard paths the harness protects, disputes, records and the feature pipeline. Its route says which command the owner types next at every stage; `/ratchet:next` prints it. This file holds only what the method leaves to the project.
 
+## Asking the owner
+
+Every question to the owner goes through the harness's question tool, whichever plugin's skill is asking: one decision per question, two to four options, the recommended one first with its reason. Never a list of questions as free text. With no question tool, one question per message with numbered options.
+
 ## What this is
 
 <One paragraph: purpose, who it is for, the one sentence that says what the system's job is.>

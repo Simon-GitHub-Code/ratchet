@@ -3,3 +3,7 @@
 .impeccable/hook.cache.json
 .impeccable/config.local.json
 .impeccable/live/sessions/
+
+# Gate outputs: the timings the method's gates write. Adopt adds this stack's own below: reports,
+# caches, mutation copies and build output.
+.ratchet/

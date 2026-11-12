@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from ratchet_guards import session
 from tests.support import PLUGIN_ROOT
 
@@ -179,10 +181,22 @@ def test_a_route_that_cannot_answer_adds_nothing(tmp_path: Path) -> None:
     assert session.message(root, plugin_root, silent) == session.message(root, plugin(tmp_path))
 
 
-def test_run_route_survives_a_missing_or_failing_interpreter() -> None:
+def test_run_route_survives_a_missing_or_failing_interpreter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Why: the hook's own limit is five seconds; starting an interpreter on a loaded machine can
+    # take longer, and this case is about the output, not about the limit.
+    monkeypatch.setattr(session, "ROUTE_TIMEOUT", 120)
     assert session.run_route(["/nonexistent/python"]) is None
     assert session.run_route([sys.executable, "-c", "raise SystemExit(1)"]) is None
     assert session.run_route([sys.executable, "-c", "print('ok')"]) == "ok\n"
+
+
+def test_run_route_gives_up_on_a_route_that_outlasts_the_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(session, "ROUTE_TIMEOUT", 0.2)
+    assert session.run_route([sys.executable, "-c", "import time; time.sleep(30)"]) is None
 
 
 def test_the_shipped_stance_links_nothing_relative() -> None:

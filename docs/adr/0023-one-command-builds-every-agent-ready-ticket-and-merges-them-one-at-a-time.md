@@ -1,0 +1,40 @@
+---
+status: accepted
+---
+# One command builds every agent-ready ticket, and merges them one at a time
+
+ADR 0021 let a change the gates can judge merge without the owner. The owner still typed `/ratchet:feature <ticket>` once for each ticket and came back between them, so a backlog of five tickets was five visits. The owner chose the alternative by name, "drain in parallel": one command builds every agent-ready ticket, the tickets building at the same time in separate work trees, each on its own branch, merging those the merge rule allows, and ending with one report of what merged, what waits for them and why, and every assumption made.
+
+We decided nine things.
+
+1. **`/ratchet:feature` with no ticket is the drain.** `scripts/drain.py plan` reads the open agent-ready tickets, runs the feature preflight on each and orders them by their `Blocked by` lines. A ticket is `buildable`, `building`, `built`, `waiting` on tickets the same drain can still merge, `held`, `merged` or `refused` with what produces each missing piece. The plan starts at most three tickets at once unless the owner names another number.
+2. **The skill starts one pipeline run for each ticket; no script fans them out.** A workflow script cannot run a command. It could not make a work tree, merge a branch or learn that a merge happened, so tickets that wait on a merge would force it into waves that the skill has to drive anyway. One run per ticket also keeps its own run to resume, so a ticket that dies is run again alone. The order and the cap are not left to the agent that starts the runs: `drain.py open <ticket>` makes the work tree only when the plan starts that ticket, and exits 1 otherwise.
+3. **The cost is stated, not asked.** A pipeline is at most nine agents. A ticket judged again behind another merge adds at most two. A drain of N tickets is at most 11N - 2 agents, and the plan prints the number. The skill says it and starts: the command is the consent (ADR 0022).
+4. **A work tree is made and removed by the script, outside the repository.** Each ticket builds in `<temporary directory>/ratchet-queue/<repository>-<hash>/<branch>`. `open` makes it, and `close`, `land` and `clean` remove it, on a merge, on a park and on a failure, with what was left uncommitted kept as a stash named for the branch. The guard hook judges a path by the checkout it is in, so a queue work tree is guarded as the repository is. The notes that outlive a session, and the reports, are in `.ratchet/queue/`, which no commit carries.
+5. **Building is parallel and merging is serial.** Results are settled one ticket at a time. Before a change lands it holds the tip of the default branch: `drain.py update` rebases it when another change merged first, and leaves the branch as it was when the rebase conflicts. `ratchet` runs after the rebase, so two changes that each raised a threshold do not meet in `quality/thresholds.toml`.
+6. **A change that was rebased is reviewed again.** The pipeline's `rejudge` mode runs the reviewer on the change as it now stands, after one reconcile agent when the rebase conflicted or `check` went red on the result. The verdict record is written from that review. Stamping the first approval onto the rebased tree would certify a tree no review saw, which is what the judge's tree check exists to stop. The rebase is lazy: a change that settles while the default branch has not moved keeps its first review, so a drain of N tickets runs at most N - 1 second reviews.
+7. **The judge merges.** With no forge `drain.py land` runs the binding's `merge` entry point and closes the ticket with the judge's own lines. With a forge the skill opens the pull request and watches it, and the merge job of ADR 0021 merges it.
+8. **A ticket that cannot go on is parked, and the drain goes on.** An open question, a guard edit, a dispute, a verdict that is not an approval or a `merge: owner` closes the ticket with the reasons as they were given. A parked ticket is held until its text changes, so an answer written under `## Answers` releases it and a rerun that would stop the same way is not started. The route names the drain when more than one agent-ready ticket states a conjecture.
+9. **An interrupted drain leaks nothing and repeats nothing.** One drain runs on a repository at a time, so the next one begins with `drain.py clean --all`, which removes every queue work tree it finds. A merged ticket is done. A branch that holds commits is put to the judge and not built again. A ticket whose build had not committed is built again, its uncommitted work kept as a stash. `drain.py report` writes `.ratchet/queue/<date>-<time>.md` from the notes, and reports each closed ticket once.
+
+Decided 2026-11-12.
+
+## Refutation criterion
+
+This is wrong if a drain leaves a work tree behind. After any drain, finished or killed, `drain.py clean --all` followed by `git worktree list` shows no path under `ratchet-queue`; one that stays is a defect of the script and becomes a case in `hooks/tests/test_drain.py`.
+
+It is wrong if the second review is cost without findings. The time a second review takes has not been measured, since no workflow ran when this was decided. On the first twenty changes judged again, count the reviews that returned a blocker or major finding and the reconciles that were needed. None in twenty means a clean rebase with a green `check` can keep its first review, and the judge's tree check is redefined to allow exactly that. If the second review takes more than a quarter of a ticket's time in the queue, measure the same count sooner.
+
+It is wrong if tickets cannot be built apart. If more than half the changes of a drain need the reconcile agent, the tickets share too much to build at once, and the plan should order tickets that name the same files instead of starting them together.
+
+Known residue. The route holds a single run's ticket by its stash and the drain holds one by its note: two mechanisms for one idea. The route counts tickets that state a conjecture, and the drain may refuse some of them for another reason. A pipeline agent is told its work tree in the prompt and nothing forces it to stay there; an edit it makes in the repository's own checkout leaves that checkout dirty, and `open` then refuses every further ticket. With no forge, a branch an earlier drain left unmerged is put to the judge without a second review: `merge.py` runs `check` on the merge result, and ADR 0021 has no `behind` reason there. With a forge the drain watches one pull request at a time, so its speed is the forge's CI. The stash list is shared by every work tree of a repository.
+
+## Considered options
+
+- One workflow that fans the pipeline out over the tickets: rejected for the reasons in decision 2. It would also be one run to resume, with every ticket's agents in it.
+- Stamp the first approval again after a clean rebase and run only `check`: rejected for now, by decision 6. The refutation criterion says what would bring it back.
+- Merge without bringing the branch up to date, since `merge.py` checks the merge result: rejected. The forge's judge refuses a branch that is behind, and the two paths should agree. Changes built side by side meet in the same files: the flag registry, the glossary, the thresholds and the next ADR number.
+- Work trees inside the repository: rejected, whole-tree gates would walk them, and nothing a run leaves behind belongs in a checkout.
+- The report under `.scratch/queue/`: rejected. A repository with local tickets tracks `.scratch/`, so an uncommitted report there makes the work tree dirty and the next preflight red.
+- `scripts/queue.py` as the name: rejected, the test path puts `scripts/` first and the name would shadow the standard library's `queue`.
+- Ask before starting, with the cost: rejected by ADR 0022 as a confirmation.
