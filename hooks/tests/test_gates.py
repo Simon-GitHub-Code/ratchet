@@ -403,6 +403,22 @@ def test_the_number_a_squash_merge_appends_is_not_counted() -> None:
 # --- change size ----------------------------------------------------------------------------
 
 
+def test_change_size_does_not_count_the_methods_own_records(tmp_path: Path) -> None:
+    # Why: the spec, the verdict record and the change description are written by the pipeline,
+    # the last two after the review, and counting them turned an approved change red at the merge.
+    root = repository(tmp_path, {"a.txt": "1\n", ".scratch/f/issues/01-a.md": "Status: open\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "a.txt", "1\n2\n")
+    write(root, "docs/features/f/spec.md", "one\ntwo\n")
+    write(root, ".scratch/f/issues/01-a.md", "Status: resolved\n")
+    commit(root, "feat(core): the change and its spec")
+    write(root, "docs/features/f/verdict.json", "{}\n")
+    write(root, ".scratch/changes/feature-1-a.md", "# a\n")
+    write(root, "docs/features/f/helper.py", "x = 1\n")
+    assert change_size.measure(root, "main") == (2, 2), "the code and a file that is no record"
+
+
 def test_change_size_measures_against_the_ceiling(tmp_path: Path, capsys: Out) -> None:
     root = repository(tmp_path, {"a.txt": "1\n2\n", "bin": "x"})
     assert run(change_size, root) == 0

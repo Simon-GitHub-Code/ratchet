@@ -30,6 +30,7 @@ A change the gates can judge now merges without the owner, and the owner is aske
 - The fix loop also runs for a finding whose test the critic kept failing, whatever its severity: such a test leaves `check` red, and the review could only refuse it.
 - A change with no room left under the change-size ceiling stops early. The spec and implement roles report the gate's two numbers, and a change over two thirds of the ceiling ends `blocked` as too large, for the owner to split, before the stages that could only push it over.
 - The orchestrator commits everything an approved run left in the work tree, not only the files the roles listed, and names an added term without quoting its _Avoid_ words.
+- The change-size gate no longer counts the method's own records of a change (the spec and verdict record under `docs/features/`, tickets and change descriptions under `.scratch/`), which the pipeline writes after the review.
 
 ### Gates
 

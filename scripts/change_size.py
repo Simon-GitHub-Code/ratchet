@@ -10,6 +10,11 @@ The adoption change is large by construction: it lands the templates, the bindin
 records in one commit. When every commit in the range is ``chore(method): adopt``, the gate
 reports the size and passes, and the pull request's Criticism section carries the number.
 
+The method's own records of a change are not counted: the feature's spec and verdict record
+under ``docs/features/`` and the tracker's markdown under ``.scratch/`` (tickets and change
+descriptions). The pipeline writes them after the review, so counting them turned a change the
+review saw green red at the merge.
+
 Usage: ``change_size.py [--root DIR] [--base REF] [--set --files N --lines N]``.
 """
 
@@ -24,17 +29,20 @@ import gatelib
 
 ADOPTION = "chore(method): adopt"
 CEILINGS_TABLE = "[ceilings.change]"
+RECORDS = ["docs/features/**/*.md", "docs/features/**/verdict.json", ".scratch/**/*.md"]
 
 
 def measure(root: Path, base: str) -> tuple[int, int]:
     """Changed files and changed lines (added plus deleted) since ``base``."""
     files, lines = 0, 0
     for row in (gatelib.git(root, "diff", "--numstat", "--no-renames", base) or "").splitlines():
-        added, deleted, _ = row.split("\t", 2)
+        added, deleted, path = row.split("\t", 2)
+        if gatelib.matches(path, RECORDS):
+            continue
         files += 1
         lines += (int(added) if added != "-" else 0) + (int(deleted) if deleted != "-" else 0)
     untracked = gatelib.git(root, "ls-files", "--others", "--exclude-standard", "-z", ":/") or ""
-    for path in (p for p in untracked.split("\0") if p):
+    for path in (p for p in untracked.split("\0") if p and not gatelib.matches(p, RECORDS)):
         text = gatelib.read_text(root / path)
         files += 1
         lines += len(text.splitlines()) if text is not None else 0
