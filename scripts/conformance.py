@@ -754,18 +754,21 @@ def guard_mutations() -> list[Mutation]:
     ]
 
 
+def rewrite(name: str, old: str, new: str) -> Callable[[Path], None]:
+    """A mutation that rewrites one piece of a template file, and refuses when it is gone."""
+
+    def mutate(root: Path) -> None:
+        path = root / name
+        text = path.read_text()
+        if old not in text:
+            message = f"the self-test's {name} has no {old!r} to mutate"
+            raise SystemExit(message)
+        path.write_text(text.replace(old, new))
+
+    return mutate
+
+
 def merge_mutations() -> list[Mutation]:
-    def rewrite(name: str, old: str, new: str) -> Callable[[Path], None]:
-        def mutate(root: Path) -> None:
-            path = root / name
-            text = path.read_text()
-            if old not in text:
-                msg = f"{name} no longer holds {old!r}"
-                raise AssertionError(msg)
-            path.write_text(text.replace(old, new))
-
-        return mutate
-
     def no_merge_workflow(root: Path) -> None:
         (root / WORKFLOWS / MERGE_WORKFLOW).unlink()
 

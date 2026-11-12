@@ -8,6 +8,7 @@ import pytest
 
 import gatelib
 import project_bite
+from tests import repos
 from tests.repos import branch, commit, git, repository, write
 
 TABLE = "| Question | Tool | Tier | Threshold source | Entry point |\n|---|---|---|---|---|\n"
@@ -61,6 +62,7 @@ def scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Scratch copies land in a directory the test can look into, and no outer bite is running."""
     directory = tmp_path / "scratch"
     directory.mkdir()
+    repos.skeleton()  # made once per process, in the real temp directory, before it is redirected
     monkeypatch.setattr(tempfile, "tempdir", str(directory))
     monkeypatch.delenv(project_bite.BITING, raising=False)
     return directory

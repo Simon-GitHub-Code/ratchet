@@ -100,7 +100,7 @@ def test_a_pristine_template_that_fails_is_reported_and_stops_the_self_test(
     assert conformance.main(["conformance.py", "--self-test"]) == 1
     out = capsys.readouterr().out
     assert out.startswith("self-test: the pristine templates fail:\n  ")
-    assert "bites" not in out
+    assert ": bites" not in out
 
 
 def test_a_mutation_that_changes_nothing_is_reported_as_not_biting(
@@ -298,3 +298,19 @@ def test_a_binding_that_is_missing_leaves_the_speed_check_to_the_workflows(repo:
         ".github/workflows/ci.yml: nothing cancels superseded runs ('concurrency:' absent)" in found
     )
     assert "docs/process/binding.md: missing" in found
+
+
+def test_a_one_way_door_needs_a_reason(repo: Path) -> None:
+    reason = "Fixtures of data that earlier versions wrote: rewriting one hides"
+    text = (repo / MANIFEST).read_text(encoding="utf-8")
+    line = next(row for row in text.splitlines() if reason in row)
+    replace(MANIFEST, line, 'reason = "Old data."')(repo)
+    expected = f"door 'stored-data' needs a reason of {conformance.MIN_REASON}+ characters"
+    assert f"guards/manifest.toml: {expected}" in red(repo)
+
+
+def test_a_self_test_mutation_refuses_a_template_it_no_longer_fits(repo: Path) -> None:
+    with pytest.raises(SystemExit, match="has no 'absent text' to mutate"):
+        conformance.rewrite(MANIFEST, "absent text", "anything")(repo)
+    with pytest.raises(SystemExit, match="has no 'absent text' to mutate"):
+        conformance.reregister("absent text", "anything")(repo)
