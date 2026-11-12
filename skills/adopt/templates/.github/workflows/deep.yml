@@ -70,7 +70,10 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
+  # Why: a matrix with no values is an error GitHub raises before the job exists, so a project with
+  # no long gate (an empty `*_sharded` list in the `justfile`) skips the job instead.
   tier2-long:
+    if: needs.shape.outputs.tier2_long != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs: shape

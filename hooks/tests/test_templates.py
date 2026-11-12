@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -16,6 +17,7 @@ TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
 ADOPT = (TEMPLATES.parent / "SKILL.md").read_text(encoding="utf-8")
 JUSTFILE = (TEMPLATES / "justfile").read_text(encoding="utf-8")
 BINDING = (TEMPLATES / "docs/process/binding.md").read_text(encoding="utf-8")
+MERGE = (TEMPLATES / ".github/workflows/merge.yml").read_text(encoding="utf-8")
 WORKFLOWS = {
     name: (TEMPLATES / ".github/workflows" / name).read_text(encoding="utf-8")
     for name in ("ci.yml", "deep.yml")
@@ -43,7 +45,9 @@ def recipe(name: str) -> str:
     return match.group(1)
 
 
-def shards(binding: str, tmp_path: Path, workflow: str) -> tuple[int, dict[str, str], str]:
+def shards(
+    binding: str, tmp_path: Path, workflow: str, *, justfile: str = JUSTFILE
+) -> tuple[int, dict[str, str], str]:
     """Run the workflow's shape step as the runner would: exit code, outputs, what it printed."""
     step = SHARDS_STEP.search(WORKFLOWS[workflow])
     bash = shutil.which("bash")
@@ -51,7 +55,7 @@ def shards(binding: str, tmp_path: Path, workflow: str) -> tuple[int, dict[str, 
     assert bash
     (tmp_path / "docs/process").mkdir(parents=True, exist_ok=True)
     (tmp_path / "docs/process/binding.md").write_text(binding, encoding="utf-8")
-    (tmp_path / "justfile").write_text(JUSTFILE, encoding="utf-8")
+    (tmp_path / "justfile").write_text(justfile, encoding="utf-8")
     output = tmp_path / "output"
     output.write_text("", encoding="utf-8")
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the script is the template's own
@@ -88,6 +92,21 @@ def test_ci_runs_every_gate_of_its_tier_once(workflow: str, tier: str, tmp_path:
 def test_no_workflow_keeps_a_gate_list_of_its_own() -> None:
     for name, text in WORKFLOWS.items():
         assert not re.search(r"^ +gate: \[", text, re.MULTILINE), name
+
+
+@pytest.mark.parametrize(("workflow", "tier"), [("ci.yml", "tier1"), ("deep.yml", "tier2")])
+def test_a_tier_with_no_long_gate_skips_its_long_job_rather_than_an_empty_matrix(
+    workflow: str, tier: str, tmp_path: Path
+) -> None:
+    # Why: observed on GitHub, 2026-11-12: a matrix vector with no values fails the whole run, and
+    # a job-level `if` that is false skips the job before its matrix is read.
+    needs_just()
+    emptied = f'{tier}_sharded := ""'
+    none = re.sub(rf'^{tier}_sharded := ".*"$', emptied, JUSTFILE, flags=re.MULTILINE)
+    assert none != JUSTFILE
+    code, outputs, _ = shards(BINDING, tmp_path, workflow, justfile=none)
+    assert (code, outputs[f"{tier}_long"]) == (0, "[]")
+    assert f"    if: needs.shape.outputs.{tier}_long != '[]'\n" in WORKFLOWS[workflow]
 
 
 @pytest.mark.parametrize("workflow", sorted(WORKFLOWS))
@@ -234,3 +253,102 @@ def test_adopt_names_the_two_skills_and_the_owner_s_steps() -> None:
     assert "`git config --unset core.hooksPath`" not in ADOPT
     assert "exempts a range made only of such commits" in ADOPT
     assert 'ref: "<ratchet-sha>"' in ADOPT
+
+
+FAKE_GH = """#!{python}
+import json, os, sys
+args = sys.argv[1:]
+world = json.load(open(os.environ["WORLD"]))
+with open(os.environ["CALLS"], "a") as log:
+    log.write(" ".join(args) + "\\n")
+joined = " ".join(args)
+if args[:2] == ["pr", "list"]:
+    print("\\n".join(world["open"]))
+elif joined.startswith("run list --workflow deep.yml"):
+    print("success")
+elif joined.startswith("run list --workflow ci.yml"):
+    print(world["ci"][args[args.index("--commit") + 1]])
+elif args[0] == "api" and args[1].endswith("/comments"):
+    print(world["comments"].get(args[1].split("/")[-2], ""))
+elif args[0] == "api" and "-X" in args and args[args.index("-X") + 1] == "PUT":
+    sha = [a for a in args if a.startswith("sha=")][0][4:]
+    if sha in world["refused"]:
+        print("Head branch was modified", file=sys.stderr)
+        sys.exit(1)
+    print("Pull Request successfully merged")
+"""
+FAKE_GIT = '#!/bin/sh\necho git "$@" >> "$CALLS"\n'
+FAKE_JUDGE = """import json, os, sys
+args = sys.argv[1:]
+head = args[args.index("--head") + 1]
+report = args[args.index("--report") + 1]
+open(report, "w").write("<!-- ratchet:merge -->\\nverdict for " + head + "\\n")
+sys.exit(0 if head in json.load(open(os.environ["WORLD"]))["agent"] else 1)
+"""
+MERGE_STEP = re.compile(
+    r"      - name: Judge every green.*\n        run: \|\n((?:          .*\n)+)"
+)
+
+
+def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_woke_it(
+    tmp_path: Path,
+) -> None:
+    # Why: observed on GitHub, 2026-11-12: of four runs queued together, two were cancelled, and
+    # the pull requests they stood for were never judged. A run that judges all of them loses none.
+    step = MERGE_STEP.search(MERGE)
+    bash = shutil.which("bash")
+    assert step
+    assert bash
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_text(FAKE_GH.format(python=sys.executable), encoding="utf-8")
+    (bin_dir / "git").write_text(FAKE_GIT, encoding="utf-8")
+    for tool in (bin_dir / "gh", bin_dir / "git"):
+        tool.chmod(0o755)
+    (tmp_path / "plugin/scripts").mkdir(parents=True)
+    (tmp_path / "plugin/scripts/merge_ready.py").write_text(FAKE_JUDGE, encoding="utf-8")
+    world = {
+        "open": [f"{n} {sha * 4} feat/{sha} main" for n, sha in enumerate("abcd", 1)],
+        "ci": {
+            "aaaa": "completed success",
+            "bbbb": "completed success",
+            "cccc": "completed failure",
+            "dddd": "completed success",
+        },
+        "comments": {"2": "77"},
+        "agent": ["aaaa", "dddd"],
+        "refused": ["dddd"],
+    }
+    (tmp_path / "world.json").write_text(json.dumps(world), encoding="utf-8")
+    calls = tmp_path / "calls"
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the script is the template's own
+        [bash, "-e", "-c", textwrap.dedent(step.group(1))],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "WORLD": str(tmp_path / "world.json"),
+            "CALLS": str(calls),
+            "RUNNER_TEMP": str(tmp_path),
+            "RATCHET_PLUGIN": str(tmp_path / "plugin"),
+            "DEFAULT_BRANCH": "main",
+            "GITHUB_REPOSITORY": "owner/repo",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    log = calls.read_text(encoding="utf-8")
+    assert done.returncode == 1, "a merge the forge refused leaves the run red"
+    assert "#3: ci is not green on cccc: left alone" in done.stdout
+    assert "issues/3" not in log
+    assert "-X POST repos/owner/repo/issues/1/comments" in log
+    assert "-X PATCH repos/owner/repo/issues/comments/77" in log
+    assert "-X POST repos/owner/repo/issues/4/comments" in log
+    assert log.count("-X PUT") == 2
+    assert "pulls/2/merge" not in log
+    assert log.count("-X DELETE repos/owner/repo/git/refs/heads/feat/a") == 1
+    assert "heads/feat/d" not in log
+    assert log.count("workflow run deep.yml --ref main") == 1
+    fetches = [line for line in log.splitlines() if line.startswith("git fetch")]
+    assert [line.split()[-1] for line in fetches] == ["aaaa", "bbbb", "dddd"]
