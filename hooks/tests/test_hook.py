@@ -180,7 +180,7 @@ def test_antigravity_gets_its_own_output_shape() -> None:
     merge = Verdict("merge-pr", "gh pr merge")
     ask = json.loads(hook.respond(merge, antigravity=True))
     assert ask == {"decision": "force_ask", "reason": hook.reason(merge)}
-    assert hook.respond(None, antigravity=True) == "{}"
+    assert json.loads(hook.respond(None, antigravity=True)) == {"decision": "ask"}
 
 
 def test_run_answers_antigravity_in_its_form() -> None:
@@ -191,7 +191,8 @@ def test_run_answers_antigravity_in_its_form() -> None:
     assert "force-pushes" in denied["reason"]
     asked = json.loads(hook.run(json.dumps(agy("edit_file", TargetFile="CLAUDE.md")), make_guard))
     assert asked["decision"] == "force_ask"
-    assert hook.run(json.dumps(agy("run_command", CommandLine="just check")), make_guard) == "{}"
+    quiet = hook.run(json.dumps(agy("run_command", CommandLine="just check")), make_guard)
+    assert json.loads(quiet) == {"decision": "ask"}
 
     def broken() -> Guard:
         msg = "no manifest"
@@ -372,7 +373,7 @@ def test_the_shim_answers_antigravity_in_its_form(tmp_path: Path) -> None:
     push = run_shim(SHIM, agy("run_command", root, CommandLine="git push --force"))
     assert json.loads(push.stdout)["decision"] == "deny"
     status = run_shim(SHIM, agy("run_command", root, CommandLine="git status"))
-    assert json.loads(status.stdout) == {}
+    assert json.loads(status.stdout) == {"decision": "ask"}
 
 
 def test_the_shim_asks_antigravity_when_the_guard_cannot_load(tmp_path: Path) -> None:
