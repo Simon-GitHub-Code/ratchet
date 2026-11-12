@@ -23,7 +23,7 @@ The decision is wrong if a commit runs without tier 0 while `hooks_installed.py`
 
 - Read the hook scripts and the git config and infer the chain: rejected. A global hook may chain through `exec`, a function, an include or a wrapper, and every spelling is a parser to maintain; the probe asks git and the hook what happens, and is right for spellings nobody wrote a case for.
 - Print the answer on standard output and read it from the hook run: rejected, `pre-commit` shows the output of a passing hook only with `verbose: true`, which would print every gate's output on every commit.
-- Ask `git config core.hooksPath` and require it empty: rejected, the owner's machine sets it globally on purpose (a secret scanner runs from there), and the right answer there is to keep that hook and make sure it chains.
+- Ask `git config core.hooksPath` and require it empty: rejected, a machine may set it globally on purpose (a secret scanner runs from there, for one), and the right answer there is to keep that hook and make sure it chains.
 - Ask the gate in CI and in `conformance` too: rejected, a CI checkout has no hooks, so it would be red on every run.
 - Run the real `just pre-commit` as the probe: rejected, it is the full tier 0, about a minute, and a session start and a route would pay it.
 - Install the hooks from the gate or the hand-over: rejected, the guard refuses hook installs and hook-path changes from an agent, and that refusal is right: a hook is code run on every commit.

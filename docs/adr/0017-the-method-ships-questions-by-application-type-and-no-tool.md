@@ -20,6 +20,8 @@ We decided four things.
 
 Two earlier records spoke of presets, and are read as follows; their decisions stand. In ADR 0011, "every preset puts the dependency manifest and its lockfile in the `tool-config` group" is now a line of the adopt skill, and the refuter's "a test-count gate in every preset" is the `test count did not fall` row every binding already carries. In ADR 0012, "OpenTelemetry is the default the presets name" is now the example the method's tier tables name. Decided 2026-11-11.
 
+ADR 0020 changes what the proof is: `bite-all` in tier 2 plants every fault of `quality/bites.toml`, and the tier 1 `bite` proves only the gates a change can affect.
+
 ## Refutation criterion
 
 This is wrong if adoption without presets binds weaker gates or costs the owner more. Adopt a Python repository on uv and a TypeScript one on pnpm afresh, and compare each row with the preset this record deleted (the tree at commit `50c291d`): if either binds a row to `none`, or to a tool with a narrower rule set, where the preset bound a tool, in two or more rows, the agent's choice is worse than a maintained recipe and presets return as maintained artefacts. It is also wrong if adoption asks the owner more than the two dialogs it asked before, or if two adoptions on one stack on the same day bind tools so different that a reader cannot move between the repositories. And the six types are wrong on the first adoption that has to write an ADR to say a row does not apply to what it plainly is not: that row's types are narrowed, or a type is added.

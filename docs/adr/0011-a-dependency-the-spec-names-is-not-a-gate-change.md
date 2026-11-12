@@ -9,6 +9,8 @@ We decided that `guard-diff` lists and counts every changed guard path, dependen
 
 An earlier form of this decision, the same day, listed dependency-only paths apart and did not count them. An independent review showed it unsafe as an exemption: lockfiles in a format it did not read passed unread, a `uv.lock` artifact swapped at the same version passed, a re-spelled or repeated name hid a rollback, and npm aliases, git shorthands, relative paths and Cargo's `package` and `registry` keys fetched a fork. Each is now a test in `hooks/tests/test_dependencies.py`, and the listing never exempts: the cover is the pipeline's, scoped to names the spec wrote down before the code.
 
+ADR 0017 deleted the presets; it says how to read them here, and this decision stands.
+
 ## Refutation criterion
 
 This is wrong if a loosening of a gate reaches a merge through a dependency the spec named. The open attempt is an added test-runner plugin that deselects tests or swallows failures: seed one in a trial repository through a spec that names it, and if no gate goes red (a test count, a coverage group), additions need an allow-list of package names or a test-count gate in every preset. Known residue: `pnpm-lock.yaml`, `yarn.lock` and the other formats are not read, so a TypeScript feature that adds a dependency still ends in `request_changes` for the owner; and in `package-lock.json` only the highest copy of a package must not fall, so a top-level copy rolled back under a higher nested one passes.

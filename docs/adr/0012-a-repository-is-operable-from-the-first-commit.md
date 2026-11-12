@@ -14,6 +14,8 @@ We decided that the method asks these four of every repository, and that each is
 
 The conformance gate requires the rows, the binding's Telemetry and Feature flags sections and the registry. A row may be `none` with a reason, as any other; it may not be absent. The spec role names the telemetry and the flag of every feature, the review judges them, and the pull request template has an Operability section. Adopt binds each row against a walking skeleton, so none of them waits for the first feature. Decided 2026-11-11.
 
+ADR 0017 deleted the presets; it says how to read "the default the presets name" here, and this decision stands.
+
 ## Refutation criterion
 
 This is wrong if the rows slow the loop or turn into paperwork. Measure on the next two adoptions: tier 0 stays under its minute and the added tier 1 recipes (`telemetry`, `flag-states` with no changed flag, `load-smoke`, `iac`) add under thirty seconds together on the skeleton; if not, the slow one moves a tier down. And read the first five features built after adoption: if more than one binds a row to `none` to get past it, or ships a flag nobody ever turns on or removes, the row is ceremony and is cut or redesigned. Measured so far: `flags.py` is tens of milliseconds; `trivy config` was 3.9 s warm and 12 s cold on the TypeScript trial, which is why it sits in tier 1 and not tier 0.

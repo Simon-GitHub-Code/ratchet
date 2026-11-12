@@ -23,7 +23,7 @@ Decided 2026-11-12.
 
 This is wrong if a drain leaves a work tree behind. After any drain, finished or killed, `drain.py clean --all` followed by `git worktree list` shows no path under `ratchet-queue`; one that stays is a defect of the script and becomes a case in `hooks/tests/test_drain.py`.
 
-It is wrong if the second review is cost without findings. The time a second review takes was not measured: the session that built this could not run a workflow. On the first twenty changes judged again, count the reviews that returned a blocker or major finding and the reconciles that were needed. None in twenty means a clean rebase with a green `check` can keep its first review, and the judge's tree check is redefined to allow exactly that. If the second review takes more than a quarter of a ticket's time in the queue, measure the same count sooner.
+It is wrong if the second review is cost without findings. The time a second review takes has not been measured, since no workflow ran when this was decided. On the first twenty changes judged again, count the reviews that returned a blocker or major finding and the reconciles that were needed. None in twenty means a clean rebase with a green `check` can keep its first review, and the judge's tree check is redefined to allow exactly that. If the second review takes more than a quarter of a ticket's time in the queue, measure the same count sooner.
 
 It is wrong if tickets cannot be built apart. If more than half the changes of a drain need the reconcile agent, the tickets share too much to build at once, and the plan should order tickets that name the same files instead of starting them together.
 
@@ -34,7 +34,7 @@ Known residue. The route holds a single run's ticket by its stash and the drain 
 - One workflow that fans the pipeline out over the tickets: rejected for the reasons in decision 2. It would also be one run to resume, with every ticket's agents in it.
 - Stamp the first approval again after a clean rebase and run only `check`: rejected for now, by decision 6. The refutation criterion says what would bring it back.
 - Merge without bringing the branch up to date, since `merge.py` checks the merge result: rejected. The forge's judge refuses a branch that is behind, and the two paths should agree. Changes built side by side meet in the same files: the flag registry, the glossary, the thresholds and the next ADR number.
-- Work trees inside the repository: rejected, whole-tree gates would walk them, and the owner's rule for the machine is that nothing is left behind in a checkout.
+- Work trees inside the repository: rejected, whole-tree gates would walk them, and nothing a run leaves behind belongs in a checkout.
 - The report under `.scratch/queue/`: rejected. A repository with local tickets tracks `.scratch/`, so an uncommitted report there makes the work tree dirty and the next preflight red.
 - `scripts/queue.py` as the name: rejected, the test path puts `scripts/` first and the name would shadow the standard library's `queue`.
 - Ask before starting, with the cost: rejected by ADR 0022 as a confirmation.
