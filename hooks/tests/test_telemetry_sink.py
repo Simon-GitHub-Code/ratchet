@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import telemetry_sink
-from tests.servers import alive, pid_of
+from tests.servers import gone, pid_of
 
 FIXTURES = Path(__file__).parent / "fixtures/otlp"
 EMIT = """
@@ -271,7 +271,7 @@ def test_a_signal_stops_the_command_and_exits_with_it(
     assert code == 128 + signal.SIGTERM
     assert "interrupted by signal" in capsys.readouterr().out
     assert marker.exists()
-    assert not alive(pid_of(marker))
+    assert gone(pid_of(marker))
 
 
 def test_the_exporter_environment_points_at_the_sink_and_keeps_what_the_project_set(

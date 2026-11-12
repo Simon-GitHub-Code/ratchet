@@ -1,6 +1,10 @@
 """Real scratch repositories for the gate-script tests."""
 
+import atexit
+import functools
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -20,21 +24,38 @@ def write(root: Path, path: str, text: str) -> None:
     target.write_text(text, encoding="utf-8")
 
 
+@functools.cache
+def skeleton() -> Path:
+    """The ``.git`` of an empty repository on ``main`` with a committer, made once per process.
+
+    Copying it costs microseconds; ``git init`` and three ``git config`` calls cost a hundred
+    milliseconds of process spawns, once per scratch repository, a thousand times a run.
+    """
+    directory = Path(tempfile.mkdtemp(prefix="ratchet-skeleton-"))
+    atexit.register(shutil.rmtree, directory, ignore_errors=True)
+    git(directory, "init", "-q", "-b", "main")
+    git(directory, "config", "user.email", "t@example.invalid")
+    git(directory, "config", "user.name", "t")
+    git(directory, "config", "commit.gpgsign", "false")
+    return directory / ".git"
+
+
 def repository(root: Path, files: dict[str, str] | None = None) -> Path:
     """A repository on ``main`` with one commit holding ``files`` (a README by default)."""
-    git(root, "init", "-q", "-b", "main")
-    git(root, "config", "user.email", "t@example.invalid")
-    git(root, "config", "user.name", "t")
-    git(root, "config", "commit.gpgsign", "false")
+    shutil.copytree(skeleton(), root / ".git", symlinks=True)
     for path, text in (files or {"README.md": "# A\n"}).items():
         write(root, path, text)
-    commit(root, "feat(core): the clean state")
+    snapshot(root, "feat(core): the clean state")
     return root
 
 
-def commit(root: Path, subject: str) -> str:
+def snapshot(root: Path, subject: str) -> None:
     git(root, "add", "-A")
     git(root, "commit", "-q", "--allow-empty", "-m", subject)
+
+
+def commit(root: Path, subject: str) -> str:
+    snapshot(root, subject)
     return git(root, "rev-parse", "HEAD")
 
 

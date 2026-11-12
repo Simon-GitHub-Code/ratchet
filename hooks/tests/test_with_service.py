@@ -11,7 +11,7 @@ import pytest
 import gatelib
 import with_service
 from tests import servers
-from tests.servers import SERVE, alive, pid_of, python
+from tests.servers import SERVE, gone, pid_of, python
 
 READY = "http://127.0.0.1:{port}/"
 SERVING = python(SERVE)
@@ -47,7 +47,7 @@ def test_smoke_boots_probes_and_stops_the_whole_process_tree(
     boot = f"{python(FORKS_A_WORKER)} {worker}"
     code, out = run("--boot", boot, "--ready", READY, capsys=capsys)
     assert (code, out) == (0, "with_service: green\n")
-    assert not alive(pid_of(worker)), "the worker the service forked did not outlive the stop"
+    assert gone(pid_of(worker)), "the worker the service forked did not outlive the stop"
 
 
 def test_the_command_runs_while_the_service_is_up_and_sees_the_port(
@@ -146,8 +146,8 @@ def test_a_signal_stops_the_command_and_the_service(
     )
     assert code == 128 + signal.SIGTERM
     assert "interrupted by signal" in out
-    assert not alive(pid_of(service))
-    assert not alive(pid_of(command))
+    assert gone(pid_of(service))
+    assert gone(pid_of(command))
 
 
 def test_a_bad_ready_url_or_env_pair_is_a_usage_error() -> None:

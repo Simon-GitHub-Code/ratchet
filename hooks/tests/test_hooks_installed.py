@@ -1,5 +1,6 @@
 """Would a commit run tier 0? Each case is a real repository, none on the machine's git config."""
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -175,13 +176,20 @@ def test_a_hooks_path_from_the_environment_is_named_by_its_scope(
 def test_a_hook_that_never_answers_is_killed_at_the_timeout(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    hook_script(root / ".git/hooks", "pre-commit", "exec sleep 31")
-    hook_script(root / ".git/hooks", "commit-msg", "exec sleep 31")
+    # Why: pgrep searches the whole machine, so the duration carries this process's id; a
+    # parallel worker or another checkout's run sleeping 31 seconds must not look like a leftover.
+    nap = f"31.{os.getpid()}"
+    hook_script(root / ".git/hooks", "pre-commit", f"exec sleep {nap}")
+    hook_script(root / ".git/hooks", "commit-msg", f"exec sleep {nap}")
     monkeypatch.setattr(hooks_installed, "TIMEOUT", 0.5)
     found = problem(root)
     assert "still running after 0.5 seconds" in found.detail
     assert "slow global hook" in found.fix
-    left = subprocess.run(["pgrep", "-f", "sleep 31"], capture_output=True, check=False)  # noqa: S607
+    left = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        ["pgrep", "-f", f"sleep {nap}"],  # noqa: S607 # -- pgrep is resolved from PATH
+        capture_output=True,
+        check=False,
+    )
     assert left.returncode == 1
 
 

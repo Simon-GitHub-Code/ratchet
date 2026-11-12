@@ -10,13 +10,31 @@ export UV_LINK_MODE := "copy"
 default:
     @just --list --unsorted
 
+# The gates of each tier, and the one runner that runs a list of them at once: a tier takes as
+# long as its slowest gate, not the sum, and one run names every red gate. No two of these write
+# the same file or directory; a gate that did would be declared with `--serial`.
+tier0_gates := "lint types validate parse-workflow parse-adapters"
+tier1_gates := "test conformance-self-test lowered-smoke bite"
+parallel := "python3 scripts/parallel.py --runner '" + just_executable() + "' --report .ratchet/timing.jsonl"
+
 # Tier 0: shape.
-tier0: lint types validate parse-workflow parse-adapters
+tier0: sync
+    {{parallel}} -- {{tier0_gates}}
 
-# Tier 1: behaviour.
-tier1: test coverage conformance-self-test lowered-smoke bite
+# Tier 1: behaviour. `test` is the suite once, under coverage, which is the coverage gate too.
+tier1: sync
+    {{parallel}} -- {{tier1_gates}}
 
-check: tier0 tier1
+check: sync
+    {{parallel}} -- {{tier0_gates}} {{tier1_gates}}
+
+# The inner loop: the same gates, stopped at the first red.
+check-fast: sync
+    {{parallel}} --fail-fast -- {{tier0_gates}} {{tier1_gates}}
+
+# One environment sync before the gates start, so no two `uv run` race to build it.
+sync:
+    uv sync --locked
 
 lint:
     uv run ruff check hooks scripts
@@ -38,13 +56,11 @@ parse-workflow:
 parse-adapters:
     node --no-warnings scripts/parse-js.mjs adapter adapters/pi/ratchet-guard.ts adapters/opencode/ratchet-guard.ts
 
+# The suite once, across every core and in random order, under coverage. The gate scripts and
+# their library are absolute paths: every line and branch must run under test, and
+# `fail_under = 100` in pyproject.toml makes this run red when one does not.
 test:
-    uv run pytest -q hooks/tests
-
-# The gate scripts and their library are absolute paths: every line and branch runs under test.
-coverage:
-    uv run coverage run -m pytest -q hooks/tests
-    uv run coverage report
+    uv run pytest -n auto --cov --cov-report=term-missing:skip-covered hooks/tests
 
 conformance-self-test:
     python3 scripts/conformance.py --self-test
