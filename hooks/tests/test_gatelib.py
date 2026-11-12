@@ -282,3 +282,14 @@ def test_a_signal_just_after_the_command_starts_still_stops_it(
     with gatelib.interrupts_raise(), pytest.raises(gatelib.Interrupted):
         gatelib.run_command(sleeper, {})
     assert started[0].poll() is not None
+
+
+def test_the_state_directory_is_made_once_and_ignores_itself(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    state = gatelib.state_dir(root)
+    assert state == root / ".ratchet"
+    (state / "timing.jsonl").write_text("{}\n", encoding="utf-8")
+    assert git(root, "status", "--porcelain") == ""
+    (state / ".gitignore").write_text("*\n!kept\n", encoding="utf-8")
+    assert gatelib.state_dir(root) == state
+    assert (state / ".gitignore").read_text(encoding="utf-8") == "*\n!kept\n", "it is the owner's"

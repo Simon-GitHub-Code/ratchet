@@ -425,3 +425,21 @@ def test_a_repository_not_yet_adopted_is_not_asked_for_hooks(
     monkeypatch.setattr(hooks_installed, "check", REAL_CHECK)
     root = repository(tmp_path, {"README.md": "# A\n"})
     assert route.decide(root, None).stage == "init"
+
+
+def test_several_tickets_with_a_conjecture_route_to_the_drain(tmp_path: Path) -> None:
+    files = {
+        **ADOPTED,
+        ".scratch/f/issues/01-a.md": "# 01: A\n\nStatus: ready-for-agent" + CONJECTURE,
+        ".scratch/f/issues/02-b.md": "# 02: B\n\nBlocked by: 01\n\nStatus: ready-for-agent"
+        + CONJECTURE,
+        ".scratch/f/issues/03-c.md": "# 03: C\n\nStatus: ready-for-agent\n\nBody.\n",
+    }
+    root = repository(tmp_path, files)
+    step = route.decide(root, None)
+    assert (step.command, step.stage) == (route.FEATURE, "drain")
+    assert step.why.startswith("2 agent-ready tickets state a conjecture")
+    assert step.then.startswith("the drain's one report")
+    (root / ".scratch/f/issues/02-b.md").unlink()
+    commit(root, "docs(tracker): one ticket left with a conjecture")
+    assert route.decide(root, None).command == f"{route.FEATURE} .scratch/f/issues/01-a.md"

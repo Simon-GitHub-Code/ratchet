@@ -30,6 +30,7 @@ from unittest import mock
 import change_size
 import commits
 import coverage_groups
+import drain
 import feature_preflight
 import flags
 import hooks_installed
@@ -364,6 +365,28 @@ def commit_after_the_review(root: Path) -> None:
     commit(root, "fix(core): one more thing")
 
 
+QUEUED = ".scratch/the-thing/issues/01-add-the-thing.md"
+BLOCKER = ".scratch/the-thing/issues/02-first.md"
+
+
+def queue_gate(argv: list[str]) -> int:
+    """``drain.py open`` on a ticket of the default branch; the work tree it makes is removed."""
+    root = Path(argv[2])
+    if not (root / QUEUED).is_file():
+        git(root, "switch", "-q", "main")
+        write(root, QUEUED, TICKET)
+        commit(root, "docs(tracker): the ticket")
+    opened = drain.main(["drain", "open", QUEUED, "--root", str(root), "--offline"])
+    drain.main(["drain", "clean", "--all", "--root", str(root)])
+    return opened
+
+
+def behind_an_open_blocker(root: Path) -> None:
+    write(root, QUEUED, TICKET.replace("**Status:**", "Blocked by: 02\n\n**Status:**"))
+    write(root, BLOCKER, "# 02: First\n\n**Status:** `needs-info`\n")
+    commit(root, "docs(tracker): a blocker the owner has not agreed")
+
+
 MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
 STRYKER = ["--tool", "stryker"]
 TICKET_REF = ["tickets/01-add-the-thing.md"]
@@ -415,6 +438,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("merge-ready: a guard path changed", merge_judge, change_config, []),
     ("merge-ready: a flag on by default", merge_judge, flag_born_on, []),
     ("merge-ready: a commit after the review", merge_judge, commit_after_the_review, []),
+    ("queue: a ticket behind an open blocker", queue_gate, behind_an_open_blocker, []),
 ]
 
 

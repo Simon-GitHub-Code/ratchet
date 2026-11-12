@@ -82,11 +82,12 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 | `skills/method/application-types.toml` | the six application types and the questions each is asked; `scripts/application_types.py <type>...` prints the rows a set of types leaves out |
 | `skills/init/` | `/ratchet:init`: the bare bones for any repository: `git init` where needed, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it, the other three plugins' one-time setup, the first commit, the remote and the triage labels |
 | `skills/adopt/` | `/ratchet:adopt`: the steps and the stack-neutral templates that bind the method to a repository's runner, forge and stack |
-| `skills/feature/` | `/ratchet:feature <ticket>`: the feature preflight on an agent-ready ticket, the branch, then the pipeline |
+| `skills/feature/` | `/ratchet:feature <ticket>`: the feature preflight on an agent-ready ticket, the branch, then the pipeline. With no ticket: every agent-ready ticket at once, each in a work tree of its own, merged one at a time, one report |
 | `skills/conjecture/` | `/ratchet:conjecture <ticket>`: the method's one addition to a ticket, drafted from the conversation that produced it |
 | `skills/next/` | `/ratchet:next`: the command the owner types next, decided from the checkout and the tracker |
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
-| `workflows/pipeline.js` | the four-role pipeline (preflight, spec, implement, critic, review) the feature skill runs |
+| `scripts/drain.py` | the queue behind `/ratchet:feature` with no ticket: the plan, the work trees it makes and removes, the rebase, the local merge and the report |
+| `workflows/pipeline.js` | the four-role pipeline (preflight, spec, implement, critic, review) the feature skill runs, and the second review of a change brought up to date behind another merge |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
 | `scripts/` | the gates that ship, in the table above |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |

@@ -21,13 +21,14 @@
 export const meta = {
   name: 'pipeline',
   description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> implement -> adversarial critique -> fix loop -> independent review',
-  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight? } after its own preflight is green; not by hand. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
+  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight? } after its own preflight is green; not by hand. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, assumptions? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
   phases: [
     { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
     { title: 'Spec', detail: 'ticket -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the ticket leaves open questions' },
     { title: 'Implement', detail: 'make the new tests pass test-first with tdd; check green' },
     { title: 'Critique', detail: 'one adversary with the rule of evidence: properties, edge cases, mutation, fuzz, fitness sabotage as binding.md names them' },
     { title: 'Fix', detail: 'fresh implementer per blocker/major round (max 2), re-critique after each' },
+    { title: 'Reconcile', detail: 'rejudge only: the rebase onto the moved default branch finished and check green again' },
     { title: 'Review', detail: 'independent code-review of the diff on the spec, standards and guard axes; the script forces the verdict from the evidence' },
   ],
 }
@@ -51,6 +52,9 @@ const BASE = typeof ARGS.base === 'string' && ARGS.base ? ARGS.base : 'main'
 const ROOT = typeof ARGS.root === 'string' && ARGS.root ? ARGS.root : ''
 const PREFLIGHT_SCRIPT = typeof ARGS.preflight === 'string' && ARGS.preflight ? ARGS.preflight : ''
 const MAX_FIX_ITERATIONS = 2
+// A branch brought up to date behind another merge is judged again, not built again (ADR 0024):
+// the skill passes what the first run returned, and only Reconcile and Review run.
+const REJUDGE = ARGS.rejudge && typeof ARGS.rejudge === 'object' ? ARGS.rejudge : null
 // The branch is the preflight's to derive (feature/<number>-<slug>) unless the skill passed it.
 let BRANCH = typeof ARGS.branch === 'string' && ARGS.branch ? ARGS.branch : ''
 let SLUG = ''
@@ -107,14 +111,20 @@ Guard paths and gate disputes:
   owner decides.
 `
 
-function commonRules() {
+function commonRules(rebasing) {
+  const uncommitted = rebasing
+    ? `- The branch holds the change as commits. Every edit you make stays uncommitted on the
+  working tree; the orchestrator commits it. The git commands you run are read-only, plus the
+  \`git switch\` above and the three that finish the rebase: \`git rebase ${BASE}\`,
+  \`git add <a file you resolved>\` and \`git rebase --continue\`.`
+    : `- Every change you make stays uncommitted on the working tree; the orchestrator commits and
+  publishes. The git commands you run are read-only, plus the \`git switch\` above.`
   return `
 Ground rules for every agent in this pipeline:
 - Work in ${ROOT_HINT} on branch \`${BRANCH}\`.
   First run \`git rev-parse --abbrev-ref HEAD\`; if it does not print \`${BRANCH}\`, run
   \`git switch ${BRANCH}\` (or \`git switch -c ${BRANCH} ${BASE}\` if the branch does not exist).
-- Every change you make stays uncommitted on the working tree; the orchestrator commits and
-  publishes. The git commands you run are read-only, plus the \`git switch\` above.
+${uncommitted}
 - Vocabulary comes from the glossary: use its terms in code, tests and docs; its Avoid lists
   are banned identifiers.
 - The project's non-negotiables are whatever AGENTS.md lists; its declared paths and their
@@ -575,6 +585,39 @@ critic's tests pass and \`check\` exits 0; otherwise return with \`checkPasses: 
 explain.`
 }
 
+function reconcilePrompt(spec, conflicts) {
+  return `${PREAMBLE}
+You are the RECONCILE agent for feature \`${spec.slug}\` of this repository. The feature was
+built and approved. Then another change merged into \`${BASE}\`, and this branch must hold
+that change before it can merge. You bring the two together and change nothing else.
+${commonRules(true)}
+Inputs you may read:
+- The spec: \`${spec.specPath}\`
+- The branch's own change: \`git diff ${BASE}...${BRANCH}\`
+- What merged meanwhile: \`git log --oneline ${BRANCH}..${BASE}\` and its diff
+- AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/
+Paths the rebase stopped on when it was tried: ${JSON.stringify(conflicts)}
+
+Do this, in order:
+1. If \`git merge-base --is-ancestor ${BASE} HEAD\` fails, run \`git rebase ${BASE}\`. At each
+   stop, resolve every conflicted file so that both changes hold: both flags stay in the
+   registry, both terms in the glossary, both routes in the application. Where the two cannot
+   both hold, \`${BASE}\` stands as it is and this feature's code adapts to it. Then
+   \`git add\` each file you resolved and \`git rebase --continue\`. Never \`--skip\` a commit
+   and never take one side of a whole file.
+2. Run \`check\`. A red gate is answered by changing this feature's code, never the other
+   change's and never a gate. A number the other change took first (a decision record, a
+   migration) is the other change's: give this feature's file the next free one. A test of
+   this feature that the other change made wrong is fixed to assert what spec.md says.
+3. Stop when the rebase is finished and \`check\` exits 0. If you cannot get there, run
+   \`git rebase --abort\` if a rebase is still in progress, and return with
+   \`checkPasses: false\`.
+
+\`filesChanged\` lists the files you edited after the rebase finished; \`allNewTestsPass\` is
+whether the spec's tests pass; \`notes\` names each conflict and how you resolved it, since
+the reviewer reads the result and not your reasoning.`
+}
+
 function critiquePrompt(spec, filesChanged, previousRound) {
   const previous = previousRound
     ? `
@@ -662,13 +705,24 @@ ${SEVERITY} \`check\` is expected to be red only on the failing tests you kept; 
 finding evidence.`
 }
 
-function reviewPrompt(spec) {
+function reviewPrompt(spec, again) {
+  const second = again
+    ? `
+This is a second review. The feature was built and approved; then another change merged into
+\`${BASE}\` and this branch was rebased onto it. Judge the change as it stands now, against the
+records as they are now: a term, a decision record, a flag or a route the other change added is
+part of \`${BASE}\` and a standard here, which this change must neither contradict nor repeat.
+The change is committed on the branch, with whatever the reconcile step edited uncommitted on
+top; \`git diff ${BASE}\` shows both, and nothing of the other change.
+`
+    : ''
   return `${PREAMBLE}
 You are the independent REVIEWER for feature \`${spec.slug}\` of this repository.
-${commonRules()}
+${commonRules()}${second}
 Inputs you may read, and nothing else:
 - The spec: \`${spec.specPath}\`
-- The uncommitted diff: the change is uncommitted on branch \`${BRANCH}\`. Enumerate it with
+- The diff: the change is on branch \`${BRANCH}\`, uncommitted unless this is a second review.
+  Enumerate it with
   \`git diff ${BASE} --stat\`, \`git diff ${BASE}\` and \`git status --porcelain\` (untracked files are
   new files: read them). If the branch has commits, \`git diff ${BASE}...${BRANCH}\` is equivalent.
 - AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
@@ -796,14 +850,101 @@ function verdictRecord({ slug, ticket, verdict, forcedBy, findings, openQuestion
     verdict,
     forcedBy: forcedBy || [],
     unresolved: titles,
-    openQuestions: (openQuestions || []).map(String),
+    openQuestions: (openQuestions || []).map(questionText),
     assumptions: assumptions || [],
   }
+}
+
+// The judge reads an open question as a text; the spec role returns it with its options.
+function questionText(question) {
+  return String(question && typeof question === 'object' ? question.question || '' : question)
+}
+
+// What a review of the branch as it now stands forces, when the branch was brought up to date
+// behind another merge (ADR 0024): the same evidence rules as the first review, less the
+// critic's, whose findings the first run already closed.
+function rejudged({ review, reconcile, dependencies }) {
+  const covered = coveredGuardPaths(reconcile ? reconcile.disputes : [], review.disputeCoverage)
+  for (const p of specDecidedDependencies(dependencies, review.dependencyNotes)) covered.add(p)
+  for (const p of additiveRecords(review.recordNotes)) covered.add(p)
+  const undisputed = (review.guardChanges || []).filter(p => p && !covered.has(p))
+  const issues = blocking(review.issues)
+  const forced = []
+  if (undisputed.length) forced.push(`guard paths changed without a dispute record, a spec-named dependency or an additions note covering them: ${undisputed.join(', ')}`)
+  if (issues.length) forced.push(`${issues.length} blocker/major review issue(s)`)
+  if (reconcile && reconcile.checkPasses !== true) forced.push('the reconcile result reported checkPasses: false')
+  if (review.checkPasses !== true) forced.push('the review reported checkPasses: false')
+  return { forced, issues, undisputed, verdict: forced.length ? 'request_changes' : review.verdict }
 }
 
 function must(result, label) {
   if (!result) throw new Error(`${label} agent returned no result (skipped or died); resume the run to retry`)
   return result
+}
+
+// ---------------------------------------------------------------------------
+// Rejudge. The branch is built, approved and committed; the default branch moved under it and
+// the skill rebased it (scripts/drain.py update). No preflight: the ticket was checked before
+// the first run, and the branch may already resolve it. The result's verdictRecord replaces the
+// first run's, so the record names a tree a review saw.
+// ---------------------------------------------------------------------------
+if (REJUDGE) {
+  SLUG = String(REJUDGE.slug || '')
+  const spec = { slug: SLUG, specPath: String(REJUDGE.specPath || '') }
+  if (!SLUG || !spec.specPath || !BRANCH) {
+    throw new Error('rejudge needs args.branch and args.rejudge = { slug, specPath }: pass what the first run returned')
+  }
+  const conflicts = (REJUDGE.conflicts || []).filter(Boolean)
+  let reconcile = null
+  if (conflicts.length > 0 || REJUDGE.checkRed === true) {
+    phase('Reconcile')
+    reconcile = must(
+      await agent(reconcilePrompt(spec, conflicts), { label: 'reconcile', phase: 'Reconcile', schema: IMPLEMENT_SCHEMA }),
+      'reconcile',
+    )
+    log(`Reconcile: ${conflicts.length} conflicted path(s), check=${reconcile.checkPasses}`)
+  }
+  phase('Review')
+  const review = must(await agent(reviewPrompt(spec, true), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
+  const judged = rejudged({ review, reconcile, dependencies: REJUDGE.dependencies })
+  log(`Review again: ${review.verdict}` + (judged.forced.length ? `; forced to request_changes: ${judged.forced.join('; ')}` : ''))
+  return {
+    slug: SLUG,
+    ref: REF,
+    rejudged: true,
+    verdict: judged.verdict,
+    verdictForcedBy: judged.forced,
+    filesChanged: reconcile ? reconcile.filesChanged : [],
+    reconcileNotes: reconcile ? reconcile.notes : '',
+    disputes: reconcile ? reconcile.disputes || [] : [],
+    reviewIssues: review.issues,
+    reviewVerdict: review.verdict,
+    adrSuggested: review.adrSuggested,
+    guardChanges: review.guardChanges,
+    undisputedGuardChanges: judged.undisputed,
+    dependencyNotes: review.dependencyNotes ?? [],
+    recordNotes: review.recordNotes ?? [],
+    specPath: spec.specPath,
+    assumptions: REJUDGE.assumptions ?? [],
+    checkPasses: review.checkPasses === true,
+    checkOutput: review.checkOutput,
+    branch: BRANCH,
+    verdictRecord: verdictRecord({
+      slug: SLUG,
+      ticket: REF,
+      verdict: judged.verdict,
+      forcedBy: judged.forced,
+      findings: judged.issues,
+      openQuestions: [],
+      assumptions: REJUDGE.assumptions,
+    }),
+    requiredByOrchestrator: [
+      'verdict is "approve": anything else leaves the branch to the owner, with verdictForcedBy as the reasons',
+      'filesChanged, when the reconcile step edited anything, is committed on the branch before the verdict record',
+      'verdictRecord goes on stdin to the `merge-ready` entry point with `record`, and the record is committed alone, last',
+      'the merge is the merge judge\'s to decide: report its lines and merge nothing by hand',
+    ],
+  }
 }
 
 // ---------------------------------------------------------------------------

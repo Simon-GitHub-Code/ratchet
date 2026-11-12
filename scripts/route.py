@@ -322,12 +322,39 @@ def own_branch(ticket: preflight.Ticket) -> str:
     return preflight.branch_of(ticket, preflight.slug_of(ticket.title, ticket.number))
 
 
-def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
-    """The step among the tickets: write one, give one its conjecture, or build one."""
+def agent_ready(root: Path, gh: preflight.Runner | None) -> tuple[list[preflight.Ticket], bool]:
+    """The open agent-ready tickets, and whether they are local files or the tracker's."""
     tickets = tracker_tickets(root, gh) if gh is not None else None
-    local = tickets is None
-    if tickets is None:
-        tickets = local_tickets(root)
+    return (local_tickets(root), True) if tickets is None else (tickets, False)
+
+
+def build_step(ready: list[preflight.Ticket], queue: int, checkout: Checkout) -> Step | None:
+    """The build among the tickets that state a conjecture: the drain for several, else the one."""
+    if not ready:
+        return None
+    if queue > 1:
+        return Step(
+            FEATURE,
+            f"{queue} agent-ready tickets state a conjecture: with no ticket named the command"
+            " builds them at once, each in a work tree of its own, and merges what the merge judge"
+            f" passes; {FEATURE} <ticket> builds one, and {POTETO} <ticket> when you stay at the"
+            " keyboard",
+            "the drain's one report: what merged, what waits for you and why, every assumption",
+            "drain",
+        )
+    ticket = ready[0]
+    return Step(
+        f"{FEATURE} {ticket.ref}",
+        f'ticket {ticket.ref} "{ticket.title}" is agent-ready with a conjecture;'
+        f" {POTETO} {ticket.ref} instead when you stay at the keyboard",
+        review(checkout),
+        "build",
+    )
+
+
+def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
+    """The step among the tickets: write one, give one its conjecture, or build them."""
+    tickets, local = agent_ready(root, gh)
     if not tickets:
         return (triage_step(root) or unsplit_spec(root) if local else None) or Step(
             SPEC,
@@ -348,6 +375,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             "specify",
         )
     runs = blocked_runs(root, checkout.default_branch)
+    stated = [t for t in tickets if not stalled(t, runs) and has_conjecture(t, root, offline_gh)]
     tickets = [t for t in unblocked if not stalled(t, runs)]
     if not tickets:
         held = unblocked[0]
@@ -360,17 +388,10 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             f"{FEATURE} {held.ref}, or {POTETO} {held.ref} now to make the edits as the guard asks",
             "blocked-run",
         )
-    for ticket in tickets:
-        if has_conjecture(ticket, root, offline_gh):
-            return Step(
-                f"{FEATURE} {ticket.ref}",
-                f'ticket {ticket.ref} "{ticket.title}" is agent-ready with a conjecture;'
-                f" {POTETO} {ticket.ref} instead when you stay at the keyboard",
-                review(checkout),
-                "build",
-            )
     first = tickets[0]
-    return Step(
+    # Why: a ticket blocked only by another in the queue is built by the same drain (ADR 0024).
+    ready = [ticket for ticket in tickets if ticket in stated]
+    return build_step(ready, len(stated), checkout) or Step(
         f"{CONJECTURE} {first.ref}",
         f'ticket {first.ref} "{first.title}" is agent-ready but states no conjecture',
         f"{FEATURE} {first.ref}",

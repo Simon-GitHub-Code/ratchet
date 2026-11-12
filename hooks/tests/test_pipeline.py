@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import merge_ready
 from tests.repos import branch, commit, repository, write
@@ -141,3 +142,171 @@ def test_the_judge_passes_the_record_the_script_builds(tmp_path: Path) -> None:
     assert merge_ready.write_record(root, json.dumps(record)) == 0
     commit(root, "docs(thing): the verdict record")
     assert merge_ready.judge(root, "main", "HEAD") == []
+
+
+# --- the whole script, run with agents that answer from a table ------------------------------
+
+HARNESS = """
+const text = require('fs').readFileSync(process.argv[1], 'utf8')
+const source = text.replace('export const meta', 'const meta')
+const [args, answers] = JSON.parse(process.argv[2])
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+const labels = []
+const prompts = {}
+const logs = []
+const agent = async (prompt, options) => {
+  labels.push(options.label)
+  prompts[options.label] = prompt
+  return answers[options.label] ?? null
+}
+const run = new AsyncFunction('args', 'agent', 'phase', 'log', source)
+run(args, agent, () => {}, line => logs.push(line)).then(
+  result => console.log(JSON.stringify({ result, labels, prompts, logs })),
+  error => console.log(JSON.stringify({ error: error.message, labels })),
+)
+"""
+REVIEW = {
+    "verdict": "approve",
+    "issues": [],
+    "adrSuggested": "",
+    "guardChanges": [],
+    "disputeCoverage": [],
+    "dependencyNotes": [],
+    "recordNotes": [],
+    "checkPasses": True,
+    "checkOutput": "check: green",
+}
+IMPLEMENTED = {
+    "filesChanged": ["src/links.py"],
+    "allNewTestsPass": True,
+    "checkPasses": True,
+    "checkOutput": "check: green",
+    "disputes": [],
+    "notes": "",
+}
+PREFLIGHT = {
+    "ok": True,
+    "slug": "expiry",
+    "branch": "feature/4-expiry",
+    "number": "4",
+    "title": "T",
+}
+SPECIFIED = {
+    "slug": "expiry",
+    "specPath": "docs/features/expiry/spec.md",
+    "testFiles": ["tests/test_expiry.py"],
+    "layersTouched": [],
+    "openQuestions": [],
+    "assumptions": [{"question": "q", "assumed": "a", "refuter": "r"}],
+    "dependencies": [],
+    "guardEdits": [],
+    "failingForRightReason": True,
+    "failures": [{"testFile": "tests/test_expiry.py", "content": "NameError: expire"}],
+    "checkOutput": "1 failed",
+}
+CRITIQUED = {
+    "findings": [],
+    "testsAdded": [],
+    "guardFilesChanged": [],
+    "attempted": ["an expiry in the past"],
+    "fitnessSabotageConfirmed": True,
+    "fitnessSabotageSummary": "",
+}
+REJUDGE = {"slug": "expiry", "specPath": "docs/features/expiry/spec.md"}
+ASKED = {
+    "question": "Does an expired link say so, or send the visitor home?",
+    "kind": "direction",
+    "options": ["A page that says it expired", "The home page"],
+    "recommendation": "The brief says a visitor is never left guessing.",
+}
+
+
+def _run(args: object, **answers: object) -> dict[str, Any]:
+    """What the script returns for ``args`` when each agent answers ``answers[its label]``."""
+    node = shutil.which("node")
+    assert node, "node runs the workflow script"
+    run = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        [node, "-e", HARNESS, str(PIPELINE), json.dumps([args, answers])],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    ran: dict[str, Any] = json.loads(run.stdout)
+    return ran
+
+
+def _again(rejudge: dict[str, object], **answers: object) -> dict[str, Any]:
+    args = {"ref": "4", "branch": "feature/4-expiry", "rejudge": {**REJUDGE, **rejudge}}
+    return _run(args, **answers)
+
+
+def test_a_branch_brought_up_to_date_is_reviewed_again_and_not_built_again() -> None:
+    assumption = {"question": "q", "assumed": "a", "refuter": "r"}
+    ran = _again({"assumptions": [assumption]}, **{"review-again": REVIEW})
+    assert ran["labels"] == ["review-again"], "no preflight, no spec, no implementer, no critic"
+    assert "This is a second review." in ran["prompts"]["review-again"]
+    result = ran["result"]
+    assert (result["rejudged"], result["verdict"], result["filesChanged"]) == (True, "approve", [])
+    assert result["verdictRecord"] == {
+        "slug": "expiry",
+        "ticket": "4",
+        "verdict": "approve",
+        "forcedBy": [],
+        "unresolved": [],
+        "openQuestions": [],
+        "assumptions": [assumption],
+    }
+
+
+def test_a_conflict_or_a_red_check_brings_the_reconcile_agent_first() -> None:
+    reconciled = {**IMPLEMENTED, "filesChanged": ["flags.toml"], "notes": "both flags kept"}
+    answers = {"reconcile": reconciled, "review-again": REVIEW}
+    ran = _again({"conflicts": ["flags.toml", ""]}, **answers)
+    assert ran["labels"] == ["reconcile", "review-again"]
+    assert 'stopped on when it was tried: ["flags.toml"]' in ran["prompts"]["reconcile"]
+    assert "git rebase --continue" in ran["prompts"]["reconcile"]
+    result = ran["result"]
+    assert (result["verdict"], result["filesChanged"]) == ("approve", ["flags.toml"])
+    assert result["reconcileNotes"] == "both flags kept"
+    assert _again({"checkRed": True}, **answers)["labels"] == ["reconcile", "review-again"]
+    red = _again(
+        {"checkRed": True}, **{**answers, "reconcile": {**reconciled, "checkPasses": False}}
+    )
+    assert red["result"]["verdict"] == "request_changes"
+    assert red["result"]["verdictForcedBy"] == ["the reconcile result reported checkPasses: false"]
+
+
+def test_the_second_review_is_held_to_the_first_ones_evidence_rules() -> None:
+    finding = {"severity": "major", "title": "repeats a term the other change defined"}
+    review = {
+        **REVIEW,
+        "issues": [finding],
+        "guardChanges": ["pyproject.toml"],
+        "checkPasses": False,
+    }
+    result = _again({}, **{"review-again": review})["result"]
+    assert result["verdict"] == "request_changes"
+    assert result["verdictForcedBy"] == [
+        (
+            "guard paths changed without a dispute record, a spec-named dependency or an additions"
+            " note covering them: pyproject.toml"
+        ),
+        "1 blocker/major review issue(s)",
+        "the review reported checkPasses: false",
+    ]
+    assert result["verdictRecord"]["unresolved"] == ["repeats a term the other change defined"]
+    note = {"path": "pyproject.toml", "note": "dependencies added", "packages": ["attrs"]}
+    named = {**REVIEW, "guardChanges": ["pyproject.toml"], "dependencyNotes": [note]}
+    dependencies = [{"name": "attrs", "reason": "value objects"}]
+    covered = _again({"dependencies": dependencies}, **{"review-again": named})["result"]
+    assert (covered["verdict"], covered["undisputedGuardChanges"]) == ("approve", [])
+
+
+def test_a_rejudge_without_what_the_first_run_returned_is_an_error() -> None:
+    ran = _run({"ref": "4", "branch": "feature/4-expiry", "rejudge": {"slug": "expiry"}})
+    assert ran["error"].startswith(
+        "rejudge needs args.branch and args.rejudge = { slug, specPath }"
+    )
+    assert ran["labels"] == []
+    died = _again({}, **{"review-again": None})
+    assert died["error"].startswith("review agent returned no result")

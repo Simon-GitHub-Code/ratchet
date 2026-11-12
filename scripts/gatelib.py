@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 FALLBACK_BRANCHES = ("main", "master")
 BINDING = Path("docs/process/binding.md")
 THRESHOLDS = Path("quality/thresholds.toml")
+STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
 
 
@@ -99,6 +100,20 @@ def entry_point(root: Path, name: str) -> str | None:
     text = read_text(root / BINDING) or ""
     row = re.search(rf"^\|\s*{re.escape(name)}\s*\|\s*`([^`]+)`\s*\|", text, re.MULTILINE)
     return row.group(1) if row else None
+
+
+def state_dir(root: Path) -> Path:
+    """``root``'s directory of uncommitted method state, made on first use and ignored by itself.
+
+    Why: the gates' timings, the queue's ledger and the question log belong to one clone and to no
+    commit, and a work tree they made dirty would turn the feature preflight red.
+    """
+    directory = root / STATE
+    directory.mkdir(parents=True, exist_ok=True)
+    ignore = directory / ".gitignore"
+    if not ignore.is_file():
+        ignore.write_text("*\n", encoding="utf-8")
+    return directory
 
 
 def subjects(root: Path, base: str) -> list[str]:

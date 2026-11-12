@@ -1,6 +1,6 @@
 # The feature pipeline
 
-One agent grading its own work is confirmation, not criticism. A feature is therefore built by four roles with fixed sight lines, run by the `pipeline` workflow the plugin ships (`workflows/pipeline.js`), which the `/ratchet:feature <ticket>` skill invokes once its preflight is green. The script is a pure function of its arguments and the agents' structured results, so it resumes cleanly. Each role does its work with the other plugins' skills; the method fixes what a role sees, what it returns and when it is done.
+One agent grading its own work is confirmation, not criticism. A feature is therefore built by four roles with fixed sight lines, run by the `pipeline` workflow the plugin ships (`workflows/pipeline.js`), which the `/ratchet:feature` skill invokes once its preflight is green: once for a ticket, and once for each ticket when it drains the queue ([the drain](#the-drain) below). The script is a pure function of its arguments and the agents' structured results, so it resumes cleanly. Each role does its work with the other plugins' skills; the method fixes what a role sees, what it returns and when it is done.
 
 ## Roles
 
@@ -38,3 +38,15 @@ The orchestrator is the `/ratchet:feature` skill's session: it runs the prefligh
 5. Write the verdict record: put the result's `verdictRecord` on stdin of the `merge-ready` entry point's `record` form (`just merge-ready record`), and commit the `docs/features/<slug>/verdict.json` it writes alone, as the last commit. The record names the tree the review saw, so any commit after it sends the merge to the owner.
 6. Push, and open the pull request with every section of the repository's template filled ([records.md](records.md)), every entry of `recordNotes` (each added term, *Avoid* item and ADR) listed in the Decisions section. With no forge nothing is pushed.
 7. The merge judge decides who merges, never the orchestrator ([guards.md](guards.md), ADR 0021). Run the `merge-ready` entry point and report its lines: `merge: agent`, or `merge: owner` with every reason. On a forge the pull request's merge job asks the same judge once `ci` is green, merges what it passes and comments why on the rest. With no forge run the `merge` entry point with the branch (`just merge <branch>`): it judges, runs `check` on the merge result and merges, or prints why the merge is the owner's. Merge nothing by hand.
+
+## The drain
+
+`/ratchet:feature` with no ticket builds every agent-ready ticket (ADR 0024). `scripts/drain.py` holds everything about it that needs no judgement, and the skill runs the pipelines.
+
+- **The plan.** `drain.py plan` lists the open agent-ready tickets with the preflight's verdict on each, ordered by their `Blocked by` lines: `buildable`, `building`, `built`, `waiting`, `held`, `merged` or `refused`. It starts at most three at once unless the owner names another number, and prints the most agents the drain can run: nine for each ticket and two more for each one judged again.
+- **A work tree per ticket.** `drain.py open <ticket>` makes the ticket's branch and work tree under the temporary directory, outside the repository, and only when the plan starts that ticket. The pipeline runs there (`args.root`). `close`, `land` and `clean` remove it, so no work tree is left for an agent to remember.
+- **Merging is serial.** One result is settled at a time. When another change merged first, `drain.py update <ticket>` rebases the branch onto the default branch, or names the conflicts and leaves it as it was. The pipeline then runs with `args.rejudge`: one reconcile agent when the rebase conflicted or `check` went red, and the reviewer again on the change as it now stands. The verdict record comes from that review, since the first one saw another tree. `ratchet` runs after the rebase.
+- **The judge merges.** With no forge `drain.py land <ticket>` runs the `merge` entry point and closes the ticket with the judge's lines. With a forge the skill opens the pull request and watches it, and the merge job merges.
+- **A ticket that cannot go on is parked.** An open question, a guard edit, a dispute, a verdict that is not an approval or a `merge: owner` closes the ticket with the reasons as given, and the others go on. A parked ticket is held until its text changes.
+- **One report.** `drain.py report` writes `.ratchet/queue/<date>-<time>.md`: what merged, what waits for the owner and why, what is parked, every assumption with its refuter, every record added, the time each ticket took. The owner's questions come after it.
+- **An interrupted drain.** The next one starts with `drain.py clean --all`. A merged ticket is done, a branch with commits goes to the judge, and a build that had not committed is built again.
