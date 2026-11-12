@@ -569,20 +569,33 @@ def stub_service() -> Iterator[str]:
         thread.join()
 
 
-def run_service(gate: Gate, arguments: list[str], stub: str) -> int:
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        return gate(["gate", *(argument.replace("{stub}", stub) for argument in arguments)])
+def quietly(gate: Gate, argv: list[str]) -> tuple[int, str]:
+    """The gate's exit code and what it printed."""
+    said = io.StringIO()
+    with redirect_stdout(said), redirect_stderr(said):
+        code = gate(argv)
+    return code, said.getvalue()
 
 
-def run(gate: Gate, root: Path, flags: list[str]) -> int:
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        return gate(["gate", "--root", str(root), *flags])
+def run_service(gate: Gate, arguments: list[str], stub: str) -> tuple[int, str]:
+    return quietly(gate, ["gate", *(argument.replace("{stub}", stub) for argument in arguments)])
 
 
-def verdict(label: str, *, green: bool, red: bool) -> bool:
-    """Print the scenario's line; whether the gate bit and passed."""
+def run(gate: Gate, root: Path, flags: list[str]) -> tuple[int, str]:
+    return quietly(gate, ["gate", "--root", str(root), *flags])
+
+
+def verdict(label: str, clean: tuple[int, str], faulty: tuple[int, str]) -> bool:
+    """Print the scenario's line; whether the gate bit and passed.
+
+    A gate red on the clean state prints what it said, so the red explains itself.
+    """
+    green, red = clean[0] == 0, faulty[0] != 0
     text = "bites" if red and green else "DOES NOT BITE" if green else "RED ON CLEAN STATE"
     print(f"bite: {label}: {text}")
+    if not green:
+        for line in clean[1].splitlines():
+            print(f"  {line}")
     return red and green
 
 
@@ -607,15 +620,13 @@ def scenarios(scratch_dir: Path) -> int:
         root = scratch_dir / label.replace(" ", "-").replace(":", "")
         root.mkdir()
         scratch(root)
-        green = run(gate, root, options) == 0
+        clean = run(gate, root, options)
         violate(root)
-        red = run(gate, root, options) != 0
-        failures += not verdict(label, green=green, red=red)
+        failures += not verdict(label, clean, run(gate, root, options))
     with stub_service() as url:
         for label, gate, healthy, violating in SERVICE_SCENARIOS:
-            green = run_service(gate, healthy, url) == 0
-            red = run_service(gate, violating, url) != 0
-            failures += not verdict(label, green=green, red=red)
+            clean = run_service(gate, healthy, url)
+            failures += not verdict(label, clean, run_service(gate, violating, url))
     return 1 if failures else 0
 
 

@@ -1,5 +1,6 @@
 """``bite.py``: every shipped gate goes red on its violation and green without it."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,12 @@ def test_a_gate_that_does_not_bite_fails_the_run(
         "SCENARIOS",
         [
             ("asleep", lambda _argv: 0, bite.add_marker, []),
-            ("broken", lambda _argv: 1, bite.add_marker, []),
+            (
+                "broken",
+                lambda _argv: sys.stdout.write("why it is red\n") and 1,
+                bite.add_marker,
+                [],
+            ),
         ],
     )
     monkeypatch.setattr(
@@ -50,7 +56,8 @@ def test_a_gate_that_does_not_bite_fails_the_run(
     )
     assert bite.bite(tmp_path) == 1
     assert capsys.readouterr().out == (
-        "bite: asleep: DOES NOT BITE\nbite: broken: RED ON CLEAN STATE\nbite: deaf: DOES NOT BITE\n"
+        "bite: asleep: DOES NOT BITE\nbite: broken: RED ON CLEAN STATE\n  why it is red\n"
+        "bite: deaf: DOES NOT BITE\n"
     )
 
 
