@@ -108,6 +108,16 @@ ADDITIVE: list[tuple[str, str, list[str]]] = [
         ["term Click (avoid: hit, visit)"],
     ),
     ("blank lines and trailing spaces", change("### Links\n", "### Links  \n\n\n") + "\n\n", []),
+    (
+        "a term all in another script, and a comparison in its text",
+        GLOSSARY + "\n**\u041c\u043e\u0441\u0442**:\nA bridge, when a < b - c.\n",
+        ["term \u041c\u043e\u0441\u0442"],
+    ),
+    (
+        "emphasis and a list inside a new entry",
+        GLOSSARY + "\n**Click**:\nOne *redirect*: counted once.\n- a first\n- a second\n",
+        ["term Click"],
+    ),
     ("Windows line endings", GLOSSARY.replace("\n", "\r\n"), []),
     (
         "a term and an Avoid item together",
@@ -335,6 +345,74 @@ NOT_ADDITIVE: list[tuple[str, str, str]] = [
         "a comment opened in a cluster heading",
         GLOSSARY + "\n### Old <!--\n",
         "it adds the heading '### Old <!--', which is not a cluster heading (### or deeper)",
+    ),
+    (
+        "a term with one Cyrillic letter that reads as a term the glossary has",
+        GLOSSARY + "\n**L\u0456nk**:\nAny URL at all.\n",
+        "the new term L\u0456nk mixes Latin and Cyrillic letters",
+    ),
+    (
+        "a term in Greek and Latin letters",
+        GLOSSARY + "\n**\u039fpen link**:\nAny URL at all.\n",
+        "the new term \u039fpen link mixes Latin and Greek letters",
+    ),
+    (
+        "a term all in Cyrillic capitals that reads as a term the glossary has",
+        GLOSSARY + "\n**COPY**:\nA duplicate.\n\n**\u0421\u041e\u0420\u0423**:\nAny URL.\n",
+        "it adds the term COPY, which reads as the term \u0421\u041e\u0420\u0423",
+    ),
+    (
+        "a term with an accent that reads as a term the glossary has",
+        GLOSSARY + "\n**L\u00ednk**:\nAny URL at all.\n",
+        "it adds the term L\u00ednk, which reads as the term Link",
+    ),
+    (
+        "an Avoid item that reads as a term, in another script",
+        GLOSSARY + "\n**Click**:\nOne redirect.\n_Avoid_: \u0405hort \u0441ode\n",
+        "it puts \u0405hort \u0441ode under _Avoid_ for Click, and Short code is a term",
+    ),
+    (
+        "a bold-italic line that redefines a term inside a new entry",
+        GLOSSARY + "\n**Click**:\nOne redirect.\n\n***Link***:\nAny URL at all.\n",
+        "the new term Click holds a line that reads as a term of its own: '***Link***:'",
+    ),
+    (
+        "an underscored line that reads as a term inside a new entry",
+        GLOSSARY + "\n**Click**:\nOne redirect.\n  __Link:__ any URL at all.\n",
+        (
+            "the new term Click holds a line that reads as a term of its own:"
+            " '  __Link:__ any URL at all.'"
+        ),
+    ),
+    (
+        "a line a row of equals signs turns into a heading",
+        GLOSSARY + "\n**Click**:\nOne redirect.\n\nDecisions\n===\n",
+        "the new term Click holds the underline of a heading: '==='",
+    ),
+    (
+        "a line a row of hyphens turns into a heading",
+        GLOSSARY + "\n**Click**: one redirect.\n ---\n",
+        "the new term Click holds the underline of a heading: ' ---'",
+    ),
+    (
+        "a tag that hides the terms after it",
+        change("### People", "**Note**:\nSee <details>\n\n### People"),
+        "the new term Note holds raw HTML",
+    ),
+    (
+        "a tag opened on a term's own line and never closed",
+        GLOSSARY + "\n**Note**: see <textarea\n",
+        "the new term Note holds raw HTML",
+    ),
+    (
+        "a style tag in an existing term's Avoid list",
+        change("mapping, shortlink", "mapping, shortlink, <style>*{display:none}"),
+        "a new _Avoid_ item of Link holds raw HTML",
+    ),
+    (
+        "a tag in a cluster heading",
+        GLOSSARY + "\n### Old <style>\n",
+        "it adds the heading '### Old <style>', which is not a cluster heading (### or deeper)",
     ),
     ("a Write that truncates", "", "the heading '# Glossary' is gone, changed or moved"),
     (

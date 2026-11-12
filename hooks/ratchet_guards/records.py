@@ -20,6 +20,11 @@ cannot read: a path that is neither kind of record, a line break other than a ne
 indented term, ``_Avoid_`` line or heading, a term defined twice. The check reads shape, never
 meaning: a new term can restate an old concept and a new record can contradict an old one. The
 listing shows both to the owner; no gate catches either.
+
+New glossary text is also refused when a reader of the rendered page would take it for
+something the listing does not show (ADR 0024): a term that mixes Latin, Cyrillic and Greek
+letters or whose ``skeleton`` is another term's, a line inside a new entry that renders as a
+term of its own or as the underline of a heading, and raw HTML.
 """
 
 import re
@@ -44,6 +49,21 @@ _CLUSTER_LEVEL = 3
 # Why: a fence or a comment opened in one new entry and closed in another hides the entries
 # between them from a reader of the rendered page, while every line parser still reads them.
 _HIDES = ("```", "~~~", "<!--", "-->")
+# Why: `<style>`, `<details>` and `<textarea>` hide or restyle every entry up to their closing
+# tag, and a tag need not close on the line that opens it. `a < b` is not one.
+_TAG = re.compile(r"<[A-Za-z/!?]")
+# Why: a line under a paragraph made only of `=` or `-` turns that paragraph into a heading.
+_UNDERLINE = re.compile(r"^\s*(?:=+|-+)\s*$")
+# Why: `***Order***:`, `__Order__:` and `*Order*:` render as a term line and are none to `_TERM`.
+_TERMLIKE = re.compile(r"^\s*[*_]{1,3}[^*_]+?(?:[*_]{1,3}\s*:|:\s*[*_]{1,3})")
+_SCRIPTS = ("LATIN", "CYRILLIC", "GREEK")
+# Why: NFKC merges the compatibility forms of one letter and leaves apart two letters of
+# different scripts that are drawn alike, so `fold` reads the Cyrillic capital O and the Latin
+# one as two terms.
+_LOOKALIKES = str.maketrans(
+    "АВЕЅІЈКМНОРСТУХԚԜаеѕіјкорсухԁԛԝһӏΑΒΕΖΗΙΚΜΝΟΡΤΥΧαικνορυϲϳ",
+    "ABESIJKMHOPCTYXQWaesijkopcyxdqwhlABEZHIKMNOPTYXaikvopucj",
+)
 # Why: `scripts/lowered.py` matches `Relaxes:` at the start of a line; refusing it anywhere,
 # in any case, is a superset that no line-splitting rule can get around.
 _RELAXES = "relaxes:"
@@ -154,6 +174,24 @@ def fold(name: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", visible).casefold().strip("`*_ ").split())
 
 
+def skeleton(name: str) -> str:
+    """``fold``, with accents dropped and a look-alike of another script read as the Latin letter.
+
+    It covers the Cyrillic and Greek letters drawn like a Latin letter in most typefaces, and
+    combining marks. It does not cover look-alikes within one script (``l``, ``I`` and ``1``;
+    ``O`` and ``0``; ``rn`` and ``m``), other scripts, or letters only some typefaces draw alike.
+    """
+    apart = unicodedata.normalize("NFKD", name)
+    bare = "".join(c for c in apart if not unicodedata.combining(c))
+    return fold(bare.translate(_LOOKALIKES))
+
+
+def _scripts(name: str) -> list[str]:
+    """Which of Latin, Cyrillic and Greek the letters of ``name`` come from."""
+    letters = [unicodedata.name(c, "") for c in unicodedata.normalize("NFKC", name) if c.isalpha()]
+    return [script for script in _SCRIPTS if any(script in letter.split() for letter in letters)]
+
+
 def glossary(text: str) -> Glossary:
     """Parse a glossary; raise ``NotAdditiveError`` on what cannot be read without guessing."""
     reader = _Reader()
@@ -193,8 +231,44 @@ def _added(before: Sequence[Item], after: Sequence[Item]) -> list[Item]:
     return added
 
 
-def _hidden(lines: Iterable[str]) -> bool:
-    return any(mark in line for line in lines for mark in _HIDES)
+def _hidden(lines: Iterable[str]) -> str | None:
+    """What in new ``lines`` a reader of the rendered page would not see as written, if anything."""
+    for line in lines:
+        if any(mark in line for mark in _HIDES):
+            return "a code fence or an HTML comment"
+        if _TAG.search(line):
+            return "raw HTML"
+    return None
+
+
+def _misread(lines: Iterable[str]) -> str | None:
+    """What the lines under a new term's own would render as beyond its definition, if anything."""
+    for line in lines:
+        if _UNDERLINE.match(line):
+            return f"the underline of a heading: {line!r}"
+        if _TERMLIKE.match(line):
+            return f"a line that reads as a term of its own: {line!r}"
+    return None
+
+
+def _new_term(entry: Entry, new: Glossary) -> None:
+    """Raise when a new term reads as something other than the term the listing will show."""
+    scripts = _scripts(entry.term)
+    if len(scripts) > 1:
+        mixed = " and ".join(script.title() for script in scripts)
+        msg = f"the new term {entry.term} mixes {mixed} letters"
+        raise NotAdditiveError(msg)
+    what = _hidden((*entry.lines, *entry.avoid)) or _misread(entry.lines[1:])
+    if what is not None:
+        msg = f"the new term {entry.term} holds {what}"
+        raise NotAdditiveError(msg)
+    for other in new.entries.values():
+        if other.term != entry.term and skeleton(other.term) == skeleton(entry.term):
+            msg = f"it adds the term {entry.term}, which reads as the term {other.term}"
+            raise NotAdditiveError(msg)
+        if skeleton(entry.term) in map(skeleton, other.avoid):
+            msg = f"it adds the term {entry.term}, which {other.term} lists under _Avoid_"
+            raise NotAdditiveError(msg)
 
 
 def _new_item(item: Item, new: Glossary) -> str | None:
@@ -211,13 +285,7 @@ def _new_item(item: Item, new: Glossary) -> str | None:
             raise NotAdditiveError(msg)
         return None
     entry = new.entries[item.text]
-    if _hidden((*entry.lines, *entry.avoid)):
-        msg = f"the new term {entry.term} holds a code fence or an HTML comment"
-        raise NotAdditiveError(msg)
-    for other in new.entries.values():
-        if fold(entry.term) in map(fold, other.avoid):
-            msg = f"it adds the term {entry.term}, which {other.term} lists under _Avoid_"
-            raise NotAdditiveError(msg)
+    _new_term(entry, new)
     _no_term_avoided(entry.term, entry.avoid, new)
     avoid = f" (avoid: {', '.join(entry.avoid)})" if entry.avoid else ""
     return f"term {entry.term}{avoid}"
@@ -225,10 +293,10 @@ def _new_item(item: Item, new: Glossary) -> str | None:
 
 def _no_term_avoided(term: str, items: Iterable[str], new: Glossary) -> None:
     """Raise when a new ``_Avoid_`` item bans a term the glossary defines."""
-    terms = {fold(name): name for name in new.entries}
+    terms = {skeleton(name): name for name in new.entries}
     for item in items:
-        if fold(item) in terms:
-            msg = f"it puts {item} under _Avoid_ for {term}, and {terms[fold(item)]} is a term"
+        if skeleton(item) in terms:
+            msg = f"it puts {item} under _Avoid_ for {term}, and {terms[skeleton(item)]} is a term"
             raise NotAdditiveError(msg)
 
 
@@ -242,8 +310,9 @@ def _kept_entry(was: Entry, new: Glossary) -> str | None:
         msg = f"it drops {', '.join(dropped)} from the _Avoid_ list of {was.term}"
         raise NotAdditiveError(msg)
     gained = [item for item in now.avoid if item not in was.avoid]
-    if _hidden(gained):
-        msg = f"a new _Avoid_ item of {was.term} holds a code fence or an HTML comment"
+    what = _hidden(gained)
+    if what is not None:
+        msg = f"a new _Avoid_ item of {was.term} holds {what}"
         raise NotAdditiveError(msg)
     _no_term_avoided(was.term, gained, new)
     return f"avoid {', '.join(gained)} (under {was.term})" if gained else None
