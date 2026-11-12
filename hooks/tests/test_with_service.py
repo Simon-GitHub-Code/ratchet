@@ -1,8 +1,10 @@
 """``with_service``: boot, wait, run, stop, against real child processes on loopback."""
 
+import errno
 import os
 import shlex
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -148,6 +150,42 @@ def test_a_signal_stops_the_command_and_the_service(
     assert "interrupted by signal" in out
     assert gone(pid_of(service))
     assert gone(pid_of(command))
+
+
+def test_a_signal_between_popen_and_the_try_still_stops_the_service(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    real, started = subprocess.Popen, []
+
+    def popen_then_signal(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = real(*args, **kwargs)  # type: ignore[call-overload]
+        if not started:
+            started.append(process.pid)
+            signal.raise_signal(signal.SIGTERM)
+        return process  # type: ignore[no-any-return]
+
+    monkeypatch.setattr(subprocess, "Popen", popen_then_signal)
+    try:
+        code, out = run("--boot", "sleep 60", "--ready", READY, capsys=capsys)
+        stopped = gone(started[0])
+    finally:
+        monkeypatch.undo()
+        if not gone(started[0], wait=0):
+            os.killpg(started[0], signal.SIGKILL)
+    assert code == 128 + signal.SIGTERM
+    assert "interrupted by signal" in out
+    assert stopped, "the service started just before the signal was left running"
+
+
+def test_a_boot_command_that_cannot_start_leaves_nothing_to_stop(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def cannot_start(*_args: object, **_kwargs: object) -> subprocess.Popen[bytes]:
+        raise OSError(errno.EAGAIN, "no process slots")
+
+    monkeypatch.setattr(subprocess, "Popen", cannot_start)
+    with pytest.raises(OSError, match="no process slots"):
+        run("--boot", "sleep 60", "--ready", READY, capsys=capsys)
 
 
 def test_a_bad_ready_url_or_env_pair_is_a_usage_error() -> None:

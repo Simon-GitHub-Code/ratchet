@@ -38,6 +38,7 @@ Pair it with ``load_smoke.py`` and ``telemetry_sink.py``, which are commands to 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import http.client
 import os
 import subprocess
@@ -85,33 +86,41 @@ def tail(log: IO[bytes]) -> list[str]:
     return ["boot output (tail):", *(f"  {line}" for line in lines)] if lines else []
 
 
+def start(
+    options: argparse.Namespace, env: dict[str, str], log: IO[bytes]
+) -> subprocess.Popen[bytes]:
+    """The boot command, in a shell and a session of its own, writing to ``log``."""
+    return subprocess.Popen(  # noqa: S602 # -- the boot command is a shell line by contract
+        options.boot,
+        shell=True,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+
 def serve(
     options: argparse.Namespace, command: list[str], env: dict[str, str]
 ) -> tuple[int, list[str]]:
     """Boot, wait, run the command, stop; the exit code and the problems."""
     code, problems = 1, []
     with tempfile.TemporaryFile() as log:
-        process = subprocess.Popen(  # noqa: S602 # -- the boot command is a shell line by contract
-            options.boot,
-            shell=True,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
         try:
-            not_ready = wait_ready(process, options.ready, options.timeout)
-            if not_ready:
-                problems = [not_ready]
-            elif command:
-                code, problems = gatelib.run_command(command, env)
-            else:
-                code = 0
+            with contextlib.ExitStack() as running:
+                with gatelib.signals_held():
+                    process = start(options, env, log)
+                    running.callback(gatelib.stop_group, process)
+                not_ready = wait_ready(process, options.ready, options.timeout)
+                if not_ready:
+                    problems = [not_ready]
+                elif command:
+                    code, problems = gatelib.run_command(command, env)
+                else:
+                    code = 0
         except gatelib.Interrupted as stop:
             code, problems = 128 + stop.signum, [str(stop)]
-        finally:
-            gatelib.stop_group(process)
         if gatelib.listening(options.ready):
             code, problems = 1, [*problems, f"{options.ready} still answers after the stop"]
         if problems:
