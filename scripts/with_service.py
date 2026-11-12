@@ -15,7 +15,9 @@ Usage::
   and answered; the verdict line is ``with_service: green``.
 * Ready means the URL answers with a status below 400. The probe repeats every 100 ms until
   ``--timeout`` (30 s by default; raise it for a service that compiles on start). A service that
-  exits before it answers, or never answers, is red, with the last lines of its output.
+  exits before it answers, or never answers, is red, with the last lines of its output; an
+  early exit also says the command as it ran, where, and for how long, and says so when the
+  command printed nothing.
 * ``{port}`` in ``--boot``, ``--ready``, an ``--env`` value or the command is replaced by a free
   port the kernel picked, and ``PORT`` is exported with it, so parallel CI jobs on one host do
   not collide on a fixed port. The boot output is shown only when the run is red.
@@ -47,6 +49,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import IO
 from urllib.parse import urlsplit
 
@@ -66,13 +69,19 @@ def probe(url: str) -> str | None:
     return None if status < 400 else f"HTTP {status}"  # noqa: PLR2004 # -- the HTTP error class
 
 
-def wait_ready(process: subprocess.Popen[bytes], url: str, timeout: float) -> str | None:
-    """``None`` once ``url`` answers; else why the service is not ready."""
-    deadline = time.monotonic() + timeout
+def wait_ready(process: subprocess.Popen[bytes], options: argparse.Namespace) -> str | None:
+    """``None`` once the ready URL answers; else why the service is not ready."""
+    url, timeout = options.ready, options.timeout
+    started = time.monotonic()
+    deadline = started + timeout
     while True:
         code = process.poll()
         if code is not None:
-            return f"the service exited with code {code} before {url} answered"
+            took = time.monotonic() - started
+            return (
+                f"the service exited with code {code} before {url} answered, {took:.1f}s after"
+                f" `{options.boot}` started in {Path.cwd()}"
+            )
         seen = probe(url)
         if seen is None:
             return None
@@ -85,7 +94,9 @@ def tail(log: IO[bytes]) -> list[str]:
     """The last lines the service wrote, indented, for a red verdict."""
     log.seek(0)
     lines = log.read().decode("utf-8", errors="replace").splitlines()[-TAIL:]
-    return ["boot output (tail):", *(f"  {line}" for line in lines)] if lines else []
+    if not lines:
+        return ["boot output: none, the boot command printed nothing"]
+    return ["boot output (tail):", *(f"  {line}" for line in lines)]
 
 
 def start(
@@ -114,7 +125,7 @@ def serve(
                 with gatelib.signals_held():
                     process = start(options, env, log)
                     running.callback(gatelib.stop_group, process)
-                not_ready = wait_ready(process, options.ready, options.timeout)
+                not_ready = wait_ready(process, options)
                 if not_ready:
                     problems = [not_ready]
                 elif command:

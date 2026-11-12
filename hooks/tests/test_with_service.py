@@ -2,6 +2,7 @@
 
 import errno
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -110,6 +111,23 @@ def test_a_service_that_exits_before_it_answers_is_red(
     assert code == 1
     assert "the service exited with code 4 before http://127.0.0.1:" in out
     assert "boot output (tail):\n  boom" in out
+
+
+def test_an_early_exit_says_what_ran_where_and_for_how_long_even_when_it_printed_nothing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, out = run("--boot", "exit 2 # {port}", "--ready", READY, capsys=capsys)
+    assert code == 1
+    said = re.search(
+        r"the service exited with code 2 before \S+ answered, (\d+\.\d)s after"
+        r" `exit 2 # (\d+)` started in (\S+)\n",
+        out,
+    )
+    assert said is not None, out
+    assert float(said.group(1)) < 30
+    assert said.group(2) != "{port}", "the command is printed as it ran, the port filled in"
+    assert said.group(3) == str(Path.cwd())
+    assert "boot output: none, the boot command printed nothing\n" in out
 
 
 def test_something_already_answering_on_the_port_is_red_and_nothing_boots(

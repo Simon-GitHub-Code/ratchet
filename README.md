@@ -77,7 +77,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/prose.py` | 0 | do the documents and comments keep to the glossary? |
 | `scripts/snapshots.py` | 0 | does each gate's recorded configuration match the one in force? |
 | `scripts/lowered.py` | 0 | was a threshold lowered, or a ceiling raised? |
-| `scripts/flags.py` | 0 and 2 | is every feature flag declared once, owned and off when new; with `--expired`, is one past its removal date? |
+| `scripts/flags.py` | 0 and 2 | is every feature flag declared once, owned and off when new; with `--expired`, is one past its removal date? `--temporary` lists the flags a gate that requests routes boots with on |
 | `scripts/pins.py` | 0 | is every action pinned by commit, every image by digest, every workflow least-privileged? |
 | `scripts/coverage_groups.py` | 1 | is each coverage group at its ratchet, and each absolute path at 100%? Fed by the suite's Cobertura or LCOV report |
 | `scripts/mutation_survivors.py` | 1 and 2 | is every surviving mutant registered, and no entry stale? Fed by any mutation tool: one JSON line per mutant, or the reports of mutmut and Stryker as they are |
@@ -109,7 +109,7 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 | `skills/init/` | `/ratchet:init`: the bare bones for any repository: `git init` where needed, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it, the pstack and impeccable one-time setups, the first commit and the remote; the mattpocock-skills setup is the owner's command after it, and a rerun of init creates the triage labels that setup recorded |
 | `skills/adopt/` | `/ratchet:adopt`: the steps and the stack-neutral templates that bind the method to a repository's runner, forge and stack |
 | `skills/feature/` | `/ratchet:feature <ticket>`: the feature preflight on an agent-ready ticket, the branch, then the pipeline. With no ticket: every agent-ready ticket at once, each in a work tree of its own, merged one at a time, one report |
-| `skills/conjecture/` | `/ratchet:conjecture <ticket>`: the method's one addition to a ticket, drafted from the conversation that produced it |
+| `skills/conjecture/` | `/ratchet:conjecture <ticket>`: the method's two additions to a ticket, its conjecture and how it is operated, drafted from the conversation that produced it |
 | `skills/next/` | `/ratchet:next`: the command the owner types next, decided from the checkout and the tracker |
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
 | `scripts/drain.py` | the queue behind `/ratchet:feature` with no ticket: the plan, the work trees it makes and removes, the rebase, the local merge and the report |
@@ -121,7 +121,7 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 | `scripts/adapter.py` | wires the guard into Codex or OpenCode when the harness does not load the plugin's hooks |
 | `adapters/` | the pi extension and the OpenCode plugin that translate a tool call into the guard's JSON |
 | `docs/harness/` | one page per harness: install commands, how the guard is wired, the names mapped, what was verified |
-| `docs/adr/` | the plugin's own decisions; 0004 is the five-harness decision, 0017 the one that removed the presets |
+| `docs/adr/` | the plugin's own decisions; 0004 is the harness decision, made for five and since extended to Antigravity, 0017 the one that removed the presets |
 | `docs/research/` | the sources behind the stance |
 
 ## Install notes

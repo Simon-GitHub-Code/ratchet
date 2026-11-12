@@ -7,6 +7,8 @@ The owner builds with Claude Code, Grok, Codex, pi and OpenCode, and wants the m
 
 The workflow named below as `workflows/feature.js` is now `workflows/pipeline.js`; ADR 0009 has the `/ratchet:feature` skill run it.
 
+Antigravity is a sixth harness since 0.9.0, on the same guard: it converts the plugin's own hooks on install and needs no adapter file, and `docs/harness/antigravity.md` says how the guard answers it.
+
 ## Refutation criterion
 
 The decision is wrong if a harness needs a change to the guard's rules, rather than to its adapter, to refuse the same command the others refuse; or if the adapters drift so that a command denied in one harness runs in another. Check with the corpus in `hooks/tests/test_corpus.py` run through each adapter after the first adoption in each harness, and again after each harness's next major release.
