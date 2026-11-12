@@ -6,7 +6,9 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# `just` never expands `~`, so the fallback is built from the home directory.
+# The plugin the recipes run. The fallback is where Claude Code keeps it, built from the home
+# directory since `just` never expands `~`. Under another harness export RATCHET_PLUGIN; the
+# plugin's docs/harness pages name the path. `plugin-pin` is red when nothing is there.
 ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", home_directory() / ".claude/plugins/marketplaces/ratchet")
 
 # The deliverable as a running thing, for the three service gates the plugin ships (`smoke`,
@@ -63,12 +65,18 @@ serial2 := ""
 # whole, and every gate's seconds are appended to .ratchet/timing.jsonl so the slowest is named.
 parallel := 'python3 "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + just_executable() + '" --report .ratchet/timing.jsonl'
 
-tier0:
+# Every tier starts here: the plugin the recipes run is the version docs/process/binding.md pins,
+# the commit CI checks out. Red before any gate runs when it is another, or when nothing is there.
+plugin-pin:
+    @test -f "{{ratchet_plugin}}/scripts/plugin_pin.py" || { echo "plugin-pin: no Ratchet plugin at {{ratchet_plugin}}, or one older than the pin check; set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins"; exit 1; }
+    @python3 "{{ratchet_plugin}}/scripts/plugin_pin.py"
+
+tier0: plugin-pin
     {{parallel}} {{serial0}} -- {{tier0_gates}}
 
 # Tier 0 less the history gate: what the pre-commit hook runs, since `commits` there would judge
 # the commit an amend replaces. The commit-msg hook checks the new subject with `commit-msg`.
-tier0-tree:
+tier0-tree: plugin-pin
     {{parallel}} {{serial0}} -- {{tier0_tree_gates}}
 
 # The two recipes the commit hooks call. RATCHET_HOOK_PROBE names a file: `hooks-installed` sets it
@@ -81,23 +89,23 @@ pre-commit:
 commit-msg file:
     @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo commit-msg > "$RATCHET_HOOK_PROBE"; else python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"; fi
 
-tier1:
+tier1: plugin-pin
     {{parallel}} {{serial1}} -- {{tier1_gates}}
 
-tier2:
+tier2: plugin-pin
     {{parallel}} {{serial2}} -- {{tier2_gates}}
 
 # Tiers 0 and 1 in one run: one wall clock, the slowest gate of the two.
-check:
+check: plugin-pin
     {{parallel}} {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
 # The inner loop: the same gates, stopped at the first red. Run `check` before you push.
-check-fast:
+check-fast: plugin-pin
     {{parallel}} --fail-fast {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
 # `perf` and `load` judge elapsed time, which other gates running beside them disturb; CI gives
 # each a job of its own, and `just perf` alone is the reading to trust.
-check-deep:
+check-deep: plugin-pin
     {{parallel}} {{serial0}} {{serial1}} {{serial2}} -- {{tier0_gates}} {{tier1_gates}} {{tier2_gates}}
 
 # --- method gates (tool-neutral, shipped by the ratchet plugin) --------------

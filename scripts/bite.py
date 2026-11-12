@@ -41,6 +41,7 @@ import merge_ready
 import mutation_survivors
 import parallel
 import pins
+import plugin_pin
 import project_bite
 import prose
 import settings_rules
@@ -97,7 +98,8 @@ TESTS_BITE = (
     '[[bite]]\ngate = "tests"\nname = "no test"\nremove = ["tests/**"]\nexpect = "no test to run"\n'
 )
 BINDING = (
-    "# Binding\n\n- Default branch: `main`\n\n## Gates\n\n"
+    "# Binding\n\n- Default branch: `main`\n"
+    f"- Ratchet plugin: 1.0.0 at {'0' * 40}\n\n## Gates\n\n"
     "| Question | Tool | Tier | Threshold source | Entry point |\n|---|---|---|---|---|\n"
     "| lint | a linter | 0 | | `sh own-gates.sh lint` |\n"
     "| unit, property and fitness tests | a test runner | 1 | | `sh own-gates.sh tests` |\n"
@@ -154,6 +156,7 @@ def scratch(root: Path) -> None:
     write(root, "surface.txt", "f(a, b)\n")
     write(root, "docs/process/binding.md", BINDING)
     write(root, "own-gates.sh", OWN_GATES)
+    write(root, PLUGIN_MANIFEST, '{"version": "1.0.0"}\n')
     write(root, "tests/test_a.py", "def test_f():\n    assert True\n")
     write(root, str(project_bite.REGISTRY), LINT_BITE + TESTS_BITE)
     install_hooks(root)
@@ -372,6 +375,19 @@ def merge_judge(argv: list[str]) -> int:
     return merge_ready.main([*argv, "--base", "main"])
 
 
+PLUGIN_COPY = "plugin"
+PLUGIN_MANIFEST = f"{PLUGIN_COPY}/{plugin_pin.MANIFEST}"
+
+
+def pin_gate(argv: list[str]) -> int:
+    """The pin check against the plugin copy the scratch repository carries."""
+    return plugin_pin.main([*argv, "--plugin", str(Path(argv[2]) / PLUGIN_COPY)])
+
+
+def plugin_moved_on(root: Path) -> None:
+    write(root, PLUGIN_MANIFEST, '{"version": "1.1.0"}\n')
+
+
 def commit_after_the_review(root: Path) -> None:
     write(root, "src/b.py", "B = 2\n")
     commit(root, "fix(core): one more thing")
@@ -458,6 +474,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("merge-ready: a commit after the review", merge_judge, commit_after_the_review, []),
     ("merge-ready: new surface with no flag", merge_judge, new_surface, []),
     ("queue: a ticket behind an open blocker", queue_gate, behind_an_open_blocker, []),
+    ("plugin-pin: a plugin at another version", pin_gate, plugin_moved_on, []),
 ]
 
 

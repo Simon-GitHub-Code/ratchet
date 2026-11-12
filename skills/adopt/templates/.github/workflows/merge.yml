@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit ADR 0001 names; adopt fills it
+        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit the binding pins; adopt fills it
       # Why: `sha` makes the forge refuse the merge when the branch moved after the judge read it.
       # A merge commit, never a squash: the route reads a finished feature from one. The token's
       # push starts no workflow, so tier 2 on the default branch is started here. The default

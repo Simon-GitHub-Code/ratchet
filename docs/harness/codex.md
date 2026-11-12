@@ -30,6 +30,7 @@ which merges PreToolUse and SessionStart entries pointing at the installed plugi
 
 | In the skills | Here |
 | --- | --- |
+| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | export it as `~/.codex/plugins/cache/<marketplace>/ratchet/<version>/` |
 | `${CLAUDE_SKILL_DIR}` | the skill folder under `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/skills/<name>/` |
 | `${CLAUDE_PLUGIN_ROOT}` | the plugin folder, `~/.codex/plugins/cache/<marketplace>/ratchet/<version>/`. Whether Codex sets this variable is not verified. Export it to that folder before starting a session, so the commands in the skills resolve. `adapter.py codex --apply` writes absolute paths into the hooks and needs no variable |
 | `disable-model-invocation: true` | read the `SKILL.md` and follow it |

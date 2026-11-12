@@ -6,6 +6,10 @@ This repository's binding of the Ratchet method (`ratchet:method`; `skills/metho
 
 <The task runner: `just`, `make`, `npm run`, `cargo xtask`, a script directory. The entry points below are its targets. The `justfile` shipped with the templates is the `just` example; delete it when the runner is something else.>
 
+- Ratchet plugin: <X.Y.Z> at <ratchet-sha>
+
+The plugin version has this one home. Every workflow checks the plugin out at this commit, and a local tier is red when the plugin it runs from is at another (`plugin-pin`). To upgrade, change this line and every workflow `ref` to the new commit in one change.
+
 ## Forge
 
 - Default branch: `main`

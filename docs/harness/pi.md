@@ -26,6 +26,7 @@ pi reads frontmatter with a strict YAML parser: a `description` holding `: ` mus
 
 | In the skills | Here |
 | --- | --- |
+| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | export it as the installed package's folder under `~/.pi/agent/git/` |
 | `${CLAUDE_SKILL_DIR}` | the skill folder inside the installed package under `~/.pi/agent/` |
 | `${CLAUDE_PLUGIN_ROOT}` | the installed package, `~/.pi/agent/git/github.com/Simon-GitHub-Code/ratchet`. The guard extension works out its own root from its file location and sets no variable, and pi is not known to set one. Export `CLAUDE_PLUGIN_ROOT="$HOME/.pi/agent/git/github.com/Simon-GitHub-Code/ratchet"` before starting a session, so the commands in the skills resolve. The path is inferred from where pi puts the impeccable package; this mapping is unverified |
 | `disable-model-invocation: true` | honoured: the skill is left out of the model's list and runs only as the owner's `/skill:<name>` |

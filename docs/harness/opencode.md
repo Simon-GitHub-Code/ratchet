@@ -21,6 +21,7 @@ The adapter writes `~/.config/opencode/plugins/ratchet-guard.ts` with the checko
 
 | In the skills | Here |
 | --- | --- |
+| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | export it as `~/.config/opencode/ratchet`, the clone the install made |
 | `${CLAUDE_SKILL_DIR}` | the skill folder under the skills directory the installer chose |
 | `${CLAUDE_PLUGIN_ROOT}` | the clone, `~/.config/opencode/ratchet` in the install above. OpenCode is not known to set this variable, and the guard plugin takes its path from the adapter, not from it. Export `CLAUDE_PLUGIN_ROOT="$HOME/.config/opencode/ratchet"` before starting a session, so the commands in the skills resolve. This mapping is unverified |
 | `disable-model-invocation: true` | no such flag; the agent reads the skill as a document |

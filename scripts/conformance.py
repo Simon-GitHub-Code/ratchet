@@ -18,6 +18,7 @@ from pathlib import Path
 
 import application_types
 import hooks_installed
+import plugin_pin
 import project_bite
 import settings_rules
 
@@ -92,9 +93,10 @@ ADR_FRONT_MATTER = re.compile(
     r"\A(?:---\nstatus: (?P<status>[^\n]+)\n(?:superseded-by: (?P<by>\d{4})\n)?---\n+)?# \S"
 )
 ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
-ADR_PLACEHOLDERS = ("<X.Y.Z>", "<ratchet-sha>")
 GLOSSARY_PLACEHOLDER = "<project>"
+PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
+PLUGIN_REF = re.compile(r'repository:\s*\S*ratchet\S*?[,\s]+ref:\s*"?([^",\s}]+)')
 COMMIT_HOOKS = Path(".pre-commit-config.yaml")
 INSTALLS_COMMIT_MSG = re.compile(r"^default_install_hook_types:.*\bcommit-msg\b", re.MULTILINE)
 COMMIT_MSG_STAGE = re.compile(r"^\s*stages:\s*\[\s*commit-msg\s*\]", re.MULTILINE)
@@ -209,10 +211,6 @@ def check_adr(number: int, path: Path, rel: Path) -> Iterable[str]:
         yield f"{rel}: '{REFUTATION_SECTION}' names no observation that would show it wrong"
     if number == 1 and "Ratchet method" not in text:
         yield f"{rel}: ADR 0001 records adopting the Ratchet method"
-    if number == 1:
-        for placeholder in ADR_PLACEHOLDERS:
-            if placeholder in text:
-                yield f"{rel}: still carries '{placeholder}'; adopt fills the plugin version"
 
 
 def section(text: str, heading: str) -> str:
@@ -386,14 +384,37 @@ def check_merge_workflow(root: Path) -> Iterable[str]:
             yield f"{WORKFLOWS / MERGE_WORKFLOW}: nothing {meaning} ('{marker}' absent)"
 
 
-def check_plugin_checkout(root: Path) -> Iterable[str]:
+def check_plugin_pin(root: Path) -> Iterable[str]:
+    """The plugin version has one home, the binding; the workflows and the justfile follow it."""
+    binding = read(root / "docs/process/binding.md")
+    if binding is None:
+        return
+    pin = plugin_pin.pinned(binding)
+    if pin is None:
+        yield (
+            "docs/process/binding.md: no '- Ratchet plugin: <version> at <commit>' line with a "
+            "full commit; adopt fills the plugin version"
+        )
+        return
     for name in (*TIER_WORKFLOWS, MERGE_WORKFLOW):
-        text = read(root / WORKFLOWS / name)
-        if text is not None and PLUGIN_CHECKOUT_PLACEHOLDER in text:
+        text = read(root / WORKFLOWS / name) or ""
+        refs = set(PLUGIN_REF.findall(text))
+        if not refs and "RATCHET_PLUGIN" in text:
             yield (
-                f"{WORKFLOWS / name}: checks the plugin out at '{PLUGIN_CHECKOUT_PLACEHOLDER}'; "
-                "adopt fills the commit ADR 0001 names"
+                f"{WORKFLOWS / name}: checks no plugin out by `repository:` then `ref:`, so "
+                "nothing holds it to the commit the binding pins"
             )
+        for ref in sorted(refs - {pin.commit}):
+            yield (
+                f"{WORKFLOWS / name}: checks the plugin out at '{ref}', not the commit the "
+                f"binding pins ({pin.commit})"
+            )
+    justfile = read(root / "justfile")
+    if justfile is not None and "plugin_pin.py" not in justfile:
+        yield (
+            "justfile: no tier runs plugin_pin.py, so a local run can use a plugin other than "
+            f"the one the binding pins; copy `plugin-pin` from {hooks_installed.TEMPLATE}"
+        )
 
 
 def check_commit_hooks(root: Path) -> Iterable[str]:
@@ -507,7 +528,7 @@ CHECKS: tuple[Check, ...] = (
     check_merge_workflow,
     check_settings,
     check_commit_hooks,
-    check_plugin_checkout,
+    check_plugin_pin,
     check_quality,
     check_bites,
     check_disputes,
@@ -541,6 +562,7 @@ def mutations() -> list[Mutation]:
         *hook_mutations(),
         *guard_mutations(),
         *merge_mutations(),
+        *pin_mutations(),
         *record_mutations(),
     ]
 
@@ -808,13 +830,31 @@ def merge_mutations() -> list[Mutation]:
     ]
 
 
+def pin_mutations() -> list[Mutation]:
+    binding, pinned = "docs/process/binding.md", "0" * 40
+    return [
+        (
+            "binding with the plugin pin unfilled",
+            rewrite(binding, f"0.0.0 at {pinned}", PLUGIN_PIN_PLACEHOLDER),
+        ),
+        (
+            "workflow at a commit the binding does not pin",
+            rewrite(str(WORKFLOWS / "deep.yml"), pinned, "1" * 40),
+        ),
+        (
+            "workflow that checks no plugin out by commit",
+            rewrite(str(WORKFLOWS / "ci.yml"), f'ref: "{pinned}", ', ""),
+        ),
+        (
+            "justfile whose tiers skip the plugin pin",
+            rewrite("justfile", "plugin_pin.py", "pin.py"),
+        ),
+    ]
+
+
 def record_mutations() -> list[Mutation]:
     def adr_without_refuter(root: Path) -> None:
         (root / "docs/adr/0002-plain.md").write_text("# We keep it plain\n\nBecause.\n")
-
-    def adr_0001_with_the_version_placeholder(root: Path) -> None:
-        path = root / "docs/adr/0001-adopt-the-ratchet-method.md"
-        path.write_text(path.read_text().replace("0.0.0", "<X.Y.Z>", 1))
 
     def adr_with_an_empty_refuter(root: Path) -> None:
         (root / "docs/adr/0002-empty.md").write_text(
@@ -841,7 +881,6 @@ def record_mutations() -> list[Mutation]:
     return [
         ("ADR without a refutation criterion", adr_without_refuter),
         ("ADR with an empty refutation criterion", adr_with_an_empty_refuter),
-        ("ADR 0001 with the version placeholder", adr_0001_with_the_version_placeholder),
         ("features directory removed", features_directory_removed),
         ("ADR numbering with a gap", gap_adrs),
         ("dispute with an unknown status", bad_dispute),
@@ -857,6 +896,7 @@ SPEED_PLACEHOLDER = re.compile(r"^(- [A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
 
 def fill_binding(text: str) -> str:
     """A command line tool's binding: one row its type leaves out, a tool in every other."""
+    text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40}")
     text = TYPES_PLACEHOLDER.sub("- Application types: cli", text)
     text = text.replace("| contract drift | |", "| contract drift | none: not a service |")
     text = EMPTY_TOOL_CELL.sub(r"\1 a tool |", text)
@@ -893,10 +933,6 @@ def fill_placeholders(root: Path) -> None:
     registry = root / project_bite.REGISTRY
     registry.write_text(registry.read_text() + fill_registry(binding.read_text()))
     fills = {
-        "docs/adr/0001-adopt-the-ratchet-method.md": {
-            "<X.Y.Z>": "0.0.0",
-            "<ratchet-sha>": "0" * 40,
-        },
         "GLOSSARY.md": {GLOSSARY_PLACEHOLDER: "the project"},
         str(WORKFLOWS / "ci.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
         str(WORKFLOWS / "deep.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},

@@ -93,6 +93,19 @@ def test_the_self_test_shows_every_mutation_bites(capsys: pytest.CaptureFixture[
     assert all(line.endswith(": bites") for line in lines[1:])
 
 
+def test_a_workflow_is_held_to_the_pin_only_where_it_runs_the_plugin(repo: Path) -> None:
+    ci, deep = ".github/workflows/ci.yml", ".github/workflows/deep.yml"
+    pinned, other = "0" * 40, "1" * 40
+    replace(ci, f'ref: "{pinned}", ', "")(repo)
+    unheld = "so nothing holds it to the commit the binding pins"
+    assert red(repo) == [f"{ci}: checks no plugin out by `repository:` then `ref:`, {unheld}"]
+    replace(ci, "RATCHET_PLUGIN", "ELSEWHERE")(repo)
+    assert red(repo) == []
+    replace(deep, pinned, other)(repo)
+    elsewhere = f"checks the plugin out at '{other}', not the commit the binding pins ({pinned})"
+    assert red(repo) == [f"{deep}: {elsewhere}"]
+
+
 def test_a_pristine_template_that_fails_is_reported_and_stops_the_self_test(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

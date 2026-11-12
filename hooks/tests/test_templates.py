@@ -12,8 +12,10 @@ from pathlib import Path
 import pytest
 
 import pins
+import plugin_pin
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
+PLUGIN_ROOT = TEMPLATES.parents[2]
 ADOPT = (TEMPLATES.parent / "SKILL.md").read_text(encoding="utf-8")
 JUSTFILE = (TEMPLATES / "justfile").read_text(encoding="utf-8")
 BINDING = (TEMPLATES / "docs/process/binding.md").read_text(encoding="utf-8")
@@ -163,8 +165,10 @@ def test_every_tier_runs_its_gates_at_once_through_the_runner(
 ) -> None:
     # Why: a developer's wall clock is the slowest gate, not the sum, from the first adoption.
     needs_just()
-    said = dry_run(name)
-    assert said.startswith(RUNNER)
+    pin, runner, gates = dry_run(name).partition(RUNNER)
+    said = runner + gates
+    assert 'python3 "/plugin/scripts/plugin_pin.py"' in pin, "the pin is judged before any gate"
+    assert runner
     assert ("--fail-fast" in said) is bool(flag)
     assert "--report .ratchet/timing.jsonl" in said
     assert said.endswith(" -- " + " ".join(gate for item in lists for gate in gate_list(item)))
@@ -238,10 +242,49 @@ def test_the_ci_templates_are_green_on_the_pins_gate() -> None:
         assert "RATCHET_PLUGIN: ${{ github.workspace }}/ratchet" in text
 
 
-def test_adr_0001_names_the_version_and_the_commit() -> None:
+def test_the_plugin_version_has_one_home_the_binding() -> None:
     text = (TEMPLATES / "docs/adr/0001-adopt-the-ratchet-method.md").read_text(encoding="utf-8")
-    assert "version <X.Y.Z> at commit `<ratchet-sha>`" in text
+    assert "\n- Ratchet plugin: <X.Y.Z> at <ratchet-sha>\n" in BINDING
+    assert "<X.Y.Z>" not in text
+    assert "<ratchet-sha>" not in text
     assert "https://github.com/Simon-GitHub-Code/ratchet" in text
+
+
+def pin_recipe(root: Path, plugin: Path) -> tuple[int, str]:
+    just = shutil.which("just")
+    assert just
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
+        [just, "--justfile", str(TEMPLATES / "justfile"), "-d", str(root), "plugin-pin"],
+        env={**os.environ, "RATCHET_PLUGIN": str(plugin)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.returncode, done.stdout
+
+
+def test_a_tier_says_what_to_set_when_no_plugin_is_where_the_justfile_looks(
+    tmp_path: Path,
+) -> None:
+    needs_just()
+    code, said = pin_recipe(tmp_path, tmp_path / "absent")
+    assert code == 1
+    assert f"plugin-pin: no Ratchet plugin at {tmp_path / 'absent'}" in said
+    assert "set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins" in said
+
+
+def test_a_tier_is_red_until_the_binding_pins_the_plugin_it_runs_from(tmp_path: Path) -> None:
+    needs_just()
+    version = plugin_pin.version_of(PLUGIN_ROOT)
+    binding = tmp_path / "docs/process/binding.md"
+    binding.parent.mkdir(parents=True)
+    binding.write_text(f"- Ratchet plugin: {version}-other at {'1' * 40}\n", encoding="utf-8")
+    code, said = pin_recipe(tmp_path, PLUGIN_ROOT)
+    assert (code, said.splitlines()[-1]) == (1, "plugin-pin: red")
+    commit = plugin_pin.commit_of(PLUGIN_ROOT) or "1" * 40
+    binding.write_text(f"- Ratchet plugin: {version} at {commit}\n", encoding="utf-8")
+    code, said = pin_recipe(tmp_path, PLUGIN_ROOT)
+    assert (code, said.splitlines()[-1]) == (0, "plugin-pin: green")
 
 
 def test_adopt_names_the_two_skills_and_the_owner_s_steps() -> None:

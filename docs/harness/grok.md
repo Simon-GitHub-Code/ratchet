@@ -23,6 +23,7 @@ Grok's matcher accepts Claude's names (`Bash` matches its `run_terminal_command`
 
 | In the skills | Here |
 | --- | --- |
+| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | export it as the `ratchet` folder under `~/.grok/installed-plugins/`, which `registry.json` names |
 | `${CLAUDE_SKILL_DIR}` | the skill folder under `~/.grok/installed-plugins/<plugin>/skills/<name>/` |
 | `${CLAUDE_PLUGIN_ROOT}` | the plugin folder under `~/.grok/installed-plugins/`. Grok expands it in hook commands: the guard's command in `hooks/hooks.json` uses it, and the guard denied calls (see Verified). Whether it is set in the shell of a skill's Bash call is not verified. Export it to the plugin folder before starting a session, so the commands in the skills resolve |
 | `disable-model-invocation: true` | read the `SKILL.md` and follow it |
