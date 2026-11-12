@@ -1,8 +1,11 @@
-"""The mutation gate: zero unregistered survivors and no stale register entry, for both tools."""
+"""The mutation gate: zero unregistered survivors and no stale register entry, for any tool."""
 
 import hashlib
 import io
 import json
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -11,6 +14,12 @@ import mutation_survivors as gate
 from tests.repos import branch, commit, repository, write
 
 Out = pytest.CaptureFixture[str]
+
+# Why: `cargo mutants` 27.1.0 on the crate whose one file is `lib.rs`, run for this test; the
+# per-phase logs, which name the machine's paths, are cut from each outcome.
+CARGO = Path(__file__).parent / "fixtures/cargo-mutants"
+RUST = "src/lib.rs"
+UNTESTED_MINUS = "src/lib.rs:BinaryOperator:-@2:11-2:12"
 
 SOURCE = (
     "def add(a, b):\n    return a + b\n\n\n"
@@ -211,7 +220,7 @@ def test_malformed_register_entries_are_named(tmp_path: Path) -> None:
     assert problems == [
         "quality/mutation-register.toml: survivor 2: `reason` shorter than 20 characters",
         (
-            "quality/mutation-register.toml: survivor 3: `tool` is not one of mutmut, stryker; "
+            "quality/mutation-register.toml: survivor 3: "
             "`function_hash` does not start with `sha256:`; `date` missing or not a TOML date"
         ),
         (
@@ -527,3 +536,221 @@ def test_an_empty_changed_scope_prints_nothing(tmp_path: Path, capsys: Out) -> N
     assert run(root, "--tool", "mutmut", "--changed") == 0
     assert run(root, "--tool", "stryker", "--changed") == 0
     assert capsys.readouterr().out == "", "mapfile would read one empty pattern from a newline"
+
+
+# --- any tool, through the tool-neutral input -----------------------------------------------
+
+
+def documented_converter() -> str:
+    """The cargo-mutants example of the gate's docstring: the code a repository would keep."""
+    text = (gate.__doc__ or "").partition("gives every outcome with both spans::\n")[2]
+    return textwrap.dedent(text.partition("Two tools need no converter")[0])
+
+
+def cargo_records(*, shift: int = 0, units: bool = True) -> str:
+    """The fixture's outcomes as the documented converter prints them, ``shift`` lines down."""
+    done = subprocess.run(  # noqa: S603 # -- this interpreter, on the docstring's own example
+        [sys.executable, "-c", documented_converter()],
+        input=(CARGO / "outcomes.json").read_text(encoding="utf-8"),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    moved = []
+    for line in done.stdout.splitlines():
+        record = json.loads(line)
+        for key in ("start", "end"):
+            record[key][0] += shift
+        record["unit"] = [row + shift for row in record["unit"]]
+        if not units:
+            del record["unit"]
+        moved.append(json.dumps(record))
+    return "\n".join(moved) + "\n"
+
+
+def crate(root: Path, *, header: str = "", records: str | None = None) -> list[gate.Mutant]:
+    """The fixture crate under ``root`` with its mutants file; the mutants the gate reads."""
+    source = (CARGO / "lib.rs").read_text(encoding="utf-8")
+    write(root, RUST, header + source)
+    text = cargo_records(shift=header.count("\n")) if records is None else records
+    write(root, "mutants.jsonl", text)
+    return gate.neutral_mutants(text, root)[0]
+
+
+def cargo(root: Path, *flags: str) -> int:
+    return run(root, "--tool", "cargo-mutants", "--mutants", "mutants.jsonl", *flags)
+
+
+def record(**fields: object) -> str:
+    whole: dict[str, object] = {
+        "file": RUST,
+        "mutator": "BinaryOperator",
+        "replacement": "-",
+        "status": "survived",
+        "start": [18, 11],
+        "end": [18, 12],
+    }
+    return json.dumps({k: v for k, v in (whole | fields).items() if v is not None})
+
+
+def test_real_cargo_mutants_output_feeds_the_gate_through_the_documented_converter(
+    tmp_path: Path, capsys: Out
+) -> None:
+    mutants = crate(tmp_path)
+    assert cargo(tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "cargo-mutants: 11/19 killed, 8 live, 0 registered in scope" in out
+    assert f"{UNTESTED_MINUS}: survived and not in quality/mutation-register.toml" in out
+    assert 'tool = "cargo-mutants"' in out
+    live = [m for m in mutants if m.state == "survived"]
+    assert len({m.identity for m in live}) == len(live), "no two survivors share an identity"
+    register(tmp_path, *(entry("cargo-mutants", m.identity, m.function_hash) for m in live))
+    assert cargo(tmp_path) == 0
+    assert "8 live, 8 registered in scope" in capsys.readouterr().out
+
+
+def test_a_survivor_of_any_tool_keeps_its_identity_when_code_above_its_unit_changes(
+    tmp_path: Path, capsys: Out
+) -> None:
+    before = crate(tmp_path)
+    register(
+        tmp_path,
+        *(
+            entry("cargo-mutants", m.identity, m.function_hash)
+            for m in before
+            if m.state in gate.LIVE
+        ),
+    )
+    assert crate(tmp_path, header="// one\n// two\n") == before
+    assert cargo(tmp_path) == 0
+    source = (tmp_path / RUST).read_text(encoding="utf-8")
+    write(tmp_path, RUST, source.replace("value + 1", "1 + value"))
+    assert cargo(tmp_path) == 1
+    out = capsys.readouterr().out
+    assert f"{UNTESTED_MINUS}: survived and not in" in out, "the unit changed, so its hash did"
+    assert f"{UNTESTED_MINUS}: register entry is stale" in out
+
+
+def test_without_a_unit_the_enclosing_top_level_declaration_is_the_unit(tmp_path: Path) -> None:
+    with_units = crate(tmp_path)
+    assert crate(tmp_path, records=cargo_records(units=False)) == with_units
+
+
+def test_the_states_of_the_neutral_input_are_judged_as_the_two_tools_are(
+    tmp_path: Path, capsys: Out
+) -> None:
+    states = ["killed", "uncovered", "timeout", "undecided", "skipped"]
+    text = "\n\n".join(record(status=state, start=[18, 5 + n]) for n, state in enumerate(states))
+    (timed_out,) = [m for m in crate(tmp_path, records=text) if m.state == "timeout"]
+    register(tmp_path, entry("cargo-mutants", timed_out.identity, timed_out.function_hash))
+    assert cargo(tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "cargo-mutants: 2/5 killed, 1 live, 1 registered in scope" in out
+    assert "src/lib.rs:BinaryOperator:-@2:6-2:12: uncovered and not in" in out
+    assert "@2:7-2:12: timeout; the run could not tell it from a survivor" in out
+    assert "@2:8-2:12: undecided; the run did not decide it" in out
+    assert "@2:9-2:12" not in out, "a skipped mutant is no finding"
+
+
+def test_an_entry_of_any_tool_without_a_position_cannot_say_which_mutant_it_excuses(
+    tmp_path: Path, capsys: Out
+) -> None:
+    (only,) = crate(tmp_path, records=record(end=None))
+    assert only.identity == "src/lib.rs:BinaryOperator:-@2:11-2:11", "end defaults to start"
+    register(tmp_path, entry("cargo-mutants", "src/lib.rs:BinaryOperator:-", only.function_hash))
+    assert cargo(tmp_path) == 1
+    assert "register entry has the old identity, without a position" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("line", "problem"),
+    [
+        ("not json", "not a JSON object"),
+        ("[1]", "not a JSON object"),
+        (record(file=None), "`file` is not text"),
+        (record(file="", mutator=""), "`file` is empty; `mutator` is empty"),
+        (record(replacement=3), "`replacement` is not text"),
+        (
+            record(status="Survived"),
+            "`status` is not one of killed, survived, uncovered, timeout, undecided, skipped",
+        ),
+        (record(start=None), "`start` and `end` are [line, column], whole numbers, lines from 1"),
+        (record(start=[0, 1]), "`start` and `end` are [line, column], whole numbers, lines from 1"),
+        (record(end=[18]), "`start` and `end` are [line, column], whole numbers, lines from 1"),
+        (
+            record(end=[18, True]),
+            "`start` and `end` are [line, column], whole numbers, lines from 1",
+        ),
+        (
+            record(unit=[19, 20]),
+            "`unit` is the [first, last] line of the declaration the mutant sits in",
+        ),
+        (
+            record(unit="17-19"),
+            "`unit` is the [first, last] line of the declaration the mutant sits in",
+        ),
+        (
+            record(start=None, unit=[17, 19]),
+            "`start` and `end` are [line, column], whole numbers, lines from 1",
+        ),
+    ],
+)
+def test_a_line_that_is_no_mutant_is_named_and_red(
+    tmp_path: Path, capsys: Out, *, line: str, problem: str
+) -> None:
+    crate(tmp_path, records=record(status="killed") + "\n" + line + "\n")
+    assert cargo(tmp_path) == 1
+    assert f"mutants line 2: {problem}\n" in capsys.readouterr().out
+
+
+def test_a_replacement_may_be_left_out_and_a_missing_file_has_no_hash(tmp_path: Path) -> None:
+    text = record(replacement=None, file="src/gone.rs")
+    (only,) = crate(tmp_path, records=text)
+    assert (only.identity, only.function_hash) == (
+        "src/gone.rs:BinaryOperator:@18:11-18:12",
+        "unknown",
+    )
+
+
+def test_a_neutral_run_with_no_mutant_is_red_unless_its_files_had_nothing_to_mutate(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    crate(tmp_path, records="\n")
+    assert cargo(tmp_path) == 1
+    assert "cargo-mutants: no mutant reported" in capsys.readouterr().out
+    assert cargo(tmp_path, "--only", "src/gone.rs") == 1
+    assert "no mutant reported" in capsys.readouterr().out
+    assert cargo(tmp_path, "--only", f"{RUST},{RUST}") == 0
+    assert "cargo-mutants: no mutant in the files it was given" in capsys.readouterr().out
+    crate(tmp_path, records="not json\n")
+    assert cargo(tmp_path, "--only", RUST) == 1, "a file that could not be read is not an empty run"
+    (tmp_path / "mutants.jsonl").unlink()
+    assert cargo(tmp_path) == 1
+    assert (
+        "mutants.jsonl: missing; convert the tool's report to it first" in capsys.readouterr().out
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(record(status="killed")))
+    assert run(tmp_path, "--tool", "cargo-mutants", "--mutants", "-") == 0
+
+
+def test_a_tool_the_gate_has_no_reader_for_needs_the_neutral_input(
+    tmp_path: Path, capsys: Out
+) -> None:
+    crate(tmp_path)
+    assert run(tmp_path, "--tool", "pitest") == 1
+    assert "--mutants is required for pitest: JSON lines" in capsys.readouterr().out
+    assert run(tmp_path, "--tool", "mutmut", "--mutants", "mutants.jsonl") == 1
+    assert "--mutants takes another tool name: mutmut names its mutants" in capsys.readouterr().out
+
+
+def test_the_changed_scope_of_any_other_tool_is_the_changed_files_that_exist(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(tmp_path, {RUST: "fn a() {}\n", "src/b.rs": "fn b() {}\n"})
+    branch(root, "feature/x")
+    (root / "src/b.rs").unlink()
+    write(root, RUST, "fn a() { }\n")
+    write(root, "src/c.rs", "fn c() {}\n")
+    commit(root, "refactor: drop b")
+    assert run(root, "--tool", "cargo-mutants", "--changed", "--base", "main") == 0
+    assert capsys.readouterr().out == "src/c.rs\nsrc/lib.rs\n"

@@ -223,6 +223,8 @@ diff-coverage:
 test-counts:
     @echo "bind: collected test count at head >= merge base"; exit 1
 
+# Any mutation tool: convert its report to one JSON line per mutant and hand it to the plugin's
+# `scripts/mutation_survivors.py --tool <name> --mutants <file>`; its docstring has the format.
 mutation-changed:
     @echo "bind: mutate changed functions, shard {{shard}} of {{shards}}; zero unregistered survivors"; exit 1
 

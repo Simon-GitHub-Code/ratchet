@@ -104,6 +104,10 @@ BINDING = (
 )
 HOOK = '#!/bin/sh\n[ -n "$RATCHET_HOOK_PROBE" ] && echo {name} > "$RATCHET_HOOK_PROBE"\nexit 0\n'
 RESULTS = "    a.x_f__mutmut_1: killed\n    a.x_f__mutmut_2: {status}\n"
+RECORDS = (
+    '{{"file": "src/a.py", "mutator": "operator", "replacement": "-", "status": "{status}",'
+    ' "start": [2, 14], "end": [2, 15]}}\n'
+)
 REGISTER_PATH = "quality/mutation-register.toml"
 REGISTER = "# Mutation register\n\n{entry}\n"
 STRYKER_REPORT = "reports/mutation/mutation.json"
@@ -142,6 +146,7 @@ def scratch(root: Path) -> None:
     write(root, WORKFLOW, PINNED)
     write(root, "coverage.xml", REPORT.format(root=root, hits=1, cond=100, total=1))
     write(root, "mutants.txt", RESULTS.format(status="killed"))
+    write(root, "mutants.jsonl", RECORDS.format(status="killed"))
     write(root, REGISTER_PATH, "# Mutation register\n")
     stryker_report(root, "Killed")
     write(root, "tickets/01-add-the-thing.md", TICKET)
@@ -194,6 +199,10 @@ def add_suppression(root: Path) -> None:
 
 def survivor(root: Path) -> None:
     write(root, "mutants.txt", RESULTS.format(status="survived"))
+
+
+def survivor_of_any_tool(root: Path) -> None:
+    write(root, "mutants.jsonl", RECORDS.format(status="survived"))
 
 
 def entry(tool: str, identity: str, function_hash: str) -> str:
@@ -396,6 +405,7 @@ def behind_an_open_blocker(root: Path) -> None:
 
 MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
 STRYKER = ["--tool", "stryker"]
+ANY_TOOL = ["--tool", "any-tool", "--mutants", "mutants.jsonl"]
 TICKET_REF = ["tickets/01-add-the-thing.md"]
 ADDITIVE = ["--fail-unless-additive"]
 GATE_READS_RED = "import pathlib, sys; sys.exit(pathlib.Path('red').is_file())"
@@ -415,6 +425,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("coverage", coverage_groups.main, uncovered, []),
     ("mutation: a survivor", mutation_survivors.main, survivor, MUTMUT),
     ("mutation: a stale entry", mutation_survivors.main, stale_entry, MUTMUT),
+    ("mutation: a survivor of any tool", mutation_survivors.main, survivor_of_any_tool, ANY_TOOL),
     ("mutation: two survivors, one entry", mutation_survivors.main, twin_survivors, STRYKER),
     (
         "mutation: an entry without a position",
