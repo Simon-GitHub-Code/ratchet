@@ -45,20 +45,26 @@ jobs:
       # A merge commit, never a squash: the route reads a finished feature from one. The token's
       # push starts no workflow, so tier 2 on the default branch is started here. The default
       # branch is fetched again before each judgement, so a pull request behind what the one
-      # before it merged is told so.
+      # before it merged is told so. Which runs count is `forge_runs.py`'s to say (ADR 0024): a
+      # `ci` run counts for a pull request only when it tested that one against the default
+      # branch, and a `deep` run only on a commit of the default branch.
       - name: Judge every green pull request, say what was found, merge what passed
         run: |
           fetch() { git fetch --no-tags -q origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" "$@"; }
-          deep="$(gh run list --workflow deep.yml --branch "$DEFAULT_BRANCH" --status completed --limit 20 --json conclusion \
-            --jq '[.[] | select(.conclusion != "cancelled" and .conclusion != "skipped")][0].conclusion // "none"')"
-          case "$deep" in success) tier2=green ;; none) tier2=none ;; *) tier2=red ;; esac
+          runs() { gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$1/runs" -f per_page=100 "${@:2}" || true; }
+          counted() { python3 "$RATCHET_PLUGIN/scripts/forge_runs.py" "$@" --repository "$GITHUB_REPOSITORY"; }
+          fetch
+          tier2="$(runs deep.yml -f "branch=$DEFAULT_BRANCH" -f status=completed | counted deep --tip "origin/$DEFAULT_BRANCH")"
           gh pr list --state open --limit 100 --json number,headRefOid,headRefName,baseRefName,isCrossRepository \
             --jq '.[] | select(.isCrossRepository | not) | "\(.number) \(.headRefOid) \(.headRefName) \(.baseRefName)"' > "$RUNNER_TEMP/open.txt"
           failed=0; merged=0
           while read -r number sha branch target; do
-            ci="$(gh run list --workflow ci.yml --event pull_request --commit "$sha" --limit 1 --json status,conclusion \
-              --jq '.[0] | "\(.status) \(.conclusion)"')"
-            if [ "$ci" != "completed success" ]; then echo "#$number: ci is not green on $sha: left alone"; continue; fi
+            gh api -X GET "repos/$GITHUB_REPOSITORY/pulls" -f state=all -f "head=${GITHUB_REPOSITORY%%/*}:$branch" -f per_page=100 > "$RUNNER_TEMP/pulls.json" || true
+            gh api "repos/$GITHUB_REPOSITORY/issues/$number/events?per_page=100" --paginate > "$RUNNER_TEMP/events.json" || true
+            if ! ci="$(runs ci.yml -f "head_sha=$sha" -f event=pull_request | counted ci --pulls "$RUNNER_TEMP/pulls.json" \
+              --events "$RUNNER_TEMP/events.json" --number "$number" --sha "$sha" --branch "$branch" --base "$DEFAULT_BRANCH")"; then
+              echo "#$number: $ci: left alone"; continue
+            fi
             fetch "$sha"
             report="$RUNNER_TEMP/merge-$number.md"
             verdict=owner
@@ -74,9 +80,16 @@ jobs:
             fi
             echo "#$number: merge: $verdict"
             if [ "$verdict" = agent ]; then
-              if gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$number/merge" -f "sha=$sha" -f merge_method=merge --jq .message; then
+              now="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '"\(.state) \(.head.sha) \(.base.ref)"' || true)"
+              if [ "$now" != "open $sha $DEFAULT_BRANCH" ]; then
+                echo "::error::#$number: its head or its base changed while it was judged"; failed=1
+              elif gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$number/merge" -f "sha=$sha" -f merge_method=merge --jq .message; then
                 merged=1
-                gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" --silent || echo "branch $branch stays"
+                # Why: the name goes into a URL, so one with a character a URL reads is left.
+                case "$branch" in
+                  *[!A-Za-z0-9._/-]*) echo "branch $branch stays" ;;
+                  *) gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" --silent || echo "branch $branch stays" ;;
+                esac
               else
                 echo "::error::#$number: the forge refused the merge"; failed=1
               fi

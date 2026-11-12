@@ -8,6 +8,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -391,40 +392,89 @@ args = sys.argv[1:]
 world = json.load(open(os.environ["WORLD"]))
 with open(os.environ["CALLS"], "a") as log:
     log.write(" ".join(args) + "\\n")
-joined = " ".join(args)
+fields = dict(a.split("=", 1) for a in args if "=" in a)
+path = [a for a in args if a.startswith("repos/")]
+path = path[0] if path else ""
 if args[:2] == ["pr", "list"]:
     print("\\n".join(world["open"]))
-elif joined.startswith("run list --workflow deep.yml"):
-    print("success")
-elif joined.startswith("run list --workflow ci.yml"):
-    print(world["ci"][args[args.index("--commit") + 1]])
-elif args[0] == "api" and args[1].endswith("/comments"):
-    print(world["comments"].get(args[1].split("/")[-2], ""))
-elif args[0] == "api" and "-X" in args and args[args.index("-X") + 1] == "PUT":
-    sha = [a for a in args if a.startswith("sha=")][0][4:]
-    if sha in world["refused"]:
+elif path.endswith("/workflows/deep.yml/runs"):
+    print(json.dumps(world["deep"]))
+elif path.endswith("/workflows/ci.yml/runs"):
+    print(json.dumps(world["ci"][fields["head_sha"]]))
+elif path.endswith("/pulls") and "GET" in args:
+    print(json.dumps(world["pulls"][fields["head"].split(":", 1)[1]]))
+elif "/events" in path:
+    print(json.dumps(world["events"].get(path.split("/")[-2], [])))
+elif path.endswith("/comments") and "-X" not in args:
+    print(world["comments"].get(path.split("/")[-2], ""))
+elif "/pulls/" in path and "-X" not in args:
+    print(world["now"][path.split("/")[-1]])
+elif "PUT" in args:
+    if fields["sha"] in world["refused"]:
         print("Head branch was modified", file=sys.stderr)
         sys.exit(1)
     print("Pull Request successfully merged")
 """
-FAKE_GIT = '#!/bin/sh\necho git "$@" >> "$CALLS"\n'
+FAKE_GIT = """#!/bin/sh
+echo git "$@" >> "$CALLS"
+if [ "$3" = rev-list ]; then printf '0\\t0\\n'; fi
+"""
 FAKE_JUDGE = """import json, os, sys
 args = sys.argv[1:]
 head = args[args.index("--head") + 1]
 report = args[args.index("--report") + 1]
+open(os.environ["CALLS"], "a").write("judge " + " ".join(args) + "\\n")
 open(report, "w").write("<!-- ratchet:merge -->\\nverdict for " + head + "\\n")
 sys.exit(0 if head in json.load(open(os.environ["WORLD"]))["agent"] else 1)
 """
 MERGE_STEP = re.compile(
     r"      - name: Judge every green.*\n        run: \|\n((?:          .*\n)+)"
 )
+OURS = {"full_name": "owner/repo"}
+TIER2 = {"event": "push", "status": "completed", "conclusion": "success", "head_sha": "f" * 40}
 
 
-def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_woke_it(
-    tmp_path: Path,
-) -> None:
-    # Why: observed on GitHub, 2026-11-12: of four runs queued together, two were cancelled, and
-    # the pull requests they stood for were never judged. A run that judges all of them loses none.
+def one_pull(number: int, sha: str, branch: str, *, base: str = "main") -> dict[str, object]:
+    head = {"ref": branch, "sha": sha, "repo": OURS}
+    return {"number": number, "state": "open", "head": head, "base": {"ref": base}}
+
+
+def ci_runs(
+    number: int, sha: str, branch: str, *, conclusion: str = "success"
+) -> dict[str, object]:
+    """The forge's answer for the ``ci`` runs on ``sha``: one, for pull request ``number``."""
+    run = {
+        "id": number,
+        "event": "pull_request",
+        "path": ".github/workflows/ci.yml",
+        "status": "completed",
+        "conclusion": conclusion,
+        "head_sha": sha,
+        "head_branch": branch,
+        "head_repository": OURS,
+        "created_at": "2026-11-12T10:00:00Z",
+        "pull_requests": [{"number": number, "base": {"ref": "main"}}],
+    }
+    return {"total_count": 1, "workflow_runs": [run]}
+
+
+def forge(heads: dict[int, tuple[str, str]]) -> dict[str, Any]:
+    """A forge where every pull request in ``heads`` is green, alone on its branch and unmoved."""
+    return {
+        "open": [f"{n} {sha} {branch} main" for n, (sha, branch) in heads.items()],
+        "deep": {"total_count": 1, "workflow_runs": [{**TIER2, "head_repository": OURS}]},
+        "ci": {sha: ci_runs(n, sha, branch) for n, (sha, branch) in heads.items()},
+        "pulls": {branch: [one_pull(n, sha, branch)] for n, (sha, branch) in heads.items()},
+        "events": {},
+        "now": {str(n): f"open {sha} main" for n, (sha, _) in heads.items()},
+        "comments": {},
+        "agent": [sha for sha, _ in heads.values()],
+        "refused": [],
+    }
+
+
+def merge_job(tmp_path: Path, world: dict[str, Any]) -> tuple[int, str, str]:
+    """Run the template's merge step against ``world``: its exit code, its output, its calls."""
     step = MERGE_STEP.search(MERGE)
     bash = shutil.which("bash")
     assert step
@@ -435,20 +485,11 @@ def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_wok
     (bin_dir / "git").write_text(FAKE_GIT, encoding="utf-8")
     for tool in (bin_dir / "gh", bin_dir / "git"):
         tool.chmod(0o755)
-    (tmp_path / "plugin/scripts").mkdir(parents=True)
-    (tmp_path / "plugin/scripts/merge_ready.py").write_text(FAKE_JUDGE, encoding="utf-8")
-    world = {
-        "open": [f"{n} {sha * 4} feat/{sha} main" for n, sha in enumerate("abcd", 1)],
-        "ci": {
-            "aaaa": "completed success",
-            "bbbb": "completed success",
-            "cccc": "completed failure",
-            "dddd": "completed success",
-        },
-        "comments": {"2": "77"},
-        "agent": ["aaaa", "dddd"],
-        "refused": ["dddd"],
-    }
+    scripts = tmp_path / "plugin/scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "merge_ready.py").write_text(FAKE_JUDGE, encoding="utf-8")
+    for name in ("forge_runs.py", "gatelib.py"):
+        shutil.copy(TEMPLATES.parents[2] / "scripts" / name, scripts / name)
     (tmp_path / "world.json").write_text(json.dumps(world), encoding="utf-8")
     calls = tmp_path / "calls"
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the script is the template's own
@@ -468,17 +509,60 @@ def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_wok
         text=True,
         check=False,
     )
-    log = calls.read_text(encoding="utf-8")
-    assert done.returncode == 1, "a merge the forge refused leaves the run red"
-    assert "#3: ci is not green on cccc: left alone" in done.stdout
-    assert "issues/3" not in log
+    return done.returncode, done.stdout, calls.read_text(encoding="utf-8")
+
+
+def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_woke_it(
+    tmp_path: Path,
+) -> None:
+    # Why: observed on GitHub, 2026-11-12: of four runs queued together, two were cancelled, and
+    # the pull requests they stood for were never judged. A run that judges all of them loses none.
+    # One pull request per way the job goes: 1 merges, 2 is the owner's, 3 is red, 4 the forge
+    # refuses, 5 has a twin against another base (ADR 0024), 6 moved while it was judged, and 7
+    # has a branch name a URL would read.
+    heads = {n: (letter * 4, f"feat/{letter}") for n, letter in enumerate("abcdef", 1)}
+    heads[7] = ("gggg", "feat/g#x")
+    world = forge(heads)
+    world["ci"] = {**world["ci"], "cccc": ci_runs(3, "cccc", "feat/c", conclusion="failure")}
+    world["pulls"]["feat/e"].append(one_pull(8, "eeee", "feat/e", base="weak"))
+    world["now"] = {**world["now"], "6": "open 9999 main"}
+    world |= {"comments": {"2": "77"}, "refused": ["dddd"]}
+    world["agent"] = ["aaaa", "dddd", "eeee", "ffff", "gggg"]
+    code, out, log = merge_job(tmp_path, world)
+    assert code == 1, "a merge the forge refused leaves the run red"
+    assert "#3: ci is not green on cccc: left alone" in out
+    assert "#5: #8 is a pull request from `feat/e` against `weak`" in out
+    assert "::error::#6: its head or its base changed while it was judged" in out
+    assert "branch feat/g#x stays" in out
+    assert "issues/3/comments" not in log
+    assert "issues/5/comments" not in log
     assert "-X POST repos/owner/repo/issues/1/comments" in log
     assert "-X PATCH repos/owner/repo/issues/comments/77" in log
     assert "-X POST repos/owner/repo/issues/4/comments" in log
-    assert log.count("-X PUT") == 2
-    assert "pulls/2/merge" not in log
+    assert log.count("-X PUT") == 3
+    for number in (2, 3, 5, 6):
+        assert f"pulls/{number}/merge" not in log
     assert log.count("-X DELETE repos/owner/repo/git/refs/heads/feat/a") == 1
-    assert "heads/feat/d" not in log
+    assert log.count("-X DELETE") == 1
     assert log.count("workflow run deep.yml --ref main") == 1
+    judged = [line for line in log.splitlines() if line.startswith("judge ")]
+    assert len(judged) == 5
+    assert all(" --tier2 green " in line for line in judged)
     fetches = [line for line in log.splitlines() if line.startswith("git fetch")]
-    assert [line.split()[-1] for line in fetches] == ["aaaa", "bbbb", "dddd"]
+    assert fetches[0].endswith("+refs/heads/main:refs/remotes/origin/main")
+    assert [line.split()[-1] for line in fetches[1:]] == ["aaaa", "bbbb", "dddd", "ffff", "gggg"]
+
+
+def test_the_merge_job_counts_nothing_the_forge_did_not_answer(tmp_path: Path) -> None:
+    # Why: an answer that is missing or cut short must read as red, and never as green.
+    world = forge({1: ("aaaa", "feat/a"), 2: ("bbbb", "feat/b"), 3: ("cccc", "feat/c")})
+    del world["deep"]
+    del world["ci"]["aaaa"]
+    del world["pulls"]["feat/b"]
+    code, out, log = merge_job(tmp_path, world)
+    assert code == 0
+    assert "#1: the forge's answer could not be read: left alone" in out
+    assert "#2: the forge's answer could not be read: left alone" in out
+    judged = [line for line in log.splitlines() if line.startswith("judge ")]
+    assert [" --head cccc " in line and " --tier2 red " in line for line in judged] == [True]
+    assert log.count("-X PUT") == 1

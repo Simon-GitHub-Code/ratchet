@@ -63,6 +63,7 @@ MERGE_WORKFLOW = "merge.yml"
 MERGE_SHAPE = (
     ("workflow_run:", "runs it after `ci`, as the default branch holds it"),
     ("merge_ready.py", "asks the merge judge"),
+    ("forge_runs.py", "says which `ci` and `deep` runs count (ADR 0024)"),
 )
 WEEKLY_WORKFLOW = "weekly.yml"
 WEEKLY_SHAPE = (
