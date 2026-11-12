@@ -5,6 +5,7 @@ ticket files and the notes, and a work tree is only proved gone by asking git.
 """
 
 import json
+import os
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -126,7 +127,7 @@ def test_the_plan_orders_tickets_by_their_blockers_and_starts_the_buildable(tmp_
     assert drafted.start == (ALPHA, GAMMA)
     assert (drafted.base, drafted.forge, drafted.blocked) == ("main", False, ())
     assert drafted.agents_at_most == 3 * 11 - 2
-    home = Path(tempfile.gettempdir()).resolve() / "ratchet-queue"
+    home = Path(tempfile.gettempdir()).resolve() / f"ratchet-queue-{os.getuid()}"
     assert Path(drafted.tickets[0].worktree).parent.parent == home
     assert Path(drafted.tickets[0].worktree).name == "feature-1-alpha"
     assert root not in Path(drafted.tickets[0].worktree).parents
@@ -684,3 +685,116 @@ def test_what_a_branch_holds_is_read_from_its_commits(tmp_path: Path) -> None:
     git(root, "rm", "-q", "guards/manifest.toml")
     commit(root, "chore: no manifest")
     assert drain.additions(drain.change_of(root, "main", BRANCH_A)) == []
+
+
+def planted(tmp_path: Path) -> Path:
+    """A directory of the owner's that the queue must never empty."""
+    precious = tmp_path / "precious"
+    write(precious, "kept/notes.txt", "the owner's\n")
+    return precious
+
+
+@pytest.mark.parametrize("level", ["user", "repository"])
+def test_a_queue_directory_that_is_a_link_is_refused_and_what_it_points_at_is_kept(
+    tmp_path: Path, capsys: Out, level: str
+) -> None:
+    # Why: the temp directory is shared and the name is predictable. A link planted there made
+    # `clean` empty the directory it pointed at.
+    root = project(tmp_path)
+    precious = planted(tmp_path)
+    home = drain.queue_home(root) if level == "repository" else drain.users_home()
+    home.parent.mkdir(mode=0o700, exist_ok=True)
+    home.symlink_to(precious, target_is_directory=True)
+    for action in (["clean", "--all"], ["open", ALPHA], ["plan"]):
+        capsys.readouterr()
+        assert run(root, *action) == 2
+        assert capsys.readouterr().out.startswith(f"drain: {home} is a link or a file, not a")
+    assert (precious / "kept/notes.txt").read_text(encoding="utf-8") == "the owner's\n"
+    assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
+
+
+def test_a_queue_directory_another_user_made_or_can_write_is_refused(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    home = drain.users_home()
+    assert (home.stat().st_mode & 0o777, drain.queue_home(root).stat().st_mode & 0o777) == (
+        0o700,
+        0o700,
+    )
+    home.chmod(0o770)
+    capsys.readouterr()
+    assert run(root, "clean", "--all") == 2
+    assert capsys.readouterr().out.startswith(f"drain: {home} can be written by other users")
+    home.chmod(0o700)
+    me = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: me)
+    monkeypatch.setattr(drain, "users_home", lambda: home)
+    monkeypatch.setattr(os, "getuid", lambda: me + 1)
+    assert run(root, "clean", "--all") == 2
+    assert capsys.readouterr().out.startswith(f"drain: {home} belongs to another user")
+    assert drain.tree_of(root, BRANCH_A).is_dir()
+
+
+def test_open_refuses_a_directory_that_became_another_s_while_it_was_made(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    answers = iter([None, f"{drain.users_home()} belongs to another user"])
+    monkeypatch.setattr(drain, "foreign", lambda _root: next(answers))
+    assert run(root, "open", ALPHA) == 1
+    assert capsys.readouterr().out.startswith(f"open: {drain.users_home()} belongs to another")
+    assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
+
+
+def test_clean_empties_only_registered_work_trees_and_follows_no_link(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    assert run(root, "open", GAMMA) == 0
+    precious = planted(tmp_path)
+    home = drain.queue_home(root)
+    link, full, file = home / "a-link", home / "not-a-tree", home / "stray.txt"
+    link.symlink_to(precious, target_is_directory=True)
+    write(full, "left/by.txt", "somebody\n")
+    file.write_text("x\n", encoding="utf-8")
+    tree_c = drain.tree_of(root, BRANCH_C)
+    git(root, "worktree", "remove", "--force", str(tree_c))
+    tree_c.symlink_to(precious, target_is_directory=True)
+    git(root, "worktree", "add", "-q", "--detach", str(drain.tree_of(root, BRANCH_A) / "base"))
+    capsys.readouterr()
+    assert run(root, "clean") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out == [
+        f"left: {link}: no work tree is registered there, and {drain.NOT_A_TREE}",
+        f"kept: {drain.tree_of(root, BRANCH_A)}: `{BRANCH_A}` is not merged",
+        f"left: {tree_c}: no work tree is registered there, and {drain.NOT_A_TREE}",
+        f"left: {full}: no work tree is registered there, and {drain.NOT_A_TREE}",
+        f"left: {file}: no work tree is registered there, and {drain.NOT_A_TREE}",
+    ]
+    assert (precious / "kept/notes.txt").read_text(encoding="utf-8") == "the owner's\n"
+    assert (full / "left/by.txt").is_file()
+    assert (drain.tree_of(root, BRANCH_A) / "base/.git").is_file(), "a nested tree is its tree's"
+    assert run(root, "clean", "--all") == 0
+    assert not drain.tree_of(root, BRANCH_A).exists()
+    assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
+
+
+def test_a_registered_work_tree_replaced_by_a_link_is_left_where_it_points(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    precious = planted(tmp_path)
+    tree = drain.tree_of(root, BRANCH_A)
+    moved = tmp_path / "moved"
+    tree.rename(moved)
+    tree.symlink_to(precious, target_is_directory=True)
+    capsys.readouterr()
+    assert run(root, "clean", "--all") == 0
+    assert capsys.readouterr().out == (
+        f"left: {tree}: the drain that made it was interrupted, and {drain.NOT_A_TREE}\n"
+    )
+    assert (precious / "kept/notes.txt").read_text(encoding="utf-8") == "the owner's\n"

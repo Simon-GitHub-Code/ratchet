@@ -29,8 +29,10 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   for the owner or parked, with the reasons; every assumption with its refuter; every glossary
   term and ADR added; the time each ticket took.
 
-Work trees live outside the repository, under the temporary directory, in a directory per
-repository. The notes and reports live in ``.ratchet/``, which no commit carries.
+Work trees live outside the repository, under the temporary directory, in a directory per user
+and repository that only that user can write. The script refuses one that is a link or another
+user's, and empties only what git lists as a work tree of this repository. The notes and reports
+live in ``.ratchet/``, which no commit carries.
 
 Usage: ``drain.py plan|open|update|land|close|clean|report [ticket] [--root DIR]
 [--concurrency N] [--offline] [--outcome O] [--reason TEXT]... [--result FILE] [--all]``.
@@ -41,8 +43,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -77,6 +81,11 @@ WAITS, PARKED = "waits", "parked"
 STASHED = {MERGED: "merged", WAITS: "unapproved", PARKED: "blocked"}
 INTERRUPTED = "interrupted"
 QUEUE = "queue"
+QUEUE_HOME = "ratchet-queue"
+OWNER_ONLY = 0o700
+OTHERS_WRITE = 0o022
+NOT_OURS = "the queue's work trees go in a directory only this user can write; remove it"
+NOT_A_TREE = "it is not a work tree of this repository or an empty directory, so it stays"
 MERGE = "merge"
 SLOWEST = 3
 
@@ -170,10 +179,36 @@ def main_tree(start: Path) -> Path | None:
     return Path(listing.splitlines()[0].removeprefix("worktree ")) if listing else None
 
 
+def users_home() -> Path:
+    """This user's directory of queue work trees: under the temp directory, named for the user."""
+    return Path(tempfile.gettempdir()).resolve() / f"{QUEUE_HOME}-{os.getuid()}"
+
+
 def queue_home(root: Path) -> Path:
-    """This repository's directory of queue work trees: outside it, under the temp directory."""
+    """This repository's directory of queue work trees: outside it, under the user's own."""
     name = f"{root.name}-{hashlib.sha256(str(root).encode()).hexdigest()[:8]}"
-    return Path(tempfile.gettempdir()).resolve() / "ratchet-queue" / name
+    return users_home() / name
+
+
+def foreign(root: Path) -> str | None:
+    """Why the queue's directories are not this user's alone, or ``None`` when they are.
+
+    The temp directory is shared and the names are predictable, so anybody can make them first:
+    as a link to a directory of the owner's, which `clean` would then empty, or as a directory
+    of their own to read what is built there. A directory that does not exist yet is fine.
+    """
+    for directory in (users_home(), queue_home(root)):
+        try:
+            status = directory.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(status.st_mode):
+            return f"{directory} is a link or a file, not a directory"
+        if status.st_uid != os.getuid():
+            return f"{directory} belongs to another user"
+        if status.st_mode & OTHERS_WRITE:
+            return f"{directory} can be written by other users"
+    return None
 
 
 def tree_of(root: Path, branch: str) -> Path:
@@ -181,29 +216,42 @@ def tree_of(root: Path, branch: str) -> Path:
 
 
 def worktrees(root: Path) -> frozenset[Path]:
-    """The queue work trees git has registered for this repository."""
+    """The queue work trees git has registered for this repository.
+
+    A queue work tree is a directory directly in the queue's own. A work tree one of them holds
+    inside itself (a gate's `.ratchet/base`) is that tree's, and goes when it goes.
+    """
     home = queue_home(root)
     listing = gatelib.git(root, "worktree", "list", "--porcelain") or ""
     registered = [line.removeprefix("worktree ") for line in listing.splitlines()]
-    return frozenset(Path(path) for path in registered if home in Path(path).parents)
+    return frozenset(Path(path) for path in registered if Path(path).parent == home)
 
 
 def dirty(tree: Path) -> bool:
     return bool(gatelib.git(tree, "status", "--porcelain", "--untracked-files=all"))
 
 
-def discard(root: Path, tree: Path, label: str) -> None:
-    """Remove a queue work tree, what it held uncommitted stashed under ``label`` first."""
+def discard(root: Path, tree: Path, label: str) -> bool:
+    """Remove a queue work tree, what it held uncommitted stashed under ``label`` first.
+
+    Only a directory git lists as a work tree of this repository is emptied. A link is never
+    followed, and anything else stays unless it is an empty directory. True when nothing is left.
+    """
+    if tree.is_symlink():
+        return False
     if tree in worktrees(root):
         gatelib.git(tree, "rebase", "--abort")
         if dirty(tree):
             gatelib.git(tree, "stash", "push", "--include-untracked", "--quiet", "-m", label)
         gatelib.git(root, "worktree", "remove", "--force", str(tree))
-    shutil.rmtree(tree, ignore_errors=True)
+        shutil.rmtree(tree, ignore_errors=True)
+    elif tree.is_dir() and not any(tree.iterdir()):
+        tree.rmdir()
     gatelib.git(root, "worktree", "prune")
-    # Why: the directory above is every repository's, and another drain may be making its own.
+    # Why: the directory above is this repository's, and nothing else is kept in it.
     if tree.parent.is_dir() and not any(tree.parent.iterdir()):
         tree.parent.rmdir()
+    return not tree.exists()
 
 
 # --- the notes -------------------------------------------------------------------------------
@@ -436,7 +484,12 @@ def open_ticket(drain: Drain, ref: str) -> int:
         print(f"open: {ref} is not started: " + "; ".join(not_started(entry, drafted)))
         return 1
     tree = Path(entry.worktree)
-    tree.parent.mkdir(parents=True, exist_ok=True)
+    for directory in (users_home(), tree.parent):
+        directory.mkdir(mode=OWNER_ONLY, exist_ok=True)
+    theirs = foreign(drain.root)
+    if theirs is not None:
+        print(f"open: {theirs}: {NOT_OURS}")
+        return 1
     added = gatelib.git(
         drain.root, "worktree", "add", "--quiet", "-B", entry.branch, str(tree), drafted.base
     )
@@ -554,8 +607,8 @@ def clean(root: Path, *, everything: bool) -> int:
         if why is None:
             print(f"kept: {tree}: `{branch}` is not merged")
             continue
-        discard(root, tree, f"{branch or tree.name}: {INTERRUPTED} run")
-        print(f"removed: {tree}: {why}")
+        gone = discard(root, tree, f"{branch or tree.name}: {INTERRUPTED} run")
+        print(f"removed: {tree}: {why}" if gone else f"left: {tree}: {why}, and {NOT_A_TREE}")
     return 0
 
 
@@ -700,6 +753,10 @@ def main(argv: list[str]) -> int:
     root = main_tree(Path(options.root))
     if root is None:
         print(f"drain: {options.root} is not a git repository")
+        return 2
+    theirs = foreign(root)
+    if theirs is not None:
+        print(f"drain: {theirs}: {NOT_OURS}")
         return 2
     drain = Drain(root, None if options.offline else preflight.run_gh, options.concurrency)
     return WHOLE.get(options.action, on_ticket)(drain, options)
