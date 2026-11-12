@@ -335,3 +335,53 @@ def test_a_clean_run_spawns_five_agents_and_records_no_question() -> None:
     assert (result["verdict"], result["branch"]) == ("approve", "feature/4-expiry")
     assert result["verdictRecord"]["openQuestions"] == []
     assert result["verdictRecord"]["assumptions"] == SPECIFIED["assumptions"]
+
+
+def test_a_test_the_critic_kept_failing_is_fixed_before_the_review() -> None:
+    # Why: a minor finding with a failing test left `check` red, skipped the fix loop and so
+    # failed every review.
+    finding = {"severity": "minor", "title": "records a HEAD as a GET", "testFails": True}
+    kept = {**CRITIQUED, "findings": [finding], "testsAdded": ["tests/test_method.py"]}
+    answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
+    answers |= {"fix-1": IMPLEMENTED, "critique-1": CRITIQUED}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert ran["labels"] == [
+        "preflight",
+        "spec",
+        "implement",
+        "critique",
+        "fix-1",
+        "critique-1",
+        "review",
+    ]
+    assert '"title": "records a HEAD as a GET"' in ran["prompts"]["fix-1"].split("MAY resolve")[0]
+    assert ran["result"]["verdict"] == "approve"
+    passing = {**kept, "findings": [{**finding, "testFails": False}]}
+    ran = _run(
+        {"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **{**answers, "critique": passing}
+    )
+    assert ran["labels"] == ["preflight", "spec", "implement", "critique", "review"]
+
+
+def test_a_change_with_no_room_under_the_ceiling_stops_before_the_next_stage() -> None:
+    # Why: a ticket whose spec tests and code already filled the ceiling ran nine agents and
+    # ended red on change-size alone once the critic's tests were added.
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    heavy = {**SPECIFIED, "changeSize": {"lines": 1001, "ceiling": 1500}}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=heavy, **answers)
+    assert ran["labels"] == ["preflight", "spec"]
+    result = ran["result"]
+    assert (result["verdict"], result["tooLarge"]["stage"]) == ("blocked", "the spec")
+    assert "1001 lines after the spec" in result["verdictForcedBy"][0]
+    assert "splits the ticket" in result["requiredByOrchestrator"][1]
+
+    fits = {**SPECIFIED, "changeSize": {"lines": 1000, "ceiling": 1500}}
+    built = {**IMPLEMENTED, "changeSize": {"lines": 1200, "ceiling": 1500}}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=fits, **{**answers, "implement": built})
+    assert ran["labels"] == ["preflight", "spec", "implement"]
+    assert ran["result"]["tooLarge"]["stage"] == "the implementation"
+    assert sorted(ran["result"]["filesChanged"]) == ["src/links.py", "tests/test_expiry.py"]
+
+    unbound = {**SPECIFIED, "changeSize": {"lines": 9, "ceiling": 0}}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=unbound, **answers)
+    assert ran["result"]["verdict"] == "approve"

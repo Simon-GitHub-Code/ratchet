@@ -149,9 +149,26 @@ function checkOutputField() {
 // ---------------------------------------------------------------------------
 // Schemas
 // ---------------------------------------------------------------------------
+// Why: a change must leave room under the binding's change-size ceiling for what the later
+// stages add. On the first tickets built this way the critic's tests were two fifths of the
+// change and the spec's tests most of the rest, so a change that is already over two thirds of
+// the ceiling cannot end green, and each stage it still runs is paid for nothing.
+const CHANGE_SIZE_FIELD = {
+  changeSize: {
+    type: 'object',
+    description: 'The two numbers the binding\'s change-size entry point prints for the working tree as you leave it; omit when the binding binds no such gate',
+    properties: { lines: { type: 'integer' }, ceiling: { type: 'integer' } },
+    required: ['lines', 'ceiling'],
+  },
+}
+const CHANGE_SIZE_RULE = 'Run the binding\'s change-size entry point last and return the lines changed and the ceiling it prints as `changeSize`; omit it when the binding binds no such gate.'
+const ROOM_NUMERATOR = 2
+const ROOM_DENOMINATOR = 3
+
 const SPEC_SCHEMA = {
   type: 'object',
   properties: {
+    ...CHANGE_SIZE_FIELD,
     slug: {
       type: 'string',
       pattern: '^[a-z0-9]+(-[a-z0-9]+)*$',
@@ -308,6 +325,7 @@ const IMPLEMENT_SCHEMA = {
     filesChanged: { type: 'array', items: { type: 'string' }, description: 'Repo-relative paths created or modified' },
     allNewTestsPass: { type: 'boolean' },
     checkPasses: { type: 'boolean', description: 'true only if `check` exited 0' },
+    ...CHANGE_SIZE_FIELD,
     notes: { type: 'string', description: 'Design decisions, trade-offs, anything the spec left open and how you resolved it' },
     ...DISPUTES_FIELD,
     ...checkOutputField(),
@@ -327,8 +345,9 @@ const CRITIQUE_SCHEMA = {
           title: { type: 'string' },
           evidence: { type: 'string', description: 'Command run and the output that demonstrates the problem' },
           suggestedTest: { type: 'string', description: 'Path of a test you added that exposes it, or a sketch of one' },
+          testFails: { type: 'boolean', description: 'true when you kept a test for this finding that fails now, so `check` is red on it' },
         },
-        required: ['severity', 'title', 'evidence', 'suggestedTest'],
+        required: ['severity', 'title', 'evidence', 'suggestedTest', 'testFails'],
       },
     },
     testsAdded: { type: 'array', items: { type: 'string' }, description: 'Repo-relative test files you created or extended' },
@@ -515,6 +534,9 @@ Your tasks, in order:
    blocks the run when a test file has no quoted failure. Put the same quotes in spec.md's
    test plan, so the reviewer sees what each test refuted.
 4. Run \`check\` and capture its tail. It is expected to be red only on your new tests.
+5. ${CHANGE_SIZE_RULE} The tests you wrote are most of what the change will
+   weigh: when they alone pass two thirds of the ceiling the run stops here, and the owner
+   splits the ticket. Write the tests the criteria need, never fewer to fit.
 
 An undecided point is the owner's in two cases, and yours in every other.
 
@@ -598,14 +620,16 @@ declared-path rule and every AGENTS.md non-negotiable, add the contracts binding
 where the spec states pre/postconditions, and regenerate any contract artefacts binding.md
 names when an interface changes, with the entry point it names.
 
+${CHANGE_SIZE_RULE}
+
 Finish when every listed test passes AND \`check\` exits 0. If a gate blocks you and you
 believe the gate, not your code, is wrong, write a gate dispute and list it in \`disputes\`.
 If you cannot get there, return anyway with \`checkPasses: false\` and explain in \`notes\`.`
 }
 
 function fixPrompt(spec, findings, testsAdded, iteration) {
-  const blockingFindings = findings.filter(f => f.severity !== 'minor')
-  const minors = findings.filter(f => f.severity === 'minor')
+  const blockingFindings = owed(findings)
+  const minors = findings.filter(f => !blockingFindings.includes(f))
   return `${PREAMBLE}
 You are the FIX agent (iteration ${iteration} of ${MAX_FIX_ITERATIONS}) for feature \`${spec.slug}\` of this repository.
 ${commonRules()}
@@ -621,7 +645,7 @@ Inputs you may read:
 
 Load the \`mattpocock-skills:tdd\` skill and work one slice at a time.
 
-Findings you MUST resolve (blocker/major):
+Findings you MUST resolve (blocker, major, or a test the critic kept failing):
 ${JSON.stringify(blockingFindings, null, 2)}
 
 Findings you MAY resolve if cheap (minor):
@@ -752,7 +776,10 @@ outcome. Nothing found refutes only the attempts that would have hit; the script
 run whose critic found nothing and attempted nothing.
 
 ${SEVERITY} \`check\` is expected to be red only on the failing tests you kept; say so in the
-finding evidence.`
+finding evidence, and set \`testFails: true\` on each such finding. A finding whose test you
+kept failing is fixed before the review whatever its severity, since a red \`check\` cannot
+be approved: keep a failing test only for a defect the code should lose, and for anything
+else say it in the evidence and keep no failing test.`
 }
 
 function reviewPrompt(spec, again) {
@@ -837,8 +864,51 @@ change only adds to, and \`check\` exits 0; otherwise
 // ---------------------------------------------------------------------------
 // Helpers (pure)
 // ---------------------------------------------------------------------------
+// The stop for a change with no room left under the ceiling, or null. \`stage\` is the role
+// that just returned.
+function noRoom(stage, size) {
+  const lines = size && size.lines
+  const ceiling = size && size.ceiling
+  if (!Number.isInteger(lines) || !Number.isInteger(ceiling) || ceiling <= 0) return null
+  if (lines * ROOM_DENOMINATOR <= ceiling * ROOM_NUMERATOR) return null
+  return {
+    stage,
+    lines,
+    ceiling,
+    reason: `too large: ${lines} lines after ${stage}, over two thirds of the change-size ceiling of ${ceiling}, with the critic's tests and the fixes still to come`,
+  }
+}
+
+function tooLarge(stop, spec, extra) {
+  log(`Blocked after ${stop.stage}: ${stop.reason}`)
+  return {
+    slug: SLUG,
+    ref: REF,
+    verdict: 'blocked',
+    verdictForcedBy: [stop.reason],
+    tooLarge: stop,
+    openQuestions: [],
+    guardEdits: [],
+    specPath: spec.specPath,
+    testFiles: spec.testFiles,
+    branch: BRANCH,
+    ...extra,
+    requiredByOrchestrator: [
+      'Commit nothing and open no PR. Tell the owner the ticket is too large to build as one change, with the two numbers',
+      'The owner splits the ticket into smaller ones (`/mattpocock-skills:to-tickets` on the same spec); the spec this run wrote, at `specPath`, says which criteria and tests there are to divide',
+    ],
+  }
+}
+
 function blocking(findings) {
   return (findings || []).filter(f => f && (f.severity === 'blocker' || f.severity === 'major'))
+}
+
+// What the fix loop owes the review: every blocker and major, and every finding whose test the
+// critic kept failing. Such a test leaves \`check\` red, and a red \`check\` is never approved, so
+// a minor finding with a failing test would otherwise skip the loop and fail the review.
+function owed(findings) {
+  return (findings || []).filter(f => f && (f.severity !== 'minor' || f.testFails === true))
 }
 
 function union(...lists) {
@@ -1036,6 +1106,9 @@ log(`Spec ${spec.slug}: ${spec.testFiles.length} test file(s), layers ${spec.lay
   (spec.failingForRightReason ? '' : ' -- WARNING: tests not failing for the right reason') +
   (spec.openQuestions.length ? `, ${spec.openQuestions.length} open question(s)` : ''))
 
+const specStop = noRoom('the spec', spec.changeSize)
+if (specStop) return tooLarge(specStop, spec, { checkOutput: spec.checkOutput })
+
 // An open question is the owner's to answer, not the implementer's to guess, and a guard path
 // other than a record the spec only added to is the owner's to edit. Stop here; the owner answers or lands the edits, and the run repeats.
 const guardEdits = spec.guardEdits ?? []
@@ -1069,6 +1142,8 @@ const impl = must(
 )
 let filesChanged = union(spec.testFiles, impl.filesChanged)
 const disputes = [...(impl.disputes || [])]
+const implStop = noRoom('the implementation', impl.changeSize)
+if (implStop) return tooLarge(implStop, spec, { filesChanged, disputes, checkOutput: impl.checkOutput })
 let lastCheckOutput = impl.checkOutput
 let lastCheckPasses = impl.checkPasses === true
 log(`Implement: ${impl.filesChanged.length} file(s), tests pass=${impl.allNewTestsPass}, check=${impl.checkPasses}`)
@@ -1083,7 +1158,7 @@ let critique = must(
 )
 filesChanged = union(filesChanged, critique.testsAdded)
 const allCriticFindings = [{ round: 0, findings: critique.findings }]
-log(`Critique: ${critique.findings.length} finding(s), ${blocking(critique.findings).length} blocking; ` +
+log(`Critique: ${critique.findings.length} finding(s), ${owed(critique.findings).length} owed a fix; ` +
   `fitness sabotage confirmed=${critique.fitnessSabotageConfirmed}`)
 
 // ---------------------------------------------------------------------------
@@ -1091,9 +1166,9 @@ log(`Critique: ${critique.findings.length} finding(s), ${blocking(critique.findi
 // ---------------------------------------------------------------------------
 phase('Fix')
 let iterations = 0
-while (blocking(critique.findings).length > 0 && iterations < MAX_FIX_ITERATIONS) {
+while (owed(critique.findings).length > 0 && iterations < MAX_FIX_ITERATIONS) {
   iterations += 1
-  log(`Fix ${iterations}/${MAX_FIX_ITERATIONS}: ${blocking(critique.findings).length} blocking finding(s)`)
+  log(`Fix ${iterations}/${MAX_FIX_ITERATIONS}: ${owed(critique.findings).length} finding(s) owed a fix`)
   const fix = must(
     await agent(fixPrompt(spec, critique.findings, critique.testsAdded, iterations), {
       label: `fix-${iterations}`, phase: 'Fix', schema: IMPLEMENT_SCHEMA,
@@ -1112,9 +1187,9 @@ while (blocking(critique.findings).length > 0 && iterations < MAX_FIX_ITERATIONS
   )
   filesChanged = union(filesChanged, critique.testsAdded)
   allCriticFindings.push({ round: iterations, findings: critique.findings })
-  log(`Re-critique ${iterations}: ${critique.findings.length} finding(s), ${blocking(critique.findings).length} still blocking`)
+  log(`Re-critique ${iterations}: ${critique.findings.length} finding(s), ${owed(critique.findings).length} still owed a fix`)
 }
-const unresolved = blocking(critique.findings)
+const unresolved = owed(critique.findings)
 if (unresolved.length) log(`Fix loop exhausted with ${unresolved.length} unresolved blocking finding(s); review runs anyway`)
 else if (iterations === 0) log('No blocking findings; fix loop skipped')
 

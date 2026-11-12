@@ -30,6 +30,7 @@ Stay in the turn until every workflow you start has returned: in a headless sess
 4. **A result that is not approved.** A `verdict` other than `approve`, an open `unresolvedBlockingFindings` or a red `checkOutput` tail commits nothing. Clear what the agents left with `git stash push -u -m "<branch>: <verdict> run"`, then `git switch <base>`, and name the stash in the hand-over; a `blocked` stash holds the ticket in the route until the default branch moves past the run. Then:
    - `openQuestions`: put them to the owner as [Questions for the owner](#questions-for-the-owner) says. When every one is answered and there is no guard edit, build the ticket again from step 1 in the same turn.
    - `guardEdits`: list them. The owner lands them on the default branch, or builds the ticket with `/pstack:poteto-mode` while present.
+   - `tooLarge`: tell the owner the two numbers; they split the ticket with `/mattpocock-skills:to-tickets`.
    - A dispute: relay it to the owner.
 
 5. **Commit an approved change,** in this order ([pipeline.md](../method/pipeline.md), the orchestrator). Run `ratchet` when it is bound, and commit `filesChanged` with the raised `quality/` files, the message naming the slug. Write the ADR the result suggests under the next free number. With no forge, write the change description at `.scratch/changes/<branch>.md` and set the local ticket's `Status:` line to `resolved` in the same commit. Last and alone, the verdict record: the result's `verdictRecord` on stdin of `just merge-ready record`, its file committed.

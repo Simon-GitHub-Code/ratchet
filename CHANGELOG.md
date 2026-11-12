@@ -23,6 +23,8 @@ A change the gates can judge now merges without the owner, and the owner is aske
 ### The drain
 
 - `/ratchet:feature` with no ticket builds every agent-ready ticket, each in its own git work tree, branch and pull request, at most three at once by default. Changes merge one at a time: a branch the default branch moved under is rebased and reviewed again. A ticket that cannot go on is parked and the rest continue. The run ends in one report of what merged, what waits and why, and every assumption made. `scripts/drain.py` holds the steps that need no judgement. (ADR 0023)
+- The fix loop also runs for a finding whose test the critic kept failing, whatever its severity: such a test leaves `check` red, and the review could only refuse it.
+- A change with no room left under the change-size ceiling stops early. The spec and implement roles report the gate's two numbers, and a change over two thirds of the ceiling ends `blocked` as too large, for the owner to split, before the stages that could only push it over.
 
 ### Gates
 
