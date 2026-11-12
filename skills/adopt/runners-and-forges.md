@@ -4,7 +4,7 @@ The templates are the `just` and GitHub examples. Step 7 of the adopt skill send
 
 ## A runner other than `just`
 
-Delete the `justfile`, create the same entry points in the repository's runner, and rewrite the binding's Entry points table with its commands. Keep the two hook recipes' behaviour: `pre-commit` and `commit-msg` answer `RATCHET_HOOK_PROBE` before any gate runs, or `hooks_installed.py` cannot tell whether a commit would run tier 0. Keep the three service gates on a `boot` and a `ready` value, and hand each long gate its shard from `SHARD` and `SHARDS`.
+Delete the `justfile`, create the same entry points in the repository's runner, and rewrite the binding's Entry points table with its commands. Keep the two hook recipes' behaviour: `pre-commit` and `commit-msg` answer `RATCHET_HOOK_PROBE` before any gate runs, or `hooks_installed.py` cannot tell whether a commit would run tier 0. Keep the three service gates on a `boot` and a `ready` value, and hand each long gate its shard from `SHARD` and `SHARDS`. Keep one list of gates per tier in that runner, run each tier's gates at once through `scripts/parallel.py` (`--runner` takes the runner's command prefix), and have the CI build its matrices from those lists, never from a copy.
 
 ## A forge other than GitHub
 

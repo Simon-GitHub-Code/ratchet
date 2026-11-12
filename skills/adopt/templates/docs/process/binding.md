@@ -15,7 +15,7 @@ This repository's binding of the Ratchet method (`ratchet:method`; [tiers.md](..
 
 ## Entry points
 
-Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2.
+Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
 
 | Entry point | Command |
 | --- | --- |
@@ -25,6 +25,7 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | tier1 | `just tier1` |
 | tier2 | `just tier2` |
 | check | `just check` |
+| check-fast | `just check-fast` |
 | check-deep | `just check-deep` |
 | ratchet | `just ratchet` |
 | ratchet-lowered | `just ratchet-lowered` |
@@ -128,7 +129,7 @@ One row per question the method asks. The application types decide which rows ap
 
 How this repository stays fast, from the first commit ([tiers.md](../../../skills/method/tiers.md#speed)). One line per concept, each saying how this stack meets it; the conformance gate is red while a line is missing or unfilled. The `Shards` line holds a whole number and nothing else: the CI workflows read it and run each long gate as that many jobs, so adding runners is this one number.
 
-- Parallel: <how the suite uses every core on a developer's machine and in CI, what keeps the tests isolated enough for that, and how a tier's gates run at once>
+- Parallel: <how the suite uses every core on a developer's machine and in CI, what keeps the tests isolated enough for that, and which gates share state and so run one after another (the `justfile`'s `serial` variables; none until a tier's gates run red in parallel and green alone)>
 - One pipeline: <CI calls the entry points above and nothing else, so a red job is reproduced by its one command; or the pipeline engine that runs the same definition in both places>
 - Shards: 1
 - Cache: <the lockfiles and tool configs each CI cache is keyed on, the tool caches it restores, and the caches the tools keep locally>

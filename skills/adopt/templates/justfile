@@ -36,11 +36,44 @@ default:
 
 # --- tiers -----------------------------------------------------------------
 
-tier0: tier0-tree commits
+# The gates of each tier: one list per tier, and the only place a gate is added to one. A tier
+# runs its gates at once through the plugin's runner, so it takes as long as its slowest gate and
+# one run names every red gate; CI reads the same lists (its `shape` job runs `just --evaluate`)
+# and gives each gate a job of its own. `tier0_tree_gates` is tier 0 less the history gate.
+tier0_tree_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions"
+tier0_gates := tier0_tree_gates + " commits"
+tier1_gates := "test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance"
+tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all"
+
+# The gates of a tier whose tool can run one `SHARD` of `SHARDS`: CI runs each over the shard count.
+tier1_sharded := "test mutation-changed"
+tier2_sharded := "mutation e2e test-stability"
+
+# Gates that cannot share a working tree at the same time, one variable per tier. Empty until
+# bound: the runner cannot see what a command touches, and a template cannot know this stack's
+# tools. Declare a group as `--serial A B`, repeated for more groups, each name a gate of that
+# tier: `serial1 := "--serial coverage diff-coverage"`. Declare one for:
+#   - two gates that write one file or directory (a coverage data file, a cache, a lock);
+#   - a gate that mutates the tree (a formatter, a generator, a migration) and every gate that
+#     reads what it writes;
+#   - two gates that bind one fixed port (better: `{port}` through `with_service.py`).
+# Giving each gate an output of its own is better than a group. A gate that is red in parallel
+# and green alone shares state with another.
+serial0 := ""
+serial1 := ""
+serial2 := ""
+
+# The runner. Each gate is an entry point of this file, run as `just <gate>` with its output held
+# whole, and every gate's seconds are appended to .ratchet/timing.jsonl so the slowest is named.
+parallel := 'python3 "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + just_executable() + '" --report .ratchet/timing.jsonl'
+
+tier0:
+    {{parallel}} {{serial0}} -- {{tier0_gates}}
 
 # Tier 0 less the history gate: what the pre-commit hook runs, since `commits` there would judge
 # the commit an amend replaces. The commit-msg hook checks the new subject with `commit-msg`.
-tier0-tree: fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions
+tier0-tree:
+    {{parallel}} {{serial0}} -- {{tier0_tree_gates}}
 
 # The two recipes the commit hooks call. RATCHET_HOOK_PROBE names a file: `hooks-installed` sets it
 # to learn that a commit would reach the recipe, and the recipe answers with its own name before
@@ -52,13 +85,24 @@ pre-commit:
 commit-msg file:
     @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo commit-msg > "$RATCHET_HOOK_PROBE"; else python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"; fi
 
-tier1: test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance
+tier1:
+    {{parallel}} {{serial1}} -- {{tier1_gates}}
 
-tier2: mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all
+tier2:
+    {{parallel}} {{serial2}} -- {{tier2_gates}}
 
-check: tier0 tier1
+# Tiers 0 and 1 in one run: one wall clock, the slowest gate of the two.
+check:
+    {{parallel}} {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
-check-deep: check tier2
+# The inner loop: the same gates, stopped at the first red. Run `check` before you push.
+check-fast:
+    {{parallel}} --fail-fast {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
+
+# `perf` and `load` judge elapsed time, which other gates running beside them disturb; CI gives
+# each a job of its own, and `just perf` alone is the reading to trust.
+check-deep:
+    {{parallel}} {{serial0}} {{serial1}} {{serial2}} -- {{tier0_gates}} {{tier1_gates}} {{tier2_gates}}
 
 # --- method gates (tool-neutral, shipped by the ratchet plugin) --------------
 

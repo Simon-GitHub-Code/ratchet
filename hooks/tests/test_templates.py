@@ -1,5 +1,6 @@
 """The adopt templates: pinned, naming the plugin by commit, and the records' placeholders."""
 
+import json
 import os
 import re
 import shutil
@@ -19,18 +20,21 @@ WORKFLOWS = {
     name: (TEMPLATES / ".github/workflows" / name).read_text(encoding="utf-8")
     for name in ("ci.yml", "deep.yml")
 }
-MATRIX_GATES = re.compile(r"^ +gate: \[([^\]]+)\]", re.MULTILINE)
 SHARDS_STEP = re.compile(r"      - id: shards\n        run: \|\n((?:          .*\n)+)")
 
 
-def tier_recipes(tier: str) -> list[str]:
-    match = re.search(rf"^{tier}: (.+)$", JUSTFILE, re.MULTILINE)
-    assert match, tier
-    return match.group(1).split()
-
-
-def matrix_gates(workflow: str) -> list[str]:
-    return [gate for row in MATRIX_GATES.findall(WORKFLOWS[workflow]) for gate in row.split(", ")]
+def gate_list(name: str) -> list[str]:
+    """A gate list of the justfile, evaluated by ``just`` as CI's shape job reads it."""
+    just = shutil.which("just")
+    if just is None:
+        pytest.skip("just is not installed")
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
+        [just, "--justfile", str(TEMPLATES / "justfile"), "--evaluate", name],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.split()
 
 
 def recipe(name: str) -> str:
@@ -39,14 +43,15 @@ def recipe(name: str) -> str:
     return match.group(1)
 
 
-def shards(binding: str, tmp_path: Path, workflow: str) -> tuple[int, str]:
-    """Run the workflow's shard step as the runner would; its exit code and what it output."""
+def shards(binding: str, tmp_path: Path, workflow: str) -> tuple[int, dict[str, str], str]:
+    """Run the workflow's shape step as the runner would: exit code, outputs, what it printed."""
     step = SHARDS_STEP.search(WORKFLOWS[workflow])
     bash = shutil.which("bash")
     assert step, workflow
     assert bash
     (tmp_path / "docs/process").mkdir(parents=True, exist_ok=True)
     (tmp_path / "docs/process/binding.md").write_text(binding, encoding="utf-8")
+    (tmp_path / "justfile").write_text(JUSTFILE, encoding="utf-8")
     output = tmp_path / "output"
     output.write_text("", encoding="utf-8")
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the script is the template's own
@@ -57,14 +62,32 @@ def shards(binding: str, tmp_path: Path, workflow: str) -> tuple[int, str]:
         text=True,
         check=False,
     )
-    return done.returncode, output.read_text(encoding="utf-8") + done.stdout
+    outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+    return done.returncode, outputs, done.stdout
+
+
+def needs_just() -> None:
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
 
 
 @pytest.mark.parametrize(("workflow", "tier"), [("ci.yml", "tier1"), ("deep.yml", "tier2")])
-def test_ci_runs_every_gate_of_its_tier_once(workflow: str, tier: str) -> None:
-    # Why: commitment 1, CI runs the same entry points. A gate the tier lists and no job runs is
-    # a gate a pull request never meets.
-    assert sorted(matrix_gates(workflow)) == sorted(tier_recipes(tier))
+def test_ci_runs_every_gate_of_its_tier_once(workflow: str, tier: str, tmp_path: Path) -> None:
+    # Why: commitment 1, CI runs the same entry points. The justfile's list is the only list: the
+    # shape job reads it, so a gate the tier lists is a job, and no job names a gate the tier lacks.
+    needs_just()
+    code, outputs, _ = shards(BINDING, tmp_path, workflow)
+    assert code == 0
+    plain, long = json.loads(outputs[tier]), json.loads(outputs[f"{tier}_long"])
+    assert long == gate_list(f"{tier}_sharded")
+    assert sorted([*plain, *long]) == sorted(gate_list(f"{tier}_gates"))
+    assert f"gate: ${{{{ fromJSON(needs.shape.outputs.{tier}) }}}}" in WORKFLOWS[workflow]
+    assert f"gate: ${{{{ fromJSON(needs.shape.outputs.{tier}_long) }}}}" in WORKFLOWS[workflow]
+
+
+def test_no_workflow_keeps_a_gate_list_of_its_own() -> None:
+    for name, text in WORKFLOWS.items():
+        assert not re.search(r"^ +gate: \[", text, re.MULTILINE), name
 
 
 @pytest.mark.parametrize("workflow", sorted(WORKFLOWS))
@@ -75,13 +98,87 @@ def test_the_long_gates_run_one_job_per_shard_the_binding_counts(
     assert "shard: ${{ fromJSON(needs.shape.outputs.shards) }}" in text
     assert "SHARD: ${{ matrix.shard }}" in text
     assert "SHARDS: ${{ needs.shape.outputs.count }}" in text
-    assert shards(BINDING, tmp_path, workflow) == (0, "count=1\nlist=[1]\n")
+    needs_just()
+    code, outputs, _ = shards(BINDING, tmp_path, workflow)
+    assert (code, outputs["count"], outputs["list"]) == (0, "1", "[1]")
     four = BINDING.replace("- Shards: 1", "- Shards: 4")
-    assert shards(four, tmp_path, workflow) == (0, "count=4\nlist=[1,2,3,4]\n")
+    code, outputs, _ = shards(four, tmp_path, workflow)
+    assert (code, outputs["count"], outputs["list"]) == (0, "4", "[1,2,3,4]")
     for unreadable in ("- Shards: 0", "- Shards: a few", "- Shards: 2 for now"):
-        code, said = shards(BINDING.replace("- Shards: 1", unreadable), tmp_path, workflow)
+        code, _, said = shards(BINDING.replace("- Shards: 1", unreadable), tmp_path, workflow)
         assert code == 1, unreadable
         assert said == "docs/process/binding.md: no '- Shards: N' line\n"
+
+
+def dry_run(recipe_name: str, justfile: Path = TEMPLATES / "justfile") -> str:
+    """The command line a recipe would run, as ``just`` expands it."""
+    just = shutil.which("just")
+    assert just
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
+        [just, "--justfile", str(justfile), "--dry-run", recipe_name],
+        env={**os.environ, "RATCHET_PLUGIN": "/plugin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return " ".join(done.stderr.split())
+
+
+RUNNER = 'python3 "/plugin/scripts/parallel.py" --runner'
+
+
+@pytest.mark.parametrize(
+    ("name", "lists", "flag"),
+    [
+        ("tier0", ["tier0_gates"], ""),
+        ("tier0-tree", ["tier0_tree_gates"], ""),
+        ("tier1", ["tier1_gates"], ""),
+        ("tier2", ["tier2_gates"], ""),
+        ("check", ["tier0_gates", "tier1_gates"], ""),
+        ("check-fast", ["tier0_gates", "tier1_gates"], "--fail-fast"),
+        ("check-deep", ["tier0_gates", "tier1_gates", "tier2_gates"], ""),
+    ],
+)
+def test_every_tier_runs_its_gates_at_once_through_the_runner(
+    name: str, lists: list[str], flag: str
+) -> None:
+    # Why: a developer's wall clock is the slowest gate, not the sum, from the first adoption.
+    needs_just()
+    said = dry_run(name)
+    assert said.startswith(RUNNER)
+    assert ("--fail-fast" in said) is bool(flag)
+    assert "--report .ratchet/timing.jsonl" in said
+    assert said.endswith(" -- " + " ".join(gate for item in lists for gate in gate_list(item)))
+
+
+def test_tier_zero_is_the_tree_gates_and_the_history_gate() -> None:
+    assert gate_list("tier0_gates") == [*gate_list("tier0_tree_gates"), "commits"]
+    assert "just tier0-tree" in recipe("pre-commit")
+
+
+def test_every_listed_gate_is_a_recipe_and_a_sharded_gate_is_listed() -> None:
+    defined = set(re.findall(r"^([a-z][a-z0-9-]*)(?: [^:\n]*)?:", JUSTFILE, re.MULTILINE))
+    listed = [g for tier in ("tier0_gates", "tier1_gates", "tier2_gates") for g in gate_list(tier)]
+    assert len(set(listed)) == len(listed), "one run holds a gate once"
+    assert set(listed) <= defined
+    assert set(gate_list("tier1_sharded")) <= set(gate_list("tier1_gates"))
+    assert set(gate_list("tier2_sharded")) <= set(gate_list("tier2_gates"))
+
+
+def test_a_serial_group_is_declared_per_tier_and_empty_until_the_stack_needs_one(
+    tmp_path: Path,
+) -> None:
+    needs_just()
+    for variable in ("serial0", "serial1", "serial2"):
+        assert f'{variable} := ""' in JUSTFILE
+    bound = tmp_path / "justfile"
+    bound.write_text(
+        JUSTFILE.replace('serial1 := ""', 'serial1 := "--serial coverage diff-coverage"'),
+        encoding="utf-8",
+    )
+    assert " --serial coverage diff-coverage -- " in dry_run("check", bound)
+    assert " --serial coverage diff-coverage -- " in dry_run("tier1", bound)
+    assert "--serial" not in dry_run("tier0", bound)
 
 
 def test_a_recipe_learns_its_shard_from_the_environment_and_is_whole_without_one() -> None:

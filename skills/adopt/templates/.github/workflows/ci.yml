@@ -33,32 +33,44 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with: { name: timing-tier0, path: .ratchet/timing.jsonl }
-  # Why: the long gates run as one job per shard, and the count is the binding's `- Shards:` line,
-  # 1 on day one. Adding runners is that one number and never a change to this file.
+  # Why: the gates of a tier are the lists at the top of the `justfile`, the lists a local run is
+  # built from, and this job turns them into matrices: adding a gate is one word there and never a
+  # change to this file. The long gates run as one job per shard, and the count is the binding's
+  # `- Shards:` line, 1 on day one. Adding runners is that one number.
   shape:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
       shards: ${{ steps.shards.outputs.list }}
       count: ${{ steps.shards.outputs.count }}
+      tier1: ${{ steps.shards.outputs.tier1 }}
+      tier1_long: ${{ steps.shards.outputs.tier1_long }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { sparse-checkout: docs/process/binding.md, sparse-checkout-cone-mode: false }
+        with: { sparse-checkout: "justfile\ndocs/process/binding.md", sparse-checkout-cone-mode: false }
+      - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
       - id: shards
         run: |
           count="$(sed -n 's/^- Shards: *\([1-9][0-9]*\) *$/\1/p' docs/process/binding.md)"
           if [ -z "$count" ]; then echo "docs/process/binding.md: no '- Shards: N' line"; exit 1; fi
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "list=[$(seq -s, 1 "$count")]" >> "$GITHUB_OUTPUT"
+          json() { out=""; for item in $1; do out="$out,\"$item\""; done; echo "[${out#,}]"; }
+          long="$(just --evaluate tier1_sharded)"; short=""
+          for gate in $(just --evaluate tier1_gates); do
+            case " $long " in *" $gate "*) ;; *) short="$short $gate" ;; esac
+          done
+          echo "tier1=$(json "$short")" >> "$GITHUB_OUTPUT"
+          echo "tier1_long=$(json "$long")" >> "$GITHUB_OUTPUT"
   tier1:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: tier0
+    needs: [tier0, shape]
     strategy:
       fail-fast: false
       # Why: one job per gate, so the wall clock is the slowest gate and one run shows every red.
       matrix:
-        gate: [coverage, diff-coverage, test-counts, contracts-check, audit, duplication, build, smoke, telemetry, flag-states, load-smoke, bite, api-check, data-compat, doctests, sast, iac, artefact-scan, type-coverage, doc-coverage, change-size, guard-diff, settings-check, conformance]
+        gate: ${{ fromJSON(needs.shape.outputs.tier1) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
@@ -84,7 +96,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [test, mutation-changed] # bind: the gates whose tool can run one shard of several
+        gate: ${{ fromJSON(needs.shape.outputs.tier1_long) }}
         shard: ${{ fromJSON(needs.shape.outputs.shards) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
