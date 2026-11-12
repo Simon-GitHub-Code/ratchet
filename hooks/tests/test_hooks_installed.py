@@ -193,6 +193,53 @@ def test_a_hook_that_never_answers_is_killed_at_the_timeout(
     assert left.returncode == 1
 
 
+def test_a_hook_that_fails_before_it_answers_is_not_read_as_not_installed(root: Path) -> None:
+    # Why: a pre-commit framework error, such as a cache database locked for over five seconds
+    # on a loaded machine, exits non-zero without reaching the recipe. The hooks are installed.
+    hook_script(
+        root / ".git/hooks",
+        "pre-commit",
+        "echo 'An unexpected error has occurred: OperationalError: database is locked' >&2\nexit 3",
+    )
+    hook_script(root / ".git/hooks", "commit-msg", answering("commit-msg"))
+    found = problem(root)
+    assert "the pre-commit hook exited 3 before it answered" in found.detail
+    assert "OperationalError: database is locked" in found.detail
+    assert "not installed" not in found.detail
+    assert "pre-commit install" not in found.fix
+    assert "git hook run pre-commit" in found.fix
+
+
+def test_a_hook_that_fails_with_no_output_says_so(root: Path) -> None:
+    hook_script(root / ".git/hooks", "pre-commit", answering("pre-commit"))
+    hook_script(root / ".git/hooks", "commit-msg", "exit 1")
+    assert "the commit-msg hook exited 1 before it answered (no output)" in problem(root).detail
+
+
+def test_a_hook_that_answers_and_then_fails_is_still_an_answer(root: Path) -> None:
+    hook_script(
+        root / ".git/hooks", "pre-commit", answering("pre-commit").replace("exit 0", "exit 5")
+    )
+    hook_script(root / ".git/hooks", "commit-msg", answering("commit-msg"))
+    assert hooks_installed.check(root) is None
+
+
+def test_the_hooks_run_one_after_the_other_as_git_runs_them(root: Path, tmp_path: Path) -> None:
+    # Why: two pre-commit processes at once contend for the cache database; a commit never runs
+    # them together.
+    log = tmp_path / "order"
+    for name in hooks_installed.HOOKS:
+        body = f"echo 'start {name}' >> {log}\nsleep 0.2\necho 'end {name}' >> {log}\n"
+        hook_script(root / ".git/hooks", name, body + answering(name))
+    assert hooks_installed.check(root) is None
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "start pre-commit",
+        "end pre-commit",
+        "start commit-msg",
+        "end commit-msg",
+    ]
+
+
 def test_a_justfile_that_cannot_answer_is_not_probed(root: Path, tmp_path: Path) -> None:
     write(root, "justfile", "pre-commit:\n    just tier0\n")
     marker = tmp_path / "ran"

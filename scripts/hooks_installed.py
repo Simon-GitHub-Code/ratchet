@@ -24,6 +24,11 @@ around when the repository's own hooks are installed (``GIT_CONFIG_GLOBAL=/dev/n
 install``, since ``pre-commit`` refuses while the variable is set); a global hook that does not
 chain to the repository's hooks is bypassed by pointing this repository at its own hooks.
 
+The hooks run one after the other, as git runs them. A hook that exits non-zero before it answers
+has run and failed, so it is not read as "not installed": the red quotes its exit code and the end
+of its output. The usual cause is the ``pre-commit`` framework failing on its cache database while
+another process holds it. A hook still running after 20 seconds is killed and reported as unknown.
+
 Forging a green means writing ``.git/hooks/*`` (the ``local-git`` guard group refuses it) or
 changing the recipes (``justfile`` is a ``gate-commands`` guard path). Setting
 ``RATCHET_HOOK_PROBE`` on a commit would skip tier 0 for it, and the guard refuses that like it
@@ -57,6 +62,7 @@ if TYPE_CHECKING:
 PROBE_ENV = "RATCHET_HOOK_PROBE"
 HOOKS = ("pre-commit", "commit-msg")
 TIMEOUT = 20.0
+OUTPUT_LINES = 3
 JUSTFILES = ("justfile", "Justfile", ".justfile")
 MIN_GIT = (2, 36)
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -73,7 +79,16 @@ class Answer(Enum):
 
     ANSWERED = "answered"
     SILENT = "silent"
+    FAILED = "failed"
     TIMED_OUT = "timed out"
+
+
+@dataclass(frozen=True)
+class Probe:
+    """The hooks' answer, and for a hook that failed, which one and what it printed."""
+
+    answer: Answer
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -119,46 +134,63 @@ def stale_recipes(root: Path) -> bool:
     return False
 
 
-def run_hooks(root: Path, git_options: Sequence[str]) -> Answer:
-    """Run both hooks as a commit runs them: did each reach its recipe and get the probe answered?
+def run_hook(argv: list[str], *, token: Path, log: Path, deadline: float) -> int | None:
+    """The exit code of one hook run with the probe set to ``token``; ``None`` past the deadline.
+
+    The hook's output goes to ``log``. A hook still running at the deadline is killed with its
+    process group.
+    """
+    with log.open("wb") as output:
+        process = subprocess.Popen(
+            argv,
+            env={**os.environ, PROBE_ENV: str(token)},
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            return process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            return None
+
+
+def run_hooks(root: Path, git_options: Sequence[str]) -> Probe:
+    """Run both hooks as a commit runs them, one after the other: did each answer the probe?
 
     ``git_options`` come before ``hook`` (``-c core.hooksPath=...`` to try the repository's own
-    hooks). The answer is the recipe's write to a scratch file; the hooks' exit codes and output
-    are not read. A hook still running at the timeout is killed with its process group.
+    hooks). The answer is the recipe's write to a scratch file. A missing hook is silent, not an
+    error (``--ignore-missing``), so a hook that exits non-zero without answering is one that
+    ran and failed: the ``pre-commit`` framework failing on a locked cache database is the usual
+    case, and a commit would be refused, not run without tier 0. The hooks run one at a time as
+    git runs them, since two ``pre-commit`` processes contend for that database.
     """
     with tempfile.TemporaryDirectory(prefix="ratchet-hooks-") as scratch:
         message = Path(scratch) / "message"
         message.write_text("probe\n", encoding="utf-8")
-        running = []
+        deadline = time.monotonic() + TIMEOUT
         for hook in HOOKS:
-            token = Path(scratch) / hook
-            argv = ["git", "-C", str(root), *git_options, "hook", "run", hook]
+            token, log = Path(scratch) / hook, Path(scratch) / f"{hook}.log"
+            argv = ["git", "-C", str(root), *git_options, "hook", "run", "--ignore-missing", hook]
             if hook == "commit-msg":
                 argv += ["--", str(message)]
-            process = subprocess.Popen(
-                argv,
-                env={**os.environ, PROBE_ENV: str(token)},
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            running.append((hook, token, process))
-        deadline = time.monotonic() + TIMEOUT
-        timed_out = False
-        for _, _, process in running:
-            try:
-                process.wait(timeout=max(0.0, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-        if timed_out:
-            return Answer.TIMED_OUT
-        replied = all(
-            token.is_file() and token.read_text(encoding="utf-8").strip() == hook
-            for hook, token, _ in running
-        )
-        return Answer.ANSWERED if replied else Answer.SILENT
+            code = run_hook(argv, token=token, log=log, deadline=deadline)
+            if code is None:
+                return Probe(Answer.TIMED_OUT)
+            if token.is_file() and token.read_text(encoding="utf-8").strip() == hook:
+                continue
+            if code != 0:
+                return Probe(Answer.FAILED, failure(hook, code, log))
+            return Probe(Answer.SILENT)
+        return Probe(Answer.ANSWERED)
+
+
+def failure(hook: str, code: int, log: Path) -> str:
+    """What the owner reads of a hook that failed: its exit code and the end of its output."""
+    tail = log.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-OUTPUT_LINES:]
+    shown = " / ".join(line.strip() for line in tail) or "no output"
+    return f"the {hook} hook exited {code} before it answered ({shown})"
 
 
 def install_command(outside: Sequence[str]) -> str:
@@ -192,11 +224,8 @@ def diagnose(scopes: dict[str, str], *, repo_installed: bool, hooks: Path) -> Pr
     )
 
 
-def check(root: Path) -> Problem | None:
-    """``None`` when a commit in ``root`` would run tier 0, else why not and the owner's fix."""
-    hooks = hooks_dir(root)
-    if hooks is None:
-        return Problem(f"{root} is not a git repository", "run `git init` there")
+def unprobeable(root: Path) -> Problem | None:
+    """Why the hooks cannot be run as a commit runs them, if they cannot."""
     if git_version() < MIN_GIT:
         return Problem(
             "git is older than 2.36, which has no `git hook run`, so the hooks cannot be run"
@@ -210,10 +239,19 @@ def check(root: Path) -> Problem | None:
             f"copy the `tier0`, `tier0-tree`, `pre-commit` and `commit-msg` recipes of {TEMPLATE}"
             " into the justfile",
         )
-    answer = run_hooks(root, ())
-    if answer is Answer.ANSWERED:
-        return None
-    if answer is Answer.TIMED_OUT:
+    return None
+
+
+def unanswered(root: Path, hooks: Path, probe: Probe) -> Problem:
+    """Why the hooks did not answer, and the owner's fix; ``probe`` is not an answer."""
+    if probe.answer is Answer.FAILED:
+        return Problem(
+            f"{probe.detail}, so whether a commit would run tier 0 is not known; git would refuse"
+            " the commit",
+            "run the hook yourself (`git hook run pre-commit`, and `git hook run commit-msg --"
+            " <message file>`), repair what it reports, then run the gate again",
+        )
+    if probe.answer is Answer.TIMED_OUT:
         return Problem(
             f"a hook was still running after {TIMEOUT:g} seconds, so whether a commit would run"
             " tier 0 is not known",
@@ -222,8 +260,22 @@ def check(root: Path) -> Problem | None:
         )
     scopes = hooks_path_scopes(root)
     # Why: without a hooksPath the effective hooks are the repository's own, which just failed.
-    own = bool(scopes) and run_hooks(root, ("-c", f"core.hooksPath={hooks}")) is Answer.ANSWERED
+    own = bool(scopes) and run_hooks(root, ("-c", f"core.hooksPath={hooks}")).answer is (
+        Answer.ANSWERED
+    )
     return diagnose(scopes, repo_installed=own, hooks=hooks)
+
+
+def check(root: Path) -> Problem | None:
+    """``None`` when a commit in ``root`` would run tier 0, else why not and the owner's fix."""
+    hooks = hooks_dir(root)
+    if hooks is None:
+        return Problem(f"{root} is not a git repository", "run `git init` there")
+    blocked = unprobeable(root)
+    if blocked is not None:
+        return blocked
+    probe = run_hooks(root, ())
+    return None if probe.answer is Answer.ANSWERED else unanswered(root, hooks, probe)
 
 
 def main(argv: list[str]) -> int:
