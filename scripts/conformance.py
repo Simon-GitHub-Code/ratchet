@@ -752,7 +752,9 @@ def check_pr_template(root: Path) -> Iterable[str]:
             yield f"{relative}: has no '{heading}' section"
 
 
+# Why: the pin comes first, since an upgrade reads the plugin's commit from it.
 CHECKS: tuple[Check, ...] = (
+    check_plugin_pin,
     check_agent_instructions,
     check_glossary,
     check_brief,
@@ -766,7 +768,6 @@ CHECKS: tuple[Check, ...] = (
     check_weekly_workflow,
     check_settings,
     check_commit_hooks,
-    check_plugin_pin,
     check_runner,
     check_quality,
     check_bites,
