@@ -443,7 +443,9 @@ SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
     (
         "smoke: a service that never answers",
         with_service.main,
-        ["--boot", python(SERVE), "--ready", READY],
+        # Why: the clean run returns the moment the service answers; the limit is only how long a
+        # starting interpreter may take on a machine running many of them at once.
+        ["--boot", python(SERVE), "--ready", READY, "--timeout", "120"],
         ["--boot", python("import time; time.sleep(30)"), "--ready", READY, "--timeout", "0.5"],
     ),
     (

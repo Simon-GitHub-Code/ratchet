@@ -11,10 +11,15 @@ from contextlib import contextmanager
 from pathlib import Path
 
 PYTHON = f"{shlex.quote(sys.executable)} -S"
+# Why: a service that is slow to answer makes the probe give up and the server print a traceback
+# for each broken connection, which would push the boot's own lines out of the gate's output tail.
 SERVE = (
-    "import os, http.server as h; "
-    "h.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), "
-    "h.SimpleHTTPRequestHandler).serve_forever()"
+    "import os, http.server as h\n"
+    "class Server(h.ThreadingHTTPServer):\n"
+    "    def handle_error(self, request, client_address): pass\n"
+    "class Handler(h.SimpleHTTPRequestHandler):\n"
+    "    def log_message(self, *args): pass\n"
+    "Server(('127.0.0.1', int(os.environ['PORT'])), Handler).serve_forever()"
 )
 
 
