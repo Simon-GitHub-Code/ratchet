@@ -13,6 +13,9 @@ gap. A row that applies to none of them may say ``none: not a <type>``, naming a
 question is asked of, and needs no ADR. A row the catalogue names is never dropped, and an empty
 Tool cell is red.
 
+A question may also require named proofs (``Catalogue.proofs``): faults specific to what it asks,
+each described under ``[proofs]``. ``project_bite.py`` holds a bound row to them.
+
 Usage: ``application_types.py`` prints the types. ``application_types.py TYPE...`` prints every
 question the catalogue narrows with ``applies`` or the ``none: not a <type>`` cell to write, so
 adoption starts from the rows these types leave out. Exits 2 on a type the catalogue lacks.
@@ -23,7 +26,7 @@ from __future__ import annotations
 import re
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,16 +43,22 @@ MIN_REASON = 10
 
 @dataclass(frozen=True)
 class Catalogue:
-    """The shipped types, the questions narrowed to some of them, and the collection gates."""
+    """The shipped types, the questions narrowed to some of them, and what their gates prove.
+
+    ``proofs`` maps a question to the named proofs it requires, and ``meanings`` a proof to the
+    fault it plants.
+    """
 
     types: Mapping[str, str]
     narrowed: Mapping[str, frozenset[str]]
     collections: frozenset[str]
+    proofs: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    meanings: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def questions(self) -> frozenset[str]:
         """Every question the catalogue says something about; its row is never dropped."""
-        return self.collections | frozenset(self.narrowed)
+        return self.collections | frozenset(self.narrowed) | frozenset(self.proofs)
 
     def asked_of(self, question: str) -> frozenset[str]:
         """The types a question is asked of: every type unless the catalogue narrows it."""
@@ -111,6 +120,8 @@ def load(path: Path = CATALOGUE) -> Catalogue:
         types=dict(data["types"]),
         narrowed={q["name"]: frozenset(q["applies-to"]) for q in questions if "applies-to" in q},
         collections=frozenset(q["name"] for q in questions if q.get("collection")),
+        proofs={q["name"]: tuple(q["proofs"]) for q in questions if "proofs" in q},
+        meanings=dict(data.get("proofs", {})),
     )
 
 

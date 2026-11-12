@@ -510,6 +510,10 @@ def test_a_well_formed_bite_is_read_whole_and_a_malformed_one_is_left_out() -> N
         ),
         project_bite.Bite("perf", "z", "L001", project_bite.Remove(("bench/**",))),
     )
+    (claimed,) = project_bite.read_registry(bite("lint", "x", PLANT + '\nproof = "a-proof"'))[
+        0
+    ].bites
+    assert claimed.proof == "a-proof"
     assert problems == ["bite 2 (lint): 'patch' is a non-empty string"]
     kept, problems = project_bite.read_registry("setup = [3]\n" + bite("lint", "x"))
     assert [b.name for b in kept.bites] == ["x"]
@@ -553,9 +557,36 @@ def test_conformance_hears_of_every_gap_in_the_registry(tmp_path: Path) -> None:
     ]
 
 
-def test_the_collection_questions_come_from_the_shipped_catalogue() -> None:
-    assert "performance budget" in project_bite.COLLECTIONS()
-    assert "lint" not in project_bite.COLLECTIONS()
+def test_a_question_that_requires_a_proof_is_unproven_until_a_bite_claims_it(
+    tmp_path: Path,
+) -> None:
+    rows = (
+        row("telemetry emitted", "1").replace("`sh gate telemetry emitted`", "`sh gate telemetry`")
+        + row("load smoke", "1", tool="none: nothing to boot; ADR 0001")
+        + row("changed flags off and on", "1").replace(
+            "gate changed flags off and on", "gate flags"
+        )
+    )
+    registry = (
+        bite("telemetry", "a failing test")
+        + bite("telemetry", "no test", 'remove = ["tests/**"]')
+        + bite("flags", "a broken state", PLANT + '\nproof = "broken-flag-state"')
+    )
+    root = project(tmp_path / "repo", {}, registry, rows=rows)
+    assert project_bite.failures(root) == [
+        (
+            "quality/bites.toml: gate 'telemetry' (telemetry emitted) has no [[bite]] with proof ="
+            ' "outside-the-seam": an entry point registered outside the instrumented seam, which'
+            " emits nothing"
+        )
+    ]
+    claimed = bite("telemetry", "past the seam", PLANT + '\nproof = "outside-the-seam"')
+    write(root, "quality/bites.toml", registry + claimed)
+    assert project_bite.failures(root) == []
+    write(root, "quality/bites.toml", registry + claimed.replace('"outside-the-seam"', "3"))
+    assert project_bite.failures(root)[0] == (
+        "quality/bites.toml: bite 4 (telemetry): 'proof' is a non-empty string"
+    )
 
 
 def test_the_scripts_own_environment_names_no_other_tree(monkeypatch: pytest.MonkeyPatch) -> None:

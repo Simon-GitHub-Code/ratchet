@@ -26,6 +26,11 @@
 #   remove   globs; every file they match is deleted. A gate that judges a collection (tests,
 #            benchmarks, fuzz targets, examples, scenarios) carries one such bite, since a gate
 #            with nothing to run is red.
+#   proof    the named proof this bite is, where the row's question requires one
+#            (`skills/method/application-types.toml` in the `ratchet` plugin, under `[proofs]`):
+#            `outside-the-seam` for `telemetry emitted`, `broken-flag-state` for `changed flags
+#            off and on`, `erroring-route` for `load smoke`. The conformance gate is red while a
+#            bound row lacks one.
 #   args     optional words appended to the gate's command, such as the seconds a fuzz run takes
 #   commit   optional; true commits the fault in the copy first, for a gate that reads history
 #            or the index (a secret scanner over commits, a linter over tracked files)
@@ -43,3 +48,10 @@
 # name = "no benchmark"
 # remove = ["<the benchmarks' glob>"]
 # expect = "<the recipe's words for nothing to run>"
+#
+# [[bite]]
+# gate = "telemetry"
+# name = "a route registered past the seam"
+# proof = "outside-the-seam"
+# patch = "quality/bites/<the diff that registers one>.patch"
+# expect = "<the fitness test's words for an entry point with no span>"

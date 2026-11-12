@@ -49,9 +49,22 @@ def test_the_catalogue_file_lists_each_question_once() -> None:
     data = tomllib.loads(application_types.CATALOGUE.read_text(encoding="utf-8"))
     names = [question["name"] for question in data["question"]]
     assert len(names) == len(set(names))
-    assert all(
-        set(question) <= {"name", "applies-to", "collection"} for question in data["question"]
-    )
+    keys = {"name", "applies-to", "collection", "proofs"}
+    assert all(set(question) <= keys for question in data["question"])
+
+
+def test_every_proof_a_question_requires_is_described_and_every_description_is_required() -> None:
+    required = {proof for proofs in SHIPPED.proofs.values() for proof in proofs}
+    assert required == set(SHIPPED.meanings)
+    assert SHIPPED.proofs == {
+        "telemetry emitted": ("outside-the-seam",),
+        "changed flags off and on": ("broken-flag-state",),
+        "load smoke": ("erroring-route",),
+    }
+    assert set(SHIPPED.proofs) <= SHIPPED.questions
+    assert Catalogue({}, {}, frozenset(), proofs={"only proofs": ("x",)}).questions == {
+        "only proofs"
+    }
 
 
 def test_a_binding_declares_its_types_on_one_line() -> None:

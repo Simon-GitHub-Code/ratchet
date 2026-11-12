@@ -5,8 +5,10 @@ The method ships no tool, so nothing it ships can vouch for a repository's own g
 repository does: ``quality/bites.toml`` holds one or more ``[[bite]]`` per gate the binding binds
 to a tool, each a fault to plant, and this script plants each one in a scratch copy and requires
 the gate red. A gate that judges a collection (tests, benchmarks, fuzz targets) also carries a
-bite that removes the collection, since a gate with nothing to run is red (ADR 0020). ``bite.py``
-is the other half: the gates the plugin ships, against their synthetic violations.
+bite that removes the collection, since a gate with nothing to run is red (ADR 0020). A question
+may also require a named proof, a fault only its gate can catch
+(``skills/method/application-types.toml``): a bite claims it with ``proof``. ``bite.py`` is the
+other half: the gates the plugin ships, against their synthetic violations.
 
 The registry::
 
@@ -25,6 +27,13 @@ The registry::
     remove = ["tests/bench/**"]          # the empty collection
     expect = "no benchmark"
 
+    [[bite]]
+    gate = "telemetry"
+    name = "a route registered past the seam"
+    proof = "outside-the-seam"           # the named proof this question requires
+    patch = "quality/bites/route-past-the-seam.patch"
+    expect = "emits no span"
+
 A fault is exactly one of ``write`` (create or replace a file), ``patch`` (a diff under
 ``quality/bites/``, applied with ``git apply``) and ``remove`` (delete every file a glob
 matches). ``args`` are appended to the gate's command, and ``commit = true`` commits the fault in
@@ -36,7 +45,8 @@ one (a recipe's own text is echoed on every run). After each run the copy is put
 every file git sees, the index and ``HEAD``. One line per bite: ``bites``, ``DOES NOT BITE``
 (green with the fault), ``RED BEFORE THE FAULT``, ``RED FOR ANOTHER REASON`` (red, and ``expect``
 no more often than when green) or ``THE FAULT WAS NOT PLANTED``. The run is red on anything but
-``bites``, on a registry that does not parse, and on a tool-bound gate with no bite.
+``bites``, on a registry that does not parse, on a tool-bound gate with no bite, and on one
+whose question requires a proof no bite of it claims.
 
 A scratch copy is the work tree as git sees it (tracked and untracked files, nothing ignored), as
 a repository of its own under ``$TMPDIR`` with the same refs, index and ``HEAD``, borrowing the
@@ -83,7 +93,6 @@ from ratchet_guards import diff as guard_paths
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
-    from collections.abc import Set as AbstractSet
 
 REGISTRY = Path("quality/bites.toml")
 PATCHES = "quality/bites/"
@@ -106,11 +115,6 @@ TAIL = 15
 MAX_LANES = 4
 # Why: a Tool cell that is the plugin's script and nothing else is a gate `bite.py` proves.
 SHIPPED = re.compile(r"`ratchet` plugin `[^`]+`(?: and `[^`]+`)*")
-
-
-def COLLECTIONS() -> frozenset[str]:  # noqa: N802 # -- the catalogue's constant, read when asked
-    """The questions whose gate judges a collection, from the shipped catalogue."""
-    return application_types.load().collections
 
 
 class Unprovable(Exception):  # noqa: N818 # -- a verdict on the run, not a fault of the code
@@ -242,6 +246,7 @@ class Bite:
     fault: Fault
     args: tuple[str, ...] = ()
     commit: bool = False
+    proof: str = ""
 
     def plant(self, copy: Path) -> None:
         """Plant the fault in ``copy`` as a change git sees, committed when the bite says so."""
@@ -315,7 +320,8 @@ def read_fault(table: dict[str, object]) -> Fault:
 def read_bite(table: dict[str, object]) -> Bite:
     """One ``[[bite]]`` table as a ``Bite``; ``ValueError`` says what is wrong with it."""
     unknown = sorted(
-        set(table) - {"gate", "name", "expect", "write", "patch", "remove", "args", "commit"}
+        set(table)
+        - {"gate", "name", "expect", "write", "patch", "remove", "args", "commit", "proof"}
     )
     if unknown:
         message = f"unknown key '{unknown[0]}'"
@@ -331,6 +337,7 @@ def read_bite(table: dict[str, object]) -> Bite:
         fault=read_fault(table),
         args=strings(table, "args"),
         commit=commit,
+        proof=text(table, "proof") if "proof" in table else "",
     )
 
 
@@ -374,9 +381,9 @@ def misplaced(root: Path, rows: Sequence[Row], bites: Sequence[Bite]) -> Iterato
 
 
 def unproven(
-    rows: Sequence[Row], bites: Sequence[Bite], collections: AbstractSet[str]
+    rows: Sequence[Row], bites: Sequence[Bite], catalogue: application_types.Catalogue
 ) -> Iterator[str]:
-    """Each tool-bound gate with no bite, and each collection gate with no ``remove`` bite."""
+    """Each tool-bound gate with no bite, no ``remove`` for its collection, or a proof unclaimed."""
     for row in rows:
         mine = [bite for bite in bites if bite.gate == row.gate]
         if not row.bound:
@@ -386,11 +393,20 @@ def unproven(
                 f"gate '{row.gate}' ({row.question}) is bound to a tool and no [[bite]] plants "
                 "a fault for it"
             )
-        elif row.question in collections and not any(isinstance(b.fault, Remove) for b in mine):
+            continue
+        emptied = any(isinstance(bite.fault, Remove) for bite in mine)
+        if row.question in catalogue.collections and not emptied:
             yield (
                 f"gate '{row.gate}' ({row.question}) judges a collection and no [[bite]] uses "
                 "'remove' to show it red when the collection is empty"
             )
+        claimed = {bite.proof for bite in mine}
+        for proof in catalogue.proofs.get(row.question, ()):
+            if proof not in claimed:
+                yield (
+                    f"gate '{row.gate}' ({row.question}) has no [[bite]] with proof = \"{proof}\": "
+                    f"{catalogue.meanings[proof]}"
+                )
 
 
 def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
@@ -401,7 +417,8 @@ def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
         return rows, Registry(), ["missing; every gate bound to a tool needs a [[bite]]"], []
     registry, problems = read_registry(source)
     problems += misplaced(root, rows, registry.bites)
-    return rows, registry, problems, list(unproven(rows, registry.bites, COLLECTIONS()))
+    gaps = list(unproven(rows, registry.bites, application_types.load()))
+    return rows, registry, problems, gaps
 
 
 def failures(root: Path) -> list[str]:

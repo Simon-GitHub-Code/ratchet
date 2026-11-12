@@ -26,6 +26,17 @@ library = "code other code imports; nothing to boot"
 #               fuzz targets, scenarios). Such a gate is red when the set is empty, and the
 #               repository proves it: a `remove` bite in `quality/bites.toml` empties the set
 #               and its `bite-all` entry point expects red.
+#   proofs      the named proofs the question requires of a gate bound to it, beyond one fault of
+#               the repository's choosing. `[proofs]` below says what each one plants. A `[[bite]]`
+#               of `quality/bites.toml` claims one with `proof = "<name>"`, and the conformance
+#               gate is red while a bound row lacks a bite for a proof its question requires.
+
+# A proof is a fault that only this question's gate can catch, named so its absence is seen.
+# The name says what to plant, in the words of the concept; the repository writes the fault.
+[proofs]
+outside-the-seam = "an entry point registered outside the instrumented seam, which emits nothing"
+broken-flag-state = "a flag whose on state breaks a test that its off state passes"
+erroring-route = "a route the smoke requests that answers with an error"
 
 [[question]]
 name = "unit, property and fitness tests"
@@ -43,14 +54,17 @@ applies-to = ["service", "web-ui", "app", "cli", "job"]
 name = "telemetry emitted"
 applies-to = ["service", "web-ui", "app", "job"]
 collection = true
+proofs = ["outside-the-seam"]
 
 [[question]]
 name = "changed flags off and on"
 applies-to = ["service", "web-ui", "app", "cli", "job"]
+proofs = ["broken-flag-state"]
 
 [[question]]
 name = "load smoke"
 applies-to = ["service", "job"]
+proofs = ["erroring-route"]
 
 [[question]]
 name = "documentation examples run"

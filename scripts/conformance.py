@@ -653,6 +653,10 @@ def bite_mutations() -> list[Mutation]:
         ("repository without the bite registry", no_registry),
         ("bound gate with no bite", reregister(lint, 'gate = "fmt-check"\nname = "another"\n')),
         ("collection gate never shown red when empty", reregister(empty, slow)),
+        (
+            "bound gate without the proof its question requires",
+            reregister('\nproof = "outside-the-seam"\n', "\n"),
+        ),
         ("bite that does not say why the gate is red", reregister('expect = "a fault"\n', "")),
         ("bite naming a gate the binding lacks", reregister(lint, 'gate = "lnit"\nname = "x"\n')),
         (
@@ -860,8 +864,8 @@ def fill_binding(text: str) -> str:
 
 
 def fill_registry(binding: str) -> str:
-    """A fault per gate the filled binding binds to a tool, and each collection gate's emptied."""
-    collections = application_types.load().collections
+    """A fault per gate the filled binding binds, each collection emptied, each proof claimed."""
+    catalogue = application_types.load()
     entries = []
     for row in project_bite.gate_rows(binding):
         if not row.bound:
@@ -869,9 +873,13 @@ def fill_registry(binding: str) -> str:
         head = f'[[bite]]\ngate = "{row.gate}"\n'
         fault = 'write = { path = "src/bite", content = "a fault" }\nexpect = "a fault"\n'
         entries.append(f'{head}name = "a fault"\n{fault}')
-        if row.question in collections:
+        if row.question in catalogue.collections:
             emptied = 'remove = ["collection/**"]\nexpect = "nothing to run"\n'
             entries.append(f'{head}name = "nothing to run"\n{emptied}')
+        entries += [
+            f'{head}name = "{proof}"\nproof = "{proof}"\n{fault}'
+            for proof in catalogue.proofs.get(row.question, ())
+        ]
     return "\n".join(entries)
 
 
