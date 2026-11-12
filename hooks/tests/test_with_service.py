@@ -48,7 +48,8 @@ def test_smoke_boots_probes_and_stops_the_whole_process_tree(
     worker = tmp_path / "worker"
     boot = f"{python(FORKS_A_WORKER)} {worker}"
     code, out = run("--boot", boot, "--ready", READY, capsys=capsys)
-    assert (code, out) == (0, "with_service: green\n")
+    assert out == "with_service: green\n"
+    assert code == 0
     assert gone(pid_of(worker)), "the worker the service forked did not outlive the stop"
 
 
