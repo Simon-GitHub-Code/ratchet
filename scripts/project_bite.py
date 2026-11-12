@@ -193,6 +193,9 @@ class Write:
             message = f"{self.path} is ignored by git, and a copy holds only what git sees"
             raise Unprovable(message)
         target = copy / self.path
+        if not within(copy, target):
+            message = f"{self.path} leaves the copy through a symbolic link"
+            raise Unprovable(message)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(self.content, encoding="utf-8")
         git_in(copy, "add", "--intent-to-add", "--", self.path)
@@ -263,6 +266,11 @@ class Registry:
     setup: tuple[str, ...] = ()
     include: tuple[str, ...] = ()
     bites: tuple[Bite, ...] = ()
+
+
+def within(base: Path, path: Path) -> bool:
+    """Whether ``path``, with every symbolic link on the way followed, is still under ``base``."""
+    return path.resolve().is_relative_to(base.resolve())
 
 
 def inside(path: str) -> bool:
@@ -481,6 +489,16 @@ def carry(source: Path, target: Path) -> None:
         shutil.copy2(source, target, follow_symlinks=False)
 
 
+def carry_included(root: Path, copy: Path, path: str) -> None:
+    """Copy one ``include`` path, a file or a directory git ignores, when it is there."""
+    if not within(root, root / path):
+        message = f"include '{path}' leaves the repository through a symbolic link"
+        raise Unprovable(message)
+    if (root / path).is_dir():
+        shutil.copytree(root / path, copy / path, symlinks=True, dirs_exist_ok=True)
+    carry(root / path, copy / path)
+
+
 class Verdict(Enum):
     """What a gate did with a fault."""
 
@@ -591,9 +609,7 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Co
     for path in visible(root):
         carry(root / path, copy / path)
     for path in registry.include:
-        if (root / path).is_dir():
-            shutil.copytree(root / path, copy / path, symlinks=True, dirs_exist_ok=True)
-        carry(root / path, copy / path)
+        carry_included(root, copy, path)
     for command in registry.setup:
         code, output = shell.run(shlex.split(command), copy)
         if code != 0:

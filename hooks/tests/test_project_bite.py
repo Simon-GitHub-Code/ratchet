@@ -593,3 +593,54 @@ def test_the_scripts_own_environment_names_no_other_tree(monkeypatch: pytest.Mon
     monkeypatch.setenv("GIT_DIR", "/somewhere/.git")
     assert "GIT_DIR" not in project_bite.environment()
     assert project_bite.environment()["PATH"] == os.environ["PATH"]
+
+
+@pytest.mark.parametrize("path", ["link/planted.txt", "file-link"])
+def test_a_write_fault_does_not_follow_a_tracked_link_out_of_the_copy(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str
+) -> None:
+    # Why: the copy carries a tracked link as a link, and a write through it landed outside the
+    # copy, where restoring the copy does not reach.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "kept.txt").write_text("the owner's\n", encoding="utf-8")
+    fault = f'write = {{ path = "{path}", content = "planted\\n" }}'
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "through a link", fault))
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    (root / "file-link").symlink_to(outside / "kept.txt")
+    commit(root, "feat(core): two links out of the repository")
+    assert prove(root) == 1
+    assert f"{path} leaves the copy through a symbolic link" in capsys.readouterr().out
+    assert sorted(p.name for p in outside.iterdir()) == ["kept.txt"]
+    assert (outside / "kept.txt").read_text(encoding="utf-8") == "the owner's\n"
+
+
+def test_a_write_fault_through_a_link_that_stays_in_the_copy_is_planted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fault = 'write = { path = "alias.txt", content = "planted\\n" }'
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "through a link", fault))
+    (root / "alias.txt").symlink_to("src/code.txt")
+    commit(root, "feat(core): a link inside the repository")
+    before = state(root)
+    assert prove(root) == 0
+    assert "bite: lint: through a link: bites" in capsys.readouterr().out
+    assert state(root) == before
+
+
+@pytest.mark.parametrize("include", ["ignored/out", "ignored/out/kept.txt", "env.secret"])
+def test_an_include_that_leaves_the_repository_through_a_link_is_red(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], include: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "kept.txt").write_text("not the repository's\n", encoding="utf-8")
+    registry = f'include = ["{include}"]\n' + bite("lint", "a planted word")
+    root = project(tmp_path / "repo", {"lint": LINT}, registry)
+    (root / "ignored").mkdir()
+    (root / "ignored/out").symlink_to(outside, target_is_directory=True)
+    (root / "env.secret").symlink_to(outside / "kept.txt")
+    assert prove(root) == 1
+    out = capsys.readouterr().out
+    assert f"include '{include}' leaves the repository through a symbolic link" in out
+    assert "bites" not in out
