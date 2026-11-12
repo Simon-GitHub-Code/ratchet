@@ -18,6 +18,7 @@ A change the gates can judge now merges without the owner, and the owner is aske
 - An open question is `direction` (the options are different products) or `irreversible` (a wrong guess loses data, fixes a public contract, spends money or weakens a security rule). Everything else is assumed, given a refuter and listed in the pull request. Questions are asked after the work, and each answer is written on the ticket under `## Answers`. (ADR 0013, ADR 0022)
 - `/ratchet:conjecture` no longer asks the owner to accept its draft.
 - `scripts/questions.py` logs each answer in `.ratchet/questions.tsv`. When a question's last three answers took the recommendation, the route proposes a standing answer for `AGENTS.md`. It never proposes one for a `direction` question. (ADR 0022)
+- Questions arrive as dialogs. The stance in every session and the `AGENTS.md` template tell agents to ask through the question tool, one decision per question with the recommended option first, whichever plugin's skill is asking. An existing adoption gets the stance from the plugin; add the `## Asking the owner` section to `AGENTS.md` by hand.
 
 ### The drain
 

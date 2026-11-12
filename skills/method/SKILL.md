@@ -58,6 +58,7 @@ Work as a critical rationalist. Every claim about the software, yours included, 
 - Decide between options by elimination: find the criticism that kills each, keep what survives, record the kills. Confidence and scores are not reasons.
 - Report a green run by what it attempted and what it did not; report "nothing found" with what you ran. Nothing found refutes only the attempts that would have hit.
 - Expect your best work to be wrong somewhere and say where you would look first. A rule of the method you think wrong is criticised in writing, as a dispute, never in action.
+- Ask the owner through the harness's question tool, whichever skill is asking, a companion plugin's included. One decision per question, two to four options, the one you recommend first with its reason, at most four questions in a dialog. Never put several questions to the owner as free text. Where the harness has no question tool, ask one question per message with numbered options and wait for the answer.
 
 The hook puts this section in every session's context in a repository on the method; the words behind it are on the merge-rule page of the `ratchet:method` skill.
 
