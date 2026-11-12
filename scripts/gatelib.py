@@ -397,6 +397,27 @@ def end_group(pid: int) -> bool:
     return True
 
 
+def end_running_from(tree: Path, proc: Path = Path("/proc")) -> list[int]:
+    """End every process whose program is a file under ``tree``; the ids of those ended.
+
+    For a work tree about to be removed. A service an agent built there and started by hand is in
+    no gate's process group, so nothing else ends it: it would hold its port and a deleted
+    program until somebody found it. ``proc`` is where the kernel lists processes; a system
+    without one ends nothing. A process of another user cannot be read and is left.
+    """
+    ended = []
+    for entry in sorted(proc.glob("[0-9]*")):
+        try:
+            program = (entry / "exe").readlink()
+            if not program.is_relative_to(tree):
+                continue
+            os.kill(int(entry.name), signal.SIGKILL)
+        except OSError:
+            continue
+        ended.append(int(entry.name))
+    return ended
+
+
 def run_command(command: list[str], env: dict[str, str]) -> tuple[int, list[str]]:
     """Run ``command`` in a session of its own: its exit code, and what went wrong.
 

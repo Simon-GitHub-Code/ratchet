@@ -6,6 +6,7 @@ ticket files and the notes, and a work tree is only proved gone by asking git.
 
 import json
 import os
+import signal
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -17,6 +18,7 @@ import pytest
 import drain
 import hooks_installed
 import merge_ready
+from tests import servers
 from tests.repos import commit, git, repository, write
 from tests.test_merge_ready import GLOSSARY, MANIFEST
 
@@ -803,3 +805,20 @@ def test_a_registered_work_tree_replaced_by_a_link_is_left_where_it_points(
         f"left: {tree}: the drain that made it was interrupted, and {drain.NOT_A_TREE}\n"
     )
     assert (precious / "kept/notes.txt").read_text(encoding="utf-8") == "the owner's\n"
+
+
+def test_a_removed_work_tree_takes_what_ran_from_it_along(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    tree = drain.tree_of(root, BRANCH_A)
+    service = servers.sleeper(tree)
+    try:
+        capsys.readouterr()
+        assert run(root, "clean", "--all") == 0
+        assert capsys.readouterr().out.splitlines()[0] == (
+            f"ended: process {service.pid}, which ran a program of {tree}"
+        )
+        assert service.wait(timeout=5) == -signal.SIGKILL
+    finally:
+        service.kill()
+        service.wait()

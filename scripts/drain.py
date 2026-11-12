@@ -242,6 +242,8 @@ def discard(root: Path, tree: Path, label: str) -> bool:
     if tree.is_symlink():
         return False
     if tree in worktrees(root):
+        for pid in gatelib.end_running_from(tree.resolve()):
+            print(f"ended: process {pid}, which ran a program of {tree}")
         gatelib.git(tree, "rebase", "--abort")
         if dirty(tree):
             gatelib.git(tree, "stash", "push", "--include-untracked", "--quiet", "-m", label)

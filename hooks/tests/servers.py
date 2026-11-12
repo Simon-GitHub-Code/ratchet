@@ -2,6 +2,7 @@
 
 import http.server
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -99,3 +100,11 @@ def reply(handler: http.server.BaseHTTPRequestHandler, status: int, body: bytes 
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def sleeper(tree: Path) -> subprocess.Popen[bytes]:
+    """Start a copy of ``sleep`` that is a file of ``tree``: a service somebody built and left."""
+    program = tree / "target" / "sleep"
+    program.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(shutil.which("sleep") or "", program)
+    return subprocess.Popen([str(program), "60"])  # noqa: S603 # -- a copy of sleep, no shell

@@ -293,3 +293,28 @@ def test_the_state_directory_is_made_once_and_ignores_itself(tmp_path: Path) -> 
     (state / ".gitignore").write_text("*\n!kept\n", encoding="utf-8")
     assert gatelib.state_dir(root) == state
     assert (state / ".gitignore").read_text(encoding="utf-8") == "*\n!kept\n", "it is the owner's"
+
+
+def test_a_process_run_from_a_tree_is_ended_and_every_other_one_is_left(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    inside = servers.sleeper(tree)
+    outside = start("import time\ntime.sleep(60)\n", tmp_path)
+    try:
+        assert gatelib.end_running_from(tree.resolve()) == [inside.pid]
+        assert inside.wait(timeout=5) == -signal.SIGKILL
+        assert outside.poll() is None
+    finally:
+        for process in (inside, outside):
+            process.kill()
+            process.wait()
+
+
+def test_a_process_that_is_gone_or_cannot_be_read_is_passed_over(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    proc = tmp_path / "proc"
+    gone = proc / "999999999"
+    gone.mkdir(parents=True)
+    (gone / "exe").symlink_to(tree / "target" / "service")
+    (proc / "12").mkdir()
+    assert gatelib.end_running_from(tree, proc) == []
+    assert gatelib.end_running_from(tree, tmp_path / "no-such-directory") == []
