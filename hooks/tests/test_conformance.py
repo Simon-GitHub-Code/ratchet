@@ -106,6 +106,41 @@ def test_a_workflow_is_held_to_the_pin_only_where_it_runs_the_plugin(repo: Path)
     assert red(repo) == [f"{deep}: {elsewhere}"]
 
 
+NAMED = "- Commit hooks: `.pre-commit-config.yaml`"
+LEFTHOOK = (
+    "pre-commit:\n  commands:\n    tree: {run: just pre-commit}\n"
+    "commit-msg:\n  commands:\n    subject: {run: just commit-msg {1}}\n"
+)
+
+
+def test_the_binding_may_name_another_hook_mechanism(repo: Path) -> None:
+    remove(".pre-commit-config.yaml")(repo)
+    replace(BINDING, NAMED, "- Commit hooks: `lefthook.yml`, installed by `lefthook install`")(repo)
+    assert red(repo) == ["lefthook.yml: missing; the tier 0 commit hooks are installed from it"]
+    write("lefthook.yml", LEFTHOOK)(repo)
+    assert red(repo) == []
+    write("lefthook.yml", "pre-commit:\n  commands:\n    tree: {run: just tier0}\n")(repo)
+    whole = "a hook runs the whole tier0, whose history gate judges the commit an amend replaces"
+    assert red(repo) == [
+        "lefthook.yml: names no `commit-msg` hook, so a commit would skip that half of tier 0",
+        f"lefthook.yml: {whole}; run `pre-commit` and `commit-msg` instead",
+    ]
+
+
+def test_a_directory_of_plain_hook_scripts_must_say_how_it_is_installed(repo: Path) -> None:
+    remove(".pre-commit-config.yaml")(repo)
+    replace(BINDING, NAMED, "- Commit hooks: `hooks`")(repo)
+    write("hooks/pre-commit", "#!/bin/sh\n# tier0, the tree\nexec just pre-commit\n")(repo)
+    write("hooks/commit-msg", '#!/bin/sh\nexec just commit-msg "$1"\n')(repo)
+    (repo / "hooks/_").mkdir()
+    unnamed = "the `- Commit hooks:` line names no command after ', installed by'"
+    blind = "so a red `hooks-installed` cannot say what the owner runs"
+    assert red(repo) == [f"docs/process/binding.md: {unnamed}, {blind}"]
+    installed = "- Commit hooks: `hooks`, installed by `git config core.hooksPath hooks`"
+    replace(BINDING, "- Commit hooks: `hooks`", installed)(repo)
+    assert red(repo) == []
+
+
 def test_a_pristine_template_that_fails_is_reported_and_stops_the_self_test(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -109,7 +109,12 @@ GLOSSARY_PLACEHOLDER = "<project>"
 PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 PLUGIN_REF = re.compile(r'repository:\s*\S*ratchet\S*?[,\s]+ref:\s*"?([^",\s}]+)')
-COMMIT_HOOKS = Path(".pre-commit-config.yaml")
+COMMIT_HOOKS = Path(hooks_installed.COMMIT_HOOKS)
+RUNS_WHOLE_TIER0 = re.compile(r"^(?!\s*#).*\btier0\b(?!-)", re.MULTILINE)
+WHOLE_TIER0 = (
+    "a hook runs the whole tier0, whose history gate judges the commit an amend replaces; "
+    "run `pre-commit` and `commit-msg` instead"
+)
 INSTALLS_COMMIT_MSG = re.compile(r"^default_install_hook_types:.*\bcommit-msg\b", re.MULTILINE)
 COMMIT_MSG_STAGE = re.compile(r"^\s*stages:\s*\[\s*commit-msg\s*\]", re.MULTILINE)
 WHOLE_TIER0_ENTRY = re.compile(r"^\s*entry:.*\btier0\b", re.MULTILINE)
@@ -446,18 +451,47 @@ def check_plugin_pin(root: Path) -> Iterable[str]:
         )
 
 
-def check_commit_hooks(root: Path) -> Iterable[str]:
-    text = read(root / COMMIT_HOOKS)
-    if text is None:
-        yield f"{COMMIT_HOOKS}: missing; the tier 0 commit hooks are installed from it"
-        return
+def hook_source(path: Path) -> str | None:
+    """The text of a hook mechanism's file, or of each file in its directory under its name."""
+    if path.is_dir():
+        files = [item for item in sorted(path.iterdir()) if item.is_file()]
+        return "\n".join(f"{item.name}\n{read(item) or ''}" for item in files)
+    return read(path)
+
+
+def check_framework_hooks(text: str) -> Iterable[str]:
+    """The ``pre-commit`` framework's config: the commit-msg stage installed, tree gates only."""
     if not (INSTALLS_COMMIT_MSG.search(text) and COMMIT_MSG_STAGE.search(text)):
         yield f"{COMMIT_HOOKS}: no commit-msg hook installed, so a bad subject is first seen in CI"
     if WHOLE_TIER0_ENTRY.search(text):
+        yield f"{COMMIT_HOOKS}: {WHOLE_TIER0}"
+
+
+def check_other_hooks(name: str, text: str, install: str | None) -> Iterable[str]:
+    """A mechanism other than the ``pre-commit`` framework: both hooks, tree gates, a command."""
+    for hook in hooks_installed.HOOKS:
+        if hook not in text:
+            yield f"{name}: names no `{hook}` hook, so a commit would skip that half of tier 0"
+    if RUNS_WHOLE_TIER0.search(text):
+        yield f"{name}: {WHOLE_TIER0}"
+    if install is None:
         yield (
-            f"{COMMIT_HOOKS}: a hook runs the whole tier0, whose history gate judges the commit "
-            "an amend replaces; run `pre-commit` and `commit-msg` instead"
+            "docs/process/binding.md: the `- Commit hooks:` line names no command after "
+            "', installed by', so a red `hooks-installed` cannot say what the owner runs"
         )
+
+
+def check_commit_hooks(root: Path) -> Iterable[str]:
+    """The hooks the binding names exist and run tier 0 in its two stages; the probe proves it."""
+    name, install = hooks_installed.mechanism(root)
+    text = hook_source(root / name)
+    if text is None:
+        yield f"{name}: missing; the tier 0 commit hooks are installed from it"
+        return
+    if name == str(COMMIT_HOOKS):
+        yield from check_framework_hooks(text)
+    else:
+        yield from check_other_hooks(name, text, install)
     justfile = read(root / "justfile")
     if justfile is not None and hooks_installed.PROBE_ENV not in justfile:
         yield (
@@ -782,7 +816,16 @@ def hook_mutations() -> list[Mutation]:
         path = root / "justfile"
         path.write_text(path.read_text().replace(hooks_installed.PROBE_ENV, "NO_PROBE"))
 
+    binding, named = "docs/process/binding.md", f"- Commit hooks: `{COMMIT_HOOKS}`"
+    renamed = rewrite(binding, named, "- Commit hooks: `lefthook.yml`, installed by `lefthook`")
+
+    def another_mechanism_with_one_hook(root: Path) -> None:
+        renamed(root)
+        (root / "lefthook.yml").write_text("pre-commit:\n  commands:\n    tree: {run: just x}\n")
+
     return [
+        ("binding naming commit hooks that are not there", renamed),
+        ("another hook mechanism without the commit-msg hook", another_mechanism_with_one_hook),
         ("commit hooks without the commit-msg stage", hooks_without_commit_msg),
         ("commit hooks running the whole tier0", hooks_running_the_whole_tier),
         ("hook recipes that cannot answer the probe", recipes_that_cannot_answer_the_probe),

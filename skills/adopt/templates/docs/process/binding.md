@@ -15,6 +15,7 @@ The plugin version has this one home. Every workflow checks the plugin out at th
 - Default branch: `main`
 - Pull request template: `.github/pull_request_template.md`
 - Change flow: <one reviewed change at a time; the commit convention, if any, and its hook>
+- Commit hooks: `.pre-commit-config.yaml` (the `pre-commit` framework, the template's example. Another mechanism, such as lefthook, husky or a directory of plain scripts, names its own file or directory here, then `, installed by` and its install command in backticks. `hooks-installed` proves either by running the hooks.)
 - Merge: the merge judge decides (`merge-ready`). The `merge` workflow merges a pull request the judge passes once `ci` is green, and comments why on one it leaves to the owner. With no forge, `merge <branch>` judges the branch, runs `check` on the merge result and merges it. The one-way doors are the `[[door]]` tables of `guards/manifest.toml`.
 
 ## Entry points

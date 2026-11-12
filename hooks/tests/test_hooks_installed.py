@@ -80,6 +80,18 @@ def test_no_hooks_is_red_and_names_the_install(
     assert out.endswith("hooks: red\n")
 
 
+def test_another_hook_mechanism_is_probed_alike_and_a_red_names_its_install(root: Path) -> None:
+    assert hooks_installed.mechanism(root) == (".pre-commit-config.yaml", None)
+    binding = "docs/process/binding.md"
+    write(root, binding, "- Commit hooks: `lefthook.yml`, installed by `lefthook install`\n")
+    assert hooks_installed.mechanism(root) == ("lefthook.yml", "lefthook install")
+    assert problem(root).fix == "run `lefthook install`"
+    write(root, binding, "- Commit hooks: `hooks` (plain scripts)\n")
+    assert problem(root).fix == "run `<the command that installs the hooks of hooks>`"
+    install_hooks(root)
+    assert hooks_installed.check(root) is None
+
+
 def test_without_pre_commit_on_the_path_the_install_runs_through_uvx(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

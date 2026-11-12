@@ -30,6 +30,11 @@ of its output. The usual cause is the ``pre-commit`` framework failing on its ca
 another process holds it. A hook still running after 20 seconds is killed and reported as
 unknown.
 
+The hooks need not come from the ``pre-commit`` framework. The binding's ``- Commit hooks:``
+line names the file or directory another mechanism (lefthook, husky, a directory of plain
+scripts) installs them from, and the command that installs them. The probe is the same, since
+it runs whatever git would run, and a red then names that command.
+
 Forging a green means writing ``.git/hooks/*`` (the ``local-git`` guard group refuses it) or
 changing the recipes (``justfile`` is a ``gate-commands`` guard path). Setting
 ``RATCHET_HOOK_PROBE`` on a commit would skip tier 0 for it, and the guard refuses that like it
@@ -62,6 +67,9 @@ if TYPE_CHECKING:
 
 PROBE_ENV = "RATCHET_HOOK_PROBE"
 HOOKS = ("pre-commit", "commit-msg")
+COMMIT_HOOKS = ".pre-commit-config.yaml"
+MECHANISM = re.compile(r"^- Commit hooks: `([^`]+)`(?:, installed by `([^`]+)`)?", re.MULTILINE)
+Mechanism = tuple[str, str | None]
 TIMEOUT = 20.0
 OUTPUT_LINES = 3
 JUSTFILES = ("justfile", "Justfile", ".justfile")
@@ -194,14 +202,37 @@ def failure(hook: str, code: int, log: Path) -> str:
     return f"the {hook} hook exited {code} before it answered ({shown})"
 
 
-def install_command(outside: Sequence[str]) -> str:
-    """``pre-commit install``, with the git config scopes that set a hooks path set aside."""
+def mechanism(root: Path) -> Mechanism:
+    """What the binding says the commit hooks are installed from, and the command that does it.
+
+    The ``pre-commit`` framework's config when the binding does not say. Its command is worked
+    out by ``install_command``, since it depends on the machine's git config.
+    """
+    match = MECHANISM.search(gatelib.read_text(root / gatelib.BINDING) or "")
+    return (match.group(1), match.group(2)) if match else (COMMIT_HOOKS, None)
+
+
+def install_command(outside: Sequence[str], source: Mechanism = (COMMIT_HOOKS, None)) -> str:
+    """The command that installs the hooks.
+
+    The binding's own for another mechanism. For the ``pre-commit`` framework,
+    ``pre-commit install`` with the git config scopes that set a hooks path set aside.
+    """
+    path, named = source
+    if path != COMMIT_HOOKS:
+        return named or f"<the command that installs the hooks of {path}>"
     installer = "pre-commit" if shutil.which("pre-commit") else "uvx pre-commit"
     prefix = "".join(f"GIT_CONFIG_{scope.upper()}=/dev/null " for scope in outside)
     return f"{prefix}{installer} install"
 
 
-def diagnose(scopes: dict[str, str], *, repo_installed: bool, hooks: Path) -> Problem:
+def diagnose(
+    scopes: dict[str, str],
+    *,
+    repo_installed: bool,
+    hooks: Path,
+    source: Mechanism = (COMMIT_HOOKS, None),
+) -> Problem:
     """The reasons the effective hooks stay silent and the commands that remove them."""
     local = [scope for scope in UNSET if scope in scopes]
     outside = [scope for scope in OUTSIDE if scope in scopes]
@@ -211,7 +242,7 @@ def diagnose(scopes: dict[str, str], *, repo_installed: bool, hooks: Path) -> Pr
     commands = [UNSET[scope] for scope in local]
     if not repo_installed:
         reasons.append(f"the repository's own hooks are not installed in {hooks}")
-        commands.append(install_command(outside))
+        commands.append(install_command(outside, source))
     elif not local:
         scope, path = next(iter(scopes.items()))
         reasons.append(
@@ -264,7 +295,7 @@ def unanswered(root: Path, hooks: Path, probe: Probe) -> Problem:
     own = bool(scopes) and run_hooks(root, ("-c", f"core.hooksPath={hooks}")).answer is (
         Answer.ANSWERED
     )
-    return diagnose(scopes, repo_installed=own, hooks=hooks)
+    return diagnose(scopes, repo_installed=own, hooks=hooks, source=mechanism(root))
 
 
 def check(root: Path) -> Problem | None:
