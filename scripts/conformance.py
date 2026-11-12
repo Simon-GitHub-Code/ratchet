@@ -45,6 +45,7 @@ ENTRY_POINTS = (
     "conformance",
     "merge-ready",
     "merge",
+    "weekly",
     "reports",
     "budget",
     "bite-one",
@@ -62,6 +63,11 @@ MERGE_WORKFLOW = "merge.yml"
 MERGE_SHAPE = (
     ("workflow_run:", "runs it after `ci`, as the default branch holds it"),
     ("merge_ready.py", "asks the merge judge"),
+)
+WEEKLY_WORKFLOW = "weekly.yml"
+WEEKLY_SHAPE = (
+    ("schedule:", "runs the weekly gates on a schedule"),
+    ("issues: write", "may open the issue a finding gets"),
 )
 DOOR_KINDS = ("change", "rewrite", "removal")
 SHARD_MATRIX = "matrix.shard"
@@ -380,17 +386,31 @@ def check_doors(root: Path) -> Iterable[str]:
             )
 
 
-def check_merge_workflow(root: Path) -> Iterable[str]:
-    """ADR 0021: a forge that runs ``ci`` has the workflow that merges what the judge passes."""
+def forge_workflow(
+    root: Path, name: str, *, unmet: str, shape: tuple[tuple[str, str], ...]
+) -> Iterable[str]:
+    """A workflow that a forge running ``ci`` must also have, and the words that show its shape."""
     if not (root / WORKFLOWS / "ci.yml").is_file():
         return
-    text = read(root / WORKFLOWS / MERGE_WORKFLOW)
+    text = read(root / WORKFLOWS / name)
     if text is None:
-        yield f"{WORKFLOWS / MERGE_WORKFLOW}: missing; nothing merges a change the judge passes"
+        yield f"{WORKFLOWS / name}: missing; {unmet}"
         return
-    for marker, meaning in MERGE_SHAPE:
+    for marker, meaning in shape:
         if marker not in text:
-            yield f"{WORKFLOWS / MERGE_WORKFLOW}: nothing {meaning} ('{marker}' absent)"
+            yield f"{WORKFLOWS / name}: nothing {meaning} ('{marker}' absent)"
+
+
+def check_merge_workflow(root: Path) -> Iterable[str]:
+    """ADR 0021: a forge that runs ``ci`` has the workflow that merges what the judge passes."""
+    unmet = "nothing merges a change the judge passes"
+    return forge_workflow(root, MERGE_WORKFLOW, unmet=unmet, shape=MERGE_SHAPE)
+
+
+def check_weekly_workflow(root: Path) -> Iterable[str]:
+    """ADR 0025: a forge that runs ``ci`` schedules the weekly gates and files what they find."""
+    unmet = "nothing runs the weekly gates, so a finding is seen only when someone thinks to look"
+    return forge_workflow(root, WEEKLY_WORKFLOW, unmet=unmet, shape=WEEKLY_SHAPE)
 
 
 def check_plugin_pin(root: Path) -> Iterable[str]:
@@ -405,7 +425,7 @@ def check_plugin_pin(root: Path) -> Iterable[str]:
             "full commit; adopt fills the plugin version"
         )
         return
-    for name in (*TIER_WORKFLOWS, MERGE_WORKFLOW):
+    for name in (*TIER_WORKFLOWS, MERGE_WORKFLOW, WEEKLY_WORKFLOW):
         text = read(root / WORKFLOWS / name) or ""
         refs = set(PLUGIN_REF.findall(text))
         if not refs and "RATCHET_PLUGIN" in text:
@@ -535,6 +555,7 @@ CHECKS: tuple[Check, ...] = (
     check_manifest,
     check_doors,
     check_merge_workflow,
+    check_weekly_workflow,
     check_settings,
     check_commit_hooks,
     check_plugin_pin,
@@ -572,6 +593,7 @@ def mutations() -> list[Mutation]:
         *guard_mutations(),
         *merge_mutations(),
         *pin_mutations(),
+        *weekly_mutations(),
         *record_mutations(),
     ]
 
@@ -842,6 +864,25 @@ def merge_mutations() -> list[Mutation]:
     ]
 
 
+def weekly_mutations() -> list[Mutation]:
+    def no_weekly_workflow(root: Path) -> None:
+        (root / WORKFLOWS / WEEKLY_WORKFLOW).unlink()
+
+    workflow = str(WORKFLOWS / WEEKLY_WORKFLOW)
+    return [
+        ("forge without the weekly workflow", no_weekly_workflow),
+        ("weekly workflow that runs on no schedule", rewrite(workflow, "schedule:", "push:")),
+        (
+            "weekly workflow that cannot open an issue",
+            rewrite(workflow, "issues: write", "issues: read"),
+        ),
+        (
+            "binding without the weekly entry point",
+            rewrite("docs/process/binding.md", "| weekly | `just weekly` |\n", ""),
+        ),
+    ]
+
+
 def pin_mutations() -> list[Mutation]:
     binding, pinned = "docs/process/binding.md", "0" * 40
     return [
@@ -949,6 +990,7 @@ def fill_placeholders(root: Path) -> None:
         str(WORKFLOWS / "ci.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
         str(WORKFLOWS / "deep.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
         str(WORKFLOWS / MERGE_WORKFLOW): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
+        str(WORKFLOWS / WEEKLY_WORKFLOW): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
     }
     for name, replacements in fills.items():
         target = root / name

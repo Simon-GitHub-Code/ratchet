@@ -366,6 +366,15 @@ formal:
 
 # --- outside the tiers ------------------------------------------------------------
 
+# The weekly gates. They block nothing, and a finding gets its own pull request. The `weekly`
+# workflow runs this on a schedule and keeps one issue while a run is red; with no forge the
+# machine's own scheduler runs it. One after another: `load-soak` judges elapsed time, which a
+# gate running beside it disturbs.
+weekly_gates := "audit-all licenses drift load-soak"
+
+weekly: plugin-pin
+    {{parallel}} --serial {{weekly_gates}} -- {{weekly_gates}}
+
 audit-all:
     @echo "bind: audit every dependency, dev tooling included"; exit 1
 

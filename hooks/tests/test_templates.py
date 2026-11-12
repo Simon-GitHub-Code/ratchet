@@ -20,6 +20,7 @@ ADOPT = (TEMPLATES.parent / "SKILL.md").read_text(encoding="utf-8")
 JUSTFILE = (TEMPLATES / "justfile").read_text(encoding="utf-8")
 BINDING = (TEMPLATES / "docs/process/binding.md").read_text(encoding="utf-8")
 MERGE = (TEMPLATES / ".github/workflows/merge.yml").read_text(encoding="utf-8")
+WEEKLY = (TEMPLATES / ".github/workflows/weekly.yml").read_text(encoding="utf-8")
 WORKFLOWS = {
     name: (TEMPLATES / ".github/workflows" / name).read_text(encoding="utf-8")
     for name in ("ci.yml", "deep.yml")
@@ -233,7 +234,7 @@ def test_the_three_service_gates_arrive_bound_to_the_shipped_scripts() -> None:
 def test_the_ci_templates_are_green_on_the_pins_gate() -> None:
     # Why: item 6 of the owner-free brief; a template that fails its own gate teaches the
     # wrong shape to every adopter.
-    for name in ("ci.yml", "deep.yml"):
+    for name in ("ci.yml", "deep.yml", "weekly.yml"):
         path = f".github/workflows/{name}"
         text = (TEMPLATES / path).read_text(encoding="utf-8")
         assert pins.check_workflow(path, text) == [], name
@@ -252,6 +253,79 @@ def test_ci_reports_a_ceiling_on_a_pull_request_and_holds_each_job_to_its_tier()
     assert deep.count('budget.py" "${{ matrix.gate }}" --tier tier2 --report') == 2
     assert "--over" not in deep, "the nightly and the default branch block"
     assert deep.count("budget.py") == 2
+
+
+def test_the_weekly_workflow_is_scheduled_and_may_only_read_and_write_issues() -> None:
+    assert "on:\n  schedule:\n" in WEEKLY
+    assert "\npermissions:\n  contents: read\n" in WEEKLY
+    assert "    permissions:\n      contents: read\n      issues: write\n" in WEEKLY
+    assert re.findall(r"^ +([a-z-]+): write$", WEEKLY, re.MULTILINE) == ["issues"]
+    assert "        shell: bash\n        run: just weekly 2>&1 | tee weekly.txt\n" in WEEKLY
+
+
+def test_the_weekly_entry_point_runs_the_four_gates_one_after_another() -> None:
+    needs_just()
+    gates = gate_list("weekly_gates")
+    assert gates == ["audit-all", "licenses", "drift", "load-soak"]
+    said = dry_run("weekly")
+    assert 'python3 "/plugin/scripts/plugin_pin.py"' in said
+    assert said.endswith(f"--serial {' '.join(gates)} -- {' '.join(gates)}")
+
+
+FAKE_ISSUES = """#!{python}
+import os, sys
+args = sys.argv[1:]
+with open(os.environ["CALLS"], "a") as log:
+    log.write(" ".join(args) + "\\n")
+if args[:2] == ["issue", "list"]:
+    print(os.environ["OPEN_ISSUE"])
+"""
+ISSUE_STEP = re.compile(
+    r"      - name: Open or update.*\n        if: failure\(\)\n"
+    r"        run: \|\n((?:          .*\n)+)"
+)
+
+
+def finding(root: Path, open_issue: str) -> tuple[list[str], str]:
+    """The calls the issue step makes to ``gh`` and the body it files, given the open issue."""
+    step = ISSUE_STEP.search(WEEKLY)
+    bash = shutil.which("bash")
+    assert step
+    assert bash
+    gh = root / "bin/gh"
+    gh.parent.mkdir(exist_ok=True)
+    gh.write_text(FAKE_ISSUES.format(python=sys.executable), encoding="utf-8")
+    gh.chmod(0o755)
+    calls = root / "calls"
+    calls.write_text("", encoding="utf-8")
+    env = {
+        "PATH": f"{gh.parent}:{os.environ['PATH']}",
+        "CALLS": str(calls),
+        "OPEN_ISSUE": open_issue,
+        "RUN": "https://forge.example/run/1",
+    }
+    subprocess.run(  # noqa: S603 # -- a fixed argv; the script is the template's own
+        [bash, "-e", "-c", textwrap.dedent(step.group(1))],
+        cwd=root,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    return calls.read_text(encoding="utf-8").splitlines(), (root / "finding.md").read_text()
+
+
+def test_a_red_weekly_run_opens_one_issue_and_then_comments_on_it(tmp_path: Path) -> None:
+    (tmp_path / "weekly.txt").write_text("parallel: red: licenses\n", encoding="utf-8")
+    calls, body = finding(tmp_path, "")
+    assert calls[0].startswith("issue list --state open --search")
+    assert calls[1:] == ["issue create --title Weekly gates: a finding --body-file finding.md"]
+    assert "were red in https://forge.example/run/1" in body
+    assert "parallel: red: licenses" in body
+    calls, _ = finding(tmp_path, "7")
+    assert calls[1:] == ["issue comment 7 --body-file finding.md"]
+    (tmp_path / "weekly.txt").unlink()
+    _, body = finding(tmp_path, "7")
+    assert "the run failed before the gates started" in body
 
 
 def test_the_plugin_version_has_one_home_the_binding() -> None:

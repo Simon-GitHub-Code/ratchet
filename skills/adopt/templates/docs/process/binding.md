@@ -45,6 +45,7 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | conformance | `just conformance` |
 | merge-ready | `just merge-ready` |
 | merge | `just merge` |
+| weekly | `just weekly` |
 | budget | `just budget tier1` |
 | reports | `just reports` |
 | bite-one | `just bite-one` |
@@ -146,7 +147,7 @@ How this repository stays fast, from the first commit (the Speed section of `ski
 
 ## Weekly and advisory
 
-`just audit-all`, `just licenses`, `just drift` and `just load-soak` run weekly and block nothing; a finding gets its own pull request. `just reports` prints hotspots, coupling, cohesion and complexity. They inform and never gate.
+`just audit-all`, `just licenses`, `just drift` and `just load-soak` run weekly as `just weekly`, from the `weekly` workflow or, with no forge, from the machine's scheduler, and block nothing; a red run opens or updates one issue, and a finding gets its own pull request. `just reports` prints hotspots, coupling, cohesion and complexity. They inform and never gate.
 
 ## Tool versions
 
