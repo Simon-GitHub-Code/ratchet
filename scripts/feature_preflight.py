@@ -24,7 +24,8 @@ failure and the skill that produces the missing piece:
 
 The output is JSON: ``ok``, ``failures`` (each with ``check``, ``detail`` and ``produce``, the
 skill or action that supplies it), the ticket's ``number``, ``title`` and ``slug``, and the
-``branch`` derived from them (``feature/<number>-<slug>``). The ``/ratchet:feature`` skill runs
+``branch`` derived from them (``feature/<number>-<slug>``), and the ``base`` it starts from:
+``--base``, else the default branch as ``gatelib`` reads it. The ``/ratchet:feature`` skill runs
 it before the workflow, so a red preflight spawns nothing; the workflow runs it again as its
 first stage, so the pipeline cannot be entered around the skill.
 
@@ -152,6 +153,7 @@ class Report:
     title: str = ""
     slug: str = ""
     branch: str = ""
+    base: str = ""
     label: str = READY_ROLE
 
     def fail(self, check: str, detail: str, produce: str = "") -> None:
@@ -369,7 +371,7 @@ def check_hooks(report: Report, root: Path) -> None:
 
 
 def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner) -> Report:
-    report = Report(ref=ref, label=ready_label(root))
+    report = Report(ref=ref, base=base, label=ready_label(root))
     ticket = fetch(ref, root, gh)
     if ticket is None:
         report.fail("ticket", f"{ref}: no such ticket (a number on the tracker, or a file path)")
@@ -384,13 +386,15 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("ref", help="the ticket: a number, #number, or a local ticket file")
     parser.add_argument("--root", default=".")
-    parser.add_argument("--base", default="main")
+    parser.add_argument("--base", help="the branch features start from (the default branch)")
     parser.add_argument("--branch", help="the working branch HEAD must be on")
     options = parser.parse_args(argv[1:])
+    root = Path(options.root).resolve()
+    base = options.base or gatelib.default_branches(root)[0].removeprefix("origin/")
     report = preflight(
         options.ref,
-        Path(options.root).resolve(),
-        base=options.base,
+        root,
+        base=base,
         branch=options.branch,
         gh=run_gh,
     )

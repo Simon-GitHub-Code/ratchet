@@ -48,7 +48,8 @@ if (!REF) {
     requiredByOrchestrator: ['Run `/ratchet:feature <ticket>`; the slash form of this workflow passes no args and spawns nothing'],
   }
 }
-const BASE = typeof ARGS.base === 'string' && ARGS.base ? ARGS.base : 'main'
+// With no base passed, the preflight reads the default branch and the run takes it from there.
+let BASE = typeof ARGS.base === 'string' && ARGS.base ? ARGS.base : ''
 const ROOT = typeof ARGS.root === 'string' && ARGS.root ? ARGS.root : ''
 const PREFLIGHT_SCRIPT = typeof ARGS.preflight === 'string' && ARGS.preflight ? ARGS.preflight : ''
 const MAX_FIX_ITERATIONS = 2
@@ -409,6 +410,7 @@ const PREFLIGHT_SCHEMA = {
     title: { type: 'string', description: 'the "title" field' },
     slug: { type: 'string', description: 'the "slug" field' },
     branch: { type: 'string', description: 'the "branch" field' },
+    base: { type: 'string', description: 'the "base" field: the default branch the feature branches from' },
     label: { type: 'string', description: 'the "label" field: the agent-ready label as this tracker spells it' },
     failures: {
       type: 'array',
@@ -439,14 +441,15 @@ function preflightPrompt() {
     ? `\`${PREFLIGHT_SCRIPT}\``
     : 'the ratchet plugin\'s `scripts/feature_preflight.py` (the newest version under `~/.claude/plugins/cache/*/ratchet/*/scripts/`, or wherever the plugin is installed; `find` it, do not write one)'
   const branchFlag = BRANCH ? ` --branch "${BRANCH}"` : ''
+  const baseFlag = BASE ? ` --base "${BASE}"` : ''
   return `You run one command and relay its output. You decide nothing.
 
 In ${ROOT_HINT}, run, in a single Bash call:
 
-    python3 ${script} "${REF}" --root . --base "${BASE}"${branchFlag}
+    python3 ${script} "${REF}" --root .${baseFlag}${branchFlag}
 
 It prints a JSON object on stdout ({ ok, ref, failures: [{ check, detail, produce }], number,
-title, slug, branch, label }) and a verdict line on stderr. Return that JSON's fields in the
+title, slug, branch, base, label }) and a verdict line on stderr. Return that JSON's fields in the
 structured result, verbatim, plus the full output. Do not fix, label, edit or commit anything,
 and do not re-run with different arguments. If the script cannot be found or Python refuses
 it, return ok: false with one failure { check: "script", detail: <what happened>, produce:
@@ -555,9 +558,9 @@ glossary \`edit = "append"\`: add the entry to GLOSSARY.md yourself before a tes
 word, in the format of the entries there (the bold term, one to three sentences, its
 \`_Avoid_\` list), and name it in spec.md. The hook lets the addition through; if it asks,
 the edit changed something that was there, and that is a guard edit. A missing
-DESIGN.md is not one: the surface is built against PRODUCT.md and impeccable's \`shape\`, and the
-owner's \`/impeccable document\` writes DESIGN.md after the merge. The owner
-lands those first and re-runs; it costs one agent instead of a whole run that ends in
+DESIGN.md is not one: the surface is built against PRODUCT.md and impeccable's \`shape\`, and an
+agent runs \`impeccable document\` to write DESIGN.md after the merge. The owner lands the
+guard edits first and re-runs; it costs one agent instead of a whole run that ends in
 disputes. A dependency the feature needs is not a guard edit: name it, with its reason, in the
 spec's placement section and in \`dependencies\`, and add it with the stack's package manager
 (\`uv add\`, \`cargo add\`, \`pnpm add\`) followed by \`snapshots\`. \`guard-diff\` still lists
@@ -1013,6 +1016,7 @@ if (!preflight.ok) {
 }
 SLUG = preflight.slug
 BRANCH = BRANCH || preflight.branch
+BASE = BASE || preflight.base || ''
 if (!SLUG || !BRANCH) throw new Error(`preflight returned ok without a slug and branch: ${JSON.stringify(preflight)}`)
 log(`Preflight green: ticket ${preflight.number || REF} "${preflight.title}" on branch ${BRANCH}`)
 
@@ -1044,7 +1048,7 @@ if (spec.openQuestions.length > 0 || guardEdits.length > 0) {
     requiredByOrchestrator: [
       'Put each open question to the owner through the question tool, one at a time, its recommended option first; each answer goes on the ticket under `## Answers`, where the next spec agent reads it',
       'Give the owner each guard edit to land on the default branch (by hand, or with an agent at the keyboard where the guard can ask); an owner-away run cannot',
-      'Re-run `/ratchet:feature <ticket>` after the ticket answers them; do not open a PR from a blocked run',
+      'When the owner has answered every open question and there is no guard edit, build the ticket again from the preflight in the same turn; with guard edits, the route names the rerun once they land. Do not open a PR from a blocked run',
     ],
   }
 }
