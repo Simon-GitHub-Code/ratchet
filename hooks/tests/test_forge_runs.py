@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import forge_runs
+import merge_ready
 from tests.repos import commit, git, repository
 
 REPO = "owner/repo"
@@ -63,6 +64,8 @@ def ci(
         str(tmp_path / "pulls.json"),
         "--events",
         str(tmp_path / "events.json"),
+        "--report",
+        str(tmp_path / "left.md"),
     ]
     argv += ["--number", "1", "--sha", SHA, "--branch", BRANCH, "--base", "main"]
     code = forge_runs.main([*argv, "--repository", REPO], runs)
@@ -213,6 +216,112 @@ def test_a_file_the_job_could_not_write_leaves_ci_uncounted(
     argv += ["--number", "1", "--sha", SHA, "--branch", BRANCH, "--base", "main"]
     assert forge_runs.main([*argv, "--repository", REPO], page(run())) == 1
     assert capsys.readouterr().out.strip() == forge_runs.UNREADABLE
+
+
+def comment_for(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    runs: str,
+    *,
+    pulls: str | None = None,
+    events: str = "[]",
+) -> tuple[int, str, str | None]:
+    """Exit code, the line for the job's log, and the comment the job would post, if any."""
+    report = tmp_path / "left.md"
+    report.write_text("a comment left by an earlier pull request", encoding="utf-8")
+    code, said = ci(tmp_path, capsys, runs, pulls=pulls, events=events)
+    return code, said, report.read_text(encoding="utf-8") if report.exists() else None
+
+
+BOTH = [{"number": 1, "base": {"ref": "main"}}, {"number": 2, "base": {"ref": "weak"}}]
+TWIN = json.dumps([pull(), pull(2, "weak", state="closed")])
+TWIN_ROW = (
+    "- `twin`: #2 is a pull request from `feat/a` against `weak`, so ci on this commit may have"
+    " run against that branch\n"
+)
+RETARGET_ROW = (
+    "- `retargeted`: its base branch was changed, so ci may have run against the earlier one\n"
+)
+TARGET_ROW = "- `target`: the pull request targets `weak`, not the default branch `main`\n"
+UNNAMED_ROW = f"- `unnamed`: no ci run on {SHA} names it against `main`\n"
+
+
+@pytest.mark.parametrize(
+    ("row", "case"),
+    [
+        # Why: observed on a forge, 2026-11-12: the only green run tested the other base.
+        (TWIN_ROW, (page(run(pull_requests=BOTH)), TWIN, "[]")),
+        (RETARGET_ROW, (page(run()), None, '[{"event": "base_ref_changed"}]')),
+        (TARGET_ROW, (page(run()), json.dumps([pull(base="weak")]), "[]")),
+        (UNNAMED_ROW, (page(run(pull_requests=[])), None, "[]")),
+    ],
+)
+def test_a_reason_the_owner_must_act_on_is_written_as_the_judge_s_comment(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    row: str,
+    case: tuple[str, str | None, str],
+) -> None:
+    runs, pulls, events = case
+    code, said, written = comment_for(tmp_path, capsys, runs, pulls=pulls, events=events)
+    judged = merge_ready.report([merge_ready.Reason("code", "text")], SHA)
+    assert code == 1
+    assert said == row.split("`: ", 1)[1].strip()
+    head = f"{merge_ready.MARKER}\n**{merge_ready.OWNER}** at `{SHA[:12]}`. "
+    assert written is not None
+    assert judged.startswith(head)
+    assert written.startswith(head)
+    assert written.split("\n\n", 1)[1] == row
+    assert judged.split("\n\n", 1)[1] == "- `code`: text\n"
+
+
+def test_every_reason_the_owner_must_act_on_is_in_the_one_comment(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = page(run(pull_requests=BOTH))
+    events = '[{"event": "base_ref_changed"}]'
+    code, _, written = comment_for(tmp_path, capsys, runs, pulls=TWIN, events=events)
+    assert code == 1
+    assert written is not None
+    assert written.split("\n\n", 1)[1] == TWIN_ROW + RETARGET_ROW
+
+
+@pytest.mark.parametrize(
+    ("runs", "pulls", "reason"),
+    [
+        (page(run("failure")), None, f"ci is not green on {SHA}"),
+        (page(run(None, status="in_progress")), None, f"ci is not green on {SHA}"),
+        (page(), None, f"no ci run on {SHA} names it"),
+        (page(run(None, status="queued", pull_requests=[])), None, f"no ci run on {SHA} names"),
+        (page(run()), json.dumps([pull(state="closed")]), f"it is not open on {SHA}"),
+        (page(run()), json.dumps([pull(7)]), f"it is not open on {SHA}"),
+        (page(run()), "[]", f"it is not open on {SHA}"),
+        (page(run()), json.dumps([pull(base="weak", state="closed")]), f"it is not open on {SHA}"),
+        ("not json", None, forge_runs.UNREADABLE),
+    ],
+)
+def test_a_ci_red_or_pending_and_a_pull_request_that_moved_stay_a_line_in_the_log(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, runs: str, pulls: str | None, reason: str
+) -> None:
+    code, said, written = comment_for(tmp_path, capsys, runs, pulls=pulls)
+    assert (code, said.startswith(reason), written) == (1, True, None)
+
+
+def test_a_green_pull_request_writes_no_comment_and_a_stale_one_is_removed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert comment_for(tmp_path, capsys, page(run())) == (0, "green", None)
+
+
+def test_a_red_ci_beside_a_twin_still_tells_the_owner_about_the_twin(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = page(run("failure", pull_requests=BOTH))
+    code, _, written = comment_for(tmp_path, capsys, runs, pulls=TWIN)
+    assert code == 1
+    assert written is not None
+    assert written.split("\n\n", 1)[1] == TWIN_ROW
 
 
 def history(root: Path) -> dict[str, str]:

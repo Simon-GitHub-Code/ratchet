@@ -47,12 +47,23 @@ jobs:
       # branch is fetched again before each judgement, so a pull request behind what the one
       # before it merged is told so. Which runs count is `forge_runs.py`'s to say (ADR 0024): a
       # `ci` run counts for a pull request only when it tested that one against the default
-      # branch, and a `deep` run only on a commit of the default branch.
+      # branch, and a `deep` run only on a commit of the default branch. It also says which
+      # reasons a run does not count are the owner's, and the job writes those as the same
+      # comment; a `ci` that is red or still running is the pull request's own checks' to say.
       - name: Judge every green pull request, say what was found, merge what passed
         run: |
           fetch() { git fetch --no-tags -q origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" "$@"; }
           runs() { gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$1/runs" -f per_page=100 "${@:2}" || true; }
           counted() { python3 "$RATCHET_PLUGIN/scripts/forge_runs.py" "$@" --repository "$GITHUB_REPOSITORY"; }
+          comment() {
+            id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$1/comments" --paginate \
+              --jq '.[] | select(.body | startswith("<!-- ratchet:merge -->")) | .id' | head -n 1)"
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F "body=@$2" --silent
+            else
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$1/comments" -F "body=@$2" --silent
+            fi
+          }
           fetch
           tier2="$(runs deep.yml -f "branch=$DEFAULT_BRANCH" -f status=completed | counted deep --tip "origin/$DEFAULT_BRANCH")"
           gh pr list --state open --limit 100 --json number,headRefOid,headRefName,baseRefName,isCrossRepository \
@@ -61,9 +72,13 @@ jobs:
           while read -r number sha branch target; do
             gh api -X GET "repos/$GITHUB_REPOSITORY/pulls" -f state=all -f "head=${GITHUB_REPOSITORY%%/*}:$branch" -f per_page=100 > "$RUNNER_TEMP/pulls.json" || true
             gh api "repos/$GITHUB_REPOSITORY/issues/$number/events?per_page=100" --paginate > "$RUNNER_TEMP/events.json" || true
+            left="$RUNNER_TEMP/left-$number.md"
             if ! ci="$(runs ci.yml -f "head_sha=$sha" -f event=pull_request | counted ci --pulls "$RUNNER_TEMP/pulls.json" \
-              --events "$RUNNER_TEMP/events.json" --number "$number" --sha "$sha" --branch "$branch" --base "$DEFAULT_BRANCH")"; then
-              echo "#$number: $ci: left alone"; continue
+              --events "$RUNNER_TEMP/events.json" --number "$number" --sha "$sha" --branch "$branch" --base "$DEFAULT_BRANCH" \
+              --report "$left")"; then
+              echo "#$number: $ci: left alone"
+              if [ -s "$left" ]; then comment "$number" "$left"; echo "#$number: merge: owner"; fi
+              continue
             fi
             fetch "$sha"
             report="$RUNNER_TEMP/merge-$number.md"
@@ -71,13 +86,7 @@ jobs:
             if python3 "$RATCHET_PLUGIN/scripts/merge_ready.py" --base "origin/$DEFAULT_BRANCH" --head "$sha" \
               --target "$target" --current --tier2 "$tier2" --report "$report"; then verdict=agent; fi
             if [ ! -s "$report" ]; then echo "#$number: the judge wrote no report"; failed=1; continue; fi
-            comment="$(gh api "repos/$GITHUB_REPOSITORY/issues/$number/comments" --paginate \
-              --jq '.[] | select(.body | startswith("<!-- ratchet:merge -->")) | .id' | head -n 1)"
-            if [ -n "$comment" ]; then
-              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment" -F "body=@$report" --silent
-            else
-              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$number/comments" -F "body=@$report" --silent
-            fi
+            comment "$number" "$report"
             echo "#$number: merge: $verdict"
             if [ "$verdict" = agent ]; then
               now="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '"\(.state) \(.head.sha) \(.base.ref)"' || true)"

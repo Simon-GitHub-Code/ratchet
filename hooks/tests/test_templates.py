@@ -398,11 +398,17 @@ def test_adopt_names_the_two_skills_and_the_owner_s_steps() -> None:
 
 FAKE_GH = """#!{python}
 import json, os, sys
+def path_of(args):
+    return " ".join(a for a in args if a.startswith("repos/"))
 args = sys.argv[1:]
 world = json.load(open(os.environ["WORLD"]))
 with open(os.environ["CALLS"], "a") as log:
     log.write(" ".join(args) + "\\n")
 fields = dict(a.split("=", 1) for a in args if "=" in a)
+for a in args:
+    if a.startswith("body=@"):
+        with open(os.environ["CALLS"] + ".bodies", "a") as bodies:
+            bodies.write(path_of(args) + "\\n" + open(a[6:]).read() + "---\\n")
 path = [a for a in args if a.startswith("repos/")]
 path = path[0] if path else ""
 if args[:2] == ["pr", "list"]:
@@ -545,7 +551,7 @@ def test_the_merge_job_judges_every_green_pull_request_not_only_the_one_that_wok
     assert "::error::#6: its head or its base changed while it was judged" in out
     assert "branch feat/g#x stays" in out
     assert "issues/3/comments" not in log
-    assert "issues/5/comments" not in log
+    assert "-X POST repos/owner/repo/issues/5/comments" in log
     assert "-X POST repos/owner/repo/issues/1/comments" in log
     assert "-X PATCH repos/owner/repo/issues/comments/77" in log
     assert "-X POST repos/owner/repo/issues/4/comments" in log
@@ -576,3 +582,57 @@ def test_the_merge_job_counts_nothing_the_forge_did_not_answer(tmp_path: Path) -
     judged = [line for line in log.splitlines() if line.startswith("judge ")]
     assert [" --head cccc " in line and " --tier2 red " in line for line in judged] == [True]
     assert log.count("-X PUT") == 1
+
+
+def bodies(root: Path) -> dict[str, str]:
+    """The comment bodies the merge job sent, by the API path they went to."""
+    sent = (root / "calls.bodies").read_text(encoding="utf-8").split("---\n")[:-1]
+    return dict(entry.split("\n", 1) for entry in sent)
+
+
+def test_the_merge_job_tells_the_owner_of_a_pull_request_it_leaves_alone_for_the_owner_s_sake(
+    tmp_path: Path,
+) -> None:
+    # Why: observed on a forge, 2026-11-12: a twin against another base, a retarget and a pull
+    # request against another branch were left alone with a line in the log and no comment. 1 has
+    # a twin, 2 is against `develop`, 3 was retargeted, 4 has a red ci and 5 is clean.
+    heads = {n: (letter * 4, f"feat/{letter}") for n, letter in enumerate("abcde", 1)}
+    world = forge(heads)
+    world["ci"]["aaaa"]["workflow_runs"][0]["pull_requests"].append(
+        {"number": 9, "base": {"ref": "weak"}}
+    )
+    world["pulls"]["feat/a"].append(one_pull(9, "aaaa", "feat/a", base="weak"))
+    world["open"][1] = "2 bbbb feat/b develop"
+    world["ci"]["bbbb"]["workflow_runs"][0]["pull_requests"] = [
+        {"number": 2, "base": {"ref": "develop"}}
+    ]
+    world["pulls"]["feat/b"] = [one_pull(2, "bbbb", "feat/b", base="develop")]
+    world["events"] = {"3": [{"event": "base_ref_changed"}]}
+    world["ci"]["dddd"] = ci_runs(4, "dddd", "feat/d", conclusion="failure")
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    code, out, log = merge_job(first, world)
+    assert code == 0
+    for number in (1, 2, 3):
+        assert f"#{number}: merge: owner" in out
+        assert log.count(f"-X POST repos/owner/repo/issues/{number}/comments") == 1
+    sent = bodies(first)
+    twin = "- `twin`: #9 is a pull request from `feat/a` against `weak`"
+    target = "- `target`: the pull request targets `develop`, not the default branch `main`"
+    assert twin in sent["repos/owner/repo/issues/1/comments"]
+    assert target in sent["repos/owner/repo/issues/2/comments"]
+    assert "- `retargeted`: its base" in sent["repos/owner/repo/issues/3/comments"]
+    for number in (1, 2, 3):
+        body = sent[f"repos/owner/repo/issues/{number}/comments"]
+        assert body.startswith("<!-- ratchet:merge -->\n**merge: owner** at `")
+    assert "#4: ci is not green on dddd: left alone" in out
+    assert "issues/4/comments" not in log
+    assert "pulls/1/merge" not in log
+    assert log.count("-X PUT") == 1, "the clean pull request still merges"
+    world["comments"] = {"1": "11", "2": "22", "3": "33"}
+    code, _, log = merge_job(second, world)
+    assert code == 0
+    for number, comment in ((1, 11), (2, 22), (3, 33)):
+        assert f"-X PATCH repos/owner/repo/issues/comments/{comment}" in log
+        assert f"-X POST repos/owner/repo/issues/{number}/comments" not in log
