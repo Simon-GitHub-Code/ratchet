@@ -314,6 +314,7 @@ def finding(root: Path, open_issue: str) -> tuple[list[str], str]:
         "CALLS": str(calls),
         "OPEN_ISSUE": open_issue,
         "RUN": "https://forge.example/run/1",
+        "RATCHET_PLUGIN": str(PLUGIN_ROOT),
     }
     subprocess.run(  # noqa: S603 # -- a fixed argv; the script is the template's own
         [bash, "-e", "-c", textwrap.dedent(step.group(1))],
@@ -337,6 +338,27 @@ def test_a_red_weekly_run_opens_one_issue_and_then_comments_on_it(tmp_path: Path
     (tmp_path / "weekly.txt").unlink()
     _, body = finding(tmp_path, "7")
     assert "the run failed before the gates started" in body
+
+
+def test_the_issue_carries_the_output_of_each_red_gate_and_not_the_green_gates_that_followed(
+    tmp_path: Path,
+) -> None:
+    # Why: observed on a forge, 2026-11-12: the last 60 lines of the log were the green gates'
+    # output, and the red gate's reason was above them.
+    noise = "".join(f"a green gate says {n}\n" for n in range(100))
+    (tmp_path / "weekly.txt").write_text(
+        "parallel: audit-all: started\n==> audit-all <==\nthe audit found CVE-1\n"
+        "parallel: audit-all: red (exit 1) in 1.0s\n==> drift <==\n"
+        + noise
+        + "parallel: drift: green in 4.3s\naudit-all: red (exit 1)\nparallel: red\n",
+        encoding="utf-8",
+    )
+    _, body = finding(tmp_path, "")
+    assert "==> audit-all <==\nthe audit found CVE-1\nparallel: audit-all: red (exit 1)" in body
+    assert "a green gate says" not in body
+    (tmp_path / "weekly.txt").write_text("parallel: red\nsome other runner\n", encoding="utf-8")
+    _, body = finding(tmp_path, "")
+    assert "some other runner" in body
 
 
 def test_the_plugin_version_has_one_home_the_binding() -> None:

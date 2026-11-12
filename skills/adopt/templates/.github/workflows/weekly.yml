@@ -49,7 +49,10 @@ jobs:
             echo "The weekly gates were red in $RUN. Each finding gets its own pull request; close this issue when a run is green."
             echo
             echo '```'
-            tail -n 60 weekly.txt 2>/dev/null || echo "the run failed before the gates started"
+            # Why: the end of the log is the last gates to finish, which are usually green. The
+            # report holds each red gate's own output; with none to find, the end of the log.
+            python3 "$RATCHET_PLUGIN/scripts/red_gates.py" weekly.txt 2>/dev/null \
+              || tail -n 60 weekly.txt 2>/dev/null || echo "the run failed before the gates started"
             echo '```'
           } > finding.md
           number="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
