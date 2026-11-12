@@ -415,7 +415,6 @@ def test_a_ticket_of_a_service_says_how_it_is_operated(tmp_path: Path) -> None:
         ("- Load: the list route joins the load smoke\n", ""),
         ("the list route joins the load smoke", ""),
         ("the list route joins the load smoke", "none"),
-        ("the list route joins the load smoke", "<the scenario>"),
     ],
 )
 def test_a_line_that_says_nothing_is_a_missing_line(tmp_path: Path, old: str, new: str) -> None:
@@ -425,6 +424,47 @@ def test_a_line_that_says_nothing_is_a_missing_line(tmp_path: Path, old: str, ne
         "4: `## Operability` lacks `Load:` (the route or input the load gates gain); write each,"
         " or `none` and why"
     )
+
+
+@pytest.mark.parametrize(
+    ("new", "cause"),
+    [
+        ("<the scenario>", "only the placeholder `<the scenario>`"),
+        ("`<route>`, <input>.", "only the placeholder `<route>`"),
+        ("the route or input the load gates gain", "the template's own words"),
+    ],
+)
+def test_a_line_still_holding_the_template_says_so(tmp_path: Path, new: str, cause: str) -> None:
+    body = BODY + OPERABILITY.replace("the list route joins the load smoke", new)
+    report = adopted(tmp_path, "service", body)
+    assert checks(report) == ["operability"]
+    assert report.failures[0].detail == (
+        f"4: `## Operability` has `Load:` with {cause}; write each, or `none` and why"
+    )
+
+
+def test_angle_brackets_in_real_text_are_not_a_placeholder(tmp_path: Path) -> None:
+    said = (
+        "\n## Operability\n\n- Flag: `notes`, default off\n"
+        "- Signal: each route gets the span `<METHOD> <route template>` (`PUT /notes/{key}`)\n"
+        "- Load: one scenario per route under `tests/load/`\n"
+        '- Security: the JSON body `{"text": "<string>"}` of at most 65,536 bytes\n'
+    )
+    assert adopted(tmp_path / "said", "service", BODY + said).ok
+    gap = said.replace("- Load: one scenario per route under `tests/load/`\n", "")
+    gap = gap.replace("`notes`, default off", "<flag>")
+    report = adopted(tmp_path / "gap", "service", BODY + gap)
+    assert report.failures[0].detail == (
+        "4: `## Operability` lacks `Load:` (the route or input the load gates gain); has `Flag:`"
+        " with only the placeholder `<flag>`; write each, or `none` and why"
+    )
+
+
+def test_a_conjecture_may_quote_angle_brackets() -> None:
+    assert preflight.states_a_conjecture(
+        "Every route gets the span `<METHOD> <route template>`; refuted by a route without one."
+    )
+    assert not preflight.states_a_conjecture("<the approach>  <its refuter>, <alternatives>")
 
 
 def test_a_line_is_asked_only_of_the_types_its_question_is_asked_of(tmp_path: Path) -> None:

@@ -67,6 +67,7 @@ LABELS_RECORD = Path("docs/agents/triage-labels.md")
 ROLE_COLUMN = "label in mattpocock/skills"
 TRACKER_COLUMN = "label in our tracker"
 EMPTY_BODIES = frozenset({"", "tbd", "todo", "n/a", "none", "-", "..."})
+PLACEHOLDER = re.compile(r"<[^<>\n]{2,}>")
 MIN_BODY = 40
 SLUG_WIDTH = 40
 CLOSED_STATUSES = frozenset({"resolved", "closed", "done", "wontfix"})
@@ -254,12 +255,27 @@ def section(text: str, heading: str) -> str:
     return match.group(1) if match else ""
 
 
-def says_something(text: str) -> bool:
-    """Whether ``text`` is a statement: not blank, not a placeholder, not a bare "none"."""
+def unfilled(text: str, template: str = "") -> str | None:
+    """Why ``text`` is still a template, or ``None`` when it states something.
+
+    Why: real text quotes angle brackets (a span named ``<METHOD> <route template>``, a body
+    ``{"text": "<string>"}``), so a placeholder is a line that holds nothing else, or that repeats
+    the template's own words; a blank, a stub word or a bare "none" says nothing.
+    """
     text = text.strip()
-    if "<" in text and ">" in text and re.search(r"<[^>\n]{2,}>", text):
-        return False
-    return text.lower().rstrip(".") not in EMPTY_BODIES
+    if text.lower().rstrip(".") in EMPTY_BODIES:
+        return "nothing"
+    if template and text.rstrip(".").lower() == template.lower():
+        return "the template's own words"
+    first = PLACEHOLDER.search(text)
+    if first and not re.search(r"\w", PLACEHOLDER.sub("", text)):
+        return f"only the placeholder `{first.group()}`"
+    return None
+
+
+def says_something(text: str) -> bool:
+    """Whether ``text`` is a statement: not blank, not only placeholders, not a bare "none"."""
+    return unfilled(text) is None
 
 
 def states_a_conjecture(body: str) -> bool:
@@ -341,16 +357,17 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     if not block.strip() and parent_ref is not None:
         parent = fetch(parent_ref, root, gh)
         block = section(parent.body, OPERABILITY) if parent is not None else ""
-    lacking = [
-        f"`{name}:` ({says})"
-        for name, says in asked
-        if not says_something("".join(operability_line(name).findall(block)[:1]))
-    ]
-    if not lacking:
+    lacking, templated = [], []
+    for name, says in asked:
+        cause = unfilled("".join(operability_line(name).findall(block)[:1]), says)
+        if cause == "nothing":
+            lacking.append(f"`{name}:` ({says})")
+        elif cause is not None:
+            templated.append(f"has `{name}:` with {cause}")
+    parts = ([f"lacks {', '.join(lacking)}"] if lacking else []) + templated
+    if not parts:
         return None
-    return (
-        f"{ticket.ref}: `{OPERABILITY}` lacks {', '.join(lacking)}; write each, or `none` and why"
-    )
+    return f"{ticket.ref}: `{OPERABILITY}` {'; '.join(parts)}; write each, or `none` and why"
 
 
 def operability_line(name: str) -> re.Pattern[str]:
