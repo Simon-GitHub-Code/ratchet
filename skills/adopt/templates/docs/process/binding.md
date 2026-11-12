@@ -11,6 +11,7 @@ This repository's binding of the Ratchet method (`ratchet:method`; [tiers.md](..
 - Default branch: `main`
 - Pull request template: `.github/pull_request_template.md`
 - Change flow: <one reviewed change at a time; the commit convention, if any, and its hook>
+- Merge: the merge judge decides (`merge-ready`). The `merge` workflow merges a pull request the judge passes once `ci` is green, and comments why on one it leaves to the owner. With no forge, `merge <branch>` judges the branch, runs `check` on the merge result and merges it. The one-way doors are the `[[door]]` tables of `guards/manifest.toml`.
 
 ## Entry points
 
@@ -34,6 +35,8 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | guard-diff | `just guard-diff` |
 | settings-check | `just settings-check` |
 | conformance | `just conformance` |
+| merge-ready | `just merge-ready` |
+| merge | `just merge` |
 | budget | `just budget tier1` |
 | reports | `just reports` |
 

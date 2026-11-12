@@ -36,7 +36,7 @@ paths = [
 
 [[group]]
 name = "ci"
-reason = "Workflows, the PR template and Dependabot decide what GitHub runs before the owner merges."
+reason = "Workflows, the PR template and Dependabot decide what GitHub runs before a change merges."
 paths = [
     ".github/**",
 ]

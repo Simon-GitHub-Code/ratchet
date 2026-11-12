@@ -19,7 +19,7 @@ Six words carry the rule; the stance in [SKILL.md](SKILL.md) says how to work by
 | alternative | the Considered options of an ADR; the alternative explanation a diagnosis names before the fix | the reviewer |
 | criticism | a red gate, a critic finding, a review issue, a tool finding | the gates, the critic, the reviewer |
 | counter | a dispute against a gate; a register entry with its reason; an answer in the pull request's Criticism section | the owner |
-| open, stands | the pipeline's forced verdict; the merge | the script, then a human |
+| open, stands | the pipeline's forced verdict; the merge | the script, then the merge judge, and the owner for what it does not pass |
 
 ## Three cautions
 

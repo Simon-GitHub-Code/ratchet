@@ -94,6 +94,13 @@ def show(root: Path, ref: str, path: str) -> str | None:
     return git(root, "show", f"{ref}:{path}")
 
 
+def entry_point(root: Path, name: str) -> str | None:
+    """The command the binding's Entry points table gives ``name``, or ``None``."""
+    text = read_text(root / BINDING) or ""
+    row = re.search(rf"^\|\s*{re.escape(name)}\s*\|\s*`([^`]+)`\s*\|", text, re.MULTILINE)
+    return row.group(1) if row else None
+
+
 def subjects(root: Path, base: str) -> list[str]:
     """The subject line of each non-merge commit after ``base`` up to ``HEAD``."""
     listed = git(root, "log", "--no-merges", "--format=%s", f"{base}..HEAD")

@@ -50,7 +50,14 @@ RULES: dict[str, Rule] = {
     ),
     "amend-pushed": Rule(Decision.DENY, "amends a commit that is already pushed"),
     "rewrite-history": Rule(Decision.DENY, "rewrites history"),
-    "merge-pr": Rule(Decision.ASK, "merges a pull request; only the owner merges"),
+    "merge-pr": Rule(
+        Decision.ASK,
+        "merges a pull request; the merge job or the owner merges one",
+    ),
+    "merge-default": Rule(
+        Decision.ASK,
+        "merges into the default branch; the `merge` entry point or the owner does",
+    ),
     "branch-protection": Rule(Decision.DENY, "reads or changes branch protection or rulesets"),
     "repo-settings": Rule(
         Decision.DENY, "changes repository, secret, variable or workflow settings"

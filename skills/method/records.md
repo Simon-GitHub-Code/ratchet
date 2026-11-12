@@ -61,3 +61,7 @@ The template and lifecycle are in [guards.md](guards.md).
 ## Pull request
 
 The body follows the repository's template at the path the binding names. `mattpocock-skills:pr` supplies Summary, Evidence and Merge Danger; the method adds Conjecture (the claim, its refuter, the assumptions the spec made where the ticket was silent, and for a fix the alternative explanation and the check that eliminated it), Operability (the flag and its default, the signals added, what the security and load gates ran), Criticism, Guard paths, Decisions (each ADR and each glossary term or _Avoid_ item the change added, as `guard-diff` lists them under `additions:`, with new dependencies and why) and Gates, and the conformance gate checks the template carries them. Every section is filled: an empty section is an open criticism of the pull request.
+
+## Verdict record: `docs/features/<slug>/verdict.json`
+
+What the pipeline concluded, for the merge judge to read: the slug, the ticket, the forced verdict and what forced it, each unresolved blocker or major finding by title, each open question, each assumption, and the tree the review saw. The orchestrator writes it from the result's `verdictRecord` with the `merge-ready` entry point's `record` form, which adds the tree, and commits it alone, as the last commit of the change. The tree is the head's with the record set aside, so the record cannot name itself and a commit after it shows. An agent writes this record and an agent can forge it; [guards.md](guards.md) says what the judge reads that does not depend on it.

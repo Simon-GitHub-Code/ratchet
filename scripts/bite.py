@@ -36,6 +36,7 @@ import hooks_installed
 import load_smoke
 import lowered
 import markers
+import merge_ready
 import mutation_survivors
 import parallel
 import pins
@@ -337,6 +338,32 @@ def foreign_deny(root: Path) -> None:
     )
 
 
+DONE: dict[str, list[str]] = {"unresolved": [], "openQuestions": [], "assumptions": []}
+VERDICT = {"slug": "the-thing", "ticket": "01", "verdict": "approve", **DONE}
+VERDICT_RECORD = "docs/features/the-thing/verdict.json"
+
+
+def merge_judge(argv: list[str]) -> int:
+    """The merge judge on the scratch change as the pipeline leaves one: committed, then recorded.
+
+    Work not yet committed is committed and the verdict recorded over it, so the judge is red for
+    what the change does and never for a missing record. A commit made after the record stays as
+    it is: that is the violation.
+    """
+    root = Path(argv[2])
+    if merge_ready.dirty(root, VERDICT_RECORD) or not (root / VERDICT_RECORD).is_file():
+        write(root, "src/b.py", "B = 1\n")
+        commit(root, "feat(core): the change")
+        merge_ready.write_record(root, json.dumps(VERDICT))
+        commit(root, "docs(core): the verdict record")
+    return merge_ready.main([*argv, "--base", "main"])
+
+
+def commit_after_the_review(root: Path) -> None:
+    write(root, "src/b.py", "B = 2\n")
+    commit(root, "fix(core): one more thing")
+
+
 MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
 STRYKER = ["--tool", "stryker"]
 TICKET_REF = ["tickets/01-add-the-thing.md"]
@@ -385,6 +412,9 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("project-bite: a gate green on its fault", project_bite.main, lint_green_on_its_fault, []),
     ("project-bite: a gate green on nothing to run", project_bite.main, tests_green_on_nothing, []),
     ("project-bite: a bound gate with no bite", project_bite.main, bite_dropped, []),
+    ("merge-ready: a guard path changed", merge_judge, change_config, []),
+    ("merge-ready: a flag on by default", merge_judge, flag_born_on, []),
+    ("merge-ready: a commit after the review", merge_judge, commit_after_the_review, []),
 ]
 
 

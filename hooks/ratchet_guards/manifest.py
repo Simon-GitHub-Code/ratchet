@@ -14,6 +14,14 @@ optional ``exclude`` lists patterns its ``paths`` do not cover, such as agent wo
 empty matches nothing: the adopt template ships such groups behind ``# bind:`` comments until
 adopt fills them, and the conformance gate reports any still empty.
 
+The file also lists the repository's one-way doors, as ``[[door]]`` tables: paths whose change
+cannot be taken back once it ships (ADR 0021). A door is no guard group: the hook, ``guard-diff``
+and the permission rules never read it, so an agent builds a change that goes through one without
+a prompt. The merge judge (``scripts/merge_ready.py``) reads it, and sends such a change to the
+owner. A door's ``on`` says what shuts it: ``"change"`` (the default) is any change to a matching
+path, ``"rewrite"`` a change to or deletion of a file the default branch holds, and ``"removal"``
+a deletion, or a change that does more than add to the file.
+
 The manifest is optional. When the file is absent the hook judges with ``EMPTY``, so no
 repository path is a guard path and only the command rules apply (gate bypasses, force
 pushes, pushes to main, history rewrites, GitHub protection, label and settings changes,
@@ -138,11 +146,30 @@ class Group:
         return any(matches(str(path), pattern) for pattern in self.excluded)
 
 
+class DoorRule(Enum):
+    """What makes a change to a door's paths one the owner merges."""
+
+    CHANGE = "change"
+    REWRITE = "rewrite"
+    REMOVAL = "removal"
+
+
+@dataclass(frozen=True, slots=True)
+class Door:
+    """Paths whose change cannot be taken back once it ships, and what shuts the door."""
+
+    name: str
+    reason: str
+    patterns: tuple[str, ...]
+    on: DoorRule = DoorRule.CHANGE
+
+
 @dataclass(frozen=True, slots=True)
 class Manifest:
-    """Every guard group, in file order."""
+    """Every guard group, in file order, and the one-way doors beside them."""
 
     groups: tuple[Group, ...]
+    doors: tuple[Door, ...] = ()
 
     def _patterns(self, scope: Scope) -> Iterator[tuple[Group, str]]:
         for group in self.groups:
@@ -170,6 +197,12 @@ class Manifest:
         """Every pattern as written, in file order."""
         return [pattern for group in self.groups for pattern in group.patterns]
 
+    def doors_of(self, path: str) -> list[Door]:
+        """Every one-way door ``path``, written relative to the repository, goes through."""
+        return [
+            door for door in self.doors if any(matches(path, pattern) for pattern in door.patterns)
+        ]
+
 
 EMPTY = Manifest(())
 
@@ -187,13 +220,13 @@ def plugin_group(plugin_root: Path) -> Group:
 
 def with_plugin_group(manifest: Manifest, plugin_root: Path) -> Manifest:
     """``manifest`` with the plugin group prepended, so it wins every match it shares."""
-    return Manifest((plugin_group(plugin_root), *manifest.groups))
+    return Manifest((plugin_group(plugin_root), *manifest.groups), manifest.doors)
 
 
-def _text(table: dict[str, object], key: str) -> str:
+def _text(table: dict[str, object], key: str, kind: str = "group") -> str:
     value = table.get(key)
     if not isinstance(value, str) or not value.strip():
-        msg = f"group {key!r} must be a non-empty string"
+        msg = f"{kind} {key!r} must be a non-empty string"
         raise ManifestError(msg)
     return value
 
@@ -231,6 +264,27 @@ def _group(table: object) -> Group:
     return Group(name, reason, patterns, _edit_rule(table.get("edit", "ask")), excludes)
 
 
+def _door_rule(value: object) -> DoorRule:
+    rules = {rule.value: rule for rule in DoorRule}
+    if not isinstance(value, str) or value not in rules:
+        msg = f"door 'on' must be one of {sorted(rules)}, not {value!r}"
+        raise ManifestError(msg)
+    return rules[value]
+
+
+def _door(table: object) -> Door:
+    if not isinstance(table, dict):
+        msg = "every [[door]] must be a table"
+        raise ManifestError(msg)
+    paths = table.get("paths")
+    if not isinstance(paths, list):
+        msg = "door 'paths' must be a list"
+        raise ManifestError(msg)
+    patterns = tuple(map(_pattern, paths))
+    name, reason = _text(table, "name", "door"), _text(table, "reason", "door")
+    return Door(name, reason, patterns, _door_rule(table.get("on", "change")))
+
+
 def parse(text: str) -> Manifest:
     """Parse manifest TOML; raise ``ManifestError`` on any departure from the documented shape."""
     try:
@@ -241,4 +295,8 @@ def parse(text: str) -> Manifest:
     if not isinstance(tables, list) or not tables:
         msg = "the manifest needs at least one [[group]]"
         raise ManifestError(msg)
-    return Manifest(tuple(map(_group, tables)))
+    doors = document.get("door", [])
+    if not isinstance(doors, list):
+        msg = "'door' must be an array of tables; write [[door]]"
+        raise ManifestError(msg)
+    return Manifest(tuple(map(_group, tables)), tuple(map(_door, doors)))

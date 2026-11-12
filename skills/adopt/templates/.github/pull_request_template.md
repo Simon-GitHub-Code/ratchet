@@ -23,7 +23,7 @@ The feature flag that gates the new behaviour and its default, or why there is n
 Critic findings and how each was resolved; review issues; disputes raised and their status. Links to the ticket and the spec where they exist.
 
 ## Guard paths
-Output of the guard-diff entry point, and for each path the upheld dispute, the dependency the spec named and why, the additions to a record, or the owner's hand.
+Output of the guard-diff entry point, and for each path the upheld dispute, the dependency the spec named and why, the additions to a record, or the owner's hand. The merge judge (`merge-ready`) reads the same paths and the one-way doors: this pull request merges itself when the judge passes it, and otherwise carries one comment saying why it waits for the owner.
 
 ## Decisions
 Each ADR added, by number and title, and each glossary term or Avoid item added, as guard-diff lists them under `additions:`. ADRs superseded, new dependencies and why. Or "none".

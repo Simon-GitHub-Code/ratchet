@@ -1,8 +1,10 @@
 """Rules for the GitHub CLI: merges, branch protection, repository settings, labels and runs.
 
 The agent's ``gh`` runs as the owner, so GitHub cannot tell the two apart; these rules are
-where the difference is drawn. Reads pass: ``gh label list`` and a ``GET`` on a labels
-endpoint are how an agent learns what the owner has set up.
+where the difference is drawn. A merge asks: the pull request's merge job merges what the
+merge judge passes, with the workflow's own token, and the owner merges the rest (ADR 0021),
+so an agent's ``gh pr merge``, in any spelling, is neither. Reads pass: ``gh label list``
+and a ``GET`` on a labels endpoint are how an agent learns what the owner has set up.
 
 Label creation has one sanctioned path. ``gh label create <name>`` on the current checkout's
 own repository passes when ``docs/agents/triage-labels.md`` at the checkout root lists

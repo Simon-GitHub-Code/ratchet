@@ -17,8 +17,10 @@ The stages, in order; the first that does not hold is the answer:
 5. the commit hooks, which run tier 0 on every commit (``hooks_installed.py`` proves they would;
    the step is the owner's command, since the guard refuses hook installs from an agent);
 6. a clean tree (finish the change: ``check``, commit, pull request);
-7. on a working branch: the pull request is open, else open it; with no forge (no ``origin``)
-   the owner merges the branch once ``check`` is green;
+7. on a working branch: the pull request is open, else open it, and its merge job merges what
+   the merge judge passes (ADR 0021); with no forge (no ``origin``) the binding's ``merge``
+   entry point judges the branch, runs ``check`` on the merge result and merges it, or says
+   why the merge is the owner's;
 8. on the default branch: the glossary and design brief (``grill-with-docs``), then an
    agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
@@ -53,7 +55,6 @@ PURPOSE_PLACEHOLDER = "<One paragraph"
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 AGENTS_TEMPLATE = PLUGIN_ROOT / "skills/init/templates/AGENTS.md"
 PLUGIN_LINE = re.compile(r"^- \*\*([^*]+)\*\*")
-ENTRY_POINT_ROW = re.compile(r"^\|\s*check\s*\|\s*`([^`]+)`\s*\|", re.MULTILINE)
 CHECK_FALLBACK = "the binding's `check` entry point"
 
 INIT = "/ratchet:init"
@@ -65,8 +66,12 @@ TICKETS = "/mattpocock-skills:to-tickets"
 CONJECTURE = "/ratchet:conjecture"
 FEATURE = "/ratchet:feature"
 POTETO = "/pstack:poteto-mode"
-PULL_REQUEST = "open the pull request (the `pr` skill fills the body); a human merges"
-WAIT = "nothing: wait for the review; a human merges"
+PULL_REQUEST = (
+    "open the pull request (the `pr` skill fills the body); its merge job merges it when the"
+    " merge judge passes it, and comments why when the merge is yours"
+)
+WAIT = "nothing: the merge job merges it once `ci` is green, or comments why the merge is yours"
+MERGE_FALLBACK = "the binding's `merge` entry point"
 NEXT = "/ratchet:next"
 CHANGES = ".scratch/changes"
 BLOCKED_RUN = ": blocked run"
@@ -111,10 +116,13 @@ def observe(root: Path) -> Checkout | None:
 
 
 def review(checkout: Checkout) -> str:
-    """How a finished branch reaches the default branch: a pull request, or the owner's merge."""
+    """How a finished branch reaches the default branch: a pull request, or the entry point."""
     if checkout.forge:
         return PULL_REQUEST
-    return f"the owner merges it once `check` is green (no forge; {CHANGES}/<branch>.md)"
+    return (
+        f"{merge_command(checkout.root, '<branch>')} merges it when the merge judge and `check`"
+        f" pass it, and says why when the merge is yours (no forge; {CHANGES}/<branch>.md)"
+    )
 
 
 def names_method(root: Path) -> bool:
@@ -127,9 +135,14 @@ def names_method(root: Path) -> bool:
 
 def check_command(root: Path) -> str:
     """The command behind the binding's ``check`` entry point, as its table names it."""
-    text = (root / BINDING).read_text(encoding="utf-8", errors="replace")
-    match = ENTRY_POINT_ROW.search(text)
-    return f"`{match.group(1)}`" if match else CHECK_FALLBACK
+    command = gatelib.entry_point(root, "check")
+    return f"`{command}`" if command else CHECK_FALLBACK
+
+
+def merge_command(root: Path, branch: str) -> str:
+    """The binding's ``merge`` entry point for ``branch``, as its table names the command."""
+    command = gatelib.entry_point(root, "merge")
+    return f"`{command} {branch}`" if command else f"{MERGE_FALLBACK} with `{branch}`"
 
 
 def records_missing(root: Path) -> str | None:
@@ -372,9 +385,11 @@ def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
     """On a working branch with a clean tree: wait for the review, or open the pull request."""
     if not checkout.forge:
         return Step(
-            f"merge `{checkout.branch}` once `check` is green:"
-            f" `git switch {checkout.default_branch} && git merge --no-ff {checkout.branch}`",
-            f"branch `{checkout.branch}` is clean and there is no forge; its change description"
+            merge_command(checkout.root, checkout.branch or ""),
+            f"branch `{checkout.branch}` is clean and there is no forge: the entry point merges"
+            " it when the merge judge and `check` pass it, and prints why when the merge is"
+            f" yours (then: `git switch {checkout.default_branch} && git merge --no-ff"
+            f" {checkout.branch}`); its change description"
             f" is {CHANGES}/{checkout.branch.replace('/', '-') if checkout.branch else ''}.md",
             NEXT,
             "merge",

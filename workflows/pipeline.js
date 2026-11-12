@@ -783,6 +783,24 @@ function additiveRecords(recordNotes) {
   return new Set((recordNotes || []).filter(n => n && n.path && Array.isArray(n.additions)).map(n => n.path))
 }
 
+// The verdict as the merge judge reads it (scripts/merge_ready.py, ADR 0021): what the script
+// decided and what is still open, as texts. The orchestrator pipes this to the `merge-ready`
+// entry point's `record` form, which stamps the tree that was reviewed.
+function verdictRecord({ slug, ticket, verdict, forcedBy, findings, openQuestions, assumptions }) {
+  const titles = (findings || [])
+    .filter(f => f && (f.severity === 'blocker' || f.severity === 'major'))
+    .map(f => String(f.title || '').trim() || 'a finding with no title')
+  return {
+    slug,
+    ticket: String(ticket),
+    verdict,
+    forcedBy: forcedBy || [],
+    unresolved: titles,
+    openQuestions: (openQuestions || []).map(String),
+    assumptions: assumptions || [],
+  }
+}
+
 function must(result, label) {
   if (!result) throw new Error(`${label} agent returned no result (skipped or died); resume the run to retry`)
   return result
@@ -974,6 +992,15 @@ return {
   checkPasses: lastCheckPasses && review.checkPasses === true,
   checkOutput: lastCheckOutput,
   branch: BRANCH,
+  verdictRecord: verdictRecord({
+    slug: SLUG,
+    ticket: REF,
+    verdict,
+    forcedBy: forcedReasons,
+    findings: [...unresolved, ...blockingReviewIssues],
+    openQuestions: spec.openQuestions,
+    assumptions: spec.assumptions,
+  }),
   requiredByOrchestrator: [
     'verdict is "approve" (the script forces request_changes when its evidence says otherwise)',
     'unresolvedBlockingFindings is empty and reviewIssues has no blocker or major entry',
@@ -981,6 +1008,8 @@ return {
     'undisputedGuardChanges is empty; every entry in disputes has been relayed to the owner, who decides',
     'adrSuggested, if set, is written in docs/adr/ in the same PR, under the next free number; the guard lets a new ADR through and asks the owner for one that supersedes another or carries a Relaxes: line',
     'every addition in recordNotes (each new term, Avoid item and ADR) is listed in the pull request under Decisions',
-    'every entry in assumptions is listed in the pull request under Conjecture, with its refuter, for the owner to counter at the merge',
+    'every entry in assumptions is listed in the pull request under Conjecture, with its refuter, for the owner to counter',
+    'after the change is committed, verdictRecord goes on stdin to the `merge-ready` entry point with `record`, and the docs/features/<slug>/verdict.json it writes is committed alone, last: a commit after it sends the merge to the owner',
+    'the merge is the merge judge\'s to decide, never the orchestrator\'s: report `merge: agent` or `merge: owner` with the judge\'s reasons, and merge nothing by hand',
   ],
 }

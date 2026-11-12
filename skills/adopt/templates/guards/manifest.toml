@@ -30,7 +30,7 @@ paths = [
 
 [[group]]
 name = "ci"
-reason = "CI config and the pull-request template decide what runs before the owner merges."
+reason = "CI config and the pull-request template decide what runs before a change merges, and the merge job is the one agent path to the default branch."
 paths = [
     ".github/**",
     # bind: the CI config paths of another forge
@@ -115,4 +115,34 @@ paths = [
     "GLOSSARY-MAP.md",
     "PRODUCT.md",
     "DESIGN.md",
+]
+
+# One-way doors: paths whose change cannot be taken back once it ships. A door is no guard: an
+# agent edits these paths without a prompt. The merge judge (`just merge-ready`) reads the doors,
+# and a change that goes through one waits for the owner. `on` says what shuts a door: "change"
+# is any change, "rewrite" a change to or deletion of a file the default branch holds, "removal"
+# a deletion or a change that does more than add. A door this repository has no path for keeps
+# `paths = []` and says why: `none = "<the reason>"`.
+
+[[door]]
+name = "one-way"
+reason = "A migration, a schema change or an infrastructure change cannot be taken back once it has run."
+paths = [
+    # bind: migrations, schema definitions, infrastructure code
+]
+
+[[door]]
+name = "stored-data"
+reason = "Fixtures of data that earlier versions wrote: rewriting one hides that old data no longer loads."
+on = "rewrite"
+paths = [
+    # bind: the golden fixtures the data-compat gate loads
+]
+
+[[door]]
+name = "contracts"
+reason = "Contract artefacts and public-surface snapshots: a line removed is a consumer broken."
+on = "removal"
+paths = [
+    # bind: the artefacts the contracts-check and api-check gates diff
 ]

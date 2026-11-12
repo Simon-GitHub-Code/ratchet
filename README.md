@@ -16,7 +16,7 @@ Every repository on the method keeps all eleven. `skills/method/SKILL.md` states
 4. **Guards.** The files that define, run or record a gate are guard paths, enforced by the harness, which the model cannot override.
 5. **Disputes.** An agent that believes a gate is wrong writes a dispute and stops on that gate; the owner decides.
 6. **Records.** A design brief, a glossary whose _Avoid_ lists are banned identifiers, one ADR per lasting decision with its refutation criterion, a brief per feature.
-7. **The pipeline.** A feature is built by four roles with fixed sight lines: spec, implement, critic, review.
+7. **The pipeline.** A feature is built by four roles with fixed sight lines: spec, implement, critic, review. A change the gates can judge merges without the owner; a guard path, a one-way door or an open finding waits for them.
 8. **Verifiable shape.** Logic sits where every verifier reaches it; declared layers, absolute paths at 100%, hard limits.
 9. **Speed.** Fast local runs and fast CI are asked from the first commit: the suite on every core, one pipeline that runs the same locally and in CI, the long gates sharded over a count the binding holds, everything cached, only what the change can affect run. Each tier has a ceiling in seconds that only falls.
 10. **The merge rule.** A change is merged when no criticism of it is open.
@@ -65,6 +65,8 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/load_smoke.py` | 1 | does a running service stay correct under seconds of concurrent requests? Judged on errors only, never on latency |
 | `scripts/telemetry_sink.py` | 2 | does the telemetry arrive? An OTLP/HTTP receiver that is green only when traces, metrics and logs arrived non-empty for the expected `service.name`; no collector to install |
 | `scripts/project_bite.py` | 1 and 2 | does every gate the repository bound go red on its fault, and on an empty collection? Plants each fault of `quality/bites.toml` in a scratch copy; with `--changed`, only when the change touches a gate |
+| `scripts/merge_ready.py` | after tier 1 | may this change reach the default branch without the owner? The merge judge: guard paths, one-way doors, disputes and the pipeline's verdict record, read from the commits |
+| `scripts/merge.py` | with no forge | judge a branch, run `check` on the merge result, and merge it when both pass |
 | `scripts/budget.py` | every tier | did a tier or gate finish under its ceiling in seconds? `--set` records the first ceiling |
 | `scripts/parallel.py` | every tier | not a gate: runs a tier's gates at once through the repository's own runner, each gate's output whole, every red one named, so local wall clock is the slowest gate and not the sum |
 | `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the owner's one command when not; asked by the preflight, the route and `just ratchet`, not by CI |

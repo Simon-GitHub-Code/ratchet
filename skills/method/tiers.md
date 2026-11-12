@@ -25,7 +25,7 @@ A row is never dropped. One that applies names a tool or is an accepted gap, as 
 | --- | --- | --- | --- | --- |
 | 0 | every commit | `tier0`; the commit hooks split it, `pre-commit` on the tree before the commit and `commit-msg` on the message being written, since `commits` over history would judge the commit an amend replaces | about a minute | the commit, and the pull request |
 | 1 | every pull request | `tier1` | under fifteen minutes, so nobody is tempted to skip it | the pull request |
-| 2 | merge to the default branch, nightly, on demand | `tier2` | unbounded; time-boxed where a tool runs forever | the next piece of work: a red tier 2 on the default branch is fixed before anything else merges |
+| 2 | merge to the default branch, nightly, on demand | `tier2` | unbounded; time-boxed where a tool runs forever | the next piece of work: a red tier 2 on the default branch is fixed before anything else merges, and while it is red the merge judge leaves every merge to the owner |
 | weekly | scheduled | `audit-all`, `licenses`, `drift`, `load-soak` | | nothing; the finding is visible and gets its own pull request |
 | advisory | on demand | `reports` | | nothing, ever; read before a refactor to pick targets |
 

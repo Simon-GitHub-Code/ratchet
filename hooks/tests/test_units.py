@@ -9,7 +9,15 @@ import pytest
 
 from ratchet_guards import bash, gh, git, gitcall
 from ratchet_guards.context import Context
-from ratchet_guards.manifest import EditRule, Group, ManifestError, Scope, parse
+from ratchet_guards.manifest import (
+    DoorRule,
+    EditRule,
+    Group,
+    ManifestError,
+    Scope,
+    parse,
+    with_plugin_group,
+)
 from ratchet_guards.options import NO_VALUES, Spec, scan
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.shell import HEREDOC_MARK, PLACEHOLDER, SimpleCommand, lex, unquote
@@ -53,7 +61,14 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "default-ref": ("DENY", DEFAULT_REF_BECAUSE),
         "amend-pushed": ("DENY", "amends a commit that is already pushed"),
         "rewrite-history": ("DENY", "rewrites history"),
-        "merge-pr": ("ASK", "merges a pull request; only the owner merges"),
+        "merge-pr": (
+            "ASK",
+            "merges a pull request; the merge job or the owner merges one",
+        ),
+        "merge-default": (
+            "ASK",
+            "merges into the default branch; the `merge` entry point or the owner does",
+        ),
         "branch-protection": ("DENY", "reads or changes branch protection or rulesets"),
         "repo-settings": ("DENY", "changes repository, secret, variable or workflow settings"),
         "labels": ("DENY", "manages labels"),
@@ -307,6 +322,66 @@ PATTERN = "pattern {} must be a non-empty relative glob without '..'"
 )
 def test_malformed_manifests_are_rejected(text: str, message: str) -> None:
     with pytest.raises(ManifestError, match=f"^{re.escape(message)}$"):
+        parse(text)
+
+
+DOORS = """
+[[door]]
+name = "one-way"
+reason = "A migration cannot be taken back."
+paths = ["migrations/**", "infra/*.tf"]
+
+[[door]]
+name = "stored-data"
+reason = "Old data must still load."
+paths = ["tests/data/**"]
+on = "rewrite"
+
+[[door]]
+name = "contracts"
+reason = "A consumer depends on every line."
+paths = []
+on = "removal"
+"""
+
+
+def test_one_way_doors_are_read_beside_the_groups_and_guard_nothing() -> None:
+    manifest = parse(GOOD + DOORS)
+    assert [(door.name, door.on) for door in manifest.doors] == [
+        ("one-way", DoorRule.CHANGE),
+        ("stored-data", DoorRule.REWRITE),
+        ("contracts", DoorRule.REMOVAL),
+    ]
+    assert [door.name for door in manifest.doors_of("migrations/0002_more.sql")] == ["one-way"]
+    assert manifest.doors_of("infra/main.tf")[0].reason == "A migration cannot be taken back."
+    assert manifest.doors_of("src/app.py") == []
+    assert manifest.doors_of("tests/contract/api.json") == [], "a door with no paths yet"
+    assert manifest.group_of("migrations/0002_more.sql") is None, "a door is no guard group"
+    assert parse(GOOD).doors == ()
+    assert with_plugin_group(manifest, Path("/plugin")).doors == manifest.doors
+
+
+@pytest.mark.parametrize(
+    ("door", "message"),
+    [
+        ('door = "migrations"', "'door' must be an array of tables; write [[door]]"),
+        ("door = [1]", "every [[door]] must be a table"),
+        ('[[door]]\nname = "d"\nreason = "r"', "door 'paths' must be a list"),
+        ('[[door]]\nname = "d"\npaths = []', "door 'reason' must be a non-empty string"),
+        ('[[door]]\nreason = "r"\npaths = []', "door 'name' must be a non-empty string"),
+        (
+            '[[door]]\nname = "d"\nreason = "r"\npaths = []\non = "never"',
+            "door 'on' must be one of ['change', 'removal', 'rewrite'], not 'never'",
+        ),
+        (
+            '[[door]]\nname = "d"\nreason = "r"\npaths = ["/abs"]',
+            "pattern '/abs' must be a non-empty relative glob without '..'",
+        ),
+    ],
+)
+def test_malformed_doors_are_rejected(door: str, message: str) -> None:
+    text = f"{door}\n{GOOD}" if door.startswith("door") else f"{GOOD}\n{door}\n"
+    with pytest.raises(ManifestError, match=f"^{re.escape(message)}"):
         parse(text)
 
 

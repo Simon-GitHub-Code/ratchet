@@ -20,6 +20,7 @@ CONJECTURE = (
 BINDING = (
     "# Binding\n\n- Default branch: `main`\n\n| Entry point | Command |\n| --- | --- |\n"
     "| check | `just check` |\n"
+    "| merge | `just merge` |\n"
 )
 ADOPTED = {
     "AGENTS.md": STANZA,
@@ -189,11 +190,17 @@ def test_without_a_forge_the_owner_merges_the_branch(tmp_path: Path) -> None:
     assert route.decide(root, None).then == route.NEXT
     branch(root, "feature/4-x")
     write(root, "src/x.py", "x = 1\n")
-    assert "the owner merges it" in route.decide(root, None).then
+    assert route.decide(root, None).then.startswith("`just merge <branch>` merges it when")
     commit(root, "feat(x): x")
     step = route.decide(root, FakeGh(pr=None))
     assert step.stage == "merge"
-    assert "git switch main && git merge --no-ff feature/4-x" in step.command
+    assert step.command == "`just merge feature/4-x`"
+    write(root, "docs/process/binding.md", BINDING.replace("| merge | `just merge` |\n", ""))
+    commit(root, "docs(process): a binding from before the merge entry point")
+    assert (
+        route.decide(root, None).command == "the binding's `merge` entry point with `feature/4-x`"
+    )
+    assert "then: `git switch main && git merge --no-ff feature/4-x`" in step.why
     assert ".scratch/changes/feature-4-x.md" in step.why
 
 

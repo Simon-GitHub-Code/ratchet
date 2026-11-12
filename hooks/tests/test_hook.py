@@ -144,9 +144,9 @@ def test_reasons_and_output_shape() -> None:
     ask = json.loads(hook.respond(Verdict("merge-pr", "gh pr merge")))["hookSpecificOutput"]
     assert ask["permissionDecision"] == "ask"
     assert ask["permissionDecisionReason"] == (
-        "Ratchet guard: this tool call merges a pull request; only the owner merges: "
-        "gh pr merge. Approve only if you, the owner, intend this. An agent that thinks a gate "
-        "is wrong writes a gate dispute (docs/disputes/NNNN-<slug>.md) instead."
+        "Ratchet guard: this tool call merges a pull request; the merge job or the owner "
+        "merges one: gh pr merge. Approve only if you, the owner, intend this. An agent that "
+        "thinks a gate is wrong writes a gate dispute (docs/disputes/NNNN-<slug>.md) instead."
     )
     assert hook.respond(None) == ""
     edit = hook.reason(Verdict("guard-path-edit", "CLAUDE.md is in guard group 'g'. Because."))

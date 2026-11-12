@@ -84,6 +84,18 @@ conformance:
 budget key *flags:
     python3 "{{ratchet_plugin}}/scripts/budget.py" {{key}} --report .ratchet/timing.jsonl {{flags}} -- just {{key}}
 
+# --- merging ------------------------------------------------------------------
+
+# May this change reach the default branch without the owner? Prints `merge: agent` or
+# `merge: owner` with every reason. The forge's merge job asks the same script.
+merge-ready *flags:
+    python3 "{{ratchet_plugin}}/scripts/merge_ready.py" {{flags}}
+
+# With no forge: judge the branch, run `check` on the merge result, and merge it when both
+# pass. With a forge the pull request's merge job does this, and the recipe says so.
+merge branch:
+    python3 "{{ratchet_plugin}}/scripts/merge.py" "{{branch}}"
+
 # --- ratchet maintenance ------------------------------------------------------
 
 # Raise every threshold to its measured value and refresh the snapshots. Red first when a commit

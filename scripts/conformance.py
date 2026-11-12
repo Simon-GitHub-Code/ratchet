@@ -38,6 +38,8 @@ ENTRY_POINTS = (
     "guard-diff",
     "settings-check",
     "conformance",
+    "merge-ready",
+    "merge",
     "reports",
     "budget",
 )
@@ -48,6 +50,14 @@ SPEED_PARTS = ("Parallel", "One pipeline", "Shards", "Cache", "Affected only", "
 SPEED_PART = re.compile(r"^- ([A-Z][a-z ]+):[ \t]*(.*)$", re.MULTILINE)
 SHARD_COUNT = re.compile(r"[1-9]\d*")
 TIER_WORKFLOWS = ("ci.yml", "deep.yml")
+# Why: ADR 0021. The merge workflow runs the judge on the default branch's checkout and
+# builds nothing, so it has nothing to cache; it is still pinned and serialised.
+MERGE_WORKFLOW = "merge.yml"
+MERGE_SHAPE = (
+    ("workflow_run:", "runs it after `ci`, as the default branch holds it"),
+    ("merge_ready.py", "asks the merge judge"),
+)
+DOOR_KINDS = ("change", "rewrite", "removal")
 SHARD_MATRIX = "matrix.shard"
 # Why: ADR 0012. These questions are asked of every repository from the first commit; a binding
 # may answer one with `none` and a reason, but may not drop the row.
@@ -277,7 +287,8 @@ def check_speed(root: Path) -> Iterable[str]:
     for path in sorted(workflows.glob("*.yml")):
         content = path.read_text(encoding="utf-8")
         for marker, meaning in CI_SHAPE:
-            if marker not in content:
+            builds = path.name != MERGE_WORKFLOW or marker != "cache"
+            if builds and marker not in content:
                 yield f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)"
         if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
             yield (
@@ -328,8 +339,50 @@ def check_manifest(root: Path) -> Iterable[str]:
         yield f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group"
 
 
+def check_doors(root: Path) -> Iterable[str]:
+    """ADR 0021: every kind of one-way door is bound, or says why the repository has none."""
+    text = read(root / "guards/manifest.toml")
+    try:
+        manifest = tomllib.loads(text or "")
+    except tomllib.TOMLDecodeError:
+        return
+    listed = manifest.get("door", [])
+    doors = [door for door in listed if isinstance(door, dict)] if text else None
+    if doors is None:
+        return
+    kinds = {door.get("on", "change") for door in doors}
+    for kind in DOOR_KINDS:
+        if kind not in kinds:
+            yield (
+                f"guards/manifest.toml: no [[door]] with on = '{kind}'; the merge judge reads"
+                " the one-way doors from it"
+            )
+    for door in doors:
+        name = door.get("name", "<unnamed>")
+        if len(str(door.get("reason", ""))) < MIN_REASON:
+            yield f"guards/manifest.toml: door '{name}' needs a reason of {MIN_REASON}+ characters"
+        if not door.get("paths") and len(str(door.get("none", ""))) < MIN_REASON:
+            yield (
+                f"guards/manifest.toml: door '{name}' has no paths yet; bind it, or say why the"
+                ' repository has none with `none = "<reason>"`'
+            )
+
+
+def check_merge_workflow(root: Path) -> Iterable[str]:
+    """ADR 0021: a forge that runs ``ci`` has the workflow that merges what the judge passes."""
+    if not (root / WORKFLOWS / "ci.yml").is_file():
+        return
+    text = read(root / WORKFLOWS / MERGE_WORKFLOW)
+    if text is None:
+        yield f"{WORKFLOWS / MERGE_WORKFLOW}: missing; nothing merges a change the judge passes"
+        return
+    for marker, meaning in MERGE_SHAPE:
+        if marker not in text:
+            yield f"{WORKFLOWS / MERGE_WORKFLOW}: nothing {meaning} ('{marker}' absent)"
+
+
 def check_plugin_checkout(root: Path) -> Iterable[str]:
-    for name in ("ci.yml", "deep.yml"):
+    for name in (*TIER_WORKFLOWS, MERGE_WORKFLOW):
         text = read(root / WORKFLOWS / name)
         if text is not None and PLUGIN_CHECKOUT_PLACEHOLDER in text:
             yield (
@@ -445,6 +498,8 @@ CHECKS: tuple[Check, ...] = (
     check_operability,
     check_speed,
     check_manifest,
+    check_doors,
+    check_merge_workflow,
     check_settings,
     check_commit_hooks,
     check_plugin_checkout,
@@ -480,6 +535,7 @@ def mutations() -> list[Mutation]:
         *operability_mutations(),
         *hook_mutations(),
         *guard_mutations(),
+        *merge_mutations(),
         *record_mutations(),
     ]
 
@@ -698,6 +754,48 @@ def guard_mutations() -> list[Mutation]:
     ]
 
 
+def merge_mutations() -> list[Mutation]:
+    def rewrite(name: str, old: str, new: str) -> Callable[[Path], None]:
+        def mutate(root: Path) -> None:
+            path = root / name
+            text = path.read_text()
+            if old not in text:
+                msg = f"{name} no longer holds {old!r}"
+                raise AssertionError(msg)
+            path.write_text(text.replace(old, new))
+
+        return mutate
+
+    def no_merge_workflow(root: Path) -> None:
+        (root / WORKFLOWS / MERGE_WORKFLOW).unlink()
+
+    manifest, workflow = "guards/manifest.toml", str(WORKFLOWS / MERGE_WORKFLOW)
+    bound = 'paths = [\n    "bound/**",\n]'
+    return [
+        (
+            "manifest without a kind of one-way door",
+            rewrite(manifest, 'on = "rewrite"', 'on = "change"'),
+        ),
+        (
+            "manifest with a one-way door still unbound",
+            rewrite(manifest, f'on = "removal"\n{bound}', 'on = "removal"\npaths = []'),
+        ),
+        ("forge without the merge workflow", no_merge_workflow),
+        (
+            "merge workflow that does not ask the judge",
+            rewrite(workflow, "merge_ready.py", "merged.py"),
+        ),
+        (
+            "merge workflow that a pull request could change",
+            rewrite(workflow, "workflow_run:", "pull_request:"),
+        ),
+        (
+            "binding without the merge entry point",
+            rewrite("docs/process/binding.md", "| merge | `just merge` |\n", ""),
+        ),
+    ]
+
+
 def record_mutations() -> list[Mutation]:
     def adr_without_refuter(root: Path) -> None:
         (root / "docs/adr/0002-plain.md").write_text("# We keep it plain\n\nBecause.\n")
@@ -786,6 +884,7 @@ def fill_placeholders(root: Path) -> None:
         "GLOSSARY.md": {GLOSSARY_PLACEHOLDER: "the project"},
         str(WORKFLOWS / "ci.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
         str(WORKFLOWS / "deep.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
+        str(WORKFLOWS / MERGE_WORKFLOW): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
     }
     for name, replacements in fills.items():
         target = root / name

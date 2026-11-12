@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+"""The merge judge: may this change reach the default branch without the owner? ADR 0021.
+
+Prints ``merge: agent`` or ``merge: owner``, then every reason as ``<code>: <text>``, and exits 0
+only for ``agent``. The owner merges when any of these holds:
+
+- ``guard``: a guard path changed, other than by an addition to a record (ADR 0014) or by a
+  threshold that only tightened. A dependency change is a guard change here: its note is printed
+  and the owner merges it.
+- ``door``: the change goes through a one-way door. A path in a ``[[door]]`` of the manifest; a
+  flag that turns on by default, becomes permanent, or leaves the registry while off.
+- ``dispute``: the change adds or edits a dispute, or an open dispute names a path it touches.
+- ``record``: no verdict record is part of the change, or the one there is not an approval of
+  exactly this tree with nothing unresolved and no open question.
+- ``target``, ``behind``, ``tier2``: the pull request targets another branch; the branch does not
+  hold the default branch's tip, so its gates ran on an older one; tier 2 is red there.
+- ``refs``, ``manifest``: the judge could not read what it judges. It fails closed.
+
+The judge reads commits and nothing else: the manifest at the default branch's tip, every other
+file at the merge base and at the head, through git. It never reads the work tree and never runs
+anything the change holds, so the forge's merge job can run it on a checkout of the default branch.
+The gates are not its question: the merge job runs it once they are green, and ``merge.py`` runs
+``check`` on the merge result beside it.
+
+``merge_ready.py record`` writes the verdict record the judge reads. It takes the pipeline's
+``verdictRecord`` on stdin, adds the tree of ``HEAD`` with the record set aside, and writes
+``docs/features/<slug>/verdict.json``; the orchestrator commits that file last, alone. An agent
+writes this record, so an agent can forge it: every other reason above is read from the diff.
+
+Usage: ``merge_ready.py [--root DIR] [--base REF] [--head REF] [--target BRANCH] [--current]
+[--tier2 green|red|none] [--report FILE]`` and ``merge_ready.py record [--root DIR]``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+
+import flags as registry
+import gatelib
+import lowered
+
+# Why: the manifest and the two classifiers the judge shares with the hook live under hooks/.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+from ratchet_guards import dependencies, records
+from ratchet_guards.manifest import (
+    MANIFEST_PATH,
+    Door,
+    DoorRule,
+    Group,
+    Manifest,
+    ManifestError,
+    parse,
+)
+
+AGENT = "merge: agent"
+OWNER = "merge: owner"
+MARKER = "<!-- ratchet:merge -->"
+SCHEMA = 1
+THRESHOLDS = gatelib.THRESHOLDS.as_posix()
+SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+RECORD = re.compile(rf"^docs/features/({SLUG})/verdict\.json$")
+DISPUTES = "docs/disputes"
+DISPUTE = re.compile(rf"^{DISPUTES}/\d{{4}}-[a-z0-9-]+\.md$")
+STATUS = re.compile(r"^- Status:[ \t]*(\S+)[ \t]*$", re.MULTILINE)
+DECIDED = frozenset({"upheld", "rejected"})
+TREE = re.compile(r"[0-9a-f]{40,64}")
+APPROVE = "approve"
+TIER2_STATES = ("green", "red", "none")
+RED = "red"
+HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
+
+
+@dataclass(frozen=True)
+class Reason:
+    """Why the owner merges: a code a script can branch on, and the sentence a person reads."""
+
+    code: str
+    text: str
+
+    def __str__(self) -> str:
+        """The line the judge prints."""
+        return f"{self.code}: {self.text}"
+
+
+@dataclass(frozen=True)
+class Change:
+    """The commits the judge reads: the default branch's tip, the merge base and the head."""
+
+    root: Path
+    base: str
+    fork: str
+    head: str
+    paths: tuple[str, ...]
+
+    def before(self, path: str) -> str | None:
+        """``path`` at the merge base, or ``None`` when it is not there or is not text."""
+        return git(self.root, "show", f"{self.fork}:{path}")
+
+    def after(self, path: str) -> str | None:
+        """``path`` at the head, or ``None`` when it is not there or is not text."""
+        return git(self.root, "show", f"{self.head}:{path}")
+
+    def held(self, path: str) -> bool:
+        """Whether the merge base holds ``path``."""
+        return git(self.root, "cat-file", "-e", f"{self.fork}:{path}") is not None
+
+    def kept(self, path: str) -> bool:
+        """Whether the head still holds ``path``."""
+        return git(self.root, "cat-file", "-e", f"{self.head}:{path}") is not None
+
+
+def git(root: Path, *args: str, env: dict[str, str] | None = None) -> str | None:
+    """``git -C root args`` stdout, unstripped; ``None`` when git fails or it is not UTF-8."""
+    done = subprocess.run(
+        ["git", "-C", str(root), *args], capture_output=True, check=False, env=env
+    )
+    if done.returncode != 0:
+        return None
+    try:
+        return done.stdout.decode()
+    except UnicodeDecodeError:
+        return None
+
+
+def commit(root: Path, ref: str) -> str | None:
+    """The commit ``ref`` names."""
+    found = git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    return found.strip() if found else None
+
+
+def default_ref(root: Path) -> str:
+    """The first default-branch candidate that names a commit, else the first by name."""
+    candidates = gatelib.default_branches(root)
+    return next((ref for ref in candidates if commit(root, ref)), candidates[0])
+
+
+def read(root: Path, base_ref: str, head_ref: str) -> Change | Reason:
+    """The change from ``base_ref`` to ``head_ref``, or why it cannot be read."""
+    base, head = commit(root, base_ref), commit(root, head_ref)
+    if base is None or head is None:
+        missing = base_ref if base is None else head_ref
+        return Reason("refs", f"`{missing}` names no commit here, so there is nothing to judge")
+    fork = git(root, "merge-base", base, head)
+    listed = (
+        None
+        if fork is None
+        else git(root, "diff", "--name-only", "--no-renames", "-z", fork.strip(), head)
+    )
+    if fork is None or listed is None:
+        return Reason("refs", f"`{base_ref}` and `{head_ref}` share no history the judge can read")
+    paths = tuple(sorted(path for path in listed.split("\0") if path))
+    return Change(root, base, fork.strip(), head, paths)
+
+
+def manifest_of(change: Change) -> Manifest | Reason:
+    """The manifest at the default branch's tip: the owner's, whatever the change holds."""
+    text = git(change.root, "show", f"{change.base}:{MANIFEST_PATH}")
+    if text is None:
+        return Reason(
+            "manifest",
+            f"the default branch has no {MANIFEST_PATH}, so nothing says what a guard path or a"
+            " one-way door is",
+        )
+    try:
+        return parse(text)
+    except ManifestError as error:
+        return Reason("manifest", f"{MANIFEST_PATH} on the default branch does not parse: {error}")
+
+
+def folded(manifest: Manifest) -> Manifest:
+    """``manifest`` with every pattern in lower case, to match a path that differs only by case.
+
+    Why: on a file system that ignores case, ``Justfile`` is ``justfile``.
+    """
+    groups = tuple(
+        Group(
+            group.name,
+            group.reason,
+            tuple(pattern.casefold() for pattern in group.patterns),
+            group.edit,
+            tuple(pattern.casefold() for pattern in group.excluded),
+        )
+        for group in manifest.groups
+    )
+    doors = tuple(
+        Door(door.name, door.reason, tuple(p.casefold() for p in door.patterns), door.on)
+        for door in manifest.doors
+    )
+    return Manifest(groups, doors)
+
+
+# --- guard paths -----------------------------------------------------------------------------
+
+
+def shape(value: object) -> object:
+    """A thresholds table with every number and flag blanked: what a ratchet never changes."""
+    if isinstance(value, dict):
+        return {key: shape(item) for key, item in value.items()}
+    return None if isinstance(value, (bool, int, float)) else value
+
+
+def more_than_tightened(before: str | None, after: str | None) -> str | None:
+    """Why a change to the thresholds is more than a ratchet, or ``None`` when that is all it is."""
+    if before is None or after is None:
+        return "the file is new, gone or not text"
+    try:
+        old, new = tomllib.loads(before), tomllib.loads(after)
+    except tomllib.TOMLDecodeError:
+        return "the file does not parse on one side"
+    if shape(old) != shape(new):
+        return "a key, a path or a text value changed, where a ratchet moves numbers only"
+    return "; ".join(lowered.loosened(lowered.flatten(old), lowered.flatten(new))) or None
+
+
+def guard_note(change: Change, path: str, group: Group) -> str | None:
+    """What a changed guard path's change is, or ``None`` when the judge lets it through."""
+    if group.additive:
+        before = records.before(lambda args: git(change.root, *args), change.fork, path)
+        note = records.note(path, before, change.after(path))
+        return None if note.startswith(records.ADDITIONS) else note
+    if path == THRESHOLDS:
+        return more_than_tightened(change.before(path), change.after(path))
+    if dependencies.recognised(path):
+        try:
+            found = dependencies.changes(path, change.before(path), change.after(path))
+        except dependencies.NotDependencyOnlyError as reason:
+            return f"not dependency-only: {reason}"
+        return "a dependency is the owner's to merge: " + ("; ".join(map(str, found)) or "none")
+    return ""
+
+
+def guard_reasons(change: Change, manifest: Manifest) -> list[Reason]:
+    """One reason per changed guard path the judge does not let through."""
+    lower = folded(manifest)
+    reasons = []
+    for path in change.paths:
+        group = manifest.group_of(path) or (HARNESS if path == MANIFEST_PATH else None)
+        if group is None:
+            other = lower.group_of(path.casefold())
+            if other is not None:
+                text = f"{path} ({other.name}): matches a guard pattern but for its case"
+                reasons.append(Reason("guard", text))
+            continue
+        note = guard_note(change, path, group)
+        if note is not None:
+            reasons.append(
+                Reason("guard", f"{path} ({group.name})" + (f": {note}" if note else ""))
+            )
+    return reasons
+
+
+# --- one-way doors ---------------------------------------------------------------------------
+
+
+def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        message = "a key is given twice"
+        raise ValueError(message)
+    return dict(pairs)
+
+
+def holds(new: object, old: object) -> bool:
+    """Whether ``new`` still holds everything ``old`` does: each key, each item, each value."""
+    if isinstance(old, dict):
+        return isinstance(new, dict) and all(
+            key in new and holds(new[key], item) for key, item in old.items()
+        )
+    if isinstance(old, list):
+        rest = iter(new) if isinstance(new, list) else iter(())
+        return all(any(holds(candidate, item) for candidate in rest) for item in old)
+    return type(new) is type(old) and new == old
+
+
+def more_than_lines_added(before: str, after: str) -> str | None:
+    old = [line for line in before.splitlines() if line.strip()]
+    new = [line for line in after.splitlines() if line.strip()]
+    if any(line[0].isspace() for line in old + new):
+        return "a line is indented, so its meaning hangs on its neighbours; snapshot it as JSON"
+    if len(set(old)) != len(old) or len(set(new)) != len(new):
+        return "a line is repeated, so one removed could hide behind one added"
+    wanted = set(old)
+    if [line for line in new if line in wanted] != old:
+        return "a line the default branch holds is gone, changed or moved"
+    return None
+
+
+def more_than_added(path: str, before: str | None, after: str | None) -> str | None:
+    """Why a change does more than add to a file, or ``None`` when adding is all it does."""
+    if before is None or after is None:
+        return "one side is not text the judge can read"
+    if not path.endswith(".json"):
+        return more_than_lines_added(before, after)
+    try:
+        old: object = json.loads(before, object_pairs_hook=unique)
+        new: object = json.loads(after, object_pairs_hook=unique)
+    except ValueError:
+        return "one side is not JSON, or gives a key twice"
+    return None if holds(new, old) else "a key, an item or a value the default branch holds is gone"
+
+
+def shut(change: Change, path: str, door: Door) -> str | None:
+    """Why ``path``'s change goes through ``door``, or ``None`` when it does not."""
+    if door.on is DoorRule.CHANGE:
+        return door.reason
+    if not change.held(path):
+        return None
+    if door.on is DoorRule.REWRITE:
+        return f"rewrites or deletes a file the default branch holds. {door.reason}"
+    if not change.kept(path):
+        return f"deletes it. {door.reason}"
+    why = more_than_added(path, change.before(path), change.after(path))
+    return None if why is None else f"{why}. {door.reason}"
+
+
+def door_reasons(change: Change, manifest: Manifest) -> list[Reason]:
+    """One reason per changed path and one-way door it goes through."""
+    lower = folded(manifest)
+    reasons = []
+    for path in change.paths:
+        for door in manifest.doors_of(path) or lower.doors_of(path.casefold()):
+            why = shut(change, path, door)
+            if why is not None:
+                reasons.append(Reason("door", f"{path} ({door.name}): {why}"))
+    return reasons
+
+
+def flag_doors(old: list[registry.Flag], new: list[registry.Flag]) -> list[str]:
+    """What the change does to a flag that ships behaviour on, or fixes it for good."""
+    was = {registry.name(flag): flag for flag in old}
+    now = {registry.name(flag): flag for flag in new}
+    found = []
+    if len(now) != len(new):
+        found.append("a flag is declared twice, so its default cannot be read")
+    for key, flag in sorted(now.items()):
+        prior = was.get(key, {})
+        if flag.get("default") is True and prior.get("default") is not True:
+            found.append(f"flag '{key}' is on by default, which ships its behaviour to everyone")
+        if flag.get("permanent") is True and prior.get("permanent") is not True:
+            found.append(f"flag '{key}' becomes permanent")
+    found += [
+        f"flag '{key}' leaves the registry while off by default: its behaviour ships on, or goes"
+        for key, flag in sorted(was.items())
+        if key not in now and flag.get("default") is not True
+    ]
+    return found
+
+
+def flag_reasons(change: Change) -> list[Reason]:
+    """The flag registry's one-way doors; the registry is always one, whatever the manifest says."""
+    if registry.REGISTRY not in change.paths:
+        return []
+    before, after = change.before(registry.REGISTRY), change.after(registry.REGISTRY)
+    old, unread = registry.parse(before or "")
+    new, unreadable = registry.parse(after or "")
+    if after is None or unread or unreadable:
+        found = ["the registry is gone or does not parse, so no flag's default can be compared"]
+    else:
+        found = flag_doors(old, new)
+    return [Reason("door", f"{registry.REGISTRY}: {text}") for text in found]
+
+
+# --- disputes --------------------------------------------------------------------------------
+
+
+def dispute_reasons(change: Change) -> list[Reason]:
+    """Disputes the change wrote or edited, and open ones that name a path it touches."""
+    reasons = [
+        Reason("dispute", f"{path}: the change adds or edits a dispute, and the owner decides one")
+        for path in change.paths
+        if DISPUTE.match(path)
+    ]
+    listed = git(change.root, "ls-tree", "-r", "--name-only", "-z", change.head, "--", DISPUTES)
+    for path in sorted(p for p in (listed or "").split("\0") if DISPUTE.match(p)):
+        if path in change.paths:
+            continue
+        text = change.after(path) or ""
+        status = STATUS.search(text)
+        named = [touched for touched in change.paths if touched in text]
+        if named and (status is None or status.group(1) not in DECIDED):
+            reasons.append(Reason("dispute", f"{path} is open and names {', '.join(named)}"))
+    return reasons
+
+
+# --- the verdict record ----------------------------------------------------------------------
+
+
+def reviewed_tree(root: Path, ref: str, record: str) -> str | None:
+    """The tree of ``ref`` with the verdict record set aside: what the record certifies."""
+    with tempfile.TemporaryDirectory() as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        steps = (
+            ("read-tree", ref),
+            ("update-index", "--force-remove", "--", record),
+            ("write-tree",),
+        )
+        results = [git(root, *step, env=env) for step in steps]
+    tree = results[-1]
+    return tree.strip() if tree and None not in results else None
+
+
+def listed(value: object) -> list[str] | None:
+    """``value`` as a list of texts, or ``None`` when it is not one."""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return [str(item) for item in value]
+
+
+def record_problems(data: dict[str, object], slug: str, tree: str | None) -> list[str]:
+    """What stops a verdict record from being an approval of ``tree``."""
+    problems = []
+    if data.get("slug") != slug:
+        problems.append(f"it names the feature {data.get('slug')!r} and sits under {slug!r}")
+    if tree is None or data.get("tree") != tree:
+        problems.append(
+            f"it certifies tree {str(data.get('tree'))[:12]} and the head's tree without the"
+            f" record is {str(tree)[:12]}: a commit came after the review, or the record is"
+            " another change's"
+        )
+    if data.get("verdict") != APPROVE:
+        problems.append(f"its verdict is {data.get('verdict')!r}, not {APPROVE!r}")
+    for key, what in (
+        ("unresolved", "unresolved blocker or major finding"),
+        ("openQuestions", "open question"),
+    ):
+        items = listed(data.get(key))
+        if items is None:
+            problems.append(f"its `{key}` is not a list of texts")
+        elif items:
+            problems.append(f"{len(items)} {what}(s): {'; '.join(items)}")
+    return problems
+
+
+def record_reasons(change: Change) -> list[Reason]:
+    """Why the change is not an approved product of the pipeline, read from its verdict record."""
+    found = [path for path in change.paths if RECORD.match(path)]
+    if len(found) != 1:
+        text = (
+            f"the change touches {len(found)} verdict records ({', '.join(found)}), and one change"
+            " carries one"
+            if found
+            else "no verdict record (docs/features/<slug>/verdict.json) is part of the change, so"
+            " it is not the product of the pipeline"
+        )
+        return [Reason("record", text)]
+    path = found[0]
+    try:
+        data: object = json.loads(change.after(path) or "")
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        return [Reason("record", f"{path} is gone or is not a JSON object")]
+    slug = RECORD.fullmatch(path)
+    problems = record_problems(
+        data, slug.group(1) if slug else "", reviewed_tree(change.root, change.head, path)
+    )
+    return [Reason("record", f"{path}: {problem}") for problem in problems]
+
+
+# --- the judge -------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Asked:
+    """What the caller knows that no commit says: the pull request's target and tier 2's state."""
+
+    target: str | None = None
+    current: bool = False
+    tier2: str = "none"
+
+
+def setting_reasons(change: Change, base_ref: str, asked: Asked) -> list[Reason]:
+    reasons = []
+    default = (
+        base_ref.removeprefix("refs/remotes/").removeprefix("refs/heads/").removeprefix("origin/")
+    )
+    if asked.target is not None and asked.target != default:
+        text = f"the pull request targets `{asked.target}`, not the default branch `{default}`"
+        reasons.append(Reason("target", text))
+    if asked.current and change.fork != change.base:
+        reasons.append(
+            Reason(
+                "behind",
+                f"the branch does not hold the tip of `{default}` ({change.base[:12]}), so its"
+                " gates ran on a merge with an older one; bring it up to date and they rerun",
+            )
+        )
+    if asked.tier2 == RED:
+        reasons.append(
+            Reason(
+                "tier2",
+                f"tier 2 is red on `{default}`: that is the next piece of work, and the owner"
+                " merges what fixes it",
+            )
+        )
+    return reasons
+
+
+def judge(root: Path, base_ref: str, head_ref: str, *, asked: Asked | None = None) -> list[Reason]:
+    """Every reason the owner merges ``base_ref..head_ref``; with none, an agent may."""
+    change = read(root, base_ref, head_ref)
+    if isinstance(change, Reason):
+        return [change]
+    manifest = manifest_of(change)
+    if isinstance(manifest, Reason):
+        return [manifest]
+    return [
+        *setting_reasons(change, base_ref, asked or Asked()),
+        *guard_reasons(change, manifest),
+        *door_reasons(change, manifest),
+        *flag_reasons(change),
+        *dispute_reasons(change),
+        *record_reasons(change),
+    ]
+
+
+def render(reasons: list[Reason]) -> str:
+    """The judge's answer as it is printed and quoted: the verdict line, then every reason."""
+    return "\n".join([OWNER if reasons else AGENT, *map(str, reasons)]) + "\n"
+
+
+def report(reasons: list[Reason], head: str) -> str:
+    """The answer as one pull request comment, marked so the merge job edits it in place."""
+    if not reasons:
+        return (
+            f"{MARKER}\n**{AGENT}** at `{head[:12]}`: the merge judge found nothing to wait for.\n"
+        )
+    rows = "".join(f"- `{reason.code}`: {reason.text}\n" for reason in reasons)
+    return (
+        f"{MARKER}\n**{OWNER}** at `{head[:12]}`. The merge judge leaves this pull request to"
+        f" the owner:\n\n{rows}"
+    )
+
+
+# --- writing the record ----------------------------------------------------------------------
+
+
+def dirty(root: Path, record: str) -> list[str]:
+    """Paths with uncommitted changes, the record itself aside."""
+    status = git(root, "status", "--porcelain", "--untracked-files=all") or ""
+    paths = [line[3:] for line in status.splitlines()]
+    return [path for path in paths if path != record]
+
+
+def write_record(root: Path, text: str) -> int:
+    """Stamp the pipeline's verdict with the tree it reviewed and write it; the exit code."""
+    try:
+        data: object = json.loads(text)
+    except ValueError:
+        data = None
+    slug = data.get("slug") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not isinstance(slug, str) or not re.fullmatch(SLUG, slug):
+        print("record: stdin is not the pipeline's verdictRecord: a JSON object with its slug")
+        return 1
+    record = f"docs/features/{slug}/verdict.json"
+    uncommitted = dirty(root, record)
+    tree = reviewed_tree(root, "HEAD", record)
+    if uncommitted or tree is None:
+        print(
+            "record: commit the change first, so the record names the tree that was reviewed:"
+            f" {', '.join(uncommitted) or 'HEAD cannot be read'}"
+        )
+        return 1
+    target = root / record
+    target.parent.mkdir(parents=True, exist_ok=True)
+    stamped = {**data, "schema": SCHEMA, "tree": tree}
+    target.write_text(json.dumps(stamped, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"record: {record} certifies tree {tree[:12]}; commit it alone, last")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    recording = argv[1:2] == ["record"]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", default=".")
+    parser.add_argument("--base")
+    parser.add_argument("--head", default="HEAD")
+    parser.add_argument("--target")
+    parser.add_argument("--current", action="store_true")
+    parser.add_argument("--tier2", choices=TIER2_STATES, default="none")
+    parser.add_argument("--report", type=Path)
+    options = parser.parse_args(argv[2:] if recording else argv[1:])
+    root = Path(options.root).resolve()
+    if recording:
+        return write_record(root, sys.stdin.read())
+    base = options.base or default_ref(root)
+    asked = Asked(options.target, options.current, options.tier2)
+    reasons = judge(root, base, options.head, asked=asked)
+    print(render(reasons), end="")
+    if options.report is not None:
+        head = commit(root, options.head) or options.head
+        options.report.write_text(report(reasons, head), encoding="utf-8")
+    return 1 if reasons else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

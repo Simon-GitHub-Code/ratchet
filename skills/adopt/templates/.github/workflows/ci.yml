@@ -107,13 +107,3 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with: { name: "timing-${{ matrix.gate }}-${{ matrix.shard }}", path: .ratchet/timing.jsonl }
-  guard-changes-present:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { fetch-depth: 0 }
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with: { repository: Simon-GitHub-Code/ratchet, ref: "<ratchet-sha>", path: ratchet } # the plugin at the commit ADR 0001 names; adopt fills it
-      - run: PYTHONPATH=ratchet/hooks python3 -m ratchet_guards.diff --root . --fail-if-present

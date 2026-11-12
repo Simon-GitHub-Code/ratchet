@@ -1,13 +1,14 @@
 """Rules for ``git``: hook bypasses, history rewrites, pushes to main and guard-path writes.
 
-The commands that write the default branch's ref are ``ratchet_guards.refmoves``'s.
+The commands that write the default branch's ref are ``ratchet_guards.refmoves``'s, and the
+ones that merge another branch into it are ``ratchet_guards.merges``'s.
 """
 
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from ratchet_guards import refmoves
+from ratchet_guards import merges, refmoves
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gitcall import Invocation, invocation
 from ratchet_guards.options import NO_VALUES, Options, Spec, scan
@@ -191,7 +192,9 @@ _SUBCOMMANDS: dict[str, Rule] = {
     "symbolic-ref": refmoves.symbolic_ref,
     "worktree": refmoves.worktree,
     "fetch": refmoves.fetch,
-    "pull": refmoves.fetch,
+    "pull": _all(refmoves.fetch, merges.pull),
+    "merge": merges.merge,
+    "cherry-pick": merges.cherry_pick,
     "rebase": refmoves.rebase,
     "remote": refmoves.remote,
     "replace": refmoves.refused,
