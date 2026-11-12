@@ -14,6 +14,7 @@ import sys
 import tempfile
 import tomllib
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import application_types
@@ -148,22 +149,88 @@ DEFAULT_PR_TEMPLATE = ".github/pull_request_template.md"
 NUMBERED = re.compile(r"^(\d{4})-[a-z0-9-]+\.md$")
 MIN_REASON = 10
 MIN_REGISTER_REASON = 20
+TEMPLATES = Path(__file__).resolve().parents[1] / "skills"
+ADOPT_TEMPLATES = TEMPLATES / "adopt/templates"
+AGENTS_TEMPLATE = TEMPLATES / "init/templates/AGENTS.md"
+ASKING = "## Asking the owner"
+RUNS_JUST = re.compile(r"^just\s+@?([A-Za-z_][\w-]*)")
+INCLUDES = re.compile(r"^(?:import|mod)\b", re.MULTILINE)
+# Why: a gate over the change compares with a base; `changed.py` hands it one, and judges nothing
+# on the adoption, whose base holds no binding.
+OVER_THE_CHANGE = frozenset({"diff-coverage", "test-counts", "mutation-changed"})
+# Why: these gates judge elapsed time, which a gate running beside them disturbs.
+TIMED = frozenset({"perf", "load"})
 
-Check = Callable[[Path], Iterable[str]]
+
+@dataclass(frozen=True)
+class Finding:
+    """One thing the repository lacks: the file, what is wrong, and the text to add when known.
+
+    The conformance gate prints the first two on one line; ``upgrade.py`` prints ``add`` too.
+    """
+
+    path: str
+    problem: str
+    add: tuple[str, ...] = ()
+
+    def __str__(self) -> str:
+        """The one line the conformance gate prints."""
+        return f"{self.path}: {self.problem}"
+
+
+Check = Callable[[Path], Iterable["str | Finding"]]
 
 
 def read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
-def check_agent_instructions(root: Path) -> Iterable[str]:
-    text = read(root / "AGENTS.md")
+def code_of(justfile: str) -> str:
+    """A justfile less its whole-line comments, where the template names what it explains."""
+    return "\n".join(line for line in justfile.splitlines() if not line.lstrip().startswith("#"))
+
+
+def definition(text: str, name: str) -> tuple[str, ...]:
+    """The recipe or variable ``name`` of a justfile: its comment, its head and its body."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        head = re.match(r"@?([A-Za-z_][\w-]*)", line)
+        if head is None or head.group(1) != name:
+            continue
+        start = index
+        while start > 0 and lines[start - 1].startswith("#"):
+            start -= 1
+        end = index + 1
+        while end < len(lines) and lines[end].startswith((" ", "\t")):
+            end += 1
+        return tuple(lines[start:end])
+    return ()
+
+
+def template_definition(name: str) -> tuple[str, ...]:
+    return definition(read(ADOPT_TEMPLATES / "justfile") or "", name)
+
+
+def defines_recipe(justfile: str, name: str) -> bool:
+    pattern = rf"^@?{re.escape(name)}(?:[ \t][^\n]*)?:(?!=)"
+    return re.search(pattern, justfile, re.MULTILINE) is not None
+
+
+def check_agent_instructions(root: Path) -> Iterable[str | Finding]:
+    name = "AGENTS.md"
+    text = read(root / name)
     if text is None:
-        text = read(root / "CLAUDE.md")
+        name, text = "CLAUDE.md", read(root / "CLAUDE.md")
     if text is None:
         yield "AGENTS.md (or CLAUDE.md): missing"
     elif "ratchet:method" not in text:
         yield "AGENTS.md: does not tell agents to load the ratchet:method skill"
+    elif ASKING not in text:
+        yield Finding(
+            name,
+            f"has no '{ASKING}' section; copy it from the template AGENTS.md",
+            (ASKING, "", section(read(AGENTS_TEMPLATE) or "", ASKING).strip()),
+        )
 
 
 def check_glossary(root: Path) -> Iterable[str]:
@@ -257,16 +324,52 @@ def table_cells(body: str) -> list[tuple[str, str]]:
     return rows[1:]
 
 
-def check_binding(root: Path) -> Iterable[str]:
+def template_rows() -> dict[str, tuple[str, str]]:
+    """The template binding's Entry points rows by name: the row as written, and its command."""
+    body = section(read(ADOPT_TEMPLATES / "docs/process/binding.md") or "", "## Entry points")
+    return {
+        match.group(1): (line, match.group(2))
+        for line in body.splitlines()
+        if (match := TABLE_ROW.match(line))
+    }
+
+
+def check_entry_points(root: Path, text: str) -> Iterable[str | Finding]:
+    """Every entry point has a row naming its command, and a ``just`` command has its recipe."""
+    commands = dict(table_cells(section(text, "## Entry points")))
+    rows = template_rows()
+    justfile = read(root / "justfile")
+    for name in ENTRY_POINTS:
+        command = commands.get(name)
+        if command is None:
+            row, command = rows[name]
+            yield Finding(
+                "docs/process/binding.md",
+                f"the Entry points table has no row for '{name}'; add the template's row {row},"
+                " with your runner's command",
+                (row,),
+            )
+        elif not command or "<" in command:
+            yield f"docs/process/binding.md: entry point '{name}' names no command"
+            continue
+        recipe = RUNS_JUST.match(command.strip("`"))
+        if justfile is None or INCLUDES.search(justfile) or recipe is None:
+            continue
+        if not defines_recipe(justfile, recipe.group(1)):
+            yield Finding(
+                "justfile",
+                f"has no `{recipe.group(1)}` recipe, which the binding's entry point '{name}'"
+                " runs; copy it from the template justfile",
+                template_definition(recipe.group(1)),
+            )
+
+
+def check_binding(root: Path) -> Iterable[str | Finding]:
     text = read(root / "docs/process/binding.md")
     if text is None:
         yield "docs/process/binding.md: missing"
         return
-    commands = dict(table_cells(section(text, "## Entry points")))
-    for name in ENTRY_POINTS:
-        command = commands.get(name, "")
-        if not command or "<" in command:
-            yield f"docs/process/binding.md: entry point '{name}' names no command"
+    yield from check_entry_points(root, text)
     gates = section(text, "## Gates")
     if not gates:
         yield "docs/process/binding.md: has no '## Gates' section"
@@ -420,17 +523,22 @@ def check_weekly_workflow(root: Path) -> Iterable[str]:
     return forge_workflow(root, WEEKLY_WORKFLOW, unmet=unmet, shape=WEEKLY_SHAPE)
 
 
-def check_plugin_pin(root: Path) -> Iterable[str]:
+def check_plugin_pin(root: Path) -> Iterable[str | Finding]:
     """The plugin version has one home, the binding; the workflows and the justfile follow it."""
     binding = read(root / "docs/process/binding.md")
     if binding is None:
         return
     pin = plugin_pin.pinned(binding)
     if pin is None:
-        yield (
-            "docs/process/binding.md: no '- Ratchet plugin: <version> at <commit>' line with a "
-            "full commit; adopt fills the plugin version"
+        line = plugin_pin.line_for(plugin_pin.PLUGIN)
+        yield Finding(
+            "docs/process/binding.md",
+            "no '- Ratchet plugin: <version> at <commit>' line; add under '## Runner', for the"
+            f" plugin in use: {line}",
+            (line,),
         )
+    yield from check_pin_recipe(root)
+    if pin is None:
         return
     for name in (*TIER_WORKFLOWS, MERGE_WORKFLOW, WEEKLY_WORKFLOW):
         text = read(root / WORKFLOWS / name) or ""
@@ -445,11 +553,75 @@ def check_plugin_pin(root: Path) -> Iterable[str]:
                 f"{WORKFLOWS / name}: checks the plugin out at '{ref}', not the commit the "
                 f"binding pins ({pin.commit})"
             )
+
+
+def check_pin_recipe(root: Path) -> Iterable[Finding]:
     justfile = read(root / "justfile")
     if justfile is not None and "plugin_pin.py" not in justfile:
-        yield (
-            "justfile: no tier runs plugin_pin.py, so a local run can use a plugin other than "
-            f"the one the binding pins; copy `plugin-pin` from {hooks_installed.TEMPLATE}"
+        yield Finding(
+            "justfile",
+            "no tier runs plugin_pin.py, so a local run can use a plugin other than the one the"
+            " binding pins; copy `plugin-pin` from the template justfile, as the first dependency"
+            " of each tier",
+            template_definition("plugin-pin"),
+        )
+
+
+def answered_gates(binding: str) -> set[str]:
+    """The entry points of the Gates rows the binding answers with something other than none."""
+    return {
+        row.gate
+        for row in project_bite.gate_rows(binding)
+        if row.tool and not application_types.NONE.match(row.tool)
+    }
+
+
+def check_runner(root: Path) -> Iterable[Finding]:
+    """What the template justfile's tiers rely on, read only where a justfile is the runner."""
+    justfile = read(root / "justfile")
+    if justfile is None:
+        return
+    code = code_of(justfile)
+    gates = answered_gates(read(root / "docs/process/binding.md") or "")
+    if gates & OVER_THE_CHANGE and "changed.py" not in code:
+        yield Finding(
+            "justfile",
+            "no gate runs through `changed.py`, so a gate over the change has no base on the"
+            " adoption; add the template's `changed` variable and run diff-coverage, test-counts"
+            " and mutation-changed as `{{changed}} -- <command>`, with `{base}` for the commit"
+            " compared with",
+            template_definition("changed"),
+        )
+    ratchet = "\n".join(definition(justfile, "ratchet"))
+    if ratchet and "hooks-installed" not in ratchet and "hooks_installed.py" not in ratchet:
+        yield Finding(
+            "justfile",
+            "the `ratchet` recipe raises the thresholds without asking whether a commit would run"
+            " tier 0; make `just hooks-installed` its first line, as the template's is",
+            template_definition("ratchet"),
+        )
+    if "--jobs" in code and "RATCHET_JOBS" not in code:
+        yield Finding(
+            "justfile",
+            "passes `--jobs` without reading RATCHET_JOBS, the one number that caps the gates"
+            " and the bite copies at once; use the template's `jobs` variable",
+            template_definition("jobs"),
+        )
+    if gates & TIMED and "parallel.py" in code and "--alone" not in code:
+        yield Finding(
+            "justfile",
+            "nothing runs `perf` and `load` alone, so other gates disturb the time they judge;"
+            " add the template's `alone` variable and pass `{{alone}}` to `parallel.py`",
+            template_definition("alone"),
+        )
+    if {"load-smoke", "flag-states"} <= gates and "--temporary" not in code:
+        yield Finding(
+            "justfile",
+            "no gate that requests the deliverable's routes boots it with the temporary flags on"
+            " (`flags.py --temporary`); add the template's `flags_on` and `probed`, bind"
+            " `flags_on` to the flag seam's override, and boot load-smoke, api-deep, dast,"
+            " pentest, load and load-soak through `{{probed}}`",
+            template_definition("flags_on") + template_definition("probed"),
         )
 
 
@@ -595,6 +767,7 @@ CHECKS: tuple[Check, ...] = (
     check_settings,
     check_commit_hooks,
     check_plugin_pin,
+    check_runner,
     check_quality,
     check_bites,
     check_disputes,
@@ -603,8 +776,20 @@ CHECKS: tuple[Check, ...] = (
 )
 
 
+def findings(root: Path) -> list[Finding]:
+    """Every failure of every check, in the order of ``CHECKS``."""
+    found = [failure for check in CHECKS for failure in check(root)]
+    return [item if isinstance(item, Finding) else as_finding(item) for item in found]
+
+
+def as_finding(line: str) -> Finding:
+    """A check's one line, as a finding: every line starts with the path it is about."""
+    path, _, problem = line.partition(": ")
+    return Finding(path, problem)
+
+
 def failures(root: Path) -> list[str]:
-    return [failure for check in CHECKS for failure in check(root)]
+    return [str(finding) for finding in findings(root)]
 
 
 def run(root: Path) -> int:
@@ -631,6 +816,39 @@ def mutations() -> list[Mutation]:
         *pin_mutations(),
         *weekly_mutations(),
         *record_mutations(),
+        *upgrade_mutations(),
+    ]
+
+
+def upgrade_mutations() -> list[Mutation]:
+    """What an adoption made by an earlier plugin lacks, each a red line of its own."""
+    return [
+        ("AGENTS.md without the Asking the owner section", rewrite("AGENTS.md", ASKING, "## Ask")),
+        (
+            "binding without the tier0-tree row",
+            rewrite("docs/process/binding.md", "| tier0-tree | `just tier0-tree` |\n", ""),
+        ),
+        ("justfile without a recipe the binding names", rewrite("justfile", "bite-one gate:", "")),
+        (
+            "justfile with no gate run through changed.py",
+            rewrite("justfile", "/scripts/changed.py", "/scripts/base.py"),
+        ),
+        (
+            "justfile whose ratchet recipe does not ask whether hooks run",
+            rewrite("justfile", "ratchet:\n    just hooks-installed\n", "ratchet:\n"),
+        ),
+        (
+            "justfile capping the gates at once by another variable",
+            rewrite("justfile", '"RATCHET_JOBS"', '"JOBS"'),
+        ),
+        (
+            "justfile timing perf and load beside other gates",
+            rewrite("justfile", 'alone := "--alone perf load"', 'alone := ""'),
+        ),
+        (
+            "justfile booting the route gates with the defaults only",
+            rewrite("justfile", "flags.py --temporary on", "every flag on"),
+        ),
     ]
 
 

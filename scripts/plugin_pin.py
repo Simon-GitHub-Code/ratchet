@@ -92,6 +92,14 @@ def commit_of(plugin: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else UNREADABLE
 
 
+def line_for(plugin: Path) -> str:
+    """The binding's pin line naming ``plugin``, with a stand-in for what the copy cannot say."""
+    version, commit = version_of(plugin) or "<version>", commit_of(plugin)
+    if commit in (None, UNREADABLE):
+        commit = f"<the full commit of {version}>"
+    return f"- Ratchet plugin: {version} at {commit}"
+
+
 def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
     """The line to print about ``plugin`` against ``pin``, and whether it is a problem."""
     version, commit = version_of(plugin), commit_of(plugin)

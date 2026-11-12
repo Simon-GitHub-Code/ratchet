@@ -18,7 +18,7 @@ A change the gates can judge now merges without the owner, and the owner is aske
 - An open question is `direction` (the options are different products) or `irreversible` (a wrong guess loses data, fixes a public contract, spends money or weakens a security rule). Everything else is assumed, given a refuter and listed in the pull request. Questions are asked after the work, and each answer is written on the ticket under `## Answers`. (ADR 0013, ADR 0022)
 - `/ratchet:conjecture` no longer asks the owner to accept its draft.
 - `scripts/questions.py` logs each answer in `.ratchet/questions.tsv`. When a question's last three answers took the recommendation, the route proposes a standing answer for `AGENTS.md`. It never proposes one for a `direction` question. (ADR 0022)
-- Questions arrive as dialogs. The stance in every session and the `AGENTS.md` template tell agents to ask through the question tool, one decision per question with the recommended option first, whichever plugin's skill is asking. An existing adoption gets the stance from the plugin; add the `## Asking the owner` section to `AGENTS.md` by hand.
+- Questions arrive as dialogs. The stance in every session and the `AGENTS.md` template tell agents to ask through the question tool, one decision per question with the recommended option first, whichever plugin's skill is asking. An existing adoption gets the stance from the plugin, and the conformance gate names the `## Asking the owner` section while `AGENTS.md` lacks it.
 
 ### The drain
 
@@ -45,6 +45,7 @@ A change the gates can judge now merges without the owner, and the owner is aske
 - The weekly gates run: a new `weekly` entry point and `weekly.yml` workflow, where a red run opens one issue or comments on the open one.
 - A ceiling reports on a pull request and blocks on the default branch and nightly (`budget.py --over report`), and CI holds each gate's job to its tier's ceiling (`--tier`).
 - Local tiers and CI run the plugin at one commit. The binding's `- Ratchet plugin: <version> at <commit>` line is the pin, every workflow `ref` must equal it, and `scripts/plugin_pin.py` is red at the start of each tier when the plugin in use is another commit.
+- The conformance gate says what to add. A missing entry point names the template's row, and the recipe when the `justfile` lacks it. A missing pin prints the line for the plugin in use. It now also names the `## Asking the owner` section of `AGENTS.md`, and in a `justfile` the `changed` wrapper, `RATCHET_JOBS`, `--alone`, the temporary-flags boot and `hooks-installed` at the top of `ratchet`.
 - Fuzz time follows the code. The template `fuzz` recipe takes `each` (seconds a target, 30) and `cap` (seconds in total, 600) in place of one fixed 600 second box, so tier 2 on a new project takes seconds. An adoption with `fuzz seconds="600"` keeps working; rebind it to the two parameters to get the saving.
 
 ### Guard hardening
@@ -75,7 +76,7 @@ A change the gates can judge now merges without the owner, and the owner is aske
 
 ### Upgrading an 0.8 or 0.9 adoption
 
-Update the plugin to 0.10.0 first. The conformance gate then names each item below that is missing. Files in the manifest's `edit = "deny"` groups (`guards/**`, `.claude/settings.json`) are the owner's to edit by hand.
+Update the plugin to 0.10.0 first. The conformance gate then names each item below that is missing, with the file and the text to add, except three that another gate names and the items under "Worth doing, not checked". The mutation gate names a stryker register entry in the old form (step 11), the load smoke names a smoke that requests only the readiness URL (step 14), and the feature preflight names a ticket without its `## Operability` lines (step 17). In a repository whose runner is not `just`, the conformance gate reads no recipe, so the `justfile` parts of steps 1, 6, 12, 15 and 16 are yours to check against the template. Files in the manifest's `edit = "deny"` groups (`guards/**`, `.claude/settings.json`) are the owner's to edit by hand.
 
 1. In `docs/process/binding.md`, add the rows the template's Entry points table has and yours lacks: `tier0-tree`, `hooks-installed`, `hooks-install`, `check-fast`, `settings`, `merge-ready`, `merge` and `bite-one`. Every skill and hook of the method calls them by name, and the conformance gate now requires each. Add their recipes, with `bite` and `bite-all`, from the plugin's `skills/adopt/templates/justfile`. Then run `just conformance`.
 2. In `docs/process/binding.md`, add `- Application types: <types>` under `## Gates`. Run `python3 <plugin>/scripts/application_types.py <type> [<type> ...]`, which prints `applies` or the Tool cell to write for each row a type can leave out. Write `none: not a <type>` on each row that does not apply. Give every remaining `none` an ADR number that exists in `docs/adr/`, and fill every empty Tool cell. Then run `just conformance`.
@@ -94,6 +95,15 @@ Update the plugin to 0.10.0 first. The conformance gate then names each item bel
 15. In the `justfile`, copy the template's `changed`, `jobs` and `alone` variables and its `parallel` line. Run each gate over the change as `{{changed}} -- <command>`, with `{base}` where the command names the commit it compares with, in place of a merge-base variable of your own.
 16. For a service, copy the template's `flags_on` and `probed` variables, bind `flags_on` to the override your flag seam reads, and boot `load-smoke`, `api-deep`, `dast`, `pentest` and `load` through `{{probed}}`. `smoke` and `telemetry-e2e` keep `{{booted}}`.
 17. Run `/ratchet:conjecture <ticket>` on each open agent-ready ticket, or once on their spec: the feature preflight now asks the `## Operability` lines of the application types the binding declares.
+18. Add the `## Asking the owner` section of the plugin's `skills/init/templates/AGENTS.md` to `AGENTS.md`.
+
+#### Worth doing, not checked
+
+No gate reads these. Each is safe to leave, and each is worth doing.
+
+- Rebind `fuzz seconds="600"` to the template's `fuzz each="30" cap="600"`, so tier 2 on a small project takes seconds.
+- When `flags_on` (step 16) takes over a flag override that `booted` used to pass, rewrite the binding's `## Feature flags` section to say which gates boot with which flags.
+- With no forge, have the machine's scheduler run `just weekly` (step 13).
 
 ## Earlier versions
 

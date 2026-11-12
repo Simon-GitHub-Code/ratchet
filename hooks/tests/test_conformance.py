@@ -362,3 +362,137 @@ def test_a_self_test_mutation_refuses_a_template_it_no_longer_fits(repo: Path) -
         conformance.rewrite(MANIFEST, "absent text", "anything")(repo)
     with pytest.raises(SystemExit, match="has no 'absent text' to mutate"):
         conformance.reregister("absent text", "anything")(repo)
+
+
+JUSTFILE = "justfile"
+TEMPLATE_JUSTFILE = (SKILLS / "adopt/templates/justfile").read_text(encoding="utf-8")
+
+
+def test_an_entry_point_with_no_row_names_the_row_to_add(repo: Path) -> None:
+    replace(BINDING, "| tier0-tree | `just tier0-tree` |\n", "")(repo)
+    assert red(repo) == [
+        (
+            f"{BINDING}: the Entry points table has no row for 'tier0-tree'; add the template's row"
+            " | tier0-tree | `just tier0-tree` |, with your runner's command"
+        )
+    ]
+    replace(BINDING, "| tier0 |", "| tier0-tree | |\n| tier0 |")(repo)
+    assert red(repo) == [f"{BINDING}: entry point 'tier0-tree' names no command"]
+
+
+def test_an_entry_point_whose_recipe_is_missing_names_the_recipe_to_copy(repo: Path) -> None:
+    replace(JUSTFILE, "hooks-install:\n", "hooks-installs:\n")(repo)
+    assert red(repo) == [
+        (
+            "justfile: has no `hooks-install` recipe, which the binding's entry point"
+            " 'hooks-install'"
+            " runs; copy it from the template justfile"
+        )
+    ]
+    [finding] = conformance.findings(repo)
+    assert finding.add[-2:] == (
+        "hooks-install:",
+        '    python3 "{{ratchet_plugin}}/scripts/hooks_install.py"',
+    )
+    replace(JUSTFILE, "set shell", 'import "more.just"\n\nset shell')(repo)
+    assert red(repo) == [], "a justfile that imports another is not read for recipes"
+
+
+def test_a_missing_pin_prints_the_line_for_the_plugin_in_use(repo: Path) -> None:
+    pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40}"
+    replace(BINDING, pin, "")(repo)
+    replace(JUSTFILE, "plugin_pin.py", "pin.py")(repo)
+    line = conformance.plugin_pin.line_for(conformance.plugin_pin.PLUGIN)
+    assert line.startswith("- Ratchet plugin: ")
+    assert red(repo) == [
+        (
+            f"{BINDING}: no '- Ratchet plugin: <version> at <commit>' line; add under '## Runner',"
+            f" for the plugin in use: {line}"
+        ),
+        (
+            "justfile: no tier runs plugin_pin.py, so a local run can use a plugin other than"
+            " the one"
+            " the binding pins; copy `plugin-pin` from the template justfile, as the first"
+            " dependency of each tier"
+        ),
+    ]
+
+
+def test_the_pin_line_says_what_a_copy_without_history_cannot(tmp_path: Path) -> None:
+    (tmp_path / ".claude-plugin").mkdir()
+    (tmp_path / ".claude-plugin/plugin.json").write_text('{"version": "1.2.3"}')
+    line = conformance.plugin_pin.line_for(tmp_path)
+    assert line == "- Ratchet plugin: 1.2.3 at <the full commit of 1.2.3>"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "failure"),
+    [
+        (
+            replace("AGENTS.md", "## Asking the owner", "## Asking"),
+            "AGENTS.md: has no '## Asking the owner' section; copy it from the template AGENTS.md",
+        ),
+        (
+            replace(JUSTFILE, "/scripts/changed.py", "/scripts/base.py"),
+            "justfile: no gate runs through `changed.py`",
+        ),
+        (
+            replace(JUSTFILE, "ratchet:\n    just hooks-installed\n", "ratchet:\n"),
+            "justfile: the `ratchet` recipe raises the thresholds without asking",
+        ),
+        (
+            replace(JUSTFILE, '"RATCHET_JOBS"', '"JOBS"'),
+            "justfile: passes `--jobs` without reading RATCHET_JOBS",
+        ),
+        (
+            replace(JUSTFILE, 'alone := "--alone perf load"', 'alone := ""'),
+            "justfile: nothing runs `perf` and `load` alone",
+        ),
+        (
+            replace(JUSTFILE, "each key of flags.py --temporary on", "every flag on"),
+            (
+                "justfile: no gate that requests the deliverable's routes boots it with the"
+                " temporary flags on"
+            ),
+        ),
+    ],
+)
+def test_each_upgrade_item_is_one_red_line(repo: Path, mutate: Mutate, failure: str) -> None:
+    mutate(repo)
+    found = red(repo)
+    assert len(found) == 1, found
+    assert found[0].startswith(failure), found
+
+
+def test_a_runner_item_is_asked_only_where_its_gates_are_bound(repo: Path) -> None:
+    for gate in ("perf", "load", "load-smoke", "diff-coverage", "test-counts", "mutation-changed"):
+        text = (repo / BINDING).read_text(encoding="utf-8")
+        row = next(line for line in text.splitlines() if line.endswith(f"`just {gate}` |"))
+        cells = row.split("|")
+        cells[2] = " none: not this repository's concern "
+        replace(BINDING, row, "|".join(cells))(repo)
+    for old, new in (
+        ('alone := "--alone perf load"', 'alone := ""'),
+        ("each key of flags.py --temporary on", "every flag on"),
+        ("/scripts/changed.py", "/scripts/base.py"),
+    ):
+        replace(JUSTFILE, old, new)(repo)
+    assert [line for line in red(repo) if line.startswith("justfile")] == []
+
+
+def test_a_comment_does_not_count_as_the_runner_item(repo: Path) -> None:
+    replace(JUSTFILE, "/scripts/changed.py\"'", "/scripts/base.py\"'\n# no changed.py here")(repo)
+    assert red(repo)[0].startswith("justfile: no gate runs through `changed.py`")
+
+
+def test_the_template_justfile_names_each_runner_item_in_code() -> None:
+    code = conformance.code_of(TEMPLATE_JUSTFILE)
+    for item in ("changed.py", "RATCHET_JOBS", "--alone", "--temporary"):
+        assert item in code, item
+
+
+def test_a_repository_whose_runner_is_not_just_is_not_read_for_recipes(repo: Path) -> None:
+    replace(BINDING, "| tier0-tree | `just tier0-tree` |\n", "")(repo)
+    remove(JUSTFILE)(repo)
+    assert [line.split(":")[0] for line in red(repo)] == [BINDING]
+    assert conformance.definition(TEMPLATE_JUSTFILE, "no-such-recipe") == ()
