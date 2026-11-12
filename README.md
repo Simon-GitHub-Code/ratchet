@@ -49,7 +49,7 @@ agy plugin install https://github.com/Simon-GitHub-Code/ratchet
 agy plugin list
 ```
 
-`agy plugin list` should show `ratchet` enabled. Antigravity has no `SubagentStart` event, so that hook is skipped and subagents do not get the stance; the guard and the `SessionStart` hook run. See `docs/harness/antigravity.md`.
+`agy plugin list` should show `ratchet` enabled. Antigravity has no `SubagentStart` event, so that hook is skipped and subagents do not get the stance; the guard and the `SessionStart` hook run. Antigravity treats a hook answer without a decision as a deny and `allow` as an auto-approve, so when no rule fires the guard answers `ask`, Antigravity's normal permission prompt. See `docs/harness/antigravity.md`.
 
 Updates arrive when `version` in `.claude-plugin/plugin.json` rises. To develop the plugin, add the checkout as a local marketplace instead (`claude plugin marketplace add /path/to/ratchet`): it is read in place, so edits apply at the next session or `/reload-plugins`.
 

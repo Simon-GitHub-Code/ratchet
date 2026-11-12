@@ -23,9 +23,11 @@ The answer is Antigravity's:
 | --- | --- |
 | deny | `{"decision": "deny", "reason": ...}` |
 | ask | `{"decision": "force_ask", "reason": ...}` |
-| no rule fires | `{}` |
+| no rule fires | `{"decision": "ask"}` |
 
-`ask` becomes `force_ask` because Antigravity's `ask` respects a cached "Always Allow", which would let a later guard-path edit through without the owner. No rule gives `{}`: no decision, so Antigravity's own permission rules decide. The guard never answers `allow`, which would skip them.
+`ask` becomes `force_ask` because Antigravity's `ask` respects a cached "Always Allow", which would let a later guard-path edit through without the owner.
+
+Antigravity has no answer for "no opinion". A missing or empty `decision` is a deny: under 0.9.0 and 0.9.1 the guard answered `{}` when no rule fired, and agy 1.5.6 refused every command and edit, `git status` included, with `tool call denied by pre-tool hook:` and an empty reason. `allow` would auto-approve past Antigravity's own permission prompt. So when no rule fires the guard answers a plain `ask`: Antigravity's normal prompt, which honours a cached "Always Allow" as it would without the guard.
 
 The session hook answers `SessionStart` with `{"injectSteps": [{"systemMessage": {"systemMessage": ...}}]}`.
 
@@ -46,5 +48,6 @@ On this machine, with agy 1.5.6:
 
 - `agy plugin install` of this repository staged the `PreToolUse` and `SessionStart` hooks shown above and skipped `SubagentStart`.
 - Antigravity-shaped input fed to `hooks/guard.py` and `hooks/session.py` gave the answers in the table.
+- A live agy 1.5.6 session under 0.9.1 showed that `{}` is a deny (above). The `decision` field's schema in the agy binary is required, one of `allow`, `deny`, `ask`, `force_ask` and `deny_unless_prior_grant`, and `allow` maps to an internal auto-approve.
 
-Not yet run: a live `agy` session. The hooks guide calls `decision` required and does not say what an empty answer does; the agy 1.5.6 changelog says an empty decision is handled instead of failing. Check once that `{}` leaves an ordinary edit to Antigravity's own prompt and does not block it.
+Not yet run: a live `agy` session under 0.9.2, to confirm that an ordinary command now reaches Antigravity's normal prompt.

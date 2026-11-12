@@ -11,7 +11,8 @@ which needs a human at the permission prompt, or ``deny`` in a group whose ``edi
 ``"deny"`` (paths Claude Code's bypass mode would let through an ``ask``); for a Bash
 command that bypasses a gate, rewrites history, removes a plugin or writes a guard path it
 answers ``deny``. When no rule fires it prints nothing, so Claude Code's own permission rules
-decide; it never answers ``allow``. Any failure answers ``ask``.
+decide; Antigravity, which reads no answer as a deny, gets a plain ``ask``, its own prompt. It
+never answers ``allow``. Any failure answers ``ask``.
 
 A verdict covers the whole tool call: Claude Code runs none of a denied Bash command line,
 so a write chained before the refused command is lost with it. The deny message says so and
@@ -95,10 +96,11 @@ ANTIGRAVITY_CHUNKS = "ReplacementChunks"
 # cached "Always Allow", which would let a later guard-path edit through unseen; `force_ask`
 # always prompts. It never answers `allow`, which would skip Antigravity's own prompts.
 ANTIGRAVITY_DECISIONS = {Decision.DENY: "deny", Decision.ASK: "force_ask"}
-# Why: Antigravity documents `decision` as required and says nothing of empty stdout. An object
-# with no decision is valid JSON that its permission manager treats as no opinion (agy 1.5.6
-# changelog: empty decision strings are handled safely), so its own rules decide.
-ANTIGRAVITY_SILENT = "{}"
+# Why: Antigravity has no "no opinion" answer. A missing or empty `decision` is a deny (seen live
+# in agy 1.5.6: `git status` was refused with an empty reason), and `allow` auto-approves past its
+# own permission prompt. `ask` is that prompt, cached "Always Allow" included, so it changes
+# nothing Antigravity would have done without the guard.
+ANTIGRAVITY_NO_RULE = json.dumps({"decision": "ask"})
 # Why: Codex edits through apply_patch, whose input is the patch text; the paths are its headers.
 PATCH_TOOL = "apply_patch"
 PATCH_HEADER = re.compile(
@@ -291,10 +293,10 @@ def reason(verdict: Verdict) -> str:
 
 
 def respond(verdict: Verdict | None, *, antigravity: bool = False) -> str:
-    """The hook's stdout: a PreToolUse decision, or nothing (``{}`` for Antigravity)."""
+    """The hook's stdout: a PreToolUse decision, or nothing (Antigravity's plain ``ask``)."""
     if antigravity:
         if verdict is None:
-            return ANTIGRAVITY_SILENT
+            return ANTIGRAVITY_NO_RULE
         answer = {"decision": ANTIGRAVITY_DECISIONS[verdict.decision], "reason": reason(verdict)}
         return json.dumps(answer)
     if verdict is None:
