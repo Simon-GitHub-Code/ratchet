@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0
+## 0.10.0
 
 A change the gates can judge now merges without the owner, and the owner is asked only what shapes the product or cannot be taken back. Ratchet ships the questions the method asks of each application type and no tool for any stack, and an adopted repository proves that each gate it binds can go red. The ADR numbers below are the plugin's own, in `docs/adr/`.
 
@@ -67,9 +67,9 @@ A change the gates can judge now merges without the owner, and the owner is aske
 - The `guard-changes-present` job of the template `ci.yml`. It failed on every guard path, an added glossary term included; the merge judge now reports guard changes with reasons. (ADR 0021)
 - The binding row `every checker bites`. It is replaced by `every changed gate still bites` (`bite`, tier 1) and `every gate bites` (`bite-all`, tier 2).
 
-### Upgrading an 0.8 adoption
+### Upgrading an 0.8 or 0.9 adoption
 
-Update the plugin to 0.9.0 first. The conformance gate then names each item below that is missing. Files in the manifest's `edit = "deny"` groups (`guards/**`, `.claude/settings.json`) are the owner's to edit by hand.
+Update the plugin to 0.10.0 first. The conformance gate then names each item below that is missing. Files in the manifest's `edit = "deny"` groups (`guards/**`, `.claude/settings.json`) are the owner's to edit by hand.
 
 1. In `docs/process/binding.md`, add the rows the template's Entry points table has and yours lacks: `tier0-tree`, `hooks-installed`, `check-fast`, `settings`, `merge-ready`, `merge` and `bite-one`. Every skill and hook of the method calls them by name, and the conformance gate now requires each. Add their recipes, with `bite` and `bite-all`, from the plugin's `skills/adopt/templates/justfile`. Then run `just conformance`.
 2. In `docs/process/binding.md`, add `- Application types: <types>` under `## Gates`. Run `python3 <plugin>/scripts/application_types.py <type> [<type> ...]`, which prints `applies` or the Tool cell to write for each row a type can leave out. Write `none: not a <type>` on each row that does not apply. Give every remaining `none` an ADR number that exists in `docs/adr/`, and fill every empty Tool cell. Then run `just conformance`.
@@ -78,7 +78,7 @@ Update the plugin to 0.9.0 first. The conformance gate then names each item belo
 5. Rewrite the binding's `## Speed` section as the six lines of the template (`- Parallel:`, `- One pipeline:`, `- Shards: 1`, `- Cache:`, `- Affected only:`, `- Ceilings:`), each saying how this stack meets it. Then run `just conformance`.
 6. In the `justfile`, replace the `tier0`, `tier0-tree`, `pre-commit` and `commit-msg` recipes with the template's, so the hook recipes answer `RATCHET_HOOK_PROBE`, and add the call to `hooks-installed` at the top of `ratchet`. Then run `just conformance`, and `just hooks-installed`, which prints the owner's command if a commit would not run tier 0.
 7. In `guards/manifest.toml` (owner), add the three `[[door]]` tables from the template. Bind each to its paths, or say why the repository has none with `none = "<reason>"`. To let agents add records, move `docs/adr/**` and `GLOSSARY.md` from `decisions` into a `records` group with `edit = "append"`, as the template does. Then run `just conformance`.
-8. Regenerate `.claude/settings.json` (owner) with `just settings`. 0.9 denies the commands that move the default branch's ref, and an `append` group gets no Edit rule. Then run `just conformance`.
+8. Regenerate `.claude/settings.json` (owner) with `just settings`. 0.10 denies the commands that move the default branch's ref, and an `append` group gets no Edit rule. Then run `just conformance`.
 9. Copy `.github/workflows/merge.yml` from the template and replace `<ratchet-sha>` with the commit ADR 0001 names. Replace `ci.yml` and `deep.yml` with the template's too: the 0.8 copies keep the `guard-changes-present` job and do not read the shard count. Then run `just conformance`.
 10. In `.github/pull_request_template.md`, add a `## Operability` section: the flag, the telemetry, and what the security and load gates ran. Then run `just conformance`.
 11. If `quality/mutation-register.toml` holds stryker entries, run the mutation gate. Each entry in the old identity form is red and names the entries to paste, one per mutant you judge equivalent. Replace them, then run `just mutation`.
@@ -88,4 +88,4 @@ Update the plugin to 0.9.0 first. The conformance gate then names each item belo
 
 ## Earlier versions
 
-Versions before 0.9.0 have no changelog entries. Their history is in the git log.
+Versions before 0.10.0 have no changelog entries. Their history is in the git log.

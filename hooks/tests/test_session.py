@@ -106,6 +106,12 @@ def test_render_is_plain_for_a_session_and_json_for_a_subagent() -> None:
     }
 
 
+def test_render_injects_a_system_message_for_antigravity() -> None:
+    assert json.loads(session.render("SessionStart", "hello", antigravity=True)) == {
+        "injectSteps": [{"systemMessage": {"systemMessage": "hello"}}]
+    }
+
+
 def shim(payload: dict[str, object], cwd: Path) -> str:
     result = subprocess.run(
         [sys.executable, str(PLUGIN_ROOT / "hooks/session.py")],
@@ -128,6 +134,15 @@ def test_the_shim_answers_each_event_in_its_form(tmp_path: Path) -> None:
     output = json.loads(shim({"hook_event_name": "SubagentStart", "cwd": str(adopted)}, tmp_path))
     assert "## The stance" in output["hookSpecificOutput"]["additionalContext"]
     assert shim({"cwd": str(tmp_path / "loose")}, tmp_path) == ""
+
+
+def test_the_shim_answers_antigravity_with_inject_steps(tmp_path: Path) -> None:
+    adopted = checkout(tmp_path, stanza=True, binding=True)
+    start = {"hookEventName": "SessionStart", "conversationId": "c", "cwd": str(adopted)}
+    output = json.loads(shim(start, tmp_path))
+    (step,) = output["injectSteps"]
+    assert "## The stance" in step["systemMessage"]["systemMessage"]
+    assert shim({**start, "cwd": str(tmp_path / "loose")}, tmp_path) == ""
 
 
 def test_the_next_step_closes_every_message(tmp_path: Path) -> None:

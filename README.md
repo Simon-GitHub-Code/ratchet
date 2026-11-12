@@ -11,7 +11,7 @@ It is for one developer, or a small team, who has agents write most of the code 
 - **Agents.** A ticket built while you are away takes at most nine agents, and two more when it is judged again behind another merge. A drain of N tickets takes at most 11N - 2, and says the number before it starts.
 - **Your keystrokes.** Up to two dialogs at init, one setup command, two dialogs at adoption, and one merge: the adoption's pull request changes guarded paths, so you merge it yourself. After that you write tickets, apply the agent-ready label, answer the questions that shape the product, and merge what the gates leave to you.
 
-The feature pipeline runs on Claude Code's Workflow tool. The method, its gates and its guard also run in Grok, Codex, pi and OpenCode, each with a page under `docs/harness/`.
+The feature pipeline runs on Claude Code's Workflow tool. The method, its gates and its guard also run in Grok, Codex, Antigravity, pi and OpenCode, each with a page under `docs/harness/`.
 
 ## First run
 
@@ -125,7 +125,16 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 
 ## Install notes
 
-The marketplace entry declares `mattpocock-skills`, `pstack` and `impeccable` as dependencies, so the last line installs all four once their marketplaces are known. pstack comes from `michael-denyer/pstack-claude`, the port with Cursor's tool names already translated for Claude Code and the other harnesses, not from `cursor/plugins`, the Cursor original. Grok, Codex, pi and OpenCode each have a page under `docs/harness/` with their commands; none has a dependency field, so `/ratchet:init` installs what is missing with the owner's consent.
+The marketplace entry declares `mattpocock-skills`, `pstack` and `impeccable` as dependencies, so the last line installs all four once their marketplaces are known. pstack comes from `michael-denyer/pstack-claude`, the port with Cursor's tool names already translated for Claude Code and the other harnesses, not from `cursor/plugins`, the Cursor original. Grok, Codex, Antigravity, pi and OpenCode each have a page under `docs/harness/` with their commands; none has a dependency field, so `/ratchet:init` installs what is missing with the owner's consent.
+
+In Antigravity's CLI:
+
+```bash
+agy plugin install https://github.com/Simon-GitHub-Code/ratchet
+agy plugin list
+```
+
+`agy plugin list` should show `ratchet` enabled. Antigravity has no `SubagentStart` event, so that hook is skipped and subagents do not get the stance; the guard and the `SessionStart` hook run. Antigravity treats a hook answer without a decision as a deny and `allow` as an auto-approve, so when no rule fires the guard answers `ask`, Antigravity's normal permission prompt. See `docs/harness/antigravity.md`.
 
 Updates arrive when `version` in `.claude-plugin/plugin.json` rises. To develop the plugin, add the checkout as a local marketplace instead (`claude plugin marketplace add /path/to/ratchet`): it is read in place, so edits apply at the next session or `/reload-plugins`.
 

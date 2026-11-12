@@ -170,6 +170,40 @@ def test_run_fails_closed() -> None:
     assert hook.run(json.dumps(payload("Bash", command="ls")), make_guard) == ""
 
 
+def agy(name: str, cwd: str = str(ROOT), **args: str) -> dict[str, object]:
+    return {"toolCall": {"id": "t", "name": name, "args": args}, "cwd": cwd, "stepIdx": 1}
+
+
+def test_antigravity_gets_its_own_output_shape() -> None:
+    verdict = Verdict("labels", "gh label create x")
+    deny = json.loads(hook.respond(verdict, antigravity=True))
+    assert deny == {"decision": "deny", "reason": hook.reason(verdict)}
+    merge = Verdict("merge-pr", "gh pr merge")
+    ask = json.loads(hook.respond(merge, antigravity=True))
+    assert ask == {"decision": "force_ask", "reason": hook.reason(merge)}
+    assert json.loads(hook.respond(None, antigravity=True)) == {"decision": "ask"}
+
+
+def test_run_answers_antigravity_in_its_form() -> None:
+    denied = json.loads(
+        hook.run(json.dumps(agy("run_command", CommandLine="git push -f")), make_guard)
+    )
+    assert denied["decision"] == "deny"
+    assert "force-pushes" in denied["reason"]
+    asked = json.loads(hook.run(json.dumps(agy("edit_file", TargetFile="CLAUDE.md")), make_guard))
+    assert asked["decision"] == "force_ask"
+    quiet = hook.run(json.dumps(agy("run_command", CommandLine="just check")), make_guard)
+    assert json.loads(quiet) == {"decision": "ask"}
+
+    def broken() -> Guard:
+        msg = "no manifest"
+        raise OSError(msg)
+
+    failed = json.loads(hook.run(json.dumps(agy("run_command", CommandLine="ls")), broken))
+    assert failed["decision"] == "force_ask"
+    assert "OSError: no manifest" in failed["reason"]
+
+
 def checkout(tmp_path: Path, *, manifest: bool | str = True, name: str = "checkout") -> Path:
     """A repository on ``main`` under ``tmp_path``.
 
@@ -343,6 +377,25 @@ def test_the_shim_asks_when_the_guard_cannot_load(tmp_path: Path) -> None:
     answer = json.loads(done.stdout)["hookSpecificOutput"]
     assert answer["permissionDecision"] == "ask"
     assert answer["permissionDecisionReason"].startswith("Ratchet guard could not run: ")
+
+
+def test_the_shim_answers_antigravity_in_its_form(tmp_path: Path) -> None:
+    root = str(checkout(tmp_path))
+    edit = run_shim(SHIM, agy("replace_file_content", root, TargetFile="CLAUDE.md"))
+    assert json.loads(edit.stdout)["decision"] == "force_ask"
+    push = run_shim(SHIM, agy("run_command", root, CommandLine="git push --force"))
+    assert json.loads(push.stdout)["decision"] == "deny"
+    status = run_shim(SHIM, agy("run_command", root, CommandLine="git status"))
+    assert json.loads(status.stdout) == {"decision": "ask"}
+
+
+def test_the_shim_asks_antigravity_when_the_guard_cannot_load(tmp_path: Path) -> None:
+    shim = tmp_path / "a/hooks/guard.py"
+    shim.parent.mkdir(parents=True)
+    shutil.copy(SHIM, shim)
+    answer = json.loads(run_shim(shim, agy("run_command", "/", CommandLine="ls")).stdout)
+    assert answer["decision"] == "force_ask"
+    assert answer["reason"].startswith("Ratchet guard could not run: ")
 
 
 def test_the_shim_asks_on_garbled_input() -> None:

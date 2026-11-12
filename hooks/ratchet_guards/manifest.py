@@ -46,7 +46,7 @@ PLUGIN_REASON = (
     "The guard's own code, the installed plugins and the user settings that enable them: "
     "changing them can switch the guard off, so the owner changes them by hand."
 )
-# Why: the guard runs in five harnesses; each one's installed plugins and the settings that
+# Why: the guard runs in six harnesses; each one's installed plugins and the settings that
 # enable them are the switch an agent must not reach.
 PLUGIN_HOME_PATTERNS = (
     "~/.claude/plugins",
@@ -68,6 +68,10 @@ PLUGIN_HOME_PATTERNS = (
     "~/.config/opencode/plugins",
     "~/.config/opencode/plugins/**",
     "~/.config/opencode/opencode.json",
+    "~/.gemini/config/plugins",
+    "~/.gemini/config/plugins/**",
+    "~/.gemini/config/hooks.json",
+    "~/.gemini/config/config.json",
 )
 
 

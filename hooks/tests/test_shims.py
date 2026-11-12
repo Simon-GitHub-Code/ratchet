@@ -82,3 +82,11 @@ def test_the_session_hook_says_nothing_when_the_session_module_fails(
     monkeypatch.setitem(sys.modules, "ratchet_guards.session", None)
     assert session.main() == 0
     assert capsys.readouterr().out == ""
+
+
+def test_the_fallback_answers_antigravity_in_its_form() -> None:
+    answer = json.loads(guard.fallback("no manifest", antigravity=True))
+    assert answer == {
+        "decision": "force_ask",
+        "reason": "Ratchet guard could not run: no manifest.",
+    }

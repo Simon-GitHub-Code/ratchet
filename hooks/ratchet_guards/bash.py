@@ -61,8 +61,8 @@ _REMOVALS: dict[str, tuple[frozenset[str], str]] = {
     "plugins": (_PLUGIN_REMOVALS, "claude plugin"),
     "marketplace": (frozenset({"remove", "rm"}), "claude plugin marketplace"),
 }
-# Why: the same guard runs in Grok, Codex, pi and OpenCode; each has its own spelling of
-# "remove the plugin that carries the guard".
+# Why: the same guard runs in Grok, Codex, Antigravity, pi and OpenCode; each has its own
+# spelling of "remove the plugin that carries the guard".
 _HARNESS_REMOVALS: dict[str, dict[str, tuple[frozenset[str], str]]] = {
     "grok": {
         "plugin": (_PLUGIN_REMOVALS | {"rm"}, "grok plugin"),
@@ -72,6 +72,7 @@ _HARNESS_REMOVALS: dict[str, dict[str, tuple[frozenset[str], str]]] = {
         "plugin": (frozenset({"remove", "rm"}), "codex plugin"),
         "marketplace": (frozenset({"remove", "rm"}), "codex plugin marketplace"),
     },
+    "agy": {"plugin": (_PLUGIN_REMOVALS, "agy plugin")},
 }
 _PI_REMOVALS = frozenset({"remove", "uninstall"})
 MAX_STATES = 64
@@ -264,6 +265,7 @@ _DIRECT: dict[str, Callable[[Sequence[str]], list[Verdict]]] = {
     "claude": _nested_claude,
     "grok": _harness("grok"),
     "codex": _harness("codex"),
+    "agy": _harness("agy"),
     "pi": _pi,
 }
 
