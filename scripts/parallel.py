@@ -15,9 +15,9 @@ Usage::
 * Each ``GATE`` becomes ``RUNNER GATE`` and runs in ``--root`` (the current directory). The
   entry is split like a shell line, so ``"test-shard 1/4"`` passes two words. With no
   ``--runner`` each entry is a whole command: ``-- "ruff check ." "mypy --strict ."``.
-* At most ``--jobs`` gates run at a time (the CPU count by default). A gate that is itself
-  parallel shares the cores with the rest; the operating system schedules them. On a machine
-  that is shared, or where each gate uses every core, give a smaller number.
+* At most ``--jobs`` gates run at a time: ``RATCHET_JOBS`` by default, else the CPU count. A
+  gate that is itself parallel shares the cores with the rest; the operating system schedules
+  them. On a machine that is shared, or where each gate uses every core, give a smaller number.
 * ``--alone GATE...`` names gates that are measured alone: each runs once every other gate has
   finished, one at a time, with nothing beside it. It is for a gate that judges elapsed time (a
   benchmark, a load run), whose reading the other gates would disturb. A name that is not among
@@ -309,7 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="parallel.py", usage="%(prog)s [options] -- GATE...", description=__doc__
     )
     parser.add_argument("--runner", default="", help="command prefix that runs one entry point")
-    parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="gates at a time")
+    parser.add_argument("--jobs", type=int, default=gatelib.default_jobs(), help="gates at a time")
     parser.add_argument("--serial", action="append", nargs="+", default=[], metavar="GATE")
     parser.add_argument("--alone", nargs="+", default=[], metavar="GATE", help="measured alone")
     parser.add_argument("--fail-fast", action="store_true", help="stop at the first red gate")

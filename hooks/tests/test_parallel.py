@@ -122,6 +122,25 @@ def test_gates_run_at_the_same_time(tmp_path: Path) -> None:
     assert run("--jobs", "2", "--", gate(MEET, a, b), gate(MEET, b, a)) == 0
 
 
+def test_ratchet_jobs_caps_how_many_run_at_once_when_no_jobs_is_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = tmp_path / "log"
+    monkeypatch.setenv("RATCHET_JOBS", "1")
+    assert run("--", *(gate(LOG, log, name) for name in "ab")) == 0
+    assert log.read_text().splitlines() == ["+a", "-a", "+b", "-b"]
+
+
+@pytest.mark.parametrize("value", ["", "many", "0", "-2"])
+def test_a_ratchet_jobs_that_is_no_count_leaves_every_core(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("RATCHET_JOBS", value)
+    assert gatelib.default_jobs() == (os.cpu_count() or 1)
+    monkeypatch.setattr(os, "cpu_count", lambda: None)
+    assert gatelib.default_jobs() == 1
+
+
 def test_jobs_caps_how_many_run_at_once(tmp_path: Path) -> None:
     log = tmp_path / "log"
     names = ["a", "b", "c"]

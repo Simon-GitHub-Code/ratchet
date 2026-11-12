@@ -108,6 +108,16 @@ def show(root: Path, ref: str, path: str) -> str | None:
     return git(root, "show", f"{ref}:{path}")
 
 
+def default_jobs() -> int:
+    """``RATCHET_JOBS`` when it is a count, else every core: the cap on what runs at once.
+
+    Why: the gates a tier runs at once and the scratch copies a bite proof runs at once share
+    one machine, so one number caps both, the one a shared machine sets.
+    """
+    value = os.environ.get("RATCHET_JOBS", "")
+    return int(value) if value.isdigit() and int(value) > 0 else os.cpu_count() or 1
+
+
 def entry_point(root: Path, name: str) -> str | None:
     """The command the binding's Entry points table gives ``name``, or ``None``."""
     text = read_text(root / BINDING) or ""

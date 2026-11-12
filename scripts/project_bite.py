@@ -58,8 +58,10 @@ a gate run through one would judge the real tree. ``setup`` rebuilds them in the
 lockfile, as a CI job does. So a gate must build what it runs, the first run in a copy is a cold
 one, and whatever lives outside the tree (a port, a database, a tool reached by an absolute path)
 is shared with the real one. A submodule's files are not copied. Gates run at once, one copy per
-lane, never two in one copy. The first copy is set up alone and the others once it stands, so a
-cache ``setup`` fills outside the tree (a package store, a compiler cache) is filled once. Put
+lane, never two in one copy, at most ``--jobs`` lanes: ``RATCHET_JOBS`` by default, the number
+that caps the gates of a tier, else the CPU count, and never more than four. The first copy is
+set up alone and the others once it stands, so a cache ``setup`` fills outside the tree (a
+package store, a compiler cache) is filled once. Put
 the build in ``setup`` as well: a gate's own build is then incremental, where a cold one would
 spend a service gate's boot timeout. What a command started and left running is ended when the
 command exits.
@@ -723,7 +725,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", type=Path, default=Path())
     parser.add_argument("--changed", action="store_true", help="only when a gate changed")
     parser.add_argument("--gate", action="append", default=[], help="only this gate's bites")
-    parser.add_argument("--jobs", type=int, default=min(MAX_LANES, os.cpu_count() or 1))
+    parser.add_argument("--jobs", type=int, default=min(MAX_LANES, gatelib.default_jobs()))
     options = parser.parse_args(argv[1:])
     if os.environ.get(BITING):
         return gatelib.report("bite", ["a bite cannot plant a fault for the gate that runs it"])

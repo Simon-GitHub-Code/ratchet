@@ -294,6 +294,25 @@ def test_lanes_run_at_once_each_in_a_copy_of_its_own(
     assert prove(root, "--jobs", "0") == 0
 
 
+def test_ratchet_jobs_caps_the_lanes_as_it_caps_the_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gates = dict.fromkeys(("one", "two", "three"), LINT)
+    registry = "".join(bite(name, "a planted word") for name in gates)
+    root = project(tmp_path / "repo", gates, registry)
+    seen: list[int] = []
+
+    def record(_root: Path, _registry: object, _tasks: object, *, lanes: int) -> int:
+        seen.append(lanes)
+        return 0
+
+    monkeypatch.setattr(project_bite, "proof", record)
+    for value in ("1", "2", "64"):
+        monkeypatch.setenv("RATCHET_JOBS", value)
+        assert project_bite.main(["project_bite.py", "--root", str(root)]) == 0
+    assert seen == [1, 2, min(project_bite.MAX_LANES, len(gates))]
+
+
 def test_one_gate_is_proven_alone_before_the_registry_is_whole(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
