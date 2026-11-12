@@ -8,7 +8,8 @@
 # Before the first `[[bite]]`, both optional:
 #   setup    commands run once in each scratch copy, in order. A copy holds what git sees and
 #            nothing ignored, so no virtualenv, no node_modules, no build output: rebuild here
-#            what the gates do not build themselves, from the lockfile.
+#            what the gates do not build themselves, from the lockfile, and build the deliverable
+#            once, so that a gate's own build is incremental and no boot waits on a cold one.
 #   include  ignored paths a gate needs that setup cannot rebuild; copied when present.
 #
 # Each `[[bite]]`:
@@ -32,6 +33,7 @@
 #            off and on`, `erroring-route` for `load smoke`. The conformance gate is red while a
 #            bound row lacks one.
 #   args     optional words appended to the gate's command, such as the seconds a fuzz run takes
+#            or the one file a whole-tree mutation run is narrowed to
 #   commit   optional; true commits the fault in the copy first, for a gate that reads history
 #            or the index (a secret scanner over commits, a linter over tracked files)
 #

@@ -49,19 +49,27 @@ no more often than when green) or ``THE FAULT WAS NOT PLANTED``. The run is red 
 whose question requires a proof no bite of it claims.
 
 A scratch copy is the work tree as git sees it (tracked and untracked files, nothing ignored), as
-a repository of its own under ``$TMPDIR`` with the same refs, index and ``HEAD``, borrowing the
-object store read-only. The real work tree is never written. What is ignored is not copied, on
+a repository of its own under ``$TMPDIR`` with the same index and commit, borrowing the object
+store read-only. ``HEAD`` is detached there and the default branch's refs point at it, so a gate
+over the change sees what the tree holds beyond ``HEAD``: once the work is committed, the planted
+fault and nothing else. The real work tree is never written. What is ignored is not copied, on
 purpose: a virtualenv or a build cache holds the absolute paths of the tree it was built in, and
 a gate run through one would judge the real tree. ``setup`` rebuilds them in the copy from the
 lockfile, as a CI job does. So a gate must build what it runs, the first run in a copy is a cold
 one, and whatever lives outside the tree (a port, a database, a tool reached by an absolute path)
 is shared with the real one. A submodule's files are not copied. Gates run at once, one copy per
-lane, never two in one copy.
+lane, never two in one copy. The first copy is set up alone and the others once it stands, so a
+cache ``setup`` fills outside the tree (a package store, a compiler cache) is filled once. Put
+the build in ``setup`` as well: a gate's own build is then incremental, where a cold one would
+spend a service gate's boot timeout. What a command started and left running is ended when the
+command exits.
 
 Usage: ``project_bite.py [--root DIR] [--changed] [--gate NAME]... [--jobs N]``. ``--changed`` is
 the pull-request form: it proves nothing unless the change touches a path that defines a gate
 (the manifest's ``tool-config``, ``gate-commands``, ``fitness``, ``gate-tools`` and ``formal``
-groups, the registry and the binding), and then proves the gates of tiers 0 and 1.
+groups, the registry and the binding), and then proves the gates of tiers 0 and 1. It proves
+nothing on the adoption either, the change whose base holds no binding: every gate is new
+there, and the whole proof runs once in tier 2.
 """
 
 from __future__ import annotations
@@ -445,27 +453,35 @@ class Shell:
         self.stopped = False
 
     def run(self, command: Sequence[str], cwd: Path) -> tuple[int, str]:
-        """The exit code and everything the command wrote; 127 when it cannot start."""
-        with self.lock:
-            if self.stopped:
-                return 130, "stopped"
-            try:
-                process = subprocess.Popen(
-                    command,
-                    cwd=cwd,
-                    env=environment(),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-            except OSError as error:
-                return 127, f"cannot run {command[0]}: {error}"
-            self.live.add(process)
-        output, _ = process.communicate()
-        with self.lock:
-            self.live.discard(process)
-        return process.returncode, output.decode("utf-8", errors="replace")
+        """The exit code and everything the command wrote; 127 when it cannot start.
+
+        What the command started and left running ends with it, and the output says so. The
+        output goes to a file, not a pipe, so a process left behind cannot hold the run open.
+        """
+        with tempfile.TemporaryFile() as log:
+            with self.lock:
+                if self.stopped:
+                    return 130, "stopped"
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        cwd=cwd,
+                        env=environment(),
+                        stdin=subprocess.DEVNULL,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+                except OSError as error:
+                    return 127, f"cannot run {command[0]}: {error}"
+                self.live.add(process)
+            code = process.wait()
+            with self.lock:
+                self.live.discard(process)
+            left = gatelib.end_group(process.pid)
+            log.seek(0)
+            output = log.read().decode("utf-8", errors="replace")
+        return code, output + (f"bite: {gatelib.LEFT_RUNNING}\n" if left else "")
 
     def stop(self) -> None:
         """Stop every running command and refuse the next ones."""
@@ -596,11 +612,8 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Co
     git_in(root, "init", "-q", str(copy))
     (copy / ".git/objects/info/alternates").write_text(f"{git_path('objects')}\n", encoding="utf-8")
     git_in(copy, "fetch", "-q", "--update-head-ok", str(root), "+refs/*:refs/*")
-    branch = gatelib.git(root, "symbolic-ref", "-q", "HEAD")
-    if branch:
-        git_in(copy, "symbolic-ref", "HEAD", branch)
-    else:
-        git_in(copy, "update-ref", "--no-deref", "HEAD", git_in(root, "rev-parse", "HEAD"))
+    head = git_in(root, "rev-parse", "HEAD")
+    git_in(copy, "update-ref", "--no-deref", "HEAD", head)
     remote_head = gatelib.git(root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")
     if remote_head:
         git_in(copy, "symbolic-ref", "refs/remotes/origin/HEAD", remote_head)
@@ -610,6 +623,12 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Co
         carry(root / path, copy / path)
     for path in registry.include:
         carry_included(root, copy, path)
+    # Why: with the default branch at `HEAD`, the base of the change is `HEAD` in the copy, so a
+    # gate over the change judges the fault and not the whole branch again.
+    for name in gatelib.default_branches(copy):
+        ref = f"refs/remotes/{name}" if name.startswith("origin/") else f"refs/heads/{name}"
+        if gatelib.git(copy, "rev-parse", "-q", "--verify", ref) is not None:
+            git_in(copy, "update-ref", ref, head)
     for command in registry.setup:
         code, output = shell.run(shlex.split(command), copy)
         if code != 0:
@@ -632,8 +651,8 @@ def run_lanes(
     shell = Shell()
     printing = threading.Lock()
 
-    def lane(path: Path) -> list[Outcome]:
-        copy = make_copy(root, path, registry=registry, shell=shell)
+    def lane(path: Path, made: Copy | None) -> list[Outcome]:
+        copy = made or make_copy(root, path, registry=registry, shell=shell)
         outcomes: list[Outcome] = []
         while not shell.stopped:
             try:
@@ -650,8 +669,14 @@ def run_lanes(
         tempfile.TemporaryDirectory(prefix="ratchet-bite-") as scratch,
         ThreadPoolExecutor(max_workers=lanes) as pool,
     ):
-        futures = [pool.submit(lane, Path(scratch) / f"copy-{n}") for n in range(lanes)]
+        paths = [Path(scratch) / f"copy-{n}" for n in range(lanes)]
         try:
+            # Why: the first setup fills the caches kept outside the tree; the rest then find
+            # them, where setups started together would each miss.
+            first = make_copy(root, paths[0], registry=registry, shell=shell)
+            futures = [
+                pool.submit(lane, path, None if n else first) for n, path in enumerate(paths)
+            ]
             return [outcome for future in futures for outcome in future.result()]
         except BaseException:
             shell.stop()
@@ -708,6 +733,12 @@ def main(argv: list[str]) -> int:
     problems += [] if options.gate else gaps
     if problems:
         return gatelib.report("bite", [f"{REGISTRY}: {problem}" for problem in problems])
+    if options.changed and gatelib.adoption(root, gatelib.base_commit(root)):
+        print(
+            "bite: green: this change is the adoption, whose base holds no binding; nothing is"
+            " proven here, and `bite-all` proves every gate in tier 2"
+        )
+        return 0
     if options.changed:
         touched = gate_paths_changed(root)
         if touched == []:

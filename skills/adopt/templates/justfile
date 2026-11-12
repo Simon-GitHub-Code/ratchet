@@ -61,9 +61,23 @@ serial0 := ""
 serial1 := ""
 serial2 := ""
 
+# How many gates run at once: every core unless RATCHET_JOBS says fewer, for a shared machine or
+# a stack whose every gate uses every core.
+jobs := env_var_or_default("RATCHET_JOBS", num_cpus())
+
+# Gates that are measured alone: they judge elapsed time, which a gate running beside them
+# disturbs, so each runs once the others have finished, by itself. A name not in a tier is ignored.
+alone := "--alone perf load"
+
 # The runner. Each gate is an entry point of this file, run as `just <gate>` with its output held
 # whole, and every gate's seconds are appended to .ratchet/timing.jsonl so the slowest is named.
-parallel := 'python3 "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + just_executable() + '" --report .ratchet/timing.jsonl'
+# What a gate started and left running is ended when the gate exits, and the runner says so.
+parallel := 'python3 "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + just_executable() + '" --report .ratchet/timing.jsonl --jobs ' + jobs + ' ' + alone
+
+# A gate over the change runs as `{{changed}} -- <command>`: `{base}` in the command is
+# the commit the change is compared with, the one the plugin's own gates use. On the adoption,
+# whose base holds no binding, it runs nothing and says so: tier 2 judges that tree whole.
+changed := 'python3 "' + ratchet_plugin + '/scripts/changed.py"'
 
 # Every tier starts here: the plugin the recipes run is the version docs/process/binding.md pins,
 # the commit CI checks out. Red before any gate runs when it is another, or when nothing is there.
@@ -103,8 +117,8 @@ check: plugin-pin
 check-fast: plugin-pin
     {{parallel}} --fail-fast {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
-# `perf` and `load` judge elapsed time, which other gates running beside them disturb; CI gives
-# each a job of its own, and `just perf` alone is the reading to trust.
+# `perf` and `load` judge elapsed time, so they run after the other gates, one at a time (`alone`
+# above); CI gives each a job of its own.
 check-deep: plugin-pin
     {{parallel}} {{serial0}} {{serial1}} {{serial2}} -- {{tier0_gates}} {{tier1_gates}} {{tier2_gates}}
 
@@ -234,15 +248,15 @@ coverage:
     python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
 
 diff-coverage:
-    @echo "bind: every changed line and branch ran"; exit 1
+    @echo "bind: through changed, every line and branch changed since {base} ran"; exit 1
 
 test-counts:
-    @echo "bind: collected test count at head >= merge base"; exit 1
+    @echo "bind: through changed, collected test count at head >= at {base}"; exit 1
 
 # Any mutation tool: convert its report to one JSON line per mutant and hand it to the plugin's
 # `scripts/mutation_survivors.py --tool <name> --mutants <file>`; its docstring has the format.
 mutation-changed:
-    @echo "bind: mutate changed functions, shard {{shard}} of {{shards}}; zero unregistered survivors"; exit 1
+    @echo "bind: through changed, mutate the functions changed since {base}, shard {{shard}} of {{shards}}; zero unregistered survivors"; exit 1
 
 contracts-check:
     @echo "bind: regenerate contract artefacts and diff"; exit 1

@@ -77,6 +77,16 @@ def base_commit(root: Path, base: str | None = None) -> str | None:
     return git(root, "rev-parse", "HEAD~1")
 
 
+def adoption(root: Path, base: str | None) -> bool:
+    """Whether the change since ``base`` is the adoption: ``base`` holds no binding.
+
+    The method was not there to judge that commit, so every line is new against it. Read from
+    the commit, so no later change can claim it: once the adoption has merged, every base holds
+    a binding.
+    """
+    return base is not None and show(root, base, str(BINDING)) is None
+
+
 def changed_paths(root: Path, base: str) -> list[str]:
     """Paths changed since ``base``, committed or not, untracked files included; renames split."""
     tracked = git(root, "diff", "--name-only", "--no-renames", "-z", base) or ""
@@ -355,6 +365,26 @@ def stop_group(process: subprocess.Popen[bytes], grace: float = 5.0, settle: flo
         time.sleep(0.02)
     signal_group(signal.SIGKILL)
     process.wait()
+
+
+LEFT_RUNNING = (
+    "something it started was still running when it exited, and was ended; a gate stops what it"
+    " starts"
+)
+
+
+def end_group(pid: int) -> bool:
+    """End what is left of the process group ``pid`` led; whether anything was left.
+
+    For a process started with ``start_new_session=True`` that has exited and been reaped. What
+    it forked and did not stop (a service a test booted) is still in its group, holds its ports
+    and its output, and would otherwise run until somebody found it.
+    """
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
 
 
 def run_command(command: list[str], env: dict[str, str]) -> tuple[int, list[str]]:

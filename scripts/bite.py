@@ -212,6 +212,10 @@ def survivor_of_any_tool(root: Path) -> None:
     write(root, "mutants.jsonl", RECORDS.format(status="survived"))
 
 
+def nothing_but_unviable_mutants(root: Path) -> None:
+    write(root, "mutants.jsonl", RECORDS.format(status="unviable"))
+
+
 def entry(tool: str, identity: str, function_hash: str) -> str:
     return (
         f'[[survivor]]\ntool = "{tool}"\nidentity = "{identity}"\n'
@@ -457,6 +461,12 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("mutation: a survivor", mutation_survivors.main, survivor, MUTMUT),
     ("mutation: a stale entry", mutation_survivors.main, stale_entry, MUTMUT),
     ("mutation: a survivor of any tool", mutation_survivors.main, survivor_of_any_tool, ANY_TOOL),
+    (
+        "mutation: no mutant was tested",
+        mutation_survivors.main,
+        nothing_but_unviable_mutants,
+        ANY_TOOL,
+    ),
     ("mutation: two survivors, one entry", mutation_survivors.main, twin_survivors, STRYKER),
     (
         "mutation: an entry without a position",

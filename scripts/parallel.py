@@ -9,14 +9,19 @@ yours to give. Python 3.11 standard library only, Linux and macOS.
 
 Usage::
 
-    parallel.py [--runner "just"] [--jobs N] [--serial A B]... [--fail-fast]
-                [--root DIR] [--report PATH] -- GATE...
+    parallel.py [--runner "just"] [--jobs N] [--serial A B]... [--alone GATE...]
+                [--fail-fast] [--root DIR] [--report PATH] -- GATE...
 
 * Each ``GATE`` becomes ``RUNNER GATE`` and runs in ``--root`` (the current directory). The
   entry is split like a shell line, so ``"test-shard 1/4"`` passes two words. With no
   ``--runner`` each entry is a whole command: ``-- "ruff check ." "mypy --strict ."``.
 * At most ``--jobs`` gates run at a time (the CPU count by default). A gate that is itself
-  parallel shares the cores with the rest; the operating system schedules them.
+  parallel shares the cores with the rest; the operating system schedules them. On a machine
+  that is shared, or where each gate uses every core, give a smaller number.
+* ``--alone GATE...`` names gates that are measured alone: each runs once every other gate has
+  finished, one at a time, with nothing beside it. It is for a gate that judges elapsed time (a
+  benchmark, a load run), whose reading the other gates would disturb. A name that is not among
+  this run's gates is ignored, so one list serves every tier.
 * Each gate's output (stdout and stderr, in the order it wrote them) is held until the gate
   finishes and is then printed whole under a ``==> name <==`` header, followed by one status
   line with its seconds. Gates never interleave. Output is plain lines whether or not a terminal
@@ -38,6 +43,9 @@ Usage::
 * SIGINT, SIGTERM and SIGHUP stop every running gate's whole process group (each gate runs in a
   session of its own), then exit 128 plus the signal. Nothing is left running except what a gate
   detached from its own group; SIGKILL cannot be caught by anything.
+* A gate's processes end with it. When a gate exits and something it started is still running
+  in its process group (a service a test booted and never stopped), the runner ends it and says
+  so under the gate's output. The verdict is the gate's own exit code.
 
 Gates that cannot share a working tree at the same time must be declared, because the runner
 cannot see what a command touches. Put them in one ``--serial`` group:
@@ -72,6 +80,8 @@ import budget
 import gatelib
 
 POLL = 0.05
+# The job a gate that is measured alone runs in; the units count from 0.
+ALONE = -1
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,12 +118,15 @@ def say(text: str) -> None:
     print(text, flush=True)
 
 
-def plan(gates: list[str], serial: list[list[str]]) -> list[tuple[str, ...]]:
-    """The units of work in launch order: each ``--serial`` group once, other gates alone.
+def plan(
+    gates: list[str], serial: list[list[str]], alone: frozenset[str] = frozenset()
+) -> list[tuple[str, ...]]:
+    """The units of work in launch order: each ``--serial`` group once, other gates singly.
 
     A unit is the gates that share one job; a unit launches where its first gate stands in
-    ``gates``. Raises ``ValueError`` with the reason when the gates or groups are unusable,
-    which includes a gate that does not split like a shell line.
+    ``gates``. The gates in ``alone`` are left out: they run after the units. Raises
+    ``ValueError`` with the reason when the gates or groups are unusable, which includes a gate
+    that does not split like a shell line.
     """
     if not gates:
         message = "no gates: name them after '--'"
@@ -133,8 +146,11 @@ def plan(gates: list[str], serial: list[list[str]]) -> list[tuple[str, ...]]:
     if len(set(grouped)) != len(grouped):
         message = "a gate is in two --serial groups; a gate belongs to at most one"
         raise ValueError(message)
-    alone = [(name,) for name in gates if name not in grouped]
-    return sorted([*groups, *alone], key=lambda unit: min(gates.index(name) for name in unit))
+    if alone.intersection(grouped):
+        message = "a gate is in --alone and in a --serial group; it runs alone already"
+        raise ValueError(message)
+    single = [(name,) for name in gates if name not in grouped and name not in alone]
+    return sorted([*groups, *single], key=lambda unit: min(gates.index(name) for name in unit))
 
 
 class Scheduler:
@@ -145,6 +161,7 @@ class Scheduler:
     ) -> None:
         """Queue every unit; nothing runs until ``run``."""
         self.pending = [deque(unit) for unit in units]
+        self.alone: deque[str] = deque(options.alone)
         self.runner = runner
         self.root: Path = options.root
         self.jobs: int = options.jobs
@@ -160,8 +177,13 @@ class Scheduler:
         try:
             while True:
                 self.start_ready()
+                self.start_alone()
                 if not self.live:
-                    return
+                    # Why: a gate that could not start is settled at once and leaves no job
+                    # running, while gates after it still wait.
+                    if self.halted or not self.not_started():
+                        return
+                    continue
                 time.sleep(POLL)
                 self.settle_exited()
                 if self.halted:
@@ -172,7 +194,7 @@ class Scheduler:
 
     def not_started(self) -> list[str]:
         """The gates a halted run never began."""
-        return [name for queue in self.pending for name in queue]
+        return [*(name for queue in self.pending for name in queue), *self.alone]
 
     def start_ready(self) -> None:
         """Start the next gate of every idle unit while a job is free."""
@@ -180,12 +202,21 @@ class Scheduler:
             if self.halted or len(self.live) >= self.jobs:
                 return
             if queue and index not in self.live:
-                with gatelib.signals_held():
-                    started = self.launch(queue.popleft())
-                    if isinstance(started, Finished):
-                        self.settle(started)
-                    else:
-                        self.live[index] = started
+                self.begin(index, queue.popleft())
+
+    def start_alone(self) -> None:
+        """Start the next gate that is measured alone, once nothing else runs or waits."""
+        if self.alone and not (self.halted or self.live or any(self.pending)):
+            self.begin(ALONE, self.alone.popleft())
+
+    def begin(self, index: int, name: str) -> None:
+        """Launch one gate in the job ``index``; one that cannot start is settled at once."""
+        with gatelib.signals_held():
+            started = self.launch(name)
+            if isinstance(started, Finished):
+                self.settle(started)
+            else:
+                self.live[index] = started
 
     def launch(self, name: str) -> Live | Finished:
         """The gate started in a session of its own, or its failure to start."""
@@ -243,9 +274,12 @@ class Scheduler:
 def collect(gate: Live, code: int) -> Finished:
     """The finished gate: its output read back, its signal death written as a shell would."""
     seconds = time.monotonic() - gate.started
+    left = gatelib.end_group(gate.process.pid)
     gate.log.seek(0)
     output = gate.log.read().decode("utf-8", errors="replace")
     gate.log.close()
+    if left:
+        output += f"parallel: {gate.name}: {gatelib.LEFT_RUNNING}\n"
     return Finished(gate.name, seconds, 128 - code if code < 0 else code, output)
 
 
@@ -277,6 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runner", default="", help="command prefix that runs one entry point")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="gates at a time")
     parser.add_argument("--serial", action="append", nargs="+", default=[], metavar="GATE")
+    parser.add_argument("--alone", nargs="+", default=[], metavar="GATE", help="measured alone")
     parser.add_argument("--fail-fast", action="store_true", help="stop at the first red gate")
     parser.add_argument("--root", type=Path, default=Path(), help="directory the gates run in")
     parser.add_argument("--report", type=Path, help="append one budget.py record per gate")
@@ -294,9 +329,10 @@ def main(argv: list[str]) -> int:
         options.report = options.root / options.report
     if options.jobs < 1:
         parser.error("--jobs is at least 1")
+    options.alone = [name for name in gates if name in options.alone]
     try:
         runner = shlex.split(options.runner)
-        units = plan(gates, options.serial)
+        units = plan(gates, options.serial, frozenset(options.alone))
     except ValueError as error:
         parser.error(str(error))
     scheduler = Scheduler(units, runner, options)

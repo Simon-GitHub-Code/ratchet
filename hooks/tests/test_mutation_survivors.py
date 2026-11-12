@@ -652,6 +652,38 @@ def test_the_states_of_the_neutral_input_are_judged_as_the_two_tools_are(
     assert "@2:9-2:12" not in out, "a skipped mutant is no finding"
 
 
+def test_an_unviable_mutant_is_counted_apart_and_never_as_a_kill(
+    tmp_path: Path, capsys: Out
+) -> None:
+    states = ["killed", "unviable", "unviable"]
+    text = "\n".join(record(status=state, start=[18, 5 + n]) for n, state in enumerate(states))
+    crate(tmp_path, records=text)
+    assert cargo(tmp_path) == 0
+    assert "cargo-mutants: 1/3 killed, 0 live, 0 registered in scope; 2 unviable" in (
+        capsys.readouterr().out
+    )
+
+
+def test_a_run_whose_every_mutant_was_unviable_tested_nothing_and_is_red(
+    tmp_path: Path, capsys: Out
+) -> None:
+    states = ["unviable", "unviable", "skipped"]
+    text = "\n".join(record(status=state, start=[18, 5 + n]) for n, state in enumerate(states))
+    crate(tmp_path, records=text)
+    assert cargo(tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "cargo-mutants: all 2 mutants the run built were unviable, so no test met one" in out
+    assert "0/3 killed, 0 live" in out
+
+
+def test_a_stryker_mutant_that_did_not_compile_is_unviable(tmp_path: Path, capsys: Out) -> None:
+    stryker_report(tmp_path, ["Killed", "CompileError", "RuntimeError"])
+    assert run(tmp_path, "--tool", "stryker") == 0
+    assert "stryker: 1/3 killed, 0 live, 0 registered in scope; 2 unviable" in (
+        capsys.readouterr().out
+    )
+
+
 def test_an_entry_of_any_tool_without_a_position_cannot_say_which_mutant_it_excuses(
     tmp_path: Path, capsys: Out
 ) -> None:
@@ -672,7 +704,10 @@ def test_an_entry_of_any_tool_without_a_position_cannot_say_which_mutant_it_excu
         (record(replacement=3), "`replacement` is not text"),
         (
             record(status="Survived"),
-            "`status` is not one of killed, survived, uncovered, timeout, undecided, skipped",
+            (
+                "`status` is not one of killed, survived, uncovered, timeout, undecided,"
+                " unviable, skipped"
+            ),
         ),
         (record(start=None), "`start` and `end` are [line, column], whole numbers, lines from 1"),
         (record(start=[0, 1]), "`start` and `end` are [line, column], whole numbers, lines from 1"),

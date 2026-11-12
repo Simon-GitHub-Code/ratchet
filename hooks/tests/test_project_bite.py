@@ -10,6 +10,7 @@ import gatelib
 import project_bite
 from tests import repos
 from tests.repos import branch, commit, git, repository, write
+from tests.servers import gone
 
 TABLE = "| Question | Tool | Tier | Threshold source | Entry point |\n|---|---|---|---|---|\n"
 # A gate is a case of one shell script: red when a file under src/ holds the word `planted`.
@@ -265,14 +266,10 @@ def test_a_setup_that_fails_is_red_and_plants_nothing(
     assert out.endswith("no lockfile\nbite: red\n")
 
 
-def test_a_detached_head_a_remote_head_and_a_linked_worktree_are_copied_as_they_are(
+def test_a_detached_head_a_remote_head_and_a_linked_worktree_are_copied(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    gates = {
-        "refs": "git rev-parse -q --verify origin/HEAD >/dev/null || exit 1\n"
-        "git symbolic-ref -q HEAD && exit 1\n"
-        f"{LINT}"
-    }
+    gates = {"refs": f"git rev-parse -q --verify origin/HEAD >/dev/null || exit 1\n{LINT}"}
     root = project(tmp_path / "repo", gates, bite("refs", "a planted word"))
     git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
     git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
@@ -398,6 +395,72 @@ def test_an_interrupt_stops_the_gates_and_removes_the_copies(
     assert out.endswith("bite: red: interrupted by signal 15\n")
     assert "bite: next" not in out
     assert list(scratch.iterdir()) == []
+
+
+def test_what_a_gate_leaves_running_ends_with_it_and_cannot_hold_the_run_open(
+    tmp_path: Path,
+) -> None:
+    forked = tmp_path / "forked"
+    code, output = project_bite.Shell().run(
+        ["sh", "-c", f"sleep 60 & echo $! > {forked}; echo done"], tmp_path
+    )
+    assert (code, output) == (0, f"done\nbite: {gatelib.LEFT_RUNNING}\n")
+    assert gone(int(forked.read_text()))
+    assert project_bite.Shell().run(["sh", "-c", "echo tidy"], tmp_path) == (0, "tidy\n")
+
+
+def test_the_first_copy_is_set_up_alone_so_the_others_find_what_it_cached(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log = tmp_path / "setups"
+    setup = f"sh -c 'echo + >> {log}; sleep 0.2; echo - >> {log}'"
+    gates = dict.fromkeys(("one", "two", "three"), LINT)
+    registry = f'setup = ["{setup}"]\n' + "".join(bite(name, "a planted word") for name in gates)
+    root = project(tmp_path / "repo", gates, registry)
+    assert prove(root, "--jobs", "3") == 0
+    assert capsys.readouterr().out.count(": bites\n") == 3
+    lines = log.read_text(encoding="utf-8").split()
+    assert lines[:2] == ["+", "-"]
+    assert sorted(lines) == ["+"] * 3 + ["-"] * 3
+
+
+def test_in_a_copy_the_change_is_what_the_tree_holds_beyond_head(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: a gate over the change would otherwise judge the whole branch again for every bite.
+    gates = {
+        "changed": "git symbolic-ref -q HEAD && exit 1\n"
+        'test "$(git merge-base HEAD main)" = "$(git rev-parse HEAD)" || exit 1\n'
+        'test "$(git merge-base HEAD origin/main)" = "$(git rev-parse HEAD)" || exit 1\n'
+        'git status --porcelain | grep -q _bite && echo "L001 the fault is the change" && exit 1\n'
+        "exit 0"
+    }
+    root = project(tmp_path / "repo", gates, bite("changed", "a planted word"))
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+    branch(root)
+    write(root, "src/more.txt", "the feature\n")
+    commit(root, "feat(core): more")
+    assert prove(root) == 0
+    assert "bite: changed: a planted word: bites" in capsys.readouterr().out
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "change"
+    assert git(root, "rev-parse", "main") != git(root, "rev-parse", "HEAD")
+
+
+def test_the_adoption_proves_nothing_on_a_pull_request_since_tier_2_proves_it_whole(
+    tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = repository(tmp_path / "repo")
+    branch(root, "adopt")
+    project_files = project(tmp_path / "other", {"lint": LINT}, bite("lint", "a planted word"))
+    for path in ("docs/process/binding.md", "gate", "quality/bites.toml", "src/code.txt"):
+        write(root, path, (project_files / path).read_text(encoding="utf-8"))
+    assert prove(root, "--changed") == 0
+    assert capsys.readouterr().out == (
+        "bite: green: this change is the adoption, whose base holds no binding; nothing is"
+        " proven here, and `bite-all` proves every gate in tier 2\n"
+    )
+    assert list(scratch.iterdir()) == []
+    assert prove(root) == 0
 
 
 def test_a_stopped_shell_runs_nothing_more(tmp_path: Path) -> None:

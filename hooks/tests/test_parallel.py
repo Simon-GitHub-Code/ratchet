@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import budget
+import gatelib
 import parallel
 from tests.servers import gone
 
@@ -158,7 +159,7 @@ def test_outputs_are_never_interleaved(capsys: pytest.CaptureFixture[str]) -> No
 
 
 def test_the_closing_lines_name_the_slowest_gate(capsys: pytest.CaptureFixture[str]) -> None:
-    options = argparse.Namespace(root=Path(), jobs=1, fail_fast=False, report=None)
+    options = argparse.Namespace(root=Path(), jobs=1, fail_fast=False, report=None, alone=[])
     scheduler = parallel.Scheduler([], [], options)
     scheduler.finished = [
         parallel.Finished("fast", 0.2, 0, ""),
@@ -269,6 +270,7 @@ def test_a_non_utf8_byte_in_the_output_is_replaced_not_fatal(
         (["--serial", "a", "x", "--", "a", "b"], "'x', which is not among"),
         (["--serial", "a", "b", "--serial", "b", "c", "--", "a", "b", "c"], "two --serial groups"),
         (["--jobs", "0", "--", "a"], "--jobs is at least 1"),
+        (["--serial", "a", "b", "--alone", "b", "--", "a", "b"], "it runs alone already"),
     ],
 )
 def test_unusable_arguments_are_a_usage_error(
@@ -278,6 +280,67 @@ def test_unusable_arguments_are_a_usage_error(
         run(*arguments)
     assert caught.value.code == 2
     assert message in capsys.readouterr().err
+
+
+def test_a_gate_measured_alone_runs_after_the_others_with_nothing_beside_it(
+    tmp_path: Path,
+) -> None:
+    log, a, b = tmp_path / "log", tmp_path / "a", tmp_path / "b"
+    timed, also = gate(LOG, log, "timed"), gate(LOG, log, "also")
+    first, beside = gate(MEET + LOG, a, b, log, "first"), gate(MEET, b, a)
+    alone = ["--alone", timed, also, "not-in-this-tier"]
+    assert run("--jobs", "4", *alone, "--", timed, first, also, beside) == 0
+    assert log.read_text().splitlines() == [
+        "+first",
+        "-first",
+        "+timed",
+        "-timed",
+        "+also",
+        "-also",
+    ]
+
+
+def test_fail_fast_names_a_gate_measured_alone_that_never_started(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    red, timed = gate(EXIT, 1), gate(SAY, "timed", "")
+    assert run("--fail-fast", "--alone", timed, "--", timed, red) == 1
+    out = capsys.readouterr().out
+    assert f"not started, --fail-fast: {timed}" in out
+    assert "timed\n" not in out
+
+
+def test_a_gate_that_cannot_start_alone_is_red_and_the_next_one_runs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    after = gate(SAY, "after", "")
+    assert run("--alone", "no-such-command-here", after, "--", "no-such-command-here", after) == 1
+    out = capsys.readouterr().out
+    assert "no-such-command-here: red (exit 127)" in out
+    assert "after\n" in out
+
+
+def test_what_a_gate_left_running_is_ended_with_it_and_said(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    forked = tmp_path / "forked"
+    leaky = f"sh -c 'sleep {PATIENCE:g} > /dev/null 2>&1 & echo $! > {forked}'"
+    tidy = gate(SAY, "tidy", "")
+    assert run("--", leaky, tidy) == 0
+    out = capsys.readouterr().out
+    assert gone(int(forked.read_text()))
+    assert f"parallel: {leaky}: something it started was still running when it exited" in out
+    assert f"parallel: {tidy}: something" not in out
+
+
+def test_a_group_the_runner_may_not_signal_is_left_and_not_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse(_pid: int, _signum: int) -> None:
+        raise PermissionError
+
+    monkeypatch.setattr(os, "killpg", refuse)
+    assert not gatelib.end_group(os.getpid())
 
 
 def test_a_serial_group_launches_where_its_first_gate_stands() -> None:

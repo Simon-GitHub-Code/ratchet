@@ -12,6 +12,8 @@ tool found and ``quality/mutation-register.toml``, and goes red on:
   cache that hid the run is a run that did not happen;
 - a mutant that timed out and has a register entry: the run could not tell it from a survivor.
   A timeout nobody registered counts as a kill, as mutation tools count it;
+- a run in which every decided mutant was ``unviable``: none met a test. An unviable mutant is
+  never a kill; the gate counts them apart and prints the count on every run that has one;
 - an entry without the tool, the identity, a ``sha256:`` hash, a reason of twenty characters or
   more and a date.
 
@@ -24,8 +26,8 @@ one object per mutant the run made. ``NAME`` is the register's ``tool`` key and 
 - ``file``: the path from the repository root; the gate reads the file to hash the unit.
 - ``mutator``, ``replacement``: what the tool calls the change and what it wrote.
 - ``status``: ``killed``, ``survived``, ``uncovered`` (no test reaches it), ``timeout``,
-  ``undecided`` (the run did not finish it) or ``skipped`` (not run on purpose: it does not
-  compile, or the tool was told to leave it).
+  ``undecided`` (the run did not finish it), ``unviable`` (the mutant did not build or load, so
+  no test met it) or ``skipped`` (not run on purpose: the tool was told to leave it).
 - ``start``, ``end``: the mutated text's ``[line, column]``, lines from 1 as the file counts
   them; ``end`` defaults to ``start``.
 - ``unit``: the ``[first, last]`` line of the function or declaration the mutant sits in, when
@@ -38,7 +40,8 @@ gives every outcome with both spans::
 
     import json, sys
 
-    STATUS = {"CaughtMutant": "killed", "MissedMutant": "survived", "Timeout": "timeout"}
+    STATUS = {"CaughtMutant": "killed", "MissedMutant": "survived", "Timeout": "timeout",
+              "Unviable": "unviable"}
     for outcome in json.load(sys.stdin)["outcomes"]:
         if outcome["scenario"] == "Baseline":
             continue
@@ -121,9 +124,11 @@ PYPROJECT = Path("pyproject.toml")
 MIN_REASON = 20
 MUTMUT, STRYKER = "mutmut", "stryker"
 # How a run ended for one mutant, in the words of the tool-neutral input.
-STATES = ("killed", "survived", "uncovered", "timeout", "undecided", "skipped")
-KILLED, SURVIVED, UNCOVERED, TIMEOUT, UNDECIDED, SKIPPED = STATES
+STATES = ("killed", "survived", "uncovered", "timeout", "undecided", "unviable", "skipped")
+KILLED, SURVIVED, UNCOVERED, TIMEOUT, UNDECIDED, UNVIABLE, SKIPPED = STATES
 LIVE = frozenset({SURVIVED, UNCOVERED})
+# A mutant a test met: only these say anything about the tests.
+TESTED = LIVE | {KILLED, TIMEOUT}
 MUTMUT_STATES = {
     "killed": KILLED,
     "survived": SURVIVED,
@@ -137,6 +142,8 @@ STRYKER_STATES = {
     "NoCoverage": UNCOVERED,
     "Timeout": TIMEOUT,
     "Pending": UNDECIDED,
+    "CompileError": UNVIABLE,
+    "RuntimeError": UNVIABLE,
 }
 POSITION = re.compile(r"@(?:\d+:\d+-\d+:\d+|\?)$")
 MUTMUT_LINE = re.compile(
@@ -617,8 +624,16 @@ def judge(tool: str, mutants: list[Mutant], found: list[Entry], *, scope: list[s
     )
     problems.extend(_stale(tool, entry, live) for entry in mine if _claim(unclaimed, entry))
     killed = sum(m.state in {KILLED, TIMEOUT} for m in mutants)
+    unviable = sum(m.state == UNVIABLE for m in mutants)
+    if unviable and not any(m.state in TESTED for m in mutants):
+        problems.append(
+            f"{tool}: all {unviable} mutants the run built were unviable, so no test met one; a"
+            " warning the mutation build treats as an error is the usual cause"
+        )
+    apart = f"; {unviable} unviable, which no test met" if unviable else ""
     print(
-        f"{tool}: {killed}/{len(mutants)} killed, {len(live)} live, {len(mine)} registered in scope"
+        f"{tool}: {killed}/{len(mutants)} killed, {len(live)} live, {len(mine)} registered in"
+        f" scope{apart}"
     )
     return problems
 

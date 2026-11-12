@@ -93,6 +93,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/merge.py` | with no forge | judge a branch, run `check` on the merge result, and merge it when both pass |
 | `scripts/budget.py` | every tier | did a tier or gate finish under its ceiling in seconds? `--set` records the first ceiling, `--tier` also holds a CI job to its tier's ceiling, and `--over report` reports without blocking on a pull request |
 | `scripts/parallel.py` | every tier | not a gate: runs a tier's gates at once through the repository's own runner, each gate's output whole, every red one named, so local wall clock is the slowest gate and not the sum |
+| `scripts/changed.py` | every gate over the change | not a gate: hands such a gate the commit the change is compared with, and runs nothing on the adoption, the change whose base holds no binding |
 | `scripts/plugin_pin.py` | every tier | is the plugin this run uses the version and commit the binding pins, the one CI checks out? Red with both ways out when not |
 | `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the repair when not: the `hooks-install` entry point (`scripts/hooks_install.py`) where the repository's own hooks are missing, the owner's one command where git config must change; asked by the preflight, the route and `just ratchet`, not by CI |
 
