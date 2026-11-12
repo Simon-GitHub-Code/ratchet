@@ -70,6 +70,16 @@ def test_each_missing_item_is_printed_under_its_file_with_who_edits_it(
     )
 
 
+def test_a_missing_tier_list_is_printed_with_the_template_s_definition(
+    repo: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    replace("justfile", "tier2_sharded :=", "tier2_shard :=")(repo)
+    code, out = report(repo, plugin, capsys)
+    assert code == 1
+    assert "  - has no `tier2_sharded` variable, which the `shape` job of `deep.yml` reads" in out
+    assert '      tier2_sharded := "mutation e2e test-stability"' in out
+
+
 def test_the_pin_comes_first_when_the_plugin_in_use_is_another(
     repo: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

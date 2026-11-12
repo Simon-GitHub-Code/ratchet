@@ -2,6 +2,7 @@
 
 import atexit
 import functools
+import re
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -483,6 +484,52 @@ def test_a_runner_item_is_asked_only_where_its_gates_are_bound(repo: Path) -> No
 def test_a_comment_does_not_count_as_the_runner_item(repo: Path) -> None:
     replace(JUSTFILE, "/scripts/changed.py\"'", "/scripts/base.py\"'\n# no changed.py here")(repo)
     assert red(repo)[0].startswith("justfile: no gate runs through `changed.py`")
+
+
+CI, DEEP = ".github/workflows/ci.yml", ".github/workflows/deep.yml"
+
+
+def without_variable(repo: Path, name: str) -> None:
+    text = (repo / JUSTFILE).read_text(encoding="utf-8")
+    (repo / JUSTFILE).write_text(
+        re.sub(rf"^{name} :=.*\n", "", text, flags=re.MULTILINE), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "workflow"),
+    [("tier1_gates", CI), ("tier1_sharded", CI), ("tier2_gates", DEEP), ("tier2_sharded", DEEP)],
+)
+def test_a_tier_list_a_workflow_reads_and_the_justfile_lacks_is_named_with_the_template_s(
+    repo: Path, name: str, workflow: str
+) -> None:
+    # Why: observed on a forge, 2026-11-12: an 0.9 adoption's `shape` job failed with "does not
+    # contain variable", and nothing in the upgrade had named the list.
+    without_variable(repo, name)
+    found = conformance.findings(repo)
+    assert len(found) == 1, found
+    assert found[0].path == JUSTFILE
+    assert found[0].problem.startswith(f"has no `{name}` variable, which the `shape` job of `")
+    assert f"`{Path(workflow).name}`" in found[0].problem
+    assert found[0].add == conformance.template_definition(name)
+    assert found[0].add[-1].startswith(f"{name} :=")
+
+
+def test_a_tier_list_may_be_empty_or_exported(repo: Path) -> None:
+    replace(JUSTFILE, 'tier1_sharded := "test mutation-changed"', 'tier1_sharded := ""')(repo)
+    replace(JUSTFILE, "tier2_gates :=", "export tier2_gates :=")(repo)
+    assert red(repo) == []
+
+
+def test_a_tier_list_is_asked_only_of_a_workflow_that_reads_it(repo: Path) -> None:
+    for name in ("tier1_gates", "tier1_sharded", "tier2_gates", "tier2_sharded"):
+        without_variable(repo, name)
+    for workflow in (CI, DEEP):
+        text = (repo / workflow).read_text(encoding="utf-8")
+        (repo / workflow).write_text(text.replace("--evaluate", "--list"), encoding="utf-8")
+    assert [line for line in red(repo) if "variable" in line] == []
+    remove(CI, DEEP)(repo)
+    assert [line for line in red(repo) if "variable" in line] == []
 
 
 def test_the_template_justfile_names_each_runner_item_in_code() -> None:

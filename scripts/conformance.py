@@ -59,6 +59,18 @@ SPEED_PARTS = ("Parallel", "One pipeline", "Shards", "Cache", "Affected only", "
 SPEED_PART = re.compile(r"^- ([A-Z][a-z ]+):[ \t]*(.*)$", re.MULTILINE)
 SHARD_COUNT = re.compile(r"[1-9]\d*")
 TIER_WORKFLOWS = ("ci.yml", "deep.yml")
+# Why: the `shape` job of each tier workflow reads these from the `justfile` with
+# `just --evaluate`, and a justfile from before the tier lists has none of them.
+TIER_LISTS = {
+    "ci.yml": (
+        ("tier1_gates", "every gate your `tier1` recipe runs"),
+        ("tier1_sharded", 'the gates of tier 1 whose tool can run one `SHARD` of `SHARDS`, or ""'),
+    ),
+    "deep.yml": (
+        ("tier2_gates", "every gate your `tier2` recipe runs"),
+        ("tier2_sharded", 'the gates of tier 2 whose tool can run one `SHARD` of `SHARDS`, or ""'),
+    ),
+}
 # Why: ADR 0021. The merge workflow runs the judge on the default branch's checkout and
 # builds nothing, so it has nothing to cache; it is still pinned and serialised.
 MERGE_WORKFLOW = "merge.yml"
@@ -576,11 +588,33 @@ def answered_gates(binding: str) -> set[str]:
     }
 
 
+def defines_variable(justfile: str, name: str) -> bool:
+    return (
+        re.search(rf"^(?:export[ \t]+)?{re.escape(name)}[ \t]*:=", justfile, re.MULTILINE)
+        is not None
+    )
+
+
+def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
+    """A tier list the tier workflows read, which the justfile does not define."""
+    for workflow, lists in TIER_LISTS.items():
+        text = read(root / WORKFLOWS / workflow) or ""
+        for name, meaning in lists:
+            if f"--evaluate {name}" in text and not defines_variable(justfile, name):
+                yield Finding(
+                    "justfile",
+                    f"has no `{name}` variable, which the `shape` job of `{workflow}` reads with"
+                    f" `just --evaluate {name}`; add the template's, naming {meaning}",
+                    template_definition(name),
+                )
+
+
 def check_runner(root: Path) -> Iterable[Finding]:
     """What the template justfile's tiers rely on, read only where a justfile is the runner."""
     justfile = read(root / "justfile")
     if justfile is None:
         return
+    yield from check_tier_lists(root, justfile)
     code = code_of(justfile)
     gates = answered_gates(read(root / "docs/process/binding.md") or "")
     if gates & OVER_THE_CHANGE and "changed.py" not in code:
@@ -849,6 +883,14 @@ def upgrade_mutations() -> list[Mutation]:
         (
             "justfile booting the route gates with the defaults only",
             rewrite("justfile", "flags.py --temporary on", "every flag on"),
+        ),
+        (
+            "justfile without the list of tier 1 gates the workflow reads",
+            rewrite("justfile", "tier1_gates :=", "tier1_list :="),
+        ),
+        (
+            "justfile without the list of sharded tier 2 gates the workflow reads",
+            rewrite("justfile", "tier2_sharded :=", "tier2_shard :="),
         ),
     ]
 
