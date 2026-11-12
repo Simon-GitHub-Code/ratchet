@@ -152,7 +152,7 @@ merge branch:
 # would not run tier 0: the gate prints the owner's one command.
 ratchet:
     just hooks-installed
-    @echo "bind: run the suites with a Cobertura report at coverage.xml, then the mutation run"; exit 1
+    @echo "bind: run the suites with a Cobertura or LCOV report, named in --report below, then the mutation run"; exit 1
     python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml --write
     just snapshots
 
@@ -224,7 +224,7 @@ test:
     @echo "bind: unit, property and fitness tests on every core, shard {{shard}} of {{shards}}; red when none is collected"; exit 1
 
 coverage:
-    @echo "bind: run the suite with a Cobertura report at coverage.xml"; exit 1
+    @echo "bind: run the suite with a Cobertura or LCOV report, named in --report below"; exit 1
     python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
 
 diff-coverage:

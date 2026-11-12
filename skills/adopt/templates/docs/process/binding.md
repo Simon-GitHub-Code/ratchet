@@ -76,7 +76,7 @@ One row per question the method asks. The application types decide which rows ap
 | no suppression kind rose, no focus marker | `ratchet` plugin `scripts/suppressions.py` | 0 | the merge base's own counts | `just suppressions` |
 | commit subjects follow the convention | `ratchet` plugin `scripts/commits.py` | 0 | | `just commits` |
 | unit, property and fitness tests | | 1 | | `just test` |
-| coverage, absolute and ratcheted | `ratchet` plugin `scripts/coverage_groups.py` over the suite's Cobertura report | 1 | 100% for absolute paths; `quality/thresholds.toml` for the rest | `just coverage` |
+| coverage, absolute and ratcheted | `ratchet` plugin `scripts/coverage_groups.py` over the suite's Cobertura or LCOV report | 1 | 100% for absolute paths; `quality/thresholds.toml` for the rest | `just coverage` |
 | diff coverage | | 1 | every changed line and branch | `just diff-coverage` |
 | test count did not fall | | 1 | the merge base's count | `just test-counts` |
 | changed-code mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 1 | `quality/mutation-register.toml` | `just mutation-changed` |

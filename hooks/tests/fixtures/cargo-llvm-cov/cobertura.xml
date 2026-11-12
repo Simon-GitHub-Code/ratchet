@@ -1,0 +1,65 @@
+<?xml version="1.0" ?>
+<!DOCTYPE coverage SYSTEM "https://cobertura.sourceforge.net/xml/coverage-04.dtd">
+<coverage branch-rate="0" branches-covered="0" branches-valid="0" complexity="0" line-rate="0.8571428571428571" lines-covered="18" lines-valid="21" timestamp="1794460014" version="2.0.3">
+    <sources>
+        <source>/work/tiny</source>
+    </sources>
+    <packages>
+        <package line-rate="0.8571428571428571" branch-rate="0" name="src" complexity="0">
+            <classes>
+                <class branch-rate="0" complexity="0" filename="src/lib.rs" line-rate="0.8571428571428571" name="src.lib.rs">
+                    <methods>
+                        <method name="tiny::clamp" signature="" complexity="0" line-rate="1" branch-rate="1">
+                            <lines>
+                                <line hits="3" number="3" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="tiny::is_even" signature="" complexity="0" line-rate="1" branch-rate="1">
+                            <lines>
+                                <line hits="1" number="13" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="tiny::untested" signature="" complexity="0" line-rate="0" branch-rate="0">
+                            <lines>
+                                <line hits="0" number="17" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="tiny::tests::even_numbers" signature="" complexity="0" line-rate="1" branch-rate="1">
+                            <lines>
+                                <line hits="1" number="33" branch="false"/>
+                            </lines>
+                        </method>
+                        <method name="tiny::tests::clamps_below_and_above" signature="" complexity="0" line-rate="1" branch-rate="1">
+                            <lines>
+                                <line hits="1" number="26" branch="false"/>
+                            </lines>
+                        </method>
+                    </methods>
+                    <lines>
+                        <line branch="false" hits="3" number="3"/>
+                        <line branch="false" hits="3" number="4"/>
+                        <line branch="false" hits="1" number="5"/>
+                        <line branch="false" hits="2" number="6"/>
+                        <line branch="false" hits="1" number="7"/>
+                        <line branch="false" hits="1" number="9"/>
+                        <line branch="false" hits="3" number="11"/>
+                        <line branch="false" hits="1" number="13"/>
+                        <line branch="false" hits="1" number="14"/>
+                        <line branch="false" hits="1" number="15"/>
+                        <line branch="false" hits="0" number="17"/>
+                        <line branch="false" hits="0" number="18"/>
+                        <line branch="false" hits="0" number="19"/>
+                        <line branch="false" hits="1" number="26"/>
+                        <line branch="false" hits="1" number="27"/>
+                        <line branch="false" hits="1" number="28"/>
+                        <line branch="false" hits="1" number="29"/>
+                        <line branch="false" hits="1" number="30"/>
+                        <line branch="false" hits="1" number="33"/>
+                        <line branch="false" hits="1" number="34"/>
+                        <line branch="false" hits="1" number="35"/>
+                    </lines>
+                </class>
+            </classes>
+        </package>
+    </packages>
+</coverage>

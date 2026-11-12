@@ -1,4 +1,4 @@
-"""The grouped coverage gate over a Cobertura report."""
+"""The grouped coverage gate over a Cobertura report or an LCOV tracefile."""
 
 from pathlib import Path
 
@@ -44,6 +44,63 @@ def project(tmp_path: Path, thresholds: str = THRESHOLDS) -> Path:
     write(tmp_path, "src/core/a.py", "x = 1\ny = 2\n")
     write(tmp_path, "src/app/b.py", "x = 1\ny = 2\n")
     return tmp_path
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+LCOV = (
+    "TN:\nSF:{root}/src/core/a.py\nDA:1,{core}\nDA:2,1,checksum\nBRDA:2,0,0,1\n"
+    "BRDA:2,0,1,{taken}\nend_of_record\nSF:src/app/b.py\nDA:1,1\nDA:2,0\nend_of_record\n"
+)
+
+
+def test_an_lcov_tracefile_is_judged_as_a_cobertura_report_is(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path, THRESHOLDS.replace("line = 50.0\n", "line = 50.0\nbranch = 100.0\n"))
+    info = root / "coverage.info"
+    info.write_text(LCOV.format(root=root, core=1, taken=1))
+    argv = ["x", "--root", str(root), "--report", "coverage.info"]
+    assert coverage_groups.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "python.coverage.core: 100.0% lines, 100.0% branches" in out
+    assert "python.coverage.app: 50.0% lines, 100.0% branches" in out
+    info.write_text(LCOV.format(root=root, core=0, taken="-"))
+    assert coverage_groups.main(argv) == 1
+    assert "python.coverage.core: 50.0% lines, 50.0% branches" in capsys.readouterr().out
+
+
+def test_a_file_that_several_lcov_records_name_is_tallied_once(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    twice = (
+        "DA:9,1\nSF:src/app/b.py\nDA:1,0\nBRDA:1,0,0,-\nend_of_record\n"
+        "TN:other\nSF:src/app/b.py\nDA:1,3\nDA:2,0\nBRDA:1,0,0,2\nBRDA:1,0,1,0\nend_of_record\n"
+    )
+    (root / "coverage.info").write_text(twice)
+    tally = coverage_groups.measured(root / "coverage.info", root)["src/app/b.py"]
+    assert (tally.lines, tally.lines_hit, tally.branches, tally.branches_hit) == (2, 1, 2, 1)
+
+
+def test_a_report_in_neither_format_is_red_and_not_an_unmeasured_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path)
+    (root / "coverage.info").write_text("TN:\nend_of_record\n")
+    assert coverage_groups.main(["x", "--root", str(root), "--report", "coverage.info"]) == 1
+    said = "coverage.info: neither a Cobertura report nor an LCOV tracefile naming a source file"
+    assert said in capsys.readouterr().out
+
+
+def test_real_lcov_and_cobertura_of_one_rust_crate_tally_alike(tmp_path: Path) -> None:
+    # Why: both files are one `cargo llvm-cov` run of one crate, machine path cut. Its Cobertura
+    # repeats each function's first line under <methods>, which was once counted twice.
+    write(tmp_path, "src/lib.rs", (FIXTURES / "cargo-mutants/lib.rs").read_text())
+    tallies = [
+        coverage_groups.measured(FIXTURES / "cargo-llvm-cov" / name, tmp_path)["src/lib.rs"]
+        for name in ("lcov.info", "cobertura.xml")
+    ]
+    assert [(t.lines, t.lines_hit, t.branches, t.branches_hit) for t in tallies] == [
+        (21, 18, 0, 0)
+    ] * 2
 
 
 def test_groups_are_read_from_every_language_table() -> None:
@@ -241,5 +298,5 @@ def test_several_reports_are_tallied_together(
     assert "not measured" not in out
     frontend.unlink()
     assert coverage_groups.problems(root, [backend, frontend]) == [
-        f"{frontend}: missing; run the suite with a Cobertura report first"
+        f"{frontend}: missing; run the suite with a Cobertura or LCOV report first"
     ]

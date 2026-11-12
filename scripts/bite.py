@@ -111,6 +111,8 @@ RECORDS = (
     '{{"file": "src/a.py", "mutator": "operator", "replacement": "-", "status": "{status}",'
     ' "start": [2, 14], "end": [2, 15]}}\n'
 )
+LCOV = "SF:src/a.py\nDA:1,1\nDA:2,{hits}\nend_of_record\n"
+IN_LCOV = ["--report", "coverage.info"]
 REGISTER_PATH = "quality/mutation-register.toml"
 REGISTER = "# Mutation register\n\n{entry}\n"
 STRYKER_REPORT = "reports/mutation/mutation.json"
@@ -148,6 +150,7 @@ def scratch(root: Path) -> None:
     write(root, "quality/thresholds.toml", THRESHOLDS)
     write(root, WORKFLOW, PINNED)
     write(root, "coverage.xml", REPORT.format(root=root, hits=1, cond=100, total=1))
+    write(root, "coverage.info", LCOV.format(hits=1))
     write(root, "mutants.txt", RESULTS.format(status="killed"))
     write(root, "mutants.jsonl", RECORDS.format(status="killed"))
     write(root, REGISTER_PATH, "# Mutation register\n")
@@ -321,6 +324,10 @@ def uncovered(root: Path) -> None:
     write(root, "coverage.xml", REPORT.format(root=root, hits=0, cond=50, total=2))
 
 
+def uncovered_in_lcov(root: Path) -> None:
+    write(root, "coverage.info", LCOV.format(hits=0))
+
+
 def lowered_threshold(root: Path) -> None:
     write(root, "quality/thresholds.toml", THRESHOLDS.replace("lines = 2", "lines = 3"))
     commit(root, "chore(quality): raise the ceiling")
@@ -446,6 +453,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("change-size", change_size.main, two_files, []),
     ("commits", commits.main, bad_subject, []),
     ("coverage", coverage_groups.main, uncovered, []),
+    ("coverage: an LCOV report", coverage_groups.main, uncovered_in_lcov, IN_LCOV),
     ("mutation: a survivor", mutation_survivors.main, survivor, MUTMUT),
     ("mutation: a stale entry", mutation_survivors.main, stale_entry, MUTMUT),
     ("mutation: a survivor of any tool", mutation_survivors.main, survivor_of_any_tool, ANY_TOOL),
