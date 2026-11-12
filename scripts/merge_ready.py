@@ -18,6 +18,8 @@ only for ``agent``. The owner merges when any of these holds:
 - ``dispute``: the change adds or edits a dispute, or an open dispute names a path it touches.
 - ``record``: no verdict record is part of the change, or the one there is not an approval of
   exactly this tree with nothing unresolved and no open question.
+- ``file``: a guard, door or record path is a symbolic link or a submodule, at the merge base
+  or at the head. Git shows a link's target as its text, which is not what a gate reads there.
 - ``target``, ``behind``, ``tier2``: the pull request targets another branch; the branch does not
   hold the default branch's tip, so its gates ran on an older one; tier 2 is red there.
 - ``refs``, ``manifest``: the judge could not read what it judges. It fails closed.
@@ -86,6 +88,9 @@ RED = "red"
 FLAGS_QUESTION = "changed flags off and on"
 DOCS = "docs/"
 HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
+# Why: `000000` is how a diff writes a path that one side does not hold.
+REGULAR = frozenset({"100644", "100755", "000000"})
+IRREGULAR = {"120000": "a symbolic link", "160000": "a submodule"}
 
 
 @dataclass(frozen=True)
@@ -264,6 +269,37 @@ def guard_reasons(change: Change, manifest: Manifest) -> list[Reason]:
             reasons.append(
                 Reason("guard", f"{path} ({group.name})" + (f": {note}" if note else ""))
             )
+    return reasons
+
+
+def modes(change: Change) -> dict[str, tuple[str, str]]:
+    """Each changed path with its file mode at the merge base and at the head."""
+    raw = git(change.root, "diff", "--raw", "--no-renames", "-z", change.fork, change.head) or ""
+    fields = raw.split("\0")
+    return {
+        path: (meta[1:].split()[0], meta.split()[1])
+        for meta, path in zip(fields[::2], fields[1::2], strict=False)
+    }
+
+
+def file_reasons(change: Change, manifest: Manifest) -> list[Reason]:
+    """One reason per guard, door or record path that is not a regular file on either side."""
+    lower = folded(manifest)
+    reasons = []
+    for path, sides in modes(change).items():
+        judged = (
+            path == MANIFEST_PATH
+            or RECORD.match(path)
+            or manifest.group_of(path)
+            or manifest.doors_of(path)
+            or lower.group_of(path.casefold())
+            or lower.doors_of(path.casefold())
+        )
+        for mode, side in zip(sides, ("the merge base", "the head"), strict=True):
+            if judged and mode not in REGULAR:
+                kind = IRREGULAR.get(mode, f"of mode {mode}")
+                text = f"{path} is {kind} at {side}, and the judge reads regular files only"
+                reasons.append(Reason("file", text))
     return reasons
 
 
@@ -610,6 +646,7 @@ def judge(root: Path, base_ref: str, head_ref: str, *, asked: Asked | None = Non
         return [manifest]
     return [
         *setting_reasons(change, base_ref, asked or Asked()),
+        *file_reasons(change, manifest),
         *guard_reasons(change, manifest),
         *door_reasons(change, manifest),
         *flag_reasons(change),

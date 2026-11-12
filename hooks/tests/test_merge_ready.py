@@ -148,6 +148,12 @@ def codes(root: Path) -> list[str]:
     return [reason.code for reason in merge_ready.judge(root, "main", "HEAD")]
 
 
+def link(root: Path, path: str, target: str) -> None:
+    """Make ``path`` a symbolic link to ``target``, which may be any text, line breaks included."""
+    (root / path).unlink(missing_ok=True)
+    (root / path).symlink_to(target)
+
+
 # --- what merges without the owner ------------------------------------------------------------
 
 
@@ -872,3 +878,61 @@ def test_the_default_base_is_the_default_branch(tmp_path: Path) -> None:
     empty.mkdir()
     git(empty, "init", "-q", "-b", "trunk")
     assert merge_ready.default_ref(empty) == "origin/main"
+
+
+# --- a path that is not a regular file ----------------------------------------------------------
+
+TERM = GLOSSARY + "\n**Order**:\nWhat a customer places.\n"
+LINKED = "and the judge reads regular files only"
+
+
+@pytest.mark.parametrize(
+    ("path", "target"),
+    [
+        ("GLOSSARY.md", TERM),
+        ("docs/adr/0002-orders.md", ADR),
+        ("tests/contract/surface.txt", SURFACE + "pkg.a.h(x)\n"),
+    ],
+)
+def test_a_guard_or_door_path_that_is_a_link_is_the_owners(
+    root: Path, path: str, target: str
+) -> None:
+    # Why: git shows a link's target as the file's text, so a link whose target is the text of
+    # an addition read as one, while a gate that opens the path follows the link somewhere else.
+    link(root, path, target)
+    change(root, {"src/a.py": "x = 2\n"})
+    assert git(root, "show", f"HEAD~1:{path}") == target.strip()
+    assert judged(root) == [f"file: {path} is a symbolic link at the head, {LINKED}"]
+
+
+def test_a_verdict_record_that_is_a_link_is_the_owners(root: Path) -> None:
+    change(root, {"src/a.py": "x = 2\n"})
+    text = (root / RECORD).read_text(encoding="utf-8")
+    link(root, RECORD, text)
+    commit(root, "docs(thing): the record, as a link")
+    assert f"file: {RECORD} is a symbolic link at the head, {LINKED}" in judged(root)
+
+
+def test_a_link_or_a_submodule_the_default_branch_holds_is_the_owners_to_replace(
+    tmp_path: Path,
+) -> None:
+    repository(tmp_path, dict(BASE))
+    link(tmp_path, "tests/contract/extra.txt", "a\n")
+    held = commit(tmp_path, "test(contract): a link")
+    git(tmp_path, "update-index", "--add", "--cacheinfo", f"160000,{held},migrations/vendor")
+    git(tmp_path, "commit", "-q", "-m", "chore(migrations): a submodule")
+    branch(tmp_path, "feature/4-thing")
+    (tmp_path / "tests/contract/extra.txt").unlink()
+    git(tmp_path, "rm", "-q", "--cached", "migrations/vendor")
+    change(tmp_path, {"tests/contract/extra.txt": "a\nb\n", "migrations/vendor": "x\n"})
+    reasons = judged(tmp_path)
+    assert (
+        f"file: tests/contract/extra.txt is a symbolic link at the merge base, {LINKED}" in reasons
+    )
+    assert f"file: migrations/vendor is a submodule at the merge base, {LINKED}" in reasons
+
+
+def test_a_link_outside_the_guard_and_door_paths_is_no_reason(root: Path) -> None:
+    link(root, "src/alias.py", "a.py")
+    change(root, {"src/a.py": "x = 2\n"})
+    assert judged(root) == []
