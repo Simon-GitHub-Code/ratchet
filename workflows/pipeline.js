@@ -52,7 +52,7 @@ const BASE = typeof ARGS.base === 'string' && ARGS.base ? ARGS.base : 'main'
 const ROOT = typeof ARGS.root === 'string' && ARGS.root ? ARGS.root : ''
 const PREFLIGHT_SCRIPT = typeof ARGS.preflight === 'string' && ARGS.preflight ? ARGS.preflight : ''
 const MAX_FIX_ITERATIONS = 2
-// A branch brought up to date behind another merge is judged again, not built again (ADR 0024):
+// A branch brought up to date behind another merge is judged again, not built again (ADR 0023):
 // the skill passes what the first run returned, and only Reconcile and Review run.
 const REJUDGE = ARGS.rejudge && typeof ARGS.rejudge === 'object' ? ARGS.rejudge : null
 // The branch is the preflight's to derive (feature/<number>-<slug>) unless the skill passed it.
@@ -905,7 +905,7 @@ function questionText(question) {
 }
 
 // What a review of the branch as it now stands forces, when the branch was brought up to date
-// behind another merge (ADR 0024): the same evidence rules as the first review, less the
+// behind another merge (ADR 0023): the same evidence rules as the first review, less the
 // critic's, whose findings the first run already closed.
 function rejudged({ review, reconcile, dependencies }) {
   const covered = coveredGuardPaths(reconcile ? reconcile.disputes : [], review.disputeCoverage)

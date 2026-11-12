@@ -65,7 +65,7 @@ The spec role reads each line as decided. A changed ticket is also what releases
 
 ## Questions and standing answers
 
-A skill asks the owner for a choice that shapes the product (`direction`), one that cannot be taken back (`irreversible`), or a tooling preference the owner said they want (`tooling`), and for nothing it would do anyway (ADR 0023). Each answer is one line of `.ratchet/questions.tsv`, written by `scripts/questions.py record`: the date, the skill, the question's key, its kind and whether the recommended option was taken. The file is one clone's and no commit carries it. A key is stable, so the same question asked again has the same key (`adopt.tools`); a question about one ticket carries its slug (`feature.<slug>.1`).
+A skill asks the owner for a choice that shapes the product (`direction`), one that cannot be taken back (`irreversible`), or a tooling preference the owner said they want (`tooling`), and for nothing it would do anyway (ADR 0022). Each answer is one line of `.ratchet/questions.tsv`, written by `scripts/questions.py record`: the date, the skill, the question's key, its kind and whether the recommended option was taken. The file is one clone's and no commit carries it. A key is stable, so the same question asked again has the same key (`adopt.tools`); a question about one ticket carries its slug (`feature.<slug>.1`).
 
 When a key's last three answers all took the recommendation the route prints an `also:` line that offers a standing answer. The owner says yes, and the key goes into `AGENTS.md`, a guard path, so the edit asks them once:
 

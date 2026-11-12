@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """How the owner answers: one line per question asked, and the questions they need not be asked.
 
-ADR 0023. A skill asks the owner where the options lead to different products, where a wrong
+ADR 0022. A skill asks the owner where the options lead to different products, where a wrong
 guess cannot be taken back, and where the owner said they want a say in the tooling. Each answer
 is one line of ``.ratchet/questions.tsv``: the date, the skill, the question's key, its kind and
 whether the owner took the recommended option. The file is one clone's and no commit carries it,

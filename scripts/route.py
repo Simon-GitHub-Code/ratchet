@@ -25,11 +25,11 @@ The stages, in order; the first that does not hold is the answer:
    agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
    away, ``/pstack:poteto-mode`` when they stay). With more than one ticket ready the build is
-   the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0024).
+   the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0023).
 
 After the three lines come the ``also:`` lines, when there are any: each is a question the owner
 has answered with the recommendation three times running, offered as a standing answer
-(``questions.py``, ADR 0023). They are proposals and change nothing.
+(``questions.py``, ADR 0022). They are proposals and change nothing.
 
 Usage: ``route.py [--root DIR] [--offline] [--json]``.
 """
@@ -395,7 +395,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             "blocked-run",
         )
     first = tickets[0]
-    # Why: a ticket blocked only by another in the queue is built by the same drain (ADR 0024).
+    # Why: a ticket blocked only by another in the queue is built by the same drain (ADR 0023).
     ready = [ticket for ticket in tickets if ticket in stated]
     return build_step(ready, len(stated), checkout) or Step(
         f"{CONJECTURE} {first.ref}",

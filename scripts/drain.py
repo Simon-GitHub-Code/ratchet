@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The queue: every agent-ready ticket built at once, each in a work tree of its own. ADR 0024.
+"""The queue: every agent-ready ticket built at once, each in a work tree of its own. ADR 0023.
 
 ``/ratchet:feature`` with no ticket drains the queue. An agent runs the pipelines; this script
 decides everything about a drain that needs no judgement, and keeps what must outlive a session.
