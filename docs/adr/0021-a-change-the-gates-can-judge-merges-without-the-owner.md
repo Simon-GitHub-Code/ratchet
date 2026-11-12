@@ -22,6 +22,8 @@ With no forge, `scripts/merge.py <branch>` (the `merge` entry point) merges the 
 
 The hook makes the judge the one agent path. `gh pr merge` and the merge API already asked the owner. On the default branch, `git merge`, `git cherry-pick` and a `git pull` that names another repository or branch now ask too (rule `merge-default`). The sync with the remote's own default branch still passes, and so does the entry point. Decided 2026-11-11.
 
+Which runs the merge job counts, a `ci` run for a pull request and a `deep` run for tier 2, is ADR 0024's to say: a run counts only for what it tested.
+
 ## What an agent could forge
 
 The verdict record is written by an agent. An agent that skips the pipeline can write a record that says it ran. The record therefore proves less than the other reasons: it catches a commit made after the review, a non-approval, and a record copied from another change, and it is how an honest orchestrator hands the pipeline's conclusion to the judge. The `guard`, `door`, `dispute`, `target`, `behind` and `tier2` reasons do not depend on it. They are read from the diff, the forge and the default branch, and hold against a forged record.
