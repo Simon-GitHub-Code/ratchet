@@ -26,7 +26,7 @@ Use these words, in code, tests, records and prose. Each one is a hook for the b
 - **dispute**: the record an agent writes when it believes a gate, not the code, is wrong. The owner decides.
 - **record**: the design brief, the glossary, an ADR, a feature brief, a dispute, and for a user interface `PRODUCT.md` and `DESIGN.md`. Records are the standards a review judges against.
 - **owner**: the human. Decides disputes, changes gates by hand, and merges every change the merge judge does not pass.
-- **merge judge**: the shipped script that decides who merges a change. It passes one whose gates are green, whose review approves with no finding open, that changes no guard path and goes through no one-way door. [guards.md](guards.md)
+- **merge judge**: the shipped script that decides who merges a change. It passes one whose gates are green, whose review approves with no finding open, that changes no guard path, goes through no one-way door and adds no surface without a flag. [guards.md](guards.md)
 - **one-way door**: a change that cannot be taken back once it ships: a migration, stored data rewritten, a contract line removed, a flag turned on for everyone. The manifest lists the paths.
 - **red**, **green**: a test or gate's observable state. A test that was never red proves nothing.
 - **bite**: a gate shown to go red on a planted fault, and on an empty collection when it judges one. `quality/bites.toml` holds the faults. A gate nobody has seen fail is a gate nobody can trust.

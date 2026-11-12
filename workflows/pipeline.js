@@ -491,7 +491,10 @@ Your tasks, in order:
    - Feature flag: the key in \`flags.toml\` that gates the new behaviour, declared there with
      \`default = false\`, and what the system does with it off (the merge base's behaviour); or
      "none" with the reason, when the change adds no behaviour a user could meet (a fix that
-     restores the specified behaviour, a refactoring, a change with nothing to turn off)
+     restores the specified behaviour, a refactoring, a change with nothing to turn off). The
+     merge judge does not read this line: a change that adds a route, a command or an exported
+     symbol to a contract artefact or public-surface snapshot, with no flag that is off declared
+     in \`flags.toml\` or named in the code it adds, waits for the owner (\`unflagged\`)
    - Test plan: the list of test files you will create, mapped to acceptance criteria; it
      includes the telemetry tests under the directory binding.md names and, when there is a
      flag, a test of the behaviour with the flag off
@@ -800,7 +803,10 @@ B. Standards conformance:
    - Feature flag: new behaviour is reachable only through the flag spec.md names, read through
      the seam binding.md's Feature flags section names, declared in \`flags.toml\` with
      \`default = false\`, and tested with the flag off; behaviour shipped on with no flag, where
-     spec.md does not say "none" with a reason, is a major issue
+     spec.md does not say "none" with a reason, is a major issue. Surface added to a contract
+     artefact or public-surface snapshot with no flag reaches the owner whatever spec.md says:
+     the merge judge reports it as \`unflagged\`, so say in the review which of the two it is,
+     behaviour that should be dark or surface with nothing to turn off
    - Assumptions: each one spec.md lists is what the tests and the code actually do
    - Does this change make a decision with lasting consequences (new storage, new external
      dependency, new layer, a changed rule that versions over time)? If so set adrSuggested.

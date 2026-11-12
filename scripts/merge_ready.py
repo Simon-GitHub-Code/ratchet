@@ -9,6 +9,12 @@ only for ``agent``. The owner merges when any of these holds:
   and the owner merges it.
 - ``door``: the change goes through a one-way door. A path in a ``[[door]]`` of the manifest; a
   flag that turns on by default, becomes permanent, or leaves the registry while off.
+- ``unflagged``: the change adds to a file behind a door that shuts on removal (a route, a command
+  or an exported symbol in a contract artefact or public-surface snapshot) and no flag hides it:
+  ``flags.toml`` gains no flag that is off, and no line the change adds outside ``docs/``, the
+  registry and those files names one that is off. Asked only of the application types the method
+  asks ``changed flags off and on`` of, read from the binding at the default branch's tip, so a
+  library is exempt; a binding that names no known type is asked. ADR 0025.
 - ``dispute``: the change adds or edits a dispute, or an open dispute names a path it touches.
 - ``record``: no verdict record is part of the change, or the one there is not an approval of
   exactly this tree with nothing unresolved and no open question.
@@ -44,6 +50,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+import application_types
 import flags as registry
 import gatelib
 import lowered
@@ -76,6 +83,8 @@ TREE = re.compile(r"[0-9a-f]{40,64}")
 APPROVE = "approve"
 TIER2_STATES = ("green", "red", "none")
 RED = "red"
+FLAGS_QUESTION = "changed flags off and on"
+DOCS = "docs/"
 HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
 
 
@@ -322,15 +331,23 @@ def shut(change: Change, path: str, door: Door) -> str | None:
     return None if why is None else f"{why}. {door.reason}"
 
 
+def doors(change: Change, manifest: Manifest) -> list[tuple[str, Door]]:
+    """Every changed path with each one-way door it sits behind, letter case set aside."""
+    lower = folded(manifest)
+    return [
+        (path, door)
+        for path in change.paths
+        for door in manifest.doors_of(path) or lower.doors_of(path.casefold())
+    ]
+
+
 def door_reasons(change: Change, manifest: Manifest) -> list[Reason]:
     """One reason per changed path and one-way door it goes through."""
-    lower = folded(manifest)
     reasons = []
-    for path in change.paths:
-        for door in manifest.doors_of(path) or lower.doors_of(path.casefold()):
-            why = shut(change, path, door)
-            if why is not None:
-                reasons.append(Reason("door", f"{path} ({door.name}): {why}"))
+    for path, door in doors(change, manifest):
+        why = shut(change, path, door)
+        if why is not None:
+            reasons.append(Reason("door", f"{path} ({door.name}): {why}"))
     return reasons
 
 
@@ -367,6 +384,84 @@ def flag_reasons(change: Change) -> list[Reason]:
     else:
         found = flag_doors(old, new)
     return [Reason("door", f"{registry.REGISTRY}: {text}") for text in found]
+
+
+# --- new surface with no flag ----------------------------------------------------------------
+
+
+def flags_asked(change: Change) -> bool:
+    """Whether the method asks the flag questions of this repository's application types.
+
+    The binding at the default branch's tip says which types it is. One that names no type, or a
+    type the catalogue lacks, is asked: the judge fails closed.
+    """
+    binding = git(change.root, "show", f"{change.base}:{gatelib.BINDING.as_posix()}")
+    kinds = application_types.declared(binding or "")
+    catalogue = application_types.load()
+    asked_of = catalogue.asked_of(FLAGS_QUESTION)
+    return not kinds or any(kind in asked_of or kind not in catalogue.types for kind in kinds)
+
+
+def grown(change: Change, path: str) -> bool:
+    """Whether a file the change only added to holds more at the head than at the merge base."""
+    if not change.held(path):
+        return True
+    before, after = change.before(path) or "", change.after(path) or ""
+    if path.endswith(".json"):
+        return bool(json.loads(before) != json.loads(after))
+    return [line for line in before.splitlines() if line.strip()] != [
+        line for line in after.splitlines() if line.strip()
+    ]
+
+
+def new_surface(change: Change, manifest: Manifest) -> list[str]:
+    """The paths behind a door that shuts on removal which the change adds to, and only adds to."""
+    return [
+        path
+        for path, door in doors(change, manifest)
+        if door.on is DoorRule.REMOVAL and shut(change, path, door) is None and grown(change, path)
+    ]
+
+
+def dark_flag(change: Change, surface: list[str]) -> bool:
+    """Whether the change declares a flag that is off, or a line it adds names one that is off.
+
+    Why: the second half lets a feature built over several changes stay behind its one flag. The
+    lines read are the added ones outside ``docs/``, the registry and the surface files, so a
+    spec that names the flag, or a route that shares its name, hides nothing.
+    """
+    old, _ = registry.parse(change.before(registry.REGISTRY) or "")
+    new, _ = registry.parse(change.after(registry.REGISTRY) or "")
+    was = {registry.name(flag) for flag in old}
+    dark = {registry.name(flag) for flag in new if flag.get("default") is False}
+    if dark - was:
+        return True
+    code = [
+        path
+        for path in change.paths
+        if path != registry.REGISTRY and path not in surface and not path.startswith(DOCS)
+    ]
+    if not code:
+        return False
+    compared = ("diff", "-U0", "--no-renames", change.fork, change.head)
+    diff = git(change.root, "--literal-pathspecs", *compared, "--", *code) or ""
+    added = [
+        line for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")
+    ]
+    return any(key in line for key in dark for line in added)
+
+
+def unflagged_reasons(change: Change, manifest: Manifest) -> list[Reason]:
+    """New surface that no flag hides: new behaviour ships dark, or the owner sees it."""
+    surface = new_surface(change, manifest)
+    if not surface or not flags_asked(change) or dark_flag(change, surface):
+        return []
+    text = (
+        f"{', '.join(surface)}: the change adds surface a consumer can meet, and it neither"
+        f" declares a flag that is off in {registry.REGISTRY} nor names one in the code it adds;"
+        " ship it dark, or the owner merges it"
+    )
+    return [Reason("unflagged", text)]
 
 
 # --- disputes --------------------------------------------------------------------------------
@@ -518,6 +613,7 @@ def judge(root: Path, base_ref: str, head_ref: str, *, asked: Asked | None = Non
         *guard_reasons(change, manifest),
         *door_reasons(change, manifest),
         *flag_reasons(change),
+        *unflagged_reasons(change, manifest),
         *dispute_reasons(change),
         *record_reasons(change),
     ]

@@ -121,7 +121,9 @@ paths = [
 # agent edits these paths without a prompt. The merge judge (`just merge-ready`) reads the doors,
 # and a change that goes through one waits for the owner. `on` says what shuts a door: "change"
 # is any change, "rewrite" a change to or deletion of a file the default branch holds, "removal"
-# a deletion or a change that does more than add. A door this repository has no path for keeps
+# a deletion or a change that does more than add. An addition behind a "removal" door is new
+# surface: it merges without the owner only when the change also declares or names a flag that is
+# off (`unflagged`, ADR 0025 of the plugin). A door this repository has no path for keeps
 # `paths = []` and says why: `none = "<the reason>"`.
 
 [[door]]

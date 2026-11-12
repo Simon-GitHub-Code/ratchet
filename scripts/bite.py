@@ -68,7 +68,9 @@ MANIFEST = (
     '[[group]]\nname = "harness"\nreason = "Settings enforce the guards."\nedit = "deny"\n'
     'paths = [".claude/settings.json"]\n\n'
     '[[group]]\nname = "records"\nreason = "An agent adds a term; the owner changes one."\n'
-    'edit = "append"\npaths = ["GLOSSARY.md", "docs/adr/**"]\n'
+    'edit = "append"\npaths = ["GLOSSARY.md", "docs/adr/**"]\n\n'
+    '[[door]]\nname = "contracts"\nreason = "A consumer depends on every line."\n'
+    'on = "removal"\npaths = ["surface.txt"]\n'
 )
 THRESHOLDS = (
     '[python.coverage.core]\npaths = ["src/**"]\nabsolute = true\n\n'
@@ -144,6 +146,7 @@ def scratch(root: Path) -> None:
     stryker_report(root, "Killed")
     write(root, "tickets/01-add-the-thing.md", TICKET)
     write(root, "flags.toml", "# No flags yet.\n")
+    write(root, "surface.txt", "f(a, b)\n")
     write(root, "docs/process/binding.md", BINDING)
     write(root, "own-gates.sh", OWN_GATES)
     write(root, "tests/test_a.py", "def test_f():\n    assert True\n")
@@ -365,6 +368,10 @@ def commit_after_the_review(root: Path) -> None:
     commit(root, "fix(core): one more thing")
 
 
+def new_surface(root: Path) -> None:
+    write(root, "surface.txt", "f(a, b)\ng(a)\n")
+
+
 QUEUED = ".scratch/the-thing/issues/01-add-the-thing.md"
 BLOCKER = ".scratch/the-thing/issues/02-first.md"
 
@@ -438,6 +445,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("merge-ready: a guard path changed", merge_judge, change_config, []),
     ("merge-ready: a flag on by default", merge_judge, flag_born_on, []),
     ("merge-ready: a commit after the review", merge_judge, commit_after_the_review, []),
+    ("merge-ready: new surface with no flag", merge_judge, new_surface, []),
     ("queue: a ticket behind an open blocker", queue_gate, behind_an_open_blocker, []),
 ]
 

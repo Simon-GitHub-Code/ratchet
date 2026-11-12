@@ -70,8 +70,17 @@ NEW_FLAG = (
     '\n[[flag]]\nkey = "fresh"\nowner = "core"\ndefault = false\nremove-by = 2999-01-01\n'
     'reason = "Ships dark until it is measured."\n'
 )
+NEW_FLAG_ON = NEW_FLAG.replace("default = false", "default = true")
 API = '{"paths": {"/a": {"get": {"tags": ["a"], "ok": true}}}}\n'
+MORE_API = '{"paths": {"/a": {"get": {"tags": ["a", "b"], "ok": true}}, "/b": {}}, "info": 1}\n'
 SURFACE = "pkg.a.f(x)\npkg.a.g(x)\n"
+MORE_SURFACE = "pkg.a.e(x)\n" + SURFACE + "pkg.b.h()\n"
+BINDING = "docs/process/binding.md"
+UNFLAGGED = (
+    "unflagged: {surface}: the change adds surface a consumer can meet, and it neither declares a"
+    " flag that is off in flags.toml nor names one in the code it adds; ship it dark, or the owner"
+    " merges it"
+)
 DISPUTE = "# 0001: the limit\n\n- Status: {status}\n\n## Gate\n\n`lint.toml` and src/a.py.\n"
 BASE = {
     "guards/manifest.toml": MANIFEST,
@@ -83,6 +92,7 @@ BASE = {
     "lint.toml": "strict = true\n",
     "justfile": "check:\n    true\n",
     "flags.toml": FLAGS,
+    BINDING: "# Binding\n\n- Application types: service, library\n",
     "src/a.py": "x = 1\n",
     "tests/contract/api.json": API,
     "tests/contract/surface.txt": SURFACE,
@@ -163,16 +173,49 @@ def test_a_new_flag_that_is_off_is_two_way(root: Path) -> None:
     assert judged(root) == []
 
 
-def test_additions_to_a_contract_and_a_new_fixture_are_two_way(root: Path) -> None:
-    api = '{"paths": {"/a": {"get": {"tags": ["a", "b"], "ok": true}}, "/b": {}}, "info": 1}\n'
+def test_additions_to_a_contract_behind_a_new_flag_and_a_new_fixture_are_two_way(
+    root: Path,
+) -> None:
     files = {
-        "tests/contract/api.json": api,
-        "tests/contract/surface.txt": "pkg.a.e(x)\n" + SURFACE + "pkg.b.h()\n",
+        "tests/contract/api.json": MORE_API,
+        "tests/contract/surface.txt": MORE_SURFACE,
         "tests/contract/new.txt": "  anything goes in a new file\n",
         "tests/data/v2.json": '{"v": 2}\n',
+        "flags.toml": FLAGS + NEW_FLAG,
     }
     change(root, files)
     assert judged(root) == []
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"src/a.py": 'x = 2 if flag("dark") else 1\n'},
+        {"src/a.py": "x = 1\n", "src/b.py": 'y = flag("dark")\n'},
+    ],
+)
+def test_new_surface_whose_added_code_names_a_flag_that_is_off_is_two_way(
+    root: Path, files: dict[str, str | None]
+) -> None:
+    change(root, {"tests/contract/surface.txt": MORE_SURFACE, **files})
+    assert judged(root) == []
+
+
+def test_a_snapshot_rewritten_to_say_the_same_adds_no_surface(root: Path) -> None:
+    files = {
+        "tests/contract/api.json": '{\n"paths": {"/a": {"get": {"ok": true, "tags": ["a"]}}}\n}\n',
+        "tests/contract/surface.txt": "\n" + SURFACE.replace("\n", "\n\n"),
+    }
+    change(root, files)
+    assert judged(root) == []
+
+
+@pytest.mark.parametrize("kinds", ["library", "`library`"])
+def test_a_library_is_not_asked_for_a_flag(tmp_path: Path, kinds: str) -> None:
+    repository(tmp_path, BASE | {BINDING: f"# Binding\n\n- Application types: {kinds}\n"})
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {"tests/contract/surface.txt": MORE_SURFACE})
+    assert judged(tmp_path) == []
 
 
 # --- guard paths ------------------------------------------------------------------------------
@@ -440,6 +483,78 @@ def test_a_flag_that_ships_on_or_stays_for_good_is_a_one_way_door(
 def test_removing_a_flag_that_is_already_on_changes_nothing_for_anyone(root: Path) -> None:
     change(root, {"flags.toml": FLAGS.partition("\n\n")[0] + "\n"})
     assert judged(root) == []
+
+
+# --- new surface with no flag -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("files", "surface"),
+    [
+        ({"tests/contract/api.json": MORE_API}, "tests/contract/api.json"),
+        ({"tests/contract/surface.txt": MORE_SURFACE}, "tests/contract/surface.txt"),
+        ({"tests/contract/new.txt": "pkg.c.i()\n"}, "tests/contract/new.txt"),
+        ({"Tests/Contract/new.txt": "pkg.c.i()\n"}, "Tests/Contract/new.txt"),
+        (
+            {"tests/contract/api.json": MORE_API, "tests/contract/surface.txt": MORE_SURFACE},
+            "tests/contract/api.json, tests/contract/surface.txt",
+        ),
+        (
+            {"tests/contract/surface.txt": MORE_SURFACE, "src/a.py": 'x = flag("lit")\n'},
+            "tests/contract/surface.txt",
+        ),
+        (
+            {
+                "tests/contract/surface.txt": MORE_SURFACE + "pkg.dark()\n",
+                "docs/features/thing/spec.md": "Feature flag: dark.\n",
+                "flags.toml": FLAGS + "# dark stays off\n",
+            },
+            "tests/contract/surface.txt",
+        ),
+        (
+            {
+                "tests/contract/surface.txt": MORE_SURFACE,
+                "flags.toml": FLAGS.replace("default = false", "default = true") + NEW_FLAG_ON,
+            },
+            "tests/contract/surface.txt",
+        ),
+    ],
+)
+def test_new_surface_that_no_flag_hides_is_the_owners(
+    root: Path, files: dict[str, str | None], surface: str
+) -> None:
+    change(root, files)
+    reasons = [reason for reason in judged(root) if not reason.startswith("door: flags.toml")]
+    assert reasons == [UNFLAGGED.format(surface=surface)]
+
+
+def test_a_flag_the_change_stops_reading_hides_nothing(tmp_path: Path) -> None:
+    repository(tmp_path, BASE | {"src/a.py": 'x = flag("dark")\n'})
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {"tests/contract/surface.txt": MORE_SURFACE, "src/a.py": "x = 1\n"})
+    assert codes(tmp_path) == ["unflagged"]
+
+
+@pytest.mark.parametrize(
+    "binding", [None, "# Binding\n", "# Binding\n\n- Application types: library, daemon\n"]
+)
+def test_a_binding_that_names_no_known_type_is_asked_for_a_flag(
+    tmp_path: Path, binding: str | None
+) -> None:
+    files = {path: text for path, text in BASE.items() if path != BINDING}
+    repository(tmp_path, files | ({BINDING: binding} if binding else {}))
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {"tests/contract/surface.txt": MORE_SURFACE})
+    assert codes(tmp_path) == ["unflagged"]
+
+
+def test_the_binding_the_branch_holds_does_not_decide_the_types(root: Path) -> None:
+    files = {
+        "tests/contract/surface.txt": MORE_SURFACE,
+        BINDING: "# Binding\n\n- Application types: library\n",
+    }
+    change(root, files)
+    assert codes(root) == ["guard", "unflagged"]
 
 
 # --- disputes ---------------------------------------------------------------------------------
