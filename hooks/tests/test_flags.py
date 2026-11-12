@@ -170,6 +170,23 @@ def test_expired_does_not_judge_shape(tmp_path: Path) -> None:
     assert run(root) == 1
 
 
+def test_temporary_prints_the_keys_due_for_removal_and_leaves_the_switches_out(
+    tmp_path: Path, capsys: Out
+) -> None:
+    switch = GOOD.replace("new-checkout", "kill-search").replace(
+        "remove-by = 2027-02-01", "permanent = true"
+    )
+    later = GOOD.replace("new-checkout", "a-later-one")
+    root = repository(tmp_path, {"flags.toml": GOOD + switch + later})
+    assert run(root, "--temporary") == 0
+    assert capsys.readouterr().out == "a-later-one\nnew-checkout\n"
+    write(root, "flags.toml", "")
+    assert run(root, "--temporary") == 0
+    assert capsys.readouterr().out == "", "no flag, nothing printed, not even a newline"
+    write(root, "flags.toml", "[[flag]\n")
+    assert run(root, "--temporary") == 1
+
+
 def test_changed_prints_the_keys_the_change_adds_or_edits(tmp_path: Path, capsys: Out) -> None:
     root = repository(tmp_path, {"flags.toml": GOOD})
     branch(root)

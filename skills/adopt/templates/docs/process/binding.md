@@ -134,7 +134,7 @@ One row per question the method asks. The application types decide which rows ap
 
 ## Feature flags
 
-<The registry is `flags.toml`. Name the one module through which a flag is read (OpenFeature, or the stack's equivalent, behind it), the override it honours so the `flag-states` gate can force a flag off and on (an environment variable such as `FLAG_OVERRIDES=key=true`), and who may turn a flag on in production. New behaviour ships behind a flag that defaults to off; a spec that ships none says why.>
+<The registry is `flags.toml`. Name the one module through which a flag is read (OpenFeature, or the stack's equivalent, behind it), the override it honours so the `flag-states` gate can force a flag off and on and the gates that request routes can boot with every flag due for removal on (an environment variable such as `FLAG_OVERRIDES=key=true`), and who may turn a flag on in production. New behaviour ships behind a flag that defaults to off; a spec that ships none says why.>
 
 ## Speed
 

@@ -24,6 +24,17 @@ boot_timeout := "30"
 service := "bind: the service.name every signal carries"
 booted := 'python3 "' + ratchet_plugin + '/scripts/with_service.py" --boot "' + boot + '" --ready "' + ready + '" --timeout ' + boot_timeout
 
+# A gate that requests the deliverable's routes from outside (`load-smoke`, `api-deep`, `dast`,
+# `pentest`, `load`) boots it through `probed`: with every flag due for removal turned on. New
+# surface ships off, so a probe of the defaults meets a 404 on each flagged route and judges none
+# of it. `flags.py --temporary` prints those keys, one per line, and `flags_on` is the override
+# the flag seam reads with each of them on, as the shell builds it on every run, such as
+#   'FLAG_OVERRIDES=$(python3 "' + ratchet_plugin + '/scripts/flags.py" --temporary | sed "s/$/=true/" | paste -sd, -)'
+# A `permanent` flag is a switch and keeps its default. `smoke`, the end-to-end suite and the off
+# half of `flag-states` judge the defaults, which are what ships. With nothing to boot: "none".
+flags_on := "bind: NAME=VALUE, the flag seam's override with each key of flags.py --temporary on"
+probed := booted + ' --env "' + flags_on + '"'
+
 # Which shard of how many this run is. CI's long-gate jobs export both from the `- Shards:` line of
 # the binding's Speed section; a local run is shard 1 of 1, the whole suite.
 shard := env_var_or_default("SHARD", "1")
@@ -287,7 +298,7 @@ flag-states:
 # URL. A skeleton whose one route is readiness replaces the `--url` with `--health-only`: green,
 # and it says so on every run until the first route takes its place.
 load-smoke:
-    {{booted}} -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --url "bind: METHOD URL STATUS BODY of a route worth overlapping, on port {port}"
+    {{probed}} -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --url "bind: METHOD URL STATUS BODY of a route worth overlapping, on port {port}"
 
 # Shipped: the pull-request half of the proof that every bound gate bites. It proves nothing, at
 # the cost of a few git calls, unless the change touches a path that defines a gate; then it
@@ -329,7 +340,7 @@ mutation:
     @echo "bind: full mutation run over the absolute paths, shard {{shard}} of {{shards}}"; exit 1
 
 api-deep:
-    @echo "bind: deep and stateful interface conformance"; exit 1
+    @echo "bind: deep and stateful interface conformance, the deliverable booted through probed"; exit 1
 
 symbolic:
     @echo "bind: symbolic checker over contracts"; exit 1
@@ -355,13 +366,13 @@ perf:
     @echo "bind: benchmarks against the binding's performance ceilings; red when there is no benchmark"; exit 1
 
 dast:
-    @echo "bind: dynamic security scan against the end-to-end environment"; exit 1
+    @echo "bind: dynamic security scan fed the contract's routes, the deliverable booted through probed"; exit 1
 
 pentest:
-    @echo "bind: active scan with a session, and contract-driven attacks on every route"; exit 1
+    @echo "bind: active scan with a session, and contract-driven attacks on every route, the deliverable booted through probed"; exit 1
 
 load:
-    @echo "bind: load test against the end-to-end environment, thresholds from the binding's Limits; red when there is no scenario"; exit 1
+    @echo "bind: load test of the deliverable booted through probed, thresholds from the binding's Limits; red when there is no scenario"; exit 1
 
 # Shipped: an OTLP receiver the booted deliverable exports to; green only when a request's
 # traces, metrics and logs arrive for `service`. `--require traces` narrows it to what is emitted.

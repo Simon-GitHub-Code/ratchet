@@ -22,8 +22,14 @@ pull request, since it goes red by the calendar: a flag past its ``remove-by`` d
 ``--changed`` judges nothing: it prints the key of every flag the change adds or edits, one per
 line, for the ``flag-states`` gate to run the suite with each of them off and on.
 
+``--temporary`` judges nothing either: it prints the key of every flag with a ``remove-by`` date,
+one per line. Those are the flags on their way to being on everywhere, and a gate that probes the
+running deliverable from outside boots it with each of them on, since new surface ships off and
+a probe of the defaults would reach none of it. A ``permanent`` flag is a switch and keeps its
+default.
+
 Usage: ``flags.py [--root DIR] [--base REF] [--used-in DIR]... [--expired [--today DATE]]
-[--changed]``.
+[--changed] [--temporary]``.
 """
 
 from __future__ import annotations
@@ -103,6 +109,17 @@ def changed(flags: list[Flag], before: list[Flag]) -> list[str]:
     return sorted(name(flag) for flag in flags if flag not in before)
 
 
+def temporary(flags: list[Flag]) -> list[str]:
+    """The key of every flag due for removal: the ones a release turns on, never a switch."""
+    return sorted(name(flag) for flag in flags if isinstance(flag.get("remove-by"), dt.date))
+
+
+def listing(keys: list[str], problems: list[str]) -> int:
+    """Print ``keys`` one per line; the exit code says whether the registry parsed."""
+    print("\n".join(keys), end="\n" if keys else "")
+    return 1 if problems else 0
+
+
 def unused(root: Path, flags: list[Flag], directories: list[str]) -> list[str]:
     """One line per declared key that no file under ``directories`` names."""
     if not directories:
@@ -138,6 +155,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--used-in", action="append", default=[])
     parser.add_argument("--expired", action="store_true")
     parser.add_argument("--changed", action="store_true")
+    parser.add_argument("--temporary", action="store_true")
     parser.add_argument("--today", type=dt.date.fromisoformat)
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
@@ -148,11 +166,12 @@ def main(argv: list[str]) -> int:
     if options.expired:
         today = options.today or dt.datetime.now(tz=dt.UTC).date()
         return gatelib.report("flags-expired", problems + expired(flags, today))
+    if options.temporary:
+        return listing(temporary(flags), problems)
     base = gatelib.base_commit(root, options.base)
     before = parse(gatelib.show(root, base, REGISTRY) or "")[0] if base else []
     if options.changed:
-        print("\n".join(changed(flags, before)), end="\n" if changed(flags, before) else "")
-        return 1 if problems else 0
+        return listing(changed(flags, before), problems)
     problems += [line for flag in flags for line in shape(flag)]
     problems += duplicates(flags) + born_on(flags, before) + unused(root, flags, options.used_in)
     return gatelib.report("flags", problems, base)

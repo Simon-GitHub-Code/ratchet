@@ -213,10 +213,20 @@ def test_a_recipe_learns_its_shard_from_the_environment_and_is_whole_without_one
         assert "shard {{shard}} of {{shards}}" in recipe(name), name
 
 
+def test_a_gate_that_requests_routes_boots_with_the_flags_due_for_removal_on() -> None:
+    assert re.search(r'^flags_on := "bind: NAME=VALUE, ', JUSTFILE, re.MULTILINE)
+    assert "probed := booted + ' --env \"' + flags_on + '\"'" in JUSTFILE
+    assert "flags.py --temporary" in JUSTFILE
+    for name in ("api-deep", "dast", "pentest", "load"):
+        assert "booted through probed" in recipe(name), name
+    for name in ("smoke", "telemetry-e2e"):
+        assert "probed" not in recipe(name), f"{name} judges the defaults, which are what ships"
+
+
 def test_the_three_service_gates_arrive_bound_to_the_shipped_scripts() -> None:
     assert '/scripts/with_service.py" --boot "\' + boot + \'" --ready "\' + ready' in JUSTFILE
     assert recipe("smoke").strip() == "{{booted}}"
-    assert recipe("load-smoke").startswith("    {{booted}} -- python3 ")
+    assert recipe("load-smoke").startswith("    {{probed}} -- python3 ")
     assert 'scripts/load_smoke.py" --url "bind: METHOD URL' in recipe("load-smoke")
     assert "{{ready}}" not in recipe("load-smoke"), "readiness alone overlaps nothing a user asks"
     assert 'scripts/telemetry_sink.py" --service "{{service}}" -- {{booted}} --' in recipe(
