@@ -52,7 +52,29 @@ A feature starts as the ticket the owner's `/mattpocock-skills:to-spec`, `to-tic
 The one approach expected to work, stated so it can be shown wrong: what would refute it. The alternatives considered and the criticism that kills each.
 ```
 
-The agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The skill the owner typed applies it; the guard asks when an agent tries to. `/ratchet:conjecture <ticket>` drafts the section from the conversation that produced the ticket and writes it after one dialog. `scripts/feature_preflight.py` refuses a ticket that is closed, has no stated conjecture or lacks the label, and names the skill that produces each missing piece; `/ratchet:feature <ticket>` runs it before any agent exists, and the pipeline runs it again as its first stage. The spec role writes `docs/features/<slug>/spec.md` from the ticket, and adds what the ticket need not carry: the telemetry that shows each criterion working in production, the feature flag that gates the new behaviour (or why there is none), and the assumptions it made where the ticket was silent, each with its refuter.
+The agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The skill the owner typed applies it; the guard asks when an agent tries to. `/ratchet:conjecture <ticket>` drafts the section from the conversation that produced the ticket, writes it and prints it; it asks only where the record leaves two different products open. `scripts/feature_preflight.py` refuses a ticket that is closed, has no stated conjecture or lacks the label, and names the skill that produces each missing piece; `/ratchet:feature <ticket>` runs it before any agent exists, and the pipeline runs it again as its first stage. The spec role writes `docs/features/<slug>/spec.md` from the ticket, and adds what the ticket need not carry: the telemetry that shows each criterion working in production, the feature flag that gates the new behaviour (or why there is none), and the assumptions it made where the ticket was silent, each with its refuter.
+
+The owner's answers to a run's open questions are a section of the ticket too, written by the skill that asked:
+
+```markdown
+## Answers
+- Does an expired link say so, or send the visitor home? A page that says it expired.
+```
+
+The spec role reads each line as decided. A changed ticket is also what releases one the drain parked.
+
+## Questions and standing answers
+
+A skill asks the owner for a choice that shapes the product (`direction`), one that cannot be taken back (`irreversible`), or a tooling preference the owner said they want (`tooling`), and for nothing it would do anyway (ADR 0023). Each answer is one line of `.ratchet/questions.tsv`, written by `scripts/questions.py record`: the date, the skill, the question's key, its kind and whether the recommended option was taken. The file is one clone's and no commit carries it. A key is stable, so the same question asked again has the same key (`adopt.tools`); a question about one ticket carries its slug (`feature.<slug>.1`).
+
+When a key's last three answers all took the recommendation the route prints an `also:` line that offers a standing answer. The owner says yes, and the key goes into `AGENTS.md`, a guard path, so the edit asks them once:
+
+```markdown
+## Standing answers
+- `adopt.tools`: accept the proposed tools.
+```
+
+A skill that finds a question's key there does not ask it, takes the answer, and says so in its hand-over. A `direction` key is never proposed.
 
 ## Dispute: `docs/disputes/NNNN-<slug>.md`
 

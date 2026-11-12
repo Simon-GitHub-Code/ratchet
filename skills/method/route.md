@@ -31,6 +31,8 @@ A `/ratchet:feature` run that blocks leaves a stash named `<branch>: blocked run
 
 With more than one agent-ready ticket that states a conjecture the route names `/ratchet:feature` with no ticket: the drain, which builds them in work trees of their own and merges what the merge judge passes ([pipeline.md](pipeline.md), ADR 0024). A ticket the drain parked is held by its note in `.ratchet/queue/` until the ticket's text changes.
 
+After its three lines the route prints an `also:` line for each question the owner has answered with the recommended option three times running (`scripts/questions.py`, ADR 0023). It proposes a standing answer and changes nothing.
+
 An `AGENTS.md` that still holds the purpose placeholder sends the owner back to `/ratchet:init`, which a dismissed dialog leaves unfinished. A local spec with no tickets beside it is split with `to-tickets` before another spec is written. Two more states the route reads from the local tracker. A ticket whose `feature/<n>-*` branch is merged but which is still open is marked resolved before anything is built again. Open tickets of which none is agent-ready name the first unblocked one for the owner to agree, before a new spec is written.
 
 ## Where poteto-mode meets the guard

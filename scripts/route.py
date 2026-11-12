@@ -24,7 +24,12 @@ The stages, in order; the first that does not hold is the answer:
 8. on the default branch: the glossary and design brief (``grill-with-docs``), then an
    agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
-   away, ``/pstack:poteto-mode`` when they stay).
+   away, ``/pstack:poteto-mode`` when they stay). With more than one ticket ready the build is
+   the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0024).
+
+After the three lines come the ``also:`` lines, when there are any: each is a question the owner
+has answered with the recommendation three times running, offered as a standing answer
+(``questions.py``, ADR 0023). They are proposals and change nothing.
 
 Usage: ``route.py [--root DIR] [--offline] [--json]``.
 """
@@ -41,6 +46,7 @@ from pathlib import Path
 import feature_preflight as preflight
 import gatelib
 import hooks_installed
+import questions
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
 STANZA = "ratchet:method"
@@ -511,13 +517,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--offline", action="store_true", help="read no tracker")
     parser.add_argument("--json", action="store_true", dest="as_json")
     options = parser.parse_args(argv[1:])
-    step = decide(Path(options.root).resolve(), None if options.offline else preflight.run_gh)
+    root = Path(options.root).resolve()
+    step = decide(root, None if options.offline else preflight.run_gh)
+    also = questions.proposals(root)
     if options.as_json:
-        print(json.dumps(asdict(step), indent=2))
+        print(json.dumps({**asdict(step), "also": also}, indent=2))
     else:
         print(f"next: {step.command}")
         print(f"why: {step.why}")
         print(f"then: {step.then}")
+        for line in also:
+            print(f"also: {line}")
     return 0
 
 

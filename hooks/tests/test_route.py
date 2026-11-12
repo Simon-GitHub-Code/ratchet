@@ -443,3 +443,17 @@ def test_several_tickets_with_a_conjecture_route_to_the_drain(tmp_path: Path) ->
     (root / ".scratch/f/issues/02-b.md").unlink()
     commit(root, "docs(tracker): one ticket left with a conjecture")
     assert route.decide(root, None).command == f"{route.FEATURE} .scratch/f/issues/01-a.md"
+
+
+def test_an_answer_that_became_a_habit_is_offered_after_the_three_lines(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = repository(tmp_path, {"README.md": "# A\n"})
+    row = "2026-11-12\tadopt\tadopt.tools\ttooling\tyes\n"
+    write(root, ".ratchet/questions.tsv", "date\tskill\tkey\tkind\trecommended\n" + row * 3)
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert len(out) == 4
+    assert out[3].startswith("also: you have taken the recommendation for `adopt.tools` 3 times")
+    assert route.main(["route", "--root", str(root), "--offline", "--json"]) == 0
+    assert len(json.loads(capsys.readouterr().out)["also"]) == 1

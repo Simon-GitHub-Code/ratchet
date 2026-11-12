@@ -310,3 +310,28 @@ def test_a_rejudge_without_what_the_first_run_returned_is_an_error() -> None:
     assert ran["labels"] == []
     died = _again({}, **{"review-again": None})
     assert died["error"].startswith("review agent returned no result")
+
+
+def test_a_product_question_stops_the_run_with_its_options() -> None:
+    asked = {**SPECIFIED, "openQuestions": [ASKED]}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=asked)
+    assert ran["labels"] == ["preflight", "spec"]
+    result = ran["result"]
+    assert (result["verdict"], result["openQuestions"]) == ("blocked", [ASKED])
+    assert "under `## Answers`" in result["requiredByOrchestrator"][0]
+    prompt = ran["prompts"]["spec"]
+    assert "Never ask the owner to confirm a choice" in prompt
+    assert "When the user could not tell which option was built, you choose." in prompt
+    assert "Read `## Answers` and the comments too" in prompt
+    assert _run(None)["labels"] == [], "no ticket, no agent"
+
+
+def test_a_clean_run_spawns_five_agents_and_records_no_question() -> None:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert ran["labels"] == ["preflight", "spec", "implement", "critique", "review"]
+    assert "This is a second review." not in ran["prompts"]["review"]
+    result = ran["result"]
+    assert (result["verdict"], result["branch"]) == ("approve", "feature/4-expiry")
+    assert result["verdictRecord"]["openQuestions"] == []
+    assert result["verdictRecord"]["assumptions"] == SPECIFIED["assumptions"]

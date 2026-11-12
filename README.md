@@ -87,6 +87,7 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 | `skills/next/` | `/ratchet:next`: the command the owner types next, decided from the checkout and the tracker |
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
 | `scripts/drain.py` | the queue behind `/ratchet:feature` with no ticket: the plan, the work trees it makes and removes, the rebase, the local merge and the report |
+| `scripts/questions.py` | one line per answer the owner gives a skill, and the proposal of a standing answer once the recommended option was taken three times running |
 | `workflows/pipeline.js` | the four-role pipeline (preflight, spec, implement, critic, review) the feature skill runs, and the second review of a change brought up to date behind another merge |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
 | `scripts/` | the gates that ship, in the table above |

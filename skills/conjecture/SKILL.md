@@ -1,6 +1,6 @@
 ---
 name: conjecture
-description: Draft the method's `## Conjecture` section for one ticket (the approach, what would refute it, the alternatives and the criticism that killed each) from the conversation that produced the ticket, confirm it with the owner in one dialog, and write it to the ticket.
+description: Draft the method's `## Conjecture` section for one ticket (the approach, what would refute it, the alternatives and the criticism that killed each) from the conversation that produced the ticket, and write it to the ticket. Asks the owner only where the record leaves two different products open.
 disable-model-invocation: true
 ---
 
@@ -18,7 +18,9 @@ disable-model-invocation: true
    - *Alternatives*: each alternative that was considered, and the criticism that killed it.
    - *Scope of the claim*: what this conjecture does not cover, when the ticket's Out of scope does not already say it.
 
-3. **One dialog, for the whole spec.** When the ticket's siblings share a parent spec, draft once for the spec and its tickets inherit it: the owner agrees one conjecture per spec, not one per ticket. Show the draft through the question tool: accept as drafted (recommended), or edit it. An alternative the owner names that the draft lacks goes in with its criticism; an approach the owner changes replaces the draft's. Skip the dialog when the owner typed the command with `accept` (`/ratchet:conjecture <ticket> accept`): write the draft, and print it in the reply so the owner reads what the label will agree to.
+3. **One conjecture for the whole spec, and no dialog to confirm it.** When the ticket's siblings share a parent spec, draft once for the spec and its tickets inherit it. The draft restates what the owner already decided, so do not ask them to accept it: write it, and print it in the reply, where they read it and counter what is wrong. An alternative the owner then names goes in with its criticism; an approach they change replaces the draft's.
+
+   Ask only at a fork the record leaves open: two approaches that would give a user of the product different things (what they see, what they can do, who may do it, what becomes of something that is theirs), with nothing in the conversation, the design brief or an ADR choosing between them. Put that one question through the question tool, in the user's words, the approach the record leans to first with `(recommended)` and the reason. Then record the answer in one Bash call: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/questions.py" record --skill conjecture --key "conjecture.<slug>" --kind direction --recommended <yes|no> --root .`. A choice between two ways to build the same product is yours: take the one the record supports and name the other under Alternatives.
 
 4. **Write it.** Append `## Conjecture` with the agreed text to the ticket body: `gh issue edit <n> --body-file <file>` with the full body in one Bash call (no label flag; the agent-ready label is the owner's act and the guard asks on it), or, on a local tracker, edit the file and commit it alone (`git commit -m "docs(tracker): the conjecture of <ticket>" -- <file>`), since the preflight refuses a dirty tree and the ticket file is a record, not work in progress. When the ticket's tickets share one spec, write it on the spec and say that its tickets inherit it.
 

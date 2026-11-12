@@ -169,8 +169,25 @@ const SPEC_SCHEMA = {
     },
     openQuestions: {
       type: 'array',
-      items: { type: 'string' },
-      description: 'Only the questions no safe default answers: a wrong guess would lose data, fix a public contract that cannot be changed back, spend money or open a security hole. Each must also be recorded in spec.md. Any entry stops the pipeline before Implement. Everything else is an assumption.',
+      items: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'The question as the owner would read it, in the words of a user of the product, with no code in it' },
+          kind: {
+            type: 'string',
+            enum: ['direction', 'irreversible'],
+            description: 'direction: the options are different products for a user. irreversible: a wrong guess cannot be taken back',
+          },
+          options: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Two to four answers the owner can choose between, the one you recommend first; each says what the user gets',
+          },
+          recommendation: { type: 'string', description: 'One sentence: why the first option, from the ticket, the design brief or the records' },
+        },
+        required: ['question', 'kind', 'options', 'recommendation'],
+      },
+      description: 'Only the points the owner decides: the options lead to different products for a user (direction), or a wrong guess would lose data, fix a public contract that cannot be changed back, spend money or open a security hole (irreversible). Each must also be recorded in spec.md. Any entry stops the pipeline before Implement. Everything else is an assumption.',
     },
     assumptions: {
       type: 'array',
@@ -450,7 +467,8 @@ Inputs you may read:
   Implementation Decisions, Testing Decisions, Out of Scope) plus the method's
   \`## Conjecture\`: the approach the owner agreed, the observation that would refute it,
   the alternatives and the criticism that killed each. Build that approach, not another.
-  Read the comments too: the owner's answers live there.
+  Read \`## Answers\` and the comments too: the owner's answers to an earlier run's
+  questions live there, and each one is decided.
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, every ADR in docs/adr/ that the ticket
   touches, and any design document AGENTS.md tells you to read first
 - The existing code and tests only as far as needed to place the feature and name test files
@@ -476,7 +494,8 @@ Your tasks, in order:
      flag, a test of the behaviour with the flag off
    - Assumptions: each point the ticket leaves undecided that you answered with a reversible
      default, with the answer and what would show it wrong
-   - Open questions: only those no safe default answers (see below)
+   - Open questions: only the points the owner decides (see below), each with its options,
+     the recommended one first, and why
    - Out of scope (copied from the ticket)
 2. Write the failing tests at those seams, with the test frameworks and directories binding.md
    names. Write a property test for every invariant you can state. Follow every AGENTS.md
@@ -491,16 +510,41 @@ Your tasks, in order:
    test plan, so the reviewer sees what each test refuted.
 4. Run \`check\` and capture its tail. It is expected to be red only on your new tests.
 
-An undecided point is an assumption unless a wrong guess cannot be taken back. This run has no
-owner at the keyboard, and a stopped run costs them a round trip, so decide what can be
-decided: take the conservative answer (the one that refuses, reserves or keeps more, and that
-a later change can relax), build the spec and the tests on it, and return it in
-\`assumptions\` with what would refute it. The pull request lists every assumption, and the
-owner counters one at the merge if it is wrong. An open question is what is left: a wrong
-guess would lose or corrupt stored data, fix a public contract others will depend on, spend
-money, or weaken a security or privacy rule. Those stop the pipeline: the orchestrator asks the
-owner, who answers on the ticket, and re-runs. A question the ADRs or GLOSSARY.md answer is
-neither.
+An undecided point is the owner's in two cases, and yours in every other.
+
+It is an open question of kind \`irreversible\` when a wrong guess cannot be taken back: it
+would lose or corrupt stored data, fix a public contract others will depend on, spend money, or
+weaken a security or privacy rule.
+
+It is an open question of kind \`direction\` when the options are different products. The
+test: describe the product to one of its users after each option, in the user's words and
+with no code in the sentence. When the two descriptions differ in what the user sees, what
+they can do, who may do it or what becomes of something that is theirs, the owner chooses.
+When the user could not tell which option was built, you choose. Three that are direction:
+- "Should an expired link show a page that says it expired, or send the visitor to the home
+  page?" The visitor sees a different thing.
+- "May anyone with the link close a poll, or only the person who made it?" Who may do it.
+- "When a voter answers twice, does the second answer replace the first or is it refused?"
+  What becomes of their answer.
+Three that are not, and are yours to assume:
+- Which HTTP status answers a reserved code. No user's product changes with it.
+- Whether the expiry is checked in the store or in the route. The user cannot tell.
+- A limit the ticket leaves unstated where one value is plainly the safe one: take it, and
+  the owner relaxes it in a later change.
+
+Everything else is an assumption. This run has no owner at the keyboard and a stopped run
+costs them a round trip, so decide what is yours to decide: take the conservative answer (the
+one that refuses, reserves or keeps more, and that a later change can relax), build the spec
+and the tests on it, and return it in \`assumptions\` with what would refute it. The pull
+request lists every assumption, and the owner counters one that is wrong.
+
+An open question stops the pipeline: the orchestrator parks the ticket and puts the question
+to the owner, who answers on the ticket, and the ticket is built again. So ask it well. Each
+one carries two to four options the owner can choose between, the one you recommend first,
+and a sentence on why. Never ask the owner to confirm a choice: an option you would take
+anyway with nothing against it is an assumption. A point the ticket, its \`## Answers\`
+section, its comments, the design brief, PRODUCT.md, GLOSSARY.md or an ADR already decides is
+neither a question nor an assumption: build what it says.
 
 Guard edits stop it too. This run has no owner at the keyboard, so no agent in it can change a
 guard path. Before writing tests, check each criterion against \`guards/manifest.toml\`: when
@@ -998,7 +1042,7 @@ if (spec.openQuestions.length > 0 || guardEdits.length > 0) {
     branch: BRANCH,
     checkOutput: spec.checkOutput,
     requiredByOrchestrator: [
-      'Put each open question to the owner; the answers go on the ticket (a comment or an edit), where the next spec agent reads them',
+      'Put each open question to the owner through the question tool, one at a time, its recommended option first; each answer goes on the ticket under `## Answers`, where the next spec agent reads it',
       'Give the owner each guard edit to land on the default branch (by hand, or with an agent at the keyboard where the guard can ask); an owner-away run cannot',
       'Re-run `/ratchet:feature <ticket>` after the ticket answers them; do not open a PR from a blocked run',
     ],
