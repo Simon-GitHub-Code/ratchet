@@ -34,7 +34,7 @@ from tests.test_hook import run_shim
 
 GLOSSARY = """# Glossary
 
-The vocabulary of linkshort. Use these words, and only these words.
+The vocabulary of inventory. Use these words, and only these words.
 
 ## Language
 
@@ -292,7 +292,7 @@ NOT_ADDITIVE: list[tuple[str, str, str]] = [
         "the introduction rewritten",
         change("and only these words.", "where you like."),
         (
-            "the text outside the entries 'The vocabulary of linkshort. Use these words, and "
+            "the text outside the entries 'The vocabulary of inventory. Use these words, and "
             "only these words.' is gone, changed or moved"
         ),
     ),
@@ -391,7 +391,7 @@ def test_the_parsed_glossary_keeps_order_headings_and_loose_lines() -> None:
         ("HEADING", "# Glossary", ""),
         (
             "LOOSE",
-            "The vocabulary of linkshort. Use these words, and only these words.",
+            "The vocabulary of inventory. Use these words, and only these words.",
             "# Glossary",
         ),
         ("HEADING", "## Language", ""),
@@ -774,7 +774,7 @@ EDITS: list[tuple[str, str, dict[str, object], str | None]] = [
         "Write",
         {"file_path": "GLOSSARY.md", "content": "# Glossary\n"},
         (
-            "the text outside the entries 'The vocabulary of linkshort. Use these words, and "
+            "the text outside the entries 'The vocabulary of inventory. Use these words, and "
             "only these words.' is gone, changed or moved"
         ),
     ),

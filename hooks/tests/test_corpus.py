@@ -616,7 +616,7 @@ ALLOWED: list[str] = [
     "chmod -x tools/run.sh",
     "chmod 755 .",
     "chmod +x build.sh",
-    "chown simon .",
+    "chown builder .",
     "chgrp staff .",
     "HUSKY_DEBUG=1 git commit -m x",
     "HUSKY=0 pnpm install",

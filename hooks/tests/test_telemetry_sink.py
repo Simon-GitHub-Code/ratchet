@@ -104,7 +104,7 @@ JSON = {"Content-Type": "application/json"}
 def test_a_real_sdk_export_names_its_service_and_counts_its_records() -> None:
     for signal_name, records in (("traces", 4), ("metrics", 4), ("logs", 1)):
         data = (FIXTURES / f"{signal_name}.pb").read_bytes()
-        assert telemetry_sink.proto_blocks(data) == [("linkshort", records)], signal_name
+        assert telemetry_sink.proto_blocks(data) == [("inventory", records)], signal_name
 
 
 def test_the_protobuf_walker_skips_scalars_and_refuses_what_is_not_protobuf() -> None:
@@ -166,7 +166,7 @@ def test_the_receiver_takes_protobuf_gzip_chunked_and_json_exports() -> None:
         body = json.dumps({"resourceLogs": [{"scopeLogs": [{"logRecords": [{}]}]}]}).encode()
         assert post(receiver, "/v1/logs", body, JSON) == (200, b"{}", "application/json")
         assert receiver.blocks == {
-            "traces": [("linkshort", 4)],
+            "traces": [("inventory", 4)],
             "metrics": [("api", 2)],
             "logs": [("api", 1), (None, 1)],
         }
