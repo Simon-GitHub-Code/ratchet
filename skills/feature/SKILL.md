@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 `/ratchet:feature <ticket>` builds one ticket: a number on the tracker (`4` or `#4`) or the path of a local ticket file (`.scratch/<slug>/issues/02-<slug>.md`). `/ratchet:feature` with no ticket, or `/ratchet:feature all`, builds every agent-ready ticket: [the drain](#the-drain-every-agent-ready-ticket). Load the `ratchet:method` skill first; [pipeline.md](../method/pipeline.md) says what the four roles do and [records.md](../method/records.md) what the ticket carries.
 
-The input is the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` wrote, with the method's `## Conjecture` section, and the agent-ready label the owner applies (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it). The label is the owner's agreement; nothing below infers it or applies it (ADR 0008).
+The input is the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` wrote, with the method's `## Conjecture` and `## Operability` sections, and the agent-ready label the owner applies (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it). The label is the owner's agreement; nothing below infers it or applies it (ADR 0008).
 
 Stay in the turn until every workflow you start has returned: in a headless session (`claude -p`) the session ends with your turn and takes a running workflow with it.
 

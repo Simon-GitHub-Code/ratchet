@@ -17,6 +17,10 @@ failure and the skill that produces the missing piece:
 - it carries the owner's agent-ready label, the ``ready-for-agent`` role as
   ``docs/agents/triage-labels.md`` maps it (a local ticket: a ``Status:`` line with that label);
 - the working tree is clean;
+- in an adopted repository the ticket, or its parent, says how the change is operated under
+  ``## Operability``: a ``Flag:``, ``Signal:``, ``Load:`` and ``Security:`` line, each asked only
+  when the binding declares an application type its question is asked of
+  (``skills/method/application-types.toml``), and each a statement or ``none`` with the reason;
 - with ``--branch``, ``HEAD`` is that branch and it is not the base branch;
 - in an adopted repository (``docs/process/binding.md``), a commit would run tier 0:
   ``hooks_installed.py`` proves it by running the commit hooks, and its failure carries the
@@ -43,10 +47,21 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import application_types
 import gatelib
 import hooks_installed
 
 CONJECTURE = "## Conjecture"
+OPERABILITY = "## Operability"
+# Why: ADR 0012 asks telemetry, flags, security and load of every change. A ticket's line is
+# asked when the catalogue asks its question of a type the binding declares, so a library's
+# ticket is asked none and a command's only its flag.
+OPERABILITY_LINES = (
+    ("Flag", "changed flags off and on", "the flag the behaviour ships behind"),
+    ("Signal", "telemetry emitted", "the span, metric or log that shows it working"),
+    ("Load", "load smoke", "the route or input the load gates gain"),
+    ("Security", "dynamic security scan", "the surface it adds: routes, inputs, who may call"),
+)
 READY_ROLE = "ready-for-agent"
 LABELS_RECORD = Path("docs/agents/triage-labels.md")
 ROLE_COLUMN = "label in mattpocock/skills"
@@ -75,6 +90,10 @@ PRODUCES = {
         "the owner adds `## Conjecture` to the ticket, or to its parent spec:"
         " `/ratchet:conjecture <ticket>` drafts it (the approach, the observation that would"
         " refute it, the alternatives and the criticism that kills each)"
+    ),
+    "operability": (
+        "`/ratchet:conjecture <ticket>` writes `## Operability` on the ticket, or on its parent"
+        " spec for all its tickets, from the binding and the record"
     ),
     "label": "the owner applies the agent-ready label (mattpocock-skills:triage, or by hand)",
     "blocked": (
@@ -235,12 +254,17 @@ def section(text: str, heading: str) -> str:
     return match.group(1) if match else ""
 
 
-def states_a_conjecture(body: str) -> bool:
-    """Whether the Conjecture section says something: not blank, placeholder or a stub."""
-    text = body.strip()
+def says_something(text: str) -> bool:
+    """Whether ``text`` is a statement: not blank, not a placeholder, not a bare "none"."""
+    text = text.strip()
     if "<" in text and ">" in text and re.search(r"<[^>\n]{2,}>", text):
         return False
-    return text.lower().rstrip(".") not in EMPTY_BODIES and len(text) >= MIN_BODY
+    return text.lower().rstrip(".") not in EMPTY_BODIES
+
+
+def states_a_conjecture(body: str) -> bool:
+    """Whether the Conjecture section says something: not blank, placeholder or a stub."""
+    return says_something(body) and len(body.strip()) >= MIN_BODY
 
 
 def ready_label(root: Path) -> str:
@@ -295,6 +319,47 @@ def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     return f"{ticket.ref} has no `{CONJECTURE}` section and its parent {parent_ref} states none"
 
 
+def operability_asked(root: Path) -> list[tuple[str, str]]:
+    """The ``## Operability`` lines asked here, each with what it says; none before adoption."""
+    binding = root / gatelib.BINDING
+    if not binding.is_file():
+        return []
+    kinds = frozenset(application_types.declared(binding.read_text(encoding="utf-8")) or ())
+    asked_of = application_types.load().asked_of
+    return [
+        (name, says) for name, question, says in OPERABILITY_LINES if asked_of(question) & kinds
+    ]
+
+
+def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
+    """Which asked lines neither the ticket nor its parent states; ``None`` when none is."""
+    asked = operability_asked(root)
+    if not asked:
+        return None
+    block = section(ticket.body, OPERABILITY)
+    parent_ref = ticket.parent or beside_spec(ticket.ref, root)
+    if not block.strip() and parent_ref is not None:
+        parent = fetch(parent_ref, root, gh)
+        block = section(parent.body, OPERABILITY) if parent is not None else ""
+    lacking = [
+        f"`{name}:` ({says})"
+        for name, says in asked
+        if not says_something("".join(operability_line(name).findall(block)[:1]))
+    ]
+    if not lacking:
+        return None
+    return (
+        f"{ticket.ref}: `{OPERABILITY}` lacks {', '.join(lacking)}; write each, or `none` and why"
+    )
+
+
+def operability_line(name: str) -> re.Pattern[str]:
+    """One line of the block, as a list item or bare, bold or plain, its value captured."""
+    return re.compile(
+        rf"^[-* \t]*\*{{0,2}}{name}:?\*{{0,2}}:?[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE
+    )
+
+
 def beside_spec(ref: str, root: Path) -> str | None:
     """The ``spec.md`` of a local ticket filed under ``<feature>/issues/``, when it exists."""
     path = Path(ref)
@@ -337,6 +402,9 @@ def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: 
     failure = conjecture_failure(ticket, root, gh)
     if failure is not None:
         report.fail("conjecture", failure)
+    failure = operability_failure(ticket, root, gh)
+    if failure is not None:
+        report.fail("operability", failure)
     if label not in ticket.labels:
         report.fail(
             "label", f"{ticket.ref} does not carry `{label}`; labels: {list(ticket.labels)}"

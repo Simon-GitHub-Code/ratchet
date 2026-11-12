@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+import feature_preflight as preflight
+
 SKILLS = Path(__file__).resolve().parents[2] / "skills"
 INIT = (SKILLS / "init/SKILL.md").read_text(encoding="utf-8")
 ADOPT = (SKILLS / "adopt/SKILL.md").read_text(encoding="utf-8")
@@ -23,6 +25,31 @@ def test_adopt_asks_two_dialogs_and_chooses_tools_itself() -> None:
     # Why: ADR 0020. The plugin ships no tool, so the adopting agent writes a fault per gate.
     assert "**A bite for every gate you bind.**" in ADOPT
     assert "the `bite-all` entry point plants each fault of `quality/bites.toml`" in ADOPT
+
+
+def test_the_fork_test_has_one_wording_the_spec_role_and_the_conjecture_skill_share() -> None:
+    # Why: the conjecture skill asked the owner what the pipeline's Spec role would have assumed,
+    # because only the role's prompt held the examples. A prompt cannot follow a link, so the
+    # method page is the source and the prompt's copy is held to it here.
+    page = (SKILLS / "method/pipeline.md").read_text(encoding="utf-8")
+    section = page.split("\n## The fork test\n", 1)[1].split("\n## ", 1)[0]
+    shared = [line.removeprefix("- ") for line in section.splitlines() if line.startswith("- ")]
+    assert len(shared) == 6
+    shared += re.findall(r"^The test: .*the owner chooses\.", section, re.MULTILINE)
+    assert len(shared) == 7
+    workflow = SKILLS.parent / "workflows/pipeline.js"
+    prompt = " ".join(workflow.read_text(encoding="utf-8").split())
+    for text in shared:
+        assert text in prompt, text
+    conjecture = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
+    assert "[the fork test](../method/pipeline.md#the-fork-test)" in conjecture
+    assert "what they can do" not in conjecture, "the skill cites the test and does not restate it"
+
+
+def test_the_conjecture_skill_writes_the_block_the_preflight_asks() -> None:
+    conjecture = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
+    for name, _, says in preflight.OPERABILITY_LINES:
+        assert f"`- {name}:` {says}" in conjecture, name
 
 
 def test_init_asks_two_dialogs_by_default_and_everything_under_interactive() -> None:

@@ -243,8 +243,13 @@ def unsplit_spec(root: Path) -> Step | None:
     return None
 
 
-def has_conjecture(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> bool:
-    return preflight.conjecture_failure(ticket, root, gh) is None
+def unstated(ticket: preflight.Ticket, root: Path, gh: preflight.Runner) -> str | None:
+    """What `/ratchet:conjecture` has still to write on the ticket; ``None`` when nothing."""
+    if preflight.conjecture_failure(ticket, root, gh) is not None:
+        return "states no conjecture"
+    if preflight.operability_failure(ticket, root, gh) is not None:
+        return "does not say how it is operated"
+    return None
 
 
 def blocking(tickets: list[preflight.Ticket], root: Path, gh: preflight.Runner) -> Step | None:
@@ -382,7 +387,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             "specify",
         )
     runs = blocked_runs(root, checkout.default_branch)
-    stated = [t for t in tickets if not stalled(t, runs) and has_conjecture(t, root, offline_gh)]
+    stated = [t for t in tickets if not stalled(t, runs) and not unstated(t, root, offline_gh)]
     tickets = [t for t in unblocked if not stalled(t, runs)]
     if not tickets:
         held = unblocked[0]
@@ -400,7 +405,8 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
     ready = [ticket for ticket in tickets if ticket in stated]
     return build_step(ready, len(stated), checkout) or Step(
         f"{CONJECTURE} {first.ref}",
-        f'ticket {first.ref} "{first.title}" is agent-ready but states no conjecture',
+        f'ticket {first.ref} "{first.title}" is agent-ready but'
+        f" {unstated(first, root, offline_gh)}",
         f"{FEATURE} {first.ref}",
         "conjecture",
     )

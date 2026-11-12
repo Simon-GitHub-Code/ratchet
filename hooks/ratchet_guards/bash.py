@@ -22,7 +22,7 @@ from dataclasses import replace
 from itertools import pairwise
 from pathlib import PurePosixPath
 
-from ratchet_guards import environment, gh, git, interpreters, writes
+from ratchet_guards import environment, gh, git, interpreters, tickets, writes
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Options, Spec, scan
 from ratchet_guards.shell import PLACEHOLDER, SimpleCommand, parse
@@ -288,14 +288,18 @@ def _inner_scripts(head: str, words: Sequence[str]) -> list[str]:
 
 
 class _Checker:
-    def __init__(self, guard: Guard, depth: int) -> None:
+    def __init__(self, guard: Guard, depth: int, line: str) -> None:
         self.guard = guard
         self.depth = depth
+        self.line = line
+
+    def _deeper(self) -> "_Checker":
+        return _Checker(self.guard, self.depth + 1, self.line)
 
     def script(self, text: str, context: Context) -> list[Verdict]:
         if self.depth > MAX_DEPTH:
             return [Verdict("unreadable", "the command nests scripts too deeply")]
-        inner = _Checker(self.guard, self.depth + 1)
+        inner = self._deeper()
         parsed = parse(text)
         trusted = not any(map(_redefines, parsed.commands))
         now = chain = seen = [context]
@@ -340,7 +344,7 @@ class _Checker:
         self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context
     ) -> list[Verdict]:
         """Check what a pipeline feeds into a shell as scripts of their own."""
-        inner = _Checker(self.guard, self.depth + 1)
+        inner = self._deeper()
         scripts = _stdin_texts(pipeline, heredocs)
         return [v for script in scripts for v in inner.script(script, context)]
 
@@ -358,11 +362,12 @@ class _Checker:
     ) -> list[Verdict]:
         """What inline programs do: write a guard path they name, or run a ``git`` command."""
         verdicts: list[Verdict] = []
-        inner = _Checker(self.guard, self.depth + 1)
+        inner = self._deeper()
         for program in filter(call.writes, programs):
             for command in interpreters.git_commands(program):
                 verdicts += inner.script(command, context)
             names = interpreters.named_paths(program)
+            verdicts += tickets.named(names, self.line, context, guard=self.guard)
             hits = self.guard.locator.words(names, context.cwd, destructive=call.removes(program))
             details = (interpreters.detail(call.name, hit.path, hit.group.name) for hit in hits)
             verdicts += [Verdict("guard-path-write", detail) for detail in details]
@@ -376,7 +381,7 @@ class _Checker:
         hits += find(removed, cwd, destructive=True)
         return [
             Verdict("guard-path-write", f"{verb} {hit.path} ({hit.group.name})") for hit in hits
-        ]
+        ] + tickets.named(written, self.line, context, guard=self.guard)
 
     def words(self, words: Sequence[str], context: Context) -> list[Verdict]:
         assignments, rest = _assignments(words)
@@ -391,7 +396,7 @@ class _Checker:
         return verdicts + self._ruled(head, rest, context)
 
     def _scripts(self, scripts: Sequence[str], context: Context) -> list[Verdict]:
-        inner = _Checker(self.guard, self.depth + 1)
+        inner = self._deeper()
         return [v for script in scripts for v in inner.script(script, context)]
 
     def _wrapped(self, words: Sequence[str], context: Context) -> list[Verdict]:
@@ -415,7 +420,7 @@ class _Checker:
         declared = environment.declared(words)
         if declared:
             return _variables(declared) + self._scripts(environment.commands(declared), context)
-        inner = _Checker(self.guard, self.depth + 1)
+        inner = self._deeper()
         verdicts = [
             v for script in _inner_scripts(head, words) for v in inner.script(script, context)
         ]
@@ -468,4 +473,4 @@ class _Checker:
 
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
     """Every verdict the rules give on a Bash command line run in ``context``."""
-    return _Checker(guard, 0).script(command, context)
+    return tickets.together(_Checker(guard, 0, command).script(command, context))

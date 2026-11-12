@@ -380,6 +380,77 @@ def test_an_adopted_repository_without_commit_hooks_is_red_with_the_repair(
     assert run(root, "4", gh_returning(issue(labels=("ready-for-agent",)))).ok
 
 
+OPERABILITY = (
+    "\n## Operability\n\n- Flag: `notes-list`, off by default\n"
+    "- **Signal:** a span per request, `notes.list`\n"
+    "- Load: the list route joins the load smoke\n"
+    "* security: one read route and no new input\n"
+)
+BODY = "## What to build\n\nA thing." + CONJECTURE
+
+
+def adopted(tmp_path: Path, types: str, body: str, *, gh: Gh | None = None) -> preflight.Report:
+    binding = f"# Binding\n\n## Gates\n\n- Application types: {types}\n"
+    root = repository(tmp_path, {"docs/process/binding.md": binding})
+    install_hooks(root)
+    return run(root, "4", gh or gh_returning(issue(body=body, labels=("ready-for-agent",))))
+
+
+def test_a_ticket_of_a_service_says_how_it_is_operated(tmp_path: Path) -> None:
+    assert adopted(tmp_path / "said", "service", BODY + OPERABILITY).ok
+    silent = adopted(tmp_path / "silent", "service", BODY)
+    assert checks(silent) == ["operability"]
+    assert silent.failures[0].detail == (
+        "4: `## Operability` lacks `Flag:` (the flag the behaviour ships behind), `Signal:` (the"
+        " span, metric or log that shows it working), `Load:` (the route or input the load gates"
+        " gain), `Security:` (the surface it adds: routes, inputs, who may call); write each, or"
+        " `none` and why"
+    )
+    assert "`/ratchet:conjecture <ticket>` writes" in silent.failures[0].produce
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("- Load: the list route joins the load smoke\n", ""),
+        ("the list route joins the load smoke", ""),
+        ("the list route joins the load smoke", "none"),
+        ("the list route joins the load smoke", "<the scenario>"),
+    ],
+)
+def test_a_line_that_says_nothing_is_a_missing_line(tmp_path: Path, old: str, new: str) -> None:
+    report = adopted(tmp_path, "service", BODY + OPERABILITY.replace(old, new))
+    assert checks(report) == ["operability"]
+    assert report.failures[0].detail == (
+        "4: `## Operability` lacks `Load:` (the route or input the load gates gain); write each,"
+        " or `none` and why"
+    )
+
+
+def test_a_line_is_asked_only_of_the_types_its_question_is_asked_of(tmp_path: Path) -> None:
+    assert adopted(tmp_path / "library", "library", BODY).ok
+    assert adopted(tmp_path / "untyped", "", BODY).ok
+    cli = adopted(tmp_path / "cli", "cli", BODY)
+    assert "lacks `Flag:` (the flag the behaviour ships behind); write" in cli.failures[0].detail
+    said = BODY + "\n## Operability\n\n- Flag: none: the command only reads\n"
+    assert adopted(tmp_path / "said", "cli", said).ok
+    both = adopted(tmp_path / "both", "library, web-ui", BODY)
+    assert "`Flag:`" in both.failures[0].detail
+    assert "`Security:`" in both.failures[0].detail
+    assert "`Load:`" not in both.failures[0].detail
+
+
+def test_a_ticket_inherits_the_operability_of_its_parent_spec(tmp_path: Path) -> None:
+    child = issue(body="**Parent:** #12\n\n## What to build\n\nA slice.\n")
+    child = child.replace("agent:ready", "ready-for-agent")
+    whole = ParentGh(child, spec("## Solution\n\nX." + CONJECTURE + OPERABILITY))
+    assert adopted(tmp_path / "whole", "service", "", gh=whole).ok
+    for name, parent in (("bare", spec("## Solution\n\nX." + CONJECTURE)), ("gone", None)):
+        report = adopted(tmp_path / name, "service", "", gh=ParentGh(child, parent))
+        assert "operability" in checks(report), name
+        assert "4: `## Operability` lacks `Flag:`" in report.failures[-1].detail
+
+
 def test_a_repository_that_is_not_adopted_is_not_asked_for_hooks(tmp_path: Path) -> None:
     root = repository(tmp_path)
     assert run(root, "4", gh_returning(issue(labels=("ready-for-agent",)))).ok

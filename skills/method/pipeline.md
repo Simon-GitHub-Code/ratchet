@@ -18,7 +18,7 @@ Severity: *blocker* is a wrong result, data loss, a layer violation or a broken 
 ## The loop
 
 0. Preflight. `scripts/feature_preflight.py` on the ticket: open, `## Conjecture` stated, the agent-ready label present, the tree clean, `HEAD` on the branch, and in an adopted repository a commit that would run tier 0 (`scripts/hooks_installed.py`, which prints the repair when the commit hooks are missing, since the pipeline's commits would otherwise skip tier 0). The skill runs it before the workflow and spawns nothing while it is red; the workflow runs it again as its first stage through one low-effort agent that types the command and relays its JSON. Red stops the run with `verdict: "blocked"` and, per failure, what produces the missing piece.
-1. Spec. An undecided point is an assumption: the spec takes the conservative, reversible answer, builds on it, and returns it in `assumptions` with its refuter, and the pull request lists each one for the owner to counter (ADR 0013). An assumption is by definition one that can be taken back, so it does not hold a merge: under ADR 0021 the owner may read it after the change has merged. A point is an open question in two cases (ADR 0022). It is `irreversible` when a wrong guess cannot be taken back (stored data lost, a public contract fixed, money spent, a security or privacy rule weakened). It is `direction` when the options are different products: describe the product to one of its users after each option, in their words and with no code, and when the descriptions differ in what the user sees, can do, who may do it or what becomes of something that is theirs, the owner chooses. A choice the user could not tell apart is the role's own. Each question carries its kind, two to four options with the recommended one first, and why; the role never asks the owner to confirm. A non-empty `openQuestions` stops the run with `verdict: "blocked"`; the orchestrator puts each question to the owner through the question tool, writes the answer on the ticket under `## Answers`, and builds the ticket again. So does a non-empty `guardEdits`: criteria that need a guard path changed (an import contract, a shared test fixture, a Layers row, the definition of a term the glossary already has) cannot be met by a run with no owner at the keyboard, so the owner lands those edits first, or builds the ticket with `/pstack:poteto-mode` while present, where the guard can ask. A word the glossary lacks is not one: the spec role adds the term with its *Avoid* list, the guard lets an addition through, and the pull request lists it (ADR 0014).
+1. Spec. An undecided point is an assumption: the spec takes the conservative, reversible answer, builds on it, and returns it in `assumptions` with its refuter, and the pull request lists each one for the owner to counter (ADR 0013). An assumption is by definition one that can be taken back, so it does not hold a merge: under ADR 0021 the owner may read it after the change has merged. A point is an open question in two cases (ADR 0022). It is `irreversible` when a wrong guess cannot be taken back (stored data lost, a public contract fixed, money spent, a security or privacy rule weakened). It is `direction` when the options are different products, which [the fork test](#the-fork-test) decides. A choice the user could not tell apart is the role's own. Each question carries its kind, two to four options with the recommended one first, and why; the role never asks the owner to confirm. A non-empty `openQuestions` stops the run with `verdict: "blocked"`; the orchestrator puts each question to the owner through the question tool, writes the answer on the ticket under `## Answers`, and builds the ticket again. So does a non-empty `guardEdits`: criteria that need a guard path changed (an import contract, a shared test fixture, a Layers row, the definition of a term the glossary already has) cannot be met by a run with no owner at the keyboard, so the owner lands those edits first, or builds the ticket with `/pstack:poteto-mode` while present, where the guard can ask. A word the glossary lacks is not one: the spec role adds the term with its *Avoid* list, the guard lets an addition through, and the pull request lists it (ADR 0014).
 2. Implement.
 3. Critique.
 4. While blocker or major findings remain, up to two rounds: a *fresh* fix agent (it has not seen the previous implementer's reasoning), then re-critique by title plus a search for new breakage.
@@ -26,6 +26,24 @@ Severity: *blocker* is a wrong result, data loss, a layer violation or a broken 
 6. The script forces `request_changes` when blocking findings are unresolved, when the last implement or fix reported `checkPasses: false`, when the spec's tests did not fail for the right reason or a test file has no quoted failure, when the critic found nothing and attempted nothing, or when a guard path changed without a dispute naming it, unless it is a dependency the spec named (ADR 0011) or a record whose `guard-diff` note is `additions:` (ADR 0014). `verdictForcedBy` says which.
 
 At most nine agents run, the preflight's included, and at most two more when the change is judged again behind another merge. Agents leave every change uncommitted; the orchestrator commits and publishes. An agent blocked by a guard path writes a dispute and returns it.
+
+## The fork test
+
+It decides whether an undecided point is the owner's because the options are different products. The Spec role's prompt carries this text and `/ratchet:conjecture` applies it, so the owner is asked the same things before a drain as during one.
+
+The test: describe the product to one of its users after each option, in the user's words and with no code in the sentence. When the two descriptions differ in what the user sees, what they can do, who may do it or what becomes of something that is theirs, the owner chooses. When the user could not tell which option was built, the agent chooses.
+
+Three that are the owner's:
+
+- "Should an expired link show a page that says it expired, or send the visitor to the home page?" The visitor sees a different thing.
+- "May anyone with the link close a poll, or only the person who made it?" Who may do it.
+- "When a voter answers twice, does the second answer replace the first or is it refused?" What becomes of their answer.
+
+Three that are the agent's to assume:
+
+- Which HTTP status answers a reserved code. No user's product changes with it.
+- Whether the expiry is checked in the store or in the route. The user cannot tell.
+- A limit the ticket leaves unstated where one value is plainly the safe one: take it, and the owner relaxes it in a later change.
 
 ## The orchestrator
 

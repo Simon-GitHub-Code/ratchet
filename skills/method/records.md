@@ -45,14 +45,22 @@ The format is domain-modeling's `ADR-FORMAT.md`, and its three-part test for whe
 
 ## Feature input: a tracker ticket
 
-A feature starts as the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` writes: on the tracker (`gh issue view <n>`), or a local file under `.scratch/<slug>/issues/` where there is no tracker. Its sections are those skills' (What to build, Acceptance criteria, Blocked by; or Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope). The method adds one section and reads one label:
+A feature starts as the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` writes: on the tracker (`gh issue view <n>`), or a local file under `.scratch/<slug>/issues/` where there is no tracker. Its sections are those skills' (What to build, Acceptance criteria, Blocked by; or Problem Statement, Solution, User Stories, Implementation Decisions, Testing Decisions, Out of Scope). The method adds two sections and reads one label:
 
 ```markdown
 ## Conjecture
 The one approach expected to work, stated so it can be shown wrong: what would refute it. The alternatives considered and the criticism that kills each.
+
+## Operability
+- Flag: the flag the behaviour ships behind
+- Signal: the span, metric or log that shows it working
+- Load: the route or input the load gates gain
+- Security: the surface it adds: routes, inputs, who may call
 ```
 
-The agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The skill the owner typed applies it; the guard asks when an agent tries to. `/ratchet:conjecture <ticket>` drafts the section from the conversation that produced the ticket, writes it and prints it; it asks only where the record leaves two different products open. `scripts/feature_preflight.py` refuses a ticket that is closed, has no stated conjecture or lacks the label, and names the skill that produces each missing piece; `/ratchet:feature <ticket>` runs it before any agent exists, and the pipeline runs it again as its first stage. The spec role writes `docs/features/<slug>/spec.md` from the ticket, and adds what the ticket need not carry: the telemetry that shows each criterion working in production, the feature flag that gates the new behaviour (or why there is none), and the assumptions it made where the ticket was silent, each with its refuter.
+A line of `## Operability` is asked when the binding declares an application type its question is asked of (`application-types.toml`), so a library's ticket carries none; a line that does not apply says `none` and why. A ticket inherits both sections from its parent spec.
+
+The agent-ready label (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The skill the owner typed applies it; the guard asks when an agent tries to, once for a call, so one call that gives every ticket of a spec the label is one ask, which names each. `/ratchet:conjecture <ticket>` drafts both sections from the conversation that produced the ticket, writes it and prints it; it asks only where the record leaves two different products open. `scripts/feature_preflight.py` refuses a ticket that is closed, has no stated conjecture, leaves out an operability line it is asked or lacks the label, and names the skill that produces each missing piece; `/ratchet:feature <ticket>` runs it before any agent exists, and the pipeline runs it again as its first stage. The spec role writes `docs/features/<slug>/spec.md` from the ticket, and adds what the ticket need not carry: the telemetry that shows each criterion working in production, the feature flag that gates the new behaviour (or why there is none), and the assumptions it made where the ticket was silent, each with its refuter.
 
 The owner's answers to a run's open questions are a section of the ticket too, written by the skill that asked:
 

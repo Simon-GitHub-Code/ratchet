@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from ratchet_guards import hook, tickets
-from ratchet_guards.verdict import Decision
+from ratchet_guards.verdict import Decision, Verdict
 from tests.support import LABELS_RECORD, ROOT, FakeFilesystem, make_guard
 
 TICKET = "/repo/.scratch/f/issues/02-b.md"
@@ -86,6 +86,97 @@ def test_other_writes_to_tracker_files_pass(
     tool: str, tool_input: dict[str, object], existing: str | None
 ) -> None:
     assert decide(tool, tool_input, existing) is None
+
+
+ISSUES = "/repo/.scratch/f/issues"
+ON_DISK = {
+    f"{ISSUES}/01-a.md": TRIAGED,
+    f"{ISSUES}/02-b.md": TRIAGED,
+    f"{ISSUES}/03-c.md": "Status: agent:ready\n",
+    "/repo/.scratch/f/notes.txt": "notes\n",
+    "/repo/docs/notes.md": "notes\n",
+}
+SED = "sed -i s/needs-triage/agent:ready/"
+
+
+def called(tool: str, tool_input: dict[str, object]) -> Verdict | None:
+    contents = {"/repo/docs/agents/triage-labels.md": LABELS_RECORD, **ON_DISK}
+    filesystem = FakeFilesystem(files=tuple(contents), contents=contents)
+    payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(ROOT)}
+    return hook.decide(payload, make_guard(filesystem=filesystem))
+
+
+def shell(command: str) -> str | None:
+    verdict = called("Bash", {"command": command})
+    if verdict is None:
+        return None
+    assert verdict.rule == "agent-ready-label"
+    assert verdict.decision is Decision.ASK
+    return verdict.detail
+
+
+def test_one_command_over_the_tickets_of_a_spec_is_one_ask_that_names_each() -> None:
+    asked = shell(f"{SED} .scratch/f/issues/*.md")
+    assert asked == "01-a.md, 02-b.md get the status `agent:ready`", "03-c.md holds it already"
+    assert shell(f"{SED} .scratch/f/issues/*") == asked, "the pattern is read, not its suffix"
+
+
+@pytest.mark.parametrize(
+    ("command", "named"),
+    [
+        (f"{SED} .scratch/f/issues/01-a.md", "01-a.md gets"),
+        (f"cd .scratch/f/issues && {SED} 01-a.md", "01-a.md gets"),
+        ("echo 'Status: agent:ready' > .scratch/f/issues/04-d.md", "04-d.md gets"),
+        ("printf 'Status: agent:ready' | tee .scratch/f/issues/04-d.md", "04-d.md gets"),
+        ("cat > .scratch/f/issues/04-d.md <<'EOF'\nStatus: agent:ready\nEOF", "04-d.md gets"),
+        ("perl -pi -e s/needs-triage/agent:ready/ .scratch/f/issues/02-b.md", "02-b.md gets"),
+        (
+            "python3 -c \"open('.scratch/f/issues/01-a.md', 'w').write('Status: agent:ready')\"",
+            "01-a.md gets",
+        ),
+    ],
+)
+def test_a_shell_write_that_gives_a_local_ticket_the_status_asks(command: str, named: str) -> None:
+    assert shell(command) == f"{named} the status `agent:ready`"
+
+
+def test_two_commands_on_one_line_are_one_ask_that_names_both_tickets() -> None:
+    asked = shell(f"{SED} .scratch/f/issues/01-a.md && {SED} .scratch/f/issues/02-b.md")
+    assert asked == ("01-a.md gets the status `agent:ready`; 02-b.md gets the status `agent:ready`")
+    forge = shell(f"gh issue edit 4 --add-label agent:ready; {SED} .scratch/f/issues/01-a.md")
+    assert forge == "gh issue edit agent:ready; 01-a.md gets the status `agent:ready`"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sed -i s/agent:ready/resolved/ .scratch/f/issues/03-c.md",
+        "sed -i s/needs-triage/needs-info/ .scratch/f/issues/01-a.md",
+        "grep -l agent:ready .scratch/f/issues/*.md",
+        "sed s/needs-triage/agent:ready/ .scratch/f/issues/01-a.md",
+        f"{SED} docs/notes.md",
+        f"{SED} .scratch/f/notes.txt",
+        f"{SED} ''",
+    ],
+)
+def test_a_shell_command_that_gives_no_ticket_the_status_passes(command: str) -> None:
+    assert shell(command) is None
+
+
+def test_a_patch_that_gives_local_tickets_the_status_is_one_ask_that_names_each() -> None:
+    patch = (
+        "*** Begin Patch\n"
+        "*** Add File: .scratch/f/issues/04-d.md\n+Status: agent:ready\n"
+        "*** Update File: .scratch/f/issues/01-a.md\n@@\n-needs-triage\n+agent:ready\n"
+        "*** Update File: .scratch/f/issues/03-c.md\n@@\n-Status: agent:ready\n+Body.\n"
+        "*** End Patch\n"
+    )
+    verdict = called("apply_patch", {"input": patch})
+    assert verdict is not None
+    assert verdict.rule == "agent-ready-label"
+    assert verdict.detail == "04-d.md, 01-a.md get the status `agent:ready`"
+    quiet = patch.replace("agent:ready", "needs-info")
+    assert called("apply_patch", {"input": quiet}) is None
 
 
 def test_without_a_record_the_role_name_is_the_label() -> None:

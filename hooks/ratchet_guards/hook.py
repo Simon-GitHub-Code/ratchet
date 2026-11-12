@@ -24,7 +24,8 @@ names the matched command, and the method asks agents to keep a gated command in
 call of its own.
 
 An Edit, Write or MultiEdit that gives a local ticket under ``.scratch/`` the agent-ready status
-asks, as applying that label on a forge does (``ratchet_guards.tickets``).
+asks, as applying that label on a forge does, and so does a command line or a patch that names
+the label and writes the ticket (``ratchet_guards.tickets``).
 
 One forge write is allowed by a record: ``gh label create <name>`` in a checkout whose
 ``docs/agents/triage-labels.md`` lists ``<name>`` in its "Label in our tracker" column (see
@@ -319,7 +320,8 @@ def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | 
         hit = guard.locator.classify(cwd / match.group("path").strip(), destructive=destructive)
         if hit is not None:
             verdicts.append(_hit_verdict(hit))
-    return strictest(verdicts)
+    paths = [match.group("path").strip() for match in PATCH_HEADER.finditer(text)]
+    return strictest(verdicts + tickets.named(paths, text, Context(cwd), guard=guard))
 
 
 def _edit(call: Call, path: Path, guard: Guard) -> Verdict | None:
