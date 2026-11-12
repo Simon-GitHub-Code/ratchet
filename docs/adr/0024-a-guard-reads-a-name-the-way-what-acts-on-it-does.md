@@ -54,3 +54,19 @@ Known residue, caught by no rule. A script run by path, and a ref, path or branc
 - Remove any directory found in the queue's own: rejected, that is how a planted link emptied what it pointed at.
 
 Decided 2026-11-12.
+
+## What the forge showed
+
+The merge job was run on a private sandbox repository on 2026-11-12, one pull request per case.
+
+A run's `pull_requests` list holds every open pull request with that head commit, each with its current base, even for a run made before a retarget. So that list alone would have counted a green run against a weakened base for the pull request against the default branch. The rule that a branch with a pull request against another base is the owner's is what stopped it, and the retarget rule is what stops a retargeted pull request. The rules were right not to rest on the list.
+
+A manual retarget records the event `base_ref_changed` and starts no new run. `automatic_base_change_succeeded` was not observed, so the rule keeps naming it on inference.
+
+The `head_branch` of a pull request run is the pull request's branch. A `workflow_dispatch` on a tag named as the default branch gets a `head_branch` equal to that name, and the runs API's branch filter returns it. `forge_runs.py deep` did not count it: given the forge's answer with every branch run edited to failure and the tag run left green, it said red.
+
+The loop over every green pull request ran on the forge. Two green pull requests were judged in one run and one merged. The other was told `behind` against the new tip, and the next run edited the same comment.
+
+The clean case merged itself, deleted its branch and dispatched `deep`. The `unflagged` reason sent a pull request that added to a surface snapshot with no flag to the owner. A pull request that removed guard paths went to the owner with each path listed.
+
+Not observed: read-only default workflow permissions, a merge the token is refused, and a red tier 2 on the default branch's tip.

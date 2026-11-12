@@ -40,7 +40,7 @@ The first version of this decision was checked on a private sandbox repository o
 
 Two things differed from what was inferred. First, of four runs queued together GitHub ran one, cancelled two and ran the newest: the group keeps one waiting run, and the pull requests of the cancelled runs got no verdict for their head. A pull request that would have passed would have waited for its next push with no word said. The job now judges every green pull request in each run, so a cancelled run loses nothing. Second, a matrix that `fromJSON` expands to no values fails the run before the job exists. A `*_sharded` list in the `justfile` that is empty gave an empty long matrix, so the long jobs of `ci.yml` and `deep.yml` now skip when it is `[]`.
 
-Not observed: a repository whose default workflow permissions are read-only (the sandbox's setting could not be read), a token refused the merge, and the loop over every green pull request on the forge. That loop is tested against a stand-in for `gh` and awaits its first run on the default branch, since `workflow_run` runs only the version the default branch holds.
+Not observed: a repository whose default workflow permissions are read-only (the sandbox's setting could not be read), a token refused the merge, and the loop over every green pull request on the forge. That loop is tested against a stand-in for `gh` and awaits its first run on the default branch, since `workflow_run` runs only the version the default branch holds. That loop has since run on the forge, as the section "What the forge showed" of ADR 0024 records.
 
 ## Refutation criterion
 
