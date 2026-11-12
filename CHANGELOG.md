@@ -8,7 +8,7 @@ A change the gates can judge now merges without the owner, and the owner is aske
 
 - A pull request merges without the owner when its gates are green, the review approves, no blocker or major finding is open, no guard path changed other than by an addition to a record or a tightened threshold, it goes through no one-way door and tier 2 is not red on the default branch. Everything else waits for the owner, with the reasons written on the pull request. (ADR 0021)
 - `scripts/merge_ready.py`, behind the new `merge-ready` entry point, is the judge. It reads commits only and prints `merge: agent` or `merge: owner` with one reason per line.
-- On GitHub the new `merge.yml` workflow runs after `ci` from the default branch and merges each pull request the judge passes. With no forge, the new `merge <branch>` entry point judges the branch, runs `check` on the merge result and merges it.
+- On GitHub the new `merge.yml` workflow runs after `ci` from the default branch and merges each pull request the judge passes. With no forge, the new `merge <branch>` entry point judges the branch, runs `check` on the merge result and merges it. When the judge leaves the merge to the owner, it prints the command the owner types and the `check-deep` to run after it.
 - One-way doors are `[[door]]` tables in `guards/manifest.toml`, of three kinds: `change`, `rewrite` and `removal`. A door guards nothing; only the judge reads it.
 - The guard hook asks on `git merge`, `git cherry-pick` and a pull of another branch on the default branch, and refuses any command that moves, deletes or re-points the default branch's ref. (ADR 0016, ADR 0021)
 

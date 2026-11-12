@@ -6,7 +6,9 @@ remote. It makes a temporary work tree of the default branch, merges the branch 
 ``--no-ff``, asks the merge judge (``merge_ready.py``) about the branch, and runs the binding's
 ``check`` in that work tree: on the merge result, never on the branch. Only when the judge says
 ``merge: agent`` and ``check`` is green does the default branch move to the merge commit, forward
-and nowhere else. Otherwise it prints ``merge: owner`` with every reason and changes nothing.
+and nowhere else. Otherwise it prints ``merge: owner`` with every reason and changes nothing; where
+the reasons are the judge's, it prints the owner's merge command and the tier 2 entry point to run
+after it.
 The work tree is removed either way.
 
 ``check`` runs in a fresh work tree, as it does in CI, so its recipes install what they need.
@@ -34,6 +36,10 @@ from merge_ready import Reason
 HEADS = "refs/heads/"
 CHECK = "check"
 TIER2 = "check-deep"
+NEXT = "next: "
+# Why: these say the merge itself failed, which the owner's merge would meet too; every other
+# reason is the judge's, and the owner merging is what it asks for.
+NOT_THE_JUDGES = frozenset({"gates", "conflict", "moved", "refs"})
 
 
 def local_default(root: Path) -> str | None:
@@ -121,11 +127,18 @@ def merge(root: Path, branch: str) -> int:
         shutil.rmtree(scratch, ignore_errors=True)
         gatelib.git(root, "worktree", "prune")
     print(merge_ready.render(reasons), end="")
+    if reasons and not any(reason.code in NOT_THE_JUDGES for reason in reasons):
+        command = gatelib.entry_point(root, TIER2)
+        deep = f"`{command}`" if command else f"the binding's `{TIER2}` entry point"
+        print(
+            f"{NEXT}the owner types `git switch {default} && git merge --no-ff {branch}`, then"
+            f" {deep} on `{default}`: no gate ran on this merge, and tier 2 runs every gate"
+        )
     if reasons:
         return 1
     deep = gatelib.entry_point(root, TIER2) or f"the binding's `{TIER2}` entry point"
     print(f"merged: `{branch}` into `{default}` at {merged[:12]}")
-    print(f"next: {deep} on `{default}`: tier 2 runs after every merge, and a red one comes first")
+    print(f"{NEXT}{deep} on `{default}`: tier 2 runs after every merge, and a red one comes first")
     return 0
 
 

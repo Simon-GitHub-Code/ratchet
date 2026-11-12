@@ -86,7 +86,11 @@ def test_a_change_the_judge_leaves_to_the_owner_is_not_merged(
     before = tips(root)
     capsys.readouterr()
     assert run(root) == 1
-    assert capsys.readouterr().out == "merge: owner\nguard: justfile (gate-commands)\n"
+    assert capsys.readouterr().out == (
+        "merge: owner\nguard: justfile (gate-commands)\n"
+        f"next: the owner types `git switch main && git merge --no-ff {FEATURE}`, then"
+        " `just check-deep` on `main`: no gate ran on this merge, and tier 2 runs every gate\n"
+    )
     assert tips(root) == before
     assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
 

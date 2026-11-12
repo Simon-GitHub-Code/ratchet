@@ -58,6 +58,7 @@ from typing import TYPE_CHECKING
 
 import feature_preflight as preflight
 import gatelib
+import merge
 import merge_ready
 import route
 
@@ -587,7 +588,7 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
         return 2
     lines = done.stdout.splitlines()
     at = lines.index(merge_ready.OWNER) if merge_ready.OWNER in lines else len(lines)
-    reasons = [line for line in lines[at + 1 :] if line.strip()]
+    reasons = [line for line in lines[at + 1 :] if line.strip() and not line.startswith(merge.NEXT)]
     close(drain.root, ticket, outcome=WAITS if done.returncode else MERGED, reasons=reasons)
     return done.returncode
 
