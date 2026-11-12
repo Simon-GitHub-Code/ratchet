@@ -21,7 +21,8 @@ RECORDS_PID = "import os, sys\nopen(sys.argv[1], 'w').write(str(os.getpid()))\n"
 PROBE = (
     "import os, sys, urllib.request as u\n"
     "status = u.urlopen(sys.argv[1]).status\n"
-    "open(sys.argv[2], 'w').write(f'{status} {os.environ[\"PORT\"]} {os.environ[\"K\"]}')"
+    "seen = [str(status), *(os.environ[name] for name in ('PORT', 'K', 'RATCHET_READY'))]\n"
+    "open(sys.argv[2], 'w').write(' '.join(seen))"
 )
 FORKS_A_WORKER = (
     "import subprocess, sys\n"
@@ -62,9 +63,10 @@ def test_the_command_runs_while_the_service_is_up_and_sees_the_port(
         *("--", sys.executable, "-c", PROBE, "http://127.0.0.1:{port}/", str(seen)),
         capsys=capsys,
     )
-    status, port, value = seen.read_text(encoding="utf-8").split()
+    status, port, value, ready = seen.read_text(encoding="utf-8").split()
     assert (code, out, status) == (0, "with_service: green\n", "200")
     assert value == f"v{port}", "{port} is replaced in --env and exported as PORT"
+    assert ready == READY.format(port=port), "the ready URL is exported with its port filled in"
     assert not gatelib.listening(f"http://127.0.0.1:{port}/"), "the service is stopped"
 
 

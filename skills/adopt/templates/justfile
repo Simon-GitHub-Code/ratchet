@@ -251,11 +251,13 @@ telemetry:
 flag-states:
     @echo "bind: for each key of flags.py --changed, the suite with the flag forced off, then on"; exit 1
 
-# Shipped: seconds of concurrent requests at the booted deliverable, judged on errors only. Add
+# Shipped: seconds of concurrent requests at the booted deliverable, judged on errors only. Name
 # one `--url "METHOD URL STATUS BODY"` per route worth overlapping; the binding's Limits hold the
-# `--concurrency` and `--seconds`.
+# `--concurrency` and `--seconds`. The smoke is red while it requests nothing but the readiness
+# URL. A skeleton whose one route is readiness replaces the `--url` with `--health-only`: green,
+# and it says so on every run until the first route takes its place.
 load-smoke:
-    {{booted}} -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --url "{{ready}}"
+    {{booted}} -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --url "bind: METHOD URL STATUS BODY of a route worth overlapping, on port {port}"
 
 # Shipped: the pull-request half of the proof that every bound gate bites. It proves nothing, at
 # the cost of a few git calls, unless the change touches a path that defines a gate; then it

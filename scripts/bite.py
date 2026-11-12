@@ -480,7 +480,7 @@ def python(code: str) -> str:
 
 
 READY = "http://127.0.0.1:{port}/"
-LOAD = ["--seconds", "0.5", "--concurrency", "2", "--min-requests", "1"]
+LOAD = ["--ready", "{stub}/health", "--seconds", "0.5", "--concurrency", "2", "--min-requests", "1"]
 SINK = ["--service", "bite", "--require", "traces"]
 SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
     (
@@ -496,6 +496,12 @@ SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
         load_smoke.main,
         ["--url", "{stub}/ok", *LOAD],
         ["--url", "{stub}/boom", *LOAD],
+    ),
+    (
+        "load-smoke: nothing but the readiness URL",
+        load_smoke.main,
+        ["--url", "{stub}/ok", *LOAD],
+        ["--url", "{stub}/health", *LOAD],
     ),
     (
         "telemetry-sink: no telemetry",

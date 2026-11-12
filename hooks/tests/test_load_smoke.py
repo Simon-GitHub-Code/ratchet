@@ -29,6 +29,13 @@ def handle(handler: http.server.BaseHTTPRequestHandler) -> None:
 
 
 RELEASE = threading.Event()
+HEALTH_ONLY = "load-smoke: health only: readiness is the one route requested (--health-only)"
+
+
+@pytest.fixture(autouse=True)
+def inside_with_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The readiness URL as ``with_service.py`` exports it; no test's route is that one."""
+    monkeypatch.setenv(gatelib.READY_ENV, "http://127.0.0.1:1/ready")
 
 
 def smoke(*args: str, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
@@ -49,6 +56,70 @@ def test_green_on_a_healthy_service_and_the_latency_is_printed(
     assert "answered; latency ms p50 " in lines[0]
     assert lines[0].endswith("(printed, not judged)")
     assert lines[1] == "load-smoke: green"
+
+
+@pytest.mark.parametrize("spec", ["{url}/health", "POST {url}/health 200", "{url}/health 200"])
+def test_a_smoke_that_requests_nothing_but_readiness_is_red_before_it_sends_anything(
+    capsys: pytest.CaptureFixture[str], spec: str
+) -> None:
+    dead = f"http://127.0.0.1:{gatelib.free_port()}"
+    code, out = smoke(
+        "--url", spec.format(url=dead), "--ready", f"{dead}/health", *SHORT, capsys=capsys
+    )
+    assert code == 1
+    assert out == (
+        f"every --url is the readiness URL {dead}/health: the smoke overlaps no request a user"
+        " makes; add a --url per route worth overlapping, or pass --health-only while readiness"
+        " is the service's only route\nload-smoke: red\n"
+    )
+
+
+def test_a_skeleton_with_one_route_says_health_only_and_is_green(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with servers.server(handle) as url:
+        monkeypatch.setenv(gatelib.READY_ENV, f"{url}/health")
+        code, out = smoke("--health-only", *SHORT, capsys=capsys)
+        assert code == 0
+        assert out.startswith(HEALTH_ONLY)
+        assert out.endswith("load-smoke: green\n")
+        code, out = smoke("--health-only", "--url", f"{url}/health", *SHORT, capsys=capsys)
+        assert (code, out.startswith(HEALTH_ONLY)) == (0, True)
+        code, out = smoke("--health-only", "--url", f"{url}/ok", *SHORT, capsys=capsys)
+        assert code == 0
+        assert HEALTH_ONLY not in out, "a real route is requested, so the flag says nothing"
+        code, out = smoke("--url", f"{url}/health", "--url", f"{url}/ok", *SHORT, capsys=capsys)
+        assert code == 0, "readiness beside a real route is fine"
+
+
+def test_the_readiness_url_is_one_place_however_it_is_written() -> None:
+    assert load_smoke.same_place("http://h:1", "http://h:1/")
+    assert load_smoke.same_place("http://h:1/health?x=1", "http://h:1/health?x=1")
+    assert not load_smoke.same_place("http://h:1/health?x=1", "http://h:1/health")
+    assert not load_smoke.same_place("http://h:1/links", "http://h:1/health")
+    assert not load_smoke.same_place("http://h:2/health", "http://h:1/health")
+
+
+@pytest.mark.parametrize(
+    ("args", "said"),
+    [
+        (["--url", "http://127.0.0.1:9/"], "with_service.py exports it as RATCHET_READY"),
+        (["--url", "http://127.0.0.1:9/", "--ready", "ftp://h/"], "not an http or https URL"),
+        (["--ready", "http://127.0.0.1:9/"], "name a --url per route, or --health-only"),
+    ],
+)
+def test_a_smoke_that_cannot_tell_readiness_from_a_route_is_a_usage_error(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    args: list[str],
+    said: str,
+) -> None:
+    monkeypatch.delenv(gatelib.READY_ENV)
+    with pytest.raises(SystemExit) as caught:
+        load_smoke.main(["load_smoke.py", *args])
+    assert caught.value.code == 2
+    assert said in capsys.readouterr().err
 
 
 def test_a_5xx_is_red_and_counted(capsys: pytest.CaptureFixture[str]) -> None:

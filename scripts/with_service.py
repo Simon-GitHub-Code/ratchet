@@ -19,6 +19,8 @@ Usage::
 * ``{port}`` in ``--boot``, ``--ready``, an ``--env`` value or the command is replaced by a free
   port the kernel picked, and ``PORT`` is exported with it, so parallel CI jobs on one host do
   not collide on a fixed port. The boot output is shown only when the run is red.
+* ``RATCHET_READY`` is exported with the ready URL, port filled in, so the command can tell the
+  readiness route from the rest: ``load_smoke.py`` is red while it requests nothing else.
 * Something already answering on the ready URL's port before the boot is red, since the probe
   would then judge a service this run did not start. A port still bound after the stop is red
   too: a process escaped the stop.
@@ -155,6 +157,7 @@ def main(argv: list[str]) -> int:
         return text.replace(PORT_TOKEN, env.get("PORT", PORT_TOKEN))
 
     options.boot, options.ready = expand(options.boot), expand(options.ready)
+    env[gatelib.READY_ENV] = options.ready
     env.update({key: expand(value) for key, value in options.env})
     command = [expand(word) for word in command]
     if urlsplit(options.ready).scheme not in ("http", "https"):

@@ -30,6 +30,9 @@ if TYPE_CHECKING:
 
 FALLBACK_BRANCHES = ("main", "master")
 BINDING = Path("docs/process/binding.md")
+# Why: `with_service.py` exports the URL it waited on, so a command run inside it can tell the
+# readiness route from the routes a user requests.
+READY_ENV = "RATCHET_READY"
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)

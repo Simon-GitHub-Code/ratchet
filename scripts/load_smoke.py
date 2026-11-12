@@ -7,10 +7,19 @@ expected is red. The request count and the latency percentiles are printed and n
 since a pull-request runner is no benchmark host. One judged number exists: ``--min-requests``,
 a floor on requests answered, so a service that hangs or crawls is red and not vacuously green.
 
+The smoke must overlap requests a user makes. It is red, before it sends anything, when every
+``--url`` is the readiness URL: a health route answers while every other route is broken. The
+readiness URL is ``--ready``, which ``with_service.py`` exports as ``RATCHET_READY``, so inside
+it there is nothing to pass. A walking skeleton whose one route is readiness says so with
+``--health-only`` and no ``--url``: the smoke then requests readiness, is green, and prints on
+every run that it is health only. The flag does not expire on its own; the first route replaces
+it with a ``--url``.
+
 Usage::
 
-    load_smoke.py --url URL [--url URL]... [--concurrency 8] [--seconds 5] [--min-requests 20]
-                  [--timeout 5]
+    load_smoke.py --url URL [--url URL]... [--ready URL] [--concurrency 8] [--seconds 5]
+                  [--min-requests 20] [--timeout 5]
+    load_smoke.py --health-only [--ready URL] ...
 
 A ``--url`` is ``[METHOD] URL [STATUS [BODY]]``, one argument, words separated by spaces:
 ``http://127.0.0.1:8000/health``, ``POST http://127.0.0.1:8000/links 201 {"url": "http://a.b"}``.
@@ -36,11 +45,13 @@ from __future__ import annotations
 import argparse
 import collections
 import http.client
+import os
 import re
 import sys
 import threading
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import gatelib
 
@@ -80,6 +91,36 @@ def target(text: str) -> Target:
         raise argparse.ArgumentTypeError(message)
     return Target(
         method or "GET", url, int(status) if status else None, body.encode() if body else None
+    )
+
+
+def same_place(url: str, ready: str) -> bool:
+    """Whether ``url`` is the readiness URL: the same host, port, path and query."""
+    places = [(part.netloc, part.path or "/", part.query) for part in map(urlsplit, (url, ready))]
+    return places[0] == places[1]
+
+
+def targets_of(parser: argparse.ArgumentParser, options: argparse.Namespace) -> list[Target] | str:
+    """The requests to send, or why the smoke would overlap nothing a user requests."""
+    try:
+        ready = target(options.ready or "")
+    except argparse.ArgumentTypeError as error:
+        parser.error(f"--ready: {error}; with_service.py exports it as {gatelib.READY_ENV}")
+    targets: list[Target] = options.url or ([ready] if options.health_only else [])
+    if not targets:
+        parser.error("name a --url per route, or --health-only while readiness is the only route")
+    if any(not same_place(goal.url, ready.url) for goal in targets):
+        return targets
+    if options.health_only:
+        print(
+            "load-smoke: health only: readiness is the one route requested (--health-only); "
+            "name the first real route here when it lands"
+        )
+        return targets
+    return (
+        f"every --url is the readiness URL {ready.url}: the smoke overlaps no request a user "
+        "makes; add a --url per route worth overlapping, or pass --health-only while readiness "
+        "is the service's only route"
     )
 
 
@@ -148,7 +189,9 @@ def hammer(
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="load_smoke.py")
-    parser.add_argument("--url", action="append", type=target, required=True)
+    parser.add_argument("--url", action="append", type=target, default=[])
+    parser.add_argument("--ready", default=os.environ.get(gatelib.READY_ENV))
+    parser.add_argument("--health-only", action="store_true")
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--seconds", type=float, default=5.0)
     parser.add_argument("--min-requests", type=int, default=20)
@@ -156,8 +199,11 @@ def main(argv: list[str]) -> int:
     options = parser.parse_args(argv[1:])
     if options.concurrency < 1 or options.seconds <= 0 or options.timeout <= 0:
         parser.error("--concurrency, --seconds and --timeout must be positive")
+    targets = targets_of(parser, options)
+    if isinstance(targets, str):
+        return gatelib.report("load-smoke", [targets])
     latencies, errors = hammer(
-        options.url, options.concurrency, options.seconds, timeout=options.timeout
+        targets, options.concurrency, options.seconds, timeout=options.timeout
     )
     if latencies:
         p50, p95, p99, worst = (percentile(latencies, f) * 1000 for f in (0.5, 0.95, 0.99, 1.0))

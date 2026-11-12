@@ -211,7 +211,8 @@ def test_the_three_service_gates_arrive_bound_to_the_shipped_scripts() -> None:
     assert '/scripts/with_service.py" --boot "\' + boot + \'" --ready "\' + ready' in JUSTFILE
     assert recipe("smoke").strip() == "{{booted}}"
     assert recipe("load-smoke").startswith("    {{booted}} -- python3 ")
-    assert 'scripts/load_smoke.py" --url "{{ready}}"' in recipe("load-smoke")
+    assert 'scripts/load_smoke.py" --url "bind: METHOD URL' in recipe("load-smoke")
+    assert "{{ready}}" not in recipe("load-smoke"), "readiness alone overlaps nothing a user asks"
     assert 'scripts/telemetry_sink.py" --service "{{service}}" -- {{booted}} --' in recipe(
         "telemetry-e2e"
     )
