@@ -5,6 +5,7 @@
   "author": {
     "name": "Simon Tulett"
   },
+  "license": "MIT",
   "keywords": [
     "method",
     "quality-gates",
