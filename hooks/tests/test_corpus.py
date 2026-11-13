@@ -8,7 +8,7 @@ Each row is a command run in ``/repo`` on branch ``feat/work`` with an unpushed 
 import pytest
 
 from ratchet_guards.manifest import EMPTY
-from tests.support import FakeRepo, make_guard, rules
+from tests.support import ROOT, FakeRepo, make_guard, rules
 
 W = "guard-path-write"
 D = "default-ref"
@@ -223,6 +223,32 @@ DENIED: list[tuple[str, list[str]]] = [
     ("(cd .github/workflows; echo ${x/)/} ${y:-${z#)}}; echo hi > ci.yml)", [W]),
     ("echo ${x:-$(rm -rf .github/workflows)}", [W]),
     ("echo ${x:-`rm -rf .github/workflows`}", [W]),
+    ("x=${ rm -f justfile; }", [W]),
+    ("x=${| rm -rf .github guards; }", [W]),
+    ("x=${\nrm -f justfile\n}", [W]),
+    ("x=${\trm -f justfile;}", [W]),
+    ('echo "${ rm -f justfile; }"', [W]),
+    ("echo ${v:-${ rm -f justfile; }}", [W]),
+    ('echo "${v:-${| rm -f justfile; }}"', [W]),
+    ("x=${ git commit --no-verify -m x; }", ["no-verify"]),
+    ("x=${ { cd .github; }; }; echo x > workflows/ci.yml", [W]),
+    ("x=${ cd .github/workflows; }; echo x > ci.yml", [W]),
+    ("echo ${ cd .github; }; echo x > workflows/ci.yml", [W]),
+    ('echo "${| cd .github; }" >/dev/null; echo x > workflows/ci.yml', [W]),
+    ("x=${ cd .github; } cp a workflows/ci.yml", [W]),
+    ("echo ${ echo }; cd .github; }; echo x > workflows/ci.yml", [W]),
+    ("(cd .github; true |<<E cat\n)\nE\necho x > workflows/ci.yml)", [W]),
+    ("(cd .github;<<E cat\n)\nE\necho x > workflows/ci.yml)", [W]),
+    ("true |<<E cat\n'\nE\nrm -f justfile\necho '", [W]),
+    ("cd .github;>workflows/ci.yml", [W]),
+    ("cd .github&&>workflows/ci.yml", [W]),
+    ('(cd .github; echo "${v:-" ) "}"; echo x > workflows/ci.yml)', [W]),
+    ("(cd .github; (cd workflows); echo x > workflows/ci.yml)", [W]),
+    ("function f { rm -f justfile; }; f", [W]),
+    ("cat <<E\\ F\nE F\nrm -f justfile\nE", [W]),
+    ("cat <<'E F'\nE F\nrm -f justfile\nE", [W]),
+    ("(( x = 1 << y ))\nrm -f justfile\ny", [W]),
+    ("echo $(( 1 << 2 ))\nrm -f justfile\n2", [W]),
     ("env -C .github/workflows tee ci.yml", [W]),
     ("env --chdir=.github/workflows tee ci.yml", [W]),
     ("env --ch .github/workflows tee ci.yml", [W]),
@@ -1641,3 +1667,38 @@ def test_a_write_after_a_directory_the_guard_cannot_resolve_is_asked(command: st
 @pytest.mark.parametrize("command", NOT_ASKED_ELSEWHERE)
 def test_a_write_that_is_no_guard_path_after_such_a_directory_is_not_asked(command: str) -> None:
     assert rules(command, make_guard(manifest=EMPTY)) == []
+
+
+# Run in /repo/app: each line moves the shell, or may, in a way the line does not spell out as a
+# `cd` the guard can read, and then writes the root's justfile.
+FROM_APP: list[tuple[str, list[str]]] = [
+    ("eval 'cd ..'; echo x > justfile", [UNRESOLVED]),
+    ('eval "(cd ..); cd .."; echo x > justfile', [UNRESOLVED]),
+    ("command eval 'cd ..'; echo x > justfile", [UNRESOLVED]),
+    ("builtin source ./up.sh; echo x > justfile", [UNRESOLVED]),
+    (". ./up.sh && echo x > justfile", [UNRESOLVED]),
+    ("trap 'cd ..' DEBUG; echo x > justfile", [UNRESOLVED]),
+    ("shopt -s cdable_vars; up=..; cd up; echo x > justfile", [UNRESOLVED]),
+    ("shopt -s expand_aliases; alias up='cd ..'\nup; echo x > justfile", [UNRESOLVED]),
+    ("function f { cd ..; }; f; echo x > justfile", [W]),
+    ("f() { cd ..; }; f; echo x > justfile", [W]),
+    ("HOME=/repo cd; echo x > justfile", [UNRESOLVED]),
+    ("HOME=/repo; cd ~ && echo x > justfile", [UNRESOLVED]),
+    ("{ HOME=/repo; cd; echo x > justfile; }", [UNRESOLVED]),
+    ("CDPATH=/ cd repo; echo x > justfile", [UNRESOLVED]),
+    ("cd .. && pushd app && pushd && echo x > justfile", [W]),
+    ("v=${ cd ..; }; cp notes.md justfile", [W]),
+    ("echo ${ cd ..; }; cp notes.md justfile", [W]),
+    ("echo ${| cd ..; }; cp notes.md justfile", [W]),
+    ("(cd ..; true |<<E cat\n)\nE\ncp notes.md justfile)", [W]),
+    ("(cd ..; ( cd app ); cp notes.md justfile)", [W]),
+    ("cd ..;>justfile", [W]),
+    ('echo "$(echo case)"; rm -f ../justfile', ["unreadable"]),
+]
+
+
+@pytest.mark.parametrize(("command", "expected"), FROM_APP)
+def test_a_move_the_line_does_not_spell_out_is_followed_or_asked(
+    command: str, expected: list[str]
+) -> None:
+    assert rules(command, cwd=ROOT / "app") == expected

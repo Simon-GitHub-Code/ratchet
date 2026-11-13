@@ -169,6 +169,100 @@ def test_shell_writes_to_product_code_are_allowed(name: str, write: Callable[[st
     assert rules(write(path)) == []
 
 
+# Constructs the guard reads as bash does: a line made only of these has its subshells followed.
+MODELLED = [
+    "ls",
+    "true",
+    "x=1",
+    "echo ')' '('",
+    'echo "a ) b"',
+    "echo \\) \\(",
+    "echo $(pwd) `pwd`",
+    'echo "$(ls)"',
+    "echo ${v:-)} ${v#(}",
+    'echo "${v:-)}"',
+    "echo $'\\')'",
+    "echo $$",
+    "a=(1 2)",
+    "ls | wc -l",
+    "ls 2>&1 >/dev/null",
+    "{ ls; }",
+    "if true; then ls; fi",
+    "while false; do :; done",
+    "git status",
+    "(ls)",
+    "(cd /tmp && ls)",
+]
+# Constructs it does not model: a heredoc, a case, a quote left open, a `${ cmd; }`, and the
+# commands that run text the line does not show or change what a later word means.
+UNMODELLED = [
+    "cat <<E\n)\nE\n",
+    "true |<<E cat\n)\nE\n",
+    "cat <<'E F'\n)\nE F\n",
+    "case a in a) :;; esac",
+    "x=${ :; }",
+    'echo "${| :; }"',
+    'echo "$(echo case)"',
+    "eval :",
+    "command eval :",
+    "f() { :; }",
+    "function f { :; }",
+    "alias a=b",
+    "source /dev/null",
+    ". /dev/null",
+    "trap : EXIT",
+    "shopt -s extglob",
+    "enable -n test",
+    "cat <(cd /tmp) > out.txt",
+    "(( x = 1 << y ))\ny\n",
+]
+SUBSHELL_MOVES = [
+    "(cd .github/workflows)",
+    "(cd .github/workflows && ls)",
+    "( (cd .github/workflows) )",
+    "(cd .github/workflows) | cat",
+    "(cd .github/workflows; ls) > out.txt",
+]
+_LATER = st.sampled_from(["; ", "\n", " && ", " || "])
+_PLACES = st.sampled_from(["before", "inside", "after"])
+
+
+def _line(parts: list[str], later: str) -> str:
+    """``parts`` as one command line, each part ended so the next starts a command."""
+    return "".join(part if part.endswith("\n") else part + later for part in parts)
+
+
+@given(
+    move=st.sampled_from(SUBSHELL_MOVES),
+    construct=st.sampled_from(UNMODELLED),
+    place=_PLACES,
+    harmless=st.lists(st.sampled_from(MODELLED), max_size=3),
+    later=_LATER,
+)
+def test_a_subshell_cd_stays_in_force_on_a_line_the_guard_does_not_model(
+    *, move: str, construct: str, place: str, harmless: list[str], later: str
+) -> None:
+    assume(not (place == "inside" and "\n" in construct))
+    if place == "inside":
+        move = move.replace("(cd .github/workflows", f"(cd .github/workflows; {construct.strip()}")
+    parts = {"before": [construct, move], "inside": [move], "after": [move, construct]}[place]
+    line = _line([*harmless, *parts], later) + "echo x > ci.yml"
+    assert {"guard-path-write", "unreadable"} & set(rules(line))
+
+
+@given(
+    move=st.sampled_from(SUBSHELL_MOVES),
+    harmless=st.lists(st.sampled_from(MODELLED), max_size=4),
+    after=st.lists(st.sampled_from(MODELLED), max_size=2),
+    later=_LATER,
+)
+def test_a_subshell_cd_is_left_behind_on_a_line_the_guard_models(
+    *, move: str, harmless: list[str], after: list[str], later: str
+) -> None:
+    line = _line([*harmless, move, *after], later) + "echo x > ci.yml"
+    assert rules(line) == []
+
+
 @given(text=st.text(max_size=200))
 def test_any_text_is_judged_without_raising(text: str) -> None:
     rules(text)

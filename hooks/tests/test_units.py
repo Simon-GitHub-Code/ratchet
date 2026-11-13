@@ -229,10 +229,47 @@ def test_a_parenthesis_after_a_word_is_no_subshell() -> None:
         "case y in x) ;; (case|*) cd q;; z|esac) ;; esac; a",
         "(cd q; cat <<E\\ F\nE\n)\nE F\na)",
         "(cd q; (( x = 1 << y ))\n)\ny\na)",
+        "(cd q; true |<<E cat\n)\nE\na)",
+        "(cd q; x=${ :; }; a)",
+        "(cd q; echo 'open)",
     ],
 )
 def test_a_line_with_a_case_or_a_heredoc_reads_no_subshell(line: str) -> None:
     assert all(opens == closes == 0 for _, opens, closes, _ in _subshells(line))
+    assert not parse_shell(line).modelled
+
+
+def test_a_run_of_operators_splits_into_the_operators_bash_reads() -> None:
+    assert [t.text for t in lex("a|<<E b;>f&&>g|&h\nx\nE")[0] if t.operator] == [
+        "|",
+        "<<",
+        ";",
+        ">",
+        "&&",
+        ">",
+        "|&",
+        "\n",
+    ]
+    assert lex("a |<<E b\n)\nE")[2] == (")",)
+
+
+def test_a_function_substitution_runs_ahead_of_the_command_holding_it() -> None:
+    commands = parse_shell("a; x=${ b; { c; }; } d").commands
+    assert [c.words for c in commands] == [
+        ("a",),
+        ("b",),
+        ("{", "c"),
+        ("}",),
+        (f"x={PLACEHOLDER}", "d"),
+    ]
+    quoted = parse_shell('echo "${| b; }" c').commands
+    assert [c.words for c in quoted] == [("b",), ("echo", PLACEHOLDER, "c")]
+
+
+def test_a_quote_or_substitution_left_open_is_reported() -> None:
+    assert parse_shell("echo 'shut' \"shut\" $(shut) ${shut} `shut` ${ shut; }").closed
+    for text in ("'open", '"open', "$(open", "${open", "`open", "${ open", "$'open"):
+        assert not parse_shell(f"echo {text}").closed
 
 
 def test_an_ansi_c_quote_keeps_its_escaped_quote() -> None:
