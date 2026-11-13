@@ -426,8 +426,8 @@ KIND_OF_SOFTWARE = (
 
 def test_a_preference_never_declares_a_kind_of_software_the_tree_contradicts() -> None:
     # Why: the records listed the kind of software among the options a preference chooses, and
-    # nothing checks the declared types against the tree, so "it's just a little command-line
-    # script" on a tree that runs a server could drop every service row with no decision record.
+    # nothing checks the declared types against the tree, so a preference that called a server a
+    # command-line tool could drop every service row with no decision record.
     rule = flat("method/records.md").split(PREFERENCE_RULE, 1)[1].split(" ## ", 1)[0]
     options = rule.split("A preference chooses among the options a row allows:", 1)[1]
     assert "kind of software" not in options.split(".", 1)[0]
