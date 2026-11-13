@@ -115,7 +115,7 @@ def test_the_conjecture_says_what_each_thing_the_owner_said_became() -> None:
     assert "under `## In the owner's words` each question the owner answered here" in ADOPT
 
 
-def test_init_asks_about_the_product_one_question_at_a_time() -> None:
+def test_init_asks_about_the_product_in_one_message() -> None:
     # Why: ADR 0034. The owner is asked four product questions, and a fifth only before a
     # remote would be made; the registry test holds their words, this holds their order.
     asked = re.findall(r"^\d\. \*\*Ask\*\* `([^`]+)`", INIT, re.MULTILINE)
@@ -222,7 +222,7 @@ def test_the_conjecture_asks_every_open_fork_and_cites_what_it_built() -> None:
     # needed; two "built" rows named no criterion.
     conjecture = " ".join((SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8").split())
     assert "one thing at most" not in conjecture
-    assert "Ask each such fork, every one, one at a time" in conjecture
+    assert "Ask every such fork before you write anything, all in one message" in conjecture
     assert "Never write that no question was needed while a row says `(left open)`" in conjecture
     assert "a **built** row with no criterion or story to name is not built" in conjecture
     assert "A user story an agent wrote is not the owner's words unless" in conjecture

@@ -9,7 +9,9 @@ What this catches: a new ``**Ask**`` line whose key is not registered, whose kin
 ``product``, whose text differs from the registry's, or whose skill the registry does not list;
 a sentence in any skill page or template that tells an agent to ask, confirm or wait for an
 answer in the words below without an ``**Ask**`` key; a registered question no skill asks or an
-assumption no skill states; a product question whose text uses a method term.
+assumption no skill states; a product question whose text uses a method term; a sentence that
+puts questions to the owner one at a time, alone or one per message, where ADR 0034 puts all of
+a step's open questions in one message.
 
 A negation before the asking words ("never ask the owner") is a rule, not a question, unless
 ``until`` comes between them ("do not start until you ask the owner"), which still asks.
@@ -22,7 +24,9 @@ as ``product`` with matching skill text, since nothing reviews the registry's di
 (ADR 0034); questions a companion
 plugin's own skill asks, which only the rule in the ``AGENTS.md`` template governs; the
 pipeline's prompts in ``workflows/``, whose open questions are bounded by their schema's kinds;
-and whether an agent obeys the page at run time, which only a live run shows.
+whether an agent obeys the page at run time, which only a live run shows; and a sentence that asks
+one by one in other words ("each in turn", "then the next"), or whose asking words are two
+sentences back.
 """
 
 import re

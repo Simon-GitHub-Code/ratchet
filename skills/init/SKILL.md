@@ -1,6 +1,6 @@
 ---
 name: init
-description: "Lay down the bare bones any repository needs before agents build in it: a git repository, an AGENTS.md that names the four plugins composed here and what each owns, CLAUDE.md as a symlink to it, the pstack and impeccable one-time setups, the first commit and the remote; then the next command for the owner to type. Asks the owner four or five questions about the product, one at a time, and assumes the rest in plain words."
+description: "Lay down the bare bones any repository needs before agents build in it: a git repository, an AGENTS.md that names the four plugins composed here and what each owns, CLAUDE.md as a symlink to it, the pstack and impeccable one-time setups, the first commit and the remote; then the next command for the owner to type. Asks the owner four or five questions about the product, in one message, and assumes the rest in plain words."
 disable-model-invocation: true
 ---
 
@@ -14,7 +14,7 @@ Every step says when it is already done. A second run on the same directory skip
 
 ## What the owner is asked
 
-The owner is asked about the product they are making and about nothing else (ADR 0034). The questions below go one at a time, in this order, each in the words written here, with two to four options where options help and the free-text answer always open; an answer is taken as given, never refined with a follow-up. A question whose answer a record already holds (a README, a package manifest, `PRODUCT.md`, an earlier run) is not asked: read the answer and say where it came from in the hand-over.
+The owner is asked about the product they are making and about nothing else (ADR 0034). The questions below go to the owner in one message, in this order, each in the words written here, with your recommended answer first where the records give one, two to four options where options help and the free-text answer always open, so the owner can accept them all at once; an answer is taken as given, never refined with a follow-up. A question whose answer a record already holds (a README, a package manifest, `PRODUCT.md`, an earlier run) is not asked: read the answer and say where it came from in the hand-over.
 
 1. **Ask** `init.purpose`: "What are you making? Tell me in a sentence or two what it should do."
 2. **Ask** `init.user`: "Who is it for, and what are they doing when they reach for it?"

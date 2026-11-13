@@ -12,17 +12,17 @@ The method ships the questions, its own gates and three gates for any service, a
 
 ## What the owner is asked
 
-The owner is asked product questions only, as the method's rule on asking defines them (ADR 0034), and only at step 3, so that every question comes in the first minutes and the rest of adoption runs while they are away. One at a time, each in the words written here, with your reading of the records as the recommended option:
+The owner is asked product questions only, as the method's rule on asking defines them (ADR 0034), and only at step 3, so that every question comes in the first minutes and the rest of adoption runs while they are away. All in one message, each in the words written here, with your reading of the records as the recommended option, so the owner can accept them all at once:
 
 1. **Ask** `adopt.first`: "What is the first thing you want to be able to do with it, from start to finish?" The options are the first usable part the records point to, as a few things a person can check, in the owner's words.
 2. **Ask** `adopt.later`: "Which of these can wait until that first part works?" The options are what the records name beyond that part; several may be chosen.
-3. **Ask** `adopt.hard-to-undo`: "<a choice about what happens to someone's things that would be hard to undo later, asked as someone using it would put it>" At most two, only where the first part meets such a choice and nothing the owner said settles it, such as "When you mark an item read, should it stay in your list as read, or be deleted?". `/ratchet:conjecture` asks the rest before anything is built.
+3. **Ask** `adopt.hard-to-undo`: "<a choice about what happens to someone's things that would be hard to undo later, asked as someone using it would put it>" At most two, only where the first part you recommend meets such a choice and nothing the owner said settles it, such as "When you mark an item read, should it stay in your list as read, or be deleted?". `/ratchet:conjecture` asks the rest before anything is built.
 
-Whether others reach it, rely on it, or trust it with what cannot be got back is something a machine cannot see reliably (ADR 0028), so the owner declares it. On a repository that already has code, always ask the first, naming any sign the tree shows (a deploy configuration or workflow, a production address, a host's configuration); recommend "no" only when the tree shows none:
+Whether others reach it, rely on it, or trust it with what cannot be got back is something a machine cannot see reliably (ADR 0028), so the owner declares it. On a repository that already has code, always ask the first in the same message, naming any sign the tree shows (a deploy configuration or workflow, a production address, a host's configuration); recommend "no" only when the tree shows none:
 
 - **Ask** `event.deployed`: "Is it now running somewhere that people other than you can reach?"
 
-Ask the other two when the tree shows a sign of them (data the tree says is kept, users outside the project) or the owner answered yes to the first:
+Ask the other two in the same message when the tree shows a sign of them (data the tree says is kept, users outside the project). When it shows none and the owner answers yes to the first, the other two follow in one more message, the only one this step adds:
 
 - **Ask** `event.irreplaceable-data`: "Does it now hold anything that could not be got back if it were lost?"
 - **Ask** `event.depended-on`: "Do people other than you now rely on it?"

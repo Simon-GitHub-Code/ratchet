@@ -1,6 +1,6 @@
 ---
 name: conjecture
-description: Draft the method's `## Conjecture` section for one ticket (the approach, what would refute it, the alternatives and the criticism that killed each, and what each thing the owner said became) from the conversation that produced the ticket, and write it to the ticket with the `## Operability` block the preflight asks. Asks the owner each product choice that nothing they said settles, one at a time, and makes the spec follow what they did say.
+description: Draft the method's `## Conjecture` section for one ticket (the approach, what would refute it, the alternatives and the criticism that killed each, and what each thing the owner said became) from the conversation that produced the ticket, and write it to the ticket with the `## Operability` block the preflight asks. Asks the owner, in one message, each product choice that nothing they said settles, and makes the spec follow what they did say.
 disable-model-invocation: true
 ---
 
@@ -40,7 +40,7 @@ disable-model-invocation: true
 
 3. **One conjecture for the whole spec, and no dialog to confirm it.** When the ticket's siblings share a parent spec, draft both once for the spec and its tickets inherit them. The draft restates what the owner already decided, so do not ask them to accept it: write it, and print it in the reply, where they read it and counter what is wrong. An alternative the owner then names goes in with its criticism; an approach they change replaces the draft's.
 
-   Put each behaviour the spec chose that nothing the owner said settles, and each addition the user would see, keep or do something differently by, to [the fork test](../method/pipeline.md#the-fork-test). What the spec, an earlier conjecture or an **Assumed** line chose does not settle it: an agent wrote those. Ask each such fork, every one, one at a time, before you write anything:
+   Put each behaviour the spec chose that nothing the owner said settles, and each addition the user would see, keep or do something differently by, to [the fork test](../method/pipeline.md#the-fork-test). What the spec, an earlier conjecture or an **Assumed** line chose does not settle it: an agent wrote those. Ask every such fork before you write anything, all in one message, each with the answer the spec leans to first, so the owner can accept them all at once. A fork already answered at the spec step has its answer under `## Answers` and is not asked again: the conjecture's questions join the same message as the spec's when they are known at that point, and otherwise, as here, form one message of their own:
 
    - **Ask** `conjecture.fork`: "<one choice the fork test gives to the owner and nothing they said settles, asked as someone using it would put it>" The answer the spec leans to comes first with `(recommended)` and the reason.
 
