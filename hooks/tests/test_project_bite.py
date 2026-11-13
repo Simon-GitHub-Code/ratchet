@@ -535,7 +535,14 @@ def test_after_an_interrupt_the_gate_it_stopped_runs_no_other_bite_and_prints_no
     # printing a verdict for it, for seconds after the stop with hundreds of bites.
     started = tmp_path / "started"
     registry = "".join(bite("slow", f"bite {n}") for n in range(1000))
-    root = project(tmp_path / "repo", {"slow": f"touch {started}; sleep 30"}, registry)
+    # Why: a runner that misses the signal gets a gate that waits a minute at most and is then
+    # red before every fault, so the test fails in seconds more instead of hanging the suite.
+    until = int(time.time()) + 60
+    slow = (
+        f'[ "$(date +%s)" -ge {until} ] && exit 1\ntouch {started}\n'
+        f'while [ "$(date +%s)" -lt {until} ]; do sleep 0.05; done'
+    )
+    root = project(tmp_path / "repo", {"slow": slow}, registry)
     sent: list[float] = []
 
     def interrupt() -> None:
