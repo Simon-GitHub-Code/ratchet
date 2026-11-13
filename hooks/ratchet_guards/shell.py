@@ -1,10 +1,11 @@
 """A small, conservative bash lexer for the guard: simple commands, redirects and nested scripts.
 
-It is not a shell. It finds what a guard needs and errs towards seeing more commands, never
-fewer:
+It is not a shell. It finds what a guard needs, and says where it may have read a line apart
+from bash or sh (``Script.modelled``, ``Script.closed``):
 
 - quotes, backslash escapes and line continuations are honoured, and each word is unquoted
-  with ``shlex.split``;
+  with ``shlex.split``; inside backticks, a backslash escapes only ``$``, a backtick or a
+  backslash, so an escaped backtick nests a substitution;
 - ``;``, ``&&``, ``||``, ``|``, ``&``, newlines and subshell parentheses separate commands; a
   run of operator characters is read as the operators bash reads in it, so ``|<<E`` is a pipe and
   a heredoc;
@@ -13,20 +14,27 @@ fewer:
 - ``$(...)`` and backticks, quoted or not, are lifted out as nested scripts and leave a
   placeholder word behind; a ``case`` pattern's ``)`` does not end a ``$(...)``;
 - ``${ cmd; }`` and ``${| cmd; }``, quoted or not, run ``cmd`` in the shell itself (bash 5.3), so
-  its commands are read as commands of the line, just before the command that holds them;
-- any other ``${...}`` expansion, quoted or not, is read to its closing brace;
+  its commands are read as commands of the line, just before the command that holds them. It
+  ends at the first ``}`` word at brace depth zero; one where no command starts may not be where
+  bash ends it;
+- any other ``${...}`` expansion, quoted or not, is read to its closing brace, and a ``$[...]``
+  arithmetic expansion to its closing bracket. Inside double quotes a ``'`` in a ``${...}`` is a
+  quote to bash but a plain character to posix mode and sh; the lexer reads it as the latter;
+- a ``$'...'`` with an escaped quote in it is one word to bash, but to sh a ``$`` and a quote
+  that the escaped one ends; the lexer reads it as sh does;
 - the word after ``<<<`` is kept as a here-string, to be read as the stdin of its command;
 - heredoc bodies are lifted out too, so prose in a commit message is never read as commands;
   the operator leaves a numbered marker so a shell fed by the heredoc can be checked. A body
-  whose end bash may place elsewhere (a delimiter the lexer may read apart from bash, or a ``<<``
-  on a line with ``((``, which may be a shift) is read as commands as well;
+  whose delimiter is not one plain word, or one opened on a line with ``((`` (where ``<<`` may
+  be a shift), is read as commands as well;
 - ``#`` at the start of a word begins a comment.
 
-``Script.modelled`` is false on a line that holds a construct the lexer does not model as bash
-does: a heredoc, a ``case``, a ``${ cmd; }``, a quote or a substitution left open. Such a line is
-split with no subshell (``ratchet_guards.bash`` states the rule). ``Script.closed`` is false when a
-quote or a substitution runs to the end of the text, where the lexer may have read commands as
-quoted text.
+``Script.modelled`` is false on a line that holds a construct the lexer knows it may read apart
+from bash: a heredoc, a ``case``, a ``${ cmd; }``, or a quote or substitution for which
+``Script.closed`` is false. Such a line is split with no subshell (``ratchet_guards.bash`` states
+the rule). ``Script.closed`` is false when a quote or a substitution runs to the end of the text,
+or where bash and sh may end it apart (the three cases above), since the lexer may then have read
+commands as quoted text.
 """
 
 import re
@@ -57,6 +65,10 @@ _PLAIN_DELIMITER = re.compile(r"\\?[\w.+-]+|'[\w.+-]*'|\"[\w.+-]*\"")
 # Why: inside `((` or `$((`, `<<` is a shift, not a heredoc.
 _ARITHMETIC = "(("
 _FUNCTION_SUBSTITUTION = re.compile(r"\$\{[ \t\n|]")
+# Why: inside backticks a backslash escapes only `$`, a backtick or a backslash.
+_BACKTICK_ESCAPE = re.compile(r"\\([$`\\])")
+_BRACKETS = {"[": 1, "]": -1}
+_EXPANSIONS = {"${": "}", "$[": "]"}
 _QUOTES = str.maketrans("", "", "'\"")
 _DELIMITER_QUOTING = str.maketrans("", "", "'\"\\")
 _PIPES = frozenset({"|", "|&"})
@@ -141,6 +153,7 @@ class _Lexer:
         self.depth = 0
         self.cases = 0
         self.braces = 0
+        self.doubled = 0
         self.closed = False
 
     def run(self) -> None:
@@ -158,9 +171,13 @@ class _Lexer:
     def _closes(self, char: str) -> bool:
         if self.closer == ")":
             return char == ")" and self.depth == 0 and self.cases == 0
+        if self.closer != "}" or char != "}" or self.word or self.braces:
+            return False
         # Why: `}` ends a `${ cmd; }` where a command could start, as it ends a `{ ...; }` group.
-        brace = char == "}" and not self.word and self._command_starts()
-        return self.closer == "}" and brace and self.braces == 0
+        # Bash may also end it at a `}` word elsewhere (after a compound command or a redirect),
+        # so the lexer ends it at the first and says it cannot tell.
+        self.shared.closed &= self._command_starts()
+        return True
 
     def _command_starts(self) -> bool:
         return not self.tokens or self.tokens[-1].operator
@@ -172,8 +189,8 @@ class _Lexer:
             self.at += 2
         elif _FUNCTION_SUBSTITUTION.match(self.text, self.at):
             self._function_substitution()
-        elif self.text.startswith("${", self.at):
-            self._parameter()
+        elif (opener := self.text[self.at : self.at + 2]) in _EXPANSIONS:
+            self._expansion(opener, _EXPANSIONS[opener])
         elif self.text.startswith("$'", self.at):
             self._ansi()
         elif char in "'\"\\`" or self.text.startswith("$(", self.at):
@@ -224,33 +241,53 @@ class _Lexer:
         self.at = end + 1
 
     def _ansi(self) -> None:
-        """A ``$'...'`` word, where a backslash escapes the next character, the quote included."""
+        r"""A ``$'...'`` word, where a backslash escapes the next character, the quote included.
+
+        sh reads ``$'a\\'`` as ``$`` and a quote that the escaped quote ends. Where the two
+        readings part, the lexer reads it as sh does and says it cannot tell.
+        """
         end = self.at + 2
         while end < len(self.text) and self.text[end] != "'":
             end += 2 if self.text[end] == "\\" else 1
+        if "\\'" in self.text[self.at + 2 : end]:
+            self.shared.closed = False
+            self.word.append("$")
+            self.at += 1
+            self._single()
+            return
         self.shared.closed &= end < len(self.text)
         end = min(end + 1, len(self.text))
         self.word.append(self.text[self.at : end])
         self.at = end
 
-    def _parameter(self) -> None:
-        """A ``${...}`` expansion read to its closing brace, so a ``)`` or blank in it ends nothing.
+    def _expansion(self, opener: str, closer: str) -> None:
+        """A ``${...}`` or ``$[...]`` read to its close, so a ``)`` or blank in it ends nothing.
 
-        A substitution inside it is still lifted out, so the command it runs is checked.
+        A substitution inside it is still lifted out, so the command it runs is checked. Inside
+        double quotes bash reads a ``'`` in a ``${...}`` as a quote, posix mode and sh as a plain
+        character; the lexer reads the latter and says it cannot tell.
         """
-        self.word.append("${")
-        self.at += 2
-        while self.at < len(self.text) and self.text[self.at] != "}":
+        self.word.append(opener)
+        self.at += len(opener)
+        depth = 0
+        while self.at < len(self.text) and (self.text[self.at] != closer or depth):
             char = self.text[self.at]
-            if self.text.startswith(("$$", "${", "$'"), self.at):
+            if self.doubled and char == "'":
+                self.shared.closed = False
+                self.word.append(char)
+                self.at += 1
+            elif self.text.startswith(("$$", "${", "$["), self.at) or (
+                not self.doubled and self.text.startswith("$'", self.at)
+            ):
                 self._step(char)
             elif char in "'\"\\`" or self.text.startswith("$(", self.at):
                 self._quoted(char)
             else:
+                depth += _BRACKETS.get(char, 0) if closer == "]" else 0
                 self.word.append(char)
                 self.at += 1
         self.shared.closed &= self.at < len(self.text)
-        self.word.append("}")
+        self.word.append(closer)
         self.at += 1
 
     def _function_substitution(self) -> None:
@@ -269,6 +306,7 @@ class _Lexer:
     def _double(self) -> None:
         self.word.append('"')
         self.at += 1
+        self.doubled += 1
         while self.at < len(self.text) and self.text[self.at] != '"':
             char = self.text[self.at]
             if char == "\\":
@@ -277,12 +315,13 @@ class _Lexer:
             elif _FUNCTION_SUBSTITUTION.match(self.text, self.at):
                 self._function_substitution()
             elif self.text.startswith("${", self.at):
-                self._parameter()
+                self._expansion("${", "}")
             elif char == "`" or self.text.startswith("$(", self.at):
                 self._substitute()
             else:
                 self.word.append(char)
                 self.at += 1
+        self.doubled -= 1
         self.shared.closed &= self.at < len(self.text)
         self.word.append('"')
         self.at += 1
@@ -295,9 +334,12 @@ class _Lexer:
 
     def _substitute(self) -> None:
         if self.text[self.at] == "`":
-            end = self._find("`", self.at + 1)
+            end = self.at + 1
+            while end < len(self.text) and self.text[end] != "`":
+                end += 2 if self.text[end] == "\\" else 1
+            end = min(end, len(self.text))
             self.shared.closed &= end < len(self.text)
-            self.shared.nested.append(self.text[self.at + 1 : end])
+            self.shared.nested.append(_BACKTICK_ESCAPE.sub(r"\1", self.text[self.at + 1 : end]))
             self.at = end + 1
         else:
             child = _Lexer(self.text, self.at + 2, self.shared, closer=")")

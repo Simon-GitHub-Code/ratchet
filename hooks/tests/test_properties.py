@@ -181,7 +181,9 @@ MODELLED = [
     'echo "$(ls)"',
     "echo ${v:-)} ${v#(}",
     'echo "${v:-)}"',
-    "echo $'\\')'",
+    "echo $'a\\\\'",
+    "echo `echo \\`echo )\\``",
+    "echo $[ ( 1 ) ]",
     "echo $$",
     "a=(1 2)",
     "ls | wc -l",
@@ -193,9 +195,12 @@ MODELLED = [
     "(ls)",
     "(cd /tmp && ls)",
 ]
-# Constructs it does not model: a heredoc, a case, a quote left open, a `${ cmd; }`, and the
-# commands that run text the line does not show or change what a later word means.
+# Constructs it does not model: a heredoc, a case, a quote left open or one bash and sh end apart,
+# a `${ cmd; }`, and the commands that run text the line does not show or change what a later
+# word means.
 UNMODELLED = [
+    "echo $'\\')'",
+    "echo \"${x:-'}'}\"",
     "cat <<E\n)\nE\n",
     "true |<<E cat\n)\nE\n",
     "cat <<'E F'\n)\nE F\n",

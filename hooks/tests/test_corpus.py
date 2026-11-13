@@ -215,7 +215,7 @@ DENIED: list[tuple[str, list[str]]] = [
     ("(cd .github/workflows; echo case; echo x > ci.yml)", [W]),
     ("case y in x) ;; (case|*) cd .github/workflows;; z|esac) ;; esac; echo x > ci.yml", [W]),
     ("case a in a) (cd .github/workflows);; esac; echo x > ci.yml", [W]),
-    ("(cd .github/workflows; echo $'\\') '\\'; echo x > ci.yml)", [W]),
+    ("(cd .github/workflows; echo $'\\') '\\'; echo x > ci.yml)", [W, "unreadable"]),
     ("(cd .github/workflows; cat <<E\\ F\nE\n)\nE F\necho x > ci.yml)", [W]),
     ("(cd .github/workflows; (( x = 1 << y ))\n)\ny\necho x > ci.yml)", [W]),
     ("echo $$'\\'; echo hi > .github/workflows/ci.yml; echo '\\'", [W]),
@@ -236,7 +236,7 @@ DENIED: list[tuple[str, list[str]]] = [
     ("echo ${ cd .github; }; echo x > workflows/ci.yml", [W]),
     ('echo "${| cd .github; }" >/dev/null; echo x > workflows/ci.yml', [W]),
     ("x=${ cd .github; } cp a workflows/ci.yml", [W]),
-    ("echo ${ echo }; cd .github; }; echo x > workflows/ci.yml", [W]),
+    ("echo ${ echo }; cd .github; }; echo x > workflows/ci.yml", [W, "unreadable"]),
     ("(cd .github; true |<<E cat\n)\nE\necho x > workflows/ci.yml)", [W]),
     ("(cd .github;<<E cat\n)\nE\necho x > workflows/ci.yml)", [W]),
     ("true |<<E cat\n'\nE\nrm -f justfile\necho '", [W, "unreadable"]),
@@ -1709,8 +1709,8 @@ FROM_APP: list[tuple[str, list[str]]] = [
     ("sh <<'E'\necho $'a\\'; rm -f ../justfile #'\nE", [W, "unreadable"]),
     ("echo $'\\''; rm -f ../justfile; echo ''", ["unreadable"]),
     # Why: bash may end a `${ cmd; }` at a `}` after a compound command or a redirect.
-    ("cd ..${ :; { :; } }; rm -rf quality\n}", [W, "unreadable"]),
-    ("cd ..${ : >}; rm -rf quality }", [W, "unreadable"]),
+    ("cd ..${ :; { :; } }; rm -rf quality\n}", ["unreadable", UNRESOLVED]),
+    ("cd ..${ : >}; rm -rf quality }", [UNRESOLVED]),
     # Why: inside backticks, an escaped backtick opens a nested substitution, ending nothing.
     (": `: \\`;(`; : \\`; cd ..; : `: \\`;)`; : \\`; echo x > justfile", [W, "unreadable"]),
     ("echo `echo \\`echo ok\\``; cd ..; echo x > justfile", [W]),

@@ -272,9 +272,13 @@ def test_a_quote_or_substitution_left_open_is_reported() -> None:
         assert not parse_shell(f"echo {text}").closed
 
 
-def test_an_ansi_c_quote_keeps_its_escaped_quote() -> None:
-    assert words_of("echo $'\\') '\\'; b") == ["echo", "$'\\') '\\'", "b"]
-    assert parse_shell("(echo $'\\') '\\')").commands[0].closes == 1
+def test_an_ansi_c_quote_with_an_escaped_quote_is_read_as_sh_reads_it() -> None:
+    # Why: bash reads `$'a\'; rm x #'` as one word; sh as `$`, a quote the escaped one ends, and
+    # a command. The lexer reads it as sh does and says it cannot tell.
+    parsed = parse_shell("echo $'a\\'; rm x #'")
+    assert not parsed.closed
+    assert [command.words for command in parsed.commands] == [("echo", "$a\\"), ("rm", "x")]
+    assert parse_shell("echo $'a\\\\'; rm x #'").closed
 
 
 def test_unquote_falls_back_to_dropping_quotes() -> None:

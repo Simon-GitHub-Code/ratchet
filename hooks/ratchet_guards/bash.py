@@ -1,7 +1,8 @@
 """Judge a Bash command line: every simple command, every nested script, every wrapper.
 
-A command line is lexed (``ratchet_guards.shell``), and each simple command is checked in
-order. Command substitutions, ``bash -c`` strings, ``eval`` arguments, ``find -exec`` commands
+A command line is lexed (``ratchet_guards.shell``), and each simple command is checked in the
+order the lexer reads the shell running them (a ``${ cmd; }`` before the command holding it).
+Command substitutions, ``bash -c`` strings, ``eval`` arguments, ``find -exec`` commands
 and heredocs fed to a shell are checked as scripts of their own. A wrapper (``sudo``, ``env``,
 ``xargs``, ``timeout`` ...) is checked from every later word that names a ruled command, so its
 own options cannot hide one. An interpreter given an inline program (``python3 -c``, ``node
@@ -10,19 +11,20 @@ own options cannot hide one. An interpreter given an inline program (``python3 -
 
 The line is judged before any of it runs, so a ``cd`` or a ``git switch`` on it is a claim, not
 a fact: the directory may not exist, the command may sit in a subshell, a pipeline or the far
-side of ``||``. A later command is therefore judged in every state the line may have left it
-in, and what any of them refuses is refused. One state is dropped only when the shell itself
-guarantees it: the command is chained with ``&&`` to a plain ``cd <directory>`` or to a ``git``
-command that must have moved ``HEAD`` (``ratchet_guards.git.switch``), and nothing on the line
-redefines what those words do (ADR 0024).
+side of ``||``. A later command is therefore judged in every state the guard sees the line may
+have left it in, and what any of them refuses is refused. One state is dropped only when the
+shell itself guarantees it: the command is chained with ``&&`` to a plain ``cd <directory>`` or
+to a ``git`` command that must have moved ``HEAD`` (``ratchet_guards.git.switch``), and nothing
+on the line redefines what those words do (ADR 0024).
 
 The guard follows the shell only through what it models, and ``_followed`` is where that rule
-lives. A ``cd`` inside a subshell is left behind at its ``)`` only on a line made wholly of
-constructs the lexer reads as bash does; on any other line every ``cd`` stays in force for what
-follows, the reading that protects. A command that may move the shell where the line does not
-show it (``eval``, ``source``, an alias, a function, a trap, ``shopt``) leaves the shell
-anywhere from there on, as a ``cd`` the guard cannot resolve does. A quote or a substitution left
-open asks: the lexer may have read commands as quoted text.
+lives. A ``cd`` inside a subshell, a pipeline stage before the last or a background job is left
+behind only on a line the lexer marks as modelled (``Script.modelled``); on any other line every
+``cd`` stays in force for what follows, the reading that protects. A command named plainly that
+may move the shell where the line does not show it (``eval``, ``source``, an alias, a function,
+a trap, ``shopt``) leaves the shell anywhere from there on, as a ``cd`` the guard cannot resolve
+does. A quote or a substitution left open, or one bash and sh may end apart, asks: the lexer may
+have read commands as quoted text.
 """
 
 import re
@@ -126,7 +128,7 @@ _FORGETTERS = frozenset({"unset", "for", "select"})
 _KEEPS = frozenset({";", "&&", "||", "\n", ""})
 _CROWDED = Verdict("unreadable", "the command line moves between too many directories")
 _UNCLOSED = Verdict(
-    "unreadable", "a quote or a substitution on the command line does not end where bash ends it"
+    "unreadable", "the guard cannot tell where a quote or a substitution on the command line ends"
 )
 _SHELL = Spec("oO", frozenset({"--rcfile", "--init-file"}))
 
@@ -265,7 +267,7 @@ def _followed(text: str) -> Script:
     """
     parsed = parse(text)
     if parsed.modelled and any(map(_redefines, parsed.commands)):
-        return parse(text, subshells=False)
+        return replace(parse(text, subshells=False), modelled=False)
     return parsed
 
 
@@ -475,6 +477,9 @@ class _Checker:
         self.guard = guard
         self.depth = depth
         self.line = line
+        # Why: whether the script being checked is one the lexer models (`_followed`); each
+        # nested script is checked by a checker of its own.
+        self.modelled = True
 
     def _deeper(self) -> "_Checker":
         return _Checker(self.guard, self.depth + 1, self.line)
@@ -484,6 +489,7 @@ class _Checker:
             return [Verdict("unreadable", "the command nests scripts too deeply")]
         inner = self._deeper()
         parsed = _followed(text)
+        self.modelled = parsed.modelled
         trusted = not any(map(_redefines, parsed.commands))
         now = chain = seen = [context]
         previous = ""
@@ -662,9 +668,9 @@ class _Checker:
         """The states ``command`` may leave ``context`` in for the command after it.
 
         ``sure`` says that command runs only when this one succeeded. Then a plain ``cd`` or
-        ``git`` leaves one state; in every other case the state before it stays possible. A
-        ``cd`` the shell runs in a subshell of its own (a pipeline stage before the last, a
-        background job) moves nothing after it.
+        ``git`` leaves one state; in every other case the state before it stays possible. On a
+        line the guard models (``self.modelled``), a ``cd`` the shell runs in a subshell of its
+        own (a pipeline stage before the last, a background job) moves nothing after it.
         """
         words = command.words
         # Why: `{ HOME=/x; ...` sets HOME as surely as `HOME=/x; ...` does.
@@ -680,7 +686,7 @@ class _Checker:
             return [context]
         plain = sure and bare
         if head in _DIRECTORY_MOVERS:
-            if command.then in _APART:
+            if self.modelled and command.then in _APART:
                 return [context]
             return self._moved(words, context, seen, plain=plain, values=values)
         move = git.switch(rest, context, self.guard)
