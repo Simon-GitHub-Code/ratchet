@@ -83,6 +83,25 @@ def test_a_missing_line_an_empty_one_and_an_unknown_type_are_red() -> None:
     assert failures("<one or more of service, app>")[0].startswith("'- Application types:' names")
 
 
+def test_a_missing_or_unknown_types_line_hides_no_row_that_does_not_need_it() -> None:
+    # Why: the report is whole in one pass; only a `none` cell waits to learn what applies.
+    dropped = [
+        f"the Gates table has no '{question}' row; a row is bound or none, never dropped"
+        for question in ("a11y", "load", "tests")
+    ]
+    rows = [("lint", "")]
+    assert failures(None, rows)[1:] == [
+        *dropped,
+        "gate 'lint' names no tool: an empty Tool cell is an unfinished binding",
+    ]
+    waiting = [("a11y", "axe"), ("tests", "pytest"), ("lint", "none")]
+    assert failures("website", waiting) == [
+        "'- Application types:' names 'website'; name one or more of service, app, library",
+        dropped[1],
+    ]
+    assert CATALOGUE.types_problem("- Application types: app\n") is None
+
+
 def test_a_row_the_catalogue_names_is_never_dropped() -> None:
     assert failures("library", [("lint", "ruff")]) == [
         f"the Gates table has no '{question}' row; a row is bound or none, never dropped"

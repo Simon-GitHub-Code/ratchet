@@ -151,9 +151,13 @@ class Catalogue:
         return "none: not " + (f"{', '.join(head)} or {last}" if head else last)
 
     def row_problem(
-        self, row: tuple[str, str], kinds: AbstractSet[str], adrs: AbstractSet[int]
+        self, row: tuple[str, str], kinds: AbstractSet[str] | None, adrs: AbstractSet[int]
     ) -> str | None:
-        """What is wrong with one Gates row for a repository of these types."""
+        """What is wrong with one Gates row for a repository of these types.
+
+        ``kinds`` is ``None`` when the binding declares none that the catalogue has: a ``none``
+        cell is then judged once they are.
+        """
         question, tool = row
         if not tool:
             return f"gate '{question}' names no tool: an empty Tool cell is an unfinished binding"
@@ -161,7 +165,7 @@ class Catalogue:
         if later is not None:
             return self.later_problem(question, later.group(1).strip())
         match = NONE.match(tool)
-        if match is None:
+        if match is None or kinds is None:
             return None
         asked_of = self.asked_of(question)
         applies = bool(asked_of & kinds)
@@ -189,27 +193,37 @@ class Catalogue:
             )
         return None
 
-    def failures(
-        self, binding: str, rows: Sequence[tuple[str, str]], adrs: AbstractSet[int]
-    ) -> Iterator[str]:
-        """What a binding's types line and Gates rows get wrong; ``rows`` are (question, tool)."""
+    def types_problem(self, binding: str) -> str | None:
+        """What is wrong with the binding's ``- Application types:`` line, or ``None``."""
         kinds = declared(binding)
         known = ", ".join(self.types)
         if kinds is None:
-            yield f"has no '- Application types:' line; name one or more of {known}"
-            return
+            return f"has no '- Application types:' line; name one or more of {known}"
         unknown = [kind for kind in kinds if kind not in self.types]
         if unknown or not kinds:
             named = f"'{unknown[0]}'" if unknown else "nothing"
-            yield f"'- Application types:' names {named}; name one or more of {known}"
-            return
+            return f"'- Application types:' names {named}; name one or more of {known}"
+        return None
+
+    def failures(
+        self, binding: str, rows: Sequence[tuple[str, str]], adrs: AbstractSet[int]
+    ) -> Iterator[str]:
+        """What a binding's types line and Gates rows get wrong; ``rows`` are (question, tool).
+
+        Why: a rule that waits for another to be met hides what it would then ask. Only a ``none``
+        cell needs the types, to say whether the row applies, so everything else is asked now.
+        """
+        problem = self.types_problem(binding)
+        if problem:
+            yield problem
+        kinds = None if problem else frozenset(declared(binding) or ())
         asked = {question for question, _ in rows}
         for question in sorted(self.questions - asked):
             yield dropped(question)
         for row in rows:
-            problem = self.row_problem(row, frozenset(kinds), adrs)
-            if problem:
-                yield problem
+            row_problem = self.row_problem(row, kinds, adrs)
+            if row_problem:
+                yield row_problem
 
 
 def dropped(question: str) -> str:

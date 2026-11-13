@@ -434,9 +434,13 @@ def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
     """The binding's rows, the registry, what is wrong in it, and each gate it leaves unproven."""
     rows = gate_rows(gatelib.read_text(root / gatelib.BINDING) or "")
     source = gatelib.read_text(root / REGISTRY)
-    if source is None:
-        return rows, Registry(), ["missing; every gate bound to a tool needs a [[bite]]"], []
-    registry, problems = read_registry(source)
+    # Why: a registry that is not there holds no bite, so every bound gate lacks one, and the
+    # report says so now instead of after the registry is created.
+    registry, problems = (
+        read_registry(source)
+        if source is not None
+        else (Registry(), ["missing; every gate bound to a tool needs a [[bite]]"])
+    )
     problems += misplaced(root, rows, registry.bites)
     gaps = list(unproven(rows, registry.bites, application_types.load()))
     return rows, registry, problems, gaps
