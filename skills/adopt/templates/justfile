@@ -360,7 +360,8 @@ config-refusal:
 
 # Trigger code:listener. Shipped: the load smoke keeps requests in flight while `--graceful` signals
 # the deliverable; green only when every request it accepted is answered and it exits within the
-# seconds. A route that takes a moment shows the drain best.
+# seconds. Where the gate cannot hold the listener, a request counts as accepted when it started
+# before the signal, and the smoke says so. A route that takes a moment shows the drain best.
 graceful-stop:
     {{booted}} --graceful 10 -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --until-stopped --url "bind: METHOD URL STATUS BODY of a route that takes a moment, on port {port}"
 
