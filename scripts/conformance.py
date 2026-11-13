@@ -106,9 +106,9 @@ UNSTATED_STAGE = (
     " for a live project."
 )
 NO_DOOR = (
-    "Nothing in this project is marked as impossible to take back once it ships, such as a"
-    " database change, saved data an older version wrote, or something other programs rely on."
-    " Merges already treat nothing that way here, and that stays so until you name one."
+    "No part of this project is marked as impossible to take back once it ships, such as a"
+    " database change, data saved in an older format, or something other programs rely on."
+    " Merges work that way here already, and they keep doing so until you name such a part."
 )
 SHARD_MATRIX = "matrix.shard"
 HELD_TO_TIER = "holds a gate's job to its tier's ceiling"
