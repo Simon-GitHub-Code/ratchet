@@ -72,14 +72,76 @@ def test_the_stages_before_adoption(tmp_path: Path) -> None:
     assert route.decide(root, None).then == route.GRILL
 
 
-def test_a_dirty_tree_is_finished_first(tmp_path: Path) -> None:
+def test_a_dirty_tree_is_finished_first_and_never_committed_on_the_default_branch(
+    tmp_path: Path,
+) -> None:
     root = repository(tmp_path, ADOPTED)
     write(root, "src/x.py", "x = 1\n")
     step = route.decide(root, None)
-    assert step.command == "run `just check`, then commit on branch `main`"
+    assert step.command == "run `just check`, then commit on a branch of its own, never on `main`"
     assert step.stage == "change"
+    assert step.then.startswith("`just merge <branch>` merges it when")
+    branch(root, "feature/4-x")
+    assert (
+        route.decide(root, None).command == "run `just check`, then commit on branch `feature/4-x`"
+    )
     write(root, "docs/process/binding.md", "# Binding without a table\n")
     assert route.check_command(root) == route.CHECK_FALLBACK
+
+
+MANIFEST = (
+    '[[group]]\nname = "records"\nreason = "Added to, never changed."\nedit = "append"\n'
+    'paths = ["docs/adr/**", "GLOSSARY.md"]\n\n'
+    '[[group]]\nname = "decisions"\nreason = "The owner\'s."\npaths = ["docs/process/**"]\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("files", "listed"),
+    [
+        ({".scratch/f/spec.md": "# F\n"}, ".scratch/f/spec.md"),
+        (
+            {f".scratch/f/issues/0{n}-x.md": "# X\n" for n in range(1, 6)},
+            (
+                ".scratch/f/issues/01-x.md, .scratch/f/issues/02-x.md, .scratch/f/issues/03-x.md"
+                " and 2 more"
+            ),
+        ),
+    ],
+)
+def test_records_alone_on_the_default_branch_are_an_agents_to_land(
+    tmp_path: Path, files: dict[str, str], listed: str
+) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    for path, text in files.items():
+        write(root, path, text)
+    step = route.decide(root, None)
+    assert step.command == "`just merge --records`"
+    assert step.stage == "records"
+    assert step.then == route.NEXT
+    assert f"holds records alone ({listed}): an agent runs this" in step.why
+    git(root, "remote", "add", "origin", "https://example.invalid/r.git")
+    step = route.decide(root, None)
+    assert step.command == f"commit them on a branch of their own, then {route.PULL_REQUEST}"
+    assert step.then == route.WAIT
+
+
+@pytest.mark.parametrize(
+    ("manifest", "files"),
+    [
+        (MANIFEST, {".scratch/f/spec.md": "# F\n", "src/x.py": "x = 1\n"}),
+        (MANIFEST, {"docs/process/notes.md": "# Notes\n"}),
+        (None, {".scratch/f/spec.md": "# F\n"}),
+    ],
+    ids=["code among records", "a guard path", "no manifest on the default branch"],
+)
+def test_more_than_records_on_the_default_branch_goes_on_a_branch(
+    tmp_path: Path, manifest: str | None, files: dict[str, str]
+) -> None:
+    root = repository(tmp_path, ADOPTED | ({"guards/manifest.toml": manifest} if manifest else {}))
+    for path, text in files.items():
+        write(root, path, text)
+    assert route.decide(root, None).stage == "change"
 
 
 def test_a_working_branch_waits_for_its_pull_request(tmp_path: Path) -> None:
@@ -201,7 +263,7 @@ def test_without_a_forge_the_owner_merges_the_branch(tmp_path: Path) -> None:
     # pull request then has nowhere to go.
     root = repository(tmp_path, ADOPTED)
     write(root, "notes.md", "x\n")
-    assert route.decide(root, None).then == route.NEXT
+    assert route.decide(root, None).then.startswith("`just merge <branch>` merges it when")
     branch(root, "feature/4-x")
     write(root, "src/x.py", "x = 1\n")
     assert route.decide(root, None).then.startswith("`just merge <branch>` merges it when")

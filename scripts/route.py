@@ -17,7 +17,9 @@ The stages, in order; the first that does not hold is the answer:
 5. the commit hooks, which run tier 0 on every commit (``hooks_installed.py`` proves they would;
    the step is the ``hooks-install`` entry point, which an agent runs, or the owner's command
    where git config must change, since the guard refuses that from an agent);
-6. a clean tree (finish the change: ``check``, commit, pull request);
+6. a clean tree (finish the change: ``check``, commit on a branch, pull request; nothing is
+   committed on the default branch itself, and records alone left there land through the
+   ``merge`` entry point's ``--records``, which an agent runs, or a pull request on a forge);
 7. on a working branch: the pull request is open, else open it, and its merge job merges what
    the merge judge passes (ADR 0021); with no forge (no ``origin``) the binding's ``merge``
    entry point judges the branch, runs ``check`` on the merge result and merges it, or says
@@ -55,6 +57,7 @@ import application_types
 import feature_preflight as preflight
 import gatelib
 import hooks_installed
+import merge_ready
 import plugin_pin
 import questions
 import triggers
@@ -96,6 +99,7 @@ EVENTS_HEADER = "date\tevent\tsign\tanswer"
 DECLINED = "declined"
 CHANGES = ".scratch/changes"
 BLOCKED_RUN = ": blocked run"
+SHOWN = 3
 
 
 @dataclass(frozen=True)
@@ -523,6 +527,48 @@ def setup_step(root: Path) -> Step | None:
     return None if hooks is None else Step(hooks.fix, hooks.detail, NEXT, "hooks")
 
 
+def dirty_step(checkout: Checkout) -> Step:
+    """Uncommitted changes: records land through the merge judge, anything else on a branch.
+
+    Why: nothing is committed on the default branch itself (ADR 0031). Records the owner's
+    conversation wrote there land through the ``merge`` entry point, which an agent runs.
+    """
+    root, default = checkout.root, checkout.default_branch
+    if not checkout.on_default:
+        return Step(
+            f"run {check_command(root)}, then commit on branch `{checkout.branch}`",
+            "the working tree has uncommitted changes",
+            review(checkout),
+            "change",
+        )
+    paths = merge_ready.uncommitted(root)
+    if paths and not merge_ready.not_records(root, merge_ready.default_ref(root), paths):
+        more = len(paths) - SHOWN
+        listed = ", ".join(paths[:SHOWN]) + (f" and {more} more" if more > 0 else "")
+        if checkout.forge:
+            return Step(
+                f"commit them on a branch of their own, then {PULL_REQUEST}",
+                f"the work tree of `{default}` holds records alone ({listed}); the merge judge"
+                " asks no verdict record of them",
+                WAIT,
+                "records",
+            )
+        return Step(
+            merge_command(root, "--records"),
+            f"the work tree of `{default}` holds records alone ({listed}): an agent runs this; it"
+            " commits them on a branch of their own and merges it when the merge judge and"
+            " `check` pass it",
+            NEXT,
+            "records",
+        )
+    return Step(
+        f"run {check_command(root)}, then commit on a branch of its own, never on `{default}`",
+        f"the work tree of `{default}` has uncommitted changes",
+        review(checkout),
+        "change",
+    )
+
+
 def decide(root: Path, gh: preflight.Runner | None) -> Step:
     """The owner's next command for the checkout at ``root``; ``gh=None`` stays offline."""
     checkout = observe(root)
@@ -532,12 +578,7 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
     if setup is not None:
         return setup
     if checkout.dirty:
-        return Step(
-            f"run {check_command(root)}, then commit on branch `{checkout.branch}`",
-            "the working tree has uncommitted changes",
-            NEXT if checkout.on_default else review(checkout),
-            "change",
-        )
+        return dirty_step(checkout)
     if not checkout.on_default:
         return pull_request_step(checkout, gh)
     missing = records_missing(root)
