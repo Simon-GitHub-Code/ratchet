@@ -624,6 +624,19 @@ def test_a_head_that_declares_the_event_does_not_wake_the_judge(tmp_path: Path) 
     assert codes(repo) == ["guard"]
 
 
+def test_a_branch_forked_before_the_declaration_still_meets_the_owner(tmp_path: Path) -> None:
+    files = {path: text for path, text in BASE.items() if path != BINDING}
+    repository(tmp_path, files | {BINDING: EVENTS.format(events="none")})
+    git(tmp_path, "branch", "old-point")
+    write(tmp_path, BINDING, EVENTS.format(events="deployed"))
+    commit(tmp_path, "chore: declare deployed")
+    git(tmp_path, "switch", "-q", "-c", "feature/4-thing", "old-point")
+    change(tmp_path, DOOR_CHANGE | SURFACE_CHANGE)
+    # Why: the declaration landed on the default branch after the fork, and merge.py passes no
+    # `current`, so the fork point's `none` must not let the change dodge it.
+    assert {"door", "unflagged"} <= set(codes(tmp_path))
+
+
 def test_guard_paths_and_disputes_do_not_wait_for_an_event(tmp_path: Path) -> None:
     repo = young(tmp_path, None)
     change(

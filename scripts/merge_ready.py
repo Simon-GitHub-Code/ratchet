@@ -125,6 +125,10 @@ class Change:
         """``path`` at the merge base, or ``None`` when it is not there or is not text."""
         return git(self.root, "show", f"{self.fork}:{path}")
 
+    def tip(self, path: str) -> str | None:
+        """``path`` at the default branch's tip, or ``None`` when it is not there or is not text."""
+        return git(self.root, "show", f"{self.base}:{path}")
+
     def after(self, path: str) -> str | None:
         """``path`` at the head, or ``None`` when it is not there or is not text."""
         return git(self.root, "show", f"{self.head}:{path}")
@@ -652,10 +656,15 @@ def waiting(
 ) -> list[Reason]:
     """``reasons`` once the merge base declares a life event in ``needs``, else none (ADR 0028).
 
-    Why: the events are read at the merge base, never the head, so a change cannot declare its
-    own way out of the judge. A reason let through is named in ``notes``.
+    Why: the events are read at the fork point and at the default branch's tip, never the head,
+    and the union counts. The fork point alone would let a change loosen its own judge; the tip
+    alone would too, for a branch cut before the owner declared an event and merged without
+    ``current``. A reason let through is named in ``notes``.
     """
-    declared = application_types.life_events(change.before(gatelib.BINDING.as_posix()) or "")
+    path = gatelib.BINDING.as_posix()
+    declared = application_types.life_events(
+        change.before(path) or ""
+    ) | application_types.life_events(change.tip(path) or "")
     if not reasons or declared & needs:
         return reasons
     notes.append(
