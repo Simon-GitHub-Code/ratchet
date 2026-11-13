@@ -13,6 +13,7 @@ from tests.repos import git, install_hooks, repository, write
 
 Out = pytest.CaptureFixture[str]
 Gh = Callable[[Sequence[str]], str | None]
+TICKET = ".scratch/f/issues/01-t.md"
 CONJECTURE = (
     "\n\n## Conjecture\n\nParse the ticket once in a script; the refuter is a green run on a"
     " ticket without a label. Alternatives: an agent reads it (killed: it spawns first).\n"
@@ -218,13 +219,59 @@ def test_a_local_ticket_file_is_read_in_place(tmp_path: Path) -> None:
 
 
 def test_a_local_ticket_without_heading_number_or_status(tmp_path: Path) -> None:
-    root = repository(tmp_path, {"notes/idea.md": "Just prose." + CONJECTURE})
-    report = run(root, "notes/idea.md")
+    root = repository(tmp_path, {".scratch/f/issues/idea.md": "Just prose." + CONJECTURE})
+    report = run(root, ".scratch/f/issues/idea.md")
     assert checks(report) == ["label"]
     assert (report.number, report.title, report.branch) == (None, "idea", "feature/idea")
     (tmp_path / "b").mkdir()
-    done = repository(tmp_path / "b", {"t.md": "# T\n\nStatus: done" + CONJECTURE})
-    assert checks(run(done, "t.md")) == ["open", "label"]
+    done = repository(tmp_path / "b", {TICKET: "# T\n\nStatus: done" + CONJECTURE})
+    assert checks(run(done, TICKET)) == ["open", "label"]
+
+
+ASTRAY = [
+    "t.md",
+    "notes/idea.md",
+    ".scratch/f/ticket.md",
+    ".scratch/f/spec.md",
+    ".scratch/f/issues/sub/07.md",
+    ".scratch/f/issues/07.txt",
+    "docs/.scratch/f/issues/07.md",
+]
+
+
+@pytest.mark.parametrize(
+    "ref", [*ASTRAY, ".scratch/f/issues/../ticket.md", ".scratch/f/issues/linked.md"]
+)
+def test_a_local_ticket_is_only_a_file_the_guard_asks_about(tmp_path: Path, ref: str) -> None:
+    # Why: the guard asks the owner before an agent writes the agent-ready label only on
+    # `.scratch/<feature>/issues/<name>.md`; a label anywhere else may be the agent's own.
+    text = "# T\n\nStatus: ready-for-agent" + CONJECTURE
+    root = repository(tmp_path, dict.fromkeys([TICKET, *ASTRAY], text))
+    (root / ".scratch/f/issues/linked.md").symlink_to(root / "notes/idea.md")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "link")
+    assert run(root, TICKET).ok
+    report = run(root, ref)
+    assert checks(report) == ["ticket"]
+    assert ".scratch/<feature>/issues/<name>.md" in report.failures[0].detail
+
+
+def test_a_ticket_outside_the_checkout_is_refused(tmp_path: Path) -> None:
+    root = repository(tmp_path / "repo")
+    write(tmp_path, "elsewhere.md", "# T\n\nStatus: ready-for-agent" + CONJECTURE)
+    for ref in ("../elsewhere.md", str(tmp_path / "elsewhere.md")):
+        assert checks(run(root, ref)) == ["ticket"]
+
+
+def test_a_ticket_with_a_second_name_is_refused(tmp_path: Path) -> None:
+    # Why: a hard link lets the agent write the label through a name the guard does not keep.
+    root = repository(tmp_path, {TICKET: "# T\n\nStatus: ready-for-agent" + CONJECTURE})
+    (root / "notes.md").hardlink_to(root / TICKET)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "link")
+    report = run(root, TICKET)
+    assert checks(report) == ["ticket"]
+    assert "no second name" in report.failures[0].detail
 
 
 def test_the_record_is_read_defensively(tmp_path: Path) -> None:
@@ -299,8 +346,8 @@ def test_run_gh_returns_stdout_on_success_and_none_otherwise(
 def test_main_prints_json_and_the_verdict(
     tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = repository(tmp_path, {"t.md": "# T\n\nStatus: ready-for-agent" + CONJECTURE})
-    assert preflight.main(["preflight", "t.md", "--root", str(root)]) == 0
+    root = repository(tmp_path, {TICKET: "# T\n\nStatus: ready-for-agent" + CONJECTURE})
+    assert preflight.main(["preflight", TICKET, "--root", str(root)]) == 0
     out, err = capsys.readouterr()
     assert json.loads(out)["ok"] is True
     assert err.strip() == "preflight: green"

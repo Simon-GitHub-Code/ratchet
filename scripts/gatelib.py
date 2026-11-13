@@ -10,9 +10,13 @@ is the merge base, before is ``HEAD~1``. ``lowered``, ``guard-diff`` and the gat
 from __future__ import annotations
 
 import contextlib
+import errno
 import fnmatch
+import ipaddress
+import json
 import os
 import re
+import selectors
 import shutil
 import signal
 import socket
@@ -20,10 +24,11 @@ import subprocess
 import time
 import tomllib
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import lru_cache
 from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple, cast
 from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
@@ -35,8 +40,13 @@ BINDING = Path("docs/process/binding.md")
 # Why: `with_service.py` exports the URL it waited on, so a command run inside it can tell the
 # readiness route from the routes a user requests.
 READY_ENV = "RATCHET_READY"
-# Why: a path that exists only once ``with_service.py --graceful`` has sent the stop signal.
+# Why: a path that exists only once ``with_service.py --graceful`` has sent the stop signal, and
+# holds what the gate knows of the service's listeners: a ``Stopping``.
 STOPPING_ENV = "RATCHET_STOPPING"
+# Why: a path the command creates once it is sending requests; ``with_service.py --graceful``
+# counts ``--signal-after`` from then, so a command slow to start still has requests in flight.
+SENDING_ENV = "RATCHET_SENDING"
+ANSWER_POLL = 0.002
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
@@ -564,17 +574,176 @@ def run_command(command: list[str], env: dict[str, str]) -> tuple[int, list[str]
     return code, ([] if code == 0 else [f"the command exited with code {code}"])
 
 
-def http_status(method: str, url: str, *, body: bytes | None = None, timeout: float = 5.0) -> int:
+class Connection(NamedTuple):
+    """One TCP connection, by both its ends: the service's address and port, then the client's.
+
+    No two open connections share all four, so a name the gate writes matches one connection.
+    """
+
+    host: str
+    port: int
+    client: str
+    client_port: int
+
+
+def connection(service: tuple[object, ...], client: tuple[object, ...]) -> Connection:
+    """The connection between two socket addresses, written alike from either end."""
+    return Connection(*end(service), *end(client))
+
+
+def end(address: tuple[object, ...]) -> tuple[str, int]:
+    """One end of a connection: its IP address as both ends write it, and its port.
+
+    An IPv4 address that a dual-stack listener sees mapped into IPv6 is written as IPv4.
+    """
+    host, port = address[:2]
+    ip = ipaddress.ip_address(str(host))
+    mapped = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) else None
+    return str(mapped or ip), cast("int", port)
+
+
+@dataclass(frozen=True)
+class Stopping:
+    """What ``with_service.py --graceful`` tells the command, from the stop signal on.
+
+    ``ports`` are the ports the gate found the service listening on, each with ``None`` while the
+    gate holds its listener, or why it no longer can. ``elsewhere`` says why the gate held no
+    listener on any other port. ``taken`` are the connections that the gate accepted from a
+    listener the service had let go of, and then reset: the service never accepted them.
+    ``answered`` is whether the gate has looked at the listeners again since the command asked.
+    """
+
+    ports: dict[int, str | None]
+    elsewhere: str
+    taken: frozenset[Connection]
+    answered: bool = False
+
+    def inexact(self, port: int) -> str | None:
+        """Why the gate cannot tell which connections to ``port`` the service accepted, if so."""
+        return self.ports.get(port, self.elsewhere)
+
+
+def write_stopping(path: Path, stopping: Stopping) -> None:
+    """Replace ``path`` with ``stopping`` whole, so a reader never sees half of it."""
+    data = {
+        "ports": stopping.ports,
+        "elsewhere": stopping.elsewhere,
+        "taken": sorted(stopping.taken),
+        "answered": stopping.answered,
+    }
+    pending = path.with_name(f"{path.name}.pending")
+    pending.write_text(json.dumps(data), encoding="utf-8")
+    pending.replace(path)
+
+
+def read_stopping(path: Path) -> Stopping:
+    """What ``path`` holds; it exists from the stop signal on."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return Stopping(
+        {int(port): why for port, why in data["ports"].items()},
+        data["elsewhere"],
+        frozenset(Connection(*taken) for taken in data["taken"]),
+        data["answered"],
+    )
+
+
+def asking(path: Path) -> Path:
+    """The path the command creates beside the stop marker ``path`` to ask the gate to answer."""
+    return path.with_name(f"{path.name}.asked")
+
+
+def ask(path: Path, within: float) -> Stopping:
+    """What the stop marker ``path`` says once the gate has looked at the listeners again.
+
+    Asking orders the answer after every reset the command saw before it asked, so it says so
+    when one of them came from a listener shut down rather than closed. A gate that does not
+    answer within ``within`` seconds leaves every port to be judged by when its requests started.
+    """
+    asking(path).touch()
+    deadline = time.monotonic() + within
+    while not (told := read_stopping(path)).answered:
+        if time.monotonic() >= deadline:
+            return Stopping({}, f"the gate did not answer within {within:g}s", told.taken)
+        time.sleep(ANSWER_POLL)
+    return told
+
+
+def reach(
+    sock: socket.socket,
+    address: tuple[object, ...],
+    *,
+    timeout: float | None,
+    connecting: Callable[[Connection], None] | None,
+) -> None:
+    """Connect ``sock`` within ``timeout``, naming the connection to ``connecting`` at once.
+
+    The connect starts without blocking, which is when the kernel picks the local address and
+    port, so ``connecting`` learns them before the connection can be made, or reset.
+    """
+    sock.settimeout(0)
+    code = sock.connect_ex(address)
+    if connecting:
+        connecting(connection(address, sock.getsockname()))
+    if code == errno.EINPROGRESS:
+        with selectors.DefaultSelector() as waiting:
+            waiting.register(sock, selectors.EVENT_WRITE)
+            if not waiting.select(timeout):
+                message = "timed out"
+                raise TimeoutError(message)
+        code = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+    if code:
+        raise OSError(code, os.strerror(code))
+    sock.settimeout(timeout)
+
+
+class Told(HTTPConnection):
+    """An ``HTTPConnection`` naming each connection it tries to ``connecting``; see ``reach``."""
+
+    connecting: Callable[[Connection], None] | None = None
+
+    def connect(self) -> None:
+        """Connect to each address of the host in turn, as ``socket.create_connection`` does."""
+        failed: OSError = socket.gaierror(f"{self.host} has no address")
+        for family, kind, proto, _, address in socket.getaddrinfo(
+            self.host, self.port, type=socket.SOCK_STREAM
+        ):
+            sock = socket.socket(family, kind, proto)
+            try:
+                reach(sock, address, timeout=self.timeout, connecting=self.connecting)
+            except OSError as error:
+                sock.close()
+                failed = error
+            else:
+                self.sock = sock
+                return
+        raise failed
+
+
+class ToldTLS(HTTPSConnection, Told):
+    """``Told`` for https: ``HTTPSConnection.connect`` reaches ``Told.connect`` before TLS."""
+
+
+def http_status(
+    method: str,
+    url: str,
+    *,
+    body: bytes | None = None,
+    timeout: float = 5.0,
+    connecting: Callable[[Connection], None] | None = None,
+) -> int:
     """The status of one request, redirects not followed; raises ``OSError`` or ``HTTPException``.
 
-    ``http`` and ``https`` only. A body is sent as JSON.
+    ``http`` and ``https`` only. A body is sent as JSON. ``connecting`` is given each
+    connection tried, as soon as its local end has a port: a reset that lands before the connect
+    returns still leaves the caller its name.
     """
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         message = f"not an http(s) URL with a host: {url}"
         raise ValueError(message)
-    connect = HTTPSConnection if parts.scheme == "https" else HTTPConnection
+    connect = ToldTLS if parts.scheme == "https" else Told
     connection = connect(parts.hostname, parts.port, timeout=timeout)
+    connection.connecting = connecting
     target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
     headers = {"Content-Type": "application/json"} if body is not None else {}
     try:
