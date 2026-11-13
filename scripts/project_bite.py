@@ -803,9 +803,12 @@ def run_lanes(
             # Why: the first setup fills the caches kept outside the tree; the rest then find
             # them, where setups started together would each miss.
             first = make_copy(root, paths[0], registry=registry, shell=shell)
-            futures = [
-                pool.submit(lane, path, None if n else first) for n, path in enumerate(paths)
-            ]
+            # Why: a signal between a lane's start and the pool recording it would leave a lane
+            # the pool does not wait for, writing into a copy that is being removed.
+            with gatelib.signals_held():
+                futures = [
+                    pool.submit(lane, path, None if n else first) for n, path in enumerate(paths)
+                ]
             # Why: the kernel may hand a signal to a lane's thread, and its handler runs only when
             # this thread runs Python, which a wait with no end would put off until the gate ends.
             while wait(futures, timeout=WAKE).not_done:
