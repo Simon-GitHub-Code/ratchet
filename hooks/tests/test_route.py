@@ -527,7 +527,8 @@ def test_an_owed_safeguard_comes_first_and_offers_the_build_beside_it(tmp_path: 
     assert step == route.Step(
         route.SAFEGUARD,
         "`outbound-call` has arrived (1 instance) and owes survives failing dependencies."
-        f" Or carry on with {route.SPEC}: the first file that brings the kind is free, a second waits for this",
+        f" Or carry on with {route.SPEC}: the first file that brings the kind is free,"
+        " a second waits for this",
         route.SPEC,
         "safeguard",
     )
