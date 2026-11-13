@@ -35,8 +35,10 @@ _DELIMITER_QUOTING = str.maketrans("", "", "'\"\\")
 _PIPES = frozenset({"|", "|&"})
 _SUBSHELL = "subshell"
 _GROUP = "group"
-_CASE = "case"
-_ESAC = "esac"
+# Why: a `case` pattern ends in a `)` that no `(` opened, and a heredoc the lexer reads apart from
+# bash may show it a `)` that bash does not see; either would close a subshell early.
+_UNSURE_WORDS = frozenset({"case", "esac"})
+_HEREDOC_OPERATOR = "<<"
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +115,9 @@ class _Lexer:
         self._end_word()
 
     def _step(self, char: str) -> None:
-        if char in "'\"\\`" or self.text.startswith("$(", self.at):
+        if self.text.startswith("$'", self.at):
+            self._ansi()
+        elif char in "'\"\\`" or self.text.startswith("$(", self.at):
             self._quoted(char)
         elif char == "#" and not self.word:
             self._skip_comment()
@@ -154,6 +158,15 @@ class _Lexer:
 
     def _single(self) -> None:
         end = self._find("'", self.at + 1) + 1
+        self.word.append(self.text[self.at : end])
+        self.at = end
+
+    def _ansi(self) -> None:
+        """A ``$'...'`` word, where a backslash escapes the next character, the quote included."""
+        end = self.at + 2
+        while end < len(self.text) and self.text[end] != "'":
+            end += 2 if self.text[end] == "\\" else 1
+        end = min(end + 1, len(self.text))
         self.word.append(self.text[self.at : end])
         self.at = end
 
@@ -268,10 +281,10 @@ def _is_fd_target(operator: str, word: str) -> bool:
 class _Splitter:
     """Groups tokens into simple commands and tells a subshell's parentheses from the others.
 
-    A ``(`` where a command starts opens a subshell. One after a word (a definition, an array,
-    a process substitution, a ``case`` pattern) does not, nor does the ``)`` that closes it or
-    one that ends a ``case`` pattern. Where it is unsure it reads no subshell, which keeps a
-    ``cd`` inside in force for what follows: the reading that protects.
+    A ``(`` where a command starts opens a subshell when ``subshells`` is set. One after a word
+    (a definition, an array, a process substitution) does not, nor does the ``)`` that closes
+    it. Without ``subshells`` no parenthesis is read as a subshell, which keeps a ``cd`` inside
+    one in force for what follows: the reading that protects.
     """
 
     commands: list[SimpleCommand] = field(default_factory=list)
@@ -280,14 +293,14 @@ class _Splitter:
     heredocs: list[int] = field(default_factory=list)
     herestrings: list[str] = field(default_factory=list)
     redirect: str | None = None
+    subshells: bool = True
     nesting: list[str] = field(default_factory=list)
     opens: int = 0
     closed: bool = False
 
-    def word(self, word: str, raw: str) -> None:
+    def word(self, word: str) -> None:
         redirect, self.redirect = self.redirect, None
         if redirect is None:
-            self._nest(word, raw)
             self.closed = False
             self.words.append(word)
         elif redirect == "<<<":
@@ -297,19 +310,11 @@ class _Splitter:
         elif ">" in redirect and not _is_fd_target(redirect, word):
             self.writes.append(word)
 
-    def _nest(self, word: str, raw: str) -> None:
-        # Why: a `case` seen where there is none only keeps a subshell open; an `esac` seen where
-        # there is none would close one early, so only a bare one in command position counts.
-        if word == _CASE:
-            self.nesting.append(_CASE)
-        elif raw == _ESAC and not self.words and self.nesting[-1:] == [_CASE]:
-            self.nesting.pop()
-
     def operator(self, operator: str) -> None:
         if "<" in operator or ">" in operator:
             self.redirect = operator
             return
-        if operator == "(" and not (self.words or self.writes or self.redirect):
+        if operator == "(" and self.subshells and not (self.words or self.writes or self.redirect):
             self.nesting.append(_SUBSHELL)
             self.opens += 1
             return
@@ -358,12 +363,14 @@ class _Splitter:
 
 def split(tokens: list[Token]) -> list[SimpleCommand]:
     """Group tokens into simple commands, recording redirect targets and heredoc markers."""
-    splitter = _Splitter()
+    words = {unquote(token.text) for token in tokens if not token.operator}
+    heredoc = any(token.operator and token.text == _HEREDOC_OPERATOR for token in tokens)
+    splitter = _Splitter(subshells=not (heredoc or words & _UNSURE_WORDS))
     for token in tokens:
         if token.operator:
             splitter.operator(token.text)
         else:
-            splitter.word(unquote(token.text), token.text)
+            splitter.word(unquote(token.text))
     return splitter.commands
 
 
