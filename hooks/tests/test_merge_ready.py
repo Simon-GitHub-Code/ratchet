@@ -1059,3 +1059,248 @@ def test_a_link_outside_the_guard_and_door_paths_is_no_reason(root: Path) -> Non
     link(root, "src/alias.py", "a.py")
     change(root, {"src/a.py": "x = 2\n"})
     assert judged(root) == []
+
+
+# --- records alone (ADR 0031) -----------------------------------------------------------------
+
+SPEC = ".scratch/thing/spec.md"
+TICKET = ".scratch/thing/issues/01-a.md"
+CHANGES = ".scratch/changes/records-thing.md"
+AGREED = "# 01: A\n\nStatus: ready-for-agent\n\n- [ ] It saves a link.\n"
+PLAIN_RECORD = (
+    "record: no verdict record (docs/features/<slug>/verdict.json) is part of the change, so it"
+    " is not the product of the pipeline"
+)
+BUT = f"{PLAIN_RECORD}; its paths are records, but "
+GIVES = "gives a ticket the agent-ready label `{label}`, which is the owner's act"
+EDITS_AGREED = (
+    "changes a ticket the owner agreed to build, where only what is appended to one lands"
+    " without them"
+)
+REWRITTEN_ADR = "not additive: it changes a decision record the default branch already holds"
+
+
+@pytest.fixture
+def tracked(tmp_path: Path) -> Path:
+    """The tracker holds a spec and a ticket the owner agreed to; ``records-thing`` is out."""
+    repository(tmp_path, {**BASE, SPEC: "# Thing\n\nStatus: ready-for-agent\n", TICKET: AGREED})
+    branch(tmp_path, "records-thing")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {".scratch/other/spec.md": "# Other\n\nStatus: needs-triage\n", CHANGES: "## Summary\n"},
+        {SPEC: "# Thing\n\nStatus: ready-for-agent\n\n## Conjecture\n\nIt works; or not.\n"},
+        {".scratch/thing/issues/02-b.md": "# 02: B\n\nStatus: needs-triage\n"},
+        {TICKET: AGREED + "\n## Conjecture\n\nIt works.\n\n## Answers\n\nQ: a? A: b.\n"},
+        {
+            "GLOSSARY.md": GLOSSARY + "\n**Order**:\nWhat a customer places.\n",
+            "docs/adr/0002-orders.md": ADR,
+            CHANGES: "## Summary\n",
+        },
+    ],
+    ids=["a spec", "its conjecture", "a ticket", "answers on an agreed one", "a term and an adr"],
+)
+def test_records_alone_are_asked_no_verdict_record(
+    tracked: Path, files: dict[str, str | None]
+) -> None:
+    change(tracked, files, record=False)
+    assert judged(tracked) == []
+
+
+@pytest.mark.parametrize(
+    ("files", "reasons"),
+    [
+        ({SPEC: "# Thing\n", "src/a.py": "x = 2\n"}, [PLAIN_RECORD]),
+        (
+            {CHANGES: "## Summary\n", "lint.toml": "strict = false\n"},
+            ["guard: lint.toml (tool-config)", PLAIN_RECORD],
+        ),
+        ({".claude/skills/x/SKILL.md": "# X\n"}, [PLAIN_RECORD]),
+        (
+            {"docs/process/notes.md": "# Notes\n"},
+            ["guard: docs/process/notes.md (gate-commands)", PLAIN_RECORD],
+        ),
+        ({".Scratch/thing/spec.md": "# Thing\n"}, [PLAIN_RECORD]),
+        ({".scratch/thing/run.sh": "echo hi\n"}, [PLAIN_RECORD]),
+        (
+            {".scratch/thing/issues/02-b.md": "# 02: B\n\nStatus: ready-for-agent\n"},
+            [f"{BUT}.scratch/thing/issues/02-b.md {GIVES.format(label='ready-for-agent')}"],
+        ),
+        (
+            {TICKET: AGREED.replace("saves a link", "mines coins")},
+            [f"{BUT}{TICKET} {EDITS_AGREED}"],
+        ),
+        ({SPEC: None}, [f"{BUT}{SPEC} deletes a record"]),
+        (
+            {"docs/adr/0001-plain.md": ADR.replace("Because.", "Because I said so.")},
+            [
+                f"guard: docs/adr/0001-plain.md (records): {REWRITTEN_ADR}",
+                f"{BUT}docs/adr/0001-plain.md is {REWRITTEN_ADR}",
+            ],
+        ),
+        ({}, [PLAIN_RECORD]),
+    ],
+    ids=[
+        "code among records",
+        "config among records",
+        "a skill",
+        "a process document",
+        "a tracker spelled in another case",
+        "a script in the tracker",
+        "a new ticket with the label",
+        "an agreed ticket rewritten",
+        "a deleted spec",
+        "an adr rewritten",
+        "nothing at all",
+    ],
+)
+def test_more_than_records_alone_is_the_owners(
+    tracked: Path, files: dict[str, str | None], reasons: list[str]
+) -> None:
+    change(tracked, files, record=False)
+    assert judged(tracked) == reasons
+
+
+def test_a_ticket_given_the_label_in_any_spelling_is_the_owners(tmp_path: Path) -> None:
+    labels = (
+        "| Label in mattpocock/skills | Label in our tracker |\n| --- | --- |\n"
+        "| `ready-for-agent` | `afk` |\n"
+    )
+    repository(tmp_path, {**BASE, "docs/agents/triage-labels.md": labels, TICKET: "# 01: A\n"})
+    branch(tmp_path, "records-thing")
+    change(tmp_path, {TICKET: "# 01: A\n\n**Status:** AFK\n"}, record=False)
+    assert judged(tmp_path) == [f"{BUT}{TICKET} {GIVES.format(label='afk')}"]
+
+
+@pytest.mark.parametrize(
+    "stricter",
+    [
+        '[[group]]\nname = "tracker"\nreason = "The owner\'s."\npaths = [".scratch/**"]\n',
+        '[[group]]\nname = "tracker"\nreason = "The owner\'s."\npaths = [".SCRATCH/**"]\n',
+        '[[door]]\nname = "plans"\nreason = "Shipped."\npaths = [".scratch/thing/**"]\n',
+        '[[group]]\nname = "pinned"\nreason = "The owner\'s."\npaths = ["docs/adr/0002-*"]\n',
+    ],
+    ids=["a guard group", "a guard group but for case", "a door", "a group below the records"],
+)
+def test_a_record_a_stricter_group_or_door_also_holds_is_no_record(
+    tmp_path: Path, stricter: str
+) -> None:
+    repository(tmp_path, {**BASE, "guards/manifest.toml": MANIFEST + "\n" + stricter})
+    branch(tmp_path, "records-thing")
+    change(tmp_path, {SPEC: "# Thing\n", "docs/adr/0002-orders.md": ADR}, record=False)
+    assert PLAIN_RECORD in judged(tmp_path)
+
+
+def test_a_record_that_is_a_link_or_not_text_is_the_owners(tracked: Path) -> None:
+    # Why: a gate that opens a linked record reads another file, and the label can hide in an
+    # encoding the judge does not read.
+    link(tracked, SPEC, "../../src/a.py")
+    unread = {".scratch/thing/issues/02-b.md", ".scratch/thing/notes.md"}
+    for path in unread:
+        write(tracked, path, "")
+        (tracked / path).write_bytes("Status: ready-for-agent".encode("utf-16"))
+    change(tracked, {}, record=False)
+    assert judged(tracked) == [
+        (
+            f"{BUT}.scratch/thing/issues/02-b.md is not text the judge can read;"
+            " .scratch/thing/notes.md is not text the judge can read;"
+            f" {SPEC} is a symbolic link"
+        )
+    ]
+
+
+def test_more_than_three_refusals_are_counted(tracked: Path) -> None:
+    files = {f".scratch/thing/issues/0{n}-x.md": "Status: ready-for-agent\n" for n in range(2, 7)}
+    change(tracked, files, record=False)
+    (reason,) = judged(tracked)
+    assert reason.endswith("; and 2 more")
+
+
+# --- the adoption (ADR 0031) ------------------------------------------------------------------
+
+UNADOPTED = {"README.md": "# A\n", "src/a.py": "x = 1\n"}
+ADOPTION = {"guards/manifest.toml": MANIFEST, BINDING: BASE[BINDING], "justfile": "check:\n"}
+ADOPTION_NOTE = (
+    "the adoption: the default branch holds no guards/manifest.toml and this change brings it, so"
+    " there is no gate before it to loosen; its own gates judge it (ADR 0031)"
+)
+NO_MANIFEST = (
+    "manifest: the default branch has no guards/manifest.toml, so nothing says what a guard path"
+    " or a one-way door is"
+)
+
+
+def adopt(root: Path, base: dict[str, str], files: dict[str, str | None]) -> None:
+    """``base`` on ``main``, then ``files`` committed on ``adopt-ratchet``."""
+    repository(root, base)
+    branch(root, "adopt-ratchet")
+    change(root, files, record=False)
+
+
+def test_the_adoption_is_judged_by_its_own_gates(tmp_path: Path) -> None:
+    adopt(tmp_path, UNADOPTED, ADOPTION)
+    notes: list[str] = []
+    assert merge_ready.judge(tmp_path, "main", "HEAD", notes=notes) == []
+    assert notes == [ADOPTION_NOTE]
+    assert merge_ready.adopts(tmp_path, "main", "HEAD")
+    assert not merge_ready.adopts(tmp_path, "main", "no-such-branch")
+
+
+@pytest.mark.parametrize(
+    ("base", "files"),
+    [
+        (UNADOPTED, {**ADOPTION, "guards/manifest.toml": "[[group]]\n"}),
+        (UNADOPTED, {"guards/manifest.toml": MANIFEST}),
+        (UNADOPTED | {BINDING: "# Binding\n"}, ADOPTION),
+        (UNADOPTED, {"src/a.py": "x = 2\n"}),
+    ],
+    ids=[
+        "a manifest that does not parse",
+        "a manifest with no binding",
+        "a binding on the default branch",
+        "no manifest at all",
+    ],
+)
+def test_what_is_not_the_adoption_still_judges_nothing(
+    tmp_path: Path, base: dict[str, str], files: dict[str, str | None]
+) -> None:
+    adopt(tmp_path, base, files)
+    assert judged(tmp_path) == [NO_MANIFEST]
+
+
+def test_a_branch_that_deletes_the_manifest_is_no_adoption(root: Path) -> None:
+    change(root, {"guards/manifest.toml": None, BINDING: None}, record=False)
+    assert judged(root) == [
+        "guard: docs/process/binding.md (gate-commands)",
+        "guard: guards/manifest.toml (harness)",
+        PLAIN_RECORD,
+    ]
+
+
+def test_a_manifest_the_default_branch_lost_is_no_fresh_start(tmp_path: Path) -> None:
+    repository(tmp_path, dict(BASE))
+    branch(tmp_path, "adopt-ratchet")
+    git(tmp_path, "checkout", "-q", "main")
+    git(tmp_path, "rm", "-q", "guards/manifest.toml", BINDING)
+    commit(tmp_path, "chore(method): drop the method")
+    git(tmp_path, "checkout", "-q", "adopt-ratchet")
+    change(tmp_path, {"src/a.py": "x = 2\n"}, record=False)
+    assert judged(tmp_path) == [NO_MANIFEST]
+
+
+def test_the_adoption_still_meets_the_setting_its_files_the_registry_and_disputes(
+    tmp_path: Path,
+) -> None:
+    files = {
+        **ADOPTION,
+        "flags.toml": "[[flag]\n",
+        "docs/disputes/0001-limit.md": DISPUTE.format(status="open"),
+    }
+    adopt(tmp_path, UNADOPTED, files)
+    link(tmp_path, "justfile", "check:\n")
+    commit(tmp_path, "chore(method): the justfile as a link")
+    assert codes(tmp_path) == ["file", "door", "dispute"]
+    assert judged(tmp_path, target="next")[0].startswith("target: ")

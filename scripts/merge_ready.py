@@ -21,12 +21,20 @@ only for ``agent``. The owner merges when any of these holds:
   and prints a ``note:`` line saying what it let through. The head's binding never counts.
 - ``dispute``: the change adds or edits a dispute, or an open dispute names a path it touches.
 - ``record``: no verdict record is part of the change, or the one there is not an approval of
-  exactly this tree with nothing unresolved and no open question.
+  exactly this tree with nothing unresolved and no open question. A change with no verdict record
+  that is records alone is not asked for one (ADR 0031): every path it touches is a markdown file
+  of the tracker under ``.scratch/`` that no guard group or door holds, kept, not given the
+  agent-ready label, or an addition to a path only ``edit = "append"`` groups hold. ``RECORDS``
+  lists those kinds; the manifest they are read against is the default branch's.
 - ``file``: a guard, door or record path is a symbolic link or a submodule, at the merge base
   or at the head. Git shows a link's target as its text, which is not what a gate reads there.
 - ``target``, ``behind``, ``tier2``: the pull request targets another branch; the branch does not
   hold the default branch's tip, so its gates ran on an older one; tier 2 is red there.
-- ``refs``, ``manifest``: the judge could not read what it judges. It fails closed.
+- ``refs``, ``manifest``: the judge could not read what it judges. It fails closed. One change
+  is read without a manifest on the default branch: the adoption, which brings the manifest and
+  the binding to a default branch whose tip and merge base hold neither. There is no gate before
+  it to loosen, so only the setting, its files, the flag registry and disputes are asked of it,
+  and ``merge.py`` runs ``check-deep`` on its merge result (ADR 0031).
 
 The judge reads commits and nothing else: the manifest at the default branch's tip, every other
 file at the merge base and at the head, through git. It never reads the work tree and never runs
@@ -55,6 +63,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import application_types
 import flags as registry
@@ -64,6 +73,8 @@ import lowered
 # Why: the manifest and the two classifiers the judge shares with the hook live under hooks/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import dependencies, records
+from ratchet_guards.gh import LABELS_RECORD, READY_ROLE, label_for_role
+from ratchet_guards.globs import matches
 from ratchet_guards.manifest import (
     MANIFEST_PATH,
     Door,
@@ -73,6 +84,9 @@ from ratchet_guards.manifest import (
     ManifestError,
     parse,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 AGENT = "merge: agent"
 OWNER = "merge: owner"
@@ -94,6 +108,10 @@ SURFACE_EVENTS = frozenset({"deployed"})
 FLAGS_QUESTION = "changed flags off and on"
 DOCS = "docs/"
 HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
+TRACKER = ".scratch/**/*.md"
+TICKETS = ".scratch/**/issues/*.md"
+NOT_A_RECORD = "is not a record"
+SHOWN = 3
 # Why: `000000` is how a diff writes a path that one side does not hold.
 REGULAR = frozenset({"100644", "100755", "000000"})
 IRREGULAR = {"120000": "a symbolic link", "160000": "a submodule"}
@@ -187,7 +205,12 @@ def read(root: Path, base_ref: str, head_ref: str) -> Change | Reason:
 
 def manifest_of(change: Change) -> Manifest | Reason:
     """The manifest at the default branch's tip: the owner's, whatever the change holds."""
-    text = git(change.root, "show", f"{change.base}:{MANIFEST_PATH}")
+    return manifest_at(change.root, change.base)
+
+
+def manifest_at(root: Path, ref: str) -> Manifest | Reason:
+    """The manifest ``ref`` holds, or why there is none to read."""
+    text = git(root, "show", f"{ref}:{MANIFEST_PATH}")
     if text is None:
         return Reason(
             "manifest",
@@ -198,6 +221,34 @@ def manifest_of(change: Change) -> Manifest | Reason:
         return parse(text)
     except ManifestError as error:
         return Reason("manifest", f"{MANIFEST_PATH} on the default branch does not parse: {error}")
+
+
+def adoption(change: Change) -> Manifest | None:
+    """The manifest the change brings when it is the adoption, else ``None``.
+
+    The adoption brings the manifest and the binding to a default branch whose tip and merge base
+    hold neither. Why both commits: a base with a manifest is adopted, whatever a branch deletes,
+    and a tip that lost one the merge base held is the owner's to explain, not a fresh start.
+    """
+    binding = gatelib.BINDING.as_posix()
+    held = [
+        git(change.root, "cat-file", "-e", f"{side}:{path}")
+        for side in (change.base, change.fork)
+        for path in (MANIFEST_PATH, binding)
+    ]
+    text = change.after(MANIFEST_PATH)
+    if any(found is not None for found in held) or text is None or not change.kept(binding):
+        return None
+    try:
+        return parse(text)
+    except ManifestError:
+        return None
+
+
+def adopts(root: Path, base_ref: str, head_ref: str) -> bool:
+    """Whether ``head_ref`` is the adoption onto ``base_ref``: see ``adoption``."""
+    change = read(root, base_ref, head_ref)
+    return isinstance(change, Change) and adoption(change) is not None
 
 
 def folded(manifest: Manifest) -> Manifest:
@@ -245,12 +296,17 @@ def more_than_tightened(before: str | None, after: str | None) -> str | None:
     return "; ".join(lowered.loosened(lowered.flatten(old), lowered.flatten(new))) or None
 
 
+def addition(change: Change, path: str) -> str | None:
+    """Why the change of a record is more than an addition (ADR 0014), or ``None``."""
+    before = records.before(lambda args: git(change.root, *args), change.fork, path)
+    note = records.note(path, before, change.after(path))
+    return None if note.startswith(records.ADDITIONS) else note
+
+
 def guard_note(change: Change, path: str, group: Group) -> str | None:
     """What a changed guard path's change is, or ``None`` when the judge lets it through."""
     if group.additive:
-        before = records.before(lambda args: git(change.root, *args), change.fork, path)
-        note = records.note(path, before, change.after(path))
-        return None if note.startswith(records.ADDITIONS) else note
+        return addition(change, path)
     if path == THRESHOLDS:
         return more_than_tightened(change.before(path), change.after(path))
     if dependencies.recognised(path):
@@ -546,6 +602,127 @@ def dispute_reasons(change: Change) -> list[Reason]:
     return reasons
 
 
+# --- records alone ---------------------------------------------------------------------------
+
+
+def holders(manifest: Manifest, path: str) -> tuple[list[Group], list[Door]]:
+    """Every guard group and one-way door that holds ``path``, letter case set aside.
+
+    Why: ``group_of`` names the first group only, and a stricter group further down the
+    manifest must keep a path from being read as a record.
+    """
+    lower = folded(manifest)
+    groups = [
+        group
+        for group, low in zip(manifest.groups, lower.groups, strict=True)
+        if Manifest((group,)).group_of(path) or Manifest((low,)).group_of(path.casefold())
+    ]
+    return groups, manifest.doors_of(path) + lower.doors_of(path.casefold())
+
+
+def in_tracker(manifest: Manifest, path: str) -> bool:
+    """A markdown file of the tracker that no guard group or door holds."""
+    return matches(path, TRACKER) and holders(manifest, path) == ([], [])
+
+
+def is_ticket(manifest: Manifest, path: str) -> bool:
+    """A ticket of the tracker, as the route and the drain find one."""
+    return matches(path, TICKETS) and in_tracker(manifest, path)
+
+
+def tracker_refusal(change: Change, path: str) -> str | None:
+    return "is not text the judge can read" if change.after(path) is None else None
+
+
+def ticket_refusal(change: Change, path: str) -> str | None:
+    """Why a ticket's change is the owner's: it gives the agent-ready label or edits an agreed one.
+
+    Why: the label is the owner's agreement to build the ticket as it stands (ADR 0008). Any
+    spelling the default branch's triage-labels record or the role name gives counts, in any
+    case, anywhere in the file. A ticket that held one at the merge base may only be appended
+    to, as its conjecture and the owner's answers are.
+    """
+    if (unread := tracker_refusal(change, path)) is not None:
+        return unread
+    spelled = label_for_role(change.tip(LABELS_RECORD.as_posix()) or "", READY_ROLE)
+    before, after = change.before(path) or "", change.after(path) or ""
+    for label in sorted({READY_ROLE, spelled or READY_ROLE}):
+        if after.casefold().count(label.casefold()) > before.casefold().count(label.casefold()):
+            return f"gives a ticket the agent-ready label `{label}`, which is the owner's act"
+        if label.casefold() in before.casefold() and not after.startswith(before):
+            return (
+                "changes a ticket the owner agreed to build, where only what is appended to one"
+                " lands without them"
+            )
+    return None
+
+
+def appended(manifest: Manifest, path: str) -> bool:
+    """A path that ``edit = "append"`` groups hold, as written, and nothing stricter does."""
+    first = manifest.group_of(path)
+    groups, doors = holders(manifest, path)
+    return first is not None and all(group.additive for group in groups) and not doors
+
+
+def not_an_addition(change: Change, path: str) -> str | None:
+    note = addition(change, path)
+    return None if note is None else f"is {note}"
+
+
+@dataclass(frozen=True)
+class RecordKind:
+    """A record the owner's own conversation writes, which no verdict record is asked of.
+
+    ``claims`` reads the path against the default branch's manifest, never the change's;
+    ``refuses`` says why one change of a claimed path is more than such a record takes.
+    """
+
+    claims: Callable[[Manifest, str], bool]
+    refuses: Callable[[Change, str], str | None]
+
+
+RECORDS = (
+    RecordKind(is_ticket, ticket_refusal),
+    RecordKind(in_tracker, tracker_refusal),
+    RecordKind(appended, not_an_addition),
+)
+
+
+def record_kind(manifest: Manifest, path: str) -> RecordKind | None:
+    """The kind of record ``path`` is by ``manifest``, or ``None`` when it is none."""
+    return next((kind for kind in RECORDS if kind.claims(manifest, path)), None)
+
+
+def refusal(change: Change, manifest: Manifest, path: str, *, sides: tuple[str, str]) -> str | None:
+    """Why the change of ``path`` is more than a record takes, or ``None`` when it is not."""
+    kind = record_kind(manifest, path)
+    if kind is None:
+        return NOT_A_RECORD
+    odd = [IRREGULAR.get(mode, f"of mode {mode}") for mode in sides if mode not in REGULAR]
+    if odd:
+        return f"is {odd[0]}"
+    if not change.kept(path):
+        return "deletes a record"
+    return kind.refuses(change, path)
+
+
+def unrecorded(change: Change, manifest: Manifest) -> dict[str, str]:
+    """Each path whose change is more than a record takes, with why; empty for records alone."""
+    sides = modes(change)
+    found = {path: refusal(change, manifest, path, sides=sides[path]) for path in change.paths}
+    return {path: why for path, why in found.items() if why is not None}
+
+
+def not_records(root: Path, base_ref: str, paths: Iterable[str]) -> list[str]:
+    """The paths that are no kind of record by the manifest ``base_ref`` holds: all, with none."""
+    manifest = manifest_at(root, base_ref)
+    return [
+        path
+        for path in paths
+        if isinstance(manifest, Reason) or record_kind(manifest, path) is None
+    ]
+
+
 # --- the verdict record ----------------------------------------------------------------------
 
 
@@ -595,16 +772,29 @@ def record_problems(data: dict[str, object], slug: str, tree: str | None) -> lis
     return problems
 
 
-def record_reasons(change: Change) -> list[Reason]:
-    """Why the change is not an approved product of the pipeline, read from its verdict record."""
+def record_reasons(change: Change, manifest: Manifest) -> list[Reason]:
+    """Why the change is not an approved product of the pipeline, read from its verdict record.
+
+    A change with no verdict record that is records alone is asked for none (ADR 0031).
+    """
     found = [path for path in change.paths if RECORD.match(path)]
+    if not found:
+        refused = unrecorded(change, manifest)
+        if change.paths and not refused:
+            return []
+        text = (
+            "no verdict record (docs/features/<slug>/verdict.json) is part of the change, so it is"
+            " not the product of the pipeline"
+        )
+        if refused and NOT_A_RECORD not in refused.values():
+            lines = [f"{path} {why}" for path, why in refused.items()]
+            rest = f"; and {len(lines) - SHOWN} more" if len(lines) > SHOWN else ""
+            text += f"; its paths are records, but {'; '.join(lines[:SHOWN])}{rest}"
+        return [Reason("record", text)]
     if len(found) != 1:
         text = (
             f"the change touches {len(found)} verdict records ({', '.join(found)}), and one change"
             " carries one"
-            if found
-            else "no verdict record (docs/features/<slug>/verdict.json) is part of the change, so"
-            " it is not the product of the pipeline"
         )
         return [Reason("record", text)]
     path = found[0]
@@ -712,7 +902,19 @@ def judge(
         return [change]
     manifest = manifest_of(change)
     if isinstance(manifest, Reason):
-        return [manifest]
+        brought = adoption(change)
+        if brought is None:
+            return [manifest]
+        notes.append(
+            f"the adoption: the default branch holds no {MANIFEST_PATH} and this change brings it,"
+            " so there is no gate before it to loosen; its own gates judge it (ADR 0031)"
+        )
+        return [
+            *setting_reasons(change, base_ref, asked or Asked()),
+            *file_reasons(change, brought),
+            *registry_reasons(change),
+            *dispute_reasons(change),
+        ]
     return [
         *setting_reasons(change, base_ref, asked or Asked()),
         *file_reasons(change, manifest),
@@ -733,7 +935,7 @@ def judge(
             what="new surface with no flag that is off",
         ),
         *dispute_reasons(change),
-        *record_reasons(change),
+        *record_reasons(change, manifest),
     ]
 
 
@@ -758,11 +960,15 @@ def report(reasons: list[Reason], head: str) -> str:
 # --- writing the record ----------------------------------------------------------------------
 
 
+def uncommitted(root: Path) -> list[str]:
+    """Every path the index or the work tree changes, a rename read as the two paths it is."""
+    status = git(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
+    return sorted({entry[3:] for entry in (status or "").split("\0") if entry})
+
+
 def dirty(root: Path, record: str) -> list[str]:
     """Paths with uncommitted changes, the record itself aside."""
-    status = git(root, "status", "--porcelain", "--untracked-files=all") or ""
-    paths = [line[3:] for line in status.splitlines()]
-    return [path for path in paths if path != record]
+    return [path for path in uncommitted(root) if path != record]
 
 
 def write_record(root: Path, text: str) -> int:
