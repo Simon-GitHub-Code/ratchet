@@ -196,6 +196,10 @@ _MANIFESTS: dict[str, tuple[Callable[[str], object], Manifest]] = {
 
 
 Locked = dict[str, dict[str, Artifact]]
+# Why: a lockfile may hold more than one inventory (pnpm's boot document beside the project's),
+# and each is compared on its own, so a version falling in one is not hidden by the other.
+Inventories = dict[str, Locked]
+LOCKFILE = "lockfile"
 
 
 def _identity(item: Data, keys: tuple[str, ...]) -> str:
@@ -229,8 +233,8 @@ def _poetry(item: Data) -> Artifact:
     return Artifact("direct", json.dumps(source, sort_keys=True), "")
 
 
-def _toml_lock(artifact: Callable[[Data], Artifact]) -> Callable[[Data], Locked]:
-    def read(data: Data) -> Locked:
+def _toml_lock(artifact: Callable[[Data], Artifact]) -> Callable[[Data], Inventories]:
+    def read(data: Data) -> Inventories:
         locked: Locked = {}
         packages = data.get("package")
         for item in packages if isinstance(packages, list) else []:
@@ -241,12 +245,12 @@ def _toml_lock(artifact: Callable[[Data], Artifact]) -> Callable[[Data], Locked]
                     version=str(item.get("version", "")),
                     artifact=artifact(item),
                 )
-        return locked
+        return {LOCKFILE: locked}
 
     return read
 
 
-def _npm_lock(data: Data) -> Locked:
+def _npm_lock(data: Data) -> Inventories:
     locked: Locked = {}
     for path, item in _table(data, "packages").items():
         if not path or not isinstance(item, dict):
@@ -260,7 +264,7 @@ def _npm_lock(data: Data) -> Locked:
         else:
             artifact = Artifact("direct", resolved, "")
         _lock(locked, name, version=str(item.get("version", "")), artifact=artifact)
-    return locked
+    return {LOCKFILE: locked}
 
 
 def _lock(locked: Locked, name: str, *, version: str, artifact: Artifact) -> None:
@@ -277,37 +281,68 @@ _PNPM_KEY = re.compile(r"""^(?:'((?:[^']|'')*)'|"([^"]*)"|([^'"\s][^:]*?))\s*:(?
 _PNPM_SECTIONS = frozenset(
     {"lockfileVersion", "settings", "importers", "packages", "snapshots", "time", "catalogs"}
 )
+_PNPM_ITEM = re.compile(r"""^-\s+(?:'((?:[^']|'')*)'|"([^"]*)"|([^'"\s:#][^:#]*?))\s*$""")
+# Why: the one list pnpm writes as a block sequence; a list anywhere else is refused.
+_PNPM_SEQUENCES = frozenset({"transitivePeerDependencies"})
 _PNPM_PACKAGE = re.compile(r"^(@?[^@\s]+)@(\d[^@()\s]*)$")
 _PNPM_PINNED = re.compile(r"^\d[^@()\s]*(?:\(.*\))?$")
 _PNPM_FIELD = re.compile(r"(\w+):\s*('[^']*'|[^,}]+)")
+# Why: from pnpm 11 the lockfile may open with a boot document, which locks the pnpm that runs
+# and the config dependencies, before the project's own (https://pnpm.io/lockfile). pnpm writes
+# the leading marker only when it writes both.
+_PNPM_DOCUMENT = "---"
+PNPM_BOOT = "boot document"
+# Why: the boot document may lock two pnpm versions after an upgrade; its pin picks the one that
+# runs, so a pin moved back is a rollback though no locked package changes.
+PNPM_PIN = "boot document pin"
+_PNPM_BOOT_GROUPS = frozenset({"configDependencies", "packageManagerDependencies"})
+# Why: an anchor, alias, tag or merge key changes what a value is without changing its text; pnpm
+# writes none, so one where a value, an item or a flow entry starts is refused.
+_PNPM_YAML_MARK = re.compile(r"(?:^|[:\-{\[,]\s*)[&*!]|<<")
 
 
 def _pnpm_tree(text: str) -> Data:
     """The indented ``key: value`` tree of a pnpm lockfile, flow values left as text.
 
     The standard library has no YAML parser and pnpm writes one narrow shape, so this reads
-    that shape only. Anything else (a tab, a multi-line scalar, a key given twice) is refused.
+    that shape only. Anything else (a tab, a multi-line scalar, a key given twice, a list where
+    pnpm writes none) is refused.
     """
     root: Data = {}
-    stack: list[tuple[int, Data]] = [(-1, root)]
+    stack: list[tuple[int, Data | list[str]]] = [(-1, root)]
+    leaf = len(text)
     for line in text.splitlines():
         body = line.strip()
         if not body or body.startswith("#"):
             continue
+        if _PNPM_YAML_MARK.search(body):
+            msg = "it uses a YAML anchor, alias, tag or merge key, which pnpm does not write"
+            raise NotDependencyOnlyError(msg)
         indent = len(line) - len(line.lstrip())
         match = _PNPM_KEY.match(body)
-        if match is None or line[:indent].strip(" "):
-            msg = "it is not in the shape pnpm writes"
-            raise NotDependencyOnlyError(msg)
-        key = match.group(1) or match.group(2) or match.group(3)
+        item = _PNPM_ITEM.match(body)
         while stack[-1][0] >= indent:
             stack.pop()
         parent = stack[-1][1]
+        # Why: a line indented under a value, not under a key that opens a block, would land in
+        # the block above it instead.
+        if line[:indent].strip(" ") or (match is None and item is None) or indent > leaf:
+            msg = "it is not in the shape pnpm writes"
+            raise NotDependencyOnlyError(msg)
+        opens = item is None and match is not None and match.group(4) is None
+        leaf = len(text) if opens else indent
+        if isinstance(parent, list) and item is not None:
+            parent.append(_unquoted(item))
+            continue
+        if isinstance(parent, list) or match is None:
+            msg = "it is not in the shape pnpm writes"
+            raise NotDependencyOnlyError(msg)
+        key = _unquoted(match)
         if key in parent:
             msg = "a key is given twice"
             raise NotDependencyOnlyError(msg)
         if match.group(4) is None:
-            child: Data = {}
+            child: Data | list[str] = [] if key in _PNPM_SEQUENCES else {}
             parent[key] = child
             stack.append((indent, child))
         else:
@@ -315,7 +350,43 @@ def _pnpm_tree(text: str) -> Data:
     return root
 
 
+def _block(value: object) -> Data:
+    """A mapping pnpm writes as a block, or ``{}`` for an empty one.
+
+    Why: the tree keeps a one-line mapping as text, so ``packages: {a@1.0.0: {...}}`` would read
+    as no packages at all; pnpm writes none but the empty one there.
+    """
+    if value is None or value == "{}":
+        return {}
+    if not isinstance(value, dict):
+        msg = "it is not in the shape pnpm writes"
+        raise NotDependencyOnlyError(msg)
+    return value
+
+
+def _unquoted(match: re.Match[str]) -> str:
+    """The key or item a matched line names, without its quotes."""
+    return match.group(1) or match.group(2) or match.group(3)
+
+
 def _pnpm_load(text: str) -> object:
+    """Each document of a pnpm lockfile by the inventory it holds: the project's, the boot one."""
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines) if line == _PNPM_DOCUMENT]
+    if not starts:
+        return {LOCKFILE: _pnpm_document(text)}
+    if starts[0] != 0 or len(starts) != 2:  # noqa: PLR2004 # -- a boot document and the project's
+        msg = "it is not in the shape pnpm writes"
+        raise NotDependencyOnlyError(msg)
+    boot = _pnpm_document("\n".join(lines[1 : starts[1]]))
+    groups = {group for i in _block(boot.get("importers")).values() for group in _block(i)}
+    if not groups <= _PNPM_BOOT_GROUPS:
+        msg = f"its boot document locks {', '.join(sorted(groups - _PNPM_BOOT_GROUPS))}"
+        raise NotDependencyOnlyError(msg)
+    return {PNPM_BOOT: boot, LOCKFILE: _pnpm_document("\n".join(lines[starts[1] + 1 :]))}
+
+
+def _pnpm_document(text: str) -> Data:
     tree = _pnpm_tree(text)
     version = str(tree.get("lockfileVersion", "")).strip("'\"")
     if not version.startswith("9.") or not tree.keys() <= _PNPM_SECTIONS:
@@ -340,17 +411,40 @@ def _pnpm_artifact(entry: Data) -> Artifact:
     return Artifact("registry", origin.group(0), integrity)
 
 
-def _pnpm_lock(data: Data) -> Locked:
+def _pnpm_lock(data: Data) -> Inventories:
+    inventories = {name: _pnpm_inventory(_table(data, name)) for name in data}
+    if PNPM_BOOT in data:
+        inventories[PNPM_PIN] = _pnpm_pins(_table(data, PNPM_BOOT), inventories[PNPM_BOOT])
+    return inventories
+
+
+def _pnpm_pins(boot: Data, locked: Locked) -> Locked:
+    """The versions the boot document's importers pin, each with the package it locks."""
+    pins: Locked = {}
+    for importer in _block(boot.get("importers")).values():
+        for group in _block(importer).values():
+            for name, spec in _block(group).items():
+                version = spec.get("version", "") if isinstance(spec, dict) else ""
+                pinned = str(version).split("(", 1)[0]
+                artifact = locked.get(normalise(name), {}).get(pinned)
+                if artifact is None:
+                    msg = f"the boot document pins {name} {pinned} but locks no such package"
+                    raise NotDependencyOnlyError(msg)
+                _lock(pins, name, version=pinned, artifact=artifact)
+    return pins
+
+
+def _pnpm_inventory(data: Data) -> Locked:
     locked: Locked = {}
-    for key, entry in _table(data, "packages").items():
+    for key, entry in _block(data.get("packages")).items():
         match = _PNPM_PACKAGE.match(key)
         if match is None or not isinstance(entry, dict):
             msg = f"{key} is not a name and version pnpm locks from a registry"
             raise NotDependencyOnlyError(msg)
         _lock(locked, match.group(1), version=match.group(2), artifact=_pnpm_artifact(entry))
-    for path, importer in _table(data, "importers").items():
-        for group in importer.values() if isinstance(importer, dict) else []:
-            for name, spec in group.items() if isinstance(group, dict) else []:
+    for path, importer in _block(data.get("importers")).items():
+        for group in _block(importer).values():
+            for name, spec in _block(group).items():
                 pinned = spec.get("version", "") if isinstance(spec, dict) else ""
                 if pinned.startswith("link:"):
                     _lock(locked, name, version=pinned, artifact=Artifact("local", path, ""))
@@ -361,7 +455,7 @@ def _pnpm_lock(data: Data) -> Locked:
 
 
 _SIDE_BY_SIDE = frozenset({"Cargo.lock", "package-lock.json", "pnpm-lock.yaml"})
-_LOCKS: dict[str, tuple[Callable[[str], object], Callable[[Data], Locked]]] = {
+_LOCKS: dict[str, tuple[Callable[[str], object], Callable[[Data], Inventories]]] = {
     "uv.lock": (tomllib.loads, _toml_lock(_uv)),
     "Cargo.lock": (tomllib.loads, _toml_lock(_cargo_lock)),
     "poetry.lock": (tomllib.loads, _toml_lock(_poetry)),
@@ -476,18 +570,27 @@ def _lockfile(file: str, before: str, after: str) -> list[Change]:
     load, read = _LOCKS[file]
     old, new = read(_parse(load, before)), read(_parse(load, after))
     known = set(_DEFAULT_REGISTRIES) | {
-        a.source for versions in old.values() for a in versions.values() if a.kind == "registry"
+        a.source
+        for locked in old.values()
+        for versions in locked.values()
+        for a in versions.values()
+        if a.kind == "registry"
     }
     found: list[Change] = []
-    for name in sorted(old.keys() | new.keys()):
-        was, now = old.get(name, {}), new.get(name, {})
-        _package(name, was, now, known=known, side_by_side=file in _SIDE_BY_SIDE)
-        if was.keys() != now.keys():
-            show = (
-                ", ".join(sorted(was, key=_version)) or None,
-                ", ".join(sorted(now, key=_version)) or None,
-            )
-            found.append(Change(name, "lockfile", *show))
+    for table in sorted(old.keys() | new.keys(), key=lambda table: (table != LOCKFILE, table)):
+        was_table, now_table = old.get(table, {}), new.get(table, {})
+        # Why: pnpm's boot document runs the one pnpm its pin names, so no version sits beside
+        # another there: an older one added is the one that runs.
+        side_by_side = file in _SIDE_BY_SIDE and table == LOCKFILE
+        for name in sorted(was_table.keys() | now_table.keys()):
+            was, now = was_table.get(name, {}), now_table.get(name, {})
+            _package(name, was, now, known=known, side_by_side=side_by_side)
+            if was.keys() != now.keys():
+                show = (
+                    ", ".join(sorted(was, key=_version)) or None,
+                    ", ".join(sorted(now, key=_version)) or None,
+                )
+                found.append(Change(name, table, *show))
     return found
 
 
