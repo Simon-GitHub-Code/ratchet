@@ -113,12 +113,14 @@ def sleeper(tree: Path) -> subprocess.Popen[bytes]:
 # Why: one service whose behaviour on SIGTERM is chosen by ``MODE``, so each way of failing the
 # graceful-shutdown check is a real process meeting a real signal. ``/work`` takes 0.3 s, so a
 # request is in flight at any moment while a load smoke runs. Modes: ``drain`` finishes the
-# requests in flight and exits 0; ``ignore`` never stops; ``drop`` exits 0 at once and cuts them
-# off; ``late`` drains but exits 1; ``slow`` drains after a 3 s pause; ``die`` exits before it
-# is signalled.
+# requests in flight and exits 0; ``ignore`` never stops; ``drop`` answers four at once, holds
+# every later one, and exits 0 at once on the signal, cutting off what it holds: a request it had
+# read is in flight at the signal however late the smoke starts sending; ``late`` drains but
+# exits 1; ``slow`` drains after a 3 s pause; ``die`` exits before it is signalled.
 STOPS = (
     "import os, signal, sys, threading, time, http.server as h\n"
     "MODE = os.environ['MODE']\n"
+    "served = []\n"
     "class Server(h.ThreadingHTTPServer):\n"
     "    daemon_threads = False\n"
     "    block_on_close = True\n"
@@ -126,7 +128,9 @@ STOPS = (
     "class Handler(h.BaseHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
     "    def do_GET(self):\n"
-    "        if self.path == '/work': time.sleep(0.3)\n"
+    "        if self.path == '/work':\n"
+    "            served.append(self.path)\n"
+    "            time.sleep((60 if len(served) > 4 else 0) if MODE == 'drop' else 0.3)\n"
     "        self.send_response(200)\n"
     "        self.send_header('Content-Length', '2')\n"
     "        self.end_headers()\n"

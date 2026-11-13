@@ -339,7 +339,7 @@ def test_a_service_that_drains_and_exits_zero_is_green_under_load(
 @pytest.mark.parametrize(
     ("mode", "said"),
     [
-        ("drop", "the command exited with code 1"),
+        ("drop", "/work: RemoteDisconnected\n"),
         ("late", "the service exited with code 1 "),
         ("ignore", "the service was still running 1s after SIGTERM"),
         ("slow", "the service was still running 1s after SIGTERM"),
@@ -347,9 +347,9 @@ def test_a_service_that_drains_and_exits_zero_is_green_under_load(
     ],
 )
 def test_each_way_of_stopping_badly_is_red(
-    mode: str, said: str, capsys: pytest.CaptureFixture[str]
+    mode: str, said: str, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    code, out = graceful(mode, capsys=capsys, limit="1")
+    code, out = graceful(mode, capsys=capfd, limit="1")
     assert said in out, out
     assert code == 1
     assert out.endswith("with_service: red\n")
