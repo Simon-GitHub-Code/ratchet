@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from first_hour import oneoff, persona, reduce, steps  # noqa: E402
+from first_hour import oneoff, persona, reduce, steps
 
 
 def _reduce(directory: Path) -> None:
@@ -39,7 +39,9 @@ def main(argv: list[str]) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="drive one run")
     run.add_argument("--plugin", type=Path, required=True, help="the plugin checkout under test")
-    run.add_argument("--dir", type=Path, required=True, help="an empty directory under the temp location")
+    run.add_argument(
+        "--dir", type=Path, required=True, help="an empty directory under the temp location"
+    )
     run.add_argument("--persona", default="read-later", help="a stem under personas/ or a path")
     run.add_argument("--minutes", type=float, default=120.0, help="wall-clock budget")
     run.add_argument("--usd", type=float, default=40.0, help="cost budget")
@@ -66,9 +68,7 @@ def main(argv: list[str]) -> int:
         plugin=options.plugin.resolve(),
         root=drive.checked_root(options.dir),
         persona=persona.load(options.persona),
-        budget=steps.Budget(
-            minutes=options.minutes, usd=options.usd, steps=options.max_steps
-        ),
+        budget=steps.Budget(minutes=options.minutes, usd=options.usd, steps=options.max_steps),
         model=options.model,
         owner_model=options.owner_model,
     )

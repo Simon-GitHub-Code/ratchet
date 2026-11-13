@@ -1,4 +1,5 @@
 import pytest
+
 from first_hour import steps
 from first_hour.steps import Action, Budget, Instruction, Seen, Stop
 

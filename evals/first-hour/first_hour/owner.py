@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -18,7 +19,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from first_hour.persona import Persona
 
-RECOMMENDED = re.compile(r"\brecommended\b", re.IGNORECASE)
+RECOMMENDED = re.compile(r"\brecommend(?:ed)?\b", re.IGNORECASE)
 GO_AHEAD = "Please go ahead with what you recommend."
 TURN_TAIL = 6000
 
@@ -179,12 +180,30 @@ def parse_reply(raw: object) -> Reply:
     return Reply(needs and bool(text), kind, text, str(data.get("reason", "")))
 
 
+def _norm(text: str) -> str:
+    return " ".join(RECOMMENDED.sub("", text).replace("()", "").split()).casefold()
+
+
+def names(pick: str, label: str) -> bool:
+    """Whether the owner's pick names this option: its label, alone or before its description."""
+    wanted, have = _norm(pick), _norm(label)
+    rest = wanted.removeprefix(have)
+    return bool(have) and wanted.startswith(have) and not rest[:1].isalnum()
+
+
+def label_for(labels: Iterable[str], pick: str) -> str | None:
+    """The option a pick names; of several, the longest, as "Accept, keep it local" is not "Accept"."""
+    matches = [label for label in labels if names(pick, label)]
+    return max(matches, key=len) if matches else None
+
+
+def took(labels: Iterable[str], answer: str, recommended: str | None) -> bool:
+    """Whether an answer is the recommended option."""
+    return recommended is not None and label_for([*labels, recommended], answer) == recommended
+
+
 def _label(question: Question, pick: str) -> str | None:
-    wanted = RECOMMENDED.sub("", pick).strip(" ()").casefold()
-    for option in question.options:
-        if RECOMMENDED.sub("", option.label).strip(" ()").casefold() == wanted:
-            return option.label
-    return None
+    return label_for((o.label for o in question.options), pick)
 
 
 def answer(question: Question, verdict: Verdict) -> Answer:
@@ -211,7 +230,7 @@ def answer(question: Question, verdict: Verdict) -> Answer:
         kind=verdict.kind,
         text=text,
         recommended=recommended,
-        took_recommended=recommended is not None and text == recommended,
+        took_recommended=took((o.label for o in question.options), text, recommended),
         reason=verdict.reason,
     )
 

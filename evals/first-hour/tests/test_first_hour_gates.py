@@ -1,0 +1,61 @@
+from first_hour import gates, safety
+from first_hour.gates import Gate, Status
+
+RUN = """\
+parallel: fmt-check: started
+==> lint <==
+lint: no TypeScript in the tree yet, so there is nothing to judge
+parallel: lint: green in 0.1s
+==> imports <==
+later: code:layer
+parallel: imports: green in 0.1s
+==> bite-all <==
+bite: smoke: a service that drops requests in flight when stopped: RED ON CLEAN STATE
+parallel: bite-all: red (exit 1) in 23.0s
+later: printed after the section closed
+parallel: 3 of 3 gates finished in 23.1s
+parallel: red
+"""
+
+
+def test_each_gate_reads_as_green_red_or_waiting_for_its_trigger():
+    assert gates.parse(RUN) == [
+        Gate("lint", Status.GREEN),
+        Gate("imports", Status.LATER, "code:layer"),
+        Gate("bite-all", Status.RED),
+    ]
+    assert gates.red(RUN) == ["bite-all"]
+
+
+def test_output_with_no_runner_lines_has_no_gates():
+    assert gates.parse("later: code:layer\nmerge: owner\n") == []
+
+
+def test_commands_that_reach_a_remote_or_change_the_users_plugins_are_refused():
+    for command in (
+        "git add . && git push origin main",
+        "git remote add origin git@github.com:me/app.git",
+        "gh repo create app --private --source . --push",
+        "glab mr create",
+        "claude plugin install foo@bar",
+        "claude mcp add x",
+        "claude --dangerously-skip-permissions -p hi",
+        "echo '{}' > ~/.claude/settings.json",
+        "sed -i s/a/b/ /home/me/.claude/plugins/installed_plugins.json",
+    ):
+        assert safety.refusal(command), command
+
+
+def test_reading_forge_tools_and_user_files_is_not_refused():
+    for command in (
+        "git init -b main && claude plugin list; gh auth status; command -v glab",
+        "cat ~/.claude/settings.json",
+        "git remote -v",
+        "python3 -c 'print(1)' > out.txt",
+    ):
+        assert safety.refusal(command) is None, command
+
+
+def test_a_write_outside_the_run_directory_is_outside(tmp_path):
+    assert not safety.outside(str(tmp_path / "app" / "x.ts"), tmp_path)
+    assert safety.outside("/etc/passwd", tmp_path)

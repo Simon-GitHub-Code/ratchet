@@ -37,11 +37,13 @@ sync:
     uv sync --locked
 
 lint:
-    uv run ruff check hooks scripts
-    uv run ruff format --check hooks scripts
+    uv run ruff check hooks scripts evals/first-hour
+    uv run ruff format --check hooks scripts evals/first-hour
 
+# The first-hour driver needs the Agent SDK, which the dev environment does not install.
 types:
     uv run mypy --strict hooks/ratchet_guards scripts
+    uv run mypy --strict evals/first-hour/first_hour --exclude 'first_hour/drive\.py$'
 
 validate:
     claude plugin validate .
@@ -60,7 +62,7 @@ parse-adapters:
 # guard hook and its two shims are absolute paths: every line and branch must run under test, and
 # `fail_under = 100` in pyproject.toml makes this run red when one does not.
 test:
-    uv run pytest -n auto --cov --cov-report=term-missing:skip-covered hooks/tests
+    uv run pytest -n auto --cov --cov-report=term-missing:skip-covered hooks/tests evals/first-hour/tests
 
 conformance-self-test:
     python3 scripts/conformance.py --self-test
@@ -72,6 +74,11 @@ bite:
 # The lowered gate on this repository's own thresholds: no ceiling raised against the merge base.
 lowered-smoke:
     python3 scripts/lowered.py
+
+# One unattended first-hour run of a scripted owner on a plugin checkout (evals/first-hour). It
+# costs real money and up to two hours, so no tier runs it.
+first-hour plugin dir *flags:
+    uv run evals/first-hour/run.py run --plugin {{plugin}} --dir {{dir}} {{flags}}
 
 # Time one gate against its ceiling in quality/thresholds.toml; CI wraps every matrix job in it.
 budget key *flags:

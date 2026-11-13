@@ -481,7 +481,11 @@ class Driver:
         self.gate_runs += 1
         run_id = self.gate_runs
         self.log.emit(
-            "gates", id=run_id, attempt=1, command=command, gates=[dataclasses.asdict(g) for g in found]
+            "gates",
+            id=run_id,
+            attempt=1,
+            command=command,
+            gates=[dataclasses.asdict(g) for g in found],
         )
         if any(g.status is gates.Status.RED for g in found):
             again, _code = self.shell(command)
@@ -577,7 +581,9 @@ class Driver:
         before = self.merges()
         self.pasted = []
         started = time.monotonic()
-        self.log.emit("step", action=move.action.value, text=move.text, commands=list(move.commands))
+        self.log.emit(
+            "step", action=move.action.value, text=move.text, commands=list(move.commands)
+        )
         if move.action is steps.Action.PASTE:
             self.paste(move.commands, "route")
         else:
@@ -615,9 +621,10 @@ class Driver:
             move = override or steps.move_for(instruction)
             if move.action is steps.Action.FORGE:
                 return steps.Stop.FORGE, instruction.command
-            self.log.step = f"{len(self.history):02d}-" + re.sub(
-                r"[^a-z0-9]+", "-", move.text.lower()
-            ).strip("-")[:40]
+            self.log.step = (
+                f"{len(self.history):02d}-"
+                + re.sub(r"[^a-z0-9]+", "-", move.text.lower()).strip("-")[:40]
+            )
             try:
                 await self.step(move)
             except Deadline:

@@ -1,6 +1,7 @@
 import json
 
 import pytest
+
 from first_hour import owner
 from first_hour.persona import load
 
@@ -126,7 +127,9 @@ def test_a_reply_that_is_not_a_verdict_is_refused(raw, error):
 
 
 def test_a_turn_that_asks_nothing_needs_no_reply():
-    reply = owner.parse_reply({"needs_reply": False, "class": "product", "reply": "", "reason": "x"})
+    reply = owner.parse_reply(
+        {"needs_reply": False, "class": "product", "reply": "", "reason": "x"}
+    )
     assert not reply.needs_reply
 
 
@@ -168,3 +171,18 @@ def test_the_prompts_carry_the_persona_the_options_and_the_turns_tail():
     prompt = owner.turn_prompt(long)
     assert "THE END" in prompt
     assert len(prompt) < 7_000
+
+
+def test_a_pick_that_quotes_a_label_and_its_description_names_the_longest_such_label():
+    question = owner.Question(
+        "Defaults",
+        "Accept the defaults?",
+        (owner.Option("Accept (Recommended)"), owner.Option("Accept, keep it local")),
+    )
+    verdict = owner.Verdict(owner.Kind.PRODUCT, ("Accept, keep it local: No remote.",), "")
+    answer = owner.answer(question, verdict)
+    assert answer.text == "Accept, keep it local"
+    assert not answer.took_recommended
+    assert owner.names("Yes, trusted (Recommended): fits", "Yes, trusted (Recommended)")
+    assert not owner.names("Yesterday", "Yes")
+    assert not owner.names("anything", "")

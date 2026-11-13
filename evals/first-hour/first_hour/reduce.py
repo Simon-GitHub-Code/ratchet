@@ -13,6 +13,8 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from first_hour import owner
+
 Event = dict[str, object]
 
 
@@ -171,6 +173,21 @@ class _Fold:
         self.steps.end(event, self.spent)
 
 
+def _took(question: Event) -> bool:
+    """Whether the answer was the recommended option, by the flag or by the answer's text.
+
+    Why: a run recorded before ``owner.names`` matched a label followed by its description
+    flagged such an answer as declined; reading the text keeps that run comparable.
+    """
+    recommended = question.get("recommended")
+    options = question.get("options")
+    labels = [str(o) for o in options] if isinstance(options, list) else []
+    return bool(question.get("took_recommended")) or (
+        isinstance(recommended, str)
+        and owner.took(labels, str(question.get("answer", "")), recommended)
+    )
+
+
 def _questions(questions: list[Event]) -> dict[str, object]:
     classes = Counter(str(q.get("class")) for q in questions)
     return {
@@ -178,7 +195,7 @@ def _questions(questions: list[Event]) -> dict[str, object]:
         "product": classes["product"],
         "default_able": classes["default-able"],
         "recommended_offered": sum(q.get("recommended") is not None for q in questions),
-        "took_recommended": sum(bool(q.get("took_recommended")) for q in questions),
+        "took_recommended": sum(_took(q) for q in questions),
         "by_channel": dict(Counter(str(q.get("channel")) for q in questions)),
         "list": [
             {
@@ -190,7 +207,7 @@ def _questions(questions: list[Event]) -> dict[str, object]:
                 "question": q.get("question"),
                 "answer": q.get("answer"),
                 "recommended": q.get("recommended"),
-                "took_recommended": q.get("took_recommended"),
+                "took_recommended": _took(q),
             }
             for q in questions
         ],
@@ -355,8 +372,7 @@ def table(metrics: dict[str, object]) -> str:
         if isinstance(r, dict)
     )
     app = (
-        f"starts: {at('app.starts')}, page: {at('app.serves_page')},"
-        f" slice: {at('app.slice_works')}"
+        f"starts: {at('app.starts')}, page: {at('app.serves_page')}, slice: {at('app.slice_works')}"
         if _at(metrics, "app.checked")
         else "not checked"
     )
@@ -371,8 +387,7 @@ def table(metrics: dict[str, object]) -> str:
         ("App finding", at("app.finding")),
         (
             "Questions (product / default-able)",
-            f"{at('questions.total')} ({at('questions.product')} /"
-            f" {at('questions.default_able')})",
+            f"{at('questions.total')} ({at('questions.product')} / {at('questions.default_able')})",
         ),
         (
             "Recommended option offered / taken",

@@ -29,16 +29,17 @@ if TYPE_CHECKING:
     from first_hour.persona import Slice
 
 NO_WAY = "no way to start it: no run command in the README, justfile or package.json"
-START_WORDS = re.compile(r"\b(start|dev|serve|run|up)\b")
+START_WORDS = re.compile(r"\b(start|dev|serve|server|run|up|app|main)\b")
 NOT_START = re.compile(r"\b(install|test|check|lint|build|fmt|format|typecheck|ci)\b")
 README_LINE = re.compile(r"^\s*\$?\s*((?:just|npm|pnpm|yarn|bun|node|python3?|uv|make|deno)\s.+)$")
-RECIPE = re.compile(r"^([A-Za-z][\w-]*)\s*(?:[^:=]*)?:(?!=)", re.MULTILINE)
+RECIPE = re.compile(r"^([A-Za-z][\w-]*)(?:\s+[^:\n]*)?:(?!=)", re.MULTILINE)
 URL = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d+)")
 RECIPE_NAMES = ("start", "dev", "serve", "run", "app")
 SCRIPT_NAMES = ("start", "dev", "serve")
 FIELD_TYPES = frozenset({"", "text", "url", "search"})
 TIMEOUT_S = 120.0
 REQUEST_S = 15.0
+STOP_GRACE_S = 10.0
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,9 @@ def _readme(root: Path) -> Start | None:
 
 
 def _justfile(root: Path) -> Start | None:
-    path = next((root / n for n in ("justfile", "Justfile", ".justfile") if (root / n).is_file()), None)
+    path = next(
+        (root / n for n in ("justfile", "Justfile", ".justfile") if (root / n).is_file()), None
+    )
     if path is None:
         return None
     recipes = set(RECIPE.findall(path.read_text(encoding="utf-8", errors="replace")))
@@ -137,6 +140,7 @@ def _get(url: str) -> tuple[int, str]:
         with urllib.request.urlopen(url, timeout=REQUEST_S) as response:  # noqa: S310
             return response.status, response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as error:
+        error.close()
         return error.code, ""
 
 
@@ -160,6 +164,7 @@ def html_form(base: str, page: str, piece: Slice) -> tuple[bool, str]:
                 with urllib.request.urlopen(request, timeout=REQUEST_S) as response:  # noqa: S310
                     response.read()
             except urllib.error.HTTPError as error:
+                error.close()
                 return False, f"the form answered {error.code} to a valid link"
         else:
             _get(f"{url}?{body}")
@@ -204,7 +209,7 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
     with contextlib.suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
     try:
-        process.wait(timeout=10)
+        process.wait(timeout=STOP_GRACE_S)
     except subprocess.TimeoutExpired:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
@@ -245,17 +250,31 @@ def check(root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S) ->
         status, page = _get(base)
         if status != 200:  # noqa: PLR2004
             return Result(
-                start.command, start.source, started=True, page_ok=False, slice_ok=False,
-                finding=f"GET / answered {status}", url=base,
+                start.command,
+                start.source,
+                started=True,
+                page_ok=False,
+                slice_ok=False,
+                finding=f"GET / answered {status}",
+                url=base,
             )
         ok, finding = SLICES[piece.kind](base, page, piece)
         return Result(
-            start.command, start.source, started=True, page_ok=True, slice_ok=ok,
-            finding=finding, url=base,
+            start.command,
+            start.source,
+            started=True,
+            page_ok=True,
+            slice_ok=ok,
+            finding=finding,
+            url=base,
         )
     except (OSError, urllib.error.URLError) as error:
         return Result(
-            start.command, start.source, started=True, page_ok=False, slice_ok=False,
+            start.command,
+            start.source,
+            started=True,
+            page_ok=False,
+            slice_ok=False,
             finding=f"request failed: {error}",
         )
     finally:

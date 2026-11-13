@@ -47,7 +47,9 @@ def _steps(logs: Path, zero: int) -> Iterator[Event]:
         if item["event"] == "end":
             for record in _lines(logs / f"{step}.jsonl"):
                 msg = record.get("msg")
-                for event in transcript.events(str(record["type"]), msg if isinstance(msg, dict) else {}):
+                for event in transcript.events(
+                    str(record["type"]), msg if isinstance(msg, dict) else {}
+                ):
                     yield {"s": at, "step": step, **event}
             yield {"s": at, "step": step, "kind": "step-end", "wall_s": item.get("wall_s", 0)}
 
@@ -76,7 +78,7 @@ def _owner(logs: Path, zero: int) -> Iterator[Event]:
             "step": item["step"],
             "kind": "question",
             "channel": "dialog",
-            "class": CLASSES[label.split(":")[0]],
+            "class": CLASSES[label.split(":", maxsplit=1)[0]],
             "header": item.get("header"),
             "question": item.get("question"),
             "options": labels,
@@ -102,23 +104,56 @@ def _merges(logs: Path, zero: int, day: dt.date) -> Iterator[Event]:
         commands = [f"just merge {branch}"] if "merge.py" in text else []
         commands.append(f"git switch main && git merge --no-ff {branch}")
         check = logs / f"{number}-owner-check-deep.txt"
-        deep = text if gates.parse(text) else check.read_text(encoding="utf-8") if check.is_file() else ""
+        deep = (
+            text
+            if gates.parse(text)
+            else check.read_text(encoding="utf-8")
+            if check.is_file()
+            else ""
+        )
         if deep:
             commands.append("just check-deep")
         for command in commands:
             yield {"s": at, "step": step, "kind": "paste", "command": command, "exit": None}
-        yield {"s": at, "step": step, "kind": "merge", "branch": branch, "how": "hand", "owner_text": text[:2000]}
+        yield {
+            "s": at,
+            "step": step,
+            "kind": "merge",
+            "branch": branch,
+            "how": "hand",
+            "owner_text": text[:2000],
+        }
         if deep:
             run_id += 1
-            found = [{"name": g.name, "status": g.status.value, "trigger": g.trigger} for g in gates.parse(deep)]
-            yield {"s": at, "step": step, "kind": "gates", "id": run_id, "attempt": 1, "command": "just check-deep", "gates": found}
+            found = [
+                {"name": g.name, "status": g.status.value, "trigger": g.trigger}
+                for g in gates.parse(deep)
+            ]
+            yield {
+                "s": at,
+                "step": step,
+                "kind": "gates",
+                "id": run_id,
+                "attempt": 1,
+                "command": "just check-deep",
+                "gates": found,
+            }
             rerun = logs / f"{number}b-check-deep-rerun1.txt"
             if rerun.is_file():
                 again = [
                     {"name": g.name, "status": g.status.value, "trigger": g.trigger}
                     for g in gates.parse(rerun.read_text(encoding="utf-8"))
                 ]
-                yield {"s": at, "step": step, "kind": "gates", "id": run_id, "of": run_id, "attempt": 2, "command": "just check-deep", "gates": again}
+                yield {
+                    "s": at,
+                    "step": step,
+                    "kind": "gates",
+                    "id": run_id,
+                    "of": run_id,
+                    "attempt": 2,
+                    "command": "just check-deep",
+                    "gates": again,
+                }
 
 
 def events(logs: Path) -> list[Event]:
@@ -144,7 +179,12 @@ def events(logs: Path) -> list[Event]:
             }
         )
     found.append(
-        {"s": max(float(str(e["s"])) for e in found), "step": "end", "kind": "stop", "reason": "observer-stopped"}
+        {
+            "s": max(float(str(e["s"])) for e in found),
+            "step": "end",
+            "kind": "stop",
+            "reason": "observer-stopped",
+        }
     )
     return sorted(found, key=lambda e: float(str(e["s"])))
 
