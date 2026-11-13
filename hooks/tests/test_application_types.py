@@ -149,3 +149,12 @@ def test_the_command_prints_the_types_then_the_rows_they_leave_out(capsys: Out) 
     assert capsys.readouterr().out == (
         "application_types: 'website' is not one of service, web-ui, app, cli, job, library\n"
     )
+
+
+def test_life_events_are_read_from_the_binding_and_default_to_none() -> None:
+    assert application_types.life_events("# Binding\n") == frozenset()
+    assert application_types.life_events("- Life events: none\n") == frozenset()
+    assert application_types.life_events("- Life events: deployed, `depended-on`\n") == {
+        "deployed",
+        "depended-on",
+    }

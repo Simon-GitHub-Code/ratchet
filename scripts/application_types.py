@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 CATALOGUE = Path(__file__).resolve().parents[1] / "skills/method/application-types.toml"
 DECLARATION = re.compile(r"^- Application types:(.*)$", re.MULTILINE)
+EVENTS = re.compile(r"^- Life events:(.*)$", re.MULTILINE)
 NONE = re.compile(r"^none\b[\s,:;-]*(.*)$")
 ADR = re.compile(r"\bADR[ -]?(\d{4})\b")
 MIN_REASON = 10
@@ -131,6 +132,18 @@ def declared(binding: str) -> list[str] | None:
     if match is None:
         return None
     return [name.strip(" `") for name in match.group(1).split(",") if name.strip(" `")]
+
+
+def life_events(binding: str) -> frozenset[str]:
+    """The life events a binding's ``- Life events:`` line declares (ADR 0028).
+
+    No line, or ``none``, declares none: a project is assumed young until its owner says otherwise.
+    """
+    match = EVENTS.search(binding)
+    if match is None:
+        return frozenset()
+    named = (name.strip(" `") for name in match.group(1).split(","))
+    return frozenset(name for name in named if name and name != "none")
 
 
 def a(kind: str) -> str:
