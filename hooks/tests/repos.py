@@ -28,7 +28,7 @@ def write(root: Path, path: str, text: str) -> None:
 def skeleton() -> Path:
     """The ``.git`` of an empty repository on ``main`` with a committer, made once per process.
 
-    Copying it costs microseconds; ``git init`` and three ``git config`` calls cost a hundred
+    Copying it costs microseconds; ``git init`` and four ``git config`` calls cost a hundred
     milliseconds of process spawns, once per scratch repository, a thousand times a run.
     """
     directory = Path(tempfile.mkdtemp(prefix="ratchet-skeleton-"))
@@ -37,6 +37,9 @@ def skeleton() -> Path:
     git(directory, "config", "user.email", "t@example.invalid")
     git(directory, "config", "user.name", "t")
     git(directory, "config", "commit.gpgsign", "false")
+    # Why: a commit can start git's maintenance in the background, and a test that copies the
+    # repository while it runs reads a lock file that is gone by the time it is copied.
+    git(directory, "config", "maintenance.auto", "false")
     return directory / ".git"
 
 
