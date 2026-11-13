@@ -12,7 +12,7 @@ import pytest
 
 from ratchet_guards import hook
 from ratchet_guards.context import Guard
-from ratchet_guards.manifest import MANIFEST_PATH, parse
+from ratchet_guards.manifest import COMMITTED, MANIFEST_PATH, parse
 from ratchet_guards.paths import Checkout
 from ratchet_guards.verdict import RULES, Decision, Verdict
 from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, ROOT, FakeRepo, make_guard
@@ -99,12 +99,12 @@ def test_ordinary_calls_get_no_verdict(case: dict[str, object]) -> None:
 def test_bash_paths_resolve_against_the_payload_cwd() -> None:
     write = payload("Bash", command="echo x > justfile")
     assert hook.decide(write, on_main()) == Verdict(
-        "guard-path-default", "redirects into justfile (gate-commands)"
+        "guard-path-default", "redirects into justfile (gate-commands)", COMMITTED
     )
     assert hook.decide(write, make_guard()) is None
     locked = payload("Bash", command="echo x > .claude/settings.json")
     assert hook.decide(locked, make_guard()) == Verdict(
-        "guard-path-write", "redirects into .claude/settings.json (harness)"
+        "guard-path-write", "redirects into .claude/settings.json (harness)", COMMITTED
     )
 
 
@@ -182,7 +182,8 @@ def test_reasons_and_output_shape() -> None:
 
 
 def test_a_deny_ends_with_the_way_out_of_its_rule() -> None:
-    edit = hook.reason(Verdict("guard-path-default", "CLAUDE.md is in guard group 'g'. Because."))
+    detail = "CLAUDE.md is in guard group 'g'. Because."
+    edit = hook.reason(Verdict("guard-path-default", detail, COMMITTED))
     assert edit == (
         "Ratchet guard denied this tool call; no part of it ran. It changes a guard path where "
         "the commit lands on the default branch, which no merge judge reads: CLAUDE.md is in "
@@ -199,6 +200,7 @@ def test_a_deny_ends_with_the_way_out_of_its_rule() -> None:
     assert "gate dispute" not in lost
     locked = hook.reason(Verdict("guard-path-locked", "x is in guard group 'g'. Because."))
     assert "gate dispute (docs/disputes/NNNN-<slug>.md)" in locked
+    assert COMMITTED not in locked
 
 
 def test_run_fails_closed() -> None:

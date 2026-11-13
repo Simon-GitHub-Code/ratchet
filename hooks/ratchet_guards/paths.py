@@ -19,7 +19,14 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from ratchet_guards.early import Kind, kind_of
-from ratchet_guards.manifest import EMPTY, GIT_STATE, Group, Manifest, Scope
+from ratchet_guards.manifest import (
+    EMPTY,
+    GIT_STATE,
+    Group,
+    Manifest,
+    Scope,
+    with_manifest_lock,
+)
 from ratchet_guards.records import Before
 
 _GLOB_CHARS = frozenset("*?[")
@@ -120,7 +127,7 @@ class Locator:
         checkout = self.filesystem.guarded_checkout(canonical)
         if checkout is not None:
             relative = canonical.relative_to(checkout.root).as_posix()
-            yield relative, Scope.REPOSITORY, checkout.manifest
+            yield relative, Scope.REPOSITORY, with_manifest_lock(checkout.manifest)
         root = self.filesystem.checkout(canonical)
         if root is not None and canonical != root:
             yield canonical.relative_to(root).as_posix(), Scope.REPOSITORY, GIT_STATE

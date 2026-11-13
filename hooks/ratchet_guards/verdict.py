@@ -124,10 +124,14 @@ ACTING_RULES = {Kind.WORKFLOW: "workflow-write", Kind.INSTRUCTIONS: "instruction
 
 @dataclass(frozen=True, slots=True)
 class Verdict:
-    """A rule that fired on a tool call, with the detail that made it fire."""
+    """A rule that fired on a tool call, with the detail that made it fire.
+
+    ``source`` is the sentence that says where a guard path's group comes from, when it has one.
+    """
 
     rule: str
     detail: str
+    source: str = ""
 
     @property
     def decision(self) -> Decision:

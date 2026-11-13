@@ -10,6 +10,7 @@ import pytest
 
 from ratchet_guards import hook
 from ratchet_guards.manifest import (
+    COMMITTED,
     EMPTY,
     MANIFEST_PATH,
     EditRule,
@@ -99,10 +100,10 @@ def test_with_a_manifest_the_path_rules_apply_too(tmp_path: Path) -> None:
     assert verdict is not None
     assert verdict.rule == P
     assert hook.decide(bash("echo x > justfile", root), guard) == Verdict(
-        P, "redirects into justfile (gate-commands)"
+        P, "redirects into justfile (gate-commands)", COMMITTED
     )
     assert hook.decide(bash("echo x > .claude/settings.json", root), guard) == Verdict(
-        W, "redirects into .claude/settings.json (harness)"
+        W, "redirects into .claude/settings.json (harness)", COMMITTED
     )
 
 
@@ -116,7 +117,7 @@ def test_on_a_branch_only_the_paths_the_owner_changes_are_refused(tmp_path: Path
     assert locked is not None
     assert locked.rule == "guard-path-locked"
     assert hook.decide(bash("echo x > .claude/settings.json", root), guard) == Verdict(
-        W, "redirects into .claude/settings.json (harness)"
+        W, "redirects into .claude/settings.json (harness)", COMMITTED
     )
 
 
@@ -210,6 +211,7 @@ def test_the_plugin_group_is_prepended_and_locked() -> None:
             "~/.gemini/config/config.json",
         ),
         EditRule.DENY,
+        source="",
     )
     assert with_plugin_group(EMPTY, PLUGIN).groups == (group,)
     assert with_plugin_group(MANIFEST, PLUGIN).groups == (group, *MANIFEST.groups)
@@ -572,9 +574,10 @@ def test_an_antigravity_command_runs_where_its_own_cwd_says(tmp_path: Path) -> N
     root = checkout(tmp_path, manifest=True)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
     elsewhere = agy("run_command", tmp_path, CommandLine="echo x > justfile", Cwd=str(root))
-    assert hook.decide(elsewhere, guard) == Verdict(P, "redirects into justfile (gate-commands)")
+    redirect = Verdict(P, "redirects into justfile (gate-commands)", COMMITTED)
+    assert hook.decide(elsewhere, guard) == redirect
     unset = agy("run_command", root, CommandLine="echo x > justfile", Cwd="")
-    assert hook.decide(unset, guard) == Verdict(P, "redirects into justfile (gate-commands)")
+    assert hook.decide(unset, guard) == redirect
     on_a_branch(root)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
     assert hook.decide(elsewhere, guard) is None

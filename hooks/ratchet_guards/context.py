@@ -160,7 +160,11 @@ class Guard:
         change takes effect before a merge.
         """
         return [
-            Verdict("guard-path-write" if hit.group.locked else "guard-path-default", detail(hit))
+            Verdict(
+                "guard-path-write" if hit.group.locked else "guard-path-default",
+                detail(hit),
+                hit.group.source,
+            )
             for hit in hits
             if hit.group.locked or self.lands_now(context, hit.at)
         ]

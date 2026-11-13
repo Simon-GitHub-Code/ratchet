@@ -64,7 +64,15 @@ from typing import TextIO
 from ratchet_guards import bash, records, tickets
 from ratchet_guards.committed import committed_manifest, default_branch
 from ratchet_guards.context import DETACHED, Context, Guard
-from ratchet_guards.manifest import EMPTY, Manifest, parse, with_plugin_group
+from ratchet_guards.manifest import (
+    EMPTY,
+    MANIFEST_LOCK,
+    Manifest,
+    gone,
+    grown,
+    parse,
+    with_plugin_group,
+)
 from ratchet_guards.paths import Checkout, Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES, REMOTE
 from ratchet_guards.verdict import ACTING_RULES, DISPUTE, Decision, Verdict, strictest
@@ -125,7 +133,6 @@ PATCH_HEADER = re.compile(
 PATCH_DESTRUCTIVE = frozenset({"Delete File", "Move to"})
 GIT_TIMEOUT_SECONDS = 5
 DISPUTES = "docs/disputes/NNNN-<slug>.md"
-COMMITTED = "Guard paths come from guards/manifest.toml as committed on the default branch."
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 STANDARD_MANIFEST = "skills/adopt/templates/guards/manifest.toml"
 
@@ -164,12 +171,17 @@ class LocalFilesystem:
     def committed(self, root: Path) -> Manifest | None:
         """The manifest committed on the default branch of the checkout at ``root``.
 
-        Read from git once per checkout per process. A manifest that does not parse raises
-        ``ManifestError`` and is not cached, so every judged path in that checkout asks.
+        Read from git once per checkout per process. When the branch's tip lost the file, it is
+        the last one the branch held with every group locked. A manifest that does not parse
+        raises ``ManifestError`` and is not cached, so every judged path in that checkout asks.
         """
         if root not in self._manifests:
-            text = committed_manifest(root)
-            self._manifests[root] = None if text is None else parse(text)
+            found = committed_manifest(root)
+            if found is None:
+                self._manifests[root] = None
+            else:
+                manifest = parse(found.text)
+                self._manifests[root] = gone(manifest) if found.gone else manifest
         return self._manifests[root]
 
     def guarded_checkout(self, path: Path) -> Checkout | None:
@@ -456,6 +468,8 @@ def _edit(call: Call, path: Path, context: Context, *, guard: Guard) -> Verdict 
     hit = guard.locator.classify(path, destructive=False)  # pragma: no mutate # -- None is False
     if hit is None or not (hit.group.locked or guard.lands_now(context, hit.at)):
         return None
+    if hit.group == MANIFEST_LOCK:
+        return _manifest_edit(call, hit, context, guard=guard)
     if hit.group.locked or not hit.group.additive:
         return _hit_verdict(hit)
     reason = _not_additive(call, path, guard)
@@ -485,9 +499,28 @@ def _not_additive(call: Call, path: Path, guard: Guard) -> str | None:
     return None
 
 
-def _hit_verdict(hit: Hit, more: str = "") -> Verdict:
+def _manifest_edit(call: Call, hit: Hit, context: Context, *, guard: Guard) -> Verdict | None:
+    """An Edit or Write that only appends whole groups or doors to the manifest, on a branch.
+
+    It is compared with the manifest the default branch holds, which the guards are read from.
+    """
+    filesystem = guard.locator.filesystem
+    after = records.written(call.reported, call.tool_input, filesystem.read_text(hit.at))
+    checkout = filesystem.guarded_checkout(hit.at)
+    reason: str | None = f"the guard cannot tell what this {call.reported} call would write"
+    if after is not None and checkout is not None:
+        reason = grown(checkout.manifest, after)
+    if reason is not None:
+        return _hit_verdict(hit, f" This edit is not an addition: {reason}.")
+    if guard.lands_now(context, hit.at):
+        return _hit_verdict(hit, rule="guard-path-default")
+    return None
+
+
+def _hit_verdict(hit: Hit, more: str = "", rule: str | None = None) -> Verdict:
     detail = f"{hit.path} is in guard group '{hit.group.name}'. {hit.group.reason}{more}"
-    return Verdict("guard-path-locked" if hit.group.locked else "guard-path-default", detail)
+    named = rule or ("guard-path-locked" if hit.group.locked else "guard-path-default")
+    return Verdict(named, detail, hit.group.source)
 
 
 def reason(verdict: Verdict) -> str:
@@ -497,9 +530,9 @@ def reason(verdict: Verdict) -> str:
         # about how the guard works.
         return f"Ratchet: {verdict.because} ({verdict.detail}). {verdict.way_out}"
     stop = "" if verdict.detail.endswith(".") else "."
-    if verdict.rule.startswith("guard-path"):
-        # Why: the agent should know where the rule comes from, and that it is not in the tree.
-        stop += f" {COMMITTED}"
+    if verdict.source:
+        # Why: the agent should know where a guard path comes from, and that it is not the tree.
+        stop += f" {verdict.source}"
     if verdict.decision is Decision.DENY:
         # Why: a denied Bash call runs none of its commands, so an unrelated write chained
         # with the refused one is lost; the agent must hear that, and the matched token.

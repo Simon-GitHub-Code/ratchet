@@ -85,7 +85,7 @@ def test_a_manifest_gone_from_the_default_branch_locks_its_paths_from_the_shell(
 ) -> None:
     said = shell(vanished, "cp README.md justfile")
     assert said["permissionDecision"] == "deny"
-    assert GONE in said["permissionDecisionReason"]
+    assert f"justfile (gate-commands). {GONE}" in said["permissionDecisionReason"]
     assert write(vanished, "src/app.py") == {}
 
 
@@ -118,7 +118,7 @@ def test_the_manifest_cannot_be_deleted_renamed_or_written_from_the_shell_on_a_b
 ) -> None:
     said = shell(adopted, command)
     assert said["permissionDecision"] == "deny"
-    assert f"{MANIFEST} (manifest-file)" in said["permissionDecisionReason"]
+    assert "(manifest-file)" in said["permissionDecisionReason"]
     assert COMMITTED not in said["permissionDecisionReason"]
 
 
@@ -130,34 +130,41 @@ def test_a_patch_cannot_delete_or_change_the_manifest_on_a_branch(adopted: Path)
 
 
 @pytest.mark.parametrize(
-    ("change", "why"),
+    ("written", "why"),
     [
-        (lambda text: "", "does not parse"),
+        ("", "does not parse"),
+        (TEMPLATE.replace('    "justfile",\n', ""), "changes, removes or reorders a [[group]]"),
         (
-            lambda text: text.replace('    "justfile",\n', ""),
-            "changes, removes or reorders a [[group]]",
-        ),
-        (
-            lambda text: text.replace(
+            TEMPLATE.replace(
                 "    # bind: the fitness test directories\n", '    "tests/fitness/**",\n'
             ),
             "changes, removes or reorders a [[group]]",
         ),
-        (
-            lambda text: text.replace('on = "rewrite"\n', ""),
-            "changes, removes or reorders a [[door]]",
-        ),
-        (lambda text: EXTRA_GROUP + text, "changes, removes or reorders a [[group]]"),
+        (TEMPLATE.replace('on = "rewrite"\n', ""), "changes, removes or reorders a [[door]]"),
+        (EXTRA_GROUP + TEMPLATE, "changes, removes or reorders a [[group]]"),
     ],
 )
 def test_a_write_that_does_more_than_add_to_the_manifest_is_denied_on_a_branch(
-    adopted: Path, change: object, why: str
+    adopted: Path, written: str, why: str
 ) -> None:
-    assert callable(change)
-    said = write(adopted, MANIFEST, change(TEMPLATE))
+    said = write(adopted, MANIFEST, written)
     assert said["permissionDecision"] == "deny"
     assert "This edit is not an addition" in said["permissionDecisionReason"]
     assert why in said["permissionDecisionReason"]
+
+
+def test_an_edit_the_guard_cannot_apply_to_the_manifest_is_denied(adopted: Path) -> None:
+    said = answer(
+        adopted,
+        "Edit",
+        file_path=str(adopted / MANIFEST),
+        old_string="no such text",
+        new_string=EXTRA_GROUP,
+    )
+    assert said["permissionDecision"] == "deny"
+    assert (
+        "the guard cannot tell what this Edit call would write" in said["permissionDecisionReason"]
+    )
 
 
 def test_a_write_or_edit_that_appends_whole_groups_or_doors_passes_on_a_branch(

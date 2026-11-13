@@ -1,10 +1,15 @@
-"""The committed manifest: ``guards/manifest.toml`` as the default branch's tip has it.
+"""The committed manifest: ``guards/manifest.toml`` as the default branch has it.
 
 Path guards are on only once the manifest is committed on the default branch. The hook reads
 that state from git and from nothing else: not the work tree, where an agent adopting the
 method is still writing the manifest and the files it names, and not a flag, which an agent
 could set. Until the adoption merges, only the command rules apply; after it, the manifest
 the owner merged is the one every path is judged against, whatever the work tree says.
+
+A default branch whose tip lacks the file but whose history held it has not gone back to before
+the adoption: the hook reads the last manifest it held and locks every path that one named
+(``ratchet_guards.manifest.gone``). Finding that costs one path-limited ``git log``, run only when
+the tip lacks the file.
 
 The default branch is the remote's ``HEAD`` when there is one and it names a commit, else the first
 of ``refs/remotes/origin/main``, ``refs/remotes/origin/master``, ``refs/heads/main`` and
@@ -17,6 +22,7 @@ refuses the commands that move these refs (ADR 0016).
 
 import subprocess
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from ratchet_guards.manifest import MANIFEST_PATH
@@ -25,6 +31,17 @@ from ratchet_guards.refs import LOCAL, REMOTE_HEAD, TRACKING
 Git = Callable[[Path, Sequence[str]], str | None]
 GIT_TIMEOUT_SECONDS = 5
 FALLBACK_BRANCHES = (*TRACKING, *LOCAL)
+# Why: `log.follow` in the user's config would follow the file back through a rename, to a commit
+# that holds it under another name.
+_LAST_HELD = ("-c", "log.follow=false", "log", "-1", "--format=%H", "--diff-filter=AM")
+
+
+@dataclass(frozen=True, slots=True)
+class Committed:
+    """The manifest's text, and whether the default branch's tip lost the file that held it."""
+
+    text: str
+    gone: bool = False
 
 
 def run_git(cwd: Path, args: Sequence[str]) -> str | None:
@@ -51,9 +68,14 @@ def default_branch(checkout: Path, git: Git = run_git) -> str | None:
     return None
 
 
-def committed_manifest(checkout: Path, git: Git = run_git) -> str | None:
-    """The manifest's text at the default branch's tip, or ``None`` when it is not there."""
+def committed_manifest(checkout: Path, git: Git = run_git) -> Committed | None:
+    """The manifest at the default branch's tip, else the last one it held, else ``None``."""
     ref = default_branch(checkout, git)
     if ref is None:
         return None
-    return git(checkout, ["show", f"{ref}:{MANIFEST_PATH}"])
+    text = git(checkout, ["show", f"{ref}:{MANIFEST_PATH}"])
+    if text is not None:
+        return Committed(text)
+    last = git(checkout, [*_LAST_HELD, ref, "--", MANIFEST_PATH])
+    held = git(checkout, ["show", f"{last}:{MANIFEST_PATH}"]) if last else None
+    return None if held is None else Committed(held, gone=True)
