@@ -43,8 +43,11 @@ each of which ends that worker. A refused connect meets a service that no longer
 is expected, not counted. A connection reset or closed with no answer is not counted when the
 gate took it: the service never accepted it, it was still waiting on the listener when the
 service stopped listening, and the file names its ports. Any other reset is a request the
-service accepted and dropped, and is red, and so is a timeout or an error status. Without the
-flag a refused connection is always an error. The flag is red without the two paths, since it
+service accepted and dropped, and is red, and so is a timeout or an error status. Where the gate
+holds no copy of the listener it cannot tell the two apart, and the file says why. A reset is
+then judged as the smoke judged it before the gate held listeners: not counted when its request
+started after the signal, counted when it started before. The smoke says so. Without the flag
+a refused connection is always an error. The flag is red without the two paths, since it
 could neither say it is sending nor tell a reset the gate made from one the service made.
 
 It ends within ``--seconds`` plus ``--timeout``: ten seconds at the defaults, even when the
@@ -157,13 +160,17 @@ class Closed(Exception):  # noqa: N818 # -- not a fault: the service stopped tak
 class Cut:
     """A connection that failed after the stop signal, judged once the run is over.
 
-    ``port`` is the service's, ``client`` the local port of the last connect tried.
+    ``port`` is the service's, ``client`` the local port of the last connect tried. ``late`` is
+    whether the request started after the signal, and ``lost`` whether the connection was reset,
+    aborted or broken: what the start-time rule needs where the gate holds no listener.
     """
 
     label: str
     error: str
     port: int
     client: int
+    late: bool
+    lost: bool
 
 
 class Cutoff(Exception):  # noqa: N818 # -- carries a failure to judge, not a fault yet
@@ -186,6 +193,7 @@ def attempt(
     was even tried.
     """
     clients: list[int] = []
+    late = stopping is not None and stopping.exists()
     started = time.perf_counter()
     try:
         status = gatelib.http_status(
@@ -202,7 +210,8 @@ def attempt(
             return None, f"{goal.label()}: {type(error).__name__}"
         if isinstance(error, ConnectionRefusedError):
             raise Closed from error
-        cut = Cut(goal.label(), type(error).__name__, goal.port(), clients[-1])
+        lost = isinstance(error, ConnectionError)
+        cut = Cut(goal.label(), type(error).__name__, goal.port(), clients[-1], late, lost)
         raise Cutoff(cut) from error
     wrong = None if goal.accepts(status) else f"{goal.label()}: HTTP {status}"
     return time.perf_counter() - started, wrong
@@ -245,31 +254,40 @@ def work(
     return worked
 
 
+def counts(cut: Cut, stopping: gatelib.Stopping) -> bool:
+    """Whether ``cut`` is a request the service accepted and dropped, as far as can be told.
+
+    With the listener held, a connection the gate took was never accepted by the service, and any
+    other was. Without it, the start-time rule the smoke used before the gate held listeners: a
+    lost connection is not counted when its request started after the signal.
+    """
+    if stopping.unread:
+        return not (cut.late and cut.lost)
+    return (cut.port, cut.client) not in stopping.taken
+
+
 def judge(
     cuts: list[Cut], stopping: gatelib.Stopping
 ) -> tuple[collections.Counter[str], list[str]]:
-    """The cut connections that count as errors, and what to say of the rest.
-
-    A cut connection the gate took was never accepted by the service; any other was, and the
-    service dropped it.
-    """
+    """The cut connections that count as errors, and what to say of the rest."""
     errors = collections.Counter(
-        f"{cut.label}: {cut.error}" for cut in cuts if (cut.port, cut.client) not in stopping.taken
+        f"{cut.label}: {cut.error}" for cut in cuts if counts(cut, stopping)
     )
     notes = []
     excused = len(cuts) - errors.total()
-    if excused:
+    if excused and not stopping.unread:
         notes.append(
             f"load-smoke: {excused} connection(s) reset after the stop signal are not counted: "
             "the service never accepted them, they were still waiting on its listener when it "
             "stopped listening"
         )
-    if errors and stopping.unread:
+    if stopping.unread:
         notes.append(
-            "load-smoke: every reset after the stop signal counts as a dropped request here, "
-            f"since the gate could not tell which connections the service had accepted: "
-            f"{stopping.unread}. A service that stops correctly still resets connections that "
-            "were waiting on its listener."
+            "load-smoke: this stop is judged the older, less exact way, because "
+            f"{stopping.unread}. A reset after the stop signal then counts as a dropped request "
+            "only when its request started before the signal. So a service that stops correctly "
+            "can be red here, and one that drops a request sent just after the signal can be "
+            "green."
         )
     return errors, notes
 

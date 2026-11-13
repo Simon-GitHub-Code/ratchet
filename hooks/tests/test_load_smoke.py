@@ -328,7 +328,7 @@ def test_a_failure_after_the_signal_is_closed_when_refused_and_cut_otherwise(
     with pytest.raises(load_smoke.Cutoff) as cutoff:
         load_smoke.attempt(goal, 1, marker)
     assert cutoff.value.cut == load_smoke.Cut(
-        "GET https://127.0.0.1/", "ConnectionResetError", 443, 40000
+        "GET https://127.0.0.1/", "ConnectionResetError", 443, 40000, late=True, lost=True
     )
     # With no connect tried there is no connection to match, so it counts.
     fail(OSError("no address"))
@@ -387,19 +387,21 @@ def test_a_connection_the_service_accepted_and_reset_after_the_signal_is_red(
     assert code == 1
 
 
-def test_resets_count_with_the_reason_when_the_gate_could_not_take_the_listener() -> None:
-    cuts = [load_smoke.Cut("GET u", "ConnectionResetError", 80, client) for client in (1, 2)]
-    errors, notes = load_smoke.judge(cuts, gatelib.Stopping(frozenset({(80, 1)}), "no Linux"))
-    assert errors == {"GET u: ConnectionResetError": 1}
-    assert notes[0].startswith("load-smoke: 1 connection(s) reset after the stop signal are not")
-    assert notes[1] == (
-        "load-smoke: every reset after the stop signal counts as a dropped request here, since "
-        "the gate could not tell which connections the service had accepted: no Linux. A service "
-        "that stops correctly still resets connections that were waiting on its listener."
+def test_where_the_gate_holds_no_listener_the_smoke_says_it_judged_the_older_way() -> None:
+    early, late = (
+        load_smoke.Cut("GET u", "ConnectionResetError", 80, client, late=late, lost=True)
+        for client, late in ((1, False), (2, True))
     )
-    assert load_smoke.judge(cuts[:1], gatelib.Stopping(frozenset({(80, 1)}), "no Linux"))[1] == [
-        notes[0]
-    ], "with nothing counted there is nothing to explain"
+    errors, notes = load_smoke.judge([early, late], gatelib.Stopping(frozenset(), "no Linux"))
+    assert errors == {"GET u: ConnectionResetError": 1}, "only the request sent before the signal"
+    assert notes == [
+        (
+            "load-smoke: this stop is judged the older, less exact way, because no Linux. A reset "
+            "after the stop signal then counts as a dropped request only when its request started "
+            "before the signal. So a service that stops correctly can be red here, and one that "
+            "drops a request sent just after the signal can be green."
+        )
+    ]
 
 
 def mains_verdict(
@@ -437,9 +439,7 @@ FAILURES: list[Exception] = [
 
 
 @pytest.mark.parametrize("error", FAILURES, ids=lambda error: type(error).__name__)
-@pytest.mark.parametrize(
-    ("at_start", "at_failure"), [(False, False), (False, True), (True, True)]
-)
+@pytest.mark.parametrize(("at_start", "at_failure"), [(False, False), (False, True), (True, True)])
 def test_where_the_gate_holds_no_listener_a_failure_is_judged_exactly_as_main_judged_it(
     error: Exception,
     *,
