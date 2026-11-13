@@ -86,15 +86,19 @@ ignore = [
 ]
 "evals/first-hour/run.py" = [
     "T201",   # the command prints the table by design
+    "S603",   # subprocess runs the resolved `claude` with a literal argv list
     "INP001", # a script run by `uv run`, deliberately not a package
 ]
 "evals/first-hour/first_hour/*.py" = [
     "S603", "S607", # subprocess runs git, the route and the app with argv lists or the owner's line
+    "S108",         # the sandbox and the policy name /tmp to replace it with the run's own
 ]
 "evals/first-hour/tests/**" = [
     "INP001",  # pytest imports these by basename; a package would clash with hooks/tests
     "S101",    # assert is the test idiom
     "S603", "S607",
+    "S108",    # the policy and sandbox tables name the temp paths a session would write to
+    "ARG002",  # the fakes keep the signatures of the protocols they stand in for
     "PLR2004", # magic numbers are the test fixtures
     "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
 ]

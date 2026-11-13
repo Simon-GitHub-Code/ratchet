@@ -145,6 +145,7 @@ class Stop(StrEnum):
     REPEAT = "repeat"
     FORGE = "forge-stage"
     MAX_STEPS = "max-steps"
+    INTERRUPTED = "interrupted"
     ERROR = "error"
 
 

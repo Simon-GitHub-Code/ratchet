@@ -20,11 +20,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from html.parser import HTMLParser
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
     from first_hour.persona import Slice
@@ -45,6 +46,20 @@ REQUEST_S = 15.0
 STOP_GRACE_S = 10.0
 
 
+class Verdict(StrEnum):
+    """What the slice check found: it works, it does not, or this check cannot tell."""
+
+    WORKS = "works"
+    FAILS = "fails"
+    UNCHECKED = "unchecked"
+
+
+UNCHECKED = (
+    "the page builds itself in the browser (it has a script and no form that works without it);"
+    " this check runs no browser, so the slice is not checked"
+)
+
+
 @dataclass(frozen=True)
 class Start:
     """How the repository says to start the app, and where it says so."""
@@ -61,13 +76,18 @@ class Result:
     source: str | None
     started: bool
     page_ok: bool
-    slice_ok: bool
+    slice: Verdict
     finding: str
     url: str | None = None
 
+    @property
+    def usable(self) -> bool:
+        """Whether a person can use the first slice: only a slice seen to work counts."""
+        return self.slice is Verdict.WORKS
+
     def event(self) -> dict[str, object]:
         """The result as one event of the run's log."""
-        return {"kind": "app", **asdict(self)}
+        return {"kind": "app", **asdict(self), "slice_ok": self.usable}
 
 
 def _readme(root: Path) -> Start | None:
@@ -147,8 +167,20 @@ def _get(url: str) -> tuple[int, str]:
         return error.code, ""
 
 
-def html_form(base: str, page: str, piece: Slice) -> tuple[bool, str]:
-    """Fill the page's first text field with the slice's value, send it, look for the result."""
+def html_form(base: str, page: str, piece: Slice) -> tuple[Verdict, str]:
+    """Fill the page's first text field with the slice's value, send it, look for the result.
+
+    A page with a script may do all of this in the browser, which this check does not run: when
+    the plain form does not work there, the slice is unchecked rather than failed.
+    """
+    scripted = "<script" in page.lower()
+    verdict, finding = _plain_form(base, page, piece)
+    if verdict is Verdict.FAILS and scripted:
+        return Verdict.UNCHECKED, f"{UNCHECKED} ({finding})"
+    return verdict, finding
+
+
+def _plain_form(base: str, page: str, piece: Slice) -> tuple[Verdict, str]:
     parser = _Forms()
     parser.feed(page)
     for form in parser.forms:
@@ -168,17 +200,20 @@ def html_form(base: str, page: str, piece: Slice) -> tuple[bool, str]:
                     response.read()
             except urllib.error.HTTPError as error:
                 error.close()
-                return False, f"the form answered {error.code} to a valid link"
+                return Verdict.FAILS, f"the form answered {error.code} to a valid link"
         else:
             _get(f"{url}?{body}")
         _status, after = _get(base)
         if piece.expect in after:
-            return True, "the saved link shows on the page"
-        return False, f"sent the form's `{target}` field; `{piece.expect}` is not on the page after"
-    return False, "the page has no form with a text field to paste a link into"
+            return Verdict.WORKS, "the saved link shows on the page"
+        return (
+            Verdict.FAILS,
+            f"sent the form's `{target}` field; `{piece.expect}` is not on the page after",
+        )
+    return Verdict.FAILS, "the page has no form with a text field to paste a link into"
 
 
-SLICES: dict[str, Callable[[str, str, Slice], tuple[bool, str]]] = {"html-form": html_form}
+SLICES: dict[str, Callable[[str, str, Slice], tuple[Verdict, str]]] = {"html-form": html_form}
 
 
 def free_port() -> int:
@@ -220,24 +255,48 @@ def stop(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-def check(root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S) -> Result:
+def _direct(command: Sequence[str]) -> list[str]:
+    return list(command)
+
+
+@dataclass(frozen=True)
+class Launch:
+    """How the check starts the app.
+
+    ``wrap`` turns the start command into what runs (the run's sandbox, in a run), ``env`` is its
+    environment, and ``on_start`` is told of the process so that a run that is stopped can end it.
+    """
+
+    wrap: Callable[[Sequence[str]], list[str]] = _direct
+    env: Mapping[str, str] | None = None
+    on_start: Callable[[subprocess.Popen[bytes]], None] | None = None
+
+
+DIRECT = Launch()
+
+
+def check(
+    root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S, launch: Launch = DIRECT
+) -> Result:
     """Start the app at ``root``, request its page, and exercise ``piece``; stop it again."""
     start = start_command(root)
     if start is None:
-        return Result(None, None, started=False, page_ok=False, slice_ok=False, finding=NO_WAY)
+        return Result(None, None, started=False, page_ok=False, slice=Verdict.FAILS, finding=NO_WAY)
     port = free_port()
-    env = {**os.environ, "PORT": str(port), "HOST": "127.0.0.1", "CI": "1"}
+    base_env = os.environ if launch.env is None else launch.env
+    child_env = {**base_env, "PORT": str(port), "HOST": "127.0.0.1", "CI": "1"}
     with log.open("wb") as out:
-        process = subprocess.Popen(  # noqa: S602
-            start.command,
-            shell=True,
+        process = subprocess.Popen(
+            launch.wrap(["sh", "-c", start.command]),
             cwd=root,
-            env=env,
+            env=child_env,
             stdout=out,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
+    if launch.on_start is not None:
+        launch.on_start(process)
     try:
         bound = _wait(process, log, port=port, timeout=timeout)
         if bound is None:
@@ -247,7 +306,7 @@ def check(root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S) ->
                 start.source,
                 started=False,
                 page_ok=False,
-                slice_ok=False,
+                slice=Verdict.FAILS,
                 finding=f"`{start.command}` did not listen within {timeout:g}s: {tail}",
             )
         base = f"http://127.0.0.1:{bound}/"
@@ -258,17 +317,17 @@ def check(root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S) ->
                 start.source,
                 started=True,
                 page_ok=False,
-                slice_ok=False,
+                slice=Verdict.FAILS,
                 finding=f"GET / answered {status}",
                 url=base,
             )
-        ok, finding = SLICES[piece.kind](base, page, piece)
+        verdict, finding = SLICES[piece.kind](base, page, piece)
         return Result(
             start.command,
             start.source,
             started=True,
             page_ok=True,
-            slice_ok=ok,
+            slice=verdict,
             finding=finding,
             url=base,
         )
@@ -278,7 +337,7 @@ def check(root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S) ->
             start.source,
             started=True,
             page_ok=False,
-            slice_ok=False,
+            slice=Verdict.FAILS,
             finding=f"request failed: {error}",
         )
     finally:

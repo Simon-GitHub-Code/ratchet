@@ -299,7 +299,7 @@ def test_the_table_names_the_measures_a_person_reads_first() -> None:
     table = reduce.table(reduce.reduce(recorded()))
     assert "| Stopped | usable-merged at 10.2 min |" in table
     assert "| Minutes to first usable merged change | 10.2 |" in table
-    assert "| App | starts: True, page: True, slice: True |" in table
+    assert "| App | starts: True, page: True, slice: works |" in table
     assert "| Questions (product / default-able) | 2 (1 / 1) |" in table
     assert "| Hand merges | 1 of 2 |" in table
     assert "| Red gates (red again on rerun) | bite-all (False) |" in table
@@ -353,3 +353,20 @@ def test_the_shipped_persona_loads_from_its_stem_or_its_path() -> None:
     assert persona.slice.kind == "html-form"
     assert persona.slice.expect in persona.slice.value
     assert load(str(PERSONAS / "read-later.toml")) == persona
+
+
+def test_a_call_the_harness_refused_counts_and_a_prompt_takes_its_origin_from_its_reason() -> None:
+    run = [
+        {"s": 60, "kind": "denied", "tool": "WebFetch", "why": "is off the list", "at": "hook"},
+        {"s": 90, "kind": "denied", "tool": "Bash", "why": "pushes to a remote", "at": "prompt"},
+        {"s": 95, "kind": "prompt", "tool": "Bash", "decision": "allow", "reason": "Ratchet guard"},
+        {"s": 96, "kind": "prompt", "tool": "Bash", "decision": "allow", "reason": "no rule"},
+    ]
+    metrics = reduce.reduce(run)
+    assert metrics["harness_denials"] == [
+        {"minute": 1.0, "tool": "WebFetch", "why": "is off the list", "at": "hook"},
+        {"minute": 1.5, "tool": "Bash", "why": "pushes to a remote", "at": "prompt"},
+    ]
+    assert metrics["prompts"]["denied"] == 1
+    assert (metrics["prompts"]["guard"], metrics["prompts"]["permission"]) == (1, 1)
+    assert "| Calls the harness refused | 2 |" in reduce.table(metrics)

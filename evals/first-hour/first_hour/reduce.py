@@ -85,6 +85,7 @@ class _Fold:
     workflows: int = 0
     guard_denials: int = 0
     refusals: list[Event] = field(default_factory=list)
+    denials: list[Event] = field(default_factory=list)
     apps: list[Event] = field(default_factory=list)
     usable_min: float | None = None
     stop: Event = field(default_factory=dict)
@@ -156,6 +157,9 @@ class _Fold:
     def on_refusal(self, event: Event) -> None:
         self.refusals.append(event)
 
+    def on_denied(self, event: Event) -> None:
+        self.denials.append(event)
+
     def on_app(self, event: Event) -> None:
         self.apps.append(event)
 
@@ -168,6 +172,9 @@ class _Fold:
 
     def on_integrity(self, event: Event) -> None:
         self.integrity = {"unchanged": event.get("unchanged"), "files": event.get("files")}
+        for key in ("changed", "before", "after", "removed_work_trees", "claude_projects"):
+            if key in event:
+                self.integrity[key] = event[key]
 
     def on_step(self, event: Event) -> None:
         self.steps.start(event, self.spent)
@@ -214,6 +221,7 @@ def _questions(questions: list[Event]) -> dict[str, object]:
                 "answer": q.get("answer"),
                 "recommended": q.get("recommended"),
                 "took_recommended": _took(q),
+                "reason": q.get("reason"),
             }
             for q in questions
         ],
@@ -271,21 +279,27 @@ def _gate_coverage(gates: list[Event]) -> dict[str, object]:
 def _origin(prompt: Event) -> str:
     """Who asked: the Ratchet guard (its hook, or the ask rules adopt writes), or Claude Code.
 
-    Why: an Edit or Write inside the project is on the session's allow-list, so the only thing
-    that asks for one is the project's own ``ask`` rule for a guard path, which Claude Code
-    reports with no reason at all.
+    A driver logs the reason Claude Code gave and the reducer decides; a log recorded before
+    that (or by the one-off run's converter) carries ``origin`` and it is read as recorded. Why
+    the empty reason counts for the guard: an Edit or Write inside the project is on the
+    session's allow-list, so the only thing that asks for one is the project's own ``ask`` rule
+    for a guard path, which Claude Code reports with no reason at all.
     """
-    origin = str(prompt.get("origin"))
+    reason = str(prompt.get("reason") or "")
+    origin = prompt.get("origin")
+    if origin is None:
+        origin = "guard" if reason.startswith("Ratchet guard") else "permission"
     write = prompt.get("tool") in ("Edit", "Write", "NotebookEdit")
-    if origin == "permission" and write and not prompt.get("reason"):
+    if origin == "permission" and write and not reason:
         return "guard"
-    return origin
+    return str(origin)
 
 
 def _app(apps: list[Event]) -> dict[str, object]:
     if not apps:
         return {"checked": False}
     last = apps[-1]
+    works = bool(last.get("slice_ok"))
     return {
         "checked": True,
         "minute": _minute(last),
@@ -293,7 +307,8 @@ def _app(apps: list[Event]) -> dict[str, object]:
         "start_source": last.get("source"),
         "starts": bool(last.get("started")),
         "serves_page": bool(last.get("page_ok")),
-        "slice_works": bool(last.get("slice_ok")),
+        "slice_works": works,
+        "slice": last.get("slice") or ("works" if works else "fails"),
         "finding": last.get("finding"),
         "checks": len(apps),
     }
@@ -330,12 +345,17 @@ def reduce(events: Iterable[Event]) -> dict[str, object]:
             "guard": prompts["guard"],
             "permission": prompts["permission"],
             "unknown": prompts["unknown"],
-            "denied": sum(p.get("decision") == "deny" for p in fold.prompts),
+            "denied": sum(p.get("decision") == "deny" for p in fold.prompts)
+            + sum(d.get("at") == "prompt" for d in fold.denials),
         },
         "guard_denials": fold.guard_denials,
         "harness_refusals": [
             {"minute": _minute(r), "why": r.get("why"), "command": r.get("command")}
             for r in fold.refusals
+        ],
+        "harness_denials": [
+            {"minute": _minute(d), "tool": d.get("tool"), "why": d.get("why"), "at": d.get("at")}
+            for d in fold.denials
         ],
         "pastes": {
             "count": len(fold.pastes),
@@ -393,7 +413,7 @@ def table(metrics: dict[str, object]) -> str:
         if isinstance(r, dict)
     )
     app = (
-        f"starts: {at('app.starts')}, page: {at('app.serves_page')}, slice: {at('app.slice_works')}"
+        f"starts: {at('app.starts')}, page: {at('app.serves_page')}, slice: {at('app.slice')}"
         if _at(metrics, "app.checked")
         else "not checked"
     )
@@ -415,6 +435,7 @@ def table(metrics: dict[str, object]) -> str:
         ("Guard approval prompts", at("prompts.guard")),
         ("Other permission prompts", str(int(prompts))),
         ("Guard denials the agent met", at("guard_denials")),
+        ("Calls the harness refused", str(_count(_at(metrics, "harness_denials")))),
         ("Shell commands the owner pasted", at("pastes.count")),
         ("Things the owner asked the assistant to do", at("asks")),
         ("Hand merges", f"{at('hand_merges')} of {_count(_at(metrics, 'merges'))}"),

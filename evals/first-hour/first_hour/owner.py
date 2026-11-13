@@ -24,6 +24,8 @@ RECOMMENDED = re.compile(r"\brecommend(?:ed)?\b", re.IGNORECASE)
 NOT_RECOMMENDED = re.compile(r"\b(?:not|n't|never)\s+(?:\w+\s+)?recommend", re.IGNORECASE)
 GO_AHEAD = "Please go ahead with what you recommend."
 TURN_TAIL = 6000
+OFFER_TAIL = 3000
+QUESTION_TAIL = 800
 
 
 class Kind(StrEnum):
@@ -101,6 +103,7 @@ class Answer:
             "header": self.question.header,
             "question": self.question.text,
             "options": [o.label for o in self.question.options],
+            "descriptions": [o.description for o in self.question.options],
             "recommended": self.recommended,
             "took_recommended": self.took_recommended,
             "answer": self.text,
@@ -310,6 +313,29 @@ def question_prompt(question: Question) -> str:
         ' "class" ("product" or "default-able"), "answer" (a list of the exact option labels you'
         ' pick, or one string in your own words) and "reason" (one sentence).'
     )
+
+
+def prose_question(turn: str, reply: Reply) -> dict[str, object]:
+    """A turn that ended by asking the owner something, as one event of the run's log.
+
+    The recommendation is whatever the turn's tail says it recommends; the owner took it when the
+    question was default-able, since a default-able reply is "go ahead with what you recommend".
+    ``read`` is the text the owner model was given, whole.
+    """
+    offered = bool(RECOMMENDED.search(turn[-OFFER_TAIL:]))
+    return {
+        "kind": "question",
+        "channel": Channel.PROSE.value,
+        "class": reply.kind.value,
+        "header": "turn end",
+        "question": turn[-QUESTION_TAIL:],
+        "read": turn[-TURN_TAIL:],
+        "options": [],
+        "recommended": "the assistant's recommendation" if offered else None,
+        "took_recommended": offered and reply.kind is Kind.DEFAULT_ABLE,
+        "answer": reply.text,
+        "reason": reply.reason,
+    }
 
 
 def turn_prompt(text: str) -> str:

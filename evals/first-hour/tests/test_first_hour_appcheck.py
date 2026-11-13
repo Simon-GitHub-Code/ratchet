@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from first_hour import appcheck
+from first_hour.appcheck import Verdict
 from first_hour.persona import Slice
 
 PIECE = Slice("html-form", "save a link", "https://example.com/a", "example.com/a")
@@ -32,8 +33,11 @@ SERVER = textwrap.dedent(
 
         def page(self, status=200):
             bare = '<input name="q"><form action="/s"><input type="hidden" name="x"></form>'
+            spa = '<div id="app"></div><script type="module" src="/src/main.ts"></script>'
             method = "get" if MODE == "get" else "post"
             body = bare if MODE == "no-form" else FORM.format(method=method)
+            body = spa if MODE == "spa" else body
+            body += "<script>/* saves in the browser */</script>" if MODE == "scripted" else ""
             body += "".join(f"<li>{i}</li>" for i in ITEMS)
             self.send_response(status)
             self.send_header("Content-Type", "text/html")
@@ -42,7 +46,7 @@ SERVER = textwrap.dedent(
 
         def save(self, query):
             fields = urllib.parse.parse_qs(query)
-            if MODE != "forgets" and fields.get("csrf") == ["t"]:
+            if MODE not in ("forgets", "scripted") and fields.get("csrf") == ["t"]:
                 ITEMS.append(fields["link"][0])
 
         def do_GET(self):
@@ -95,14 +99,16 @@ def test_an_app_that_saves_the_link_passes_the_slice(tmp_path: Path, mode: str) 
     result = check(app(tmp_path, run_readme(mode)))
     assert result.started
     assert result.page_ok
-    assert result.slice_ok, result.finding
+    assert result.slice is Verdict.WORKS, result.finding
+    assert result.usable
     assert result.source == "README.md"
     assert result.event()["kind"] == "app"
+    assert result.event()["slice_ok"] is True
 
 
 def test_an_app_that_ignores_port_is_found_by_the_url_it_prints(tmp_path: Path) -> None:
     result = check(app(tmp_path, run_readme("own-port", str(appcheck.free_port()))))
-    assert result.slice_ok, result.finding
+    assert result.usable, result.finding
 
 
 @pytest.mark.parametrize(
@@ -121,8 +127,46 @@ def test_an_app_that_starts_but_fails_the_slice_says_why(
     result = check(app(tmp_path, run_readme(mode)))
     assert result.started
     assert result.page_ok is page_ok
-    assert not result.slice_ok
+    assert result.slice is Verdict.FAILS
+    assert not result.usable
     assert finding in result.finding
+
+
+@pytest.mark.parametrize(
+    ("mode", "finding"),
+    [
+        ("spa", "no form with a text field"),
+        ("scripted", "is not on the page after"),
+    ],
+)
+def test_a_page_that_builds_itself_in_the_browser_is_unchecked_not_failed(
+    tmp_path: Path, *, mode: str, finding: str
+) -> None:
+    result = check(app(tmp_path, run_readme(mode)))
+    assert result.started
+    assert result.page_ok
+    assert result.slice is Verdict.UNCHECKED
+    assert not result.usable
+    assert "runs no browser" in result.finding
+    assert finding in result.finding
+
+
+def test_the_start_command_runs_through_the_wrapper_with_the_given_environment(
+    tmp_path: Path,
+) -> None:
+    seen: list[list[str]] = []
+
+    def wrap(command: list[str]) -> list[str]:
+        seen.append(list(command))
+        return ["env", *command]
+
+    root = app(tmp_path, run_readme("post"))
+    env = {"PATH": "/usr/bin:/bin"}
+    result = appcheck.check(
+        root, PIECE, root / "app.log", timeout=20.0, launch=appcheck.Launch(wrap, env)
+    )
+    assert result.usable, result.finding
+    assert seen == [["sh", "-c", "python3 server.py post"]]
 
 
 def test_an_app_that_will_not_stop_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
