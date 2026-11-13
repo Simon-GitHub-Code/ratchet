@@ -28,6 +28,11 @@ Usage::
   is attached: no colour, no cursor movement, flushed gate by gate, so a CI log reads as a
   terminal does. A gate's output is captured, so a tool that colours only for a terminal prints
   plain text; give the recipe the tool's own force-colour switch to colour the replay.
+* A gate whose whole output is one ``later: <trigger>`` or ``none: <reason>`` line and that exits
+  0 judged nothing: it is the body a binding gives a question not asked yet (ADR 0028) or one
+  that does not apply. Its status line says so in place of green, and the closing line counts
+  the gates judged and green apart from these, so a run of mostly ``later:`` gates never reads
+  as all green. Such a gate is not red: the exit code is unchanged.
 * The exit code is 0 when every gate is green and 1 otherwise, and the closing lines name EVERY
   red gate, so one run shows all of them. 128 plus the signal after an interrupt; 2 for a
   usage error. ``--fail-fast`` stops at the first red instead, for an inner loop: it stops the
@@ -65,14 +70,16 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import re
 import shlex
 import signal
 import subprocess
 import sys
 import tempfile
 import time
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import IO
 
@@ -82,6 +89,18 @@ import gatelib
 POLL = 0.05
 # The job a gate that is measured alone runs in; the units count from 0.
 ALONE = -1
+# Why: the body a binding gives a `later:` or `none:` row prints the Tool cell and exits 0; the
+# template writes it as `@echo "later: <trigger>"`, so that one line is all the gate says.
+WAITING = re.compile(r"(?P<standing>later|none): \S.*")
+
+
+class Standing(Enum):
+    """How a finished gate stands, worded as the closing line counts it."""
+
+    GREEN = "judged and green"
+    RED = "red"
+    LATER = "not asked yet (later: each one's line names what it waits for)"
+    NONE = "not applicable (none)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,9 +117,23 @@ class Finished:
         """Whether the gate exited 0."""
         return self.exit_code == 0
 
+    @property
+    def standing(self) -> Standing:
+        """Red, judged and green, or green having judged nothing: ``later:`` or ``none:``."""
+        if not self.green:
+            return Standing.RED
+        waiting = WAITING.fullmatch(self.output.strip())
+        return Standing[waiting["standing"].upper()] if waiting else Standing.GREEN
+
     def line(self) -> str:
         """The one status line the gate gets."""
-        how = "green" if self.green else f"red (exit {self.exit_code})"
+        match self.standing:
+            case Standing.GREEN:
+                how = "green"
+            case Standing.RED:
+                how = f"red (exit {self.exit_code})"
+            case _:
+                how = f"judged nothing ({self.output.strip()})"
         return f"parallel: {self.name}: {how} in {self.seconds:.1f}s"
 
 
@@ -288,9 +321,15 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     slowest = max(scheduler.finished, key=lambda result: result.seconds)
     work = sum(result.seconds for result in scheduler.finished)
     total = len(scheduler.finished) + len(scheduler.stopped) + len(scheduler.not_started())
+    counts = Counter(result.standing for result in scheduler.finished)
+    tally = ", ".join(
+        f"{counts[standing]} {standing.value}"
+        for standing in Standing
+        if counts[standing] or standing is Standing.GREEN
+    )
     say(
         f"parallel: {len(scheduler.finished)} of {total} gates finished in {wall:.1f}s "
-        f"({work:.1f}s of gate time); slowest: {slowest.name} {slowest.seconds:.1f}s"
+        f"({work:.1f}s of gate time): {tally}; slowest: {slowest.name} {slowest.seconds:.1f}s"
     )
     problems = [
         f"{result.name}: red (exit {result.exit_code})"
