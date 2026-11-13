@@ -65,6 +65,9 @@ TOOLS: Mapping[str, Tool] = {
     "TaskStop": Tool(Kind.SESSION),
     "ToolSearch": Tool(Kind.SESSION),
     "SendMessage": Tool(Kind.MESSAGE),
+    # Why: a workflow agent or subagent given a `schema` returns its result through this tool.
+    # Without it the `/ratchet:feature` pipeline cannot finish its first step.
+    "StructuredOutput": Tool(Kind.SESSION),
 }
 # Why: named so the CLI refuses them before the model can call them; `decide` denies every tool
 # not in TOOLS whatever this list says.
