@@ -533,9 +533,12 @@ def _lockfile(file: str, before: str, after: str) -> list[Change]:
     found: list[Change] = []
     for table in sorted(old.keys() | new.keys(), key=lambda table: table != LOCKFILE):
         was_table, now_table = old.get(table, {}), new.get(table, {})
+        # Why: pnpm's boot document runs the one pnpm its pin names, so no version sits beside
+        # another there: an older one added is the one that runs.
+        side_by_side = file in _SIDE_BY_SIDE and table == LOCKFILE
         for name in sorted(was_table.keys() | now_table.keys()):
             was, now = was_table.get(name, {}), now_table.get(name, {})
-            _package(name, was, now, known=known, side_by_side=file in _SIDE_BY_SIDE)
+            _package(name, was, now, known=known, side_by_side=side_by_side)
             if was.keys() != now.keys():
                 show = (
                     ", ".join(sorted(was, key=_version)) or None,
