@@ -52,7 +52,8 @@ next ``up``::
     probes/           the proxy: each request and answer as sent, cut at 1 MB
     seal.json         the proxy, when it stops: how many lines it wrote, their SHA-256, and
                       how many answers reached the tester with no line
-    tester/           the tester's: record.json and its screenshots
+    tester/           the tester's: record.json and its screenshots; ``check`` refuses a link
+                      in it that leads out of it
     replay.json       the last replay of the record's kept checks; control.json, against nothing
 
 Every command stops what it started on SIGINT, SIGTERM and SIGHUP, removes its temporary
@@ -703,16 +704,10 @@ def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None
     """The record of a session, and every sentence about what is wrong with it."""
     if state(directory) in (State.LIVE, State.STARTING):
         return None, ["the session is still running: run `down` first"]
-    path = directory / RECORD
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None, [f"the tester wrote no record at {path}"]
-    except ValueError as error:
-        return None, [f"{path} is not JSON: {error}"]
-    record, problems = acceptance_record.parse_record(raw)
+    escapes = links_out(directory)
+    record, problems = read_record(directory / RECORD)
     if record is None:
-        return None, problems
+        return None, escapes + problems
     session = read_json(directory / "session.json") or {}
     served = (directory / "proxy.json").is_file()
     data = (directory / "requests.jsonl").read_bytes() if served else b""
@@ -727,6 +722,7 @@ def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None
             ),
             *problems,
         ]
+    problems = escapes + problems
     every: list[acceptance_record.Criterion | acceptance_record.Finding] = [
         *record.criteria,
         *record.findings,
@@ -748,6 +744,35 @@ def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None
     )
     problems += acceptance_record.judge(record, facts)
     return (record if not problems else None), problems
+
+
+def read_record(path: Path) -> tuple[acceptance_record.Record | None, list[str]]:
+    """The tester's record at ``path``, or why there is none."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, [f"the tester wrote no record at {path}"]
+    except ValueError as error:
+        return None, [f"{path} is not JSON: {error}"]
+    return acceptance_record.parse_record(raw)
+
+
+def links_out(directory: Path) -> list[str]:
+    """A sentence for each link in the session's ``tester/`` that leads out of it.
+
+    Such a link is a way to the product's code or the harness's log that no path names.
+    """
+    tester = directory / "tester"
+    inside = Path(os.path.realpath(tester))
+    found = []
+    for folder, folders, files in os.walk(tester):
+        folders.sort()
+        for path in sorted(Path(folder) / name for name in folders + files):
+            target = Path(os.path.realpath(path))
+            if path.is_symlink() and not target.is_relative_to(inside):
+                where = path.relative_to(directory)
+                found.append(f"{where} is a link out of the tester's directory, to {target}")
+    return found
 
 
 def seal_of(directory: Path) -> acceptance_record.Seal | None:
