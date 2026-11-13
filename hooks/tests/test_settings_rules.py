@@ -8,7 +8,8 @@ import pytest
 
 import settings_rules
 from ratchet_guards.manifest import GIT_STATE_PATTERNS
-from tests.support import STANDARD, make_guard, rules
+from ratchet_guards.verdict import strictest
+from tests.support import STANDARD, FakeRepo, make_guard, rules, verdicts
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
 
@@ -29,21 +30,25 @@ def test_the_template_settings_are_what_the_generator_writes() -> None:
 
 def test_every_path_the_template_locks_and_the_hook_reads_refs_through_is_denied() -> None:
     # Why: the list is fixed so that it never follows a manifest edit; this keeps it no looser
-    # than the paths the template still has the owner change by hand. The workflows are the one
-    # exception: adoption writes their plugin refs after `just settings` has switched the rules
-    # on, so until the adoption merges only the hook, reading the default branch's manifest,
-    # refuses them.
+    # than the paths the template still has the owner change by hand.
     manifest = tomllib.loads((TEMPLATES / "guards/manifest.toml").read_text(encoding="utf-8"))
     locked = {p for g in manifest["group"] if g.get("edit") == "deny" for p in g["paths"]}
-    assert ".github/workflows/**" in locked
-    assert locked - {".github/workflows/**"} | set(GIT_STATE_PATTERNS) <= set(settings_rules.TAMPER)
+    assert locked | set(GIT_STATE_PATTERNS) <= set(settings_rules.TAMPER)
 
 
-def test_a_workflow_is_refused_on_a_branch_once_the_template_manifest_is_committed() -> None:
+def test_a_workflow_is_asked_on_a_branch_once_the_template_manifest_is_committed() -> None:
+    # Why: GitHub runs a branch's own workflow before any merge, so the owner is asked at the
+    # write; a settings deny would make him edit the file by hand, and adoption writes the
+    # workflows before the manifest is on the default branch.
     guard = make_guard(manifest=STANDARD)
-    assert rules("echo x > .github/workflows/ci.yml", guard) == ["guard-path-write"]
+    assert rules("echo x > .github/workflows/ci.yml", guard) == ["workflow-write"]
+    on_main = make_guard(FakeRepo(branch="main"), manifest=STANDARD)
+    assert rules("echo x > .github/workflows/ci.yml", on_main) == [
+        "guard-path-default",
+        "workflow-write",
+    ]
     assert rules("echo x > .github/pull_request_template.md", guard) == []
-    assert rules("rm -rf .github", guard) == ["guard-path-write"]
+    assert not any("workflows" in rule for rule in settings_rules.TAMPER if ".github" in rule)
 
 
 @pytest.mark.parametrize("pattern", settings_rules.TAMPER)
@@ -51,8 +56,9 @@ def test_each_tamper_path_is_one_the_hook_refuses_on_a_branch(pattern: str) -> N
     # Why: a settings deny the hook does not share would leave the two layers disagreeing
     # (ADR 0006); each of these acts before a merge, so the hook refuses it on any branch.
     path = pattern.replace("/**", "/x")
-    command = f"echo x > {path}"
-    assert rules(command, make_guard()) == ["guard-path-write"]
+    refused = strictest(verdicts(f"echo x > {path}", make_guard()))
+    assert refused is not None
+    assert refused.rule == "guard-path-write"
 
 
 def test_write_then_check_round_trips_and_keeps_other_keys(tmp_path: Path) -> None:

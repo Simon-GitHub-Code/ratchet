@@ -328,12 +328,12 @@ def test_a_here_string_fed_to_a_shell_is_checked() -> None:
 
 def test_the_shim_denies_the_trial_command_in_a_real_checkout(tmp_path: Path) -> None:
     root = checkout(tmp_path)
-    program = "python3 - <<'EOF'\np='CLAUDE.md'\ns=open(p).read()\n...\nopen(p,'w').write(s)\nEOF"
+    program = "python3 - <<'EOF'\np='justfile'\ns=open(p).read()\n...\nopen(p,'w').write(s)\nEOF"
     case = {"tool_name": "Bash", "tool_input": {"command": program}, "cwd": str(root)}
     done = run_shim(SHIM, case)
     assert decision(done) == "deny"
     assert "Make the change on a branch" in done.stdout
-    read = "python3 - <<'EOF'\nprint(open('CLAUDE.md').read())\nEOF"
+    read = "python3 - <<'EOF'\nprint(open('justfile').read())\nEOF"
     read_case = {"tool_name": "Bash", "tool_input": {"command": read}, "cwd": str(root)}
     assert run_shim(SHIM, read_case).stdout == ""
     switch_to_a_branch(root)

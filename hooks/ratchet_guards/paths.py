@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
+from ratchet_guards.early import Kind, kind_of
 from ratchet_guards.manifest import EMPTY, GIT_STATE, Group, Manifest, Scope
 from ratchet_guards.records import Before
 
@@ -80,6 +81,14 @@ class Hit:
     path: str
     group: Group
     at: Path
+
+
+@dataclass(frozen=True, slots=True)
+class Acting:
+    """A file that acts before the merge, from its checkout's root, and what it does."""
+
+    path: str
+    kind: Kind
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,9 +168,9 @@ class Locator:
                 found.append(word)
         return found
 
-    def words(self, words: Iterable[str], cwd: Path, *, destructive: bool) -> list[Hit]:
-        """Hits for shell words naming paths relative to ``cwd``; globs are expanded."""
-        hits: list[Hit] = []
+    def paths(self, words: Iterable[str], cwd: Path) -> list[Path]:
+        """The paths shell words name relative to ``cwd``, globs expanded."""
+        paths: list[Path] = []
         for word in words:
             if not word:
                 continue
@@ -170,8 +179,34 @@ class Locator:
             # Why: globbing a literal path finds that path or nothing; the test only saves a stat.
             wild = _GLOB_CHARS & set(expanded)  # pragma: no mutate # -- see the Why above
             found = self.filesystem.glob(path) if wild else []  # pragma: no mutate # -- see the Why
-            for candidate in found or [path]:
-                hit = self.classify(candidate, destructive=destructive)
-                if hit is not None:
-                    hits.append(hit)
-        return hits
+            paths += found or [path]
+        return paths
+
+    def named(self, names: Iterable[str], cwd: Path) -> list[Path]:
+        """The files an inline program's strings name relative to ``cwd``.
+
+        A program's strings are not shell words: no shell expands them, and one that reads as a
+        glob (a ``*`` in arithmetic, a ``/**`` doc comment) names no file the program writes.
+        """
+        literal = (name for name in names if name and not _GLOB_CHARS & set(name))
+        return [cwd / self.filesystem.expand(name) for name in literal]
+
+    def words(self, words: Iterable[str], cwd: Path, *, destructive: bool) -> list[Hit]:
+        """Hits for shell words naming paths relative to ``cwd``; globs are expanded."""
+        hits = (self.classify(path, destructive=destructive) for path in self.paths(words, cwd))
+        return [hit for hit in hits if hit is not None]
+
+    def acting(self, path: Path) -> Acting | None:
+        """``path`` if it acts before the merge, in a checkout whose default branch has a manifest.
+
+        Read from the root of the nearest checkout, so an agent worktree under ``.claude/`` is
+        judged as a checkout of its own. Before the adoption merges nothing is asked: it writes
+        the workflows and the instructions the manifest will guard.
+        """
+        canonical = self.filesystem.canonical(path)
+        checkout = self.filesystem.guarded_checkout(canonical)
+        if checkout is None:
+            return None
+        relative = canonical.relative_to(checkout.root).as_posix()
+        kind = kind_of(relative)
+        return None if kind is None else Acting(relative, kind)

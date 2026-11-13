@@ -10,9 +10,11 @@ A change to a guard path, by Edit, Write, MultiEdit, NotebookEdit, a Codex ``app
 shell, gets no verdict when its commit lands on a branch other than the default: it reaches the
 default branch only through a merge, and the merge judge sends it to the owner (ADR 0033). Where
 the commit would land on the default branch it is denied, with the way out: make it on a branch.
-In a group whose ``edit`` is ``"deny"`` (the files that act before any merge) every change is
-denied. In a group whose ``edit`` is ``"append"`` (the glossary and the decision records) an
-Edit, Write or MultiEdit that only adds passes on the default branch too:
+In a group whose ``edit`` is ``"deny"`` (the files the owner edits by hand) every change is
+denied. A write of a file that acts the moment it is written, a CI workflow or an
+agent-instruction file at any depth (``ratchet_guards.early``), asks the owner on every branch, in
+one plain sentence. In a group whose ``edit`` is ``"append"`` (the glossary and the decision
+records) an Edit, Write or MultiEdit that only adds passes on the default branch too:
 ``ratchet_guards.records`` compares the file the call would leave with the merge base of ``HEAD``
 and the default branch (ADR 0014). For a Bash command that bypasses a gate, rewrites history or
 removes a plugin it answers ``deny``. It answers ``ask`` on a merge into the default branch and on
@@ -62,7 +64,7 @@ from ratchet_guards.context import DETACHED, Context, Guard
 from ratchet_guards.manifest import EMPTY, Manifest, parse, with_plugin_group
 from ratchet_guards.paths import Checkout, Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES, REMOTE
-from ratchet_guards.verdict import DISPUTE, Decision, Verdict, strictest
+from ratchet_guards.verdict import ACTING_RULES, DISPUTE, Decision, Verdict, strictest
 
 EDIT_TOOLS = {
     "Edit": "file_path",
@@ -362,7 +364,8 @@ def _judge(call: Call, target: str, context: Context, *, guard: Guard) -> Verdic
         return strictest(bash.check(target, context, guard))
     path = context.cwd / target
     label = tickets.check(call.tool, call.tool_input, path, guard=guard)
-    return strictest(v for v in (_edit(call, path, context, guard=guard), label) if v is not None)
+    verdicts = [v for v in (_edit(call, path, context, guard=guard), label) if v is not None]
+    return strictest(verdicts + guard.acting([path]))
 
 
 def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | None:
@@ -379,7 +382,8 @@ def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | 
         if hit is not None and (hit.group.locked or guard.lands_now(context, hit.at)):
             verdicts.append(_hit_verdict(hit))
     paths = [match.group("path").strip() for match in PATCH_HEADER.finditer(text)]
-    return strictest(verdicts + tickets.named(paths, text, context, guard=guard))
+    acting = guard.acting(cwd / path for path in paths)
+    return strictest(verdicts + acting + tickets.named(paths, text, context, guard=guard))
 
 
 def _edit(call: Call, path: Path, context: Context, *, guard: Guard) -> Verdict | None:
@@ -423,6 +427,10 @@ def _hit_verdict(hit: Hit, more: str = "") -> Verdict:
 
 def reason(verdict: Verdict) -> str:
     """The sentence the agent (deny) or the owner (ask) reads, ending in what to do next."""
+    if verdict.rule in ACTING_RULES.values():
+        # Why: the owner answers this one at the prompt, so it says what is at stake and nothing
+        # about how the guard works.
+        return f"Ratchet: {verdict.because} ({verdict.detail}). {verdict.way_out}"
     stop = "" if verdict.detail.endswith(".") else "."
     if verdict.rule.startswith("guard-path"):
         # Why: the agent should know where the rule comes from, and that it is not in the tree.

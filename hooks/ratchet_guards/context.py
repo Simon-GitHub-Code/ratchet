@@ -7,7 +7,7 @@ from typing import Protocol
 
 from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
-from ratchet_guards.verdict import Verdict
+from ratchet_guards.verdict import ACTING_RULES, Verdict
 
 # Why: what git prints for a detached HEAD, and a name git refuses to give a branch.
 DETACHED = "HEAD"
@@ -164,3 +164,8 @@ class Guard:
             for hit in hits
             if hit.group.locked or self.lands_now(context, hit.at)
         ]
+
+    def acting(self, paths: Iterable[Path]) -> list[Verdict]:
+        """The owner's question on each of ``paths`` that acts before the merge, on any branch."""
+        found = (self.locator.acting(path) for path in paths)
+        return [Verdict(ACTING_RULES[file.kind], file.path) for file in found if file is not None]

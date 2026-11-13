@@ -1,12 +1,16 @@
 # Guard paths (Ratchet method): the single list of files that define, run or record the quality gates.
 # Globs are matched against repository-relative paths; `*` stays within a segment, `**` spans any.
-# A `~/` pattern matches against the home directory. On a branch an agent changes a guard path with
-# no prompt: the merge judge reads the change and sends it to the owner. Where the commit would land
-# on the default branch the hook refuses it, since no judge reads that. `edit = "deny"` locks a
-# group whose files act before any merge: the owner edits those by hand. `edit = "append"` marks
-# records an agent may add to: on the default branch a new glossary term, a new `_Avoid_` item or a
-# new ADR still passes. The hook, the merge judge, `just guard-diff` and a fitness test read this
-# file as the default branch holds it.
+# A `~/` pattern matches against the home directory. Edit-time control stays for exactly the files
+# whose effect comes before the merge; everything else is judged at merge. On a branch an agent
+# changes a guard path with no prompt: the merge judge reads the change and sends it to the owner.
+# Where the commit would land on the default branch the hook refuses it, since no judge reads that.
+# `edit = "deny"` locks a group the owner edits by hand. Two kinds of file act before any merge and
+# need no group here: the hook asks the owner before a write of a CI workflow
+# (`.github/workflows/**`) or of an agent-instruction file at any depth (`CLAUDE.md`,
+# `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`, anything under a `.claude/` directory), on every
+# branch. `edit = "append"` marks records an agent may add to: on the default branch a new glossary
+# term, a new `_Avoid_` item or a new ADR still passes. The hook, the merge judge, `just guard-diff`
+# and a fitness test read this file as the default branch holds it.
 
 [[group]]
 name = "tool-config"
@@ -29,14 +33,6 @@ name = "ratchets"
 reason = "Recorded thresholds, the mutation register and config snapshots only ever rise."
 paths = [
     "quality/**",
-]
-
-[[group]]
-name = "workflows"
-reason = "The forge runs a branch's own workflow files on a push or a pull request, with the repository's token and secrets, before any merge; the owner edits them by hand."
-edit = "deny"
-paths = [
-    ".github/workflows/**",
 ]
 
 [[group]]

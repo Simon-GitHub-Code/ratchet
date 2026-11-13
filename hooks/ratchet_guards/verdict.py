@@ -15,6 +15,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
 
+from ratchet_guards.early import Kind
+
 DISPUTE = (
     "Do not work around it. If you believe the gate is wrong, stop, write a gate dispute "
     "(docs/disputes/NNNN-<slug>.md) and report it to whoever started you."
@@ -23,6 +25,8 @@ ON_A_BRANCH = (
     "Make the change on a branch (`git switch -c <name>`) and commit it there: the merge judge "
     "reads it and sends it to the owner when it must."
 )
+# Why: the owner answers a file that acts before the merge at the prompt, in plain words.
+ALLOW = "Allow it?"
 NAME_THE_DIRECTORY = (
     "Give the file a path the guard can follow, an absolute one or one after a `cd` to a literal "
     "directory, and it is judged where it lands."
@@ -103,6 +107,8 @@ RULES: dict[str, Rule] = {
     "plugin-removal": Rule(
         Decision.DENY, "disables or removes a harness plugin, package or marketplace"
     ),
+    "workflow-write": Rule(Decision.ASK, Kind.WORKFLOW.value, ALLOW),
+    "instructions-write": Rule(Decision.ASK, Kind.INSTRUCTIONS.value, ALLOW),
     "unreadable": Rule(Decision.ASK, "could not be checked by the guard"),
     "unresolved-directory": Rule(
         Decision.DENY,
@@ -111,6 +117,9 @@ RULES: dict[str, Rule] = {
         NAME_THE_DIRECTORY,
     ),
 }
+
+
+ACTING_RULES = {Kind.WORKFLOW: "workflow-write", Kind.INSTRUCTIONS: "instructions-write"}
 
 
 @dataclass(frozen=True, slots=True)

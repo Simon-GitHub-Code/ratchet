@@ -8,7 +8,8 @@ from hypothesis import strategies as st
 
 from ratchet_guards import bash
 from ratchet_guards.context import Context, Guard
-from ratchet_guards.verdict import Decision, strictest
+from ratchet_guards.early import kind_of
+from ratchet_guards.verdict import ACTING_RULES, Decision, strictest
 from tests.support import MANIFEST, ROOT, FakeRepo, make_guard, rules
 from tests.test_corpus import ALLOWED, ASKED, DENIED, P, U
 
@@ -158,8 +159,10 @@ def test_every_shell_write_to_a_guard_path_is_refused_where_it_takes_effect(
     group = MANIFEST.group_of(path)
     assert group is not None
     locked = ["guard-path-write"] if group.locked else []
-    assert rules(write(path)) == locked
-    assert rules(write(path), ON_MAIN) == (locked or ["guard-path-default"])
+    kind = kind_of(path)
+    asked = [ACTING_RULES[kind]] if kind is not None else []
+    assert rules(write(path)) == sorted(locked + asked)
+    assert rules(write(path), ON_MAIN) == sorted((locked or ["guard-path-default"]) + asked)
 
 
 @given(name=_SEGMENT, write=st.sampled_from(WRITES))

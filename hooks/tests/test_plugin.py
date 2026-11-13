@@ -64,9 +64,9 @@ def bash(command: str, cwd: Path) -> dict[str, object]:
 def test_without_a_manifest_only_the_command_rules_apply(tmp_path: Path) -> None:
     root = checkout(tmp_path, manifest=False)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    assert hook.decide(edit(root / "CLAUDE.md", root), guard) is None
+    assert hook.decide(edit(root / "justfile", root), guard) is None
     assert hook.decide(edit(root / MANIFEST_PATH, root), guard) is None
-    assert hook.decide(bash("echo x > CLAUDE.md", root), guard) is None
+    assert hook.decide(bash("echo x > justfile", root), guard) is None
     assert hook.decide(bash("rm -rf .github", root), guard) is None
     for command, rule in [
         ("git commit --no-verify -m x", "no-verify"),
@@ -95,11 +95,11 @@ def test_without_a_manifest_only_the_command_rules_apply(tmp_path: Path) -> None
 def test_with_a_manifest_the_path_rules_apply_too(tmp_path: Path) -> None:
     root = checkout(tmp_path, manifest=True)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    verdict = hook.decide(edit(root / "CLAUDE.md", root), guard)
+    verdict = hook.decide(edit(root / "justfile", root), guard)
     assert verdict is not None
     assert verdict.rule == P
-    assert hook.decide(bash("echo x > CLAUDE.md", root), guard) == Verdict(
-        P, "redirects into CLAUDE.md (decisions)"
+    assert hook.decide(bash("echo x > justfile", root), guard) == Verdict(
+        P, "redirects into justfile (gate-commands)"
     )
     assert hook.decide(bash("echo x > .claude/settings.json", root), guard) == Verdict(
         W, "redirects into .claude/settings.json (harness)"
@@ -110,8 +110,8 @@ def test_on_a_branch_only_the_paths_the_owner_changes_are_refused(tmp_path: Path
     root = checkout(tmp_path, manifest=True)
     on_a_branch(root)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    assert hook.decide(edit(root / "CLAUDE.md", root), guard) is None
-    assert hook.decide(bash("echo x > CLAUDE.md", root), guard) is None
+    assert hook.decide(edit(root / "justfile", root), guard) is None
+    assert hook.decide(bash("echo x > justfile", root), guard) is None
     locked = hook.decide(edit(root / ".claude/settings.json", root), guard)
     assert locked is not None
     assert locked.rule == "guard-path-locked"
@@ -126,7 +126,7 @@ def test_a_manifest_not_on_the_default_branch_guards_nothing_yet(
 ) -> None:
     root = checkout(tmp_path, manifest=True, state=state)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    assert hook.decide(edit(root / "CLAUDE.md", root), guard) is None
+    assert hook.decide(edit(root / "justfile", root), guard) is None
     assert hook.decide(edit(root / MANIFEST_PATH, root), guard) is None
     assert hook.decide(bash("echo x > .claude/settings.json", root), guard) is None
     verdict = hook.decide(bash("git push --force", root), guard)
@@ -138,7 +138,7 @@ def test_the_committed_manifest_wins_over_the_work_tree(tmp_path: Path) -> None:
     root = checkout(tmp_path, manifest=True)
     (root / MANIFEST_PATH).write_text("", encoding="utf-8")
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    verdict = hook.decide(edit(root / "CLAUDE.md", root), guard)
+    verdict = hook.decide(edit(root / "justfile", root), guard)
     assert verdict is not None
     assert verdict.rule == P
     assert hook.reason(verdict).endswith(
@@ -148,7 +148,7 @@ def test_the_committed_manifest_wins_over_the_work_tree(tmp_path: Path) -> None:
     )
     on_a_branch(root)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    assert hook.decide(edit(root / "CLAUDE.md", root), guard) is None
+    assert hook.decide(edit(root / "justfile", root), guard) is None
 
 
 def test_the_remote_default_branch_is_preferred(tmp_path: Path) -> None:
@@ -161,7 +161,7 @@ def test_the_remote_default_branch_is_preferred(tmp_path: Path) -> None:
     git(root, "rm", "-q", "-r", "guards")
     git(root, "commit", "-q", "-m", "drop locally")
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    assert hook.decide(edit(root / "CLAUDE.md", root), guard) is not None
+    assert hook.decide(edit(root / "justfile", root), guard) is not None
 
 
 def test_the_manifest_is_read_from_the_nearest_checkout(tmp_path: Path) -> None:
@@ -171,7 +171,7 @@ def test_the_manifest_is_read_from_the_nearest_checkout(tmp_path: Path) -> None:
     assert hook.read_manifest(root / "app").groups == MANIFEST.groups
     assert hook.read_manifest(tmp_path / "loose") is EMPTY
     guard = hook.local_guard(root / "app", plugin_root=tmp_path / "plugin")
-    verdict = hook.decide(edit(root / "CLAUDE.md", root / "app"), guard)
+    verdict = hook.decide(edit(root / "justfile", root / "app"), guard)
     assert verdict is not None
     assert verdict.rule == P
 
@@ -376,10 +376,10 @@ def patch(text: str, cwd: Path) -> dict[str, object]:
 def test_apply_patch_is_judged_by_the_paths_in_its_headers(tmp_path: Path) -> None:
     root = checkout(tmp_path, manifest=True)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    verdict = hook.decide(patch(PATCH.format(path="CLAUDE.md"), root), guard)
+    verdict = hook.decide(patch(PATCH.format(path="justfile"), root), guard)
     assert verdict is not None
     assert verdict.rule == P
-    assert "CLAUDE.md is in guard group 'decisions'" in verdict.detail
+    assert "justfile is in guard group 'gate-commands'" in verdict.detail
     assert hook.decide(patch(PATCH.format(path="app/main.py"), root), guard) is None
     deleted = "*** Begin Patch\n*** Delete File: quality/thresholds.toml\n*** End Patch\n"
     verdict = hook.decide(patch(deleted, root), guard)
@@ -404,11 +404,11 @@ def test_apply_patch_on_a_branch_is_refused_only_for_the_paths_the_owner_changes
     root = checkout(tmp_path, manifest=True)
     on_a_branch(root)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    assert hook.decide(patch(PATCH.format(path="CLAUDE.md"), root), guard) is None
+    assert hook.decide(patch(PATCH.format(path="justfile"), root), guard) is None
     deleted = "*** Begin Patch\n*** Delete File: quality/thresholds.toml\n*** End Patch\n"
     assert hook.decide(patch(deleted, root), guard) is None
     both = (
-        "*** Begin Patch\n*** Update File: CLAUDE.md\n@@\n-a\n+b\n"
+        "*** Begin Patch\n*** Update File: justfile\n@@\n-a\n+b\n"
         "*** Update File: .claude/settings.json\n@@\n-a\n+b\n*** End Patch\n"
     )
     verdict = hook.decide(patch(both, root), guard)
@@ -424,13 +424,13 @@ def test_apply_patch_on_a_branch_is_refused_only_for_the_paths_the_owner_changes
         ("run_terminal_command", {"command": "git push --force"}, "force-push"),
         (
             "search_replace",
-            {"file_path": "CLAUDE.md", "old_string": "a", "new_string": "b"},
+            {"file_path": "justfile", "old_string": "a", "new_string": "b"},
             P,
         ),
-        ("hashline_edit", {"file_path": "CLAUDE.md"}, P),
+        ("hashline_edit", {"file_path": "justfile"}, P),
         ("write", {"file_path": ".claude/settings.json", "content": "{}"}, "guard-path-locked"),
         ("Shell", {"command": "git push -f origin feat/work"}, "force-push"),
-        ("StrReplace", {"path": "CLAUDE.md"}, P),
+        ("StrReplace", {"path": "justfile"}, P),
         ("Write", {"path": ".claude/settings.json", "contents": "{}"}, "guard-path-locked"),
     ],
 )
@@ -447,9 +447,9 @@ def test_other_harness_tool_names_are_judged_as_claude_tools(
 @pytest.mark.parametrize(
     ("tool", "tool_input"),
     [
-        ("search_replace", {"file_path": "CLAUDE.md", "old_string": "a", "new_string": "b"}),
-        ("hashline_edit", {"file_path": "CLAUDE.md"}),
-        ("StrReplace", {"path": "CLAUDE.md"}),
+        ("search_replace", {"file_path": "justfile", "old_string": "a", "new_string": "b"}),
+        ("hashline_edit", {"file_path": "justfile"}),
+        ("StrReplace", {"path": "justfile"}),
     ],
 )
 def test_other_harness_edits_of_a_guard_path_get_no_verdict_on_a_branch(
@@ -505,14 +505,14 @@ def agy(name: str, cwd: Path, **args: object) -> dict[str, object]:
     [
         ("run_command", {"CommandLine": "git push --force"}, "force-push"),
         ("run_command", {"CommandLine": "agy plugin disable ratchet"}, "plugin-removal"),
-        ("write_to_file", {"TargetFile": "CLAUDE.md", "CodeContent": "x"}, P),
+        ("write_to_file", {"TargetFile": "justfile", "CodeContent": "x"}, P),
         ("write_file", {"TargetFile": ".claude/settings.json"}, "guard-path-locked"),
         (
             "replace_file_content",
-            {"TargetFile": "CLAUDE.md", "TargetContent": "a", "ReplacementContent": "b"},
+            {"TargetFile": "justfile", "TargetContent": "a", "ReplacementContent": "b"},
             P,
         ),
-        ("edit_file", {"TargetFile": "CLAUDE.md"}, P),
+        ("edit_file", {"TargetFile": "justfile"}, P),
         (
             "multi_replace_file_content",
             {"TargetFile": ".claude/settings.json", "ReplacementChunks": []},
@@ -535,12 +535,12 @@ def test_antigravity_calls_are_judged_as_claude_tools(
 @pytest.mark.parametrize(
     ("name", "args"),
     [
-        ("write_to_file", {"TargetFile": "CLAUDE.md", "CodeContent": "x"}),
+        ("write_to_file", {"TargetFile": "justfile", "CodeContent": "x"}),
         (
             "replace_file_content",
-            {"TargetFile": "CLAUDE.md", "TargetContent": "a", "ReplacementContent": "b"},
+            {"TargetFile": "justfile", "TargetContent": "a", "ReplacementContent": "b"},
         ),
-        ("edit_file", {"TargetFile": "CLAUDE.md"}),
+        ("edit_file", {"TargetFile": "justfile"}),
     ],
 )
 def test_antigravity_edits_of_a_guard_path_get_no_verdict_on_a_branch(
@@ -571,10 +571,10 @@ def test_antigravity_calls_pass_when_no_rule_fires(
 def test_an_antigravity_command_runs_where_its_own_cwd_says(tmp_path: Path) -> None:
     root = checkout(tmp_path, manifest=True)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
-    elsewhere = agy("run_command", tmp_path, CommandLine="echo x > CLAUDE.md", Cwd=str(root))
-    assert hook.decide(elsewhere, guard) == Verdict(P, "redirects into CLAUDE.md (decisions)")
-    unset = agy("run_command", root, CommandLine="echo x > CLAUDE.md", Cwd="")
-    assert hook.decide(unset, guard) == Verdict(P, "redirects into CLAUDE.md (decisions)")
+    elsewhere = agy("run_command", tmp_path, CommandLine="echo x > justfile", Cwd=str(root))
+    assert hook.decide(elsewhere, guard) == Verdict(P, "redirects into justfile (gate-commands)")
+    unset = agy("run_command", root, CommandLine="echo x > justfile", Cwd="")
+    assert hook.decide(unset, guard) == Verdict(P, "redirects into justfile (gate-commands)")
     on_a_branch(root)
     guard = hook.local_guard(root, plugin_root=tmp_path / "plugin")
     assert hook.decide(elsewhere, guard) is None

@@ -29,9 +29,9 @@ def payload(tool: str, **tool_input: str) -> dict[str, object]:
 
 
 UNLOCKED_EDITS = [
-    ("Edit", "file_path", "/repo/CLAUDE.md"),
+    ("Edit", "file_path", "/repo/justfile"),
     ("Write", "file_path", "config/lint.toml"),
-    ("MultiEdit", "file_path", "/repo/.github/workflows/ci.yml"),
+    ("MultiEdit", "file_path", "/repo/.github/dependabot.yml"),
     ("NotebookEdit", "notebook_path", "/repo/formal/x.ipynb"),
 ]
 
@@ -97,9 +97,9 @@ def test_ordinary_calls_get_no_verdict(case: dict[str, object]) -> None:
 
 
 def test_bash_paths_resolve_against_the_payload_cwd() -> None:
-    write = payload("Bash", command="echo x > CLAUDE.md")
+    write = payload("Bash", command="echo x > justfile")
     assert hook.decide(write, on_main()) == Verdict(
-        "guard-path-default", "redirects into CLAUDE.md (decisions)"
+        "guard-path-default", "redirects into justfile (gate-commands)"
     )
     assert hook.decide(write, make_guard()) is None
     locked = payload("Bash", command="echo x > .claude/settings.json")
@@ -234,7 +234,7 @@ def test_run_answers_antigravity_in_its_form() -> None:
     )
     assert denied["decision"] == "deny"
     assert "force-pushes" in denied["reason"]
-    edit = json.dumps(agy("edit_file", TargetFile="CLAUDE.md"))
+    edit = json.dumps(agy("edit_file", TargetFile="justfile"))
     refused = json.loads(hook.run(edit, on_main))
     assert refused["decision"] == "deny"
     assert "changes a guard path" in refused["reason"]
@@ -284,7 +284,7 @@ def test_main_reads_stdin_and_writes_a_decision(tmp_path: Path) -> None:
     stdout = io.StringIO()
     case = {
         "tool_name": "Write",
-        "tool_input": {"file_path": str(root / "CLAUDE.md")},
+        "tool_input": {"file_path": str(root / "justfile")},
         "cwd": str(root),
     }
     assert hook.main(root, io.StringIO(json.dumps(case)), stdout) == 0
@@ -293,7 +293,7 @@ def test_main_reads_stdin_and_writes_a_decision(tmp_path: Path) -> None:
     case["tool_input"] = {"file_path": str(root / "notes.md")}
     assert hook.main(root, io.StringIO(json.dumps(case)), quiet) == 0
     assert quiet.getvalue() == ""
-    case["tool_input"] = {"file_path": str(root / "CLAUDE.md")}
+    case["tool_input"] = {"file_path": str(root / "justfile")}
     switch_to_a_branch(root)
     on_a_branch = io.StringIO()
     assert hook.main(root, io.StringIO(json.dumps(case)), on_a_branch) == 0
@@ -432,7 +432,7 @@ def test_a_default_branch_that_is_not_called_main_still_takes_the_edit_where_it_
     _git(root, "branch", "-m", "main", "trunk")
     _git(root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
     _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
-    case = {"tool_name": "Edit", "tool_input": {"file_path": "CLAUDE.md"}, "cwd": str(root)}
+    case = {"tool_name": "Edit", "tool_input": {"file_path": "justfile"}, "cwd": str(root)}
     assert answer(root, case)["permissionDecision"] == "deny"
     switch_to_a_branch(root)
     assert answer(root, case) == {}
@@ -485,7 +485,7 @@ def decision(done: subprocess.CompletedProcess[str]) -> str:
 
 def test_the_shim_answers_from_the_checkout_named_by_cwd(tmp_path: Path) -> None:
     root = checkout(tmp_path)
-    edit = {"tool_name": "Edit", "tool_input": {"file_path": "CLAUDE.md"}, "cwd": str(root)}
+    edit = {"tool_name": "Edit", "tool_input": {"file_path": "justfile"}, "cwd": str(root)}
     assert decision(run_shim(SHIM, edit)) == "deny"
     locked = {"tool_name": "Edit", "tool_input": {"file_path": ".claude/settings.json"}}
     assert decision(run_shim(SHIM, {**locked, "cwd": str(root)})) == "deny"
@@ -498,7 +498,7 @@ def test_the_shim_answers_from_the_checkout_named_by_cwd(tmp_path: Path) -> None
 def test_the_shim_lets_a_guard_path_edit_through_on_a_branch(tmp_path: Path) -> None:
     root = checkout(tmp_path)
     switch_to_a_branch(root)
-    edit = {"tool_name": "Edit", "tool_input": {"file_path": "CLAUDE.md"}, "cwd": str(root)}
+    edit = {"tool_name": "Edit", "tool_input": {"file_path": "justfile"}, "cwd": str(root)}
     assert run_shim(SHIM, edit).stdout == ""
     locked = {"tool_name": "Edit", "tool_input": {"file_path": ".claude/settings.json"}}
     assert decision(run_shim(SHIM, {**locked, "cwd": str(root)})) == "deny"
@@ -506,7 +506,7 @@ def test_the_shim_lets_a_guard_path_edit_through_on_a_branch(tmp_path: Path) -> 
 
 def test_the_shim_without_a_manifest_keeps_only_the_command_rules(tmp_path: Path) -> None:
     root = checkout(tmp_path, manifest=False)
-    edit = {"tool_name": "Edit", "tool_input": {"file_path": "CLAUDE.md"}, "cwd": str(root)}
+    edit = {"tool_name": "Edit", "tool_input": {"file_path": "justfile"}, "cwd": str(root)}
     assert run_shim(SHIM, edit).stdout == ""
     push = {"tool_name": "Bash", "tool_input": {"command": "git push --force"}, "cwd": str(root)}
     assert decision(run_shim(SHIM, push)) == "deny"
@@ -514,9 +514,62 @@ def test_the_shim_without_a_manifest_keeps_only_the_command_rules(tmp_path: Path
     assert decision(run_shim(SHIM, own)) == "deny"
 
 
+ADOPTION_WRITES = [
+    ".github/workflows/ci.yml",
+    ".github/workflows/deep.yml",
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".claude/rules/method.md",
+]
+
+
+def test_the_adoption_writes_its_workflows_and_instructions_without_a_prompt(
+    tmp_path: Path,
+) -> None:
+    root = checkout(tmp_path, manifest=False)
+    switch_to_a_branch(root)
+    (root / "guards").mkdir()
+    (root / MANIFEST_PATH).write_text(MANIFEST_TEXT, encoding="utf-8")
+    for name in ADOPTION_WRITES:
+        assert answer(root, edit_from(root, root / name, "Write")) == {}
+    heredoc = "cat > .github/workflows/ci.yml <<'EOF'\non: push\nEOF"
+    assert answer(root, bash_from(root, heredoc)) == {}
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "adopt")
+    for name in ADOPTION_WRITES:
+        assert answer(root, edit_from(root, root / name, "Write")) == {}
+    _git(root, "switch", "-q", "main")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "feature/x")
+    _git(root, "switch", "-q", "feature/x")
+    asked = answer(root, edit_from(root, root / ".github/workflows/ci.yml", "Write"))
+    assert asked["permissionDecision"] == "ask"
+    nested = answer(root, edit_from(root, root / "src/x/CLAUDE.md", "Write"))
+    assert nested["permissionDecision"] == "ask"
+
+
+def test_the_shim_asks_the_owner_in_one_plain_sentence(tmp_path: Path) -> None:
+    root = checkout(tmp_path)
+    switch_to_a_branch(root)
+    for name, sentence in [
+        (
+            ".github/workflows/ci.yml",
+            "This changes what GitHub runs with this repository's secrets, before any merge",
+        ),
+        (
+            ".scratch/feature/CLAUDE.md",
+            "This changes the instructions agents follow in this project, starting now",
+        ),
+    ]:
+        write = {"tool_name": "Write", "tool_input": {"file_path": name}, "cwd": str(root)}
+        done = run_shim(SHIM, write)
+        assert decision(done) == "ask"
+        reason = json.loads(done.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        assert reason == f"Ratchet: {sentence} ({name}). Allow it?"
+
+
 def test_the_shim_falls_back_to_the_project_directory_then_asks(tmp_path: Path) -> None:
     root = checkout(tmp_path)
-    no_cwd = {"tool_name": "Edit", "tool_input": {"file_path": "CLAUDE.md"}}
+    no_cwd = {"tool_name": "Edit", "tool_input": {"file_path": "justfile"}}
     done = run_shim(SHIM, no_cwd, CLAUDE_PROJECT_DIR=str(root))
     assert decision(done) == "ask"
     assert "lacks tool_name, tool_input or cwd" in done.stdout
@@ -534,7 +587,7 @@ def test_the_shim_asks_when_the_guard_cannot_load(tmp_path: Path) -> None:
 
 def test_the_shim_answers_antigravity_in_its_form(tmp_path: Path) -> None:
     root = str(checkout(tmp_path))
-    edit = run_shim(SHIM, agy("replace_file_content", root, TargetFile="CLAUDE.md"))
+    edit = run_shim(SHIM, agy("replace_file_content", root, TargetFile="justfile"))
     assert json.loads(edit.stdout)["decision"] == "deny"
     push = run_shim(SHIM, agy("run_command", root, CommandLine="git push --force"))
     assert json.loads(push.stdout)["decision"] == "deny"

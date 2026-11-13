@@ -99,19 +99,30 @@ def test_the_rule_catalogue_is_pinned() -> None:
             "DENY",
             "disables or removes a harness plugin, package or marketplace",
         ),
+        "workflow-write": (
+            "ASK",
+            "This changes what GitHub runs with this repository's secrets, before any merge",
+        ),
+        "instructions-write": (
+            "ASK",
+            "This changes the instructions agents follow in this project, starting now",
+        ),
         "unreadable": ("ASK", "could not be checked by the guard"),
     }
 
 
-def test_only_four_rules_point_somewhere_other_than_a_dispute() -> None:
+def test_only_six_rules_point_somewhere_other_than_a_dispute() -> None:
     elsewhere = {rule for rule, spec in RULES.items() if spec.way_out != DISPUTE}
+    acting = {"workflow-write", "instructions-write"}
     assert elsewhere == {
         "guard-path-default",
         "unresolved-directory",
         "merge-pr",
         "merge-default",
+        *acting,
     }
-    assert len({RULES[rule].way_out for rule in elsewhere}) == len(elsewhere)
+    assert len({RULES[rule].way_out for rule in elsewhere - acting}) == len(elsewhere - acting)
+    assert {RULES[rule].way_out for rule in acting} == {"Allow it?"}
     assert "git switch -c" in RULES["guard-path-default"].way_out
 
 
@@ -628,11 +639,15 @@ def test_a_switch_is_not_certain_under_a_variable_that_redirects_it(name: str) -
 
 def test_details_name_the_offending_command() -> None:
     assert details("git push -f origin x") == ["git push -f origin x"]
-    assert details("echo x > CLAUDE.md", ON_MAIN) == ["redirects into CLAUDE.md (decisions)"]
+    assert details("echo x > CLAUDE.md", ON_MAIN) == [
+        "redirects into CLAUDE.md (decisions)",
+        "CLAUDE.md",
+    ]
     assert details("rm -rf formal", ON_MAIN) == ["rm formal (formal)"]
     assert details("git rm justfile", ON_MAIN) == ["git rm justfile (gate-commands)"]
     assert details("echo x > .claude/settings.json") == [
-        "redirects into .claude/settings.json (harness)"
+        "redirects into .claude/settings.json (harness)",
+        ".claude/settings.json",
     ]
     assert details("gh pr merge 3") == ["gh pr merge"]
     assert details("gh api -X delete repos/o/r/actions/runs/1") == [
@@ -839,18 +854,26 @@ def test_a_switch_earlier_on_the_line_decides_where_a_change_lands(
 @pytest.mark.parametrize(
     ("command", "repo_branch", "expected"),
     [
-        ("git switch main && echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
-        ("git switch -c topic && echo x > CLAUDE.md", "main", []),
-        ("git switch main; echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
-        ("git switch topic; echo x > CLAUDE.md", "feat/x", []),
-        ("git switch topic; echo x > CLAUDE.md", "main", ["guard-path-default"]),
-        ("git switch - && echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
-        ("git switch main && echo x > .claude/settings.json", "feat/x", ["guard-path-write"]),
-        ("git switch topic && echo x > .claude/settings.json", "main", ["guard-path-write"]),
-        ("git checkout main -- && echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
-        ("git switch -- main && echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
-        ("git checkout main -- README.md && echo x > CLAUDE.md", "feat/x", []),
-        ("git checkout -- main && echo x > CLAUDE.md", "feat/x", []),
+        ("git switch main && echo x > justfile", "feat/x", ["guard-path-default"]),
+        ("git switch -c topic && echo x > justfile", "main", []),
+        ("git switch main; echo x > justfile", "feat/x", ["guard-path-default"]),
+        ("git switch topic; echo x > justfile", "feat/x", []),
+        ("git switch topic; echo x > justfile", "main", ["guard-path-default"]),
+        ("git switch - && echo x > justfile", "feat/x", ["guard-path-default"]),
+        (
+            "git switch main && echo x > .claude/settings.json",
+            "feat/x",
+            ["guard-path-write", "instructions-write"],
+        ),
+        (
+            "git switch topic && echo x > .claude/settings.json",
+            "main",
+            ["guard-path-write", "instructions-write"],
+        ),
+        ("git checkout main -- && echo x > justfile", "feat/x", ["guard-path-default"]),
+        ("git switch -- main && echo x > justfile", "feat/x", ["guard-path-default"]),
+        ("git checkout main -- README.md && echo x > justfile", "feat/x", []),
+        ("git checkout -- main && echo x > justfile", "feat/x", []),
     ],
 )
 def test_a_switch_on_the_same_line_moves_a_shell_write_between_branch_and_main(
@@ -879,16 +902,16 @@ def test_a_switch_on_the_same_line_moves_a_shell_write_between_branch_and_main(
     ],
 )
 def test_a_switch_the_guard_cannot_read_may_leave_a_shell_write_on_main(switch: str) -> None:
-    assert rules(f"{switch} && echo x > CLAUDE.md") == ["guard-path-default"]
+    assert rules(f"{switch} && echo x > justfile") == ["guard-path-default"]
 
 
 @pytest.mark.parametrize(
     "command",
     [
-        "bash -c 'git status' && echo x > CLAUDE.md",
-        "echo git && echo x > CLAUDE.md",
-        "sudo git checkout -- main && echo x > CLAUDE.md",
-        "git rebase -x 'make test' feat/x && echo x > CLAUDE.md",
+        "bash -c 'git status' && echo x > justfile",
+        "echo git && echo x > justfile",
+        "sudo git checkout -- main && echo x > justfile",
+        "git rebase -x 'make test' feat/x && echo x > justfile",
     ],
 )
 def test_a_git_command_that_moves_no_head_leaves_a_shell_write_on_the_branch(command: str) -> None:
@@ -898,14 +921,14 @@ def test_a_git_command_that_moves_no_head_leaves_a_shell_write_on_the_branch(com
 def test_a_switch_in_another_checkout_counts_for_a_write_there() -> None:
     other = ".claude/worktrees/agent-1"
     guard = make_guard(Heads(branch="feat/x", heads={WORKTREE: "feat/y"}))
-    switched = f"git -C {other} switch main && echo x > {other}/CLAUDE.md"
+    switched = f"git -C {other} switch main && echo x > {other}/justfile"
     assert rules(switched, guard) == ["guard-path-default"]
-    assert rules(f"echo x > {other}/CLAUDE.md", guard) == []
+    assert rules(f"echo x > {other}/justfile", guard) == []
 
 
 @pytest.mark.parametrize(
     "command",
-    ["echo x > CLAUDE.md", "rm -rf formal", "git rm justfile", "git diff --output=justfile"],
+    ["echo x > quality/x.toml", "rm -rf formal", "git rm justfile", "git diff --output=justfile"],
 )
 def test_a_shell_write_to_an_unlocked_guard_path_is_refused_only_on_main(command: str) -> None:
     assert rules(command) == []
@@ -913,13 +936,16 @@ def test_a_shell_write_to_an_unlocked_guard_path_is_refused_only_on_main(command
 
 
 def test_a_shell_write_to_a_locked_guard_path_is_refused_on_any_branch() -> None:
-    assert rules("echo x > .claude/settings.json") == ["guard-path-write"]
-    assert rules("echo x > .claude/settings.json", ON_MAIN) == ["guard-path-write"]
+    assert rules("echo x > .claude/settings.json") == ["guard-path-write", "instructions-write"]
+    assert rules("echo x > .claude/settings.json", ON_MAIN) == [
+        "guard-path-write",
+        "instructions-write",
+    ]
 
 
 def test_cd_moves_later_writes() -> None:
     guard = make_guard()
-    assert bash.check("cd /tmp && echo x > CLAUDE.md", Context(ROOT), guard) == []
+    assert bash.check("cd /tmp && echo x > justfile", Context(ROOT), guard) == []
     assert rules("pushd config && rm lint.toml") == []
     assert rules("pushd config && rm lint.toml", ON_MAIN) == ["guard-path-default"]
-    assert rules("pushd .claude && rm settings.json") == ["guard-path-write"]
+    assert rules("pushd .claude && rm settings.json") == ["guard-path-write", "instructions-write"]

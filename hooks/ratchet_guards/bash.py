@@ -501,6 +501,7 @@ class _Checker:
             verdicts += self.guard.writes(
                 context, hits, lambda hit: interpreters.detail(call.name, hit.path, hit.group.name)
             )
+            verdicts += self.guard.acting(self.guard.locator.named(names, context.cwd))
         return verdicts
 
     def _writes(
@@ -512,6 +513,7 @@ class _Checker:
         verdicts = self.guard.writes(
             context, hits, lambda hit: f"{verb} {hit.path} ({hit.group.name})"
         )
+        verdicts += self.guard.acting(self.guard.locator.paths([*written, *removed], cwd))
         if context.lost:
             # Why: the shell may be in any checkout, one on its default branch among them, so a
             # guard path there is refused whatever branch the line's own checkout has.

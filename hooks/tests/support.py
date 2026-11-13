@@ -89,9 +89,11 @@ class FakeFilesystem:
         if not roots:
             return None
         nearest = max(roots, key=lambda root: len(root.parts))
-        if nearest not in self.guarded:
+        manifest = self.manifests.get(nearest, self.manifest)
+        # Why: a manifest needs a group to parse, so an empty one stands for none committed.
+        if nearest not in self.guarded or not manifest.groups:
             return None
-        return Checkout(nearest, self.manifests.get(nearest, self.manifest))
+        return Checkout(nearest, manifest)
 
     def checkout(self, path: Path) -> Path | None:
         roots = [root for root in (*self.guarded, *self.unguarded) if path.is_relative_to(root)]
