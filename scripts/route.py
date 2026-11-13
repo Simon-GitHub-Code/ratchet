@@ -13,7 +13,8 @@ The stages, in order; the first that does not hold is the answer:
 1. a git repository;
 2. ``AGENTS.md`` naming the method (``/ratchet:init``);
 3. the tracker record ``docs/agents/issue-tracker.md`` (the mattpocock-skills setup);
-4. the binding ``docs/process/binding.md`` (``/ratchet:adopt``);
+4. the binding ``docs/process/binding.md`` with its plugin pin written, which adopt does last of
+   what it binds (``/ratchet:adopt``, again to resume one that stopped);
 5. the commit hooks, which run tier 0 on every commit (``hooks_installed.py`` proves they would;
    the step is the ``hooks-install`` entry point, which an agent runs, or the owner's command
    where git config must change, since the guard refuses that from an agent);
@@ -65,6 +66,7 @@ import merge
 import merge_ready
 import plugin_pin
 import questions
+import queue_notes
 import triggers
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
@@ -386,6 +388,31 @@ def own_branch(ticket: preflight.Ticket) -> str:
     return preflight.branch_of(ticket, preflight.slug_of(ticket.title, ticket.number))
 
 
+def releases(hold: queue_notes.Hold, ref: str, default_branch: str) -> list[str]:
+    """What the owner does to free a ticket the drain parked, one step for each kind of hold.
+
+    Why: the drain keeps a parked ticket until its text changes, so a bare ``/ratchet:feature``
+    would only be refused again; each kind names the step that changes what it was parked for.
+    """
+    steps = []
+    if queue_notes.SIZE in hold.kinds:
+        steps.append(
+            f"split ticket {ref} with {TICKETS} on its spec: it is too large for one change"
+        )
+    if queue_notes.QUESTIONS in hold.kinds:
+        steps.append(f"answer the open questions the run of {ref} named, on the ticket")
+    if queue_notes.GUARD in hold.kinds:
+        steps.append(f"land the guard edits the run of {ref} named on {default_branch}")
+    if hold.owes:
+        steps.append(f"run {SAFEGUARD} for {', '.join(hold.owes)}")
+    return steps or [f"change ticket {ref} to meet what the drain parked it for"]
+
+
+def drain_hold(root: Path, ticket: preflight.Ticket) -> queue_notes.Hold | None:
+    """The hold the drain keeps on ``ticket`` from its note, until the ticket's text changes."""
+    return queue_notes.held(root, own_branch(ticket), ticket)
+
+
 def agent_ready(root: Path, gh: preflight.Runner | None) -> tuple[list[preflight.Ticket], bool]:
     """The open agent-ready tickets, and whether they are local files or the tracker's."""
     tickets = tracker_tickets(root, gh) if gh is not None else None
@@ -439,10 +466,25 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             "specify",
         )
     runs = blocked_runs(root, checkout.default_branch)
-    stated = [t for t in tickets if not stalled(t, runs) and not unstated(t, root, offline_gh)]
-    tickets = [t for t in unblocked if not stalled(t, runs)]
+    drained = {t.ref: hold for t in unblocked if (hold := drain_hold(root, t))}
+
+    def free(t: preflight.Ticket) -> bool:
+        return not stalled(t, runs) and t.ref not in drained
+
+    stated = [t for t in tickets if free(t) and not unstated(t, root, offline_gh)]
+    tickets = [t for t in unblocked if free(t)]
     if not tickets:
         held = unblocked[0]
+        if held.ref in drained:
+            hold = drained[held.ref]
+            why = hold.reasons[0] if hold.reasons else "the drain parked it"
+            return Step(
+                "; ".join(releases(hold, held.ref, checkout.default_branch)),
+                f"the drain parked ticket {held.ref} and holds it until the ticket changes ({why});"
+                f" {FEATURE} would be refused again",
+                f"{FEATURE}, or {POTETO} {held.ref} now to make the change as the guard asks",
+                "blocked-run",
+            )
         return Step(
             f"answer the questions or land the guard edits the blocked run of {held.ref} named"
             f" (stash `{stalled(held, runs)}`) on {checkout.default_branch}; an answer given"
@@ -515,6 +557,24 @@ def stale_plugin_lines(agents: Path) -> list[str]:
     return [q for q, line in present.items() if q in template and template[q] != line]
 
 
+def adoption_step(root: Path) -> Step | None:
+    """``/ratchet:adopt`` while the binding is missing or still the template's; else ``None``."""
+    binding = root / BINDING
+    if not binding.is_file():
+        return Step(ADOPT, f"{BINDING} is missing, so no gate is bound", GRILL, "adopt")
+    if plugin_pin.pinned(binding.read_text(errors="replace")) is None:
+        # Why: adopt writes the pin last of what it binds (its step 10), so a binding without
+        # one is the template's: an adoption that stopped, which hooks-install cannot finish.
+        return Step(
+            ADOPT,
+            f"{BINDING} has no plugin pin, so an adoption stopped before it bound the gates;"
+            " it resumes from the templates already copied, on its own branch if it has one",
+            GRILL,
+            "adopt",
+        )
+    return None
+
+
 def setup_step(root: Path) -> Step | None:
     """The step before the work: adoption, then the commit hooks; ``None`` once both hold."""
     if not names_method(root):
@@ -541,8 +601,8 @@ def setup_step(root: Path) -> Step | None:
             ADOPT,
             "tracker",
         )
-    if not (root / BINDING).is_file():
-        return Step(ADOPT, f"{BINDING} is missing, so no gate is bound", GRILL, "adopt")
+    if adoption := adoption_step(root):
+        return adoption
     hooks = hooks_installed.check(root)
     return None if hooks is None else Step(hooks.fix, hooks.detail, NEXT, "hooks")
 
