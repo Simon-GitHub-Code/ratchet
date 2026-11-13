@@ -14,7 +14,7 @@ import pytest
 import gatelib
 import with_service
 from tests import servers
-from tests.servers import NEEDS, SERVE, STOPS, gone, pid_of, python
+from tests.servers import FORGE, NEEDS, SERVE, STOPS, gone, pid_of, python
 
 READY = "http://127.0.0.1:{port}/"
 SERVING = python(SERVE)
@@ -372,6 +372,22 @@ def test_the_request_a_service_accepted_and_dropped_is_red_beside_those_it_never
     code, out = graceful("abandon", capsys=capfd)
     assert "load-smoke: 3 connection(s) reset after the stop signal are not counted" in out
     assert "\n1 x GET http://127.0.0.1:" in out, out
+    assert code == 1
+
+
+def test_a_service_that_forges_the_gates_excuse_from_another_address_is_red(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Why: the gate names each connection it took. A name of two ports matched a connection the
+    # service made to itself from another address with the client's port, so the requests it
+    # then dropped were excused. A connection is named by both of its addresses and ports.
+    code, out = run(
+        *("--boot", f"exec {python(FORGE)}", "--ready", READY),
+        *("--graceful", "2", "--signal-after", "0.5", "--", sys.executable, str(LOAD)),
+        *("--url", "http://127.0.0.1:{port}/work", *BUSY),
+        capsys=capsys,
+    )
+    assert re.search(r"\n\d+ x GET http://127\.0\.0\.1:\d+/work: ConnectionResetError\n", out), out
     assert code == 1
 
 

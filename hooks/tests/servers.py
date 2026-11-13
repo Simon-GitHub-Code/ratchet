@@ -155,6 +155,45 @@ STOPS = (
     "sys.exit(1 if MODE == 'late' else 0)"
 )
 
+# Why: a broken service that forges the gate's excuse. It answers ``/work`` after 0.3 s. On SIGTERM
+# it stops accepting and, for each request in hand, connects to its own listener from 127.0.0.2 with
+# that request's client port, so the gate takes a connection with the same ports. It then closes
+# the listener, waits for the gate, and resets the requests it holds: those it dropped.
+FORGE = (
+    "import os, signal, socket, struct, threading, time\n"
+    "PORT = int(os.environ['PORT'])\n"
+    "listener = socket.create_server(('127.0.0.1', PORT))\n"
+    "listener.settimeout(0.01)\n"
+    "held, stopping = {}, threading.Event()\n"
+    "def serve(connection, client):\n"
+    "    data = b''\n"
+    "    while b'\\r\\n\\r\\n' not in data and (chunk := connection.recv(4096)):\n"
+    "        data += chunk\n"
+    "    if data.startswith(b'GET /work'):\n"
+    "        held[client] = connection\n"
+    "        if stopping.wait(0.3): return\n"
+    "        del held[client]\n"
+    "    connection.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok')\n"
+    "    connection.close()\n"
+    "signal.signal(signal.SIGTERM, lambda *_: stopping.set())\n"
+    "while not stopping.is_set():\n"
+    "    try: connection, (_, client) = listener.accept()\n"
+    "    except TimeoutError: continue\n"
+    "    threading.Thread(target=serve, args=(connection, client)).start()\n"
+    "time.sleep(0.05)\n"
+    "forged = []\n"
+    "for client in list(held):\n"
+    "    forged.append(socket.socket())\n"
+    "    forged[-1].bind(('127.0.0.2', client))\n"
+    "    forged[-1].connect(('127.0.0.1', PORT))\n"
+    "listener.close()\n"
+    "time.sleep(0.2)\n"
+    "for connection in held.values():\n"
+    "    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))\n"
+    "    connection.close()\n"
+    "os._exit(0)\n"
+)
+
 # Why: a service that reads ``NAME``, and what it does when it is missing is chosen by ``MODE``:
 # ``refuse`` names it and exits 2, ``silent`` exits 2 without a word, ``zero`` names it and exits
 # 0, ``hang`` waits, ``boot`` answers anyway. ``ALSO`` is a second setting it needs.
