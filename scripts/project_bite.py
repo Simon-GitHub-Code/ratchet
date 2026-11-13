@@ -679,6 +679,7 @@ class Verdict(Enum):
     RED_BEFORE = "RED BEFORE THE FAULT"
     OTHER_REASON = "RED FOR ANOTHER REASON"
     NOT_PLANTED = "THE FAULT WAS NOT PLANTED"
+    NOT_PROVEN = "NOT PROVEN"
 
 
 @dataclass(frozen=True)
@@ -693,6 +694,16 @@ class Outcome:
         """The verdict on one line, and the detail indented under it."""
         head = f"bite: {self.bite.gate}: {self.bite.name}: {self.verdict.value}"
         return "\n".join([head, *(f"  {line}" for line in self.detail.splitlines())])
+
+    def unproven(self, red: str) -> Outcome:
+        """This outcome, when a later run with no fault planted printed ``red`` and exited red."""
+        if self.verdict is not Verdict.BITES:
+            return self
+        why = (
+            "the gate did not return to green once the fault was gone, so its red may come from"
+            " what its own runs leave and not from the fault"
+        )
+        return Outcome(self.bite, Verdict.NOT_PROVEN, f"{why}\n{tail(red)}")
 
 
 def tail(output: str) -> str:
@@ -745,23 +756,42 @@ class Copy:
         return result
 
     def prove(self, row: Row, bites: Sequence[Bite]) -> Iterator[Outcome]:
-        """Each bite of one gate: green without the fault, then red on it, run after run."""
+        """Each bite of one gate: green without the fault, red on it, and green again after.
+
+        A bite stands only while every later run of its command with no fault planted is green:
+        the green run of each later bite with the same ``args``, and one closing run after the
+        last bite, for each set of ``args`` a bite that bit gave the gate.
+        """
+        outcomes: list[Outcome] = []
         for bite in bites:
-            command = [*shlex.split(row.command), *bite.args]
             # Why: a green run taken before an earlier fault says nothing of what that fault left
             # behind (a cache, a mark in an ignored file), so each fault gets its own green run.
-            code, green = self.run(command)
+            code, green = self.unfaulted(row, bite.args, outcomes)
             if code != 0:
-                yield Outcome(bite, Verdict.RED_BEFORE, tail(green))
+                outcomes.append(Outcome(bite, Verdict.RED_BEFORE, tail(green)))
                 continue
             try:
                 bite.plant(self.path)
             # Why: every way a fault fails to plant is one verdict, a file the system refuses too.
             except (Unprovable, OSError) as error:
                 self.restore()
-                yield Outcome(bite, Verdict.NOT_PLANTED, str(error).replace(f"{self.path}/", ""))
+                why = str(error).replace(f"{self.path}/", "")
+                outcomes.append(Outcome(bite, Verdict.NOT_PLANTED, why))
                 continue
-            yield judge(bite, green, self.run(command))
+            outcomes.append(judge(bite, green, self.run([*shlex.split(row.command), *bite.args])))
+        # Why: a gate red from its second run on, by state it keeps, is red on every fault.
+        for args in dict.fromkeys(o.bite.args for o in outcomes if o.verdict is Verdict.BITES):
+            self.unfaulted(row, args, outcomes)
+        yield from outcomes
+
+    def unfaulted(
+        self, row: Row, args: tuple[str, ...], outcomes: list[Outcome]
+    ) -> tuple[int, str]:
+        """A run with no fault planted; red, it leaves no bite before it with ``args`` standing."""
+        code, output = self.run([*shlex.split(row.command), *args])
+        if code != 0:
+            outcomes[:] = [o.unproven(output) if o.bite.args == args else o for o in outcomes]
+        return code, output
 
 
 def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Copy:
