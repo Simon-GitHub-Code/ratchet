@@ -323,6 +323,20 @@ def test_git_repo_state_survives_a_missing_git(monkeypatch: pytest.MonkeyPatch) 
     assert hook.GitRepoState().current_branch(Path.cwd()) is None
 
 
+def test_a_double_star_reads_as_a_star_in_a_shell_without_globstar(tmp_path: Path) -> None:
+    filesystem = hook.LocalFilesystem()
+    deep = tmp_path / "a/b/c.txt"
+    deep.parent.mkdir(parents=True)
+    deep.write_text("", encoding="utf-8")
+    assert filesystem.glob(tmp_path / "**") == [tmp_path / "a"]
+    assert filesystem.glob(tmp_path / "**/c.txt") == []
+    assert filesystem.glob(tmp_path / "a/**/c.txt") == [deep]
+    assert filesystem.glob(tmp_path / "a/***/c.txt") == [deep]
+    top = filesystem.glob(Path("/**"))
+    assert top
+    assert {len(path.parts) for path in top} == {2}
+
+
 def run_shim(shim: Path, case: object, **env: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 # -- the interpreter running these tests, on a fixed script
         [sys.executable, str(shim)],

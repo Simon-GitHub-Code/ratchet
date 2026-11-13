@@ -188,9 +188,15 @@ class LocalFilesystem:
         return records.before(lambda args: _output(checkout, *args), commit, relative)
 
     def glob(self, pattern: Path) -> list[Path]:
-        """Existing paths matching ``pattern``."""
+        """Existing paths matching ``pattern``, as a shell without ``globstar`` expands it.
+
+        Why: ``**`` is ``*`` to such a shell, and read as Python reads it a word like ``/** A
+        doc comment`` in a program's text walked the whole filesystem and outran the hook's
+        timeout, which lets the tool call run unjudged.
+        """
         anchor = Path(pattern.anchor)
-        return sorted(anchor.glob(str(pattern.relative_to(anchor))))
+        shell = re.sub(r"\*\*+", "*", str(pattern.relative_to(anchor)))
+        return sorted(anchor.glob(shell))
 
     def expand(self, word: str) -> str:
         """``word`` with ``~`` and ``$VARIABLES`` expanded from this process's environment."""
