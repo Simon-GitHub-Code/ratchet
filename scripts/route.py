@@ -20,11 +20,15 @@ The stages, in order; the first that does not hold is the answer:
 6. a clean tree (finish the change: ``check``, commit on a branch, pull request; nothing is
    committed on the default branch itself, and records alone left there land through the
    ``merge`` entry point's ``--records``, which an agent runs, or a pull request on a forge);
+   with no forge, a ``records/<time>`` branch checked out is a ``--records`` run that stopped,
+   and the same command finishes it;
 7. on a working branch: the pull request is open, else open it, and its merge job merges what
    the merge judge passes (ADR 0021); with no forge (no ``origin``) the binding's ``merge``
    entry point judges the branch, runs ``check`` on the merge result and merges it, or says
    why the merge is the owner's;
-8. on the default branch: the glossary and design brief (``grill-with-docs``), then an
+8. on the default branch: a ``records/<time>`` branch not yet merged, which the merge judge is
+   asked about (the owner's merge command with its first reason, or the ``merge`` entry point
+   for an agent when it passes); the glossary and design brief (``grill-with-docs``), then an
    agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
    away, ``/pstack:poteto-mode`` when they stay). With more than one ticket ready the build is

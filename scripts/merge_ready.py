@@ -6,7 +6,9 @@ only for ``agent``. The owner merges when any of these holds:
 
 - ``guard``: a guard path changed, other than by an addition to a record (ADR 0014) or by a
   threshold that only tightened. A dependency change is a guard change here: its note is printed
-  and the owner merges it.
+  and the owner merges it. An instruction file (``AGENTS.md``, ``CLAUDE.md``, ``CLAUDE.local.md``,
+  ``GEMINI.md`` in any letter case, or a path under a ``.claude/`` directory) is a guard path at
+  any depth, whatever the manifest says.
 - ``door``: the change goes through a one-way door. A path in a ``[[door]]`` of the manifest; a
   flag that turns on by default, becomes permanent, or leaves the registry while off.
 - ``unflagged``: the change adds to a file behind a door that shuts on removal (a route, a command
@@ -22,12 +24,14 @@ only for ``agent``. The owner merges when any of these holds:
 - ``dispute``: the change adds or edits a dispute, or an open dispute names a path it touches.
 - ``record``: no verdict record is part of the change, or the one there is not an approval of
   exactly this tree with nothing unresolved and no open question. A change with no verdict record
-  that is records alone is not asked for one (ADR 0031): every path it touches is a markdown file
-  of the tracker under ``.scratch/`` that no guard group or door holds, or an addition to a path
-  only ``edit = "append"`` groups hold, kept, and as the change found it at the tip. A ticket may
-  not gain the agent-ready label or take another's number, and a labelled ticket and the spec it
-  inherits from take only appends. ``RECORDS`` lists the kinds; the manifest they are read
-  against is the default branch's.
+  that is records alone is not asked for one (ADR 0031): every path it touches has the whole
+  shape of a file a skill writes, listed in ``RECORDS``, is a plain file kept by the change and
+  as the change found it at the tip, and has no twin in another letter case. Read by the default
+  branch's manifest, the glossary and ADRs sit in ``edit = "append"`` groups alone, the rest in
+  none, and no door holds any. The glossary takes only additions (ADR 0014). A ticket may not gain
+  the agent-ready label, take another's number or be closed. A labelled ticket, the spec it
+  inherits from and the status of a ticket it waits on do not change (``feature_preflight.reads``
+  names them). An ADR is a decision the owner agrees to: the reason names its title.
 - ``file``: a guard, door or record path is a symbolic link or a submodule, at the merge base
   or at the head. Git shows a link's target as its text, which is not what a gate reads there.
 - ``target``, ``behind``, ``tier2``: the pull request targets another branch; the branch does not

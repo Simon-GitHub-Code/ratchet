@@ -17,12 +17,16 @@ The adoption, the change that brings the manifest to a default branch with none,
 its own gates: ``check-deep`` runs on its merge result in place of ``check`` (ADR 0031).
 
 ``merge.py --records`` lands what the owner's conversation wrote and left in the work tree of the
-default branch: a spec, a ticket, a conjecture, a change description, an added term or ADR. Every
-uncommitted path must be a record by the manifest the default branch holds. It commits them on a
-branch of their own, ``records/<time>``, with the repository's commit hooks, switches back to the
-default branch, and merges that branch as above: the judge asks no verdict record of records alone
-(ADR 0031). A merged records branch is deleted; one the owner merges stays, and the work tree is
-clean either way, so nothing is ever committed on the default branch itself.
+default branch: a spec, a ticket, a conjecture, a change description, an added term, or an ADR,
+which the judge leaves to the owner to agree. Every uncommitted path must be a record by the
+manifest the default branch holds. It commits them on a branch of their own, ``records/<time>``,
+with the repository's commit hooks, switches back to the default branch, and merges that branch
+as above: the judge asks no verdict record of records alone (ADR 0031). A merged records branch
+is deleted; one the owner merges stays, and the work tree is clean either way, so nothing is ever
+committed on the default branch itself. A run that stopped partway, killed in the commit hooks or
+after its commit, leaves HEAD on its records branch; the next run switches back, carrying what is
+uncommitted, and lands the records or merges their commit. When git cannot switch back, it prints
+git's line and what to type before running again.
 
 With a remote named ``origin`` the script refuses: the pull request's merge job is the one that
 merges there, and a local merge could not be pushed.
