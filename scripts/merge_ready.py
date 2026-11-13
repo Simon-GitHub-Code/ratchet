@@ -29,9 +29,10 @@ only for ``agent``. The owner merges when any of these holds:
   as the change found it at the tip, and has no twin in another letter case. Read by the default
   branch's manifest, the glossary and ADRs sit in ``edit = "append"`` groups alone, the rest in
   none, and no door holds any. The glossary takes only additions (ADR 0014). A ticket may not gain
-  the agent-ready label, take another's number or be closed. A labelled ticket, the spec it
-  inherits from and the status of a ticket it waits on do not change (``feature_preflight.reads``
-  names them). An ADR is a decision the owner agrees to: the reason names its title.
+  the agent-ready label, take another's number, be one a labelled ticket's ``Blocked by`` line can
+  name, or be closed. A labelled ticket, the spec it inherits from and the status of a ticket it
+  waits on do not change (``feature_preflight.reads`` names them). An ADR is a decision the owner
+  agrees to: the reason names its title.
 - ``file``: a guard, door or record path is a symbolic link or a submodule, at the merge base
   or at the head. Git shows a link's target as its text, which is not what a gate reads there.
 - ``target``, ``behind``, ``tier2``: the pull request targets another branch; the branch does not
@@ -40,8 +41,9 @@ only for ``agent``. The owner merges when any of these holds:
   is read without a manifest on the default branch: the adoption, which brings the manifest and
   the binding to a default branch whose tip and merge base hold neither. There is no gate before
   it to loosen, so the setting, its files, the flag registry and disputes are asked of it, and
-  its manifest must guard at least what the template's does; ``merge.py`` runs ``check-deep`` on
-  its merge result (ADR 0031).
+  its manifest must guard at least what the template's does. It may bring no instruction file but
+  ``ADOPTION_WRITES`` and no ticket with the agent-ready label. ``merge.py`` runs ``check-deep``
+  on its merge result (ADR 0031).
 
 The judge reads commits and nothing else: the manifest at the default branch's tip, every other
 file at the merge base and at the head, through git. It never reads the work tree and never runs
@@ -123,6 +125,10 @@ HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_
 INSTRUCTION_FILES = frozenset({"agents.md", "claude.md", "claude.local.md", "gemini.md"})
 INSTRUCTION_DIRECTORY = ".claude"
 INSTRUCTS = "(instructions): an agent reads it as instructions, wherever it sits"
+# Why: `/ratchet:adopt` writes these instruction files and no other: `AGENTS.md` in its step 7,
+# `.claude/settings.json` from its template through `just settings`. A test holds the set to the
+# skill and its templates, so a template that adds one fails it until the judge knows.
+ADOPTION_WRITES = frozenset({"AGENTS.md", ".claude/settings.json"})
 TRACKER_DIRECTORY = ".scratch"
 TRACKER = f"{TRACKER_DIRECTORY}/**/*.md"
 TICKETS = f"{TRACKER_DIRECTORY}/**/issues/*.md"
@@ -289,6 +295,24 @@ def unlike_template(brought: Manifest) -> list[Reason]:
         or not set(want.patterns) <= set(got.patterns)
         or (got.additive and set(got.patterns) != set(want.patterns))
     ]
+
+
+def smuggled(change: Change) -> list[Reason]:
+    """What the adoption carries that it never writes: an instruction file, or the label.
+
+    Why: the guard and record reasons are not asked of the adoption, and from its merge on the
+    owner trusts the guards; an instruction file or an agreed ticket must not ride in with it.
+    """
+    labels = spellings(change)
+    reasons = []
+    for path in change.paths:
+        if instructs(path) and path not in ADOPTION_WRITES:
+            text = f"{path} is an instruction file agents obey, and not one the adoption writes"
+            reasons.append(Reason("guard", text))
+        elif matches(path.casefold(), TICKETS) and carries(change.after(path) or "", labels):
+            text = f"{path} is a ticket with the agent-ready label, which only the owner gives"
+            reasons.append(Reason("record", text))
+    return reasons
 
 
 def adopts(root: Path, base_ref: str, head_ref: str) -> bool:
@@ -769,6 +793,13 @@ def agreement(change: Change, path: str) -> str | None:
         if ticket == path:
             return "is a ticket the owner agreed to build, and only they change it"
         return f"is what {ticket} inherits its approach from, a ticket the owner agreed to build"
+    if path in status and not change.held(path):
+        # Why: a `Blocked by` number reads the one ticket that bears it, so a second one, open
+        # or closed, turns the blocker from found to "not found".
+        return (
+            f"is a new ticket the `Blocked by` line of {status[path]} can name, which changes"
+            " whether that ticket may start, a ticket the owner agreed to build"
+        )
     if path in status and open_ticket(path, change.before(path)) != open_ticket(
         path, change.after(path)
     ):
@@ -1137,6 +1168,7 @@ def judge(
         return [
             *setting_reasons(change, base_ref, asked or Asked()),
             *unlike_template(brought),
+            *smuggled(change),
             *file_reasons(change, brought),
             *registry_reasons(change),
             *dispute_reasons(change),
