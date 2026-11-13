@@ -63,7 +63,7 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "rewrite-history": ("DENY", "rewrites history"),
         "unresolved-directory": (
             "ASK",
-            "writes a relative path after a cd the guard cannot resolve; it may be a guard path",
+            "changes a file or folder after moving to a folder the guard cannot work out",
         ),
         "merge-pr": (
             "ASK",
@@ -170,7 +170,7 @@ def test_lexer_survives_unterminated_constructs() -> None:
     assert lex("echo $(ls")[1] == ("ls\n",)
     assert lex('echo "open')[0][1].text == '"open\n"'
     assert lex("cat <<EOF\nnever closed")[2] == ("never closed",)
-    assert lex("cat <<")[0][-2].text == f"{HEREDOC_MARK}0"
+    assert f"{HEREDOC_MARK}0" in [token.text for token in lex("cat <<")[0]]
 
 
 def test_comments_start_only_at_a_word() -> None:
@@ -191,8 +191,94 @@ def test_redirects_and_file_descriptors() -> None:
         SimpleCommand(("d",), then="\n"),
     )
     ends = [command.then for command in parse_shell("a && b || c & (d) ; e").commands]
-    assert ends == ["&&", "||", "&", ")", "\n"]
+    assert ends == ["&&", "||", "&", ";", "\n"]
     assert [c.then for c in parse_shell("f() { g; }").commands] == ["(", ";", "\n"]
+
+
+def _subshells(text: str) -> list[tuple[str, int, int, str]]:
+    return [(" ".join(c.words), c.opens, c.closes, c.then) for c in parse_shell(text).commands]
+
+
+def test_a_subshell_is_marked_where_it_opens_and_closes() -> None:
+    assert _subshells("(a && (b)) || c") == [
+        ("a", 1, 0, "&&"),
+        ("b", 1, 2, "||"),
+        ("c", 0, 0, "\n"),
+    ]
+    assert _subshells("(a;) | b") == [("a", 1, 1, "|"), ("b", 0, 0, "\n")]
+    assert parse_shell("(a) | b").commands[0].piped
+    assert _subshells("( ) ; a") == [("a", 0, 0, "\n")]
+    assert _subshells("(a) > f; b") == [("a", 1, 1, ";"), ("", 0, 0, ";"), ("b", 0, 0, "\n")]
+
+
+def test_a_parenthesis_after_a_word_is_no_subshell() -> None:
+    assert _subshells("x=(1 2); a <(b)") == [
+        ("x=", 0, 0, "("),
+        ("1 2", 0, 0, ")"),
+        ("a", 0, 0, "("),
+        ("b", 0, 0, ")"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "case x in (y) a;; z) (b);; esac",
+        "(case x in y) a;; esac)",
+        "(echo case; a)",
+        "case y in x) ;; (case|*) cd q;; z|esac) ;; esac; a",
+        "(cd q; cat <<E\\ F\nE\n)\nE F\na)",
+        "(cd q; (( x = 1 << y ))\n)\ny\na)",
+        "(cd q; true |<<E cat\n)\nE\na)",
+        "(cd q; x=${ :; }; a)",
+        "(cd q; echo 'open)",
+    ],
+)
+def test_a_line_with_a_case_or_a_heredoc_reads_no_subshell(line: str) -> None:
+    assert all(opens == closes == 0 for _, opens, closes, _ in _subshells(line))
+    assert not parse_shell(line).modelled
+
+
+def test_a_run_of_operators_splits_into_the_operators_bash_reads() -> None:
+    assert [t.text for t in lex("a|<<E b;>f&&>g|&h\nx\nE")[0] if t.operator] == [
+        "|",
+        "<<",
+        ";",
+        ">",
+        "&&",
+        ">",
+        "|&",
+        "\n",
+    ]
+    assert lex("a |<<E b\n)\nE")[2] == (")",)
+
+
+def test_a_function_substitution_runs_ahead_of_the_command_holding_it() -> None:
+    commands = parse_shell("a; x=${ b; { c; }; } d").commands
+    assert [c.words for c in commands] == [
+        ("a",),
+        ("b",),
+        ("{", "c"),
+        ("}",),
+        (f"x={PLACEHOLDER}", "d"),
+    ]
+    quoted = parse_shell('echo "${| b; }" c').commands
+    assert [c.words for c in quoted] == [("b",), ("echo", PLACEHOLDER, "c")]
+
+
+def test_a_quote_or_substitution_left_open_is_reported() -> None:
+    assert parse_shell("echo 'shut' \"shut\" $(shut) ${shut} `shut` ${ shut; }").closed
+    for text in ("'open", '"open', "$(open", "${open", "`open", "${ open", "$'open"):
+        assert not parse_shell(f"echo {text}").closed
+
+
+def test_an_ansi_c_quote_with_an_escaped_quote_is_read_as_sh_reads_it() -> None:
+    # Why: bash reads `$'a\'; rm x #'` as one word; sh as `$`, a quote the escaped one ends, and
+    # a command. The lexer reads it as sh does and says it cannot tell.
+    parsed = parse_shell("echo $'a\\'; rm x #'")
+    assert not parsed.closed
+    assert [command.words for command in parsed.commands] == [("echo", "$a\\"), ("rm", "x")]
+    assert parse_shell("echo $'a\\\\'; rm x #'").closed
 
 
 def test_unquote_falls_back_to_dropping_quotes() -> None:

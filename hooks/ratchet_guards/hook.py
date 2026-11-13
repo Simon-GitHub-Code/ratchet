@@ -23,9 +23,9 @@ so a write chained before the refused command is lost with it. The deny message 
 names the matched command, and the method asks agents to keep a gated command in a tool
 call of its own.
 
-An Edit, Write or MultiEdit that gives a local ticket under ``.scratch/`` the agent-ready status
-asks, as applying that label on a forge does, and so does a command line or a patch that names
-the label and writes the ticket (``ratchet_guards.tickets``).
+An Edit, Write or MultiEdit that gives a local ticket (``.scratch/<feature>/issues/<name>.md``)
+the agent-ready status asks, as applying that label on a forge does, and so does a command line
+or a patch that names the label and writes the ticket (``ratchet_guards.tickets``).
 
 One forge write is allowed by a record: ``gh label create <name>`` in a checkout whose
 ``docs/agents/triage-labels.md`` lists ``<name>`` in its "Label in our tracker" column (see
@@ -378,10 +378,10 @@ def reason(verdict: Verdict) -> str:
             f"stop, write a gate dispute ({DISPUTES}) and report it to whoever started you. If "
             f"the call also did unrelated work, redo that in a tool call of its own."
         )
+    choice = verdict.choice or "Approve only if you, the owner, intend this."
     return (
-        f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop} Approve only "
-        f"if you, the owner, intend this. An agent that thinks a gate is wrong writes a gate "
-        f"dispute ({DISPUTES}) instead."
+        f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop} {choice} An "
+        f"agent that thinks a gate is wrong writes a gate dispute ({DISPUTES}) instead."
     )
 
 
