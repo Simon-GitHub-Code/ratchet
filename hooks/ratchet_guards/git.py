@@ -15,6 +15,7 @@ from ratchet_guards.context import Context, Guard
 from ratchet_guards.gitcall import Invocation, invocation
 from ratchet_guards.options import NO_VALUES, Options, Spec, expand_long, scan
 from ratchet_guards.refs import MAIN_BRANCHES, TRACKING
+from ratchet_guards.shell import PLACEHOLDER
 from ratchet_guards.verdict import Verdict
 
 _FORCE = frozenset({"-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror"})
@@ -59,6 +60,8 @@ _TRACKS = frozenset({"-t", "--track"})
 _DETACHES = frozenset({"-d", "--detach"})
 # `--force` is listed so that it is not read as a prefix of `--force-create`.
 _SWITCH_LONG = _SWITCH.long_values | _TRACKS | _DETACHES | {"--force"}
+# Why: the shell reads a variable or a substitution in a branch name only when the line runs.
+_UNKNOWN_MARKS = ("$", "`", PLACEHOLDER)
 # Why: with `push.default = upstream` a push of a branch made from `origin/main` goes to `main`,
 # under any name the command line gives it, so the rule asks git where each branch is pushed.
 _PUSHED = "@{push}"
@@ -169,13 +172,11 @@ def _reads_config(options: Options) -> bool:
 
 
 def _paths(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    del context
     operands = scan(call.args, _PATHS).operands
     hits = guard.locator.words(operands, call.cwd, destructive=True)
-    return [
-        Verdict("guard-path-write", f"git {call.subcommand} {hit.path} ({hit.group.name})")
-        for hit in hits
-    ]
+    return guard.writes(
+        context, hits, lambda hit: f"git {call.subcommand} {hit.path} ({hit.group.name})"
+    )
 
 
 def _names_output(option: str, subcommand: str) -> bool:
@@ -200,12 +201,10 @@ def _outputs(call: Invocation) -> list[str]:
 
 
 def _written(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    del context
     hits = guard.locator.words(_outputs(call), call.cwd, destructive=False)
-    return [
-        Verdict("guard-path-write", f"git {call.subcommand} writes {hit.path} ({hit.group.name})")
-        for hit in hits
-    ]
+    return guard.writes(
+        context, hits, lambda hit: f"git {call.subcommand} writes {hit.path} ({hit.group.name})"
+    )
 
 
 def _is_option(word: str) -> bool:
@@ -250,7 +249,8 @@ def _all(*rules: Rule) -> Rule:
 
 _SUBCOMMANDS: dict[str, Rule] = {
     "commit": _commit,
-    "am": _am,
+    "am": _all(_am, merges.cherry_pick),
+    "read-tree": merges.read_tree,
     "commit-tree": _commit_tree,
     "push": _push,
     "reset": refmoves.reset,
@@ -347,21 +347,27 @@ class Switch:
 _ANYWHERE = Switch(MAIN_BRANCHES)
 
 
-def _previous(name: str) -> bool:
-    """Whether ``name`` is a branch only git can resolve: ``-``, ``@{-1}`` and the like."""
-    return name == "-" or name.startswith("@")
+def _unknown(name: str) -> bool:
+    """Whether git alone (``-``, ``@{-1}``) or the shell alone (``$B``) can read ``name``."""
+    return name == "-" or name.startswith("@") or any(mark in name for mark in _UNKNOWN_MARKS)
 
 
 def _checked_out(call: Invocation, guard: Guard, *, here: bool) -> Switch | None:
-    """The move ``git switch`` or ``git checkout`` makes; a checkout of paths makes none."""
-    options = scan(expand_long(call.args, _SWITCH_LONG), _SWITCH)
+    """The move ``git switch`` or ``git checkout`` makes; a checkout of paths makes none.
+
+    ``git checkout <branch> --`` with no path after the ``--`` still switches, and so does
+    ``git switch -- <branch>``.
+    """
+    args = list(call.args)
+    paths = args[args.index("--") + 1 :] if "--" in args and call.subcommand == "checkout" else []
+    options = scan(expand_long(args, _SWITCH_LONG), _SWITCH)
     created = next((options.values[flag] for flag in _SWITCH_FLAGS if flag in options.values), None)
     name = options.operands[0] if options.operands else None
     if created is not None:
-        return Switch(frozenset({created}), here)
-    if name is None or "--" in call.args or options.flags & _DETACHES:
+        return _ANYWHERE if _unknown(created) else Switch(frozenset({created}), here)
+    if name is None or paths or options.flags & _DETACHES:
         return None
-    if options.flags & _TRACKS or _previous(name):
+    if options.flags & _TRACKS or _unknown(name):
         return _ANYWHERE
     branch = call.subcommand == "switch" or (
         guard.repo.full_name(call.cwd, name) == f"refs/heads/{name}"
@@ -373,7 +379,8 @@ def switch(words: Sequence[str], context: Context, guard: Guard) -> Switch | Non
     """The move of ``HEAD`` a ``git switch``, ``checkout``, ``symbolic-ref`` or ``bisect`` makes.
 
     ``None`` when the command moves nothing the guard reads. A branch git alone can name (``-``,
-    ``@{-1}``, a ``--track`` form, whatever ``bisect`` returns to) may be a default branch.
+    ``@{-1}``, a ``--track`` form, whatever ``bisect`` returns to), or the shell alone (``$B``,
+    ``$(...)``), may be a default branch.
     """
     call = invocation(words, context.cwd)
     here = call.cwd == context.cwd and not call.redirected

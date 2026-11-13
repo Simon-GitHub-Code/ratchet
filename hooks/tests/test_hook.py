@@ -14,29 +14,39 @@ from ratchet_guards import hook
 from ratchet_guards.context import Guard
 from ratchet_guards.manifest import MANIFEST_PATH, parse
 from ratchet_guards.paths import Checkout
-from ratchet_guards.verdict import Decision, Verdict
+from ratchet_guards.verdict import RULES, Decision, Verdict
 from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, ROOT, FakeRepo, make_guard
 
 SHIM = PLUGIN_ROOT / "hooks/guard.py"
+
+
+def on_main() -> Guard:
+    return make_guard(FakeRepo(branch="main"))
 
 
 def payload(tool: str, **tool_input: str) -> dict[str, object]:
     return {"tool_name": tool, "tool_input": tool_input, "cwd": str(ROOT), "session_id": "s"}
 
 
-@pytest.mark.parametrize(
-    ("tool", "key", "path"),
-    [
-        ("Edit", "file_path", "/repo/CLAUDE.md"),
-        ("Write", "file_path", "config/lint.toml"),
-        ("MultiEdit", "file_path", "/repo/.github/workflows/ci.yml"),
-        ("NotebookEdit", "notebook_path", "/repo/formal/x.ipynb"),
-    ],
-)
-def test_edits_to_guard_paths_ask(tool: str, key: str, path: str) -> None:
-    verdict = hook.decide(payload(tool, **{key: path}), make_guard())
+UNLOCKED_EDITS = [
+    ("Edit", "file_path", "/repo/CLAUDE.md"),
+    ("Write", "file_path", "config/lint.toml"),
+    ("MultiEdit", "file_path", "/repo/.github/workflows/ci.yml"),
+    ("NotebookEdit", "notebook_path", "/repo/formal/x.ipynb"),
+]
+
+
+@pytest.mark.parametrize(("tool", "key", "path"), UNLOCKED_EDITS)
+def test_edits_to_guard_paths_are_denied_on_main(tool: str, key: str, path: str) -> None:
+    verdict = hook.decide(payload(tool, **{key: path}), on_main())
     assert verdict is not None
-    assert verdict.rule == "guard-path-edit"
+    assert verdict.rule == "guard-path-default"
+    assert verdict.decision is Decision.DENY
+
+
+@pytest.mark.parametrize(("tool", "key", "path"), UNLOCKED_EDITS)
+def test_edits_to_guard_paths_get_no_verdict_on_a_branch(tool: str, key: str, path: str) -> None:
+    assert hook.decide(payload(tool, **{key: path}), make_guard()) is None
 
 
 @pytest.mark.parametrize(
@@ -52,15 +62,16 @@ def test_edits_to_guard_paths_ask(tool: str, key: str, path: str) -> None:
         "/home/agent/.claude/settings.json",
     ],
 )
-def test_edits_to_locked_guard_paths_are_denied(path: str) -> None:
-    verdict = hook.decide(payload("Write", file_path=path), make_guard())
+@pytest.mark.parametrize("guard", [make_guard(), on_main()], ids=["branch", "main"])
+def test_edits_to_locked_guard_paths_are_denied(path: str, guard: Guard) -> None:
+    verdict = hook.decide(payload("Write", file_path=path), guard)
     assert verdict is not None
     assert verdict.rule == "guard-path-locked"
     assert verdict.decision is Decision.DENY
 
 
 def test_the_edit_detail_names_group_and_reason() -> None:
-    verdict = hook.decide(payload("Edit", file_path="/repo/justfile"), make_guard())
+    verdict = hook.decide(payload("Edit", file_path="/repo/justfile"), on_main())
     assert verdict is not None
     assert verdict.detail == (
         "justfile is in guard group 'gate-commands'. The command contract and the scripts "
@@ -86,8 +97,15 @@ def test_ordinary_calls_get_no_verdict(case: dict[str, object]) -> None:
 
 
 def test_bash_paths_resolve_against_the_payload_cwd() -> None:
-    verdict = hook.decide(payload("Bash", command="echo x > CLAUDE.md"), make_guard())
-    assert verdict == Verdict("guard-path-write", "redirects into CLAUDE.md (decisions)")
+    write = payload("Bash", command="echo x > CLAUDE.md")
+    assert hook.decide(write, on_main()) == Verdict(
+        "guard-path-default", "redirects into CLAUDE.md (decisions)"
+    )
+    assert hook.decide(write, make_guard()) is None
+    locked = payload("Bash", command="echo x > .claude/settings.json")
+    assert hook.decide(locked, make_guard()) == Verdict(
+        "guard-path-write", "redirects into .claude/settings.json (harness)"
+    )
 
 
 def test_the_local_guard_reads_git(tmp_path: Path) -> None:
@@ -144,17 +162,43 @@ def test_reasons_and_output_shape() -> None:
     ask = json.loads(hook.respond(Verdict("merge-pr", "gh pr merge")))["hookSpecificOutput"]
     assert ask["permissionDecision"] == "ask"
     assert ask["permissionDecisionReason"] == (
-        "Ratchet guard: this tool call merges a pull request; the merge job or the owner "
-        "merges one: gh pr merge. Approve only if you, the owner, intend this. An agent that "
-        "thinks a gate is wrong writes a gate dispute (docs/disputes/NNNN-<slug>.md) instead."
+        "Ratchet: an agent asks to run a tool call that merges a pull request: gh pr merge. "
+        f"{RULES['merge-pr'].way_out} Approve only if you have read them and want this change "
+        "in now."
+    )
+    merge = hook.reason(Verdict("merge-default", "git merge feat/x"))
+    assert merge == (
+        "Ratchet: an agent asks to run a tool call that merges another branch into the default "
+        f"branch: git merge feat/x. {RULES['merge-default'].way_out} Approve only if you have "
+        "read them and want this change in now."
+    )
+    unreadable = hook.reason(Verdict("unreadable", "the hook input is not a JSON object"))
+    assert unreadable == (
+        "Ratchet guard: this tool call could not be checked by the guard: the hook input is not "
+        "a JSON object. Approve only if you, the owner, intend this. An agent that thinks a gate "
+        "is wrong writes a gate dispute (docs/disputes/NNNN-<slug>.md) instead."
     )
     assert hook.respond(None) == ""
-    edit = hook.reason(Verdict("guard-path-edit", "CLAUDE.md is in guard group 'g'. Because."))
-    assert edit.startswith(
-        "Ratchet guard: this tool call edits a guard path; only the owner approves a "
-        "gate change: CLAUDE.md is in guard group 'g'. Because. Guard paths come from "
-        "guards/manifest.toml as committed on the default branch. Approve only if"
+
+
+def test_a_deny_ends_with_the_way_out_of_its_rule() -> None:
+    edit = hook.reason(Verdict("guard-path-default", "CLAUDE.md is in guard group 'g'. Because."))
+    assert edit == (
+        "Ratchet guard denied this tool call; no part of it ran. It changes a guard path where "
+        "the commit lands on the default branch, which no merge judge reads: CLAUDE.md is in "
+        "guard group 'g'. Because. Guard paths come from guards/manifest.toml as committed on "
+        f"the default branch. {RULES['guard-path-default'].way_out} If the call also did "
+        "unrelated work, redo that in a tool call of its own."
     )
+    assert "gate dispute" not in edit
+    lost = hook.reason(Verdict("unresolved-directory", "writes notes.md"))
+    assert lost.endswith(
+        f"{RULES['unresolved-directory'].way_out} If the call also did unrelated work, redo "
+        "that in a tool call of its own."
+    )
+    assert "gate dispute" not in lost
+    locked = hook.reason(Verdict("guard-path-locked", "x is in guard group 'g'. Because."))
+    assert "gate dispute (docs/disputes/NNNN-<slug>.md)" in locked
 
 
 def test_run_fails_closed() -> None:
@@ -190,8 +234,11 @@ def test_run_answers_antigravity_in_its_form() -> None:
     )
     assert denied["decision"] == "deny"
     assert "force-pushes" in denied["reason"]
-    asked = json.loads(hook.run(json.dumps(agy("edit_file", TargetFile="CLAUDE.md")), make_guard))
-    assert asked["decision"] == "force_ask"
+    edit = json.dumps(agy("edit_file", TargetFile="CLAUDE.md"))
+    refused = json.loads(hook.run(edit, on_main))
+    assert refused["decision"] == "deny"
+    assert "changes a guard path" in refused["reason"]
+    assert json.loads(hook.run(edit, make_guard)) == {"decision": "ask"}
     quiet = hook.run(json.dumps(agy("run_command", CommandLine="just check")), make_guard)
     assert json.loads(quiet) == {"decision": "ask"}
 
@@ -241,11 +288,16 @@ def test_main_reads_stdin_and_writes_a_decision(tmp_path: Path) -> None:
         "cwd": str(root),
     }
     assert hook.main(root, io.StringIO(json.dumps(case)), stdout) == 0
-    assert json.loads(stdout.getvalue())["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert json.loads(stdout.getvalue())["hookSpecificOutput"]["permissionDecision"] == "deny"
     quiet = io.StringIO()
     case["tool_input"] = {"file_path": str(root / "notes.md")}
     assert hook.main(root, io.StringIO(json.dumps(case)), quiet) == 0
     assert quiet.getvalue() == ""
+    case["tool_input"] = {"file_path": str(root / "CLAUDE.md")}
+    switch_to_a_branch(root)
+    on_a_branch = io.StringIO()
+    assert hook.main(root, io.StringIO(json.dumps(case)), on_a_branch) == 0
+    assert on_a_branch.getvalue() == ""
 
 
 def test_local_filesystem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,6 +318,10 @@ def test_local_filesystem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("GUARD_TEST_DIR", "value")
     assert filesystem.expand("$GUARD_TEST_DIR/x") == "value/x"
     assert filesystem.expand("~/x") == str(Path.home() / "x")
+
+
+def switch_to_a_branch(root: Path) -> None:
+    _git(root, "switch", "-q", "-c", "feature/x")
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -321,6 +377,80 @@ def test_git_repo_state(tmp_path: Path) -> None:
 def test_git_repo_state_survives_a_missing_git(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATH", "")
     assert hook.GitRepoState().current_branch(Path.cwd()) is None
+    assert hook.GitRepoState().checked_out(Path.cwd()) is None
+
+
+def test_checked_out_names_the_branch_the_detached_head_or_nothing(tmp_path: Path) -> None:
+    def head() -> str | None:
+        return hook.GitRepoState().checked_out(tmp_path)
+
+    assert head() is None
+    _git(tmp_path, "init", "-q", "-b", "trunk")
+    assert head() == "trunk"
+    commit = ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m"]
+    _git(tmp_path, *commit, "x")
+    assert head() == "trunk"
+    switch_to_a_branch(tmp_path)
+    assert head() == "feature/x"
+    _git(tmp_path, "checkout", "-q", "--detach")
+    assert head() == "HEAD"
+
+
+def test_one_state_reads_each_checkout_once(tmp_path: Path) -> None:
+    root = checkout(tmp_path)
+    state = hook.GitRepoState()
+    assert (state.checked_out(root), state.default_branches(root)) == ("main", {"main", "master"})
+    switch_to_a_branch(root)
+    _git(root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+    _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+    assert (state.checked_out(root), state.default_branches(root)) == ("main", {"main", "master"})
+    fresh = hook.GitRepoState()
+    assert fresh.checked_out(root) == "feature/x"
+    assert fresh.default_branches(root) == {"main", "master", "trunk"}
+
+
+def test_the_default_branches_are_main_master_and_the_one_the_manifest_is_read_from(
+    tmp_path: Path,
+) -> None:
+    def defaults(root: Path) -> frozenset[str]:
+        return hook.GitRepoState().default_branches(root)
+
+    assert defaults(tmp_path) == {"main", "master"}
+    root = checkout(tmp_path)
+    assert defaults(root) == {"main", "master"}
+    _git(root, "branch", "-m", "main", "trunk")
+    assert defaults(root) == {"main", "master"}
+    _git(root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+    _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+    assert defaults(root) == {"main", "master", "trunk"}
+
+
+def test_a_default_branch_that_is_not_called_main_still_takes_the_edit_where_it_lands(
+    tmp_path: Path,
+) -> None:
+    root = checkout(tmp_path)
+    _git(root, "branch", "-m", "main", "trunk")
+    _git(root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+    _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+    case = {"tool_name": "Edit", "tool_input": {"file_path": "CLAUDE.md"}, "cwd": str(root)}
+    assert answer(root, case)["permissionDecision"] == "deny"
+    switch_to_a_branch(root)
+    assert answer(root, case) == {}
+
+
+def test_a_detached_head_is_behind_a_merge(adopted: Path) -> None:
+    _git(adopted, "checkout", "-q", "--detach")
+    assert answer(adopted, edit_from(adopted, adopted / "justfile")) == {}
+    locked = edit_from(adopted, adopted / ".claude/settings.json", "Write")
+    assert answer(adopted, locked)["permissionDecision"] == "deny"
+
+
+def test_a_checkout_git_cannot_read_takes_the_edit_where_it_lands(
+    adopted: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    switch_to_a_branch(adopted)
+    monkeypatch.setattr(hook.GitRepoState, "checked_out", lambda _self, _root: None)
+    assert answer(adopted, edit_from(adopted, adopted / "justfile"))["permissionDecision"] == "deny"
 
 
 def test_a_double_star_reads_as_a_star_in_a_shell_without_globstar(tmp_path: Path) -> None:
@@ -356,13 +486,22 @@ def decision(done: subprocess.CompletedProcess[str]) -> str:
 def test_the_shim_answers_from_the_checkout_named_by_cwd(tmp_path: Path) -> None:
     root = checkout(tmp_path)
     edit = {"tool_name": "Edit", "tool_input": {"file_path": "CLAUDE.md"}, "cwd": str(root)}
-    assert decision(run_shim(SHIM, edit)) == "ask"
+    assert decision(run_shim(SHIM, edit)) == "deny"
     locked = {"tool_name": "Edit", "tool_input": {"file_path": ".claude/settings.json"}}
     assert decision(run_shim(SHIM, {**locked, "cwd": str(root)})) == "deny"
     push = {"tool_name": "Bash", "tool_input": {"command": "git push --force"}, "cwd": str(root)}
     assert decision(run_shim(SHIM, push)) == "deny"
     status = {"tool_name": "Bash", "tool_input": {"command": "git status"}, "cwd": str(root)}
     assert run_shim(SHIM, status).stdout == ""
+
+
+def test_the_shim_lets_a_guard_path_edit_through_on_a_branch(tmp_path: Path) -> None:
+    root = checkout(tmp_path)
+    switch_to_a_branch(root)
+    edit = {"tool_name": "Edit", "tool_input": {"file_path": "CLAUDE.md"}, "cwd": str(root)}
+    assert run_shim(SHIM, edit).stdout == ""
+    locked = {"tool_name": "Edit", "tool_input": {"file_path": ".claude/settings.json"}}
+    assert decision(run_shim(SHIM, {**locked, "cwd": str(root)})) == "deny"
 
 
 def test_the_shim_without_a_manifest_keeps_only_the_command_rules(tmp_path: Path) -> None:
@@ -396,7 +535,7 @@ def test_the_shim_asks_when_the_guard_cannot_load(tmp_path: Path) -> None:
 def test_the_shim_answers_antigravity_in_its_form(tmp_path: Path) -> None:
     root = str(checkout(tmp_path))
     edit = run_shim(SHIM, agy("replace_file_content", root, TargetFile="CLAUDE.md"))
-    assert json.loads(edit.stdout)["decision"] == "force_ask"
+    assert json.loads(edit.stdout)["decision"] == "deny"
     push = run_shim(SHIM, agy("run_command", root, CommandLine="git push --force"))
     assert json.loads(push.stdout)["decision"] == "deny"
     status = run_shim(SHIM, agy("run_command", root, CommandLine="git status"))
@@ -456,13 +595,25 @@ def session(tmp_path: Path) -> Path:
 
 
 def test_an_edit_is_judged_by_the_checkout_holding_the_file(adopted: Path, session: Path) -> None:
-    asked = answer(session, edit_from(session, adopted / "justfile"))
-    assert asked["permissionDecision"] == "ask"
-    assert "justfile is in guard group 'gate-commands'" in asked["permissionDecisionReason"]
+    denied = answer(session, edit_from(session, adopted / "justfile"))
+    assert denied["permissionDecision"] == "deny"
+    assert "justfile is in guard group 'gate-commands'" in denied["permissionDecisionReason"]
     locked = answer(session, edit_from(session, adopted / ".claude/settings.json", "Write"))
     assert locked["permissionDecision"] == "deny"
     assert answer(session, edit_from(session, adopted / "app/core/money.py")) == {}
     assert answer(session, edit_from(session, session / "justfile")) == {}
+
+
+def test_an_edit_lands_where_the_checkout_holding_the_file_is_not_where_the_session_is(
+    adopted: Path, session: Path
+) -> None:
+    switch_to_a_branch(adopted)
+    assert answer(session, edit_from(session, adopted / "justfile")) == {}
+    locked = answer(session, edit_from(session, adopted / ".claude/settings.json", "Write"))
+    assert locked["permissionDecision"] == "deny"
+    switch_to_a_branch(session)
+    _git(adopted, "switch", "-q", "main")
+    assert answer(session, edit_from(session, adopted / "justfile"))["permissionDecision"] == "deny"
 
 
 def test_an_edit_is_judged_when_the_session_is_in_no_checkout(
@@ -470,16 +621,20 @@ def test_an_edit_is_judged_when_the_session_is_in_no_checkout(
 ) -> None:
     elsewhere = tmp_path / "not-a-repository"
     elsewhere.mkdir()
-    asked = answer(elsewhere, edit_from(elsewhere, adopted / "quality/thresholds.toml"))
-    assert asked["permissionDecision"] == "ask"
+    case = edit_from(elsewhere, adopted / "quality/thresholds.toml")
+    assert answer(elsewhere, case)["permissionDecision"] == "deny"
+    switch_to_a_branch(adopted)
+    assert answer(elsewhere, case) == {}
 
 
 def test_a_file_reached_through_a_symlink_is_judged_where_it_lives(
     adopted: Path, session: Path
 ) -> None:
     (session / "link.toml").symlink_to(adopted / "quality/thresholds.toml")
-    asked = answer(session, edit_from(session, session / "link.toml"))
-    assert asked["permissionDecision"] == "ask"
+    case = edit_from(session, session / "link.toml")
+    assert answer(session, case)["permissionDecision"] == "deny"
+    switch_to_a_branch(adopted)
+    assert answer(session, case) == {}
 
 
 def test_each_checkout_is_judged_by_its_own_manifest(tmp_path: Path, adopted: Path) -> None:
@@ -487,37 +642,51 @@ def test_each_checkout_is_judged_by_its_own_manifest(tmp_path: Path, adopted: Pa
         '[[group]]\nname = "notes"\nreason = "The notes are the owner\'s."\npaths = ["NOTES.md"]\n'
     )
     sibling = checkout(tmp_path, manifest=own, name="sibling")
-    assert answer(adopted, edit_from(adopted, sibling / "NOTES.md"))["permissionDecision"] == "ask"
+    notes = answer(adopted, edit_from(adopted, sibling / "NOTES.md"))
+    assert notes["permissionDecision"] == "deny"
     assert answer(adopted, edit_from(adopted, sibling / "justfile")) == {}
-    assert answer(sibling, edit_from(sibling, adopted / "justfile"))["permissionDecision"] == "ask"
+    justfile = answer(sibling, edit_from(sibling, adopted / "justfile"))
+    assert justfile["permissionDecision"] == "deny"
     assert answer(sibling, edit_from(sibling, adopted / "NOTES.md")) == {}
 
 
 def test_a_codex_patch_is_judged_by_the_checkout_it_names(adopted: Path, session: Path) -> None:
     patch = f"*** Begin Patch\n*** Update File: {adopted}/justfile\n@@\n-a\n+b\n*** End Patch\n"
     case = {"tool_name": "apply_patch", "tool_input": {"input": patch}, "cwd": str(session)}
-    assert answer(session, case)["permissionDecision"] == "ask"
+    assert answer(session, case)["permissionDecision"] == "deny"
+    switch_to_a_branch(adopted)
+    assert answer(session, case) == {}
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        "sed -i 's/a/b/' {adopted}/quality/thresholds.toml",
-        "echo x > {adopted}/justfile",
-        "cp /tmp/x {adopted}/scripts/gate.py",
-        "cd {adopted} && sed -i s/a/b/ quality/thresholds.toml",
-        "cd {adopted}/quality && sed -i s/a/b/ thresholds.toml",
-        "cd {adopted} && cd quality && rm thresholds.toml",
-        "git -C {adopted} rm quality/thresholds.toml",
-        "python3 -c \"open('{adopted}/justfile', 'w').write('x')\"",
-    ],
-)
+SHELL_WRITES = [
+    "sed -i 's/a/b/' {adopted}/quality/thresholds.toml",
+    "echo x > {adopted}/justfile",
+    "cp /tmp/x {adopted}/scripts/gate.py",
+    "cd {adopted} && sed -i s/a/b/ quality/thresholds.toml",
+    "cd {adopted}/quality && sed -i s/a/b/ thresholds.toml",
+    "cd {adopted} && cd quality && rm thresholds.toml",
+    "git -C {adopted} rm quality/thresholds.toml",
+    "python3 -c \"open('{adopted}/justfile', 'w').write('x')\"",
+]
+
+
+@pytest.mark.parametrize("command", SHELL_WRITES)
 def test_a_shell_write_is_judged_by_the_checkout_it_lands_in(
     command: str, adopted: Path, session: Path
 ) -> None:
     denied = answer(session, bash_from(session, command.format(adopted=adopted)))
     assert denied["permissionDecision"] == "deny"
     assert "guards/manifest.toml as committed" in denied["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("command", SHELL_WRITES)
+def test_a_shell_write_to_a_checkout_on_a_branch_is_left_to_the_merge_judge(
+    command: str, adopted: Path, session: Path
+) -> None:
+    switch_to_a_branch(adopted)
+    assert answer(session, bash_from(session, command.format(adopted=adopted))) == {}
+    locked = bash_from(session, f"echo x > {adopted}/.claude/settings.json")
+    assert answer(session, locked)["permissionDecision"] == "deny"
 
 
 def test_a_shell_write_outside_the_guard_paths_is_free_from_any_session(
@@ -555,13 +724,16 @@ def test_the_shim_judges_a_file_by_its_checkout_not_the_session_directory(
     adopted: Path, session: Path
 ) -> None:
     here = {**edit_from(adopted, adopted / "justfile")}
-    assert decision(run_shim(SHIM, here)) == "ask"
+    assert decision(run_shim(SHIM, here)) == "deny"
     elsewhere = edit_from(session, adopted / "justfile")
-    assert decision(run_shim(SHIM, elsewhere)) == "ask"
+    assert decision(run_shim(SHIM, elsewhere)) == "deny"
     sed = bash_from(session, f"sed -i s/a/b/ {adopted}/quality/thresholds.toml")
     assert decision(run_shim(SHIM, sed)) == "deny"
     free = edit_from(session, adopted / "app/core/money.py")
     assert run_shim(SHIM, free).stdout == ""
+    switch_to_a_branch(adopted)
+    assert run_shim(SHIM, elsewhere).stdout == ""
+    assert run_shim(SHIM, here).stdout == ""
 
 
 def test_the_manifest_of_a_checkout_is_read_from_git_once(

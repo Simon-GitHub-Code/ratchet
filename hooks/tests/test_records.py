@@ -1,9 +1,11 @@
-"""Additive records: what an agent may add to the glossary and the ADRs, and what still asks.
+"""Additive records: what an agent may add to the glossary and the ADRs, and what is refused.
 
 ``ADDITIVE`` and ``NOT_ADDITIVE`` are the corpus of the pure judge, one row per way a glossary
 can change; ``ADR_ROWS`` is the same for decision records. ``EDITS`` drives the hook with the tool
 calls an agent makes. Every row of the refused tables is an attempt to get a change to an
-existing record past the check.
+existing record past the check. The hook judges a record only where the commit lands on the
+default branch (ADR 0033): there an addition passes and anything else is refused; on a branch it
+says nothing and ``guard-diff`` reads the change at the merge.
 """
 
 import io
@@ -28,6 +30,7 @@ from tests.support import (
     ROOT,
     WORKTREE,
     FakeFilesystem,
+    FakeRepo,
     make_guard,
 )
 from tests.test_hook import run_shim
@@ -807,7 +810,8 @@ def edit(old: str, new: str) -> dict[str, object]:
     return {"old_string": old, "new_string": new}
 
 
-# Each row: the tool, its input, and the reason the hook gives when it asks (None: it passes).
+# Each row: the tool, its input, and the reason the hook gives when it refuses on main (None: it
+# passes).
 EDITS: list[tuple[str, str, dict[str, object], str | None]] = [
     (
         "an Edit adds a term",
@@ -935,22 +939,26 @@ EDITS: list[tuple[str, str, dict[str, object], str | None]] = [
 
 
 def decide(
-    tool: str, tool_input: dict[str, object], filesystem: FakeFilesystem | None = None
+    tool: str,
+    tool_input: dict[str, object],
+    filesystem: FakeFilesystem | None = None,
+    *,
+    branch: str = "main",
 ) -> str | None:
-    """The detail of the ask on one edit made in ``/repo``, or ``None`` when the hook passes it."""
+    """The detail of the refusal of one edit made in ``/repo``, or ``None`` when it passes."""
     payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(ROOT)}
     filesystem = filesystem or FakeFilesystem(contents=dict(ON_DISK), merged=dict(MERGED))
-    verdict = hook.decide(payload, make_guard(filesystem=filesystem))
+    verdict = hook.decide(payload, make_guard(FakeRepo(branch=branch), filesystem=filesystem))
     if verdict is None:
         return None
-    assert verdict.rule == "guard-path-edit"
+    assert verdict.rule == "guard-path-default"
     return verdict.detail
 
 
 @pytest.mark.parametrize(
     ("label", "tool", "tool_input", "reason"), EDITS, ids=[row[0] for row in EDITS]
 )
-def test_the_hook_passes_an_addition_and_asks_on_anything_else(
+def test_on_main_the_hook_passes_an_addition_and_refuses_anything_else(
     *, label: str, tool: str, tool_input: dict[str, object], reason: str | None
 ) -> None:
     del label
@@ -962,16 +970,26 @@ def test_the_hook_passes_an_addition_and_asks_on_anything_else(
         assert detail.endswith(f" This edit is not an addition: {reason}")
 
 
-def test_the_ask_names_the_group_its_reason_and_what_the_edit_changes() -> None:
-    asked = decide("Edit", {"file_path": "GLOSSARY.md", **edit("mapping, shortlink", "mapping")})
-    assert asked == (
+@pytest.mark.parametrize(
+    ("label", "tool", "tool_input", "reason"), EDITS, ids=[row[0] for row in EDITS]
+)
+def test_on_a_branch_the_hook_says_nothing_of_a_record_edit(
+    *, label: str, tool: str, tool_input: dict[str, object], reason: str | None
+) -> None:
+    del label, reason
+    assert decide(tool, tool_input, branch="feat/work") is None
+
+
+def test_the_refusal_names_the_group_its_reason_and_what_the_edit_changes() -> None:
+    refused = decide("Edit", {"file_path": "GLOSSARY.md", **edit("mapping, shortlink", "mapping")})
+    assert refused == (
         "GLOSSARY.md is in guard group 'records'. Decision records and the vocabulary: an agent "
         "adds to them, the owner changes them. This edit is not an addition: it drops shortlink "
         "from the _Avoid_ list of Link"
     )
 
 
-def test_a_branch_may_rework_what_it_added_and_not_what_the_owner_merged() -> None:
+def test_what_the_agent_added_may_be_reworked_and_what_the_owner_merged_may_not() -> None:
     # Why: the merge base is the standard, not the work tree. The conformance gate may send an
     # agent back to its own new record; a record the owner merged stays the owner's.
     drafted = FakeFilesystem(
@@ -985,28 +1003,29 @@ def test_a_branch_may_rework_what_it_added_and_not_what_the_owner_merged() -> No
         contents={"/repo/GLOSSARY.md": GLOSSARY.replace("mapping, shortlink", "mapping")},
         merged=dict(MERGED),
     )
-    asked = decide(
+    refused = decide(
         "Edit", {"file_path": "GLOSSARY.md", **edit("slug, token", "slug, token, key")}, changed
     )
-    assert asked is not None
-    assert asked.endswith("it drops shortlink from the _Avoid_ list of Link")
+    assert refused is not None
+    assert refused.endswith("it drops shortlink from the _Avoid_ list of Link")
 
 
 def test_a_record_is_judged_in_the_checkout_that_holds_it() -> None:
     filesystem = FakeFilesystem(contents={f"{WORKTREE}/GLOSSARY.md": GLOSSARY}, merged=dict(MERGED))
     path = f"{WORKTREE}/GLOSSARY.md"
     assert decide("Write", {"file_path": path, "content": GLOSSARY + CLICK}, filesystem) is None
-    asked = decide("Write", {"file_path": path, "content": ""}, filesystem)
-    assert asked is not None
-    assert "is not an addition" in asked
+    refused = decide("Write", {"file_path": path, "content": ""}, filesystem)
+    assert refused is not None
+    assert "is not an addition" in refused
 
 
-def test_without_a_merge_base_or_a_checkout_the_hook_asks() -> None:
+def test_without_a_merge_base_or_a_checkout_the_hook_refuses() -> None:
     call = {"file_path": "GLOSSARY.md", "content": GLOSSARY + CLICK}
     unborn = FakeFilesystem(contents=dict(ON_DISK), merged=None)
-    asked = decide("Write", call, unborn)
-    assert asked is not None
-    assert asked.endswith("there is no merge base with the default branch to compare it with")
+    refused = decide("Write", call, unborn)
+    assert refused is not None
+    assert refused.endswith("there is no merge base with the default branch to compare it with")
+    assert decide("Write", call, unborn, branch="feat/work") is None
     at_home = parse(
         '[[group]]\nname = "notes"\nreason = "r"\nedit = "append"\npaths = ["~/GLOSSARY.md"]\n'
     )
@@ -1017,18 +1036,20 @@ def test_without_a_merge_base_or_a_checkout_the_hook_asks() -> None:
     }
     verdict = hook.decide(payload, make_guard(manifest=at_home))
     assert verdict is not None
+    assert verdict.rule == "guard-path-default"
     assert verdict.detail.endswith("the guard cannot tell what this Write call would write")
 
 
-def test_a_codex_patch_on_a_record_still_asks() -> None:
+def test_a_codex_patch_on_a_record_is_refused_on_main_even_as_an_addition() -> None:
     patch = (
         "*** Begin Patch\n*** Add File: docs/adr/0004-links-expire.md\n+# A title\n*** End Patch"
     )
     payload = {"tool_name": "apply_patch", "tool_input": {"command": patch}, "cwd": str(ROOT)}
-    verdict = hook.decide(payload, make_guard())
+    verdict = hook.decide(payload, make_guard(FakeRepo(branch="main")))
     assert verdict is not None
-    assert verdict.rule == "guard-path-edit"
+    assert verdict.rule == "guard-path-default"
     assert verdict.detail.startswith("docs/adr/0004-links-expire.md is in guard group 'records'.")
+    assert hook.decide(payload, make_guard()) is None
 
 
 def fake_git(answers: dict[tuple[str, ...], str | None]) -> records.Git:
@@ -1067,7 +1088,11 @@ MANIFEST = (
 
 @pytest.fixture
 def adopted(tmp_path: Path) -> Path:
-    """A repository with the manifest, a glossary and three records on ``main``, on a branch."""
+    """A repository with the manifest, a glossary and three records on ``main``, on a branch.
+
+    The branch is ``change``; a test that needs the commit to land on the default branch switches
+    to ``main``.
+    """
     files = {
         MANIFEST_PATH: MANIFEST,
         "AGENTS.md": "# Agents\n",
@@ -1102,6 +1127,7 @@ def guard_diff(root: Path, *flags: str) -> tuple[int, str, str]:
 
 
 def test_the_hook_and_guard_diff_agree_in_a_real_repository(adopted: Path) -> None:
+    repos.git(adopted, "checkout", "-q", "main")
     glossary, record = adopted / "GLOSSARY.md", adopted / "docs/adr/0004-links-expire.md"
     assert (
         answer(adopted, "Write", {"file_path": str(glossary), "content": GLOSSARY + CLICK})
@@ -1123,9 +1149,10 @@ def test_the_hook_and_guard_diff_agree_in_a_real_repository(adopted: Path) -> No
 
     shorter = (GLOSSARY + CLICK).replace("mapping, shortlink", "mapping")
     merged = adopted / "docs/adr/0003-codes.md"
-    assert answer(adopted, "Write", {"file_path": str(glossary), "content": shorter}) == "ask"
+    assert answer(adopted, "Write", {"file_path": str(glossary), "content": shorter}) == "deny"
     assert (
-        answer(adopted, "Edit", {"file_path": str(merged), **edit("Runbooks rot.", "No.")}) == "ask"
+        answer(adopted, "Edit", {"file_path": str(merged), **edit("Runbooks rot.", "No.")})
+        == "deny"
     )
     glossary.write_text(shorter, encoding="utf-8")
     merged.write_text(ADR.replace("Runbooks rot.", "No."), encoding="utf-8")
@@ -1141,6 +1168,16 @@ def test_the_hook_and_guard_diff_agree_in_a_real_repository(adopted: Path) -> No
     )
     merged.unlink()
     assert "  not additive: it is deleted\n" in guard_diff(adopted)[1]
+
+
+def test_on_a_branch_the_hook_leaves_a_record_to_guard_diff(adopted: Path) -> None:
+    glossary = adopted / "GLOSSARY.md"
+    shorter = (GLOSSARY + CLICK).replace("mapping, shortlink", "mapping")
+    assert answer(adopted, "Write", {"file_path": str(glossary), "content": shorter}) == "pass"
+    glossary.write_text(shorter, encoding="utf-8")
+    code, printed, _ = guard_diff(adopted, "--fail-unless-additive")
+    assert code == 1
+    assert "  not additive: it drops shortlink from the _Avoid_ list of Link\n" in printed
 
 
 def test_another_guard_path_fails_the_additive_exit_and_committed_additions_pass(
@@ -1166,9 +1203,25 @@ def test_the_merge_base_is_the_standard_when_the_default_branch_moves_on(adopted
     repos.commit(adopted, "docs(glossary): add click")
     repos.git(adopted, "checkout", "-q", "change")
     more = GLOSSARY + "\n**Expiry**:\nThe day a link stops redirecting.\n"
+    target = adopted / "GLOSSARY.md"
+    target.write_text(more, encoding="utf-8")
+    assert guard_diff(adopted, "--fail-unless-additive")[0] == 0
+    target.write_text("# Glossary\n", encoding="utf-8")
+    assert guard_diff(adopted, "--fail-unless-additive")[0] == 1
+
+
+def test_where_the_default_branch_is_ahead_of_the_checkout_the_merge_base_is_still_the_standard(
+    adopted: Path,
+) -> None:
+    repos.git(adopted, "checkout", "-q", "main")
+    (adopted / "GLOSSARY.md").write_text(GLOSSARY + CLICK, encoding="utf-8")
+    repos.commit(adopted, "docs(glossary): add click")
+    repos.git(adopted, "update-ref", "refs/remotes/origin/main", "HEAD")
+    repos.git(adopted, "reset", "-q", "--hard", "HEAD~1")
+    more = GLOSSARY + "\n**Expiry**:\nThe day a link stops redirecting.\n"
     target = str(adopted / "GLOSSARY.md")
     assert answer(adopted, "Write", {"file_path": target, "content": more}) == "pass"
-    assert answer(adopted, "Write", {"file_path": target, "content": "# Glossary\n"}) == "ask"
+    assert answer(adopted, "Write", {"file_path": target, "content": "# Glossary\n"}) == "deny"
 
 
 def test_a_checkout_with_no_default_branch_or_no_commit_has_no_merge_base(tmp_path: Path) -> None:
@@ -1202,7 +1255,9 @@ def test_a_checkout_with_no_default_branch_or_no_commit_has_no_merge_base(tmp_pa
     assert filesystem.merge_base(orphan, "GLOSSARY.md") == Before(GLOSSARY, ("GLOSSARY.md",))
 
 
-def test_the_shim_passes_an_addition_and_asks_on_a_change(adopted: Path) -> None:
+def test_the_shim_passes_an_addition_and_refuses_a_change_on_main(adopted: Path) -> None:
+    repos.git(adopted, "checkout", "-q", "main")
+
     def shim(content: str) -> str:
         tool_input = {"file_path": str(adopted / "GLOSSARY.md"), "content": content}
         done = run_shim(
@@ -1213,13 +1268,16 @@ def test_the_shim_passes_an_addition_and_asks_on_a_change(adopted: Path) -> None
         return done.stdout
 
     assert shim(GLOSSARY + CLICK) == ""
-    asked = json.loads(shim(GLOSSARY.replace("slug, token", "slug")))["hookSpecificOutput"]
-    assert asked["permissionDecision"] == "ask"
-    assert asked["permissionDecisionReason"].startswith(
-        "Ratchet guard: this tool call edits a guard path; only the owner approves a gate change: "
-        "GLOSSARY.md is in guard group 'records'. An agent adds, the owner changes. This edit is "
-        "not an addition: it drops token from the _Avoid_ list of Short code. Guard paths come "
+    refused = json.loads(shim(GLOSSARY.replace("slug, token", "slug")))["hookSpecificOutput"]
+    assert refused["permissionDecision"] == "deny"
+    assert refused["permissionDecisionReason"].startswith(
+        "Ratchet guard denied this tool call; no part of it ran. It changes a guard path where "
+        "the commit lands on the default branch, which no merge judge reads: GLOSSARY.md is in "
+        "guard group 'records'. An agent adds, the owner changes. This edit is not an addition: "
+        "it drops token from the _Avoid_ list of Short code. Guard paths come "
     )
+    repos.git(adopted, "checkout", "-q", "change")
+    assert shim(GLOSSARY.replace("slug, token", "slug")) == ""
 
 
 def test_record_notes_cover_only_groups_marked_append(tmp_path: Path) -> None:

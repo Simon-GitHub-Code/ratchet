@@ -3,6 +3,7 @@
 import re
 import shlex
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -20,9 +21,10 @@ from ratchet_guards.manifest import (
 )
 from ratchet_guards.options import NO_VALUES, Spec, scan
 from ratchet_guards.paths import Hit, Locator
+from ratchet_guards.refs import MAIN_BRANCHES
 from ratchet_guards.shell import HEREDOC_MARK, PLACEHOLDER, SimpleCommand, lex, unquote
 from ratchet_guards.shell import parse as parse_shell
-from ratchet_guards.verdict import RULES, Decision, Verdict, strictest
+from ratchet_guards.verdict import DISPUTE, RULES, Decision, Verdict, strictest
 from ratchet_guards.writes import Touched, touched
 from tests.support import (
     HOME,
@@ -30,6 +32,7 @@ from tests.support import (
     MANIFEST,
     ROOT,
     UNGUARDED,
+    WORKTREE,
     FakeFilesystem,
     FakeRepo,
     details,
@@ -38,6 +41,7 @@ from tests.support import (
     verdicts,
 )
 
+ON_MAIN = make_guard(FakeRepo(branch="main"))
 DEFAULT_REF_BECAUSE = (
     "moves, deletes or re-points the default branch, or a ref or setting it is read through"
 )
@@ -46,12 +50,21 @@ DEFAULT_REF_BECAUSE = (
 def test_the_rule_catalogue_is_pinned() -> None:
     catalogue = {rule: (spec.decision.name, spec.because) for rule, spec in RULES.items()}
     assert catalogue == {
-        "guard-path-edit": ("ASK", "edits a guard path; only the owner approves a gate change"),
+        "guard-path-default": (
+            "DENY",
+            (
+                "changes a guard path where the commit lands on the default branch, which no "
+                "merge judge reads"
+            ),
+        ),
         "guard-path-locked": (
             "DENY",
             "edits a guard path that only the owner changes, by hand, outside Claude Code",
         ),
-        "guard-path-write": ("DENY", "writes, moves or deletes a guard path from the shell"),
+        "guard-path-write": (
+            "DENY",
+            "writes, moves or deletes, from the shell, a guard path that only the owner changes",
+        ),
         "no-verify": ("DENY", "skips the git hooks"),
         "skip-hooks": ("DENY", "skips or uninstalls the pre-commit hooks"),
         "hooks-path": ("DENY", "redirects git hooks or overrides git config"),
@@ -62,17 +75,14 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "amend-pushed": ("DENY", "amends a commit that is already pushed"),
         "rewrite-history": ("DENY", "rewrites history"),
         "unresolved-directory": (
-            "ASK",
-            "writes a relative path after a cd the guard cannot resolve; it may be a guard path",
+            "DENY",
+            (
+                "writes a relative path after a cd the guard cannot follow; it may be a guard "
+                "path that only the owner changes, or one on the default branch"
+            ),
         ),
-        "merge-pr": (
-            "ASK",
-            "merges a pull request; the merge job or the owner merges one",
-        ),
-        "merge-default": (
-            "ASK",
-            "merges into the default branch; the `merge` entry point or the owner does",
-        ),
+        "merge-pr": ("ASK", "merges a pull request"),
+        "merge-default": ("ASK", "merges another branch into the default branch"),
         "branch-protection": ("DENY", "reads or changes branch protection or rulesets"),
         "repo-settings": ("DENY", "changes repository, secret, variable or workflow settings"),
         "labels": ("DENY", "manages labels"),
@@ -91,6 +101,18 @@ def test_the_rule_catalogue_is_pinned() -> None:
         ),
         "unreadable": ("ASK", "could not be checked by the guard"),
     }
+
+
+def test_only_four_rules_point_somewhere_other_than_a_dispute() -> None:
+    elsewhere = {rule for rule, spec in RULES.items() if spec.way_out != DISPUTE}
+    assert elsewhere == {
+        "guard-path-default",
+        "unresolved-directory",
+        "merge-pr",
+        "merge-default",
+    }
+    assert len({RULES[rule].way_out for rule in elsewhere}) == len(elsewhere)
+    assert "git switch -c" in RULES["guard-path-default"].way_out
 
 
 def test_deny_outranks_ask_and_the_first_of_equals_wins() -> None:
@@ -304,6 +326,45 @@ def test_group_below_reads_repository_patterns_by_default() -> None:
     assert parse(GOOD).group_below(".x") is None
 
 
+LAYERED = """
+[[group]]
+name = "open"
+reason = "because"
+paths = ["d/x.toml", "e/g/h.toml", "k/a.toml"]
+
+[[group]]
+name = "shut"
+reason = "because"
+edit = "deny"
+paths = ["d/y.json", "e/**"]
+
+[[group]]
+name = "late"
+reason = "because"
+paths = ["d/z.md", "k/b.md"]
+"""
+
+
+@pytest.mark.parametrize(
+    ("directory", "group"),
+    [
+        # Why: removing a directory removes every path in it, and on a branch only a locked
+        # group is refused, so the locked one is the verdict wherever it appears (ADR 0033).
+        (".", "shut"),
+        ("d", "shut"),
+        ("e/g", "shut"),
+        ("e/f", "shut"),
+        ("k", "open"),
+        ("d/x.toml", "open"),
+        ("d/z.md", "late"),
+    ],
+)
+def test_group_below_prefers_a_locked_group(directory: str, group: str) -> None:
+    found = parse(LAYERED).group_below(directory)
+    assert found is not None
+    assert found.name == group
+
+
 PATTERN = "pattern {} must be a non-empty relative glob without '..'"
 
 
@@ -411,9 +472,18 @@ def test_locator_prefers_a_home_hit_and_falls_back_to_the_checkout() -> None:
     assert settings is not None
     assert settings.path == "~/.claude/settings.json"
     hit = locator.classify(HOME / "repo/CLAUDE.md", destructive=False)
-    assert hit == Hit("CLAUDE.md", MANIFEST.groups[-1])
+    assert hit == Hit("CLAUDE.md", MANIFEST.groups[-1], HOME / "repo/CLAUDE.md")
     assert locator.classify(HOME / "notes.txt", destructive=True) is None
     assert locator.classify(Path("/nowhere/CLAUDE.md"), destructive=False) is None
+
+
+def test_a_hit_names_the_canonical_path_it_found() -> None:
+    locator = Locator(MANIFEST, FakeFilesystem())
+    hit = locator.classify(ROOT / "docs/../CLAUDE.md", destructive=False)
+    assert hit == Hit("CLAUDE.md", MANIFEST.groups[-1], ROOT / "CLAUDE.md")
+    below = locator.classify(ROOT / "tools/../.claude", destructive=True)
+    assert below is not None
+    assert below.at == ROOT / ".claude"
 
 
 def test_locator_judges_a_path_by_the_manifest_of_its_own_checkout() -> None:
@@ -558,9 +628,12 @@ def test_a_switch_is_not_certain_under_a_variable_that_redirects_it(name: str) -
 
 def test_details_name_the_offending_command() -> None:
     assert details("git push -f origin x") == ["git push -f origin x"]
-    assert details("echo x > CLAUDE.md") == ["redirects into CLAUDE.md (decisions)"]
-    assert details("rm -rf formal") == ["rm formal (formal)"]
-    assert details("git rm justfile") == ["git rm justfile (gate-commands)"]
+    assert details("echo x > CLAUDE.md", ON_MAIN) == ["redirects into CLAUDE.md (decisions)"]
+    assert details("rm -rf formal", ON_MAIN) == ["rm formal (formal)"]
+    assert details("git rm justfile", ON_MAIN) == ["git rm justfile (gate-commands)"]
+    assert details("echo x > .claude/settings.json") == [
+        "redirects into .claude/settings.json (harness)"
+    ]
     assert details("gh pr merge 3") == ["gh pr merge"]
     assert details("gh api -X delete repos/o/r/actions/runs/1") == [
         "gh api DELETE repos/o/r/actions/runs/1"
@@ -670,7 +743,183 @@ def test_each_nested_shell_counts_towards_the_depth_limit(wrap: Callable[[str], 
     assert rules(wrap(command)) == ["unreadable"]
 
 
+@dataclass
+class Heads(FakeRepo):
+    """A fake repository where each checkout has its own branch and the default ones are chosen."""
+
+    heads: dict[Path, str | None] = field(default_factory=dict)
+    defaults: frozenset[str] = MAIN_BRANCHES
+
+    def checked_out(self, root: Path) -> str | None:
+        return self.heads.get(root, self.branch)
+
+    def default_branches(self, root: Path) -> frozenset[str]:
+        del root
+        return self.defaults
+
+
+@pytest.mark.parametrize(
+    ("head", "lands"),
+    [
+        ("main", True),
+        ("master", True),
+        ("feat/x", False),
+        ("HEAD", False),
+        (None, True),
+    ],
+    ids=["main", "master", "a branch", "a detached HEAD", "git cannot say"],
+)
+def test_a_change_lands_now_on_a_default_branch_and_where_git_cannot_say(
+    head: str | None, *, lands: bool
+) -> None:
+    guard = make_guard(Heads(branch=head))
+    assert guard.lands_now(Context(ROOT), ROOT / "CLAUDE.md") is lands
+
+
+@pytest.mark.parametrize(
+    ("head", "lands"),
+    [("main", True), ("feat/x", False), ("HEAD", False), (None, True)],
+    ids=["main", "a branch", "a detached HEAD", "git cannot say"],
+)
+def test_a_change_lands_where_the_checkout_holding_the_file_is_not_where_the_line_runs(
+    head: str | None, *, lands: bool
+) -> None:
+    guard = make_guard(Heads(branch="main", heads={WORKTREE: head}))
+    assert guard.lands_now(Context(ROOT), WORKTREE / "CLAUDE.md") is lands
+
+
+def test_the_branch_of_the_checkout_the_line_runs_in_does_not_decide_for_another_checkout() -> None:
+    on_a_branch = make_guard(Heads(branch="feat/x", heads={WORKTREE: "main"}))
+    assert on_a_branch.lands_now(Context(ROOT), WORKTREE / "CLAUDE.md")
+    on_main = make_guard(Heads(branch="main", heads={WORKTREE: "feat/x"}))
+    assert not on_main.lands_now(Context(ROOT), WORKTREE / "CLAUDE.md")
+
+
+def test_a_change_lands_now_in_a_file_that_is_in_no_checkout() -> None:
+    guard = make_guard(Heads(branch="feat/x"))
+    assert guard.lands_now(Context(ROOT), Path("/nowhere/notes.md"))
+    assert guard.lands_now(Context(ROOT), HOME / "notes.md")
+
+
+def test_the_branch_the_manifest_is_committed_on_is_a_default_branch() -> None:
+    trunk = make_guard(Heads(branch="trunk", defaults=MAIN_BRANCHES | {"trunk"}))
+    assert trunk.lands_now(Context(ROOT), ROOT / "CLAUDE.md")
+    assert not make_guard(Heads(branch="trunk")).lands_now(Context(ROOT), ROOT / "CLAUDE.md")
+
+
+@pytest.mark.parametrize(
+    ("context", "on_a_branch", "on_main"),
+    [
+        (Context(ROOT).switched_to("main"), True, True),
+        (Context(ROOT).switched_to("feat/y"), False, False),
+        (Context(ROOT).claiming(["main"]), True, True),
+        (Context(ROOT).claiming(["feat/y"]), False, True),
+        (Context(ROOT).switched_to("feat/y").moved_to(ROOT / "app"), False, True),
+        (Context(ROOT).switched_to("main").moved_to(ROOT / "app"), True, True),
+        (Context(ROOT).switching_unseen().moved_to(ROOT / "app"), True, True),
+    ],
+    ids=[
+        "a certain switch to main",
+        "a certain switch to a branch",
+        "a possible switch to main",
+        "a possible switch to a branch",
+        "a switch to a branch, then a cd",
+        "a switch to main, then a cd",
+        "a switch the guard cannot read, then a cd",
+    ],
+)
+def test_a_switch_earlier_on_the_line_decides_where_a_change_lands(
+    context: Context, *, on_a_branch: bool, on_main: bool
+) -> None:
+    path = ROOT / "CLAUDE.md"
+    assert make_guard(FakeRepo(branch="feat/x")).lands_now(context, path) is on_a_branch
+    assert make_guard(FakeRepo(branch="main")).lands_now(context, path) is on_main
+
+
+@pytest.mark.parametrize(
+    ("command", "repo_branch", "expected"),
+    [
+        ("git switch main && echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
+        ("git switch -c topic && echo x > CLAUDE.md", "main", []),
+        ("git switch main; echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
+        ("git switch topic; echo x > CLAUDE.md", "feat/x", []),
+        ("git switch topic; echo x > CLAUDE.md", "main", ["guard-path-default"]),
+        ("git switch - && echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
+        ("git switch main && echo x > .claude/settings.json", "feat/x", ["guard-path-write"]),
+        ("git switch topic && echo x > .claude/settings.json", "main", ["guard-path-write"]),
+        ("git checkout main -- && echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
+        ("git switch -- main && echo x > CLAUDE.md", "feat/x", ["guard-path-default"]),
+        ("git checkout main -- README.md && echo x > CLAUDE.md", "feat/x", []),
+        ("git checkout -- main && echo x > CLAUDE.md", "feat/x", []),
+    ],
+)
+def test_a_switch_on_the_same_line_moves_a_shell_write_between_branch_and_main(
+    command: str, repo_branch: str, expected: list[str]
+) -> None:
+    assert rules(command, make_guard(FakeRepo(branch=repo_branch))) == expected
+
+
+@pytest.mark.parametrize(
+    "switch",
+    [
+        "git switch $B",
+        'git switch "${B:-main}"',
+        "git switch $(cat branch.txt)",
+        "git switch `cat branch.txt`",
+        "git switch -C $B",
+        "bash -c 'git switch main'",
+        "eval git switch main",
+        "echo main | xargs git switch",
+        "for b in main; do git switch $b; done",
+        "find . -maxdepth 0 -exec git checkout main ';'",
+        "out=$(git switch main)",
+        "echo $(sh -c 'git checkout main')",
+        "git rebase -x 'git switch main' feat/x",
+        "xargs -I{} git switch {} < branch.txt",
+    ],
+)
+def test_a_switch_the_guard_cannot_read_may_leave_a_shell_write_on_main(switch: str) -> None:
+    assert rules(f"{switch} && echo x > CLAUDE.md") == ["guard-path-default"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'git status' && echo x > CLAUDE.md",
+        "echo git && echo x > CLAUDE.md",
+        "sudo git checkout -- main && echo x > CLAUDE.md",
+        "git rebase -x 'make test' feat/x && echo x > CLAUDE.md",
+    ],
+)
+def test_a_git_command_that_moves_no_head_leaves_a_shell_write_on_the_branch(command: str) -> None:
+    assert rules(command) == []
+
+
+def test_a_switch_in_another_checkout_counts_for_a_write_there() -> None:
+    other = ".claude/worktrees/agent-1"
+    guard = make_guard(Heads(branch="feat/x", heads={WORKTREE: "feat/y"}))
+    switched = f"git -C {other} switch main && echo x > {other}/CLAUDE.md"
+    assert rules(switched, guard) == ["guard-path-default"]
+    assert rules(f"echo x > {other}/CLAUDE.md", guard) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["echo x > CLAUDE.md", "rm -rf formal", "git rm justfile", "git diff --output=justfile"],
+)
+def test_a_shell_write_to_an_unlocked_guard_path_is_refused_only_on_main(command: str) -> None:
+    assert rules(command) == []
+    assert rules(command, ON_MAIN) == ["guard-path-default"]
+
+
+def test_a_shell_write_to_a_locked_guard_path_is_refused_on_any_branch() -> None:
+    assert rules("echo x > .claude/settings.json") == ["guard-path-write"]
+    assert rules("echo x > .claude/settings.json", ON_MAIN) == ["guard-path-write"]
+
+
 def test_cd_moves_later_writes() -> None:
     guard = make_guard()
     assert bash.check("cd /tmp && echo x > CLAUDE.md", Context(ROOT), guard) == []
-    assert rules("pushd config && rm lint.toml") == ["guard-path-write"]
+    assert rules("pushd config && rm lint.toml") == []
+    assert rules("pushd config && rm lint.toml", ON_MAIN) == ["guard-path-default"]
+    assert rules("pushd .claude && rm settings.json") == ["guard-path-write"]

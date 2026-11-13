@@ -6,9 +6,10 @@ stay within one segment and ``**`` spans any number of segments. Its ``Scope`` i
 its first characters: ``~/`` is matched relative to the user's home directory, ``/`` against
 the absolute path (only the implicit plugin group uses these; the file may not), and
 anything else relative to the repository. A group's optional ``edit`` is ``"ask"`` (the
-default), ``"deny"``, for paths Claude Code's bypass mode would otherwise let through, or
-``"append"``, for records an agent may add to and only the owner changes: an edit that
-``ratchet_guards.records`` finds additive passes, and every other one asks (ADR 0014). Its
+default: a change on a branch goes to the merge judge, and one that lands on the default branch
+is denied, ADR 0033), ``"deny"``, for paths that act before any merge, or ``"append"``, for
+records an agent may add to and only the owner changes: an edit that ``ratchet_guards.records``
+finds additive passes even on the default branch (ADR 0014). Its
 optional ``exclude`` lists patterns its ``paths`` do not cover, such as agent worktrees under
 ``.claude/worktrees/``, which are checkouts of their own. A group whose ``paths`` list is
 empty matches nothing: the adopt template ships such groups behind ``# bind:`` comments until
@@ -190,12 +191,16 @@ class Manifest:
         return None
 
     def group_below(self, directory: str, *, scope: Scope = Scope.REPOSITORY) -> Group | None:
-        """The group guarding something at or below ``directory`` (``"."`` is the top)."""
+        """The group guarding something at or below ``directory`` (``"."`` is the top).
+
+        A locked group wins over the rest: removing the directory removes every path in it, and
+        on a branch only a locked one is refused (ADR 0033).
+        """
         prefix = "" if directory == "." else directory.rstrip("/") + "/"
-        for group, pattern in self._patterns(scope):
-            if pattern.startswith(prefix):
-                return group
-        return self.group_of(directory, scope=scope)
+        below = [group for group, pattern in self._patterns(scope) if pattern.startswith(prefix)]
+        holding = self.group_of(directory, scope=scope)
+        first = below[0] if below else holding
+        return next((group for group in (*below, holding) if group and group.locked), first)
 
     def patterns(self) -> list[str]:
         """Every pattern as written, in file order."""

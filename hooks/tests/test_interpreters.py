@@ -1,8 +1,11 @@
-"""Interpreters given an inline program that writes a guard path are denied; reads pass.
+"""Interpreters given an inline program that writes a guard path are judged like any shell write.
 
 The 2026-11-09 trial: a subagent changed ``DESIGN.md`` with ``python3 - <<'EOF' ... EOF`` and
 the hook let it through, so the owner's approval never fired. Each row runs in ``/repo`` against
-a manifest that guards ``DESIGN.md``, ``pyproject.toml`` and a directory.
+a manifest that guards ``DESIGN.md``, ``pyproject.toml`` and a directory, and ``LOCKED.md`` that
+only the owner changes. A write to the first three is refused where the commit lands on ``main``
+and gets no verdict on a branch (the merge judge reads it); a write to ``LOCKED.md`` is refused
+on any branch.
 """
 
 from pathlib import Path
@@ -10,22 +13,30 @@ from pathlib import Path
 import pytest
 
 from ratchet_guards import interpreters
+from ratchet_guards.context import Guard
 from ratchet_guards.hook import reason
 from ratchet_guards.manifest import parse
-from tests.support import ROOT, make_guard, rules, verdicts
-from tests.test_hook import SHIM, checkout, decision, run_shim
+from tests.support import ROOT, FakeRepo, make_guard, rules, verdicts
+from tests.test_hook import SHIM, checkout, decision, run_shim, switch_to_a_branch
 
 W = "guard-path-write"
-GUARD = make_guard(
-    manifest=parse(
-        """
+P = "guard-path-default"
+MANIFEST = parse(
+    """
 [[group]]
 name = "design"
 reason = "The design record is the standard every review judges against."
 paths = ["DESIGN.md", "pyproject.toml", "scripts/**"]
+
+[[group]]
+name = "locked"
+reason = "Only the owner changes it."
+edit = "deny"
+paths = ["LOCKED.md"]
 """
-    )
 )
+GUARD = make_guard(manifest=MANIFEST)
+ON_MAIN = make_guard(FakeRepo(branch="main"), manifest=MANIFEST)
 T4 = "python3 - <<'EOF'\np='DESIGN.md'\ns=open(p).read()\n...\nopen(p,'w').write(s)\nEOF"
 
 TEXT_WITH_SLASHES = (
@@ -63,7 +74,6 @@ PYTHON_WRITES = [
     "python3 -c \"import shutil; shutil.copy('/tmp/x', 'DESIGN.md')\"",
     "python3 -c \"import shutil; shutil.move('DESIGN.md', '/tmp/x')\"",
     "python3 -c \"import shutil; shutil.rmtree('scripts')\"",
-    "python3 -c \"import shutil; shutil.rmtree('/')\"",
     "python3 -c \"import os; x = 'a / b'; os.unlink('scripts')\"",
     "python3 -c \"import os; os.unlink('DESIGN.md'); x = 'a / b'\"",
     "python3 -c \"import os; os.system('rm scripts/x.py / y')\"",
@@ -246,8 +256,33 @@ ALLOWED = [
 
 
 @pytest.mark.parametrize("command", DENIED)
-def test_an_inline_program_that_writes_a_guard_path_is_denied(command: str) -> None:
-    assert rules(command, GUARD) == [W]
+def test_an_inline_program_that_writes_a_guard_path_is_denied_on_main(command: str) -> None:
+    assert rules(command, ON_MAIN) == [P]
+
+
+@pytest.mark.parametrize("command", DENIED)
+def test_an_inline_program_that_writes_a_guard_path_gets_no_verdict_on_a_branch(
+    command: str,
+) -> None:
+    assert rules(command, GUARD) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -c \"open('LOCKED.md','w')\"",
+        "python3 - <<'EOF'\nopen('LOCKED.md','w')\nEOF",
+        "node -e \"require('fs').writeFileSync('LOCKED.md','x')\"",
+        "perl -pi -e 's/a/b/' LOCKED.md",
+        "ruby -e 'File.delete(\"LOCKED.md\")'",
+        "python3 -c \"import shutil; shutil.rmtree('/')\"",
+    ],
+)
+@pytest.mark.parametrize("guard", [GUARD, ON_MAIN], ids=["branch", "main"])
+def test_an_inline_program_that_writes_a_locked_path_is_denied_on_any_branch(
+    command: str, guard: Guard
+) -> None:
+    assert rules(command, guard) == [W]
 
 
 @pytest.mark.parametrize("command", ALLOWED)
@@ -255,29 +290,34 @@ def test_reads_and_unrelated_writes_pass(command: str) -> None:
     assert rules(command, GUARD) == []
 
 
-def test_the_trial_command_is_denied_with_the_owner_route() -> None:
-    (verdict,) = verdicts(T4, GUARD, ROOT)
+def test_the_trial_command_is_denied_on_main_with_the_way_to_a_branch() -> None:
+    (verdict,) = verdicts(T4, ON_MAIN, ROOT)
     message = reason(verdict)
-    assert verdict.rule == W
+    assert verdict.rule == P
     assert "DESIGN.md (design)" in verdict.detail
     assert "python3" in verdict.detail
-    assert "Edit or Write tool so the owner is asked" in message
-    assert "one Write for many changes in one file, since each Edit asks" in message
-    assert "split a read of a guard path from an unrelated write" in message
+    assert "A read of a guard path goes in a tool call of its own" in message
+    assert "apart from an unrelated write" in message
+    assert "Make the change on a branch (`git switch -c <name>`)" in message
     assert "Ratchet guard denied this tool call" in message
+    assert "Edit or Write tool so the owner is asked" not in message
+
+
+def test_the_trial_command_gets_no_verdict_on_a_branch() -> None:
+    assert verdicts(T4, GUARD, ROOT) == []
 
 
 def test_every_guard_path_the_program_names_is_reported() -> None:
     command = "python3 -c \"open('DESIGN.md','w'); open('pyproject.toml','w')\""
-    details = [verdict.detail for verdict in verdicts(command, GUARD, ROOT)]
+    details = [verdict.detail for verdict in verdicts(command, ON_MAIN, ROOT)]
     assert any("DESIGN.md" in detail for detail in details)
     assert any("pyproject.toml" in detail for detail in details)
 
 
 def test_a_guard_path_is_resolved_against_the_working_directory() -> None:
     command = "python3 -c \"open('DESIGN.md','w')\""
-    assert rules(command, GUARD, ROOT / "docs") == []
-    assert rules(command, GUARD, ROOT) == [W]
+    assert rules(command, ON_MAIN, ROOT / "docs") == []
+    assert rules(command, ON_MAIN, ROOT) == [P]
 
 
 def test_a_here_string_fed_to_a_shell_is_checked() -> None:
@@ -292,9 +332,11 @@ def test_the_shim_denies_the_trial_command_in_a_real_checkout(tmp_path: Path) ->
     case = {"tool_name": "Bash", "tool_input": {"command": program}, "cwd": str(root)}
     done = run_shim(SHIM, case)
     assert decision(done) == "deny"
-    assert "Edit or Write tool so the owner is asked" in done.stdout
+    assert "Make the change on a branch" in done.stdout
     read = "python3 - <<'EOF'\nprint(open('CLAUDE.md').read())\nEOF"
-    case = {"tool_name": "Bash", "tool_input": {"command": read}, "cwd": str(root)}
+    read_case = {"tool_name": "Bash", "tool_input": {"command": read}, "cwd": str(root)}
+    assert run_shim(SHIM, read_case).stdout == ""
+    switch_to_a_branch(root)
     assert run_shim(SHIM, case).stdout == ""
 
 

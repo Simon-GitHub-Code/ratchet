@@ -1,22 +1,24 @@
 """The Claude Code PreToolUse hook: JSON in on stdin, a decision out on stdout.
 
 ``hooks/guard.py`` puts ``hooks/`` on ``sys.path`` and calls ``main`` with the repository
-root. For Edit, Write, MultiEdit and NotebookEdit on a guard path, and for a Codex ``apply_patch``
-whose headers name one, the hook answers ``ask``. Grok's own tool names
-(``run_terminal_command``, ``search_replace``, ``write``, ...) are judged as the Claude tools
-they stand for. Antigravity's input (``toolCall`` with ``name`` and ``args``) is translated to
-Claude's shape first, and the answer goes back in Antigravity's (``decision`` and ``reason``).
-It answers ``ask``,
-which needs a human at the permission prompt, or ``deny`` in a group whose ``edit`` is
-``"deny"`` (paths Claude Code's bypass mode would let through an ``ask``). In a group whose
-``edit`` is ``"append"`` (the glossary and the decision records) an Edit, Write or MultiEdit that
-only adds gets no verdict: ``ratchet_guards.records`` compares the file the call would leave
-with the merge base of ``HEAD`` and the default branch, and anything it does not find additive
-asks, with the reason (ADR 0014). For a Bash
-command that bypasses a gate, rewrites history, removes a plugin or writes a guard path it
-answers ``deny``. When no rule fires it prints nothing, so Claude Code's own permission rules
-decide; Antigravity, which reads no answer as a deny, gets a plain ``ask``, its own prompt. It
-never answers ``allow``. Any failure answers ``ask``.
+root. Grok's own tool names (``run_terminal_command``, ``search_replace``, ``write``, ...) are
+judged as the Claude tools they stand for. Antigravity's input (``toolCall`` with ``name`` and
+``args``) is translated to Claude's shape first, and the answer goes back in Antigravity's
+(``decision`` and ``reason``).
+
+A change to a guard path, by Edit, Write, MultiEdit, NotebookEdit, a Codex ``apply_patch`` or the
+shell, gets no verdict when its commit lands on a branch other than the default: it reaches the
+default branch only through a merge, and the merge judge sends it to the owner (ADR 0033). Where
+the commit would land on the default branch it is denied, with the way out: make it on a branch.
+In a group whose ``edit`` is ``"deny"`` (the files that act before any merge) every change is
+denied. In a group whose ``edit`` is ``"append"`` (the glossary and the decision records) an
+Edit, Write or MultiEdit that only adds passes on the default branch too:
+``ratchet_guards.records`` compares the file the call would leave with the merge base of ``HEAD``
+and the default branch (ADR 0014). For a Bash command that bypasses a gate, rewrites history or
+removes a plugin it answers ``deny``. It answers ``ask`` on a merge into the default branch and on
+the agent-ready label, the owner's to give. When no rule fires it prints nothing, so the harness's
+own permission rules decide; Antigravity, which reads no answer as a deny, gets a plain ``ask``,
+its own prompt. It never answers ``allow``. Any failure answers ``ask``.
 
 A verdict covers the whole tool call: Claude Code runs none of a denied Bash command line,
 so a write chained before the refused command is lost with it. The deny message says so and
@@ -56,10 +58,11 @@ from typing import TextIO
 
 from ratchet_guards import bash, records, tickets
 from ratchet_guards.committed import committed_manifest, default_branch
-from ratchet_guards.context import Context, Guard
+from ratchet_guards.context import DETACHED, Context, Guard
 from ratchet_guards.manifest import EMPTY, Manifest, parse, with_plugin_group
 from ratchet_guards.paths import Checkout, Hit, Locator
-from ratchet_guards.verdict import Decision, Verdict, strictest
+from ratchet_guards.refs import MAIN_BRANCHES, REMOTE
+from ratchet_guards.verdict import DISPUTE, Decision, Verdict, strictest
 
 EDIT_TOOLS = {
     "Edit": "file_path",
@@ -101,7 +104,7 @@ ANTIGRAVITY_ARGS = {
 }
 ANTIGRAVITY_CHUNKS = "ReplacementChunks"
 # Why: ratchet's `ask` means the owner approves this one call. Antigravity's `ask` honours a
-# cached "Always Allow", which would let a later guard-path edit through unseen; `force_ask`
+# cached "Always Allow", which would let a later merge or label through unseen; `force_ask`
 # always prompts. It never answers `allow`, which would skip Antigravity's own prompts.
 ANTIGRAVITY_DECISIONS = {Decision.DENY: "deny", Decision.ASK: "force_ask"}
 # Why: Antigravity has no "no opinion" answer. A missing or empty `decision` is a deny (seen live
@@ -203,19 +206,24 @@ class LocalFilesystem:
         return os.path.expandvars(Path(word).expanduser())
 
 
-def _output(cwd: Path, *args: str) -> str | None:
-    """``git -C cwd args`` stdout as git wrote it, or ``None`` when git fails or is missing."""
+def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
+    """``git -C cwd args`` as it finished, or ``None`` when git is missing or hangs."""
     try:
-        completed = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        return subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
             ["git", "-C", str(cwd), *args],  # noqa: S607 # -- git is resolved from PATH on purpose
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT_SECONDS,  # pragma: no mutate # -- only bounds a hung git
-            check=False,  # pragma: no mutate # -- a failure returns None either way
+            check=False,  # pragma: no mutate # -- the caller reads the exit status
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    return completed.stdout if completed.returncode == 0 else None
+
+
+def _output(cwd: Path, *args: str) -> str | None:
+    """``git -C cwd args`` stdout as git wrote it, or ``None`` when git fails or is missing."""
+    completed = _run(cwd, *args)
+    return completed.stdout if completed is not None and completed.returncode == 0 else None
 
 
 def _git(cwd: Path, *args: str) -> str | None:
@@ -224,10 +232,33 @@ def _git(cwd: Path, *args: str) -> str | None:
 
 
 _HEADS = "refs/heads/"
+_TRACKING = f"refs/remotes/{REMOTE}/"
+# `git symbolic-ref -q` exits 1, silently, when HEAD names a commit rather than a branch.
+_NOT_SYMBOLIC = 1
+
+
+def _head(root: Path) -> str | None:
+    completed = _run(root, "symbolic-ref", "-q", "HEAD")
+    if completed is None:
+        return None
+    if completed.returncode == _NOT_SYMBOLIC:
+        return DETACHED
+    head = completed.stdout.strip() if completed.returncode == 0 else ""
+    return head.removeprefix(_HEADS) or None
 
 
 class GitRepoState:
-    """Git state read with the ``git`` command."""
+    """Git state read with the ``git`` command.
+
+    What branch a checkout has, and which are its default ones, is read once per instance: one
+    tool call may name hundreds of files in one checkout, and git's answer does not change while
+    the guard judges it.
+    """
+
+    def __init__(self) -> None:
+        """Empty caches of what each checkout has checked out and calls its default branches."""
+        self._heads: dict[Path, str | None] = {}
+        self._defaults: dict[Path, frozenset[str]] = {}
 
     def current_branch(self, cwd: Path) -> str | None:
         """The checked-out branch, or ``None`` when detached or not a repository.
@@ -237,6 +268,22 @@ class GitRepoState:
         """
         head = _git(cwd, "symbolic-ref", "HEAD")
         return head.removeprefix(_HEADS) if head else None
+
+    def checked_out(self, root: Path) -> str | None:
+        """The branch the checkout at ``root`` has, ``DETACHED``, or ``None`` when git fails.
+
+        A branch with no commit yet is still a branch: ``HEAD`` names it.
+        """
+        if root not in self._heads:
+            self._heads[root] = _head(root)
+        return self._heads[root]
+
+    def default_branches(self, root: Path) -> frozenset[str]:
+        """``main``, ``master`` and the branch the committed manifest is read from at ``root``."""
+        if root not in self._defaults:
+            name = (default_branch(root) or "").removeprefix(_TRACKING).removeprefix(_HEADS)
+            self._defaults[root] = MAIN_BRANCHES | ({name} if name else frozenset())
+        return self._defaults[root]
 
     def head_is_pushed(self, cwd: Path) -> bool | None:
         """Whether any remote-tracking branch contains ``HEAD`` (``--contains`` defaults to it)."""
@@ -315,27 +362,32 @@ def _judge(call: Call, target: str, context: Context, *, guard: Guard) -> Verdic
         return strictest(bash.check(target, context, guard))
     path = context.cwd / target
     label = tickets.check(call.tool, call.tool_input, path, guard=guard)
-    return strictest(v for v in (_edit(call, path, guard), label) if v is not None)
+    return strictest(v for v in (_edit(call, path, context, guard=guard), label) if v is not None)
 
 
 def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | None:
-    """The strictest verdict over the files an ``apply_patch`` adds, updates, deletes or moves."""
+    """The strictest verdict over the files an ``apply_patch`` adds, updates, deletes or moves.
+
+    A patch is not computed, so on the default branch even an addition to a record is refused.
+    """
     text = "\n".join(value for value in tool_input.values() if isinstance(value, str))
+    context = Context(cwd)
     verdicts = []
     for match in PATCH_HEADER.finditer(text):
         destructive = match.group("verb") in PATCH_DESTRUCTIVE
         hit = guard.locator.classify(cwd / match.group("path").strip(), destructive=destructive)
-        if hit is not None:
+        if hit is not None and (hit.group.locked or guard.lands_now(context, hit.at)):
             verdicts.append(_hit_verdict(hit))
     paths = [match.group("path").strip() for match in PATCH_HEADER.finditer(text)]
-    return strictest(verdicts + tickets.named(paths, text, Context(cwd), guard=guard))
+    return strictest(verdicts + tickets.named(paths, text, context, guard=guard))
 
 
-def _edit(call: Call, path: Path, guard: Guard) -> Verdict | None:
+def _edit(call: Call, path: Path, context: Context, *, guard: Guard) -> Verdict | None:
+    """A locked path is refused; any other guard path only where the edit lands on main."""
     hit = guard.locator.classify(path, destructive=False)  # pragma: no mutate # -- None is False
-    if hit is None:
+    if hit is None or not (hit.group.locked or guard.lands_now(context, hit.at)):
         return None
-    if not hit.group.additive:
+    if hit.group.locked or not hit.group.additive:
         return _hit_verdict(hit)
     reason = _not_additive(call, path, guard)
     return None if reason is None else _hit_verdict(hit, f" This edit is not an addition: {reason}")
@@ -366,11 +418,11 @@ def _not_additive(call: Call, path: Path, guard: Guard) -> str | None:
 
 def _hit_verdict(hit: Hit, more: str = "") -> Verdict:
     detail = f"{hit.path} is in guard group '{hit.group.name}'. {hit.group.reason}{more}"
-    return Verdict("guard-path-locked" if hit.group.locked else "guard-path-edit", detail)
+    return Verdict("guard-path-locked" if hit.group.locked else "guard-path-default", detail)
 
 
 def reason(verdict: Verdict) -> str:
-    """The sentence Claude (deny) or the human (ask) reads."""
+    """The sentence the agent (deny) or the owner (ask) reads, ending in what to do next."""
     stop = "" if verdict.detail.endswith(".") else "."
     if verdict.rule.startswith("guard-path"):
         # Why: the agent should know where the rule comes from, and that it is not in the tree.
@@ -380,14 +432,19 @@ def reason(verdict: Verdict) -> str:
         # with the refused one is lost; the agent must hear that, and the matched token.
         return (
             f"Ratchet guard denied this tool call; no part of it ran. It {verdict.because}: "
-            f"{verdict.detail}{stop} Do not work around it. If you believe the gate is wrong, "
-            f"stop, write a gate dispute ({DISPUTES}) and report it to whoever started you. If "
-            f"the call also did unrelated work, redo that in a tool call of its own."
+            f"{verdict.detail}{stop} {verdict.way_out} If the call also did unrelated work, redo "
+            f"that in a tool call of its own."
+        )
+    if verdict.way_out == DISPUTE:
+        return (
+            f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop} Approve "
+            f"only if you, the owner, intend this. An agent that thinks a gate is wrong writes a "
+            f"gate dispute ({DISPUTES}) instead."
         )
     return (
-        f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop} Approve only "
-        f"if you, the owner, intend this. An agent that thinks a gate is wrong writes a gate "
-        f"dispute ({DISPUTES}) instead."
+        f"Ratchet: an agent asks to run a tool call that {verdict.because}: {verdict.detail}"
+        f"{stop} {verdict.way_out} Approve only if you have read them and want this change in "
+        f"now."
     )
 
 

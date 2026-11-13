@@ -21,11 +21,7 @@ import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-ADVICE = (
-    "Write the guard path with the Edit or Write tool so the owner is asked (one Write for "
-    "many changes in one file, since each Edit asks), and split a read of a guard path from "
-    "an unrelated write."
-)
+ADVICE = "A read of a guard path goes in a tool call of its own, apart from an unrelated write."
 _NEVER = re.compile(r"(?!)")
 # One call argument: quoted strings and balanced parentheses (two deep) hide their commas.
 _ARG = r"""(?:'[^'\n]*'|"[^"\n]*"|[^,()'"]|\((?:[^()]|\([^()]*\))*\))*"""

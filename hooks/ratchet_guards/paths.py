@@ -75,10 +75,11 @@ class Checkout:
 
 @dataclass(frozen=True, slots=True)
 class Hit:
-    """A guarded path as the human should read it, and its group."""
+    """A guarded path as the human should read it, its group, and where it is on disk."""
 
     path: str
     group: Group
+    at: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,21 +116,21 @@ class Locator:
 
     def classify(self, path: Path, *, destructive: bool) -> Hit | None:
         """The hit for ``path``; ``destructive`` also catches guard paths below a directory."""
-        for relative, scope, manifest in self._views(self.filesystem.canonical(path)):
-            hit = self._match(manifest, relative, destructive=destructive, scope=scope)
-            if hit is not None:
-                return hit
+        canonical = self.filesystem.canonical(path)
+        for relative, scope, manifest in self._views(canonical):
+            group = self._match(manifest, relative, destructive=destructive, scope=scope)
+            if group is not None:
+                shown = f"~/{relative}" if scope is Scope.HOME else relative
+                return Hit(shown, group, canonical)
         return None
 
     @staticmethod
-    def _match(manifest: Manifest, relative: str, *, destructive: bool, scope: Scope) -> Hit | None:
+    def _match(
+        manifest: Manifest, relative: str, *, destructive: bool, scope: Scope
+    ) -> Group | None:
         if destructive:
-            group = manifest.group_below(relative, scope=scope)
-        else:
-            group = manifest.group_of(relative, scope=scope)
-        if group is None:
-            return None
-        return Hit(f"~/{relative}" if scope is Scope.HOME else relative, group)
+            return manifest.group_below(relative, scope=scope)
+        return manifest.group_of(relative, scope=scope)
 
     def could_hit(self, words: Iterable[str], *, destructive: bool) -> list[str]:
         """The relative words that would be guard paths in some repository, wherever it is.

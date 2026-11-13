@@ -12,6 +12,7 @@ from ratchet_guards.globs import matches
 from ratchet_guards.manifest import Manifest, parse, with_plugin_group
 from ratchet_guards.paths import Checkout, Locator
 from ratchet_guards.records import Before
+from ratchet_guards.refs import MAIN_BRANCHES
 from ratchet_guards.verdict import Verdict
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -130,6 +131,14 @@ class FakeRepo:
     def current_branch(self, cwd: Path) -> str | None:
         self.asked.append(f"branch {cwd}")
         return self.branch
+
+    def checked_out(self, root: Path) -> str | None:
+        self.asked.append(f"head {root}")
+        return self.branch
+
+    def default_branches(self, root: Path) -> frozenset[str]:
+        del root
+        return MAIN_BRANCHES
 
     def head_is_pushed(self, cwd: Path) -> bool | None:
         self.asked.append(f"pushed {cwd}")
