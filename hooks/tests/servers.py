@@ -118,20 +118,22 @@ def sleeper(tree: Path) -> subprocess.Popen[bytes]:
 # is signalled. ``queue`` serves one request at a time, answers the first four ``/work`` at once
 # and holds the fifth until the signal, so the connections behind it wait in the kernel's accept
 # queue; on the signal it answers the fifth and exits 0, and the kernel resets the connections it
-# never accepted, as any correct server's listener close does.
+# never accepted, as any correct server's listener close does. ``abandon`` is ``queue`` exiting at
+# once on the signal instead, so it drops the fifth, which it accepted, as well.
 STOPS = (
     "import os, signal, sys, threading, time, http.server as h\n"
     "MODE = os.environ['MODE']\n"
+    "QUEUES = MODE in ('queue', 'abandon')\n"
     "held, stopping = [], threading.Event()\n"
-    "class Server(h.HTTPServer if MODE == 'queue' else h.ThreadingHTTPServer):\n"
+    "class Server(h.HTTPServer if QUEUES else h.ThreadingHTTPServer):\n"
     "    daemon_threads = False\n"
     "    block_on_close = True\n"
     "    def handle_error(self, request, client_address): pass\n"
     "class Handler(h.BaseHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
     "    def do_GET(self):\n"
-    "        if self.path == '/work' and MODE != 'queue': time.sleep(0.3)\n"
-    "        if self.path == '/work' and MODE == 'queue':\n"
+    "        if self.path == '/work' and not QUEUES: time.sleep(0.3)\n"
+    "        if self.path == '/work' and QUEUES:\n"
     "            held.append(self.connection)\n"
     "            if len(held) == 5: stopping.wait()\n"
     "        self.send_response(200)\n"
@@ -140,7 +142,7 @@ STOPS = (
     "        self.wfile.write(b'ok')\n"
     "server = Server(('127.0.0.1', int(os.environ['PORT'])), Handler)\n"
     "def stop(*args):\n"
-    "    if MODE == 'drop': os._exit(0)\n"
+    "    if MODE in ('drop', 'abandon'): os._exit(0)\n"
     "    if MODE == 'slow': time.sleep(3)\n"
     "    stopping.set()\n"
     "    threading.Thread(target=server.shutdown).start()\n"

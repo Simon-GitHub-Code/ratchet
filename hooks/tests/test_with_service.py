@@ -350,14 +350,26 @@ def test_a_service_that_drains_and_exits_zero_is_green_under_load(
 
 
 def test_a_service_that_leaves_connections_in_its_accept_queue_is_green(
-    capsys: pytest.CaptureFixture[str],
+    capfd: pytest.CaptureFixture[str],
 ) -> None:
     # Why: a correct server stops by closing its listener, and the kernel resets every connection
     # still queued on it. The service never accepted them, so nothing it owed was dropped, though
     # each was made before the signal and fails with no response, as a dropped request does.
-    code, out = graceful("queue", capsys=capsys)
+    code, out = graceful("queue", capsys=capfd)
     assert out.endswith("with_service: green\n"), out
+    assert " connection(s) reset after the stop signal are not counted: the service " in out
     assert code == 0
+
+
+def test_the_request_a_service_accepted_and_dropped_is_red_beside_those_it_never_accepted(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    # Why: the gate excuses a reset only for a connection it took itself from a listener the
+    # service had let go of. The one request this service accepted and then abandoned counts.
+    code, out = graceful("abandon", capsys=capfd)
+    assert "load-smoke: 3 connection(s) reset after the stop signal are not counted" in out
+    assert "\n1 x GET http://127.0.0.1:" in out, out
+    assert code == 1
 
 
 def test_a_smoke_slow_to_start_still_has_requests_in_flight_at_the_signal(

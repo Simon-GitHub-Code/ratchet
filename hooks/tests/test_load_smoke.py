@@ -2,12 +2,16 @@
 
 import argparse
 import http.server
+import socket
 import threading
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import gatelib
+import listeners
 import load_smoke
 from tests import servers
 
@@ -295,31 +299,105 @@ def test_a_refusal_after_the_signal_is_expected_and_before_it_is_an_error(
     assert after == (0, "load-smoke: green\n")
 
 
-def test_a_refusal_raced_against_the_signal_is_closed_but_a_reset_is_not(
+def test_a_failure_after_the_signal_is_closed_when_refused_and_cut_otherwise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     marker = tmp_path / "stopping"
-    goal = load_smoke.Target("GET", "http://127.0.0.1:1/", None, None)
+    goal = load_smoke.Target("GET", "https://127.0.0.1/", None, None)
 
-    def fail_as(error: OSError) -> None:
-        def http_status(*_: object, **__: object) -> int:
+    def fail(error: OSError, *clients: int) -> None:
+        """``http_status`` failing once the signal landed, after trying ``clients`` ports."""
+
+        def http_status(*_: object, connecting: Callable[[object], None], **__: object) -> int:
+            for client in clients:
+                connecting(SimpleNamespace(getsockname=lambda port=client: ("127.0.0.1", port)))
             marker.touch()  # the signal lands while the request is in flight
             raise error
 
         monkeypatch.setattr(gatelib, "http_status", http_status)
 
-    # Why: a refused connect never reached the service, so nothing was in flight to be dropped;
-    # whatever the signal's timing against the request's start, it is the listener having closed.
-    fail_as(ConnectionRefusedError())
+    # Why: a refused connect never reached the service, so it dropped nothing.
+    fail(ConnectionRefusedError(), 40000)
     with pytest.raises(load_smoke.Closed):
         load_smoke.attempt(goal, 1, marker)
-    # A reset may have cut a request the service owed an answer, so the start-time rule keeps it.
-    marker.unlink()
-    fail_as(ConnectionResetError())
-    assert load_smoke.attempt(goal, 1, marker) == (
-        None,
-        "GET http://127.0.0.1:1/: ConnectionResetError",
+    # Any other failure may be one the service accepted: whose it was is judged at the end, by
+    # the port of the last connect tried.
+    fail(ConnectionResetError(), 39999, 40000)
+    with pytest.raises(load_smoke.Cutoff) as cutoff:
+        load_smoke.attempt(goal, 1, marker)
+    assert cutoff.value.cut == load_smoke.Cut(
+        "GET https://127.0.0.1/", "ConnectionResetError", 443, 40000
     )
+    # With no connect tried there is no connection to match, so it counts.
+    fail(OSError("no address"))
+    assert load_smoke.attempt(goal, 1, marker) == (None, "GET https://127.0.0.1/: OSError")
+
+
+def cut_after_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    as_gate: bool,
+) -> tuple[int, str]:
+    """The smoke after the signal against a server that resets every connection.
+
+    With ``as_gate`` it first writes the connection's ports to the marker, as the gate does with
+    a connection it took from a listener the service let go of; without, it is a service
+    dropping requests it accepted.
+    """
+    marker, _ = until_stopped(tmp_path, monkeypatch)
+    gatelib.write_stopping(marker, gatelib.Stopping(frozenset(), None))
+    taken: set[tuple[int, int]] = set()
+    lock = threading.Lock()
+
+    def handle(handler: http.server.BaseHTTPRequestHandler) -> None:
+        if as_gate:
+            with lock:
+                taken.add((handler.connection.getsockname()[1], handler.client_address[1]))
+                gatelib.write_stopping(marker, gatelib.Stopping(frozenset(taken), None))
+        handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, listeners.RESET)
+        handler.connection.close()
+
+    with servers.server(handle) as url:
+        args = ["--seconds", "0.3", "--concurrency", "4", "--min-requests", "0"]
+        return smoke("--until-stopped", "--url", f"{url}/", *args, capsys=capsys)
+
+
+def test_a_connection_the_gate_took_and_reset_is_not_counted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out = cut_after_signal(tmp_path, monkeypatch, capsys, as_gate=True)
+    assert out == (
+        "load-smoke: 4 connection(s) reset after the stop signal are not counted: the service "
+        "never accepted them, they were still waiting on its listener when it stopped listening\n"
+        "load-smoke: green\n"
+    )
+    assert code == 0
+
+
+def test_a_connection_the_service_accepted_and_reset_after_the_signal_is_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out = cut_after_signal(tmp_path, monkeypatch, capsys, as_gate=False)
+    assert out.startswith("4 x GET http://127.0.0.1:"), out
+    assert "not counted" not in out
+    assert code == 1
+
+
+def test_resets_count_with_the_reason_when_the_gate_could_not_take_the_listener() -> None:
+    cuts = [load_smoke.Cut("GET u", "ConnectionResetError", 80, client) for client in (1, 2)]
+    errors, notes = load_smoke.judge(cuts, gatelib.Stopping(frozenset({(80, 1)}), "no Linux"))
+    assert errors == {"GET u: ConnectionResetError": 1}
+    assert notes[0].startswith("load-smoke: 1 connection(s) reset after the stop signal are not")
+    assert notes[1] == (
+        "load-smoke: every reset after the stop signal counts as a dropped request here, since "
+        "the gate could not tell which connections the service had accepted: no Linux. A service "
+        "that stops correctly still resets connections that were waiting on its listener."
+    )
+    assert load_smoke.judge(cuts[:1], gatelib.Stopping(frozenset({(80, 1)}), "no Linux"))[1] == [
+        notes[0]
+    ], "with nothing counted there is nothing to explain"
 
 
 def test_an_error_status_or_a_timeout_after_the_signal_is_still_red(
