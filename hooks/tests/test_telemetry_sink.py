@@ -1,5 +1,6 @@
 """``telemetry_sink``: an OTLP/HTTP receiver judged on what a real SDK export contains."""
 
+import contextlib
 import gzip
 import http.client
 import json
@@ -284,21 +285,29 @@ def test_the_receiver_thread_leaves_every_interrupt_to_the_main_thread(tmp_path:
     blocked: set[int] = set()
     seen = tmp_path / "seen"
 
+    def receiver() -> threading.Thread | None:
+        return next((t for t in threading.enumerate() if "(serve" in t.name), None)
+
     def watch_the_receiver() -> None:
         deadline = time.monotonic() + 10
-        while not (started := set(threading.enumerate()) - running):
-            time.sleep(0.01)
-        status = Path(f"/proc/self/task/{started.pop().native_id}/status")
-        while blocked != set(INTERRUPTS) and time.monotonic() < deadline:
-            mask = int(re.findall(r"^SigBlk:\s*(\w+)$", status.read_text(), re.MULTILINE)[0], 16)
-            blocked.update(s for s in INTERRUPTS if mask >> (s - 1) & 1)
-            time.sleep(0.01)
-        seen.touch()
+        try:
+            while blocked != set(INTERRUPTS) and time.monotonic() < deadline:
+                time.sleep(0.01)
+                if (thread := receiver()) is None:
+                    continue
+                status = Path(f"/proc/self/task/{thread.native_id}/status")
+                with contextlib.suppress(OSError):
+                    mask = re.findall(r"^SigBlk:\s*(\w+)$", status.read_text(), re.MULTILINE)
+                    blocked.update(s for s in INTERRUPTS if int(mask[0], 16) >> (s - 1) & 1)
+        finally:
+            seen.touch()
 
     watcher = threading.Thread(target=watch_the_receiver, daemon=True)
-    running = {*threading.enumerate(), watcher}
     watcher.start()
-    wait = "import os, sys, time\nwhile not os.path.exists(sys.argv[1]): time.sleep(0.01)"
+    wait = (
+        "import os, sys, time\ndeadline = time.monotonic() + 30\n"
+        "while not os.path.exists(sys.argv[1]) and time.monotonic() < deadline: time.sleep(0.01)"
+    )
     code = sink("--service", "api", "--wait", "0", "--", sys.executable, "-c", wait, str(seen))
     assert code == 1
     assert blocked == set(INTERRUPTS)
