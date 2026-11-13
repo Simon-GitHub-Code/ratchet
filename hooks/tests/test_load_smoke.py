@@ -1,8 +1,10 @@
 """``load_smoke``: concurrent requests judged on errors only, against an in-test server."""
 
 import argparse
+import http.client
 import http.server
 import socket
+import ssl
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -398,6 +400,76 @@ def test_resets_count_with_the_reason_when_the_gate_could_not_take_the_listener(
     assert load_smoke.judge(cuts[:1], gatelib.Stopping(frozenset({(80, 1)}), "no Linux"))[1] == [
         notes[0]
     ], "with nothing counted there is nothing to explain"
+
+
+def mains_verdict(
+    goal: load_smoke.Target, error: Exception, *, at_start: bool, at_failure: bool
+) -> str | None:
+    """What main's load smoke said of one failed request, or ``None`` when it did not count it.
+
+    Its ``attempt`` before the gate held listeners, verbatim but for the marker: ``at_start`` and
+    ``at_failure`` are whether the stop marker existed when the request started and failed.
+    """
+    after_signal = at_start
+    try:
+        raise error
+    except TimeoutError:
+        return f"{goal.label()}: timed out after 1s"
+    except (OSError, http.client.HTTPException) as caught:
+        raced = isinstance(caught, ConnectionRefusedError) and at_failure
+        if (after_signal and isinstance(caught, ConnectionError)) or raced:
+            return None
+        return f"{goal.label()}: {type(caught).__name__}"
+
+
+FAILURES: list[Exception] = [
+    TimeoutError(),
+    ConnectionRefusedError(),
+    ConnectionResetError(),
+    ConnectionAbortedError(),
+    BrokenPipeError(),
+    http.client.RemoteDisconnected(),
+    http.client.IncompleteRead(b""),
+    http.client.BadStatusLine("x"),
+    ssl.SSLEOFError(),
+    OSError("no route"),
+]
+
+
+@pytest.mark.parametrize("error", FAILURES, ids=lambda error: type(error).__name__)
+@pytest.mark.parametrize(
+    ("at_start", "at_failure"), [(False, False), (False, True), (True, True)]
+)
+def test_where_the_gate_holds_no_listener_a_failure_is_judged_exactly_as_main_judged_it(
+    error: Exception,
+    *,
+    at_start: bool,
+    at_failure: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Why: without a copy of the listener the gate cannot tell a connection the service accepted
+    # from one it never did, so the stop is judged by main's rule, never stricter and never looser.
+    marker = tmp_path / "stopping"
+    fallback = gatelib.Stopping(frozenset(), "the gate holds no listener")
+    goal = load_smoke.Target("GET", "http://127.0.0.1:8000/work", None, None)
+
+    def http_status(*_: object, connecting: Callable[[object], None], **__: object) -> int:
+        connecting(SimpleNamespace(getsockname=lambda: ("127.0.0.1", 40000)))
+        if at_failure:
+            gatelib.write_stopping(marker, fallback)
+        raise error
+
+    monkeypatch.setattr(gatelib, "http_status", http_status)
+    if at_start:
+        gatelib.write_stopping(marker, fallback)
+    try:
+        said = load_smoke.attempt(goal, 1, marker)[1]
+    except load_smoke.Closed:
+        said = None
+    except load_smoke.Cutoff as cutoff:
+        said = next(iter(load_smoke.judge([cutoff.cut], fallback)[0]), None)
+    assert said == mains_verdict(goal, error, at_start=at_start, at_failure=at_failure)
 
 
 def test_an_error_status_or_a_timeout_after_the_signal_is_still_red(

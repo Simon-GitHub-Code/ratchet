@@ -119,9 +119,11 @@ def sleeper(tree: Path) -> subprocess.Popen[bytes]:
 # and holds the fifth until the signal, so the connections behind it wait in the kernel's accept
 # queue; on the signal it answers the fifth and exits 0, and the kernel resets the connections it
 # never accepted, as any correct server's listener close does. ``abandon`` is ``queue`` exiting at
-# once on the signal instead, so it drops the fifth, which it accepted, as well.
+# once on the signal instead, so it drops the fifth, which it accepted, as well. ``HIDDEN`` makes
+# the service non-dumpable, so no other process may look at its open files.
 STOPS = (
-    "import os, signal, sys, threading, time, http.server as h\n"
+    "import ctypes, os, signal, sys, threading, time, http.server as h\n"
+    "if os.environ.get('HIDDEN'): ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)\n"
     "MODE = os.environ['MODE']\n"
     "QUEUES = MODE in ('queue', 'abandon')\n"
     "held, stopping = [], threading.Event()\n"

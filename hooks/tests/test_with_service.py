@@ -324,17 +324,20 @@ def graceful(
     capsys: pytest.CaptureFixture[str],
     limit: str = "2",
     starts_after: str = "0",
+    hidden: bool = False,
 ) -> tuple[int, str]:
     """The load smoke run inside a service of ``mode`` that is signalled 0.5 s in.
 
-    The smoke starts ``starts_after`` seconds after the command does, as on a loaded runner.
+    The smoke starts ``starts_after`` seconds after the command does, as on a loaded runner. A
+    ``hidden`` service lets no other process look at its open files.
     """
     command = [
         *("sh", "-c", f'sleep {starts_after} && exec "$@"', "late", sys.executable, str(LOAD)),
         *("--url", "http://127.0.0.1:{port}/work", *BUSY),
     ]
+    boot = f"MODE={mode}{' HIDDEN=1' if hidden else ''} exec {python(STOPS)}"
     return run(
-        *("--boot", f"MODE={mode} exec {python(STOPS)}", "--ready", READY),
+        *("--boot", boot, "--ready", READY),
         *("--graceful", limit, "--signal-after", "0.5", *extra),
         *("--", *command),
         capsys=capsys,
@@ -370,6 +373,17 @@ def test_the_request_a_service_accepted_and_dropped_is_red_beside_those_it_never
     assert "load-smoke: 3 connection(s) reset after the stop signal are not counted" in out
     assert "\n1 x GET http://127.0.0.1:" in out, out
     assert code == 1
+
+
+def test_a_correct_drain_the_gate_cannot_look_into_is_judged_as_before_and_green(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Why: this service keeps listening for up to half a second after the signal and then closes
+    # its listener, which resets the requests sent meanwhile. Without a copy of the listener the
+    # gate judges those by when they started, as before it held listeners, and does not count them.
+    code, out = graceful("drain", capsys=capsys, hidden=True)
+    assert out.endswith("with_service: green\n"), out
+    assert code == 0
 
 
 def test_a_smoke_slow_to_start_still_has_requests_in_flight_at_the_signal(
