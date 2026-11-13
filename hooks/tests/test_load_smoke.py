@@ -410,10 +410,14 @@ def cut_after_signal(
 def test_a_connection_the_gate_took_and_reset_is_not_counted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Why: the gate takes what waited when the service stopped listening and what arrived after,
+    # so the note says both; "still waiting" alone was untrue of a connection that came later.
     code, out = cut_after_signal(tmp_path, monkeypatch, capsys, as_gate=True)
     assert out == (
-        "load-smoke: 4 connection(s) reset after the stop signal are not counted: the service "
-        "never accepted them, they were still waiting on its listener when it stopped listening\n"
+        "load-smoke: 4 connection(s) reset after the stop signal are not counted, since the "
+        "service never accepted them. The gate held the service's listener and, once no process "
+        "of the service held it, took each connection waiting there and reset it. Each was "
+        "waiting when the service stopped listening, or arrived after.\n"
         "load-smoke: green\n"
     )
     assert code == 0

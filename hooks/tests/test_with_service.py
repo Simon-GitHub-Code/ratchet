@@ -360,7 +360,7 @@ def test_a_service_that_leaves_connections_in_its_accept_queue_is_green(
     # each was made before the signal and fails with no response, as a dropped request does.
     code, out = graceful("queue", capsys=capfd)
     assert out.endswith("with_service: green\n"), out
-    assert " connection(s) reset after the stop signal are not counted: the service " in out
+    assert " connection(s) reset after the stop signal are not counted, since the service " in out
     assert code == 0
 
 
