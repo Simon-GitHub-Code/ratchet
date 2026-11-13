@@ -51,13 +51,18 @@ def empty_body(text: str, heading: str) -> bool:
 
 
 def table_cells(body: str) -> list[tuple[str, str]]:
-    """The first two cells of every row under the header; an empty second cell is kept."""
-    rows = []
-    for line in body.splitlines():
-        match = TABLE_ROW.match(line)
-        if match and not set(match.group(1)) <= set("-: "):
-            rows.append((match.group(1), match.group(2)))
-    return rows[1:]
+    """The first two cells of every row of every table in ``body``; an empty second cell is kept.
+
+    A table's header is the row above its rule row, so a section that holds two tables gives the
+    rows of both and neither header.
+    """
+    matches = [TABLE_ROW.match(line) for line in body.splitlines()]
+    rules = [match is not None and set(match.group(1)) <= set("-: ") for match in matches]
+    return [
+        (match.group(1), match.group(2))
+        for i, match in enumerate(matches)
+        if match is not None and not rules[i] and not (i + 1 < len(rules) and rules[i + 1])
+    ]
 
 
 @dataclass(frozen=True)

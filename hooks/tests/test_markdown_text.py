@@ -405,3 +405,8 @@ def test_the_templates_own_entry_points_table_splits_and_is_written_by_hand() ->
     assert found.header == HEADER
     assert not found.padded
     assert len(found.rows) == len(found.lines) - 2
+
+
+def test_a_body_with_two_tables_gives_the_rows_of_both_and_neither_header() -> None:
+    body = "| A | B |\n| - | - |\n| x | y |\n\nBetween.\n\n| C | D |\n| :-- | --: |\n| z | w |\n"
+    assert markdown_text.table_cells(body) == [("x", "y"), ("z", "w")]

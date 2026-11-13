@@ -498,10 +498,11 @@ def template_binding() -> str:
 def template_rows() -> dict[str, tuple[str, str]]:
     """The template binding's Entry points rows by name, in its order: the row and its command."""
     body = markdown_text.section(template_binding(), ENTRY_POINTS_SECTION)
+    rows = dict(markdown_text.table_cells(body))
     return {
         match.group(1): (line, match.group(2))
         for line in body.splitlines()
-        if (match := markdown_text.TABLE_ROW.match(line)) and match.group(1) in ENTRY_POINTS
+        if (match := markdown_text.TABLE_ROW.match(line)) and match.group(1) in rows
     }
 
 
