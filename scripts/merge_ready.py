@@ -418,18 +418,32 @@ def flag_doors(old: list[registry.Flag], new: list[registry.Flag]) -> list[str]:
     return found
 
 
-def flag_reasons(change: Change) -> list[Reason]:
-    """The flag registry's one-way doors; the registry is always one, whatever the manifest says."""
-    if registry.REGISTRY not in change.paths:
-        return []
+def registry_state(change: Change) -> list[str] | None:
+    """The registry's one-way doors, or ``None`` when it is gone or does not parse."""
     before, after = change.before(registry.REGISTRY), change.after(registry.REGISTRY)
     old, unread = registry.parse(before or "")
     new, unreadable = registry.parse(after or "")
     if after is None or unread or unreadable:
-        found = ["the registry is gone or does not parse, so no flag's default can be compared"]
-    else:
-        found = flag_doors(old, new)
-    return [Reason("door", f"{registry.REGISTRY}: {text}") for text in found]
+        return None
+    return flag_doors(old, new)
+
+
+def registry_reasons(change: Change) -> list[Reason]:
+    """Why a registry that changed cannot be read at all: the owner's, whatever the events.
+
+    Why: it is not a door the project may not have met yet; the judge is blind to every flag, so it
+    does not wait for a life event.
+    """
+    if registry.REGISTRY not in change.paths or registry_state(change) is not None:
+        return []
+    text = "the registry is gone or does not parse, so no flag's default can be compared"
+    return [Reason("door", f"{registry.REGISTRY}: {text}")]
+
+
+def flag_reasons(change: Change) -> list[Reason]:
+    """The flag registry's one-way doors; the registry is always one, whatever the manifest says."""
+    found = registry_state(change) if registry.REGISTRY in change.paths else None
+    return [Reason("door", f"{registry.REGISTRY}: {text}") for text in found or []]
 
 
 # --- new surface with no flag ----------------------------------------------------------------
@@ -703,6 +717,7 @@ def judge(
         *setting_reasons(change, base_ref, asked or Asked()),
         *file_reasons(change, manifest),
         *guard_reasons(change, manifest),
+        *registry_reasons(change),
         *waiting(
             change,
             [*door_reasons(change, manifest), *flag_reasons(change)],

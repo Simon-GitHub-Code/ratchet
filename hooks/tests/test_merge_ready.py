@@ -632,6 +632,16 @@ def test_a_binding_with_no_events_line_declares_every_event(tmp_path: Path) -> N
     assert {"door", "unflagged"} <= set(codes(repo))
 
 
+@pytest.mark.parametrize("after", [None, "[[flag]\n"])
+def test_a_registry_that_cannot_be_read_reaches_the_owner_before_any_event(
+    tmp_path: Path, after: str | None
+) -> None:
+    # Why: the judge is blind to every flag then, which is no door the project has yet to meet.
+    repo = young(tmp_path, EVENTS.format(events="none"))
+    change(repo, {"flags.toml": after})
+    assert codes(repo) == ["door"]
+
+
 def test_a_branch_forked_before_the_declaration_still_meets_the_owner(tmp_path: Path) -> None:
     files = {path: text for path, text in BASE.items() if path != BINDING}
     repository(tmp_path, files | {BINDING: EVENTS.format(events="none")})
