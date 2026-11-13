@@ -1,14 +1,20 @@
 """The feature preflight: red with the exact failure before any agent spawns, green otherwise."""
 
+import functools
 import json
+import os
+import posixpath
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
+import drain
 import feature_preflight as preflight
+import route
 from tests.repos import git, install_hooks, repository, write
 
 Out = pytest.CaptureFixture[str]
@@ -600,3 +606,104 @@ def test_the_critic_runs_only_for_a_project_that_is_depended_on(tmp_path: Path) 
     bare = run(repository(tmp_path / "bare"), "4", gh)
     assert not bare.critic
     assert json.loads(json.dumps(asdict(asked)))["critic"] is True
+
+
+# --- what a ticket reads (ADR 0031) ------------------------------------------------------------
+
+
+class Opened:
+    """The files this process opens while a test watches: the audit hook sees every ``open``."""
+
+    paths: list[str] | None = None
+
+
+@functools.cache
+def watching() -> type[Opened]:
+    def hook(event: str, args: tuple[object, ...]) -> None:
+        if event == "open" and Opened.paths is not None and isinstance(args[0], str):
+            Opened.paths.append(args[0])
+
+    sys.addaudithook(hook)
+    return Opened
+
+
+def opened_by(root: Path, read: Callable[[], object]) -> set[str]:
+    """The files under ``root`` that ``read`` opens, relative and normalised."""
+    watch = watching()
+    watch.paths = []
+    try:
+        read()
+        seen = watch.paths
+    finally:
+        watch.paths = None
+    return {
+        posixpath.normpath(os.path.relpath(path, root))
+        for path in seen
+        if os.path.normpath(path).startswith(f"{root}{os.sep}")
+    }
+
+
+TRACKER = {
+    ".scratch/thing/spec.md": spec("## Problem\n\nA thing."),
+    ".scratch/thing/issues/01-a.md": "# 01: A\n\nStatus: done\n",
+    ".scratch/thing/issues/02-b.md": "# 02: B\n\nStatus: needs-triage\n",
+    ".scratch/thing/issues/03-c.md": "# 03: C\n\nStatus: resolved\n",
+    ".scratch/other/spec.md": spec("## Problem\n\nAnother."),
+    ".scratch/other/issues/05-e.md": "# 05: E\n\nStatus: closed\n",
+}
+BUILT = ".scratch/thing/issues/04-d.md"
+
+
+@pytest.mark.parametrize(
+    ("lines", "whole", "status"),
+    [
+        (
+            "Blocked by: 01, 03-c.md",
+            {BUILT, ".scratch/thing/spec.md"},
+            {".scratch/thing/issues/01-a.md", ".scratch/thing/issues/03-c.md"},
+        ),
+        (
+            "Parent: ../../other/spec.md\n\nBlocked by: #5",
+            {BUILT, ".scratch/other/spec.md"},
+            {".scratch/other/issues/05-e.md"},
+        ),
+        (
+            "Blocked by: 01-a.md, 02",
+            {BUILT, ".scratch/thing/spec.md"},
+            set(TRACKER)
+            - {
+                ".scratch/other/spec.md",
+                ".scratch/other/issues/05-e.md",
+                ".scratch/thing/spec.md",
+                ".scratch/thing/issues/03-c.md",
+            },
+        ),
+    ],
+    ids=["the spec beside it and two blockers", "a parent line and a number", "an open blocker"],
+)
+def test_the_readers_of_a_ticket_read_only_what_reads_names(
+    tmp_path: Path, *, lines: str, whole: set[str], status: set[str]
+) -> None:
+    # Why: the judge freezes what `reads` names while the ticket carries the label, so a reader
+    # that opens a file `reads` does not name would let a records-only change steer the build.
+    ticket = f"# 04: D\n\nStatus: ready-for-agent\n\n{lines}\n"
+    repository(tmp_path, {**TRACKER, BUILT: ticket})
+    parsed = preflight.local_ticket(BUILT, ticket)
+    named = preflight.reads(parsed, tmp_path)
+    assert named == (frozenset(whole), frozenset(status))
+    offline: Gh = gh_returning(None)
+    seen = drain.Seen(base="main", merged=frozenset(), trees=frozenset(), queued=frozenset())
+    entry = drain.Entry(BUILT, parsed.title, "feature/4-d", drain.BUILDABLE)
+    readers: dict[str, Callable[[], object]] = {
+        "preflight": lambda: preflight.preflight(
+            BUILT, tmp_path, base="main", branch=None, gh=offline
+        ),
+        "drain": lambda: drain.pending(entry, parsed, drain=drain.Drain(tmp_path, None), seen=seen),
+        "route": lambda: (
+            route.unstated(parsed, tmp_path, offline),
+            route.blocking([parsed], tmp_path, offline),
+        ),
+    }
+    for name, read in readers.items():
+        assert opened_by(tmp_path, read) <= whole | status, name
+    assert opened_by(tmp_path, readers["preflight"]) == whole | status

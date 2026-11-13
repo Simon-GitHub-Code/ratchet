@@ -618,7 +618,9 @@ def test_adopt_names_the_two_skills_and_the_owner_s_steps() -> None:
     assert 'ref: "<ratchet-sha>"' in ADOPT
 
 
-FAKE_GH = """#!{python}
+# Why: `-S` skips the site hook through which coverage measures subprocesses. The fake is not
+# code under test, and coverage starting in each of its calls was most of these tests' time.
+FAKE_GH = """#!{python} -S
 import json, os, sys
 def path_of(args):
     return " ".join(a for a in args if a.startswith("repos/"))
