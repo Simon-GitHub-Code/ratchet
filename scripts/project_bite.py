@@ -349,9 +349,6 @@ def owned(copy: Path, *paths: str) -> list[Path]:
     repository, in a file git ignores, or in a new file of the rules restoring works by.
     ``Unprovable`` says why the first such path is not one.
     """
-    parents = sorted({name for path in paths for name in above(path)})
-    staged = git_in(copy, "ls-files", "-z", "--stage", "--", *parents) if parents else ""
-    gitlinks = {line.partition("\t")[2] for line in staged.split("\0") if line.startswith("160000")}
     for path in paths:
         parts = PurePosixPath(path).parts
         if not inside(path) or ".git" in (part.casefold() for part in parts):
@@ -362,20 +359,23 @@ def owned(copy: Path, *paths: str) -> list[Path]:
                 f"{path} is reached through a symbolic link; a fault changes the copy's own file"
             )
             raise Unprovable(message)
-        # Why: a submodule's files are not copied; a repository setup made is in the copy.
-        for name in (
-            name for name in above(path) if name in gitlinks or (copy / name / ".git").exists()
-        ):
-            message = (
-                f"{path} is inside {name}, a repository of its own, whose files restoring the copy"
-                " does not put back"
-            )
-            raise Unprovable(message)
         if parts[-1] in RULES and not copy.joinpath(*parts).exists():
             message = (
                 f"{path} would be a new {parts[-1]}, and restoring the copy works by those rules"
             )
             raise Unprovable(message)
+    parents = sorted({name for path in paths for name in above(path)})
+    staged = git_in(copy, "ls-files", "-z", "--stage", "--", *parents) if parents else ""
+    gitlinks = {line.partition("\t")[2] for line in staged.split("\0") if line.startswith("160000")}
+    # Why: a submodule's files are not copied; a repository setup made is in the copy.
+    for path in paths:
+        for name in above(path):
+            if name in gitlinks or (copy / name / ".git").exists():
+                message = (
+                    f"{path} is inside {name}, a repository of its own, whose files restoring"
+                    " the copy does not put back"
+                )
+                raise Unprovable(message)
     # Why: judged by the snapshot, a file it holds is tracked even where an ignore rule matches.
     # 1 is git's answer when it ignores none of the paths; 0 names those it ignores, more is none.
     ignored = run_git(
