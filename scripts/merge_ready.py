@@ -6,7 +6,9 @@ only for ``agent``. The owner merges when any of these holds:
 
 - ``guard``: a guard path changed, other than by an addition to a record (ADR 0014) or by a
   threshold that only tightened. A dependency change is a guard change here: its note is printed
-  and the owner merges it.
+  and the owner merges it. An instruction file (``AGENTS.md``, ``CLAUDE.md``, ``CLAUDE.local.md``,
+  ``GEMINI.md`` in any letter case, or a path under a ``.claude/`` directory) is a guard path at
+  any depth, whatever the manifest says.
 - ``door``: the change goes through a one-way door. A path in a ``[[door]]`` of the manifest; a
   flag that turns on by default, becomes permanent, or leaves the registry while off.
 - ``unflagged``: the change adds to a file behind a door that shuts on removal (a route, a command
@@ -21,12 +23,27 @@ only for ``agent``. The owner merges when any of these holds:
   and prints a ``note:`` line saying what it let through. The head's binding never counts.
 - ``dispute``: the change adds or edits a dispute, or an open dispute names a path it touches.
 - ``record``: no verdict record is part of the change, or the one there is not an approval of
-  exactly this tree with nothing unresolved and no open question.
+  exactly this tree with nothing unresolved and no open question. A change with no verdict record
+  that is records alone is not asked for one (ADR 0031): every path it touches has the whole
+  shape of a file a skill writes, listed in ``RECORDS``, is a plain file kept by the change and
+  as the change found it at the tip, and has no twin in another letter case. Read by the default
+  branch's manifest, the glossary and ADRs sit in ``edit = "append"`` groups alone, the rest in
+  none, and no door holds any. The glossary takes only additions (ADR 0014). A ticket may not gain
+  the agent-ready label, take another's number, be one a labelled ticket's ``Blocked by`` line can
+  name, or be closed. A labelled ticket, the spec it inherits from and the status of a ticket it
+  waits on do not change (``feature_preflight.reads`` names them). An ADR is a decision the owner
+  agrees to: the reason names its title.
 - ``file``: a guard, door or record path is a symbolic link or a submodule, at the merge base
   or at the head. Git shows a link's target as its text, which is not what a gate reads there.
 - ``target``, ``behind``, ``tier2``: the pull request targets another branch; the branch does not
   hold the default branch's tip, so its gates ran on an older one; tier 2 is red there.
-- ``refs``, ``manifest``: the judge could not read what it judges. It fails closed.
+- ``refs``, ``manifest``: the judge could not read what it judges. It fails closed. One change
+  is read without a manifest on the default branch: the adoption, which brings the manifest and
+  the binding to a default branch whose tip and merge base hold neither. There is no gate before
+  it to loosen, so the setting, its files, the flag registry and disputes are asked of it, and
+  its manifest must guard at least what the template's does. It may bring no instruction file but
+  ``ADOPTION_WRITES`` and no ticket with the agent-ready label. ``merge.py`` runs ``check-deep``
+  on its merge result (ADR 0031).
 
 The judge reads commits and nothing else: the manifest at the default branch's tip, every other
 file at the merge base and at the head, through git. It never reads the work tree and never runs
@@ -46,6 +63,8 @@ Usage: ``merge_ready.py [--root DIR] [--base REF] [--head REF] [--target BRANCH]
 from __future__ import annotations
 
 import argparse
+import contextlib
+import functools
 import json
 import os
 import re
@@ -53,17 +72,24 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 import application_types
+import feature_preflight as preflight
 import flags as registry
 import gatelib
 import lowered
+import owed
+import plugin_pin
 
 # Why: the manifest and the two classifiers the judge shares with the hook live under hooks/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import dependencies, records
+from ratchet_guards.gh import LABELS_RECORD, READY_ROLE, label_for_role
+from ratchet_guards.globs import matches
 from ratchet_guards.manifest import (
     MANIFEST_PATH,
     Door,
@@ -74,11 +100,16 @@ from ratchet_guards.manifest import (
     parse,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Iterator
+
 AGENT = "merge: agent"
 OWNER = "merge: owner"
 MARKER = "<!-- ratchet:merge -->"
 SCHEMA = 1
 THRESHOLDS = gatelib.THRESHOLDS.as_posix()
+LEDGER = owed.LEDGER.as_posix()
+BINDING = gatelib.BINDING.as_posix()
 SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 RECORD = re.compile(rf"^docs/features/({SLUG})/verdict\.json$")
 DISPUTES = "docs/disputes"
@@ -94,9 +125,30 @@ SURFACE_EVENTS = frozenset({"deployed"})
 FLAGS_QUESTION = "changed flags off and on"
 DOCS = "docs/"
 HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
+# Why: Claude Code loads a CLAUDE.md beside any file it reads, and the other harnesses read
+# theirs the same way, so an agent obeys these at any depth; the manifest names the top only.
+INSTRUCTION_FILES = frozenset({"agents.md", "claude.md", "claude.local.md", "gemini.md"})
+INSTRUCTION_DIRECTORY = ".claude"
+INSTRUCTS = "(instructions): an agent reads it as instructions, wherever it sits"
+# Why: `/ratchet:adopt` writes these instruction files and no other: `AGENTS.md` in its step 7,
+# `.claude/settings.json` from its template through `just settings`. A test holds the set to the
+# skill and its templates, so a template that adds one fails it until the judge knows.
+ADOPTION_WRITES = frozenset({"AGENTS.md", ".claude/settings.json"})
+TRACKER_DIRECTORY = ".scratch"
+TRACKER = f"{TRACKER_DIRECTORY}/**/*.md"
+TICKETS = f"{TRACKER_DIRECTORY}/**/issues/*.md"
+NUMBER = re.compile(r"\d+")
+CHANGE_NAME = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
+TITLE = re.compile(r"^#[ \t]+(\S.*)$", re.MULTILINE)
+TITLE_WIDTH = 100
+TEMPLATE = Path(__file__).resolve().parents[1] / "skills" / "adopt" / "templates" / MANIFEST_PATH
+NOT_A_RECORD = "is not a record"
+SHOWN = 3
 # Why: `000000` is how a diff writes a path that one side does not hold.
 REGULAR = frozenset({"100644", "100755", "000000"})
 IRREGULAR = {"120000": "a symbolic link", "160000": "a submodule"}
+# Why: a record is read and never run, so it is a plain file on each side that holds it.
+RECORD_MODES = frozenset({"100644", "000000"})
 
 
 @dataclass(frozen=True)
@@ -187,7 +239,12 @@ def read(root: Path, base_ref: str, head_ref: str) -> Change | Reason:
 
 def manifest_of(change: Change) -> Manifest | Reason:
     """The manifest at the default branch's tip: the owner's, whatever the change holds."""
-    text = git(change.root, "show", f"{change.base}:{MANIFEST_PATH}")
+    return manifest_at(change.root, change.base)
+
+
+def manifest_at(root: Path, ref: str) -> Manifest | Reason:
+    """The manifest ``ref`` holds, or why there is none to read."""
+    text = git(root, "show", f"{ref}:{MANIFEST_PATH}")
     if text is None:
         return Reason(
             "manifest",
@@ -198,6 +255,75 @@ def manifest_of(change: Change) -> Manifest | Reason:
         return parse(text)
     except ManifestError as error:
         return Reason("manifest", f"{MANIFEST_PATH} on the default branch does not parse: {error}")
+
+
+def adoption(change: Change) -> Manifest | None:
+    """The manifest the change brings when it is the adoption, else ``None``.
+
+    The adoption brings the manifest and the binding to a default branch whose tip and merge base
+    hold neither. Why both commits: a base with a manifest is adopted, whatever a branch deletes,
+    and a tip that lost one the merge base held is the owner's to explain, not a fresh start.
+    """
+    binding = gatelib.BINDING.as_posix()
+    held = [
+        git(change.root, "cat-file", "-e", f"{side}:{path}")
+        for side in (change.base, change.fork)
+        for path in (MANIFEST_PATH, binding)
+    ]
+    text = change.after(MANIFEST_PATH)
+    if any(found is not None for found in held) or text is None or not change.kept(binding):
+        return None
+    try:
+        return parse(text)
+    except ManifestError:
+        return None
+
+
+def unlike_template(brought: Manifest) -> list[Reason]:
+    """Why the adoption's manifest guards less than the template it fills, one reason per group.
+
+    Why: nothing before the adoption judges it, so it must keep every template group in order,
+    with its rule, its exclusions and its paths. It may add paths to a group that is not
+    ``edit = "append"``, and groups after the template's: neither lets anything through.
+    """
+    template = parse(TEMPLATE.read_text(encoding="utf-8"))
+    names = [group.name for group in brought.groups[: len(template.groups)]]
+    if names != [group.name for group in template.groups]:
+        text = f"{MANIFEST_PATH}: the adoption does not keep the template's groups in their order"
+        return [Reason("guard", text)]
+    return [
+        Reason(
+            "guard", f"{MANIFEST_PATH} ({want.name}): the adoption guards less than the template"
+        )
+        for want, got in zip(template.groups, brought.groups, strict=False)
+        if (got.edit, got.excluded) != (want.edit, want.excluded)
+        or not set(want.patterns) <= set(got.patterns)
+        or (got.additive and set(got.patterns) != set(want.patterns))
+    ]
+
+
+def smuggled(change: Change) -> list[Reason]:
+    """What the adoption carries that it never writes: an instruction file, or the label.
+
+    Why: the guard and record reasons are not asked of the adoption, and from its merge on the
+    owner trusts the guards; an instruction file or an agreed ticket must not ride in with it.
+    """
+    labels = spellings(change)
+    reasons = []
+    for path in change.paths:
+        if instructs(path) and path not in ADOPTION_WRITES:
+            text = f"{path} is an instruction file agents obey, and not one the adoption writes"
+            reasons.append(Reason("guard", text))
+        elif matches(path.casefold(), TICKETS) and carries(change.after(path) or "", labels):
+            text = f"{path} is a ticket with the agent-ready label, which only the owner gives"
+            reasons.append(Reason("record", text))
+    return reasons
+
+
+def adopts(root: Path, base_ref: str, head_ref: str) -> bool:
+    """Whether ``head_ref`` is the adoption onto ``base_ref``: see ``adoption``."""
+    change = read(root, base_ref, head_ref)
+    return isinstance(change, Change) and adoption(change) is not None
 
 
 def folded(manifest: Manifest) -> Manifest:
@@ -245,14 +371,39 @@ def more_than_tightened(before: str | None, after: str | None) -> str | None:
     return "; ".join(lowered.loosened(lowered.flatten(old), lowered.flatten(new))) or None
 
 
+def more_than_shrunk(change: Change) -> str | None:
+    """Why a change to the owed ledger is more than a shrink, or ``None`` when that is all it is.
+
+    Why: ADR 0037. An entry that goes lets the check it excused run again, so dropping entries
+    loosens nothing. An entry that is added or reworded excuses a finding, and the plugin pin
+    moving is what allows that, so each of those stays the owner's.
+    """
+    after = owed.parse(change.after(LEDGER))
+    if after.problems:
+        return "the ledger does not read: " + "; ".join(after.problems)
+    added = Counter(after.entries) - Counter(owed.parse(change.before(LEDGER)).entries)
+    if added:
+        return "adds or changes " + ", ".join(sorted(f"'{e.problem}' ({e.path})" for e in added))
+    if plugin_pin.pinned(change.before(BINDING)) != plugin_pin.pinned(change.after(BINDING)):
+        return "the plugin pin moves with it"
+    return None
+
+
+def addition(change: Change, path: str) -> str | None:
+    """Why the change of a record is more than an addition (ADR 0014), or ``None``."""
+    before = records.before(lambda args: git(change.root, *args), change.fork, path)
+    note = records.note(path, before, change.after(path))
+    return None if note.startswith(records.ADDITIONS) else note
+
+
 def guard_note(change: Change, path: str, group: Group) -> str | None:
     """What a changed guard path's change is, or ``None`` when the judge lets it through."""
     if group.additive:
-        before = records.before(lambda args: git(change.root, *args), change.fork, path)
-        note = records.note(path, before, change.after(path))
-        return None if note.startswith(records.ADDITIONS) else note
+        return addition(change, path)
     if path == THRESHOLDS:
         return more_than_tightened(change.before(path), change.after(path))
+    if path == LEDGER:
+        return more_than_shrunk(change)
     if dependencies.recognised(path):
         try:
             found = dependencies.changes(path, change.before(path), change.after(path))
@@ -262,12 +413,27 @@ def guard_note(change: Change, path: str, group: Group) -> str | None:
     return ""
 
 
+def instructs(path: str) -> bool:
+    """Whether an agent reads ``path`` as instructions: by its name, or a ``.claude/`` above it.
+
+    Letter case is set aside: a file system that ignores it opens ``claude.md`` as ``CLAUDE.md``.
+    """
+    *folders, name = path.casefold().split("/")
+    return name in INSTRUCTION_FILES or INSTRUCTION_DIRECTORY in folders
+
+
 def guard_reasons(change: Change, manifest: Manifest) -> list[Reason]:
-    """One reason per changed guard path the judge does not let through."""
+    """One reason per changed guard path the judge does not let through.
+
+    An instruction file is a guard path wherever it sits, whatever the manifest says.
+    """
     lower = folded(manifest)
     reasons = []
     for path in change.paths:
         group = manifest.group_of(path) or (HARNESS if path == MANIFEST_PATH else None)
+        if group is None and instructs(path):
+            reasons.append(Reason("guard", f"{path} {INSTRUCTS}"))
+            continue
         if group is None:
             other = lower.group_of(path.casefold())
             if other is not None:
@@ -299,6 +465,7 @@ def file_reasons(change: Change, manifest: Manifest) -> list[Reason]:
     for path, sides in modes(change).items():
         judged = (
             path == MANIFEST_PATH
+            or instructs(path)
             or RECORD.match(path)
             or manifest.group_of(path)
             or manifest.doors_of(path)
@@ -546,6 +713,308 @@ def dispute_reasons(change: Change) -> list[Reason]:
     return reasons
 
 
+# --- records alone ---------------------------------------------------------------------------
+
+
+def holders(manifest: Manifest, path: str) -> tuple[list[Group], list[Door]]:
+    """Every guard group and one-way door that holds ``path``, letter case set aside.
+
+    Why: ``group_of`` names the first group only, and a stricter group further down the
+    manifest must keep a path from being read as a record.
+    """
+    lower = folded(manifest)
+    groups = [
+        group
+        for group, low in zip(manifest.groups, lower.groups, strict=True)
+        if Manifest((group,)).group_of(path) or Manifest((low,)).group_of(path.casefold())
+    ]
+    return groups, manifest.doors_of(path) + lower.doors_of(path.casefold())
+
+
+def spellings(change: Change) -> tuple[str, ...]:
+    """The agent-ready label as the default branch's triage-labels record and the role spell it."""
+    spelled = label_for_role(change.tip(LABELS_RECORD.as_posix()) or "", READY_ROLE)
+    return tuple(sorted({READY_ROLE, spelled or READY_ROLE}))
+
+
+def carries(text: str, labels: tuple[str, ...]) -> bool:
+    """Whether ``text`` holds the label in any of its spellings, in any case, anywhere."""
+    return any(label.casefold() in text.casefold() for label in labels)
+
+
+@functools.cache
+def labelled(change: Change) -> frozenset[str]:
+    """The tickets that carry the agent-ready label at the merge base or at the tip.
+
+    Why: the label is the owner's agreement to build a ticket as it stands (ADR 0008). The tip
+    counts too: a ticket labelled there after the change forked is agreed in the merge.
+    """
+    labels = spellings(change)
+    found = set()
+    for ref in (change.fork, change.base):
+        listed = git(
+            change.root, "ls-tree", "-r", "--name-only", "-z", ref, "--", TRACKER_DIRECTORY
+        )
+        for path in (listed or "").split("\0"):
+            ticket = matches(path, TRACKER) and matches(path.casefold(), TICKETS)
+            text = git(change.root, "show", f"{ref}:{path}") if ticket else None
+            if text is not None and carries(text, labels):
+                found.add(path)
+    return frozenset(found)
+
+
+@contextlib.contextmanager
+def tracker_names(change: Change, ref: str) -> Iterator[Path]:
+    """A directory with an empty file for each path ``ref`` holds under ``.scratch/``.
+
+    Why: the preflight finds a ticket's spec and blockers by the names beside it, so the judge
+    lends it the names a commit holds and asks it, rather than finding them a second way.
+    """
+    listed = git(change.root, "ls-tree", "-r", "--name-only", "-z", ref, "--", TRACKER_DIRECTORY)
+    with tempfile.TemporaryDirectory() as scratch:
+        for path in filter(None, (listed or "").split("\0")):
+            target = Path(scratch, path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.touch()
+        yield Path(scratch)
+
+
+@functools.cache
+def build_inputs(change: Change) -> tuple[dict[str, str], dict[str, str]]:
+    """What each labelled ticket reads to decide what it builds, each with the ticket reading it.
+
+    The first is read whole: the ticket and the spec it inherits from. The second for its
+    ``Status:`` line: a ticket it is blocked by. ``preflight.reads`` names both, at the merge
+    base, the tip and the head, so a file the change makes one of them counts too.
+    """
+    whole: dict[str, str] = {}
+    status: dict[str, str] = {}
+    for ref in (change.fork, change.base, change.head):
+        with tracker_names(change, ref) as names:
+            for ticket in sorted(labelled(change)):
+                text = git(change.root, "show", f"{ref}:{ticket}")
+                read, waited = preflight.reads(preflight.local_ticket(ticket, text or ""), names)
+                for path in read:
+                    whole.setdefault(path, ticket)
+                for path in waited:
+                    status.setdefault(path, ticket)
+    return whole, status
+
+
+def unreadable(change: Change, path: str) -> str | None:
+    return "is not text the judge can read" if change.after(path) is None else None
+
+
+def open_ticket(path: str, text: str | None) -> bool:
+    """Whether a ticket is open as the preflight reads it; a missing one blocks as an open one."""
+    return text is None or preflight.local_ticket(path, text).is_open
+
+
+def agreement(change: Change, path: str) -> str | None:
+    """Why a change of what a labelled ticket reads is the owner's: what it builds, or when."""
+    whole, status = build_inputs(change)
+    if path in whole:
+        ticket = whole[path]
+        if ticket == path:
+            return "is a ticket the owner agreed to build, and only they change it"
+        return f"is what {ticket} inherits its approach from, a ticket the owner agreed to build"
+    if path in status and not change.held(path):
+        # Why: a `Blocked by` number reads the one ticket that bears it, so a second one, open
+        # or closed, turns the blocker from found to "not found".
+        return (
+            f"is a new ticket the `Blocked by` line of {status[path]} can name, which changes"
+            " whether that ticket may start, a ticket the owner agreed to build"
+        )
+    if path in status and open_ticket(path, change.before(path)) != open_ticket(
+        path, change.after(path)
+    ):
+        return f"changes whether {status[path]} may start, a ticket the owner agreed to build"
+    return None
+
+
+def closes(change: Change, path: str) -> str | None:
+    """Why a ticket's change is the owner's: it closes the ticket, and no build of it merged."""
+    if open_ticket(path, change.before(path)) and not open_ticket(path, change.after(path) or ""):
+        return "closes a ticket, which only the merge of its build does"
+    return None
+
+
+def label_given(change: Change, path: str) -> str | None:
+    before, after = (change.before(path) or "").casefold(), (change.after(path) or "").casefold()
+    for label in spellings(change):
+        if after.count(label.casefold()) > before.count(label.casefold()):
+            return f"gives a ticket the agent-ready label `{label}`, which is the owner's act"
+    return None
+
+
+def namesake(change: Change, path: str) -> str | None:
+    """Why a new ticket is the owner's: it shares its number with another beside it.
+
+    Why: a ``Blocked by`` line that names a number reads the first file of the folder whose name
+    starts with it, so a new ticket with that number could stand in for the one the owner meant.
+    """
+    number = NUMBER.match(PurePosixPath(path).name)
+    if change.held(path) or number is None:
+        return None
+    folder = PurePosixPath(path).parent.as_posix()
+    for ref in (change.head, change.base):
+        listed = git(change.root, "ls-tree", "--name-only", "-z", ref, "--", f"{folder}/") or ""
+        for other in listed.split("\0"):
+            lead = NUMBER.match(PurePosixPath(other).name)
+            if other not in ("", path) and lead and int(lead.group()) == int(number.group()):
+                return f"shares its number with {other}, which a `Blocked by` line could mean"
+    return None
+
+
+def ticket_refusal(change: Change, path: str) -> str | None:
+    """Why a ticket's change is the owner's: the label given, a borrowed number, a close."""
+    return label_given(change, path) or namesake(change, path) or closes(change, path)
+
+
+def nothing(_change: Change, _path: str) -> None:
+    return None
+
+
+def not_an_addition(change: Change, path: str) -> str | None:
+    note = addition(change, path)
+    return None if note is None else f"is {note}"
+
+
+@dataclass(frozen=True)
+class RecordKind:
+    """A file the owner's own conversation writes, which no verdict record is asked of.
+
+    ``shape`` is its whole path, as the template or skill that writes it names it. A kind that is
+    ``appended`` is held by ``edit = "append"`` groups of the default branch's manifest, as the
+    template holds it; any other kind by no group. No one-way door holds either. ``refuses``
+    says why one change of it is more than such a record takes. A kind that ``decides`` is a
+    decision, which the owner agrees to however it is written: the judge cannot read meaning.
+    """
+
+    shape: re.Pattern[str]
+    refuses: Callable[[Change, str], str | None]
+    appended: bool = False
+    decides: bool = False
+
+
+# Why closed: a file no skill writes is no record, so a name the judge was never told of, an
+# instruction file or a script among them, takes the pipeline's path. Every component is lower
+# case, so no two records are one file on a file system that ignores case.
+RECORDS = (
+    # to-tickets, one file per ticket numbered from 01 (the local tracker of mattpocock-skills)
+    RecordKind(re.compile(rf"\.scratch/{SLUG}/issues/\d+-{SLUG}\.md"), ticket_refusal),
+    # to-spec; /ratchet:conjecture writes the conjecture into it
+    RecordKind(re.compile(rf"\.scratch/{SLUG}/spec\.md"), nothing),
+    # the change description with no forge: adopt, the feature skill and the route name it
+    RecordKind(re.compile(rf"\.scratch/changes/{CHANGE_NAME}\.md"), nothing),
+    # a term or an `_Avoid_` item that domain-modeling adds (ADR 0014)
+    RecordKind(re.compile(r"GLOSSARY\.md"), not_an_addition, appended=True),
+    # a decision record domain-modeling writes: the owner's to agree, so --records can land it
+    RecordKind(re.compile(rf"docs/adr/\d{{4}}-{SLUG}\.md"), nothing, appended=True, decides=True),
+)
+
+
+def record_kind(manifest: Manifest, path: str) -> RecordKind | None:
+    """The kind of record ``path`` is by ``manifest``, or ``None`` when it is none."""
+    kind = next((kind for kind in RECORDS if kind.shape.fullmatch(path)), None)
+    if kind is None or instructs(path):
+        return None
+    groups, doors = holders(manifest, path)
+    held = bool(groups) and all(group.additive for group in groups) if kind.appended else not groups
+    return kind if held and not doors else None
+
+
+@functools.cache
+def spelled(change: Change) -> dict[str, frozenset[str]]:
+    """Every path the head or the tip holds, by its name with letter case set aside."""
+    found: dict[str, set[str]] = {}
+    for ref in (change.head, change.base):
+        for path in (git(change.root, "ls-tree", "-r", "--name-only", "-z", ref) or "").split("\0"):
+            found.setdefault(path.casefold(), set()).add(path)
+    return {key: frozenset(paths) for key, paths in found.items()}
+
+
+def twin(change: Change, path: str) -> str | None:
+    """Why a record is the owner's: another path is the same file where case is ignored."""
+    others = sorted(spelled(change).get(path.casefold(), frozenset()) - {path})
+    if not others:
+        return None
+    return (
+        f"has a twin in another letter case, {others[0]}, which a file system that ignores case"
+        " opens as this file"
+    )
+
+
+def refusal(change: Change, path: str, *, kind: RecordKind, sides: tuple[str, str]) -> str | None:
+    """Why the change of record ``path`` is more than a record takes, or ``None`` when it is not."""
+    odd = [mode for mode in sides if mode not in RECORD_MODES]
+    if odd:
+        return f"is {IRREGULAR.get(odd[0], f'of mode {odd[0]}')}, where a record is a plain file"
+    if not change.kept(path):
+        return "deletes a record"
+    if change.tip(path) != change.before(path):
+        return (
+            "changed on the default branch after the change forked, so the merge holds text the"
+            " judge did not read; bring the change up to date"
+        )
+    return (
+        twin(change, path)
+        or unreadable(change, path)
+        or agreement(change, path)
+        or kind.refuses(change, path)
+    )
+
+
+def decision(change: Change, path: str) -> Reason:
+    """The owner's question for a decision record: one sentence that names its title."""
+    found = TITLE.search(change.after(path) or "")
+    named = found.group(1).strip() if found else PurePosixPath(path).stem
+    title = "".join(character for character in named if character.isprintable())[:TITLE_WIDTH]
+    return Reason("record", f'{path} records a decision: "{title}". Yours to agree.')
+
+
+def records_alone(change: Change, manifest: Manifest) -> list[Reason]:
+    """Why a change with no verdict record is the owner's; none when it is records alone.
+
+    More than records is the plain reason. Records some change of which is more than a record
+    takes name up to three of them, and each decision record asks its own question.
+    """
+    sides = modes(change)
+    refused: dict[str, str] = {}
+    decided = []
+    for path in change.paths:
+        kind = record_kind(manifest, path)
+        why = NOT_A_RECORD if kind is None else refusal(change, path, kind=kind, sides=sides[path])
+        if why is not None:
+            refused[path] = why
+        elif kind is not None and kind.decides:
+            decided.append(decision(change, path))
+    text = (
+        "no verdict record (docs/features/<slug>/verdict.json) is part of the change, so it is"
+        " not the product of the pipeline"
+    )
+    if not change.paths or NOT_A_RECORD in refused.values():
+        return [Reason("record", text)]
+    if not refused:
+        return decided
+    lines = [f"{path} {why}" for path, why in refused.items()]
+    rest = f"; and {len(lines) - SHOWN} more" if len(lines) > SHOWN else ""
+    return [
+        Reason("record", f"{text}; its paths are records, but {'; '.join(lines[:SHOWN])}{rest}"),
+        *decided,
+    ]
+
+
+def not_records(root: Path, base_ref: str, paths: Iterable[str]) -> list[str]:
+    """The paths that are no kind of record by the manifest ``base_ref`` holds: all, with none."""
+    manifest = manifest_at(root, base_ref)
+    return [
+        path
+        for path in paths
+        if isinstance(manifest, Reason) or record_kind(manifest, path) is None
+    ]
+
+
 # --- the verdict record ----------------------------------------------------------------------
 
 
@@ -595,16 +1064,18 @@ def record_problems(data: dict[str, object], slug: str, tree: str | None) -> lis
     return problems
 
 
-def record_reasons(change: Change) -> list[Reason]:
-    """Why the change is not an approved product of the pipeline, read from its verdict record."""
+def record_reasons(change: Change, manifest: Manifest) -> list[Reason]:
+    """Why the change is not an approved product of the pipeline, read from its verdict record.
+
+    A change with no verdict record that is records alone is asked for none (ADR 0031).
+    """
     found = [path for path in change.paths if RECORD.match(path)]
+    if not found:
+        return records_alone(change, manifest)
     if len(found) != 1:
         text = (
             f"the change touches {len(found)} verdict records ({', '.join(found)}), and one change"
             " carries one"
-            if found
-            else "no verdict record (docs/features/<slug>/verdict.json) is part of the change, so"
-            " it is not the product of the pipeline"
         )
         return [Reason("record", text)]
     path = found[0]
@@ -712,7 +1183,21 @@ def judge(
         return [change]
     manifest = manifest_of(change)
     if isinstance(manifest, Reason):
-        return [manifest]
+        brought = adoption(change)
+        if brought is None:
+            return [manifest]
+        notes.append(
+            f"the adoption: the default branch holds no {MANIFEST_PATH} and this change brings it,"
+            " so there is no gate before it to loosen; its own gates judge it (ADR 0031)"
+        )
+        return [
+            *setting_reasons(change, base_ref, asked or Asked()),
+            *unlike_template(brought),
+            *smuggled(change),
+            *file_reasons(change, brought),
+            *registry_reasons(change),
+            *dispute_reasons(change),
+        ]
     return [
         *setting_reasons(change, base_ref, asked or Asked()),
         *file_reasons(change, manifest),
@@ -733,7 +1218,7 @@ def judge(
             what="new surface with no flag that is off",
         ),
         *dispute_reasons(change),
-        *record_reasons(change),
+        *record_reasons(change, manifest),
     ]
 
 
@@ -758,11 +1243,15 @@ def report(reasons: list[Reason], head: str) -> str:
 # --- writing the record ----------------------------------------------------------------------
 
 
+def uncommitted(root: Path) -> list[str]:
+    """Every path the index or the work tree changes, a rename read as the two paths it is."""
+    status = git(root, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
+    return sorted({entry[3:] for entry in (status or "").split("\0") if entry})
+
+
 def dirty(root: Path, record: str) -> list[str]:
     """Paths with uncommitted changes, the record itself aside."""
-    status = git(root, "status", "--porcelain", "--untracked-files=all") or ""
-    paths = [line[3:] for line in status.splitlines()]
-    return [path for path in paths if path != record]
+    return [path for path in uncommitted(root) if path != record]
 
 
 def write_record(root: Path, text: str) -> int:

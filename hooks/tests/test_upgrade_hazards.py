@@ -242,9 +242,10 @@ def test_a_rule_the_owner_made_stricter_stays_stricter_and_is_named(
 def test_a_stricter_rule_is_not_drift_and_a_looser_one_is(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     shutil.copytree(pristine(), root, symlinks=True)
-    deny_instead(root, ("Bash(gh pr merge:*)",))
-    assert settings_rules.drift(root) == []
     data = json.loads((root / SETTINGS).read_text())
+    data["permissions"]["deny"].append("Bash(gh pr merge:*)")
+    (root / SETTINGS).write_text(json.dumps(data))
+    assert settings_rules.drift(root) == []
     data["permissions"]["deny"].remove("Bash(git push --force:*)")
     data["permissions"]["ask"].append("Bash(git push --force:*)")
     (root / SETTINGS).write_text(json.dumps(data))

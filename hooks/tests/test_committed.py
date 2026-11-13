@@ -54,10 +54,31 @@ def test_the_manifest_is_shown_from_the_default_branch() -> None:
         exists("refs/remotes/origin/main"): "abc",
         "show refs/remotes/origin/main:guards/manifest.toml": "[[group]]\n",
     }
-    assert committed.committed_manifest(ROOT, fake_git(answers)) == "[[group]]\n"
+    assert committed.committed_manifest(ROOT, fake_git(answers)) == committed.Committed(
+        "[[group]]\n"
+    )
     assert committed.committed_manifest(ROOT, fake_git({})) is None
     absent = {exists("refs/heads/main"): "abc"}
     assert committed.committed_manifest(ROOT, fake_git(absent)) is None
+
+
+LAST_HELD = (
+    "-c log.follow=false log -1 --format=%H --diff-filter=AM refs/heads/main -- "
+    "guards/manifest.toml"
+)
+
+
+def test_a_manifest_the_default_branch_lost_is_read_from_the_last_commit_that_held_it() -> None:
+    answers = {
+        exists("refs/heads/main"): "abc",
+        LAST_HELD: "def",
+        "show def:guards/manifest.toml": "[[group]]",
+    }
+    assert committed.committed_manifest(ROOT, fake_git(answers)) == committed.Committed(
+        "[[group]]", gone=True
+    )
+    unreadable = {exists("refs/heads/main"): "abc", LAST_HELD: "def"}
+    assert committed.committed_manifest(ROOT, fake_git(unreadable)) is None
 
 
 def test_run_git_answers_none_when_git_fails(tmp_path: Path) -> None:
@@ -89,4 +110,16 @@ def test_a_ref_under_the_short_name_does_not_stand_in_for_the_branch(
     commit(root, "chore(guards): the manifest")
     git(root, "update-ref", f"refs/{shadow}", first)
     assert committed.default_branch(root) == "refs/heads/main"
-    assert committed.committed_manifest(root) == "[[group]]"
+    assert committed.committed_manifest(root) == committed.Committed("[[group]]")
+
+
+def test_a_manifest_renamed_away_is_not_followed_to_its_old_name(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"README.md": "# A\n"})
+    git(root, "config", "log.follow", "true")
+    write(root, "guards/old.toml", "[[group]]\n")
+    commit(root, "chore(guards): an old manifest")
+    git(root, "mv", "guards/old.toml", "guards/manifest.toml")
+    commit(root, "chore(guards): the manifest")
+    git(root, "rm", "-q", "guards/manifest.toml")
+    commit(root, "chore(guards): no manifest")
+    assert committed.committed_manifest(root) == committed.Committed("[[group]]", gone=True)

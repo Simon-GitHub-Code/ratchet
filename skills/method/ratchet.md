@@ -20,7 +20,7 @@ coverage = 97.1
 
 - The `ratchet-lowered` entry point (tier 0) flattens the file to dotted keys at the merge base and at head and fails on any key that is lower or missing.
 - The `ratchet` entry point runs the suites, raises each value to the measured one (never lowers), reads the last full mutation runs for the scores, refreshes the snapshots. Commit the result with the change that earned it.
-- Relaxing a value is an owner's change with an ADR behind it. The ADR names each loosening on a line of its own, `Relaxes: <key> from <old> to <new>` (`removed` for a dropped key, `true` and `false` for a flag such as `absolute`), and `ratchet-lowered` passes exactly the loosenings an ADR names and prints which ADR. An agent may write a new ADR, never one with this line: the guard asks the owner for any record that carries `Relaxes:`, so the line is the owner's ([guards.md](guards.md)).
+- Relaxing a value is an owner's change with an ADR behind it. The ADR names each loosening on a line of its own, `Relaxes: <key> from <old> to <new>` (`removed` for a dropped key, `true` and `false` for a flag such as `absolute`), and `ratchet-lowered` passes exactly the loosenings an ADR names and prints which ADR. An agent may write a new ADR, never one with this line: a record that carries `Relaxes:` is no addition, so the merge judge sends the change to the owner and the guard refuses it on the default branch: the line is the owner's ([guards.md](guards.md)).
 - `quality/owed.toml` holds what the project owes since an upgrade: the findings a new plugin version raised that the upgrade could not settle itself. The conformance gate counts each as owed and is not red on it. An entry excuses one finding: the check, the file and the problem it names. Between upgrades the list only falls. An entry goes once its finding is fixed (`upgrade.py --apply` drops it), and `ratchet-lowered` fails a change that adds or alters an entry unless the same change moves the plugin pin to a newer version and the merge base was already red on that finding. No entry excuses a finding another gate judges, such as the permission rules or the thresholds. The upgrade writes the file, and nobody edits it by hand (plugin ADR 0037).
 
 ## 2. Absolute paths
@@ -59,9 +59,9 @@ date = 2026-11-06
 - Registers written before the place was part of the identity hold stryker entries without the `@` suffix. Each is red until replaced: the gate names it as the old identity, lists the live mutants it matched, and prints an entry to paste for each unregistered survivor. The owner reviews them and writes one entry per mutant they judge equivalent, with a reason of their own. Nothing carries over unreviewed. Entries for mutmut keep their identity.
 - Pull requests mutate changed functions (tier 1). The default branch mutates everything on the absolute paths (tier 2).
 
-## 5. Effective configuration is snapshotted
+## 5. Listed configuration is snapshotted
 
-`quality/snapshots/` holds each gate's configuration as the tool resolves it (presets, inherited defaults and upgrades included), normalised and sorted. The `snapshots-check` entry point (tier 0) regenerates and diffs. After an intended change, the `snapshots` entry point rewrites them and the diff is reviewed with the pull request. Loosening a gate therefore shows as a reviewed diff instead of a silent config edit.
+`quality/snapshots/` holds a copy of each file the `tool-config` group of `guards/manifest.toml` lists. The `snapshots-check` entry point (tier 0) copies them again and diffs. After an intended change, the `snapshots` entry point rewrites them and the diff is reviewed with the pull request. Loosening a listed config therefore shows as a reviewed diff instead of a silent config edit, and a config the group does not list is neither guarded nor recorded: an agent can loosen it and no gate sees it. Adoption lists each config it writes; after adoption the manifest is the owner's, so `/ratchet:safeguard` prints the lines for him to add.
 
 ## 6. Ceilings only fall
 

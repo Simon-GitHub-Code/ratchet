@@ -627,7 +627,7 @@ def test_a_rule_of_the_project_s_own_stays_red_and_stays_a_question(
     commit(root, "chore(method): upgrade the Ratchet plugin")
     code, said = checked(root, capsys)
     assert code == 1
-    assert "in ask mirrors no manifest pattern" in said.split("owed: ")[0]
+    assert "in ask is not a rule this tool writes" in said.split("owed: ")[0]
 
 
 @pytest.mark.parametrize(

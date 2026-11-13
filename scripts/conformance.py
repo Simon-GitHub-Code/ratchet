@@ -216,7 +216,10 @@ PR_SECTIONS = (
     "## Decisions",
     "## Gates",
 )
-LOCKED_PATTERNS = {".claude/settings.json", ".claude/hooks/**", "guards/**"}
+LOCKED_PATTERNS = {".claude/settings.json", ".claude/hooks/**"}
+# Why: the hook and the judge read the manifest as the default branch holds it, so a change to it
+# needs no lock, only to stay a guard path the judge sends to the owner (ADR 0033).
+GUARDED_PATTERNS = {"guards/**"}
 # Why: a repository with no forge names a change template; adopt's own wording for it follows
 # the path with a clause, so the line is read up to the closing backtick.
 PR_TEMPLATE_LINE = re.compile(r"^- (?:Pull request|Change) template: `([^`]+)`", re.MULTILINE)
@@ -1036,7 +1039,6 @@ def check_manifest(root: Path) -> Iterable[Finding]:
     if not isinstance(groups, list) or not groups:
         yield agent("guards/manifest.toml: has no [[group]]")
         return
-    locked: set[str] = set()
     for group in groups:
         name = group.get("name", "<unnamed>")
         if len(str(group.get("reason", ""))) < MIN_REASON:
@@ -1047,10 +1049,15 @@ def check_manifest(root: Path) -> Iterable[Finding]:
             yield agent(f"guards/manifest.toml: group '{name}' needs a paths list")
         elif not group["paths"]:
             yield agent(f"guards/manifest.toml: group '{name}' has no paths yet; bind or remove it")
-        elif group.get("edit") == "deny":
-            locked.update(group["paths"])
+    bound = [group for group in groups if isinstance(group.get("paths"), list)]
+    guarded = {pattern for group in bound for pattern in group["paths"]}
+    locked = {
+        pattern for group in bound if group.get("edit") == "deny" for pattern in group["paths"]
+    }
     for pattern in sorted(LOCKED_PATTERNS - locked):
         yield agent(f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group")
+    for pattern in sorted(GUARDED_PATTERNS - guarded):
+        yield agent(f"guards/manifest.toml: '{pattern}' is in no group")
 
 
 def check_doors(root: Path) -> Iterable[Finding]:
@@ -1578,9 +1585,9 @@ def settings_finding(
         return owner(
             found.line,
             f"Should Claude keep this rule: {said}? No version of Ratchet writes it, so the"
-            " settings check stays red while it is there. Keep it by adding what it protects to a"
-            f" group of {settings_rules.MANIFEST}, so that Ratchet writes it, or remove it from"
-            f" {settings_rules.SETTINGS}.",
+            " settings check stays red while it is there. Remove it from"
+            f" {settings_rules.SETTINGS}, or keep it in your own `.claude/settings.local.json`,"
+            " which no gate reads.",
             assumed=(
                 "Claude's settings for this project hold a permission rule that no version of"
                 f" Ratchet writes: {said}. It stays as it is, and the settings check stays red on"
@@ -1592,7 +1599,7 @@ def settings_finding(
     path, _, problem = found.line.partition(": ")
     settings = settings_rules.parse_settings(text)
     kept = settings_rules.stricter(settings or {}, manifest)
-    does = "regenerate the permission rules from the manifest, keeping the project's own"
+    does = "regenerate the permission rules, keeping the project's own"
     if kept:
         does += f"; keeping in deny what you made stricter: {', '.join(f'`{r}`' for r in kept)}"
     broken = (f"{path} is not a JSON object, so it is left as it is",) if settings is None else ()
@@ -2171,8 +2178,8 @@ def guard_mutations() -> list[Mutation]:
             rewrite(settings, denied, denied + '\n      "Bash(gh label create:*)",'),
         ),
         (
-            "settings missing a manifest rule",
-            rewrite(settings, '      "Edit(/GLOSSARY-MAP.md)",\n', ""),
+            "settings missing a fixed rule",
+            rewrite(settings, '      "Edit(/.claude/hooks/**)",\n', ""),
         ),
     ]
 

@@ -22,6 +22,8 @@ Two earlier records spoke of presets, and are read as follows; their decisions s
 
 ADR 0020 changes what the proof is: `bite-all` in tier 2 plants every fault of `quality/bites.toml`, and the tier 1 `bite` proves only the gates a change can affect.
 
+Superseded in part by ADR 0034: the owner is no longer asked about tools. The adopting agent chooses them, and the hand-over states each choice with what the owner can say to change it. The rest of this decision stands.
+
 ## Refutation criterion
 
 This is wrong if adoption without presets binds weaker gates or costs the owner more. Adopt a Python repository on uv and a TypeScript one on pnpm afresh, and compare each row with the preset this record deleted (the tree at commit `50c291d`): if either binds a row to `none`, or to a tool with a narrower rule set, where the preset bound a tool, in two or more rows, the agent's choice is worse than a maintained recipe and presets return as maintained artefacts. It is also wrong if adoption asks the owner more than the two dialogs it asked before, or if two adoptions on one stack on the same day bind tools so different that a reader cannot move between the repositories. And the six types are wrong on the first adoption that has to write an ADR to say a row does not apply to what it plainly is not: that row's types are narrowed, or a type is added.

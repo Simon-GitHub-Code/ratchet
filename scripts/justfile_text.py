@@ -174,17 +174,15 @@ def parse_head(line: str, name_end: int) -> Head | None:
     return Head(colon, params, before, tuple(dependency(w) for w in listed[chain + 1 :]))
 
 
-def blocks(lines: Sequence[str]) -> list[Block]:
-    """The top-level definitions of a justfile, in order.
-
-    Why: an upgrade runs each check again on every edit it tries, and so parses the same few
-    justfiles hundreds of times; the parse of one text is kept.
-    """
-    return list(_blocks(tuple(lines)))
+def blocks(lines: Sequence[str]) -> tuple[Block, ...]:
+    """The top-level definitions of a justfile, in order."""
+    return parsed_blocks(tuple(lines))
 
 
-@functools.lru_cache(maxsize=256)
-def _blocks(lines: tuple[str, ...]) -> tuple[Block, ...]:
+# Why: one conformance run asks the same few justfiles about each recipe it names, and parsing
+# them again for every question was most of the run's time.
+@functools.lru_cache(maxsize=64)
+def parsed_blocks(lines: tuple[str, ...]) -> tuple[Block, ...]:
     found = []
     pending = None
     index = 0
