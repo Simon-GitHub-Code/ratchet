@@ -127,9 +127,13 @@ def test_main_holds_a_gate_to_its_tier_and_only_reports_when_told(
     argv = ["budget", "test", "--root", str(tmp_path), "--tier", "tier1", "--report", "t.jsonl"]
     command = ["--", sys.executable, "-c", "pass"]
     assert budget.main([*argv, *command]) == 1
-    assert "(ceiling 0s of tier1): red\n" in capsys.readouterr().out
+    blocked = capsys.readouterr().out
+    assert "(ceiling 0s of tier1): red\n" in blocked
+    assert "::warning" not in blocked, "a red that blocks needs no annotation"
     assert budget.main([*argv, "--over", "report", *command]) == 0
-    assert "(ceiling 0s of tier1): red, reported and not blocking" in capsys.readouterr().out
+    reported = capsys.readouterr().out
+    assert "(ceiling 0s of tier1): red, reported and not blocking" in reported
+    assert "::warning title=ratchet-budget::ratchet-budget: test took" in reported
     records = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text().splitlines()]
     assert [(r["ceiling"], r["status"], r["exit"]) for r in records] == [(0.0, "red", 0)] * 2
     assert budget.main([*argv, "--set", *command]) == 1
