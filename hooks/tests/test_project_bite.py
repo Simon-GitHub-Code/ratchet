@@ -882,6 +882,16 @@ def links_to_a_secret(root: Path) -> None:
     commit(root, "feat(core): a tracked link to a file git ignores")
 
 
+def ignores_in_a_nested_gitignore(root: Path) -> None:
+    write(root, "docs/.gitignore", "local.txt\n")
+    commit(root, "chore(core): a nested ignore rule")
+
+
+def ignores_in_the_exclude_file(root: Path) -> None:
+    with (root / ".git/info/exclude").open("a", encoding="utf-8") as exclude:
+        exclude.write("local.txt\n")
+
+
 def adds_a_submodule(root: Path) -> None:
     head = git(root, "rev-parse", "HEAD")
     git(root, "update-index", "--add", "--cacheinfo", f"160000,{head},sub")
@@ -905,6 +915,16 @@ def adds_a_submodule(root: Path) -> None:
             'write = { path = "src/.gitignore", content = "*\\nplanted\\n" }',
             None,
             "src/.gitignore would be a new .gitignore",
+        ),
+        (
+            'write = { path = "docs/local.txt", content = "planted\\n" }',
+            ignores_in_a_nested_gitignore,
+            "docs/local.txt is ignored by git",
+        ),
+        (
+            'write = { path = "local.txt", content = "planted\\n" }',
+            ignores_in_the_exclude_file,
+            "local.txt is ignored by git",
         ),
         (
             'write = { path = ".git/info/exclude", content = "*\\n" }',
