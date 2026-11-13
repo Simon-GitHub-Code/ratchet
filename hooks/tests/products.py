@@ -234,14 +234,17 @@ def wait_for(path: Path, limit: float = 30.0) -> None:
 
 
 def processes_naming(text: str) -> list[str]:
-    """Every process whose command line names ``text``: what a test left running."""
+    """Every process whose command line names ``text``: what a test left running.
+
+    ``-ww`` because ps otherwise cuts each line to the terminal's width, before the path.
+    """
     listed = subprocess.run(
-        ["ps", "-eo", "pid=,args="],  # noqa: S607 # -- ps is resolved from PATH
+        ["ps", "-ww", "-eo", "pid=,args="],  # noqa: S607 # -- ps is resolved from PATH
         capture_output=True,
         text=True,
         check=True,
     ).stdout.splitlines()
-    return [line for line in listed if text in line and "ps -eo" not in line]
+    return [line for line in listed if text in line]
 
 
 def running(root: Path) -> list[str]:
