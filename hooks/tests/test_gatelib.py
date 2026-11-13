@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 import gatelib
 from tests import servers
@@ -318,3 +320,13 @@ def test_a_process_that_is_gone_or_cannot_be_read_is_passed_over(tmp_path: Path)
     (proc / "12").mkdir()
     assert gatelib.end_running_from(tree, proc) == []
     assert gatelib.end_running_from(tree, tmp_path / "no-such-directory") == []
+
+
+@given(text=st.text(), current=st.text())
+def test_created_gives_the_text_to_an_absent_file_and_leaves_any_other_alone(
+    text: str, current: str
+) -> None:
+    want = gatelib.created(text)
+    assert want(None) == text
+    assert want(current) == current
+    assert want(want(None)) == want(None)

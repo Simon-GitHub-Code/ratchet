@@ -18,6 +18,7 @@ import socket
 import subprocess
 import time
 import tomllib
+from collections.abc import Callable
 from functools import lru_cache
 from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path, PurePosixPath
@@ -33,6 +34,11 @@ BINDING = Path("docs/process/binding.md")
 # Why: `with_service.py` exports the URL it waited on, so a command run inside it can tell the
 # readiness route from the routes a user requests.
 READY_ENV = "RATCHET_READY"
+
+# Why: an edit the upgrade makes to one file: the text the file holds now (``None``: absent) to
+# the text it must hold. It reads nothing else, never drops a line it did not write and, applied
+# twice, changes nothing the second time.
+Want = Callable[[str | None], str]
 # Why: a path that exists only once ``with_service.py --graceful`` has sent the stop signal.
 STOPPING_ENV = "RATCHET_STOPPING"
 THRESHOLDS = Path("quality/thresholds.toml")
@@ -156,6 +162,15 @@ def read_text(path: Path) -> str | None:
     if b"\0" in data[:8000]:
         return None
     return data.decode("utf-8", errors="replace")
+
+
+def created(text: str) -> Want:
+    """The want of a file the plugin supplies whole, only while it is absent."""
+
+    def want(current: str | None) -> str:
+        return text if current is None else current
+
+    return want
 
 
 def thresholds(root: Path) -> dict[str, object]:
