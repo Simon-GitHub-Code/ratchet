@@ -14,13 +14,15 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # plugin's docs/harness pages name the path. `plugin-pin` is red when nothing is there.
 ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", home_directory() / ".claude/plugins/marketplaces/ratchet")
 
-# The deliverable as a running thing, for the three service gates the plugin ships (`smoke`,
-# `load-smoke`, `telemetry-e2e`): the command that starts it in the foreground, the URL that
-# answers below 400 once it is up, the seconds it may take to get there, and the `service.name` its
-# telemetry carries. `{port}` becomes a free port, exported as PORT, so parallel runs never
-# collide. The boot command builds what it runs: in CI each gate is a job of its own, with nothing
-# another recipe built. A repository with nothing to boot sets `boot`, `ready` and `service` to
-# "none" and binds those three recipes as its application types say.
+# The deliverable as a running thing, for `start` and the three service gates the plugin ships
+# (`smoke`, `load-smoke`, `telemetry-e2e`). Adoption fills `boot`, `ready` and `service` for every
+# type that boots, before its code exists. `boot` stays in the foreground (a server until stopped,
+# one run of a job, a command line tool with the words after it, an app headless) and builds what
+# it runs: in CI each gate is a job of its own, with nothing another recipe built. `{port}` becomes
+# a free port, exported as PORT, so parallel runs never collide. `ready` is the URL that answers
+# below 400 once it is up, or "none" for a `cli`, `job` or `app`, whose gates run `boot` to its
+# exit; `boot_timeout` is the seconds it may take. `service` is the `service.name` its telemetry
+# carries. A `library` boots nothing and sets all three to "none".
 boot := "bind: the command that builds and starts the deliverable in the foreground, such as ./server --port {port}"
 ready := "bind: the URL that answers once it is up, such as http://127.0.0.1:{port}/health"
 boot_timeout := "30"
@@ -43,8 +45,21 @@ probed := booted + ' --env "' + flags_on + '"'
 shard := env_var_or_default("SHARD", "1")
 shards := env_var_or_default("SHARDS", "1")
 
+port := "8000"
+
+test_runner := "bind: the command that runs the test files named after it, or every test with none"
+
 default:
     @just --list --unsorted
+
+# Not a gate: the deliverable for a person, and where to open it.
+start *args:
+    @{{ if ready =~ '^https?://' { "echo 'open " + replace(ready, "{port}", port) + " once it is up; Ctrl-C stops it'" } else { "true" } }}
+    export PORT={{port}}; {{ replace(boot, "{port}", port) }} {{args}}
+
+# `just test-files tests/unit/a.test.ts` runs that file; with none, every test.
+test-files *files:
+    {{test_runner}} {{files}}
 
 # --- tiers -----------------------------------------------------------------
 
@@ -266,7 +281,7 @@ prose:
 # --- tier 1 bodies ---------------------------------------------------------------
 
 test:
-    @echo "bind: unit, property and fitness tests on every core, shard {{shard}} of {{shards}}; red when none is collected"; exit 1
+    @echo "bind: unit, property and fitness tests on every core: test_runner with the runner's shard flags, shard {{shard}} of {{shards}}; red when none is collected"; exit 1
 
 coverage:
     @echo "bind: run the suite with a Cobertura or LCOV report, named in --report below"; exit 1
