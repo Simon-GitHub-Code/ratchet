@@ -41,9 +41,9 @@ signal comes ``--signal-after`` seconds later; ``RATCHET_STOPPING`` is a file th
 the signal on. Every request is judged as always, with two exceptions once the signal is sent,
 each of which ends that worker. A refused connect meets a service that no longer listens, so it
 is expected, not counted. A connection reset or closed with no answer is not counted when the
-gate took it: the service never accepted it, it was still waiting on the listener when the
-service stopped listening, and the file named it before the client saw the reset. Any other
-reset is a request the service accepted and dropped, and is red, and so is a timeout or an
+gate took it: the service never accepted it, it was waiting on the listener when the service
+stopped listening or arrived after, and the file named it before the client saw the reset. Any
+other reset is a request the service accepted and dropped, and is red, and so is a timeout or an
 error status.
 
 That holds on each port where the gate holds the service's listener. On a port where it does
@@ -288,9 +288,10 @@ def judge(
     taken = sum(cut.named and not told.inexact(cut.port) for cut in cuts)
     if taken:
         notes.append(
-            f"load-smoke: {taken} connection(s) reset after the stop signal are not counted: "
-            "the service never accepted them, they were still waiting on its listener when it "
-            "stopped listening"
+            f"load-smoke: {taken} connection(s) reset after the stop signal are not counted, "
+            "since the service never accepted them. The gate held the service's listener and, "
+            "once no process of the service held it, took each connection waiting there and "
+            "reset it. Each was waiting when the service stopped listening, or arrived after."
         )
     older: dict[str, list[str]] = {}
     for port in sorted(set(ports)):
