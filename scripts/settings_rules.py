@@ -14,12 +14,20 @@ The ``ask`` list is empty. An edit of any other guard path meets no rule here: o
 merge judge reads it, and where it lands on the default branch the hook refuses it. The hook is
 the one layer that asks, on a merge and on the agent-ready label, so its prompt is the one the
 owner reads, with its reasons (ADR 0033). A repository-relative pattern becomes ``Edit(/pattern)``
-(Claude Code reads a leading ``/`` as the project root) and a ``~/`` pattern stays as it is. The
-``deny`` and ``ask`` lists are owned by this tool in full; a project's own rules go in ``allow``.
+(Claude Code reads a leading ``/`` as the project root) and a home pattern stays as it is.
+
+The rules the plugin writes are the whole of what it owns. Earlier versions wrote one ``Edit`` rule
+per manifest pattern and ``gh pr merge`` as an ask; a rule no version writes is the project's own,
+and ``regenerated`` keeps it where it stood, so ``--check`` still reports it and no write removes
+it. A rule some version writes that the project holds in ``deny`` and this one does not is
+stricter than the plugin's: it stays in ``deny``, and neither list reports it. No regeneration
+takes a rule out of ``deny`` (ADR 0029).
 
 Usage: ``settings_rules.py [--root DIR] [--check | --write]``. ``--check`` (the default) prints
-one line per rule missing from or foreign to the lists and exits 1 on any. ``--write`` replaces
-the two lists and keeps every other key.
+one line per rule missing from or foreign to the lists and exits 1 on any. ``--write`` regenerates
+the two lists and keeps every other key and every rule of the project's own. It refuses while the
+repository has no readable manifest, while ``settings.json`` is not a JSON object, and while the
+plugin in use is not the one CI runs (``plugin_pin.write_refusal``).
 """
 
 from __future__ import annotations
@@ -27,9 +35,18 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tomllib
+from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple
 
-# Why: the conformance gate checks the settings only in a repository that has adopted the method.
+import plugin_pin
+
+if TYPE_CHECKING:
+    import gatelib
+
+# Why: the settings belong to a repository that has adopted the method, and the patterns an
+# earlier version mirrored tell its rules from the project's own.
 MANIFEST = Path("guards/manifest.toml")
 SETTINGS = Path(".claude/settings.json")
 SCHEMA = "https://json.schemastore.org/claude-code-settings.json"
@@ -124,17 +141,38 @@ def edit_rule(pattern: str) -> str:
 
 DENY = [*map(edit_rule, TAMPER), *COMMAND_DENIES]
 ASK: list[str] = []
+# Why: an earlier version asked here; a repository that still holds it is regenerated.
+EARLIER_ASKS = ("Bash(gh pr merge:*)",)
+
+
+def read_manifest(root: Path) -> dict[str, object] | None:
+    path = root / MANIFEST
+    if not path.is_file():
+        return None
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError:
+        return None
+
+
+def parse_settings(text: str | None) -> dict[str, object] | None:
+    """The settings file's JSON object; a new one for no file, ``None`` for text that is not one."""
+    if text is None:
+        return {"$schema": SCHEMA}
+    try:
+        loaded = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def settings_text(root: Path) -> str | None:
+    path = root / SETTINGS
+    return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
 def read_settings(root: Path) -> dict[str, object]:
-    path = root / SETTINGS
-    if not path.is_file():
-        return {"$schema": SCHEMA}
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
+    return parse_settings(settings_text(root)) or {}
 
 
 def listed(settings: dict[str, object], key: str) -> list[str]:
@@ -145,33 +183,134 @@ def listed(settings: dict[str, object], key: str) -> list[str]:
     return [v for v in values if isinstance(v, str)] if isinstance(values, list) else []
 
 
-def drift(root: Path) -> list[str]:
-    """One line per missing or foreign rule; empty when the settings hold the fixed lists."""
-    settings = read_settings(root)
-    problems: list[str] = []
-    for key, expected in (("deny", DENY), ("ask", ASK)):
+class Fault(Enum):
+    """What kind of drift a line reports, which says who may settle it."""
+
+    MANIFEST = "manifest"
+    MISSING = "missing"
+    MISPLACED = "misplaced"
+    OWN = "own"
+
+
+class Drift(NamedTuple):
+    """One line ``--check`` prints, and the kind of fault it is."""
+
+    line: str
+    fault: Fault
+
+
+def drifts(root: Path) -> list[Drift]:
+    """Each manifest fault, missing rule and foreign rule, with its kind; empty when they match."""
+    manifest = read_manifest(root)
+    if manifest is None:
+        line = f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"
+        return [Drift(line, Fault.MANIFEST)]
+    return drifts_of(manifest, read_settings(root))
+
+
+def stricter(settings: dict[str, object], manifest: dict[str, object]) -> list[str]:
+    """The rules the project denies that an earlier version wrote and this one does not: kept.
+
+    Why: ``deny`` is as strict as a rule gets. A rule the plugin could write that the project
+    holds there is the owner's choice, and taking it out of ``deny`` would loosen it.
+    """
+    return [
+        rule
+        for rule in listed(settings, "deny")
+        if rule not in DENY and plugin_writes(rule, manifest)
+    ]
+
+
+def drifts_of(manifest: dict[str, object], settings: dict[str, object]) -> list[Drift]:
+    """The drift of ``settings`` from the fixed lists, read against ``manifest``."""
+    kept = stricter(settings, manifest)
+    found: list[Drift] = []
+    for key, expected in (("deny", [*DENY, *kept]), ("ask", ASK)):
         actual = listed(settings, key)
-        problems.extend(
-            f"{SETTINGS}: '{r}' is missing from {key}" for r in expected if r not in actual
+        found.extend(
+            Drift(f"{SETTINGS}: '{r}' is missing from {key}", Fault.MISSING)
+            for r in expected
+            if r not in actual and r not in kept
         )
-        problems.extend(
-            f"{SETTINGS}: '{r}' in {key} is not a rule this tool writes"
+        found.extend(
+            Drift(
+                f"{SETTINGS}: '{r}' in {key} is not a rule this tool writes",
+                Fault.MISPLACED if plugin_writes(r, manifest) else Fault.OWN,
+            )
             for r in actual
             if r not in expected
         )
-    return problems
+    return found
 
 
-def write(root: Path) -> None:
-    """Replace the deny and ask lists with the fixed ones and keep every other key."""
-    settings = read_settings(root)
-    permissions = settings.get("permissions")
-    if not isinstance(permissions, dict):
-        permissions = {}
-    settings["permissions"] = {**permissions, "deny": DENY, "ask": ASK}
+def drift(root: Path) -> list[str]:
+    """One line per manifest fault, missing rule or foreign rule; empty when settings match."""
+    return [found.line for found in drifts(root)]
+
+
+def plugin_writes(rule: str, manifest: dict[str, object]) -> bool:
+    """Whether some version of the plugin writes ``rule`` for this manifest, in either list."""
+    groups = manifest.get("group")
+    mirrored = {
+        edit_rule(pattern)
+        for group in (groups if isinstance(groups, list) else [])
+        if isinstance(group, dict) and isinstance(group.get("paths"), list)
+        for pattern in group["paths"]
+        if isinstance(pattern, str)
+    }
+    return rule in DENY or rule in EARLIER_ASKS or rule in mirrored
+
+
+def own_rules(settings: dict[str, object], manifest: dict[str, object]) -> list[tuple[str, str]]:
+    """The project's own rules, as (list, rule) in order: those no version of the plugin writes."""
+    return [
+        (key, rule)
+        for key in ("deny", "ask")
+        for rule in listed(settings, key)
+        if not plugin_writes(rule, manifest)
+    ]
+
+
+def regenerated(manifest: dict[str, object]) -> gatelib.Want:
+    """The want over ``settings.json`` text, which leaves text that is not a JSON object alone."""
+
+    def want(text: str | None) -> str:
+        settings = parse_settings(text)
+        if settings is None:
+            return text or ""
+        permissions = settings.get("permissions")
+        held = permissions if isinstance(permissions, dict) else {}
+        own = own_rules(settings, manifest)
+        kept = stricter(settings, manifest)
+        ours = {"deny": [*DENY, *kept], "ask": [rule for rule in ASK if rule not in kept]}
+        lists = {
+            key: [*rules_, *(rule for k, rule in own if k == key)] for key, rules_ in ours.items()
+        }
+        settings["permissions"] = {**held, **lists}
+        return json.dumps(settings, indent=2) + "\n"
+
+    return want
+
+
+def regenerate(root: Path) -> None:
+    """Write ``.claude/settings.json`` as ``regenerated`` makes it for the root's manifest."""
     path = root / SETTINGS
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    want = regenerated(read_manifest(root) or {})
+    path.write_text(want(settings_text(root)), encoding="utf-8")
+
+
+def write_problems(root: Path, plugin: Path) -> list[str]:
+    """What stops ``--write`` from regenerating the file under ``plugin``; empty when nothing."""
+    if read_manifest(root) is None:
+        return [f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"]
+    problems: list[str] = []
+    refusal = plugin_pin.write_refusal(root, plugin)
+    if refusal:
+        problems.append(f"{SETTINGS}: not written, {refusal}")
+    if parse_settings(settings_text(root)) is None:
+        problems.append(f"{SETTINGS}: not a JSON object, so it is left as it is; fix or delete it")
+    return problems
 
 
 def main(argv: list[str]) -> int:
@@ -182,14 +321,17 @@ def main(argv: list[str]) -> int:
     mode.add_argument("--write", action="store_true")
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
-    if options.write:
-        write(root)
-        print(f"settings-check: {SETTINGS} written")
-        return 0
-    problems = drift(root)
+    problems = write_problems(root, plugin_pin.PLUGIN) if options.write else drift(root)
+    if options.write and not problems:
+        regenerate(root)
     for line in problems:
         print(line)
-    print("settings-check: red" if problems else "settings-check: green")
+    if problems:
+        print("settings-check: red")
+    elif options.write:
+        print(f"settings-check: {SETTINGS} written")
+    else:
+        print("settings-check: green")
     return 1 if problems else 0
 
 

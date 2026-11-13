@@ -25,8 +25,9 @@
 # tier1 = 600
 # tier2 = 3600
 
-# The change-size ceiling per pull request, files and added-plus-deleted lines; `just change-size
-# --set --files N --lines N` records it. The adoption commit is exempt by construction.
-# [ceilings.change]
-# files = 40
-# lines = 1500
+# The change-size ceiling per pull request: files, and added-plus-deleted lines, against the merge
+# base. It only falls; the plugin's `scripts/change_size.py --set --files N --lines N` writes a
+# lower one. The adoption's own commits are exempt.
+[ceilings.change]
+files = 40
+lines = 1500
