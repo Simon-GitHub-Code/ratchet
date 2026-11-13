@@ -194,8 +194,23 @@ def run_gh(args: Sequence[str]) -> str | None:
     return completed.stdout if completed.returncode == 0 else None
 
 
+def numbered_locally(ref: str, root: Path) -> list[str]:
+    """The local ticket files whose name starts with the number ``ref`` gives (``03``, ``#3``)."""
+    number = ref.lstrip("#")
+    if not number.isdigit():
+        return []
+    return sorted(
+        path.relative_to(root).as_posix()
+        for path in root.glob(".scratch/*/issues/*.md")
+        if (lead := re.match(r"\d+", path.name)) and int(lead.group()) == int(number)
+    )
+
+
 def fetch(ref: str, root: Path, gh: Runner) -> Ticket | None:
-    """The ticket behind ``ref``: a local file, or an issue by number through ``gh``."""
+    """The ticket behind ``ref``: a local file, or an issue by number through ``gh``.
+
+    Where the tracker answers nothing, a number is the one local file whose name it starts.
+    """
     path = root / Path(ref)
     if path.is_file():
         return local_ticket(Path(ref).as_posix(), path.read_text(encoding="utf-8"))
@@ -204,7 +219,10 @@ def fetch(ref: str, root: Path, gh: Runner) -> Ticket | None:
         return None
     output = gh(["issue", "view", number, "--json", "number,title,body,labels,state"])
     if output is None:
-        return None
+        # Why: with no tracker a number can only mean a local file; a second match is ambiguous
+        # and the caller names the candidates (see numbered_locally).
+        found = numbered_locally(ref, root)
+        return fetch(found[0], root, gh) if len(found) == 1 else None
     try:
         data = json.loads(output)
     except ValueError:
@@ -469,7 +487,10 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("ref", help="the ticket: a number, #number, or a local ticket file")
+    parser.add_argument(
+        "ref",
+        help="the ticket: a number, #number, or a local file (a number may start its name)",
+    )
     parser.add_argument("--root", default=".")
     parser.add_argument("--base", help="the branch features start from (the default branch)")
     parser.add_argument("--branch", help="the working branch HEAD must be on")
