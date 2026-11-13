@@ -294,6 +294,7 @@ def test_a_change_description_that_names_the_label_does_not_ask() -> None:
 
 
 READY = "echo 'Status: agent:ready' >"
+TEE = "echo 'Status: agent:ready' | tee"
 
 
 @pytest.mark.parametrize(
@@ -308,6 +309,11 @@ READY = "echo 'Status: agent:ready' >"
         (f"{READY} /tmp/t/issues/01.md; cp -r /tmp/t .scratch/g", "g/ gets"),
         (f"{READY} /tmp/s/g/issues/01.md; mv /tmp/s .scratch", ".scratch/, s/ get"),
         (f"cd .scratch/f && {READY}> issues/04-d.md", "04-d.md gets"),
+        # Why: brace expansion, a variable or a substitution may spell any part of the path.
+        (f"{TEE} .scratch/f/{{issues,none}}/04-d.md", "04-d.md gets"),
+        (f"{TEE} .scratch/f/issues/04-d.{{md,txt}}", "04-d.{md,txt} gets"),
+        (f"{TEE} .scratch/f/$D/04-d.md", "04-d.md gets"),
+        (f"{TEE} .scratch/f/$(echo issues)/04-d.md", "04-d.md gets"),
     ],
 )
 def test_every_other_way_to_write_a_ticket_with_the_status_asks(command: str, named: str) -> None:

@@ -1702,6 +1702,24 @@ FROM_APP: list[tuple[str, list[str]]] = [
     ("(cd ..; ( cd app ); cp notes.md justfile)", [W]),
     ("cd ..;>justfile", [W]),
     ('echo "$(echo case)"; rm -f ../justfile', ["unreadable"]),
+    # Why: posix mode and sh read a `'` in a quoted `${x-...}` as a character, bash as a quote.
+    ('set -o posix\necho "${x:-\'}"; echo x > ../justfile #\'}"', [W, "unreadable"]),
+    ("echo \"${x:-'}\"'}\"; rm -f ../justfile; echo '", ["unreadable"]),
+    # Why: sh reads `$'a\'` as `$` and a quote that the escaped quote ends.
+    ("sh <<'E'\necho $'a\\'; rm -f ../justfile #'\nE", [W, "unreadable"]),
+    ("echo $'\\''; rm -f ../justfile; echo ''", ["unreadable"]),
+    # Why: bash may end a `${ cmd; }` at a `}` after a compound command or a redirect.
+    ("cd ..${ :; { :; } }; rm -rf quality\n}", [W, "unreadable"]),
+    ("cd ..${ : >}; rm -rf quality }", [W, "unreadable"]),
+    # Why: inside backticks, an escaped backtick opens a nested substitution, ending nothing.
+    (": `: \\`;(`; : \\`; cd ..; : `: \\`;)`; : \\`; echo x > justfile", [W, "unreadable"]),
+    ("echo `echo \\`echo ok\\``; cd ..; echo x > justfile", [W]),
+    # Why: `$[ ... ]` is an arithmetic expansion, so a parenthesis in it opens no subshell.
+    (": $[\n( ]\ncd ..\n: $[\n) ]\necho x > justfile", [W]),
+    ("echo $[ 1 << 2 ]; cd ..; echo x > justfile", [W]),
+    # Why: on a line the guard does not model, a `cd` in a pipeline is read as staying in force.
+    ("case a in a) :;; esac; cd .. | cat; echo x > justfile", [W]),
+    ("eval :; cd .. & echo x > justfile", [W]),
 ]
 
 
