@@ -1338,7 +1338,7 @@ def fingerprint(root: Path) -> list[tuple[str, int, bytes]]:
             continue
         mode = path.lstat().st_mode
         held = (
-            os.readlink(path).encode()
+            path.readlink().as_posix().encode()
             if path.is_symlink()
             else path.read_bytes()
             if path.is_file()
@@ -1356,15 +1356,17 @@ SWAPPED = {
 }
 
 
-@pytest.mark.parametrize("swapped", ["src", "src/deep"])
-@pytest.mark.parametrize("kind", sorted(SWAPPED))
+@pytest.mark.parametrize(
+    "case", [(kind, at) for kind in sorted(SWAPPED) for at in ("src", "src/deep")]
+)
 def test_a_directory_swapped_for_a_link_between_the_check_and_the_plant_is_refused(
     tmp_path: Path,
+    *,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
-    kind: str,
-    swapped: str,
+    case: tuple[str, str],
 ) -> None:
+    kind, swapped = case
     # Why: a process setup left running swapped a directory of the copy for a link to the real
     # tree after the fault's path was checked and before it was written, and the fault landed in
     # the real tree. The swap is made at that seam here, so no race decides the test.
@@ -1400,8 +1402,11 @@ def test_a_process_setup_left_swapping_a_directory_for_a_link_never_changes_the_
         'replace = { path = "src/code.txt", old = "clean", new = "planted" }',
         'remove = ["src/code.txt"]',
     ]
-    registry = 'setup = ["setsid -f sh ' + str(swapper) + '"]\n' + "".join(
-        bite("lint", f"f{n}", faults[n % 3].replace("{n}", str(n))) for n in range(24)
+    registry = (
+        'setup = ["setsid -f sh '
+        + str(swapper)
+        + '"]\n'
+        + "".join(bite("lint", f"f{n}", faults[n % 3].replace("{n}", str(n))) for n in range(24))
     )
     root = project(tmp_path / "repo", {"lint": "exit 0"}, registry)
     until = int(time.time()) + 20
