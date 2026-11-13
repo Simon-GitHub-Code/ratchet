@@ -17,9 +17,10 @@ command that must have moved ``HEAD`` (``ratchet_guards.git.switch``), and nothi
 redefines what those words do (ADR 0024).
 """
 
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
-from itertools import pairwise
+from itertools import pairwise, product
 from pathlib import PurePosixPath
 
 from ratchet_guards import environment, gh, git, interpreters, tickets, writes
@@ -91,6 +92,15 @@ _DEFINITION = "("
 _AND = "&&"
 # After `||` the command may have been skipped; in a pipeline it runs in a subshell.
 _UNSURE_AFTER = frozenset({"||", "|", "|&"})
+_VARIABLE = re.compile(r"\$(\w+)|\$\{(\w+)\}")
+# Why: a value the guard cannot take as one literal word is not a value it knows.
+_DYNAMIC = ("$", "`", PLACEHOLDER)
+# Why: a block or a negation runs its commands as they stand; the other reserved words make the
+# command after them conditional or repeated.
+_BRANCHING = RESERVED - {"{", "}", "!"}
+_FORGETTERS = frozenset({"unset", "for", "select"})
+# Why: the shell runs these in the shell itself, so what they set is there for the next command.
+_KEEPS = frozenset({";", "&&", "||", "\n", ""})
 _CROWDED = Verdict("unreadable", "the command line moves between too many directories")
 _SHELL = Spec("oO", frozenset({"--rcfile", "--init-file"}))
 
@@ -139,11 +149,93 @@ def _levelled(contexts: Sequence[Context]) -> list[Context]:
     return _distinct(replace(c, exported=exported, unsettled=unsettled) for c in contexts)
 
 
+def _bindings(words: Sequence[str]) -> dict[str, str | None]:
+    """The variables a simple command sets, each with its literal value or ``None``.
+
+    ``None`` means the command sets the variable to something the guard cannot read, or unsets
+    it.
+    """
+    lead, rest = _assignments(words)
+    if not rest:
+        return {
+            name: _literal(word)
+            for word in lead
+            if (name := environment.assigned(word)) is not None
+        }
+    if _name(rest[0]) in _FORGETTERS:
+        # `for NAME in ...` names one variable; `unset` names every operand.
+        names = [word for word in rest[1:] if not word.startswith("-")]
+        return dict.fromkeys(names if rest[0] == "unset" else names[:1])
+    return {name: _literal(word) for name, word in environment.declared(rest).items()}
+
+
+def _literal(word: str) -> str | None:
+    """The value a plain ``NAME=value`` word sets, when the guard can read it as one word."""
+    name, _, value = word.partition("=")
+    plain = environment.assigned(word) == name
+    return value if plain and value and not _dynamic(value) else None
+
+
+def _dynamic(value: str) -> bool:
+    return any(mark in value for mark in _DYNAMIC) or len(value.split()) != 1
+
+
+def _resolved(target: str, values: Mapping[str, frozenset[str | None]]) -> list[str]:
+    """Each way ``target`` reads once the names the line has set are replaced by their values.
+
+    A name with no known value, or one that may have none, stays in the word as ``$name``,
+    which the caller takes for a target it cannot read.
+    """
+    names = sorted({m.group(1) or m.group(2) for m in _VARIABLE.finditer(target)} & values.keys())
+    options = [sorted(values[name], key=lambda value: value or "") for name in names]
+    return [
+        _substituted(target, dict(zip(names, picks, strict=True))) for picks in product(*options)
+    ]
+
+
+def _substituted(target: str, chosen: Mapping[str, str | None]) -> str:
+    def value(match: re.Match[str]) -> str:
+        return chosen.get(match.group(1) or match.group(2)) or match.group(0)
+
+    return _VARIABLE.sub(value, target)
+
+
 def _redefines(command: SimpleCommand) -> bool:
     """Whether a command may change what ``cd`` or ``git`` means: a definition, ``eval``, a trap."""
     _, rest = _assignments(command.words)
-    defines = command.then == _DEFINITION and len(rest) == 1
+    # Why: a wrapper before the name (`sudo cd() { :; }`) still defines it.
+    defines = command.then == _DEFINITION and bool(rest)
     return defines or bool(rest and {rest[0], _name(rest[0])} & _REDEFINERS)
+
+
+def _assigning(
+    values: Mapping[str, frozenset[str | None]],
+    command: SimpleCommand,
+    *,
+    position: int,
+    previous: str,
+) -> dict[str, frozenset[str | None]]:
+    """``values`` after ``command``: every value each name may hold, ``None`` for one not known.
+
+    A command that sets a name where the shell certainly keeps it replaces what the name held.
+    In a subshell, a pipeline, a branch, a loop, a background job or the far side of ``||`` the
+    new value is only one of the values the name may hold. A closing parenthesis forgets every
+    name, since what ran inside it is gone.
+    """
+    if command.then == ")":
+        return {}
+    lead, _ = _assignments(command.words)
+    kept = (
+        position == 1
+        and command.then in _KEEPS
+        and previous not in _UNSURE_AFTER
+        and not any(word in _BRANCHING for word in lead)
+    )
+    after = dict(values)
+    for name, value in _bindings(command.words).items():
+        new = frozenset({value})
+        after[name] = new if kept else after.get(name, frozenset({None})) | new
+    return after
 
 
 def _unreadable(target: str) -> bool:
@@ -304,19 +396,25 @@ class _Checker:
         trusted = not any(map(_redefines, parsed.commands))
         now = chain = seen = [context]
         previous = ""
+        values: dict[str, frozenset[str | None]] = {}
         crowded = False
         verdicts: list[Verdict] = []
         pipeline: list[SimpleCommand] = []
         for command in parsed.commands:
             pipeline.append(command)
+            position = len(pipeline)
             for place in now:
                 verdicts += self._command(pipeline, parsed.heredocs, place)
             pipeline = pipeline if command.piped else []
             chained = command.then == _AND
             sure = trusted and chained and previous not in _UNSURE_AFTER
+            known = values if trusted else {}
             after = [
-                a for place in now for a in self._advance(command.words, place, seen, sure=sure)
+                a
+                for place in now
+                for a in self._advance(command.words, place, seen, sure=sure, values=known)
             ]
+            values = _assigning(values, command, position=position, previous=previous)
             chain = _distinct([*chain, *after])
             states = _levelled(after if chained else chain)
             crowded = crowded or len(states) > MAX_STATES
@@ -379,9 +477,14 @@ class _Checker:
         find, cwd = self.guard.locator.words, context.cwd
         hits = find(written, cwd, destructive=False)  # pragma: no mutate # -- None is False
         hits += find(removed, cwd, destructive=True)
-        return [
+        verdicts = [
             Verdict("guard-path-write", f"{verb} {hit.path} ({hit.group.name})") for hit in hits
-        ] + tickets.named(written, self.line, context, guard=self.guard)
+        ]
+        if context.lost:
+            locate = self.guard.locator.could_hit
+            lost = [*locate(written, destructive=False), *locate(removed, destructive=True)]
+            verdicts += [Verdict("unresolved-directory", f"{verb} {word}") for word in lost]
+        return verdicts + tickets.named(written, self.line, context, guard=self.guard)
 
     def words(self, words: Sequence[str], context: Context) -> list[Verdict]:
         assignments, rest = _assignments(words)
@@ -433,7 +536,13 @@ class _Checker:
         return verdicts + self._writes(touched.written, touched.removed, context, verb=head)
 
     def _advance(
-        self, words: Sequence[str], context: Context, seen: Sequence[Context], *, sure: bool
+        self,
+        words: Sequence[str],
+        context: Context,
+        seen: Sequence[Context],
+        *,
+        sure: bool,
+        values: Mapping[str, frozenset[str | None]],
     ) -> list[Context]:
         """The states ``words`` may leave ``context`` in for the command after it.
 
@@ -451,7 +560,7 @@ class _Checker:
             return [context]
         plain = sure and bare
         if head in _DIRECTORY_MOVERS:
-            return self._moved(rest, context, seen, plain=plain)
+            return self._moved(rest, context, seen, plain=plain, values=values)
         move = git.switch(rest, context, self.guard)
         if move is None:
             return [context]
@@ -460,17 +569,38 @@ class _Checker:
         return [context.claiming(move.branches)]
 
     def _moved(
-        self, words: Sequence[str], context: Context, seen: Sequence[Context], *, plain: bool
+        self,
+        words: Sequence[str],
+        context: Context,
+        seen: Sequence[Context],
+        *,
+        plain: bool,
+        values: Mapping[str, frozenset[str | None]],
     ) -> list[Context]:
-        """Where a ``cd``, ``pushd`` or ``popd`` may leave the commands after it."""
-        target = self.guard.locator.filesystem.expand(words[-1] if len(words) > 1 else "~")
-        hidden = _name(words[0]) == _POPD or _unreadable(target) or _CDPATH in context.exported
-        if hidden:
-            return _distinct([context, *(context.moved_to(place.cwd) for place in seen)])
-        moved = context.moved_to(context.cwd / target)
-        return [moved] if plain else [context, moved]
+        """Where a ``cd``, ``pushd`` or ``popd`` may leave the commands after it.
+
+        A name the line set to a literal is read as the shell will read it (ADR 0024). A target
+        it cannot read leaves the directory unknown, which a later write must not take as a
+        directory it has already seen.
+        """
+        readings = _resolved(words[-1], values) if len(words) > 1 else ["~"]
+        places: list[Context] = []
+        for word in readings:
+            target = self.guard.locator.filesystem.expand(word)
+            hidden = _name(words[0]) == _POPD or _unreadable(target) or _CDPATH in context.exported
+            if hidden:
+                earlier = (context.moved_to(place.cwd) for place in seen)
+                places += [context, context.adrift(), *earlier]
+                continue
+            anchored = PurePosixPath(target).is_absolute()
+            moved = context.moved_to(context.cwd / target, anchored=anchored)
+            places += [moved] if plain else [context, moved]
+        return _distinct(places)
 
 
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
     """Every verdict the rules give on a Bash command line run in ``context``."""
-    return tickets.together(_Checker(guard, 0, command).script(command, context))
+    verdicts = tickets.together(_Checker(guard, 0, command).script(command, context))
+    # Why: a write that is refused outright needs no question about where it ran.
+    refused = any(verdict.rule == "guard-path-write" for verdict in verdicts)
+    return [v for v in verdicts if not (refused and v.rule == "unresolved-directory")]

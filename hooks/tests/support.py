@@ -19,6 +19,9 @@ MANIFEST_TEXT = (Path(__file__).resolve().parent / "fixtures/manifest.toml").rea
     encoding="utf-8"
 )
 MANIFEST = parse(MANIFEST_TEXT)
+STANDARD = parse(
+    (PLUGIN_ROOT / "skills/adopt/templates/guards/manifest.toml").read_text(encoding="utf-8")
+)
 PLUGIN = Path("/plugin")
 ROOT = Path("/repo")
 WORKTREE = ROOT / ".claude/worktrees/agent-1"
@@ -144,7 +147,9 @@ def make_guard(
 ) -> Guard:
     """A guard over the fakes, the fixture manifest and a plugin installed at ``/plugin``."""
     locator = Locator(
-        with_plugin_group(manifest, PLUGIN), filesystem or FakeFilesystem(manifest=manifest)
+        with_plugin_group(manifest, PLUGIN),
+        filesystem or FakeFilesystem(manifest=manifest),
+        STANDARD,
     )
     return Guard(locator, repo or FakeRepo())
 

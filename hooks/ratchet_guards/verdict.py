@@ -76,6 +76,10 @@ RULES: dict[str, Rule] = {
         Decision.DENY, "disables or removes a harness plugin, package or marketplace"
     ),
     "unreadable": Rule(Decision.ASK, "could not be checked by the guard"),
+    "unresolved-directory": Rule(
+        Decision.ASK,
+        "writes a relative path after a cd the guard cannot resolve; it may be a guard path",
+    ),
 }
 
 

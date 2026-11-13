@@ -119,6 +119,7 @@ GIT_TIMEOUT_SECONDS = 5
 DISPUTES = "docs/disputes/NNNN-<slug>.md"
 COMMITTED = "Guard paths come from guards/manifest.toml as committed on the default branch."
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
+STANDARD_MANIFEST = "skills/adopt/templates/guards/manifest.toml"
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +425,17 @@ def read_manifest(root: Path, filesystem: LocalFilesystem | None = None) -> Mani
     return EMPTY if manifest is None else manifest
 
 
+def standard_manifest(plugin_root: Path) -> Manifest:
+    """The manifest ``/ratchet:adopt`` starts a repository from, or ``EMPTY`` without the template.
+
+    It is the guard's best guess at the guard paths of a repository it cannot see.
+    """
+    try:
+        return parse((plugin_root / STANDARD_MANIFEST).read_text(encoding="utf-8"))
+    except OSError:
+        return EMPTY
+
+
 def local_guard(root: Path, plugin_root: Path = PLUGIN_ROOT) -> Guard:
     """The guard over the real filesystem and git.
 
@@ -433,7 +445,8 @@ def local_guard(root: Path, plugin_root: Path = PLUGIN_ROOT) -> Guard:
     """
     filesystem = LocalFilesystem()
     manifest = with_plugin_group(read_manifest(root, filesystem), plugin_root)
-    return Guard(Locator(manifest, filesystem), GitRepoState())
+    standard = standard_manifest(plugin_root)
+    return Guard(Locator(manifest, filesystem, standard), GitRepoState())
 
 
 def main(root: Path, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> int:

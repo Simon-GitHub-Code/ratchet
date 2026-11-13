@@ -40,7 +40,9 @@ class Context:
     than the one in ``cwd`` (``--git-dir``, ``GIT_DIR``): the guard cannot ask which branch it
     is on, and judges it as a default branch. ``unsettled`` is set once an earlier command on the
     line may have changed what a ref name or an upstream resolves to, so what git says of them
-    now is not what the command will meet.
+    now is not what the command will meet. ``lost`` marks a ``cwd`` that a ``cd`` the guard could
+    not resolve may have replaced: the command then runs somewhere unknown, and a relative path
+    it writes may be a guard path of whatever repository that is.
     """
 
     cwd: Path
@@ -49,10 +51,21 @@ class Context:
     exported: frozenset[str] = frozenset()
     unread: bool = False
     unsettled: bool = False
+    lost: bool = False
 
-    def moved_to(self, cwd: Path) -> "Context":
-        """This context after a ``cd``: the branch known here may still be the one there."""
-        return replace(self, cwd=cwd, branch=None, maybe=self._claims())
+    def moved_to(self, cwd: Path, *, anchored: bool = True) -> "Context":
+        """This context after a ``cd``: the branch known here may still be the one there.
+
+        ``anchored`` says ``cwd`` is where the shell goes; a relative step from a lost place is
+        still lost.
+        """
+        return replace(
+            self, cwd=cwd, branch=None, maybe=self._claims(), lost=self.lost and not anchored
+        )
+
+    def adrift(self) -> "Context":
+        """This context after a ``cd`` to a place the guard cannot resolve."""
+        return replace(self, lost=True)
 
     def switched_to(self, branch: str) -> "Context":
         """This context after a branch switch that is certain to have happened."""

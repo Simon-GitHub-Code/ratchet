@@ -10,12 +10,13 @@ directory is judged by the manifest of the checkout it edits. So a git worktree 
 and ``..`` are resolved before matching.
 """
 
+import posixpath
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 
-from ratchet_guards.manifest import GIT_STATE, Group, Manifest, Scope
+from ratchet_guards.manifest import EMPTY, GIT_STATE, Group, Manifest, Scope
 from ratchet_guards.records import Before
 
 _GLOB_CHARS = frozenset("*?[")
@@ -91,6 +92,7 @@ class Locator:
 
     manifest: Manifest
     filesystem: Filesystem
+    standard: Manifest = EMPTY
 
     def _views(self, canonical: Path) -> Iterator[tuple[str, Scope, Manifest]]:
         """``canonical`` written relative to each scope it falls in, with the manifest for it.
@@ -128,6 +130,33 @@ class Locator:
         if group is None:
             return None
         return Hit(f"~/{relative}" if scope is Scope.HOME else relative, group)
+
+    def could_hit(self, words: Iterable[str], *, destructive: bool) -> list[str]:
+        """The relative words that would be guard paths in some repository, wherever it is.
+
+        For a command whose directory the guard cannot resolve. Each word is read against the
+        patterns of the session's manifest, of ``standard`` (what an adopted repository starts
+        from, the best guess at one the guard cannot see) and of the git state, as if it started
+        at a repository root, since any directory it ran in may be one. A word that is absolute
+        or starts with ``~`` names its place by itself and is left to ``words``.
+        """
+        found: list[str] = []
+        for word in words:
+            expanded = self.filesystem.expand(word)
+            if not expanded or expanded.startswith(("/", "~")):
+                continue
+            relative = PurePosixPath(posixpath.normpath(expanded))
+            # Why: `..` out of an unknown directory lands in an unknown one; what follows it is
+            # the part that could be a guard path.
+            relative = PurePosixPath(*[part for part in relative.parts if part != ".."])
+            if any(
+                self._match(
+                    manifest, relative.as_posix(), destructive=destructive, scope=Scope.REPOSITORY
+                )
+                for manifest in (self.manifest, self.standard, GIT_STATE)
+            ):
+                found.append(word)
+        return found
 
     def words(self, words: Iterable[str], cwd: Path, *, destructive: bool) -> list[Hit]:
         """Hits for shell words naming paths relative to ``cwd``; globs are expanded."""
