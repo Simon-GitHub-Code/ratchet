@@ -506,7 +506,11 @@ SEEDED: dict[str, tuple[Callable[[Path], object], str]] = {
         "the request log holds 4 lines but the harness logged 3 requests",
     ),
     "no seal": (lambda d: (d / "seal.json").unlink(), "the request log was never sealed"),
-    "changed answer": (change_first_answer, "whose stored answer was changed or lost"),
+    "changed answer": (change_first_answer, "whose stored request or answer was changed or lost"),
+    "changed request": (
+        lambda d: (d / "probes" / f"{products.log(d)[0]['id']}.request").write_bytes(b"GET /"),
+        "whose stored request or answer was changed or lost",
+    ),
     "empty screenshot": (
         lambda d: (d / "tester" / "shots" / "list.png").write_bytes(b""),
         "cites screenshot shots/list.png, which is not a PNG file",

@@ -19,16 +19,29 @@ EMPTY = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<p>There is nothing 
 SAVED = b"HTTP/1.1 303 See Other\r\nLocation: /\r\n\r\n"
 READS = "a file of the product's code; the tester judges by use and never by reading"
 LISTED = b'HTTP/1.1 200 OK\r\n\r\n<a href="https://example.com/a">https://example.com/a</a>'
+LOOK = b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+SAVE = b"POST /items HTTP/1.1\r\nContent-Length: 34\r\n\r\nlink=https%3A%2F%2Fexample.com%2Fa"
+EXCHANGES = {
+    IDS[0]: ar.Exchange(LOOK, EMPTY),
+    IDS[1]: ar.Exchange(SAVE, SAVED),
+    IDS[2]: ar.Exchange(LOOK, LISTED),
+}
 
 
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def entry(ident: str, method: str, path: str, status: int, error: str | None = None) -> ar.Entry:
+    """The log's line for ``ident``, whose stored exchange is in ``EXCHANGES``."""
+    stored = EXCHANGES[ident]
+    return ar.Entry(ident, method, path, status, sha(stored.sent), sha(stored.answer), error)
+
+
 LOG = {
-    IDS[0]: ar.Entry(IDS[0], "GET", "/", 200, sha(EMPTY)),
-    IDS[1]: ar.Entry(IDS[1], "POST", "/items", 303, sha(SAVED)),
-    IDS[2]: ar.Entry(IDS[2], "GET", "/", 200, sha(LISTED)),
+    IDS[0]: entry(IDS[0], "GET", "/", 200),
+    IDS[1]: entry(IDS[1], "POST", "/items", 303),
+    IDS[2]: entry(IDS[2], "GET", "/", 200),
 }
 FACTS = ar.Facts(
     session=SESSION,
@@ -36,7 +49,7 @@ FACTS = ar.Facts(
     web_ui=True,
     promises=PROMISES,
     log=LOG,
-    answers={IDS[0]: EMPTY, IDS[1]: SAVED, IDS[2]: LISTED},
+    exchanges=EXCHANGES,
     screenshots=frozenset({"shots/list.png"}),
     code=("src/settings.py", "docs/process/binding.md"),
     served=True,
@@ -71,6 +84,42 @@ def test_the_ticket_promises_are_its_checklist_lines_with_whitespace_collapsed()
     assert ar.promises(products.TICKET) == list(PROMISES)
 
 
+# Two answers that show what the request itself sent: a 404 page that repeats its query, and a
+# route that repeats its body. Neither shows anything of the product.
+GONE = "There is nothing left to read."
+SENT = "which the request itself sent, so it shows nothing of the product"
+EXCHANGES["abcd1234-4"] = ar.Exchange(
+    b"GET /search?q=There+is+nothing+left+to+read. HTTP/1.1\r\n\r\n",
+    b"HTTP/1.1 404 Not Found\r\n\r\nNo page for There is nothing left to read.",
+)
+EXCHANGES["abcd1234-5"] = ar.Exchange(
+    b"POST /echo HTTP/1.1\r\nContent-Length: 30\r\n\r\nThere is nothing left to read.",
+    b"HTTP/1.1 200 OK\r\n\r\nPOST There is nothing left to read.",
+)
+ECHOES: dict[str, object] = {
+    "log": {
+        **LOG,
+        "abcd1234-4": entry("abcd1234-4", "GET", "/search", 404),
+        "abcd1234-5": entry("abcd1234-5", "POST", "/echo", 200),
+    },
+    "exchanges": EXCHANGES,
+}
+ECHOED = {
+    "query": {"request": "abcd1234-4", "method": "GET", "path": "/search", "status": 404},
+    "body": {"request": "abcd1234-5", "method": "POST", "path": "/echo", "status": 200},
+}
+for cited in ECHOED.values():
+    cited["contains"] = [GONE]
+
+
+def test_a_finding_may_show_an_echo_or_a_request_that_broke() -> None:
+    raw = good()
+    finding(raw)["requests"] = list(ECHOED.values())
+    broke = entry("abcd1234-5", "POST", "/echo", 200, "the answer broke off: Reset")
+    facts = ECHOES | {"log": {**ECHOES["log"], "abcd1234-5": broke}}  # type: ignore[dict-item]
+    assert judged(raw, **facts) == []
+
+
 Mutate = Callable[[dict[str, object]], object]
 NO_STEPS: Mutate = lambda r: criterion(r, 2).update(verdict="fail")  # noqa: E731
 REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
@@ -84,8 +133,8 @@ REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
     (
         "empty evidence",
         lambda _: None,
-        {"answers": {IDS[0]: EMPTY, IDS[1]: SAVED}},
-        "criterion C1 cites request abcd1234-3, whose stored answer was changed or lost",
+        {"exchanges": {IDS[0]: EXCHANGES[IDS[0]], IDS[1]: EXCHANGES[IDS[1]]}},
+        "criterion C1 cites request abcd1234-3, whose stored request or answer was changed or lost",
     ),
     (
         "evidence that only shows it started",
@@ -279,6 +328,27 @@ REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
         f"tryIt names src/settings.py, {READS}",
     ),
     (
+        "a pass on a request that broke",
+        lambda _: None,
+        {"log": {**LOG, IDS[2]: entry(IDS[2], "GET", "/", 200, "the answer broke off: Reset")}},
+        (
+            "criterion C1 passes on request abcd1234-3, which did not complete: the answer broke"
+            " off: Reset"
+        ),
+    ),
+    (
+        "a pass on what its own query sent",
+        lambda r: criterion(r, 1).update(requests=[ECHOED["query"]]),
+        ECHOES,
+        f"criterion C2 says request abcd1234-4 showed {GONE!r}, {SENT}",
+    ),
+    (
+        "a pass on what its own body sent",
+        lambda r: criterion(r, 1).update(requests=[ECHOED["body"]]),
+        ECHOES,
+        f"criterion C2 says request abcd1234-5 showed {GONE!r}, {SENT}",
+    ),
+    (
         "a tester that signs as the harness",
         lambda r: r.update(author="harness"),
         {},
@@ -367,12 +437,15 @@ def test_a_record_not_in_the_shape_is_refused_before_it_is_judged(
 
 
 def test_the_log_reads_each_line_and_names_each_that_is_not_a_request() -> None:
-    line = json.dumps(
-        {"id": "x-1", "method": "GET", "path": "/", "status": 200, "responseSha256": "d"}
-    )
-    data = f"{line}\nnot json\n{{}}\n".encode()
+    good = {"id": "x-1", "method": "GET", "path": "/", "status": 200}
+    good |= {"requestSha256": "q", "responseSha256": "a"}
+    broke = good | {"id": "x-2", "status": 502, "error": "ConnectionRefusedError: refused"}
+    data = f"{json.dumps(good)}\nnot json\n{{}}\n{json.dumps(broke)}\n".encode()
     entries, problems = ar.read_log(data)
-    assert entries == {"x-1": ar.Entry("x-1", "GET", "/", 200, "d")}
+    assert entries == {
+        "x-1": ar.Entry("x-1", "GET", "/", 200, "q", "a"),
+        "x-2": ar.Entry("x-2", "GET", "/", 502, "q", "a", "ConnectionRefusedError: refused"),
+    }
     assert problems == [
         "line 2 of the request log is not a logged request",
         "line 3 of the request log is not a logged request",
@@ -439,7 +512,7 @@ def test_a_seal_covers_the_session_files_and_says_down_ended_it_in_time() -> Non
 def test_the_harness_record_for_a_product_that_cannot_start_is_accepted_and_blocks() -> None:
     said = "It was started with `node src/server.js` and did not answer: Error: no dist"
     raw = ar.cannot_start(SESSION, TREE, ticket=list(PROMISES), said=said)
-    assert judged(raw, served=False, log={}, answers={}) == [], "it may quote the boot command"
+    assert judged(raw, served=False, log={}, exchanges={}) == [], "it may quote the boot command"
     record, _ = ar.parse_record(raw)
     assert record is not None
     assert ar.effects(record) == (["F1"], ["C1", "C2", "C3"])
