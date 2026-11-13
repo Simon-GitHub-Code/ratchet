@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Build features from tickets
 
-`/ratchet:feature <ticket>` builds one ticket: a number on the tracker (`4` or `#4`) or the path of a local ticket file (`.scratch/<slug>/issues/02-<slug>.md`). `/ratchet:feature` with no ticket, or `/ratchet:feature all`, builds every agent-ready ticket: [the drain](#the-drain-every-agent-ready-ticket). Load the `ratchet:method` skill first; [pipeline.md](../method/pipeline.md) says what the four roles do and [records.md](../method/records.md) what the ticket carries.
+`/ratchet:feature <ticket>` builds one ticket: a number on the tracker (`4` or `#4`) or the path of a local ticket file (`.scratch/<slug>/issues/02-<slug>.md`). `/ratchet:feature` with no ticket, or `/ratchet:feature all`, builds every agent-ready ticket: [the drain](#the-drain-every-agent-ready-ticket). Load the `ratchet:method` skill first; [pipeline.md](../method/pipeline.md) says what the roles do (spec, implement and review always; the critic and its fix loop once the project is depended-on) and [records.md](../method/records.md) what the ticket carries.
 
 The input is the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` wrote, with the method's `## Conjecture` and `## Operability` sections, and the agent-ready label the owner applies (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it). The label is the owner's agreement; nothing below infers it or applies it (ADR 0008).
 
@@ -14,7 +14,7 @@ Stay in the turn until every workflow you start has returned: in a headless sess
 
 ## One ticket
 
-1. **Preflight, before any agent exists.** One Bash call: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" "<ticket>" --root .`. It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`) and exits 1 when red; `base` is the default branch, read from the checkout and the binding. Red: report `verdict: blocked` and, for each failure, its `check`, `detail` and `produce`, the skill or act that supplies the missing piece. A `hooks` failure whose `produce` does not start `the owner:` is yours to repair: run the command it names in one Bash call, then the preflight again. One that does is a change of git config, which the guard refuses from an agent: report it, do not run it. Spawn nothing, create nothing, label nothing. Stop.
+1. **Preflight, before any agent exists.** One Bash call: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" "<ticket>" --root .`. It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`) and exits 1 when red; `base` is the default branch, read from the checkout and the binding. Red: report `verdict: blocked` and, for each failure, its `check`, `detail` and `produce`, the skill or act that supplies the missing piece. A `hooks` failure whose `produce` does not start `the owner:` is yours to repair: run the command it names in one Bash call, then the preflight again. One that does is a change of git config, which the guard refuses from an agent: report it, do not run it. Spawn nothing, create nothing, label nothing. Stop.
 
 2. **The branch.** Green: `git switch <branch>` when `git rev-parse --verify --quiet <branch>` finds it, else `git switch -c <branch> <base>`. Run the preflight again with `--branch <branch>`; it must stay green.
 
@@ -25,7 +25,7 @@ Stay in the turn until every workflow you start has returned: in a headless sess
    args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
    ```
 
-   It runs the same preflight as its first stage, then Spec, Implement, Critique, the fix loop and Review. It never commits, pushes or opens a pull request.
+   It runs the same preflight as its first stage, which is where it reads `critic` (the arguments carry only the script's path): Spec, Implement, then Critique and the fix loop only when `critic` is true (the binding declares the `depended-on` life event, ADR 0028), then Review. When it did not run the critic, the result's `critic` says so and why; put that line in the pull request. It never commits, pushes or opens a pull request.
 
 4. **A result that is not approved.** A `verdict` other than `approve`, an open `unresolvedBlockingFindings` or a red `checkOutput` tail commits nothing. Clear what the agents left with `git stash push -u -m "<branch>: <verdict> run"`, then `git switch <base>`, and name the stash in the hand-over; a `blocked` stash holds the ticket in the route until the default branch moves past the run. Then:
    - `openQuestions`: put them to the owner as [Questions for the owner](#questions-for-the-owner) says. When every one is answered and there is no guard edit, build the ticket again from step 1 in the same turn.
@@ -47,7 +47,7 @@ Stay in the turn until every workflow you start has returned: in a headless sess
 
 1. **Clear what an interrupted drain left.** `D clean --all --root .` removes every queue work tree, keeps what one held uncommitted as the stash `<branch>: interrupted run`, and prints a line for each.
 
-2. **The plan.** `D plan --root .` (with `--concurrency N` when given) prints JSON: `base`, `forge`, `blocked`, `start`, `agents_at_most`, and per ticket its `state`, `branch`, `worktree`, `why` and `waits_on`. When `blocked` is not empty the checkout is not fit to build on, and each buildable ticket's `why` says so: a `hooks:` line that does not end in an `the owner:` command is yours to repair as in the single-ticket preflight, then plan again; otherwise report each line, which ends with what fixes it, and stop. Otherwise say in one or two sentences what the drain will do and go on without asking: how many tickets it builds and how many at once, which are refused or held and why, and the cost, at most `agents_at_most` agents (nine per ticket, two more per ticket judged again).
+2. **The plan.** `D plan --root .` (with `--concurrency N` when given) prints JSON: `base`, `forge`, `blocked`, `start`, `agents_at_most`, and per ticket its `state`, `branch`, `worktree`, `why` and `waits_on`. When `blocked` is not empty the checkout is not fit to build on, and each buildable ticket's `why` says so: a `hooks:` line that does not end in an `the owner:` command is yours to repair as in the single-ticket preflight, then plan again; otherwise report each line, which ends with what fixes it, and stop. Otherwise say in one or two sentences what the drain will do and go on without asking: how many tickets it builds and how many at once, which are refused or held and why, and the cost, at most `agents_at_most` agents (nine per ticket, four when the project is not yet depended-on, but `agents_at_most` still counts nine, two more per ticket judged again).
 
 3. **Start the pipelines.** For each ticket in `start`, `D open <ticket> --root .`: exit 0 prints its `branch`, `worktree` and `base`; exit 1 means the plan does not start it. Then call the Workflow tool once per ticket opened, every call in one message so the runs are concurrent:
 
