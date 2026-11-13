@@ -1455,10 +1455,10 @@ def ledger_raised(root: Path, keys: list[owed.Key]) -> list[tuple[Check, Finding
         found = Counter(keys)
         for key, extra in sorted(stale.items()):
             rule, path, problem = key
-            entries = "an entry" if extra == 1 else f"{extra} entries"
+            entries = "an entry owes" if extra == 1 else f"{extra} entries owe"
             yield Finding(
                 str(owed.LEDGER),
-                f"{entries} owe '{problem}' for {path} ({rule}), which is no longer found;"
+                f"{entries} '{problem}' for {path} ({rule}), which is no longer found;"
                 " an entry goes once its finding is fixed",
                 Edit("drop the entry whose finding is fixed", owed.kept(key, found[key]), Agent()),
                 rule=owed.OWN,

@@ -241,7 +241,7 @@ def test_an_entry_whose_finding_is_fixed_goes_and_the_count_drops(
     edit(repo / WEEKLY, MARKER, "      - run: ./scripts/install-toolchain\n")
     code, out = checked(repo, capsys)
     assert code == 1, "an entry that excuses nothing is red until it goes"
-    assert "an entry owe 'still says '# bind: toolchain setup'" in out
+    assert "an entry owes 'still says '# bind: toolchain setup'" in out
     assert "`upgrade.py --apply` makes 1 of them" in out
     assert upgrade.main(["upgrade.py", "--root", str(repo), "--apply"]) == 0
     assert "write down" not in capsys.readouterr().out
