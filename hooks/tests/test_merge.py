@@ -1,6 +1,7 @@
 """``merge.py``: the merge with no forge lands what the judge and ``check`` both pass, only that."""
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 import merge
 import merge_ready
 from merge_ready import Reason
-from tests.repos import branch, commit, git, repository, write
+from tests.repos import branch, commit, git, hook_script, repository, write
 from tests.test_merge_ready import BASE, VERDICT
 
 FEATURE = "feature/4-thing"
@@ -144,8 +145,8 @@ def test_a_default_branch_that_cannot_move_forward_is_left_alone(
 ) -> None:
     root = project(tmp_path)
 
-    def moves_main(tree: Path) -> Reason | None:
-        del tree
+    def moves_main(tree: Path, entry: str) -> Reason | None:
+        del tree, entry
         git(root, "update-ref", "refs/heads/main", git(root, "rev-parse", FEATURE))
         return None
 
@@ -228,3 +229,150 @@ def test_a_binding_without_tier_2_still_says_what_comes_next(
     capsys.readouterr()
     assert run(root) == 0
     assert "next: the binding's `check-deep` entry point on `main`" in capsys.readouterr().out
+
+
+# --- the adoption (ADR 0031) ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("deep", "code"), [("true", 0), ("false", 1)])
+def test_the_adoption_lands_on_its_own_tier_2_and_not_on_check(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, deep: str, code: int
+) -> None:
+    repository(tmp_path, {"README.md": "# A\n"})
+    branch(tmp_path, "adopt-ratchet")
+    write(tmp_path, "guards/manifest.toml", BASE["guards/manifest.toml"])
+    write(tmp_path, "docs/process/binding.md", binding(check="false", deep=deep))
+    commit(tmp_path, "chore(method): adopt")
+    capsys.readouterr()
+    assert run(tmp_path, "adopt-ratchet") == code
+    out = capsys.readouterr().out
+    assert ("merged: `adopt-ratchet` into `main`" in out) is (code == 0)
+    assert ("gates: `false` is red on the merge result" in out) is (code == 1)
+
+
+# --- records alone (ADR 0031) -----------------------------------------------------------------
+
+SPEC = ".scratch/thing/spec.md"
+
+
+def on_main(root: Path, files: dict[str, str]) -> Path:
+    """The adopted repository on ``main``, with ``files`` written and left uncommitted."""
+    repository(root, {**BASE, "docs/process/binding.md": binding()})
+    for path, text in files.items():
+        write(root, path, text)
+    return root
+
+
+def records(root: Path) -> int:
+    return merge.main(["merge", "--records", "--root", str(root)])
+
+
+def record_branches(root: Path) -> list[str]:
+    return git(root, "branch", "--list", "records/*", "--format=%(refname:short)").split()
+
+
+def test_records_alone_land_with_nothing_committed_on_main(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = on_main(tmp_path, {SPEC: "# Thing\n", ".scratch/changes/x.md": "## Summary\n"})
+    was = git(root, "rev-parse", "main")
+    capsys.readouterr()
+    assert records(root) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("records: 2 path(s) committed on `records/")
+    assert "merge: agent\nmerged: `records/" in out
+    first, second = git(root, "rev-list", "--parents", "-1", "main").split()[1:]
+    assert first == was
+    assert git(root, "log", "-1", "--format=%s", second) == merge.SUBJECT
+    assert git(root, "rev-list", "--count", f"{was}..main") == "2"
+    assert git(root, "status", "--porcelain") == ""
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert (root / SPEC).read_text(encoding="utf-8") == "# Thing\n"
+    assert record_branches(root) == []
+
+
+def test_records_the_judge_leaves_to_the_owner_wait_on_their_branch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = on_main(tmp_path, {".scratch/thing/issues/01-a.md": "Status: ready-for-agent\n"})
+    was = git(root, "rev-parse", "main")
+    capsys.readouterr()
+    assert records(root) == 1
+    out = capsys.readouterr().out
+    (waiting,) = record_branches(root)
+    assert "gives a ticket the agent-ready label `ready-for-agent`" in out
+    assert f"the owner types `git switch main && git merge --no-ff {waiting}`" in out
+    assert git(root, "rev-parse", "main") == was
+    assert git(root, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize(
+    ("files", "said"),
+    [
+        ({SPEC: "# Thing\n", "src/a.py": "x = 2\n"}, "the work tree holds src/a.py;"),
+        ({}, "the work tree holds nothing uncommitted;"),
+    ],
+)
+def test_more_than_records_is_not_landed_as_records(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, files: dict[str, str], said: str
+) -> None:
+    root = on_main(tmp_path, files)
+    status = git(root, "status", "--porcelain")
+    capsys.readouterr()
+    assert records(root) == 2
+    assert said in capsys.readouterr().out
+    assert git(root, "status", "--porcelain") == status
+    assert record_branches(root) == []
+
+
+def test_records_land_from_the_default_branch_and_without_a_forge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = on_main(tmp_path, {SPEC: "# Thing\n"})
+    branch(root, "feature/4-thing")
+    assert records(root) == 2
+    assert "records land from the default branch" in capsys.readouterr().out
+    git(root, "checkout", "-q", "main")
+    git(root, "remote", "add", "origin", "https://example.invalid/x.git")
+    assert records(root) == 2
+    assert "its merge job merges records alone" in capsys.readouterr().out
+    assert record_branches(root) == []
+
+
+def test_records_a_commit_hook_refuses_stay_uncommitted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = on_main(tmp_path, {SPEC: "# Thing\n"})
+    hook_script(root / ".git/hooks", "pre-commit", "echo prose: red on Thing; exit 1")
+    was = git(root, "rev-parse", "main")
+    capsys.readouterr()
+    assert records(root) == 1
+    assert capsys.readouterr().out == (
+        "merge: owner\ngates: the commit hooks refused the records, which stay uncommitted on the"
+        " default branch: prose: red on Thing\n"
+    )
+    assert git(root, "rev-parse", "main") == was
+    assert git(root, "status", "--porcelain", "--untracked-files=all") == f"?? {SPEC}"
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert record_branches(root) == []
+
+
+def test_a_records_branch_that_exists_already_is_not_reused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = on_main(tmp_path, {SPEC: "# Thing\n"})
+    stopped = datetime(2026, 11, 13, 3, 14, 15, tzinfo=UTC)
+    monkeypatch.setattr(
+        merge, "datetime", type("Clock", (), {"now": staticmethod(lambda _: stopped)})
+    )
+    git(root, "branch", "records/20261113-031415")
+    capsys.readouterr()
+    assert records(root) == 1
+    assert "refs: `records/20261113-031415` could not be made" in capsys.readouterr().out
+    assert git(root, "status", "--porcelain", "--untracked-files=all") == f"?? {SPEC}"
+
+
+@pytest.mark.parametrize("argv", [["merge"], ["merge", "feature/4-thing", "--records"]])
+def test_a_branch_or_the_records_and_never_both(argv: list[str]) -> None:
+    with pytest.raises(SystemExit):
+        merge.main(argv)
