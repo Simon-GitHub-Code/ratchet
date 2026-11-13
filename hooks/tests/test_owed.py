@@ -175,6 +175,17 @@ def test_the_plain_count_names_the_latest_upgrade(
     assert str(owed.summary(tmp_path)).startswith("2 things this project owes since the upgrade")
 
 
+def test_a_list_that_does_not_read_is_said_plainly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "quality").mkdir()
+    (tmp_path / LEDGER).write_text("[[owed\n")
+    assert owed.main(["owed.py", "--root", str(tmp_path)]) == 0
+    said = capsys.readouterr().out
+    assert said.startswith(f"The list of what this project owes ({LEDGER}) cannot be read"), said
+    assert "every check it held back is red until it reads" in said
+
+
 # --- the upgrade writes it, conformance counts it --------------------------------------------
 
 
@@ -235,6 +246,36 @@ def test_a_second_violation_of_an_owed_check_in_the_same_file_is_red(
     code, out = checked(repo, capsys)
     assert code == 1
     assert "conformance: red (1 failures;" in out
+
+
+def test_an_entry_cannot_excuse_a_placeholder_in_another_job_of_its_workflow(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edit(repo / WEEKLY, MARKER, "      - run: ./scripts/install-toolchain\n")
+    other = "  other:\n    runs-on: ubuntu-latest\n    steps:\n" + MARKER + NEXT + "        run: true\n"
+    (repo / WEEKLY).write_text((repo / WEEKLY).read_text(encoding="utf-8") + other)
+    code, out = checked(repo, capsys)
+    assert code == 1, out
+    red = [line for line in out.splitlines() if not line.startswith(("owed: ", "conformance: "))]
+    assert any(line.startswith(f"{WEEKLY}: line ") and "job `other`" in line for line in red), red
+    assert any("an entry owes" in line and "job `weekly`" in line for line in red), red
+
+
+def test_every_stale_entry_goes_in_one_edit(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    held = owed.read(repo).entries
+    stale = [entry(problem=f"a finding fixed long ago, number {n}") for n in range(upgrade.PASSES + 2)]
+    add(repo, *stale)
+    code, out = checked(repo, capsys)
+    assert code == 1
+    red = [line for line in out.splitlines() if line.startswith(f"{LEDGER}: ")]
+    assert len(red) == 1, red
+    assert red[0].startswith(f"{LEDGER}: {len(stale)} entries owe what is no longer found: ")
+    assert "`upgrade.py --apply` makes 1 of them" in out
+    assert upgrade.main(["upgrade.py", "--root", str(repo), "--apply"]) == 0
+    assert f"drop the {len(stale)} entries whose findings are fixed" in capsys.readouterr().out
+    assert owed.read(repo).entries == held
 
 
 def test_an_entry_whose_finding_is_fixed_goes_and_the_count_drops(
@@ -338,6 +379,35 @@ def test_an_entry_added_with_a_newer_pin_must_carry_that_version(
         "since '0.1.0'; the change moves the plugin pin to 999.0.0, so a new entry is owed since"
         " 999.0.0"
     ) in out
+
+
+def test_an_unpinned_base_may_only_move_to_a_pin_no_older_than_the_plugin_in_use(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = adopted.copy(adopted.adopted("0.9.2"), tmp_path / "repo")
+    branch(root, "change")
+    assert plugin_pin.pinned((root / BINDING).read_text(encoding="utf-8")) is None
+    old = f"- Ratchet plugin: 0.0.1 at {'a' * 40}"
+    (root / BINDING).write_text(plugin_pin.with_pin(old)((root / BINDING).read_text()))
+    (root / LEDGER).write_text(owed.render([entry(since="0.0.1")]), encoding="utf-8")
+    code, out = gate(root, capsys)
+    assert code == 1, out
+    assert f"0.0.1 is older than the plugin in use, {VERSION}" in out
+
+
+def test_a_ledger_that_grows_where_the_thresholds_are_new_is_still_judged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = adopted.copy(merged_upgrade(), tmp_path / "repo")
+    (root / "quality/thresholds.toml").unlink()
+    commit(root, "chore: the thresholds go")
+    branch(root, "change")
+    git(root, "checkout", "-q", "HEAD~1", "--", "quality/thresholds.toml")
+    add(root, entry(since=VERSION))
+    code, out = gate(root, capsys)
+    assert "is new at" in out
+    assert code == 1, out
+    assert "without moving the plugin pin to a newer version" in out
 
 
 def test_a_ledger_that_does_not_read_is_red_in_both_gates(
