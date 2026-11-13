@@ -136,6 +136,7 @@ def test_an_emptied_collection_is_a_fault_and_comes_back_for_the_next_gate(
             "tests", "no directory", 'remove = ["tests/**", "top.t", "deep/**"]', expect="no test"
         )
         + bite("after", "no file at the top", 'remove = ["top.t"]', expect="x")
+        + bite("after", "a directory that keeps one", 'remove = ["deep/keep.txt"]', expect="x")
     )
     root = project(tmp_path / "repo", gates, registry)
     write(root, "top.t", "at the top\n")
@@ -146,6 +147,7 @@ def test_an_emptied_collection_is_a_fault_and_comes_back_for_the_next_gate(
     assert "bite: tests: no test: bites" in out
     assert "bite: tests: no directory: bites" in out
     assert "bite: after: no file at the top: RED FOR ANOTHER REASON" in out
+    assert "bite: after: a directory that keeps one: DOES NOT BITE" in out
 
 
 def test_a_fault_that_cannot_be_planted_is_red_and_says_why(
@@ -1098,7 +1100,7 @@ def test_a_gate_red_again_with_no_fault_planted_proves_no_bite_before_it(
     "case",
     [
         ('replace = { path = "src/code.txt", old = "clean", new = "x" }', "  src/code.txt is not"),
-        ('write = { path = "src/other.txt/x", content = "x" }', "File exists: 'src/other.txt'"),
+        ('write = { path = "src/other.txt/x", content = "x" }', "Not a directory: 'src/other.txt'"),
         ('remove = ["src/code.txt"]', "  no file matches src/code.txt"),
         ('patch = "quality/bites/p.patch"', "  git apply"),
     ],
@@ -1348,18 +1350,22 @@ def fingerprint(root: Path) -> list[tuple[str, int, bytes]]:
     return entries
 
 
+INNER = "src/deep/inner.txt"
 SWAPPED = {
     "write": 'write = { path = "src/deep/planted.txt", content = "planted\\n" }',
-    "replace": 'replace = { path = "src/deep/inner.txt", old = "clean", new = "planted" }',
-    "remove": 'remove = ["src/deep/inner.txt"]',
+    "overwrite": f'write = {{ path = "{INNER}", content = "planted\\n" }}',
+    "replace": f'replace = {{ path = "{INNER}", old = "clean", new = "planted" }}',
+    "remove": f'remove = ["{INNER}"]',
     "patch": 'patch = "quality/bites/inner.patch"',
 }
 
 
 @pytest.mark.parametrize(
-    "case", [(kind, at) for kind in sorted(SWAPPED) for at in ("src", "src/deep")]
+    "case",
+    [(kind, at) for kind in sorted(SWAPPED) for at in ("src", "src/deep")]
+    + [(kind, INNER) for kind in sorted(SWAPPED) if kind != "write"],
 )
-def test_a_directory_swapped_for_a_link_between_the_check_and_the_plant_is_refused(
+def test_a_path_swapped_for_a_link_between_the_check_and_the_plant_is_refused(
     tmp_path: Path,
     *,
     capsys: pytest.CaptureFixture[str],
@@ -1380,7 +1386,7 @@ def test_a_directory_swapped_for_a_link_between_the_check_and_the_plant_is_refus
     def check_then_swap(copy: Path, *paths: str) -> object:
         verdict = checked(copy, *paths)
         (copy / swapped).rename(copy / "aside")
-        (copy / swapped).symlink_to(root / swapped, target_is_directory=True)
+        (copy / swapped).symlink_to(root / swapped)
         return verdict
 
     monkeypatch.setattr(project_bite, "owned", check_then_swap)
@@ -1421,10 +1427,66 @@ def test_a_process_setup_left_swapping_a_directory_for_a_link_never_changes_the_
     )
     before = fingerprint(root)
     try:
-        prove(root)
+        # Why: red either way, on a fault the gate never reads or on a copy the swapper left
+        # in a state restoring refuses; what counts is the real tree.
+        assert prove(root) == 1
     finally:
         if pidfile.exists():
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int(pidfile.read_text(encoding="utf-8")), signal.SIGKILL)
-    assert "bite: lint: f0: " in capsys.readouterr().out
     assert fingerprint(root) == before
+    assert "bite: red" in capsys.readouterr().out
+
+
+def test_a_system_that_cannot_open_a_directory_without_following_a_link_plants_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(project_bite, "DESCRIPTORS", False)
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    before = fingerprint(root)
+    assert prove(root) == 1
+    assert capsys.readouterr().out == f"{project_bite.UNSUPPORTED}\nbite: red\n"
+    assert fingerprint(root) == before
+
+
+def test_a_copy_whose_name_now_names_another_directory_is_neither_read_nor_written(
+    tmp_path: Path,
+) -> None:
+    copy, real = tmp_path / "copy", tmp_path / "real"
+    copy.mkdir()
+    real.mkdir()
+    tree = project_bite.Tree.pin(copy)
+    copy.rename(tmp_path / "aside")
+    copy.mkdir()
+    with pytest.raises(project_bite.Unprovable, match="no longer the directory the scratch copy"):
+        tree.write("x.txt", b"planted\n")
+    copy.rmdir()
+    copy.symlink_to(real, target_is_directory=True)
+    with pytest.raises(OSError, match=str(copy)):
+        tree.write("x.txt", b"planted\n")
+    assert list(real.iterdir()) == []
+
+
+def test_a_patch_deletes_a_file_and_a_patch_that_makes_a_link_is_not_planted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    patches = {
+        "delete": "--- a/src/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n",
+        "link": "diff --git a/src/link b/src/link\nnew file mode 120000\n--- /dev/null\n"
+        "+++ b/src/link\n@@ -0,0 +1 @@\n+code.txt\n\\ No newline at end of file\n",
+    }
+    for name, text in patches.items():
+        write(tmp_path / "repo", f"quality/bites/{name}.patch", text)
+    write(tmp_path / "repo", "src/old.txt", "old\n")
+    gates = {"lint": 'test -f src/old.txt || { echo "L001 no old"; exit 1; }\ntest ! -e src/link'}
+    registry = bite("lint", "deleted", 'patch = "quality/bites/delete.patch"') + bite(
+        "lint", "a link", 'patch = "quality/bites/link.patch"'
+    )
+    root = project(tmp_path / "repo", gates, registry)
+    assert prove(root) == 1
+    out = capsys.readouterr().out
+    assert "bite: lint: deleted: bites\n" in out
+    assert (
+        "bite: lint: a link: THE FAULT WAS NOT PLANTED\n  src/link would be a symbolic link or a"
+        " submodule, and a fault writes a file\n" in out
+    )
