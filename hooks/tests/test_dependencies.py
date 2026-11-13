@@ -572,6 +572,35 @@ def test_a_pnpm_lockfile_that_swaps_or_cannot_be_read_is_not_dependency_only(
     assert reason in _reason("pnpm-lock.yaml", PNPM_LOCK, after)
 
 
+# Why: an anchor, alias, tag or merge key changes what a value is without changing its text, and
+# pnpm writes none, so the reader refuses them rather than take the text at its word.
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("  lit@3.1.0:\n    resolution", "  lit@3.1.0: &a\n    resolution"),
+        ("resolution: {integrity: sha512-lit}", "resolution: *a"),
+        ("{integrity: sha512-lit}", "{integrity: sha512-lit, <<: *a}"),
+        ("{integrity: sha512-lit}", "{<<: *a, integrity: sha512-lit}"),
+        ("{integrity: sha512-lit}", "!!map {integrity: sha512-lit}"),
+        ("version: 3.1.0", "version: !!str 3.1.0"),
+        ("  lit@3.1.0:\n", "  lit@3.1.0:\n    <<: *a\n"),
+        ("      - react\n", "      - *a\n"),
+    ],
+)
+def test_a_pnpm_lockfile_with_yaml_pnpm_does_not_write_is_refused(old: str, new: str) -> None:
+    after = PNPM_12_LOCK.replace(old, new, 1)
+    assert after != PNPM_12_LOCK
+    assert "anchor, alias, tag or merge key" in _reason("pnpm-lock.yaml", PNPM_12_LOCK, after)
+
+
+def test_a_pnpm_lockfile_keeps_yaml_marks_inside_quotes_and_words() -> None:
+    marked = PNPM_12_LOCK.replace(
+        "    hasBin: true\n",
+        "    hasBin: true\n    os: ['!win32']\n    deprecated: use a & b, or c*\n",
+    ).replace("specifier: ^3.1.0", "specifier: '*'")
+    assert _shown("pnpm-lock.yaml", marked, marked) == []
+
+
 def test_pnpm_lock_keeps_a_linked_workspace_package_and_a_registry_tarball() -> None:
     linked = PNPM_LOCK.replace("version: 3.1.0", "version: link:../lit", 1)
     assert _shown("pnpm-lock.yaml", linked, linked) == []
@@ -618,6 +647,10 @@ PNPM_12_LOCK = PNPM_BOOT + PNPM_LOCK.replace(
     "      - '@types/react'\n",
 )
 IDB = "packages:\n\n  idb@8.0.0:\n    resolution: {integrity: sha512-idb}\n"
+PNPM_PIN = (
+    "    packageManagerDependencies:\n      pnpm:\n        specifier: 12.18.0\n"
+    "        version: 12.18.0\n"
+)
 
 
 def _boot(text: str, old: str, new: str) -> str:
@@ -631,10 +664,19 @@ def test_a_pnpm_lockfile_with_a_boot_document_reads_both() -> None:
     assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, added) == ["idb (lockfile) (none) -> 8.0.0"]
     raised = _boot(PNPM_12_LOCK, "12.18.0", "12.19.0")
     assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, raised) == [
-        "pnpm (boot document) 12.18.0 -> 12.19.0"
+        "pnpm (boot document) 12.18.0 -> 12.19.0",
+        "pnpm (boot document pin) 12.18.0 -> 12.19.0",
     ]
     assert _shown("pnpm-lock.yaml", PNPM_LOCK, PNPM_12_LOCK) == [
-        "pnpm (boot document) (none) -> 12.18.0"
+        "pnpm (boot document) (none) -> 12.18.0",
+        "pnpm (boot document pin) (none) -> 12.18.0",
+    ]
+
+
+def test_a_pnpm_pin_dropped_from_the_boot_document_is_shown() -> None:
+    unpinned = _boot(PNPM_12_LOCK, PNPM_PIN, "    packageManagerDependencies: {}\n")
+    assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, unpinned) == [
+        "pnpm (boot document pin) 12.18.0 -> (none)"
     ]
 
 
@@ -663,6 +705,12 @@ PNPM_BOOT_FLOW = (
     "packages: {pnpm@12.17.0: {resolution: {integrity: sha512-p17}}}\n\n"
     "snapshots: {pnpm@12.17.0: {}}\n\n---\n" + PNPM_12_LOCK.partition("\n---\n")[2]
 )
+# Why: an upgrade may keep the old pnpm locked beside the new; the pin then picks which runs.
+PNPM_BOOT_TWO = _boot(
+    PNPM_12_LOCK.replace("version: 12.18.0", "version: 12.19.0"),
+    "\nsnapshots:\n",
+    "\n  pnpm@12.19.0:\n    resolution: {integrity: sha512-p19}\n\nsnapshots:\n",
+)
 PNPM_PROJECT_FLOW = re.sub(
     r"\npackages:\n.*?\nsnapshots:",
     "\npackages: {lit@2.0.0: {resolution: {integrity: sha512-old}}}\n\nsnapshots:",
@@ -677,6 +725,16 @@ PNPM_PROJECT_FLOW = re.sub(
         (PNPM_12_LOCK, _boot(PNPM_12_LOCK, "12.18.0", "12.17.0"), "pnpm falls from 12.18.0"),
         (PNPM_IN_PROJECT, _boot(PNPM_IN_PROJECT, "12.18.0", "12.17.0"), "pnpm falls"),
         (PNPM_12_LOCK, PNPM_BOOT_BESIDE, "pnpm falls from 12.18.0 to 12.17.0"),
+        (
+            PNPM_BOOT_TWO,
+            PNPM_BOOT_TWO.replace("version: 12.19.0", "version: 12.18.0"),
+            "pnpm falls from 12.19.0 to 12.18.0",
+        ),
+        (
+            PNPM_12_LOCK,
+            PNPM_12_LOCK.replace("version: 12.18.0", "version: 12.19.0"),
+            "pnpm is pinned to 12.19.0 in the boot document, which locks no such package",
+        ),
         (PNPM_12_LOCK, PNPM_BOOT_FLOW, "not in the shape"),
         (
             PNPM_12_LOCK,
