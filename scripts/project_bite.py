@@ -335,12 +335,9 @@ def owned(copy: Path, path: str) -> Path:
     if parts[-1] == ".gitignore" and not target.exists():
         message = f"{path} would be a new .gitignore, and restoring the copy cleans by those rules"
         raise Unprovable(message)
-    ignored = run_git(copy, "check-ignore", "-q", "--", path)
-    if ignored.returncode == 0:
+    # Why: 1 is git's answer for a path it does not ignore; 0 is ignored, and more is no answer.
+    if run_git(copy, "check-ignore", "-q", "--", path).returncode != 1:
         message = f"{path} is ignored by git, and restoring the copy puts back only what git sees"
-        raise Unprovable(message)
-    if ignored.returncode != 1:
-        message = f"{path} is not a file git sees: {ignored.stderr.strip()}"
         raise Unprovable(message)
     return target
 
