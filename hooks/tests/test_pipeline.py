@@ -699,6 +699,11 @@ def _schema(label: str) -> dict[str, Any]:
     return schema
 
 
+def _said(prompt: str) -> str:
+    """``prompt`` with its line breaks and indents folded, as a reader takes the sentences."""
+    return " ".join(prompt.split())
+
+
 def _reread(promise: str, reading: dict[str, str]) -> list[dict[str, object]]:
     """The faithful promises, with ``promise`` read as ``reading`` instead."""
     return [p if p["promise"] != promise else {"promise": promise, **reading} for p in PROMISES]
@@ -709,6 +714,10 @@ SAVED = "Saving a link answers `303` to the list"
 OUT_OF_SCOPE = {"reading": "dropped", "specLine": "Out of scope: client JavaScript"}
 GAP = {**CHECKED, "ticketPromises": _reread(NO_SCRIPT, OUT_OF_SCOPE)}
 TICKET_FILE = ".scratch/list/issues/01-save-a-link.md"
+HEADER_IS_NO_INPUT = (
+    "A header the change itself adds or checks to guard the product (an `Origin` check that"
+    " refuses cross-site posts) is not one either: no user sends it as content."
+)
 
 
 def test_every_role_that_reads_a_local_ticket_reads_it_as_the_base_holds_it() -> None:
@@ -752,6 +761,9 @@ def test_the_check_and_the_review_answer_the_same_two_axes() -> None:
     for role in ("ticket-check", "review"):
         assert "- `dropped`: no criterion carries it;" in prompts[role], role
         assert "an assumption decides no case." in prompts[role], role
+        # Why: one of two checks counted a header the plan checked for its own cross-site
+        # refusal as an input, and its undecided cases as gaps.
+        assert HEADER_IS_NO_INPUT in _said(prompts[role]), role
 
 
 def test_the_schema_forces_an_answer_on_each_axis_and_cannot_force_a_whole_one() -> None:
@@ -823,8 +835,12 @@ def test_a_gap_the_check_finds_is_amended_once_and_the_run_goes_on() -> None:
     assert (result["verdict"], result["testFiles"]) == ("approve", tests)
 
 
-def test_what_the_amend_leaves_open_is_asked_before_anything_is_built() -> None:
-    gap = {**GAP, "acceptedInputs": [{**LINK_FIELD, "empty": None}]}
+def test_a_promise_the_amend_still_leaves_out_is_asked_before_anything_is_built() -> None:
+    # Why: the owner cannot read code, so the question quotes his ticket, not the plan, and says
+    # in plain words what the plan would do; a promise that ends a sentence got two periods.
+    left_out = {"promise": f"{NO_SCRIPT}.", **OUT_OF_SCOPE}
+    promises = [left_out if p["promise"] == NO_SCRIPT else p for p in PROMISES]
+    gap = {"ticketPromises": promises, "acceptedInputs": [{**LINK_FIELD, "empty": None}]}
     ran = _built(REVIEW, **{"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": gap})
     assert ran["labels"] == ["preflight", "spec", "ticket-check", "spec-amend", "ticket-recheck"]
     result = ran["result"]
@@ -832,18 +848,118 @@ def test_what_the_amend_leaves_open_is_asked_before_anything_is_built() -> None:
     asked = result["openQuestions"]
     assert [q["question"] for q in asked] == [
         (
-            f'The ticket says: "{NO_SCRIPT}". The plan leaves this out (Out of scope: client'
-            " JavaScript). Should the app be built without it?"
+            f'Your ticket says "{NO_SCRIPT}", but the plan leaves that out, so the app would be'
+            " built without it; is that what you want?"
+        )
+    ], "one question, for the promise; the input case is not the owner's"
+    assert (asked[0]["kind"], asked[0]["options"]) == (
+        "direction",
+        [
+            "No: the plan is changed so the app does what the ticket says",
+            "Yes: the app is built without it, and a later ticket can add it",
+        ],
+    )
+    assert "under `## Answers`" in result["requiredByOrchestrator"][0]
+    assert result.get("ticketPromises") == promises, "the readings the stop rests on"
+
+
+# What the owner reads in the pull request for a case the run assumed: the case in his words, the
+# safe answer that was built, and what would show it wrong.
+ASSUMED_CASES = {
+    "empty": (
+        "left empty",
+        "the app refuses it with a message and saves nothing",
+        "an empty value is something a user means to send, such as clearing a note",
+    ),
+    "oversized": (
+        "far longer than anyone would type",
+        "the app refuses it with a message, saves nothing and keeps what the user typed",
+        "a user needs to send a value that long",
+    ),
+    "hostile": (
+        "made to cause harm, such as hidden code",
+        (
+            "the app keeps it as plain text that does nothing: shown as text, never run,"
+            " followed or used as a path"
+        ),
+        "a user needs the value to run or be followed as sent",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(ASSUMED_CASES))
+def test_an_input_case_the_amend_leaves_undecided_is_built_safe_and_asks_nothing(case: str) -> None:
+    # Why: the spec prompt makes a limit with one plainly safe value the agent's to assume, and
+    # never asks the owner to confirm a choice; the script asked him anyway.
+    words, safe, refuter = ASSUMED_CASES[case]
+    gap = {**CHECKED, "acceptedInputs": [{**LINK_FIELD, case: None}]}
+    answers = {"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": gap}
+    ran = _built(REVIEW, **answers)
+    assert ran["labels"][-3:] == ["implement", "critique", "review"]
+    result = ran["result"]
+    assert (result["verdict"], result["openQuestions"]) == ("approve", [])
+    assumed = {
+        "question": f"What the app does when the link field of the save form is {words}",
+        "assumed": safe,
+        "refuter": f"Wrong if {refuter}",
+    }
+    assert result["assumptions"] == [*SPECIFIED["assumptions"], assumed]
+    assert result["verdictRecord"]["assumptions"] == result["assumptions"]
+    built = _said(ran["prompts"]["implement"])
+    assert "the run took the safe answer for each" in built
+    assert f'"assumed": "{safe}"' in built
+    judged = _said(ran["prompts"]["review"])
+    assert f'"{case}": "Assumed by the run, as no criterion decides it: {safe}"' in judged
+    assert f'"{case}": null' not in judged
+    assert "as that reading states" in judged
+    plain = _said(_built(REVIEW)["prompts"]["implement"])
+    assert "the run took the safe answer" not in plain
+
+
+def test_an_input_case_that_is_a_product_choice_is_the_spec_roles_question() -> None:
+    # Why: the script asks the owner nothing about an input, so a case whose safe answer takes
+    # something from the user reaches him only as the spec role's direction question.
+    choice = (
+        "An input case where the safe answer takes something from the user (refusing an empty"
+        " value when an empty one clears a note, or a limit that loses what they typed) is a real"
+        " product choice: raise it as a `direction` open question under the fork test below,"
+        " since the script asks the owner nothing about inputs."
+    )
+    ran = _built(REVIEW, **{"ticket-check": GAP, "spec-amend": SPECIFIED, "ticket-recheck": GAP})
+    for role in ("spec", "spec-amend"):
+        assert choice in _said(ran["prompts"][role]), role
+
+
+def test_the_amend_closes_each_gap_with_the_smallest_safe_change() -> None:
+    # Why: in all eight sampled amends the plan brought a later ticket's rule forward to close
+    # a gap, and an amend that rewrites the rest of the plan is a new plan nobody checked.
+    ran = _built(REVIEW, **{"ticket-check": GAP, "spec-amend": SPECIFIED, "ticket-recheck": GAP})
+    amend = _said(ran["prompts"]["spec-amend"])
+    for rule in (
+        (
+            "Close each gap with the smallest change that makes the plan do what this ticket says,"
+            " or that makes an accepted input safe. Change nothing the gaps do not touch."
         ),
         (
-            "The plan does not say what happens when the link field of the save form is left empty."
-            " Should the app make that safe?"
+            "An input case: decide it yourself with the safe answer (the app refuses the value with"
+            " a message and keeps what the user typed, or keeps it as plain text that does nothing)"
         ),
-    ]
-    assert [(q["kind"], len(q["options"])) for q in asked] == [("direction", 2)] * 2
-    assert asked[0]["options"][0] == "No: the plan is changed so the app does what the ticket says"
-    assert "under `## Answers`" in result["requiredByOrchestrator"][0]
-    assert result["ticketPromises"] == gap["ticketPromises"]
+        (
+            "Never bring forward what another ticket of this feature promises (its rule, its"
+            " check, its message): when the smallest safe answer overlaps another ticket, take the"
+            " narrower answer this ticket needs and name that ticket in the assumption"
+        ),
+    ):
+        assert rule in amend, rule
+    spec = _said(ran["prompts"]["spec"])
+    assert "Close each gap" not in spec
+    assert "Decide each such case the ticket leaves open with the safe answer (" in spec
+    assert (
+        "Every promise the ticket makes about what the product does has a criterion, a sentence"
+        " in its Problem or What to build included. For each thing users or other systems send the"
+        " running product (a form field, a request body, a file), criteria say what happens to an"
+        " empty, an oversized and a hostile value."
+    ) in spec
 
 
 def test_an_amend_that_asks_the_owner_stops_the_run_there() -> None:
@@ -895,6 +1011,10 @@ def test_the_review_starts_from_the_readings_the_check_settled() -> None:
     answers = {"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": settled}
     prompt = _built(REVIEW, **answers)["prompts"]["review"]
     assert "They are decided: do not argue them again." in prompt
+    assert (
+        "D. The ticket. Only the spec role and the ticket check read it before you, so a change"
+        " that loses what the owner asked for can pass every other axis."
+    ) in _said(prompt)
     assert '"oversized": "17: a settled length"' in prompt
     again = _again({}, **{"review-again": REVIEW})["prompts"]["review-again"]
     assert "do not argue them again" not in again
