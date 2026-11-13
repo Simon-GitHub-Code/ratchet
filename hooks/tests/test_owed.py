@@ -518,3 +518,67 @@ def test_a_missing_gates_row_is_the_same_debt_once_its_trigger_fires() -> None:
     after = conformance.dropped_row(failure, question, trigger=trigger, fired=fired)
     assert before.problem != after.problem
     assert before.key() == after.key()
+
+
+# --- what the change brought is never owed ------------------------------------------------------
+
+DIFF_COVERAGE = "| diff coverage |"
+MARKERS = "| marker comments did not rise |"
+
+
+def drop_row(root: Path, prefix: str) -> str:
+    """Drop the binding's Gates row that starts with ``prefix``; the problem its absence raises."""
+    text = (root / BINDING).read_text(encoding="utf-8")
+    [row] = [line for line in text.splitlines(keepends=True) if line.startswith(prefix)]
+    (root / BINDING).write_text(text.replace(row, ""), encoding="utf-8")
+    return f"the Gates table has no '{prefix.strip('| ')}' row"
+
+
+@pytest.mark.parametrize("release", ["0.8.2", "0.9.2"])
+def test_a_violation_the_change_brought_is_not_owed_by_its_upgrade(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], release: str
+) -> None:
+    root = adopted.copy(adopted.adopted(release), tmp_path / "repo")
+    branch(root, "feature")
+    dropped = drop_row(root, DIFF_COVERAGE)
+    commit(root, "feat(core): a feature that also drops a gate row")
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 1
+    out = capsys.readouterr().out
+    assert not [entry for entry in owed.read(root).entries if dropped in entry.problem]
+    red = out.split("Red until fixed")[1].split("Owed, ")[0]
+    assert dropped in red
+    assert "1 thing stops a merge until fixed." in out
+    commit(root, "chore(method): upgrade the Ratchet plugin")
+    code, said = checked(root, capsys)
+    assert code == 1
+    assert f"{BINDING}: {dropped}" in said
+
+
+def test_an_entry_the_upgrade_could_not_have_written_is_red_before_the_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = adopted.copy(adopted.adopted("0.9.2"), tmp_path / "repo")
+    branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    assert gate(root, capsys)[0] == 0, "what the upgrade wrote is what the base owes"
+    dropped = drop_row(root, DIFF_COVERAGE)
+    found = [f for f in conformance.findings(root) if f.rule != owed.OWN]
+    written = [owed.Entry(f.path, f.rule, f.key()[2], VERSION) for f in found]
+    (root / LEDGER).write_text(owed.render(written), encoding="utf-8")
+    assert checked(root, capsys)[0] == 0, "conformance alone reads every entry as owed"
+    code, out = gate(root, capsys)
+    assert code == 1, out
+    [line] = [line for line in out.splitlines() if "which the upgrade's own plan" in line]
+    assert f"adds '{dropped}; a row is bound or none, never dropped' for {BINDING}" in line
+
+
+def test_another_plugin_than_the_pin_skips_the_question_and_says_so(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repin(repo, "999.0.0", "d" * 40)
+    add(repo, entry(since="999.0.0"))
+    code, out = gate(repo, capsys)
+    assert code == 0
+    assert "is asked of the plugin the binding pins, 999.0.0 at dddddddddddd" in out
+    assert "CI, which runs the pinned plugin, asks it" in out
