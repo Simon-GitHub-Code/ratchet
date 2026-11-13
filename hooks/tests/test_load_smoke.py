@@ -5,6 +5,7 @@ import http.client
 import http.server
 import socket
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,13 @@ def handle(handler: http.server.BaseHTTPRequestHandler) -> None:
 
 
 RELEASE = threading.Event()
+
+
+def signal_now(marker: Path) -> None:
+    """The marker as ``with_service.py`` writes it: the line drawn at this moment."""
+    marker.write_text(repr(time.monotonic()), encoding="ascii")
+
+
 HEALTH_ONLY = "load-smoke: health only: readiness is the one route requested (--health-only)"
 
 
@@ -268,7 +276,7 @@ def test_a_refusal_after_the_signal_is_expected_and_before_it_is_an_error(
     monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
     args = ["--until-stopped", "--url", closed_port(), "--min-requests", "0", "--seconds", "0.3"]
     before = smoke(*args, capsys=capsys)
-    marker.touch()
+    signal_now(marker)
     after = smoke(*args, capsys=capsys)
     assert before[0] == 1
     assert "ConnectionRefusedError" in before[1]
@@ -282,7 +290,7 @@ def test_a_refusal_raced_against_the_signal_is_closed(
     goal = load_smoke.Target("GET", "http://127.0.0.1:1/", None, None)
 
     def http_status(*_: object, **__: object) -> int:
-        marker.touch()  # the signal lands while the request is in flight
+        signal_now(marker)  # the signal lands while the request is in flight
         raise ConnectionRefusedError
 
     monkeypatch.setattr(gatelib, "http_status", http_status)
@@ -304,11 +312,12 @@ def reset_on_the_signal(
 
         def signal_then_connect(connection: http.client.HTTPConnection) -> None:
             if not connected_first:
-                marker.touch()
+                signal_now(marker)
             connect(connection)
 
         def close_then_read(connection: http.client.HTTPConnection) -> http.client.HTTPResponse:
-            marker.touch()
+            if connected_first:
+                signal_now(marker)
             listener.close()
             return read(connection)
 
@@ -329,8 +338,8 @@ def test_a_request_connected_after_the_signal_meets_a_closed_listener(
 def test_a_request_connected_before_the_signal_is_owed_an_answer_even_when_reset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: with_service.py signals only once the service has accepted every queued connection,
-    # so a reset of one made before the signal is a request the service took and cut off.
+    # Why: with_service.py draws the line where the service had accepted every queued connection,
+    # so a reset of one made before the line is a request the service took and cut off.
     result = reset_on_the_signal(tmp_path / "stopping", monkeypatch, connected_first=True)
     assert result[0] is None
     assert result[1] is not None
@@ -350,7 +359,7 @@ def test_a_request_the_service_read_and_dropped_after_the_signal_is_an_error(
                 request = b""
                 while b"\r\n\r\n" not in request:
                     request += connection.recv(4096)
-                marker.touch()
+                signal_now(marker)
 
         service = threading.Thread(target=read_then_drop)
         service.start()
@@ -363,7 +372,7 @@ def test_an_error_status_or_a_timeout_after_the_signal_is_still_red(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     marker = tmp_path / "stopping"
-    marker.touch()
+    signal_now(marker)
     monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
     with servers.server(handle) as url:
         code, out = smoke("--until-stopped", "--url", f"{url}/boom", *SHORT, capsys=capsys)

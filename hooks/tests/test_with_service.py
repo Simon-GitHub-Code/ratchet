@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -343,6 +344,7 @@ def test_a_service_that_drains_and_exits_zero_is_green_under_load(
     ("mode", "said"),
     [
         ("drop", "/work: RemoteDisconnected\n"),
+        ("jam", "/work: ConnectionResetError\n"),
         ("late", "the service exited with code 1 "),
         ("ignore", "the service was still running 1s after SIGTERM"),
         ("slow", "the service was still running 1s after SIGTERM"),
@@ -373,79 +375,101 @@ def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is
 
 
 @pytest.mark.skipif(not Path("/proc/net/tcp").exists(), reason="Linux shows the accept queue")
-def test_the_accept_queue_of_the_listener_is_read_from_the_kernel() -> None:
-    with socket.create_server(("127.0.0.1", 0)) as listener:
-        port = listener.getsockname()[1]
-        assert with_service.queued(port) == 0
-        clients = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
-        assert with_service.queued(port) == 2
-        listener.accept()[0].close()
-        assert with_service.queued(port) == 1
-        for client in clients:
-            client.close()
-    assert with_service.queued(port) is None, "no listener on the port"
+def test_the_accept_queue_of_a_listener_the_group_holds_is_read_from_the_kernel() -> None:
+    other = subprocess.Popen(["sleep", "5"], start_new_session=True)  # noqa: S607 # -- from PATH
+    try:
+        with socket.create_server(("127.0.0.1", 0)) as listener:
+            mine = {str(os.fstat(listener.fileno()).st_ino)}
+            assert mine <= with_service.sockets(os.getpgid(0)), "the group holds it"
+            assert not mine & with_service.sockets(other.pid), "another group does not"
+            assert with_service.queued(mine) == 0
+            clients = [socket.create_connection(listener.getsockname()) for _ in range(2)]
+            assert with_service.queued(mine) == 2
+            listener.accept()[0].close()
+            assert with_service.queued(mine) == 1
+            for client in clients:
+                client.close()
+        assert with_service.queued(mine) is None, "the listener is closed"
+    finally:
+        other.kill()
+        other.wait()
 
 
-def test_no_table_to_read_is_no_queue_seen(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_proc_and_no_tables_is_no_queue_seen(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(with_service, "PROC", "/nonexistent")
     monkeypatch.setattr(with_service, "TABLES", ("/nonexistent/tcp",))
-    assert with_service.queued(80) is None
+    assert with_service.sockets(os.getpgid(0)) == set()
+    assert with_service.queued({"1"}) is None
+
+
+def settled_after(
+    lengths: list[int | None], monkeypatch: pytest.MonkeyPatch, within: float = 5.0
+) -> tuple[float, list[float]]:
+    """The line ``settled`` draws over queue ``lengths``, and when each length was read."""
+    left, reads = iter(lengths), []
+
+    def queued(_: set[str]) -> int | None:
+        reads.append(time.monotonic())
+        return next(left)
+
+    monkeypatch.setattr(with_service, "queued", queued)
+    return with_service.settled(os.getpgid(0), within), reads
+
+
+@pytest.mark.parametrize("lengths", [[2, 1, 0], [None]])
+def test_the_line_is_where_the_queue_was_last_seen_empty_or_unseen(
+    lengths: list[int | None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    line, reads = settled_after(lengths, monkeypatch)
+    assert len(reads) == len(lengths)
+    assert line <= reads[-1], "drawn before the read that found the queue empty"
+    assert len(reads) == 1 or line > reads[-2]
+
+
+def test_a_queue_that_never_empties_puts_the_line_at_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = time.monotonic()
+    line, reads = settled_after([1] * 10_000, monkeypatch, within=0.2)
+    assert 1 < len(reads) < 10_000
+    assert line >= started + 0.2
 
 
 class Stops:
-    """A service process that exits 0 on SIGTERM, and the queue lengths read before it."""
+    """A service process that exits 0 on SIGTERM, and what the marker held when it was sent."""
 
-    def __init__(self, reads: list[int]) -> None:
+    def __init__(self, marker: Path) -> None:
         self.returncode: int | None = None
-        self.reads = reads
-        self.read_before_signal = -1
+        self.marker = marker
+        self.held = ""
 
     def poll(self) -> int | None:
         return self.returncode
 
     def send_signal(self, _signum: int) -> None:
-        self.read_before_signal, self.returncode = len(self.reads), 0
+        self.held, self.returncode = self.marker.read_text(encoding="ascii"), 0
 
     def wait(self, timeout: float) -> int:  # noqa: ARG002 # -- the Popen signature
         return 0
 
 
-def signalled_after(
-    lengths: list[int | None], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> int:
-    """How many queue lengths ``signal_midway`` read before it signalled; each from port 8123."""
-    seen: list[int] = []
-    left = iter(lengths)
-
-    def queued(port: int) -> int | None:
-        seen.append(port)
-        return next(left)
-
-    monkeypatch.setattr(with_service, "queued", queued)
-    process = Stops(seen)
-    options = argparse.Namespace(ready="http://127.0.0.1:8123/", signal_after=0.01, graceful=0.2)
+def test_the_marker_holds_the_line_whole_before_the_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "stopping"
+    monkeypatch.setattr(with_service, "settled", lambda group, within: group + within)
+    service = Stops(marker)
+    service.pid = 100  # type: ignore[attr-defined] # -- the group settled is asked about
+    options = argparse.Namespace(signal_after=0.01, graceful=0.5)
     found = with_service.signal_midway(
-        process,  # type: ignore[arg-type] # -- a stand-in for Popen
+        service,  # type: ignore[arg-type] # -- a stand-in for Popen
         options,
-        tmp_path / "stopping",
+        marker,
         ended=threading.Event(),
     )
     assert found == []
-    assert set(seen) == {8123}
-    return process.read_before_signal
-
-
-@pytest.mark.parametrize(("lengths", "reads"), [([2, 1, 0], 3), ([None], 1)])
-def test_the_signal_waits_until_the_service_has_accepted_every_queued_connection(
-    lengths: list[int | None], reads: int, *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    assert signalled_after(lengths, tmp_path, monkeypatch) == reads
-
-
-def test_a_queue_that_never_empties_is_signalled_after_the_graceful_seconds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    lengths: list[int | None] = [1] * 10_000
-    assert 1 < signalled_after(lengths, tmp_path, monkeypatch) < len(lengths)
+    assert float(service.held) == 100.5
+    assert [path.name for path in tmp_path.iterdir()] == ["stopping"]
 
 
 def test_a_service_killed_by_the_signal_is_told_to_exec(
