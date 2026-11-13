@@ -1074,8 +1074,11 @@ PLAIN_RECORD = (
 BUT = f"{PLAIN_RECORD}; its paths are records, but "
 GIVES = "gives a ticket the agent-ready label `{label}`, which is the owner's act"
 EDITS_AGREED = (
-    "changes a ticket the owner agreed to build, where only what is appended to one lands"
-    " without them"
+    "changes what the owner agreed to build, where only what is appended to it lands without them"
+)
+STALE = (
+    "changed on the default branch after the change forked, so the merge holds text the judge did"
+    " not read; bring the change up to date"
 )
 REWRITTEN_ADR = "not additive: it changes a decision record the default branch already holds"
 
@@ -1212,6 +1215,99 @@ def test_a_record_that_is_a_link_or_not_text_is_the_owners(tracked: Path) -> Non
     ]
 
 
+@pytest.mark.parametrize(
+    ("ticket", "spec", "edited"),
+    [
+        ("# 01: A\n\nStatus: ready-for-agent\n", SPEC, SPEC),
+        (
+            "# 01: A\n\nParent: ../../plans/thing.md\n\nStatus: ready-for-agent\n",
+            ".scratch/plans/thing.md",
+            ".scratch/plans/thing.md",
+        ),
+    ],
+    ids=["the spec beside its issues", "the spec its parent line names"],
+)
+def test_the_spec_an_agreed_ticket_inherits_from_is_agreed_too(
+    tmp_path: Path, *, ticket: str, spec: str, edited: str
+) -> None:
+    # Why: the ticket takes its conjecture from the spec, so rewriting the spec rewrites what the
+    # owner agreed to build; appending to it is how the conjecture arrives.
+    repository(tmp_path, {**BASE, TICKET: ticket, spec: "# Thing\n\n## Conjecture\n\nA.\n"})
+    branch(tmp_path, "records-thing")
+    change(tmp_path, {edited: "# Thing\n\n## Conjecture\n\nB.\n"}, record=False)
+    assert judged(tmp_path) == [f"{BUT}{edited} {EDITS_AGREED}"]
+    git(tmp_path, "reset", "-q", "--hard", "HEAD~1")
+    change(tmp_path, {edited: "# Thing\n\n## Conjecture\n\nA.\n\n## Answers\n"}, record=False)
+    assert judged(tmp_path) == []
+
+
+def test_a_spec_no_agreed_ticket_inherits_from_is_still_being_written(tmp_path: Path) -> None:
+    # Why: `to-spec` writes the label on the spec, and the conjecture rewrites part of it before
+    # `to-tickets` splits it; nothing builds a spec, so its label agrees to nothing yet.
+    spec = "# Thing\n\nStatus: ready-for-agent\n\n- Operability: four lines.\n"
+    repository(tmp_path, {**BASE, SPEC: spec})
+    branch(tmp_path, "records-thing")
+    written = spec.replace("four lines.", "see below.") + "\n## Operability\n\n- Flag: none.\n"
+    change(tmp_path, {SPEC: written}, record=False)
+    assert judged(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "text", "why"),
+    [
+        (TICKET, AGREED.replace("saves a link", "mines coins"), STALE),
+        (SPEC, "# Coins\n\nIt mines them.\n", EDITS_AGREED),
+    ],
+    ids=["the ticket the tip labelled", "the spec of a ticket the tip labelled"],
+)
+def test_what_the_tip_agreed_after_the_fork_is_judged_as_agreed(
+    tmp_path: Path, *, path: str, text: str, why: str
+) -> None:
+    repository(tmp_path, {**BASE, SPEC: "# Thing\n", TICKET: "# 01: A\n\n- [ ] It saves a link.\n"})
+    branch(tmp_path, "records-thing")
+    git(tmp_path, "checkout", "-q", "main")
+    write(tmp_path, TICKET, AGREED)
+    commit(tmp_path, "docs(tracker): the owner agrees to ticket 01")
+    git(tmp_path, "checkout", "-q", "records-thing")
+    change(tmp_path, {path: text}, record=False)
+    assert judged(tmp_path) == [f"{BUT}{path} {why}"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [".scratch/thing/issues/01-0-note.md", ".scratch/thing/issues/1-note.md"],
+    ids=["sorted first", "unpadded"],
+)
+def test_a_new_ticket_that_takes_another_tickets_number_is_the_owners(
+    tracked: Path, path: str
+) -> None:
+    # Why: `Blocked by: 01` reads the first file beside it whose name starts with 01, so a closed
+    # namesake would release every ticket the owner ordered after ticket 01.
+    change(tracked, {path: "# 01: Note\n\nStatus: done\n"}, record=False)
+    reason = f"shares its number with {TICKET}, which a `Blocked by` line could mean"
+    assert judged(tracked) == [f"{BUT}{path} {reason}"]
+
+
+def test_an_agreed_ticket_pointed_at_another_spec_is_the_owners(tracked: Path) -> None:
+    # Why: the preflight reads the conjecture from the spec a `Parent:` line names, so one
+    # appended to an agreed ticket would swap the approach the owner agreed to.
+    other = ".scratch/other/spec.md"
+    change(
+        tracked,
+        {other: "# Other\n", TICKET: AGREED + "\nParent: ../../other/spec.md\n"},
+        record=False,
+    )
+    assert judged(tracked) == [
+        f"{BUT}{TICKET} points a ticket the owner agreed to build at another spec"
+    ]
+
+
+def test_a_ticket_folder_in_another_case_is_still_read_as_tickets(tracked: Path) -> None:
+    path = ".scratch/thing/Issues/02-b.md"
+    change(tracked, {path: "# 02: B\n\nStatus: ready-for-agent\n"}, record=False)
+    assert judged(tracked) == [f"{BUT}{path} {GIVES.format(label='ready-for-agent')}"]
+
+
 def test_more_than_three_refusals_are_counted(tracked: Path) -> None:
     files = {f".scratch/thing/issues/0{n}-x.md": "Status: ready-for-agent\n" for n in range(2, 7)}
     change(tracked, files, record=False)
@@ -1222,7 +1318,8 @@ def test_more_than_three_refusals_are_counted(tracked: Path) -> None:
 # --- the adoption (ADR 0031) ------------------------------------------------------------------
 
 UNADOPTED = {"README.md": "# A\n", "src/a.py": "x = 1\n"}
-ADOPTION = {"guards/manifest.toml": MANIFEST, BINDING: BASE[BINDING], "justfile": "check:\n"}
+TEMPLATE = merge_ready.TEMPLATE.read_text(encoding="utf-8")
+ADOPTION = {"guards/manifest.toml": TEMPLATE, BINDING: BASE[BINDING], "justfile": "check:\n"}
 ADOPTION_NOTE = (
     "the adoption: the default branch holds no guards/manifest.toml and this change brings it, so"
     " there is no gate before it to loosen; its own gates judge it (ADR 0031)"
@@ -1269,6 +1366,57 @@ def test_what_is_not_the_adoption_still_judges_nothing(
 ) -> None:
     adopt(tmp_path, base, files)
     assert judged(tmp_path) == [NO_MANIFEST]
+
+
+LESS = "guard: guards/manifest.toml ({group}): the adoption guards less than the template"
+
+
+@pytest.mark.parametrize(
+    ("manifest", "reasons"),
+    [
+        (
+            TEMPLATE.replace('    "docs/process/**",\n', ""),
+            [LESS.format(group="decisions")],
+        ),
+        (
+            TEMPLATE.replace(
+                '    "GLOSSARY.md",\n', '    "GLOSSARY.md",\n    "docs/process/**",\n'
+            ),
+            [LESS.format(group="records")],
+        ),
+        (
+            TEMPLATE.replace('edit = "append"\n', ""),
+            [LESS.format(group="records")],
+        ),
+        (
+            '[[group]]\nname = "mine"\nreason = "Mine."\nedit = "append"\npaths = ["docs/**"]\n\n'
+            + TEMPLATE,
+            [
+                (
+                    "guard: guards/manifest.toml: the adoption does not keep the template's groups"
+                    " in their order"
+                )
+            ],
+        ),
+        (TEMPLATE.replace('    "justfile",\n', '    "justfile",\n    "Makefile",\n'), []),
+        (TEMPLATE + '\n[[group]]\nname = "mine"\nreason = "Mine."\npaths = ["notes/**"]\n', []),
+    ],
+    ids=[
+        "a template path dropped",
+        "a path added under append",
+        "a rule loosened",
+        "a group put first",
+        "a path added to a group that asks",
+        "a group added after",
+    ],
+)
+def test_the_adoption_keeps_every_guard_the_template_holds(
+    tmp_path: Path, manifest: str, reasons: list[str]
+) -> None:
+    # Why: no gate judges the adoption before it lands, so its manifest may add to the template
+    # and may not take from it; a binding made unguarded could become a record later.
+    adopt(tmp_path, UNADOPTED, {**ADOPTION, "guards/manifest.toml": manifest})
+    assert judged(tmp_path) == reasons
 
 
 def test_a_branch_that_deletes_the_manifest_is_no_adoption(root: Path) -> None:

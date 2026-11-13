@@ -23,9 +23,11 @@ only for ``agent``. The owner merges when any of these holds:
 - ``record``: no verdict record is part of the change, or the one there is not an approval of
   exactly this tree with nothing unresolved and no open question. A change with no verdict record
   that is records alone is not asked for one (ADR 0031): every path it touches is a markdown file
-  of the tracker under ``.scratch/`` that no guard group or door holds, kept, not given the
-  agent-ready label, or an addition to a path only ``edit = "append"`` groups hold. ``RECORDS``
-  lists those kinds; the manifest they are read against is the default branch's.
+  of the tracker under ``.scratch/`` that no guard group or door holds, or an addition to a path
+  only ``edit = "append"`` groups hold, kept, and as the change found it at the tip. A ticket may
+  not gain the agent-ready label or take another's number, and a labelled ticket and the spec it
+  inherits from take only appends. ``RECORDS`` lists the kinds; the manifest they are read
+  against is the default branch's.
 - ``file``: a guard, door or record path is a symbolic link or a submodule, at the merge base
   or at the head. Git shows a link's target as its text, which is not what a gate reads there.
 - ``target``, ``behind``, ``tier2``: the pull request targets another branch; the branch does not
@@ -33,8 +35,9 @@ only for ``agent``. The owner merges when any of these holds:
 - ``refs``, ``manifest``: the judge could not read what it judges. It fails closed. One change
   is read without a manifest on the default branch: the adoption, which brings the manifest and
   the binding to a default branch whose tip and merge base hold neither. There is no gate before
-  it to loosen, so only the setting, its files, the flag registry and disputes are asked of it,
-  and ``merge.py`` runs ``check-deep`` on its merge result (ADR 0031).
+  it to loosen, so the setting, its files, the flag registry and disputes are asked of it, and
+  its manifest must guard at least what the template's does; ``merge.py`` runs ``check-deep`` on
+  its merge result (ADR 0031).
 
 The judge reads commits and nothing else: the manifest at the default branch's tip, every other
 file at the merge base and at the head, through git. It never reads the work tree and never runs
@@ -54,18 +57,21 @@ Usage: ``merge_ready.py [--root DIR] [--base REF] [--head REF] [--target BRANCH]
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import application_types
+import feature_preflight as preflight
 import flags as registry
 import gatelib
 import lowered
@@ -108,8 +114,11 @@ SURFACE_EVENTS = frozenset({"deployed"})
 FLAGS_QUESTION = "changed flags off and on"
 DOCS = "docs/"
 HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
-TRACKER = ".scratch/**/*.md"
-TICKETS = ".scratch/**/issues/*.md"
+TRACKER_DIRECTORY = ".scratch"
+TRACKER = f"{TRACKER_DIRECTORY}/**/*.md"
+TICKETS = f"{TRACKER_DIRECTORY}/**/issues/*.md"
+NUMBER = re.compile(r"\d+")
+TEMPLATE = Path(__file__).resolve().parents[1] / "skills" / "adopt" / "templates" / MANIFEST_PATH
 NOT_A_RECORD = "is not a record"
 SHOWN = 3
 # Why: `000000` is how a diff writes a path that one side does not hold.
@@ -243,6 +252,29 @@ def adoption(change: Change) -> Manifest | None:
         return parse(text)
     except ManifestError:
         return None
+
+
+def unlike_template(brought: Manifest) -> list[Reason]:
+    """Why the adoption's manifest guards less than the template it fills, one reason per group.
+
+    Why: nothing before the adoption judges it, so it must keep every template group in order,
+    with its rule, its exclusions and its paths. It may add paths to a group that is not
+    ``edit = "append"``, and groups after the template's: neither lets anything through.
+    """
+    template = parse(TEMPLATE.read_text(encoding="utf-8"))
+    names = [group.name for group in brought.groups[: len(template.groups)]]
+    if names != [group.name for group in template.groups]:
+        text = f"{MANIFEST_PATH}: the adoption does not keep the template's groups in their order"
+        return [Reason("guard", text)]
+    return [
+        Reason(
+            "guard", f"{MANIFEST_PATH} ({want.name}): the adoption guards less than the template"
+        )
+        for want, got in zip(template.groups, brought.groups, strict=False)
+        if (got.edit, got.excluded) != (want.edit, want.excluded)
+        or not set(want.patterns) <= set(got.patterns)
+        or (got.additive and set(got.patterns) != set(want.patterns))
+    ]
 
 
 def adopts(root: Path, base_ref: str, head_ref: str) -> bool:
@@ -626,35 +658,120 @@ def in_tracker(manifest: Manifest, path: str) -> bool:
 
 
 def is_ticket(manifest: Manifest, path: str) -> bool:
-    """A ticket of the tracker, as the route and the drain find one."""
-    return matches(path, TICKETS) and in_tracker(manifest, path)
+    """A ticket of the tracker: every file the route, the drain and the preflight read as one.
+
+    Why the case is folded: a file system that ignores case writes ``Issues/`` into ``issues/``.
+    """
+    return matches(path.casefold(), TICKETS) and in_tracker(manifest, path)
 
 
-def tracker_refusal(change: Change, path: str) -> str | None:
+def spellings(change: Change) -> tuple[str, ...]:
+    """The agent-ready label as the default branch's triage-labels record and the role spell it."""
+    spelled = label_for_role(change.tip(LABELS_RECORD.as_posix()) or "", READY_ROLE)
+    return tuple(sorted({READY_ROLE, spelled or READY_ROLE}))
+
+
+def carries(text: str, labels: tuple[str, ...]) -> bool:
+    """Whether ``text`` holds the label in any of its spellings, in any case, anywhere."""
+    return any(label.casefold() in text.casefold() for label in labels)
+
+
+def parent_spec(path: str, text: str) -> str | None:
+    """The tracker file a local ticket inherits its conjecture from, as the preflight finds it."""
+    named = preflight.local_ticket(path, text).parent
+    if named is None:
+        folder = PurePosixPath(path).parent
+        named = (folder.parent / "spec.md").as_posix() if folder.name == "issues" else None
+    return posixpath.normpath(named) if named and named.endswith(".md") else None
+
+
+@functools.cache
+def agreed(change: Change) -> frozenset[str]:
+    """The labelled tickets and the specs they inherit from, at the merge base or the tip.
+
+    Why: the label is the owner's agreement to build a ticket as it stands (ADR 0008), and the
+    spec it names as parent, or the ``spec.md`` beside its ``issues/``, gives it the approach.
+    A spec no labelled ticket inherits from is still being written, its conjecture among it.
+    The tip counts too: a ticket labelled there after the change forked is agreed in the merge.
+    """
+    labels = spellings(change)
+    found: set[str] = set()
+    for ref in (change.fork, change.base):
+        listed = git(
+            change.root, "ls-tree", "-r", "--name-only", "-z", ref, "--", TRACKER_DIRECTORY
+        )
+        for path in (listed or "").split("\0"):
+            ticket = matches(path, TRACKER) and matches(path.casefold(), TICKETS)
+            text = git(change.root, "show", f"{ref}:{path}") if ticket else None
+            if text is not None and carries(text, labels):
+                spec = parent_spec(path, text)
+                found.update([path, spec] if spec else [path])
+    return frozenset(found)
+
+
+def unreadable(change: Change, path: str) -> str | None:
     return "is not text the judge can read" if change.after(path) is None else None
 
 
-def ticket_refusal(change: Change, path: str) -> str | None:
-    """Why a ticket's change is the owner's: it gives the agent-ready label or edits an agreed one.
-
-    Why: the label is the owner's agreement to build the ticket as it stands (ADR 0008). Any
-    spelling the default branch's triage-labels record or the role name gives counts, in any
-    case, anywhere in the file. A ticket that held one at the merge base may only be appended
-    to, as its conjecture and the owner's answers are.
-    """
-    if (unread := tracker_refusal(change, path)) is not None:
-        return unread
-    spelled = label_for_role(change.tip(LABELS_RECORD.as_posix()) or "", READY_ROLE)
+def agreed_edit(change: Change, path: str) -> str | None:
+    """Why the change of an agreed file is the owner's: it does more than append to it."""
     before, after = change.before(path) or "", change.after(path) or ""
-    for label in sorted({READY_ROLE, spelled or READY_ROLE}):
-        if after.casefold().count(label.casefold()) > before.casefold().count(label.casefold()):
-            return f"gives a ticket the agent-ready label `{label}`, which is the owner's act"
-        if label.casefold() in before.casefold() and not after.startswith(before):
-            return (
-                "changes a ticket the owner agreed to build, where only what is appended to one"
-                " lands without them"
-            )
+    if path in agreed(change) and not after.startswith(before):
+        return (
+            "changes what the owner agreed to build, where only what is appended to it lands"
+            " without them"
+        )
     return None
+
+
+def reparented(change: Change, path: str) -> str | None:
+    """Why an agreed ticket's change is the owner's: it points the ticket at another spec."""
+    before, after = change.before(path) or "", change.after(path) or ""
+    if path in agreed(change) and parent_spec(path, before) != parent_spec(path, after):
+        return "points a ticket the owner agreed to build at another spec"
+    return None
+
+
+def label_given(change: Change, path: str) -> str | None:
+    before, after = (change.before(path) or "").casefold(), (change.after(path) or "").casefold()
+    for label in spellings(change):
+        if after.count(label.casefold()) > before.count(label.casefold()):
+            return f"gives a ticket the agent-ready label `{label}`, which is the owner's act"
+    return None
+
+
+def namesake(change: Change, path: str) -> str | None:
+    """Why a new ticket is the owner's: it shares its number with another beside it.
+
+    Why: a ``Blocked by`` line that names a number reads the first file of the folder whose name
+    starts with it, so a new ticket with that number could stand in for the one the owner meant.
+    """
+    number = NUMBER.match(PurePosixPath(path).name)
+    if change.held(path) or number is None:
+        return None
+    folder = PurePosixPath(path).parent.as_posix()
+    for ref in (change.head, change.base):
+        listed = git(change.root, "ls-tree", "--name-only", "-z", ref, "--", f"{folder}/") or ""
+        for other in listed.split("\0"):
+            lead = NUMBER.match(PurePosixPath(other).name)
+            if other not in ("", path) and lead and int(lead.group()) == int(number.group()):
+                return f"shares its number with {other}, which a `Blocked by` line could mean"
+    return None
+
+
+def tracker_refusal(change: Change, path: str) -> str | None:
+    return unreadable(change, path) or agreed_edit(change, path)
+
+
+def ticket_refusal(change: Change, path: str) -> str | None:
+    """Why a ticket's change is the owner's: the label, an agreed one changed, a borrowed number."""
+    return (
+        unreadable(change, path)
+        or label_given(change, path)
+        or agreed_edit(change, path)
+        or reparented(change, path)
+        or namesake(change, path)
+    )
 
 
 def appended(manifest: Manifest, path: str) -> bool:
@@ -703,6 +820,11 @@ def refusal(change: Change, manifest: Manifest, path: str, *, sides: tuple[str, 
         return f"is {odd[0]}"
     if not change.kept(path):
         return "deletes a record"
+    if change.tip(path) != change.before(path):
+        return (
+            "changed on the default branch after the change forked, so the merge holds text the"
+            " judge did not read; bring the change up to date"
+        )
     return kind.refuses(change, path)
 
 
@@ -911,6 +1033,7 @@ def judge(
         )
         return [
             *setting_reasons(change, base_ref, asked or Asked()),
+            *unlike_template(brought),
             *file_reasons(change, brought),
             *registry_reasons(change),
             *dispute_reasons(change),
