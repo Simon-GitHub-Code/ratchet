@@ -129,6 +129,9 @@ def test_a_glob_in_a_program_that_writes_is_no_instruction_file_it_names() -> No
         (".claude", Kind.INSTRUCTIONS),
         ("sub/.Claude", Kind.INSTRUCTIONS),
         (".github/workflows", Kind.WORKFLOW),
+        # Why: removing, moving or filling `.github` removes, moves or fills its workflows.
+        (".github", Kind.WORKFLOW),
+        (".GitHub", Kind.WORKFLOW),
     ],
 )
 def test_a_directory_that_acts_is_one_itself(path: str, kind: Kind) -> None:
@@ -140,6 +143,8 @@ def test_a_directory_that_acts_is_one_itself(path: str, kind: Kind) -> None:
     [
         ("mkdir -p sub && mv notes sub/.claude", INSTRUCTIONS, "sub/.claude"),
         ("mv drafts .github/workflows", WORKFLOW, ".github/workflows"),
+        ("mv drafts .github", WORKFLOW, ".github"),
+        ("rm -rf .github", WORKFLOW, ".github"),
     ],
 )
 def test_a_directory_moved_into_place_is_named_as_the_call_names_it(
