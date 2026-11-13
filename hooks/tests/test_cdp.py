@@ -1,6 +1,7 @@
 """The debugging-pipe driver, against a stand-in browser on a real pipe; see ``browsers.py``."""
 
 import re
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -113,7 +114,12 @@ def test_the_browser_keeps_its_temporary_files_in_a_short_directory_that_is_remo
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     browsers.fake(tmp_path, monkeypatch)
-    monkeypatch.setenv("TMPDIR", str(tmp_path / ("a-long-name" * 12)))
+    long = tmp_path / ("a-long-name" * 12)
+    long.mkdir()
+    monkeypatch.setenv("TMPDIR", str(long))
+    # Why: Python reads TMPDIR once and keeps it; this makes it read the long one, as a process
+    # started under it would.
+    monkeypatch.setattr(tempfile, "tempdir", None)
     with tab(tmp_path):
         used = Path((tmp_path / "profile" / "tmpdir").read_text(encoding="utf-8"))
         socket = used / ".org.chromium.Chromium.XXXXXX" / "SingletonSocket"
