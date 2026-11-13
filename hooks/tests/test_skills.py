@@ -28,6 +28,16 @@ def test_adopt_asks_two_dialogs_and_chooses_tools_itself() -> None:
     assert "the `bite-all` entry point plants each fault of `quality/bites.toml`" in ADOPT
 
 
+def test_adopt_binds_the_floor_and_what_has_arrived_and_builds_no_skeleton() -> None:
+    # Why: ADR 0028. A hobby project on its first day owes the floor alone; a skeleton built for
+    # the gates stood between the owner and the idea they sat down to write.
+    assert "walking skeleton" not in ADOPT
+    assert 'scripts/triggers.py" --count' in ADOPT
+    assert 'scripts/triggers.py" --json' in ADOPT
+    assert '`@echo "later: <trigger>"`' in ADOPT
+    assert "the recommended answer is `none` for a new project" in ADOPT
+
+
 def test_adopt_leaves_the_permission_rules_to_step_8() -> None:
     # Why: issue 20. Claude Code applies .claude/settings.json the moment it exists, so a copy at
     # step 2 locked guards/** before step 8 filled the manifest. The file is written last.
