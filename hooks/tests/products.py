@@ -20,8 +20,10 @@ from tests import repos
 # justfile's `flags_on` turns on; the rest are the shapes of answer the proxy must pass through
 # unchanged (a large body, one with no length, no content, one that breaks off, the request's
 # own headers echoed, one compressed when the request accepts gzip), a route that holds a
-# request open and one that answers half a second late. `BOOTING` names a file the app
-# writes its process id to as it starts, and `DELAY` holds it that long before it listens.
+# request open and one that answers half a second late. `/held` answers only once the file `GO`
+# names exists, and `/drip` sends its head and half its body, then the rest once it does.
+# `BOOTING` names a file the app writes its process id to as it starts, and `DELAY` holds it
+# that long before it listens.
 APP = r"""
 import gzip, html, json, os, time, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,6 +32,9 @@ if os.environ.get("BOOTING"):
     os.replace(os.environ["BOOTING"] + ".partial", os.environ["BOOTING"])
 time.sleep(float(os.environ.get("DELAY", "0")))
 ITEMS = []
+def go():
+    while not os.path.exists(os.environ.get("GO", "")):
+        time.sleep(0.02)
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     def handle_error(self, request, client_address): pass
@@ -51,6 +56,16 @@ class App(BaseHTTPRequestHandler):
             time.sleep(30)
         if self.path == "/later":
             time.sleep(0.5)
+        if self.path == "/held":
+            go()
+        if self.path == "/drip":
+            self.send_response(200)
+            self.send_header("Content-Length", "10")
+            self.end_headers()
+            self.wfile.write(b"01234")
+            self.wfile.flush()
+            go()
+            return self.wfile.write(b"56789")
         if self.path == "/big":
             return self.send(200, b"x" * (2 * 1024 * 1024), "text/plain")
         if self.path == "/stream":
@@ -154,7 +169,12 @@ def serving(tmp_path: Path) -> Iterator[str]:
     """The test product on a free port, stopped at the end; its address."""
     (tmp_path / "app.py").write_text(APP, encoding="utf-8")
     port = gatelib.free_port()
-    env = {**os.environ, "PORT": str(port), "SLOW": str(tmp_path / "slow")}
+    env = {
+        **os.environ,
+        "PORT": str(port),
+        "SLOW": str(tmp_path / "slow"),
+        "GO": str(tmp_path / "go"),
+    }
     process = subprocess.Popen(  # noqa: S603 # -- this interpreter and a file this test wrote
         [sys.executable, str(tmp_path / "app.py")], env=env, start_new_session=True
     )

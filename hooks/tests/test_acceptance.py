@@ -3,6 +3,7 @@
 import datetime as dt
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -856,24 +857,37 @@ def test_down_while_a_request_is_in_flight_stops_everything_and_seals(
     _, (url, _) = up(product, capsys)
     assert products.request(url)[0] == 200
     failed: list[BaseException] = []
+    begun = threading.Event()
 
-    def hang() -> None:
+    def hang(path: str) -> None:
+        host, port = url.split("//")[1].rstrip("/").split(":")
+        connection = http.client.HTTPConnection(host, int(port), timeout=30)
         try:
-            products.request(url, path="/slow")
-        except OSError as error:
+            connection.request("GET", path)
+            response = connection.getresponse()
+            begun.set()
+            response.read()
+        except (OSError, http.client.HTTPException) as error:
             failed.append(error)
 
-    waiting = threading.Thread(target=hang)
-    waiting.start()
+    waiting = [threading.Thread(target=hang, args=(path,)) for path in ("/slow", "/drip")]
+    for thread in waiting:
+        thread.start()
     products.wait_for(tmp_path / "slow")
+    assert begun.wait(30), "the drip's answer has begun"
     began = time.monotonic()
     code, out = down(product, capsys)
-    assert (code, out[1:]) == (0, ["acceptance down: stopped 1"])
+    directory = session(product)
+    assert code == 0
+    assert out[0] == f"session {directory.name}: answers that reached the tester unlogged: 1"
+    assert out[2:] == ["acceptance down: stopped 1"]
     assert time.monotonic() - began < acceptance.STOP_GRACE
-    waiting.join()
-    assert failed, "the request in flight ended with the session"
-    seal = json.loads((session(product) / "seal.json").read_text(encoding="utf-8"))
+    for thread in waiting:
+        thread.join()
+    assert len(failed) == 2, "each request in flight ended with the session"
+    seal = json.loads((directory / "seal.json").read_text(encoding="utf-8"))
     assert seal["requests"] == 1, "what was answered is logged; what never was is not"
+    assert seal["unlogged"] == 1, "the answer that had begun reached the tester with no line"
 
 
 def test_up_after_down_begins_a_new_session_and_keeps_the_ended_one(

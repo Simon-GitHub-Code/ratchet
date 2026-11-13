@@ -31,7 +31,7 @@ SESSION = "20261113T000000000000Z-abcd1234"
 def proxied(tmp_path: Path, upstream: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     """The proxy in front of ``upstream``, serving on a thread until the block ends; its address."""
     directory = tmp_path / "session"
-    directory.mkdir()
+    directory.mkdir(exist_ok=True)
     (directory / "session.json").write_text(json.dumps({"session": SESSION}), encoding="utf-8")
     monkeypatch.setenv(gatelib.READY_ENV, upstream)
     serving = threading.Thread(target=acceptance_proxy.serve, args=(directory, os.getppid()))
@@ -187,6 +187,57 @@ def test_the_seal_says_what_was_written_and_nothing_is_written_after_it(
     log.seal({"session": "again"})
     log.finish({"id": "x-1"})
     assert (tmp_path / "again" / "requests.jsonl").read_bytes() == b"", "it waited, then sealed"
+
+
+def test_an_answer_that_had_begun_when_the_log_was_sealed_is_counted_and_no_other_goes_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(acceptance_proxy, "SETTLE", 0.1)
+    directory, got = tmp_path / "session", {}
+    begun = threading.Event()
+
+    def drip(url: str) -> None:
+        host, port = url.split("//")[1].rstrip("/").split(":")
+        connection = http.client.HTTPConnection(host, int(port), timeout=30)
+        connection.request("GET", "/drip")
+        response = connection.getresponse()
+        begun.set()
+        got["drip"] = response.read()
+
+    def held(url: str) -> None:
+        try:
+            got["held"] = exchange(url, "GET", "/held").body
+        except (OSError, http.client.HTTPException) as error:
+            got["held"] = error
+
+    with products.serving(tmp_path) as upstream:
+        with proxied(tmp_path, upstream, monkeypatch) as url:
+            threads = [threading.Thread(target=f, args=(url,)) for f in (drip, held)]
+            threads[0].start()
+            assert begun.wait(30)
+            threads[1].start()
+            products.wait_for(directory / "probes" / "abcd1234-2.request")
+        (tmp_path / "go").write_text("", encoding="utf-8")
+        for thread in threads:
+            thread.join()
+    seal = json.loads((directory / "seal.json").read_text(encoding="utf-8"))
+    assert (seal["requests"], seal["unlogged"]) == (0, 1)
+    assert got["drip"] == b"0123456789", "an answer that had begun went out whole"
+    assert isinstance(got["held"], (OSError, http.client.HTTPException)), "none began after it"
+
+
+@pytest.mark.skipif(not Path("/dev/full").exists(), reason="no /dev/full to fill the disk")
+def test_an_answer_whose_line_could_not_be_written_is_counted_in_the_seal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "session"
+    directory.mkdir()
+    (directory / "requests.jsonl").symlink_to("/dev/full")
+    with products.serving(tmp_path) as upstream, proxied(tmp_path, upstream, monkeypatch) as url:
+        assert products.request(url)[0] == 200, "the answer reached the tester"
+        assert products.request(url)[0] == 200
+    seal = json.loads((directory / "seal.json").read_text(encoding="utf-8"))
+    assert (seal["requests"], seal["unlogged"]) == (0, 2)
 
 
 def run_proxy(tmp_path: Path, *args: str, env: dict[str, str]) -> subprocess.Popen[bytes]:
