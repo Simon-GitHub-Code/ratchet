@@ -14,7 +14,7 @@ default:
 # long as its slowest gate, not the sum, and one run names every red gate. No two of these write
 # the same file or directory; a gate that did would be declared with `--serial`.
 tier0_gates := "lint types validate parse-workflow parse-adapters"
-tier1_gates := "test conformance-self-test lowered-smoke bite"
+tier1_gates := "test test-floor conformance-self-test lowered-smoke bite"
 parallel := "python3 scripts/parallel.py --runner '" + just_executable() + "' --report .ratchet/timing.jsonl"
 
 # Tier 0: shape.
@@ -60,9 +60,17 @@ parse-adapters:
 
 # The suite once, across every core and in random order, under coverage. The gate scripts, the
 # guard hook and its two shims are absolute paths: every line and branch must run under test, and
-# `fail_under = 100` in pyproject.toml makes this run red when one does not.
+# `fail_under = 100` in pyproject.toml makes this run red when one does not. It runs on the Python
+# `.python-version` pins, whose `sys.monitoring` traces branches at a fraction of the older
+# tracer's cost (ADR 0038). An idle worker takes queued tests from a busy one, and the ten slowest
+# are named beside the budget line on every run.
 test:
-    uv run pytest -n auto --cov --cov-report=term-missing:skip-covered hooks/tests evals/first-hour/tests
+    uv run pytest -n auto --dist worksteal --durations=10 --cov --cov-report=term-missing:skip-covered hooks/tests evals/first-hour/tests
+
+# The suite again on Python 3.11, the oldest the hook and the gate scripts support (ADR 0007),
+# without coverage and in an environment of its own.
+test-floor:
+    UV_PROJECT_ENVIRONMENT=.venv-floor uv run --frozen --python 3.11 pytest -n auto --dist worksteal -p no:cacheprovider hooks/tests
 
 conformance-self-test:
     python3 scripts/conformance.py --self-test

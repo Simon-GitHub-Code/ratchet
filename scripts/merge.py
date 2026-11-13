@@ -13,10 +13,27 @@ The work tree is removed either way.
 
 ``check`` runs in a fresh work tree, as it does in CI, so its recipes install what they need.
 
+The adoption, the change that brings the manifest to a default branch with none, is judged by
+its own gates: ``check-deep`` runs on its merge result in place of ``check`` (ADR 0031).
+
+``merge.py --records`` lands what the owner's conversation wrote and left in the work tree of the
+default branch: a spec, a ticket, a conjecture, a change description, an added term, or an ADR,
+which the judge leaves to the owner to agree. Every uncommitted path must be a record by the
+manifest the default branch holds. It commits them on a branch of their own, ``records/<time>``,
+with the repository's commit hooks, switches back to the default branch, and merges that branch
+as above: the judge asks no verdict record of records alone (ADR 0031). A records branch this
+script merges is deleted, by ``--records`` or by name; one the owner merges stays, and the work
+tree is clean either way, so nothing is ever committed on the default branch itself. A run that
+stopped partway, killed in the commit hooks or after its commit, leaves HEAD on its records
+branch; the next run switches back, carrying what is uncommitted, and lands the records or merges
+their commit. When git cannot switch back, it prints git's line and what to type before running
+again.
+
 With a remote named ``origin`` the script refuses: the pull request's merge job is the one that
 merges there, and a local merge could not be pushed.
 
-Usage: ``merge.py <branch> [--root DIR]``. Exit 0 merged, 1 the owner merges, 2 nothing to judge.
+Usage: ``merge.py <branch> [--root DIR]`` or ``merge.py --records [--root DIR]``. Exit 0 merged,
+1 the owner merges, 2 nothing to judge.
 """
 
 from __future__ import annotations
@@ -27,6 +44,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 import gatelib
@@ -37,6 +55,9 @@ HEADS = "refs/heads/"
 CHECK = "check"
 TIER2 = "check-deep"
 NEXT = "next: "
+RECORDS = "records/"
+SUBJECT = "docs(records): land what the owner's conversation wrote"
+HOOK_LINES = 5
 # Why: these say the merge itself failed, which the owner's merge would meet too; every other
 # reason is the judge's, and the owner merging is what it asks for.
 NOT_THE_JUDGES = frozenset({"gates", "conflict", "moved", "refs"})
@@ -63,11 +84,11 @@ def checked_out(root: Path, branch: str) -> Path | None:
     return None
 
 
-def run_check(tree: Path) -> Reason | None:
-    """Run the binding's ``check`` on the merge result; why it is not green, if it is not."""
-    command = gatelib.entry_point(tree, CHECK)
+def run_check(tree: Path, entry: str = CHECK) -> Reason | None:
+    """Run the binding's ``entry`` on the merge result; why it is not green, if it is not."""
+    command = gatelib.entry_point(tree, entry)
     if command is None:
-        return Reason("gates", "the binding names no `check` entry point, so no gate ran")
+        return Reason("gates", f"the binding names no `{entry}` entry point, so no gate ran")
     try:
         code = subprocess.run(shlex.split(command), cwd=tree, check=False).returncode
     except OSError as error:
@@ -105,7 +126,9 @@ def attempt(root: Path, tree: Path, *, default: str, branch: str) -> tuple[list[
     if reasons:
         return reasons, ""
     merged = gatelib.git(tree, "rev-parse", "HEAD") or ""
-    red = run_check(tree) or land(root, default, old=old, new=merged)
+    # Why: the adoption binds the gates, and nothing before it says they bite; tier 2 does.
+    gate = TIER2 if merge_ready.adopts(root, f"{HEADS}{default}", head) else CHECK
+    red = run_check(tree, gate) or land(root, default, old=old, new=merged)
     return ([red] if red else []), merged
 
 
@@ -142,16 +165,163 @@ def merge(root: Path, branch: str) -> int:
     return 0
 
 
+def on_branch(root: Path) -> str | None:
+    return gatelib.git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+
+
+def porcelain(root: Path, *args: str, given: str = "") -> subprocess.CompletedProcess[str]:
+    """``git args`` with the commit hooks running as they do on any commit; ``given`` on stdin."""
+    return subprocess.run(
+        ["git", "-C", str(root), *args], input=given, capture_output=True, text=True, check=False
+    )
+
+
+def commit_records(root: Path, default: str, paths: list[str]) -> str | Reason:
+    """Commit ``paths`` on a new records branch and switch back to ``default``; the branch.
+
+    Anything short of a clean commit puts the index back as the owner left it, switches back
+    and deletes the branch, so the records stay uncommitted on the default branch. Why HEAD is
+    read rather than the exit code: a failing ``post-checkout`` hook fails a switch that happened.
+    """
+    branch = f"{RECORDS}{datetime.now(UTC):%Y%m%d-%H%M%S}"
+    index = gatelib.git(root, "write-tree")
+    if index is None or tip(root, branch) is not None:
+        return Reason("refs", f"`{branch}` exists already, or the index holds a merge conflict")
+    porcelain(root, "switch", "--quiet", "-c", branch)
+    if on_branch(root) != branch:
+        return Reason("refs", f"`{branch}` could not be made and checked out")
+    message = (
+        f"{SUBJECT}\n\nRecords alone, landed by `merge.py --records` (ADR 0031):\n\n"
+        + "".join(f"- {path}\n" for path in paths)
+    )
+    added = porcelain(
+        root,
+        "add",
+        "--all",
+        "--pathspec-from-file=-",
+        "--pathspec-file-nul",
+        given="\0".join(paths),
+    )
+    done = (
+        porcelain(root, "commit", "-q", "--file=-", given=message)
+        if not added.returncode
+        else added
+    )
+    committed = done.returncode == 0
+    left = merge_ready.uncommitted(root) if committed else []
+    if committed and not left:
+        porcelain(root, "switch", "--quiet", default)
+        return branch
+    if committed:
+        porcelain(root, "reset", "--quiet", "--soft", "HEAD~1")
+    porcelain(root, "switch", "--quiet", default)
+    gatelib.git(root, "read-tree", index)
+    gatelib.git(root, "branch", "--quiet", "-D", branch)
+    if left:
+        said = "the commit hooks changed " + ", ".join(left) + " as they ran"
+    else:
+        said = "the commit hooks refused them: " + " / ".join(
+            (done.stdout + done.stderr).strip().splitlines()[-HOOK_LINES:]
+        )
+    return Reason("gates", f"the records stay uncommitted on the default branch, since {said}")
+
+
+def again(root: Path) -> str:
+    """The binding's ``merge`` entry point with ``--records``, as its table names the command."""
+    command = gatelib.entry_point(root, "merge")
+    return f"`{command} --records`" if command else "the binding's `merge` entry point --records"
+
+
+def come_back(root: Path, default: str, branch: str) -> int | None:
+    """Leave the records branch a stopped run left checked out; ``None`` once back on ``default``.
+
+    Why: a run killed in the commit hooks leaves HEAD on its branch, the records staged and not
+    committed; one killed after its commit leaves them committed there. Either way the next run
+    goes back to ``default``, carrying what is uncommitted, and lands the records from there.
+    """
+    committed = gatelib.git(root, "merge-base", "--is-ancestor", branch, default) is None
+    switched = porcelain(root, "switch", "--quiet", default)
+    if on_branch(root) != default:
+        said = (switched.stdout + switched.stderr).strip().splitlines()[:1]
+        print(
+            f"merge: a run that stopped left the records on `{branch}`, and git cannot switch back"
+            f" to `{default}`: {''.join(said)}"
+        )
+        lock = root / (gatelib.git(root, "rev-parse", "--git-path", "index.lock") or "")
+        if lock.is_file():
+            print(
+                f"{NEXT}once no git command runs in this repository, type `rm {lock}`, then"
+                f" {again(root)}"
+            )
+        else:
+            print(f"{NEXT}commit or set aside what git names on `{branch}`, then {again(root)}")
+        return 2
+    print(f"records: a run that stopped left them on `{branch}`; back on `{default}`", flush=True)
+    if committed:
+        return merge_records(root, branch)
+    gatelib.git(root, "branch", "--quiet", "-D", branch)
+    return None
+
+
+def merge_records(root: Path, branch: str) -> int:
+    """Merge a records branch as any branch is merged; delete it once it is merged."""
+    code = merge(root, branch)
+    if code == 0:
+        gatelib.git(root, "branch", "--quiet", "-d", branch)
+    return code
+
+
+def land_records(root: Path) -> int:
+    """Commit the records the default branch's work tree holds on a branch, then merge it."""
+    default = local_default(root)
+    if gatelib.git(root, "remote", "get-url", "origin") is not None:
+        print(
+            "merge: this repository has a forge (`origin`): commit the records on a branch of"
+            " their own and open the pull request; its merge job merges records alone"
+        )
+        return 2
+    current = on_branch(root) or ""
+    if default is not None and current.startswith(RECORDS):
+        code = come_back(root, default, current)
+        if code is not None:
+            return code
+    if default is None or on_branch(root) != default:
+        print("merge: records land from the default branch; on a working branch, commit them there")
+        return 2
+    paths = merge_ready.uncommitted(root)
+    strangers = merge_ready.not_records(root, f"{HEADS}{default}", paths)
+    if not paths or strangers:
+        what = ", ".join(strangers) if strangers else "nothing uncommitted"
+        print(
+            f"merge: --records lands records alone, and the work tree holds {what}; a change goes"
+            " on a branch of its own and through `merge <branch>`"
+        )
+        return 2
+    branch = commit_records(root, default, paths)
+    if isinstance(branch, Reason):
+        print(f"records: {branch}")
+        return 1
+    print(f"records: {len(paths)} path(s) committed on `{branch}`", flush=True)
+    return merge_records(root, branch)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("branch")
+    parser.add_argument("branch", nargs="?")
+    parser.add_argument("--records", action="store_true")
     parser.add_argument("--root", default=".")
     options = parser.parse_args(argv[1:])
+    if options.records == (options.branch is not None):
+        parser.error("name a branch, or pass --records")
     top = gatelib.git(Path(options.root), "rev-parse", "--show-toplevel")
     if top is None:
         print(f"merge: {options.root} is not a git repository")
         return 2
-    return merge(Path(top), options.branch)
+    if options.records:
+        return land_records(Path(top))
+    # Why: the route names `merge <branch>` for a records branch a stopped run left unmerged.
+    land = merge_records if options.branch.startswith(RECORDS) else merge
+    return land(Path(top), options.branch)
 
 
 if __name__ == "__main__":
