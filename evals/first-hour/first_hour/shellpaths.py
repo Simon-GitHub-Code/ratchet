@@ -60,6 +60,8 @@ _WRAPPERS = frozenset({"env", "command", "exec", "time", "nohup", "sudo", "xargs
 # Why: the script of `sed -e` and the pattern of `grep -e` are the next word, not the first.
 _SCRIPT_FLAGS = frozenset({"-e", "--expression", "--regexp"})
 _PUNCTUATION = ";&|()<>\n"
+# Why: `for g in a b; do sed ...` starts its command after `do`, so the program is the next word.
+_KEYWORDS = frozenset({"do", "then", "else", "elif", "if", "while", "until", "!", "{", "}"})
 
 
 def words(command: str) -> Iterator[Word]:
@@ -77,6 +79,92 @@ def words(command: str) -> Iterator[Word]:
             yield from (Word(w.raw) for w in words(body))
         elif kind == "code":
             yield from _literals(body)
+
+
+@dataclass(frozen=True)
+class Call:
+    """A command a line runs: the program, and the words after it."""
+
+    name: str
+    args: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Scan:
+    """What a line runs: its commands, and the code it hands to an interpreter."""
+
+    calls: tuple[Call, ...]
+    code: tuple[str, ...]
+
+
+def scan(command: str) -> Scan | None:
+    """The commands and inline code of ``command``, or ``None`` if a shell would not read it.
+
+    A command is found after a separator, a keyword (``do``), an assignment or a wrapper
+    (``env``, ``xargs``), in a quoted substitution, in the argument of ``sh -c`` and in the body
+    of a heredoc a shell reads. The code is a heredoc body or the argument of ``-c`` and ``-e``
+    that an interpreter reads. The body of a heredoc that only writes a file is neither.
+    """
+    try:
+        calls, code = _scan(command)
+    except ValueError:
+        return None
+    return Scan(tuple(calls), tuple(code))
+
+
+def _scan(command: str) -> tuple[list[Call], list[str]]:
+    shell_text, bodies = _split_heredocs(command)
+    calls: list[Call] = []
+    code: list[str] = []
+    for simple in _simple_commands(_tokens(shell_text), targets=False):
+        for token in simple:
+            for match in _SUBSTITUTION.finditer(token):
+                _extend(calls, code, _scan(match.group(1) or match.group(2)))
+        _extend(calls, code, _scan_simple(_after_prefix(simple)))
+    for kind, body in bodies:
+        if kind == "shell":
+            _extend(calls, code, _scan(body))
+        elif kind == "code":
+            code.append(body)
+    return calls, code
+
+
+def _scan_simple(words: list[str]) -> tuple[list[Call], list[str]]:
+    calls: list[Call] = []
+    code: list[str] = []
+    if not words:
+        return calls, code
+    name = _basename(words[0]).lstrip("`")
+    calls.append(Call(name, tuple(words[1:])))
+    previous = ""
+    for arg in words[1:]:
+        if _SHELL.match(name) and _SHELL_FLAG.fullmatch(previous):
+            _extend(calls, code, _scan(arg))
+        elif _INTERPRETER.match(name) and _CODE_FLAG.fullmatch(previous):
+            code.append(arg)
+        previous = arg
+    return calls, code
+
+
+def _extend(calls: list[Call], code: list[str], found: tuple[list[Call], list[str]]) -> None:
+    calls.extend(found[0])
+    code.extend(found[1])
+
+
+def _after_prefix(simple: list[str]) -> list[str]:
+    """The simple command without its assignments, keywords and wrappers (with their flags)."""
+    index = 0
+    while index < len(simple):
+        word = simple[index]
+        if _ASSIGN.match(word) or word in _KEYWORDS:
+            index += 1
+        elif _basename(word) in _WRAPPERS:
+            index += 1
+            while index < len(simple) and simple[index].startswith("-"):
+                index += 1
+        else:
+            break
+    return simple[index:]
 
 
 def _tokens(text: str) -> list[str]:
@@ -131,16 +219,27 @@ def _last_simple(text: str) -> list[str]:
     return simples[-1] if simples else []
 
 
-def _simple_commands(tokens: list[str]) -> Iterator[list[str]]:
-    """The tokens split at each separator; a redirect operator is dropped, its target kept."""
+def _simple_commands(tokens: list[str], *, targets: bool = True) -> Iterator[list[str]]:
+    """The tokens split at each separator; a redirect operator is dropped.
+
+    Its target is kept, as a path to judge, unless ``targets`` is false: the arguments of a
+    command do not include where its output goes, nor the ``2`` of ``2>``.
+    """
     current: list[str] = []
+    redirected = False
     for token in tokens:
         if token and set(token) <= set(_PUNCTUATION):
             if "<" in token or ">" in token:
+                if not targets:
+                    redirected = True
+                    if current and current[-1].isdigit():
+                        current.pop()
                 continue
             if current:
                 yield current
             current = []
+        elif redirected:
+            redirected = False
         else:
             current.append(token)
     if current:
@@ -154,7 +253,9 @@ def _basename(word: str) -> str:
 def _simple(simple: list[str]) -> Iterator[Word]:
     index = 0
     while index < len(simple) and (
-        _ASSIGN.match(simple[index]) or _basename(simple[index]) in _WRAPPERS
+        _ASSIGN.match(simple[index])
+        or simple[index] in _KEYWORDS
+        or _basename(simple[index]) in _WRAPPERS
     ):
         yield from _word(simple[index])
         index += 1
