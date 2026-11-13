@@ -257,7 +257,8 @@ def test_the_conjecture_table_never_slips_a_product_choice_in_as_added() -> None
     )
     assert len(table_problems(verifier)) == 2
     conjecture = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
-    example = conjecture.split("```markdown\n| You said | Became | Where |\n", 1)[1]
+    unindented = re.sub(r"^ +", "", conjecture, flags=re.MULTILINE)
+    example = unindented.split("```markdown\n| You said | Became | Where |\n", 1)[1]
     example = example.split("```", 1)[0]
     assert table_problems(example) == []
     kinds = set(re.findall(r"\| \*\*([a-z ]+)\*\*", example))
