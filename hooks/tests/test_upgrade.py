@@ -169,9 +169,11 @@ def test_what_the_project_wrote_survives_the_upgrade(name: str, tmp_path: Path) 
     assert PROJECT_BITE in after["justfile"]
     assert PROJECT_RECIPE in after["justfile"]
     assert ENTRY in after[BINDING]
-    assert markdown_text.section(after[BINDING], "## Gates") == markdown_text.section(
-        before[BINDING], "## Gates"
-    )
+    kept, now = (markdown_text.table(text[BINDING], "## Gates") for text in (before, after))
+    assert kept is not None
+    assert now is not None
+    rows = iter(now.rows)
+    assert all(row in rows for row in kept.rows), "every row the project wrote, in its order"
     assert DENY in after[".claude/settings.json"]
     assert [f for f in result.owner if DENY in str(f)]
     for sections in ("AGENTS.md", ".github/pull_request_template.md"):
@@ -466,7 +468,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
     assert "Would write 12 files (run with --apply):" in out
-    assert "  quality/owed.toml\n    - write down 83 things owed since " in out
+    assert "  quality/owed.toml\n    - write down 65 things owed since " in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
@@ -478,7 +480,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 31 edits in 12 files. 83 items are owed")
+    assert verdict(out).startswith("upgrade: would write 55 edits in 12 files. 65 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -486,12 +488,24 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 31 changes in 12"
-                " files. The project owes 83 things since the upgrade, which an agent works"
-                " through one at a time; none of them stops a merge."
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 55 changes in 12"
+                " files. The project owes 65 things since the upgrade. None of them turns a check"
+                " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
+                " fixes them by itself: ask an agent to. Each is in a file whose changes you"
+                " approve, so those fixes reach the project through merges you make; one change"
+                " can carry several."
+            ),
+            (
+                "Checks that do not run until then: the weekly checks, configuration hardening,"
+                " load smoke, refuses bad configuration, rolls back safely, shuts down gracefully,"
+                " survives failing dependencies, telemetry emitted."
             ),
             "Assumed until you say otherwise:",
-            f"- {conformance.UNSTATED_STAGE}",
+            (
+                f"- {conformance.UNSTATED_STAGE} The checks such a project needs do not run until"
+                " you say it is one: active security scan, load, telemetry arrives, backup"
+                " restores, production answers."
+            ),
             f"- {conformance.NO_DOOR}",
             "Your one step is the merge.",
         ]

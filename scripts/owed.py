@@ -17,13 +17,13 @@ that problem. Two equal entries excuse two equal findings. A finding no entry ex
 before, so a new violation of the same check in the same file, or the same one in another file,
 stays red.
 
-The ledger only shrinks. An entry whose finding is gone is red until it goes, and ``upgrade.py
---apply`` drops it. Against the merge base, a change may add or alter an entry only when it also
-moves the plugin pin to a newer version, and the entry it adds carries that version;
-``lowered.py``, which runs before every merge, holds that.
+Between upgrades the ledger only shrinks. An entry whose finding is gone is red until it goes,
+and ``upgrade.py --apply`` drops it. Against the merge base, a change may add or alter an entry
+only when it also moves the plugin pin to a newer version, and the entry it adds carries that
+version; ``lowered.py``, which runs before every merge, holds that.
 
-Usage: ``owed.py [--root DIR]`` prints how many things the project owes, in plain words, or
-nothing when it owes nothing. It always exits 0.
+Usage: ``owed.py [--root DIR]`` prints how many things the project owes and which checks do not
+run until they are fixed, in plain words, or nothing when it owes nothing. It always exits 0.
 """
 
 from __future__ import annotations
@@ -65,9 +65,9 @@ HEADER = """\
 # that found it (`rule`), the file (`path`), what is wrong (`problem`) and the plugin version
 # whose upgrade wrote it down (`since`). While an entry is here, its check counts that one thing
 # as owed instead of failing. It excuses nothing else.
-# The list only gets shorter. Once a thing is fixed, `upgrade.py --apply` removes its entry. A
-# change that adds or alters an entry fails before it can merge, unless it also moves the plugin
-# to a newer version. Nobody needs to edit this file by hand.
+# Between upgrades the list only gets shorter. Once a thing is fixed, `upgrade.py --apply` removes
+# its entry. A change that adds or alters an entry fails before it can merge, unless it also moves
+# the plugin to a newer version. Nobody needs to edit this file by hand.
 """
 
 Key = tuple[str, str, str]
@@ -257,8 +257,11 @@ def pin_name(pin: plugin_pin.Pin | None) -> str:
     return f"{pin.version} at {pin.commit[:12]}" if pin else "no pin"
 
 
-def summary(root: Path) -> str | None:
-    """The plain line that says how much the project owes, or ``None`` when it owes nothing."""
+def summary(root: Path, *, waiting: Sequence[str] = ()) -> str | None:
+    """The plain line that says how much the project owes, or ``None`` when it owes nothing.
+
+    ``waiting`` names the checks that do not run until what is owed is fixed.
+    """
     ledger = read(root)
     if ledger.problems:
         return (
@@ -274,17 +277,28 @@ def summary(root: Path) -> str | None:
         (entry.since for entry in entries),
         key=lambda version: tuple(int(part) for part in version.split(".") if part.isdigit()),
     )
-    return (
+    text = (
         f"{count} {things} this project owes since the upgrade to {latest}. None of them stops a"
-        " merge, and the list only gets shorter: an agent works through them one at a time."
+        " merge, and between upgrades the list only gets shorter. Nothing fixes them by itself:"
+        " ask an agent to."
     )
+    if waiting:
+        text += f" Checks that do not run until then: {', '.join(waiting)}."
+    return text
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="owed.py")
     parser.add_argument("--root", type=Path, default=Path())
     options = parser.parse_args(argv[1:])
-    line = summary(options.root.resolve())
+    root = options.root.resolve()
+    waiting: list[str] = []
+    if read(root).entries:
+        # Why: conformance imports this module, and only a project that owes pays for its checks.
+        import conformance  # noqa: PLC0415
+
+        waiting = conformance.not_running(root, conformance.findings(root))
+    line = summary(root, waiting=waiting)
     if line:
         print(line)
     return 0

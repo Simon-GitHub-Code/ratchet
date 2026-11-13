@@ -275,11 +275,8 @@ def test_a_gates_row_whose_trigger_has_fired_is_never_steered_to_later(
     assert "bind it: its trigger `code:container` has fired here" in fired
     assert "later" not in fired.split("never dropped")[1]
     assert "'container' has 1 instance here: Dockerfile" in out
-    waiting = next(line for line in out.splitlines() if "'changed flags off and on' row" in line)
-    assert "or `later: code:flag` only while that trigger has not fired" in waiting
-    assert "'flag' has no instance here yet" in out
-    always = next(line for line in out.splitlines() if "'incidents tighten a gate' row" in line)
-    assert "bind it: the question is asked from the first commit" in always
+    assert "    - add the 'changed flags off and on' row as `later: code:flag`" in out
+    assert "    - add the 'incidents tighten a gate' row, bound to the plugin's own gate" in out
     assert "a row that says `later: <trigger>` needs none" not in out
 
 

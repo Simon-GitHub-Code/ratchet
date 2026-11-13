@@ -16,7 +16,7 @@ import sys
 import tempfile
 import tomllib
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -102,16 +102,37 @@ DOOR_MEANINGS = {
 # nothing, so each default is the one that loosens no gate.
 UNSTATED_STAGE = (
     "Whether this project is live, relied on by other people, or holds data that cannot be"
-    " replaced is not written down yet. Until it is, every merge stays as careful as it would be"
-    " for a live project."
+    " replaced is not written down yet. Until it is, Ratchet decides which changes may merge"
+    " without you as carefully as it would for a live project."
 )
 NO_DOOR = (
     "No part of this project is marked as impossible to take back once it ships, such as a"
     " database change, data saved in an older format, or something other programs rely on."
-    " Merges work that way here already, and they keep doing so until you name such a part."
+    " Until one is, an agent can merge a change to such a part without you. To mark one, ask an"
+    " agent which files hold it, then add them to guards/manifest.toml yourself: agents may not"
+    " edit that file."
 )
+WEEKLY_CHECKS = "the weekly checks"
 SHARD_MATRIX = "matrix.shard"
+# Why: a budget call as the templates before ADR 0025 wrote it; the upgrade adds the flags to it.
+OLD_TIER0_BUDGET = (
+    'python3 "$RATCHET_PLUGIN/scripts/budget.py" tier0 --report .ratchet/timing.jsonl -- just tier0'
+)
+OLD_GATE_BUDGET = (
+    'python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --report'
+    ' .ratchet/timing.jsonl -- just "${{ matrix.gate }}"'
+)
+PLUGIN_ENV = "  RATCHET_PLUGIN: "
+TOP_KEY = re.compile(r"^ {0,2}\S")
+MATRIX_GATE = re.compile(r"^\s+gate:(?:\s|$)")
+GATE_NAME = re.compile(r"[\w-]+")
 HELD_TO_TIER = "holds a gate's job to its tier's ceiling"
+TRIGGERS_PLACEHOLDER_ROW = (
+    "| <kind> | <globs of the tracked files that hold one, or `none: <reason>`>"
+    " | <optional regex> |"
+)
+# Why: adopt's step 4: `flag` is `flags.toml` with the pattern of a flag's table in every stack.
+MECHANICAL_TRIGGERS = {"flag": "| flag | `flags.toml` | `^\\[\\[flag\\]\\]` |"}
 CEILING_SHAPE = (
     ("ci.yml", "--over", "says that a ceiling reports on a pull request and blocks elsewhere"),
     ("ci.yml", "--tier", HELD_TO_TIER),
@@ -268,7 +289,8 @@ class Finding:
 
     ``rule`` names the check that raised it, which ``raised`` sets. ``identity`` is what stays the
     same while the finding stands, where the problem says more: a line number, or advice that
-    changes as other findings are fixed. An owed entry matches ``key`` (ADR 0037).
+    changes as other findings are fixed. An owed entry matches ``key`` (ADR 0037). ``stops`` names
+    the check that does not run while the finding stands, as the owner reads it.
     """
 
     path: str
@@ -276,6 +298,7 @@ class Finding:
     fix: Fix
     rule: str = ""
     identity: str = ""
+    stops: str = ""
 
     def __post_init__(self) -> None:
         """Refuse an edit under ``guards/``: the manifest says who may edit those paths."""
@@ -554,11 +577,6 @@ def template_gate_row(question: str) -> str:
     return next(line for line in body.splitlines() if line.startswith(prefix))
 
 
-def template_block(heading: str) -> tuple[str, ...]:
-    """A section of the template binding, heading included, for the upgrade report to copy."""
-    return (heading, *markdown_text.section(template_binding(), heading).rstrip().splitlines())
-
-
 def entry_points(text: str) -> dict[str, str]:
     """The Entry points table of a binding: each entry point and its command."""
     return dict(markdown_text.table_cells(markdown_text.section(text, ENTRY_POINTS_SECTION)))
@@ -593,6 +611,7 @@ def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
             f"{problem}; it cannot be copied as it stands: {'; '.join(reasons)}",
             Agent(start=start),
             identity=problem,
+            stops=WEEKLY_CHECKS if recipe == "weekly" else "",
         )
     want = justfile_text.with_recipe(text, recipe)
     edit = Edit(f"copy the template's `{recipe}` recipe", want, Agent(start=start))
@@ -702,13 +721,17 @@ def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> F
         f"binding '{question}' to a tool needs a [[bite]] for gate '{gate}' in"
         f" {project_bite.REGISTRY}"
     )
-    start = (template_gate_row(question),)
+    row = template_gate_row(question)
+    start = (row,)
     always = trigger == application_types.ALWAYS
     said = [] if always else [fired.part(part) for part in application_types.parts(trigger)]
     shown = tuple(why for _, why in said)
+    edit = None
     if always:
         fill = "add the template's row and bind it: the question is asked from the first commit"
         fix = Agent(start, (bite,))
+        if shipped(row):
+            edit = (f"add the '{question}' row, bound to the plugin's own gate", row)
     elif {state for state, _ in said} == {True}:
         fill = f"add the template's row and bind it: its trigger `{trigger}` has fired here"
         fix = Agent(start, (*shown, bite))
@@ -719,8 +742,37 @@ def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> F
         )
         waits = f"; a row that says `later: {trigger}` needs none while that trigger has not fired"
         fix = Agent(start, (*shown, bite + waits))
+        # Why: `later:` is written only for a trigger known not to have fired. One whose kind
+        # the Triggers table cannot count might have, and `later:` would defer what is owed.
+        if None not in {state for state, _ in said}:
+            edit = (
+                f"add the '{question}' row as `later: {trigger}`",
+                with_tool(row, f"later: {trigger}"),
+            )
     # Why: what to write changes as the trigger fires; the row owed does not (ADR 0037).
-    return Finding(BINDING_PATH, f"{failure}; {fill}", fix, identity=failure)
+    problem = f"{failure}; {fill}"
+    if edit is None:
+        return Finding(BINDING_PATH, problem, fix, identity=failure, stops=question)
+    does, written = edit
+    want = markdown_text.with_row("## Gates", written, template_questions())
+    return Finding(BINDING_PATH, problem, Edit(does, want, fix), identity=failure, stops=question)
+
+
+def shipped(row: str) -> bool:
+    """Whether a Gates row's Tool cell is the plugin's own script, which needs no bite."""
+    return project_bite.SHIPPED.fullmatch(row.split("|")[2].strip()) is not None
+
+
+def with_tool(row: str, tool: str) -> str:
+    """A Gates row with its Tool cell replaced."""
+    cells = row.split("|")
+    cells[2] = f" {tool} "
+    return "|".join(cells)
+
+
+def template_questions() -> tuple[str, ...]:
+    """The questions of the template binding's Gates table, in its order."""
+    return tuple(row.question for row in project_bite.gate_rows(template_binding()))
 
 
 def triggers_follow(catalogue: application_types.Catalogue) -> tuple[str, ...]:
@@ -755,7 +807,26 @@ def life_events_question(root: Path) -> Owner:
         for name in events
         if (owed := catalogue.owed_by(name))
     )
-    return Owner(ask, UNSTATED_STAGE, evidence, then)
+    return Owner(ask, unstated_stage(read(root / BINDING_PATH) or ""), evidence, then)
+
+
+def unstated_stage(binding: str) -> str:
+    """What holds while the Life events line is missing, with the checks that wait for it.
+
+    Why: the merge judge reads a missing line as every event, and a `later:` row waiting on an
+    event reads it as none; the owner hears both.
+    """
+    waiting = [
+        row.question
+        for row in project_bite.gate_rows(binding)
+        if later(row.tool) and application_types.LIFE in row.tool
+    ]
+    if not waiting:
+        return UNSTATED_STAGE
+    return (
+        f"{UNSTATED_STAGE} The checks such a project needs do not run until you say it is one:"
+        f" {', '.join(waiting)}."
+    )
 
 
 def declared_events(root: Path, text: str) -> Iterable[Finding]:
@@ -792,12 +863,16 @@ def check_triggers(root: Path) -> Iterable[Finding]:
     yield from declared_events(root, text)
     catalogue = application_types.load()
     if not markdown_text.has_section(text, triggers.SECTION.strip()):
-        yield Finding(
-            BINDING_PATH,
+        problem = (
             "has no '## Triggers' section; add the template's, one row per kind of code a question"
-            " asked of these types names (ADR 0028)",
-            Agent(start=template_block("## Triggers")),
+            " asked of these types names (ADR 0028)"
         )
+        # Why: ADR 0037. The section, with the rows every stack writes alike, lets the triggers
+        # gate count those kinds from the next change; a kind found by this stack's own paths is
+        # an agent's row, which conformance asks for once the types are named.
+        rows = "\n".join(MECHANICAL_TRIGGERS.values())
+        made = template_binding().replace(TRIGGERS_PLACEHOLDER_ROW, rows)
+        yield missing_section(BINDING_PATH, problem, "## Triggers", template_text=made)
         return
     kinds, problems = triggers.parse(text)
     for problem in problems:
@@ -828,7 +903,14 @@ def check_operability(root: Path) -> Iterable[Finding]:
     types_check_asks = application_types.load().questions
     for question in OPERABILITY_QUESTIONS:
         if text and question not in asked and question not in types_check_asks:
-            yield agent(f"{BINDING_PATH}: the Gates table has no '{question}' row")
+            problem = f"the Gates table has no '{question}' row"
+            row = template_gate_row(question)
+            fix: Edit | Agent = Agent()
+            if shipped(row):
+                want = markdown_text.with_row("## Gates", row, template_questions())
+                does = f"add the '{question}' row, bound to the plugin's own gate"
+                fix = Edit(does, want, Agent(start=(row,)))
+            yield Finding(BINDING_PATH, problem, fix, stops=question)
     waiting = {row.question for row in project_bite.gate_rows(text) if later(row.tool)}
     for heading, questions in OPERABILITY_SECTIONS.items():
         if text and not waiting >= set(questions) and markdown_text.empty_body(text, heading):
@@ -860,7 +942,12 @@ def check_speed(root: Path) -> Iterable[Finding]:
                 yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
         for name, marker, meaning in CEILING_SHAPE:
             if path.name == name and marker not in content:
-                yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
+                problem = f"nothing {meaning} ('{marker}' absent)"
+                does = (
+                    "pass the template's budget flags to each budget call an older template wrote"
+                )
+                edit = Edit(does, budget_flags(name), Agent())
+                yield Finding(str(path.relative_to(root)), problem, edit)
         if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
             yield agent(
                 f"{path.relative_to(root)}: no long gate runs over the binding's shard count "
@@ -868,15 +955,65 @@ def check_speed(root: Path) -> Iterable[Finding]:
             )
 
 
+def budget_flags(workflow: str) -> gatelib.Want:
+    """The want of a tier workflow whose budget calls carry the current template's flags.
+
+    A call as an older template wrote it gains ``--tier``, and in ``ci.yml`` ``--over`` and the
+    variable it reads. Why: ADR 0025. A line the project wrote itself is left as it is, so the
+    check stays red on it.
+    """
+    tier = "tier2" if workflow == "deep.yml" else "tier1"
+    over = ' --over "$OVER"' if workflow == "ci.yml" else ""
+    flags = {OLD_TIER0_BUDGET: over, OLD_GATE_BUDGET: f" --tier {tier}{over}"}
+    template = template_file(f".github/workflows/{workflow}").splitlines()
+    variable = [line for line in template if line.startswith("  OVER:")]
+    said = (
+        template[template.index(variable[0]) - 1 : template.index(variable[0]) + 1]
+        if variable
+        else []
+    )
+
+    def want(current: str | None) -> str:
+        lines = (current or "").split("\n")
+        for index, line in enumerate(lines):
+            indent, _, run = line.partition("- run: ")
+            if not indent.strip() and run in flags and flags[run]:
+                lines[index] = (
+                    f"{indent}- run: {run.replace(' --report ', f'{flags[run]} --report ', 1)}"
+                )
+        if over and said and not any(line.startswith("  OVER:") for line in lines):
+            at = next((i for i, line in enumerate(lines) if line.startswith(PLUGIN_ENV)), None)
+            if at is not None:
+                lines[at + 1 : at + 1] = said
+        return "\n".join(lines)
+
+    return want
+
+
+def with_shards(text: str | None) -> str:
+    """The binding with ``- Shards: 1``, the template's day-one count, ending its Speed list."""
+    lines = (text or "").split("\n")
+    if SPEED_SECTION not in lines or any(line.startswith("- Shards:") for line in lines):
+        return text or ""
+    start = lines.index(SPEED_SECTION)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    listed = [i for i in range(start + 1, end) if lines[i].startswith("- ")]
+    at = listed[-1] + 1 if listed else start + 1
+    lines[at:at] = ["- Shards: 1"] if listed else ["", "- Shards: 1"]
+    return "\n".join(lines)
+
+
 def check_speed_parts(body: str) -> Iterable[Finding]:
     stated = dict(SPEED_PART.findall(body))
     for part in SPEED_PARTS:
         value = stated.get(part, "")
         if part == "Shards" and not SHARD_COUNT.fullmatch(value):
-            yield agent(
-                f"{BINDING_PATH}: the Speed section needs '- Shards: N', a whole "
-                "number alone on its line, 1 on day one; CI reads it"
+            problem = (
+                "the Speed section needs '- Shards: N', a whole number alone on its line, 1 on day"
+                " one; CI reads it"
             )
+            edit = Edit("state the template's day-one shard count, 1", with_shards, Agent())
+            yield Finding(BINDING_PATH, problem, edit)
         elif not value or value.startswith("<"):
             yield agent(f"{BINDING_PATH}: the Speed section does not say how '{part}' is met")
 
@@ -1036,6 +1173,7 @@ def check_toolchain(root: Path) -> Iterable[Finding]:
                     f"line {number} {unset}; add the steps that install it, pinned by commit SHA",
                     Agent(),
                     identity=unset,
+                    stops=WEEKLY_CHECKS if path.name == WEEKLY_WORKFLOW else "",
                 )
 
 
@@ -1130,18 +1268,173 @@ def answered_gates(binding: str) -> set[str]:
 
 
 def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
-    """A tier list the tier workflows read, which the justfile does not define."""
+    """A tier list the tier workflows read, which the justfile does not define.
+
+    Why: ADR 0037. A tier whose recipe only names its gates gives its list as it stands, and a
+    list of the gates to shard starts empty, as the template's day one does; the upgrade writes
+    both. A tier that runs its gates some other way is an agent's to list.
+    """
+    tiers = tier_recipes(read(root / BINDING_PATH) or "", justfile)
     for workflow, lists in TIER_LISTS.items():
         if not (root / WORKFLOWS / workflow).is_file():
             continue
         for name, meaning in lists:
-            if not justfile_text.defines_variable(justfile, name):
-                yield Finding(
-                    "justfile",
-                    f"has no `{name}` variable, which the template's `shape` job of `{workflow}`"
-                    f" reads with `just --evaluate {name}`; add the template's, naming {meaning}",
-                    Agent(start=template_definition(name)),
-                )
+            if justfile_text.defines_variable(justfile, name):
+                continue
+            problem = (
+                f"has no `{name}` variable, which the template's `shape` job of `{workflow}`"
+                f" reads with `just --evaluate {name}`; add the template's, naming {meaning}"
+            )
+            fix = Agent(start=template_definition(name))
+            tier = name.split("_")[0]
+            if name.endswith("_sharded"):
+                does = f"add `{name}`, naming no gate to shard"
+                edit = Edit(does, justfile_text.with_variable(name, lambda _: '""'), fix)
+                yield Finding("justfile", problem, edit)
+            elif (recipe := tiers.get(tier)) and justfile_text.dependencies(justfile, recipe):
+                does = f"add `{name}`, listing the gates the `{recipe}` recipe runs"
+                edit = Edit(does, justfile_text.with_variable(name, gates_of(recipe)), fix)
+                yield Finding("justfile", problem, edit)
+            else:
+                yield Finding("justfile", problem, fix)
+
+
+def gates_of(recipe: str) -> Callable[[str], str]:
+    """The value of a tier list: the gates a recipe with no body depends on, quoted."""
+
+    def value(justfile: str) -> str:
+        listed = justfile_text.dependencies(justfile, recipe) or ()
+        return '"' + " ".join(name for name in listed if name != PIN_RECIPE) + '"'
+
+    return value
+
+
+def unrun_gates(binding: str, justfile: str) -> Iterable[Finding]:
+    """A gate the plugin ships, bound at tier 0 or 1, that its tier's recipe never reaches.
+
+    Why: ADR 0037. A row the upgrade binds names a gate; with no recipe, or no tier that runs it,
+    conformance would be green on a safeguard that is off. A tier whose recipe only names its
+    gates gets the gate, and the template's recipe when the justfile lacks it.
+    """
+    tiers = tier_recipes(binding, justfile)
+    template = template_file("justfile")
+    for row in project_bite.gate_rows(binding):
+        tier = f"tier{row.tier}"
+        if not project_bite.SHIPPED.fullmatch(row.tool) or tier not in ("tier0", "tier1"):
+            continue
+        recipe = tiers.get(tier)
+        if recipe is None or justfile_text.undefined(justfile, recipe):
+            continue
+        if row.gate in justfile_text.reaches(justfile, recipe):
+            continue
+        tree = tiers.get("tier0-tree")
+        target = (
+            tree if tier == "tier0" and tree in justfile_text.reaches(justfile, recipe) else recipe
+        )
+        problem = (
+            f"no tier runs `{row.gate}`, which the binding binds to '{row.question}' at tier"
+            f" {row.tier}, so that gate never runs; run it in `{target}`"
+        )
+        defined = justfile_text.defines_recipe(justfile, row.gate)
+        reasons = () if defined else justfile_text.unmet(template, justfile, row.gate)
+        fix = Agent(start=template_definition(row.gate), then=reasons)
+        if reasons or justfile_text.dependencies(justfile, target) is None:
+            yield Finding("justfile", problem, fix, stops=row.question)
+            continue
+        copied = [] if defined else [justfile_text.with_recipe(template, row.gate)]
+        wants = [*copied, justfile_text.with_dependency(target, row.gate)]
+        if target == recipe:
+            # Why: a tier list the upgrade wrote from this tier in an earlier pass lists it too.
+            wants.append(justfile_text.with_listed(f"{tier}_gates", row.gate))
+        want = gatelib.chained(*wants)
+        does = f"run `{row.gate}` in `{target}`" + (
+            "" if defined else ", from the template's recipe"
+        )
+        yield Finding("justfile", problem, Edit(does, want, fix), stops=row.question)
+
+
+@dataclass(frozen=True)
+class Matrix:
+    """A job's gates as its workflow lists them: the lines that hold the list, and the gates."""
+
+    start: int
+    end: int
+    gates: tuple[str, ...]
+
+
+def static_matrix(lines: list[str], job: str) -> Matrix | None:
+    """The gates a job's ``gate:`` matrix lists by name, on one line or one per line.
+
+    ``None`` when the job has no such list, such as one that reads its gates from the justfile.
+    """
+    if f"  {job}:" not in lines:
+        return None
+    start = lines.index(f"  {job}:")
+    end = next((i for i in range(start + 1, len(lines)) if TOP_KEY.match(lines[i])), len(lines))
+    at = next((i for i in range(start, end) if MATRIX_GATE.match(lines[i])), None)
+    if at is None:
+        return None
+    rest = lines[at].partition("gate:")[2].strip()
+    if rest.startswith("[") and rest.endswith("]"):
+        items = [item.strip() for item in rest[1:-1].split(",") if item.strip()]
+        return Matrix(at, at, tuple(items)) if all(map(GATE_NAME.fullmatch, items)) else None
+    if rest or at + 1 >= end or lines[at + 1].strip() != "[":
+        return None
+    close = next((i for i in range(at + 2, end) if lines[i].strip() == "]"), None)
+    if close is None:
+        return None
+    items = [line.strip().removesuffix(",") for line in lines[at + 2 : close]]
+    return Matrix(at + 1, close, tuple(items)) if all(map(GATE_NAME.fullmatch, items)) else None
+
+
+def with_matrix_gate(job: str, gate: str) -> gatelib.Want:
+    """The want of a workflow whose job's listed matrix also names ``gate``, laid out as it is."""
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        lines = text.split("\n")
+        matrix = static_matrix(lines, job)
+        if matrix is None or gate in matrix.gates:
+            return text
+        if matrix.start == matrix.end:
+            line = lines[matrix.start]
+            close = line.rindex("]")
+            joined = ", " if matrix.gates else ""
+            lines[matrix.start] = f"{line[:close].rstrip()}{joined}{gate}{line[close:]}"
+            return "\n".join(lines)
+        last = lines[matrix.end - 1]
+        indent = last[: len(last) - len(last.lstrip())] + ("" if matrix.gates else "  ")
+        if matrix.gates and not last.rstrip().endswith(","):
+            lines[matrix.end - 1] = last.rstrip() + ","
+        lines.insert(matrix.end, f"{indent}{gate},")
+        return "\n".join(lines)
+
+    return want
+
+
+def ci_unrun(root: Path, binding: str) -> Iterable[Finding]:
+    """A gate the plugin ships, bound at tier 1, that the CI tier 1 job's listed matrix lacks.
+
+    Why: ADR 0037. A workflow an older template wrote names its tier 1 gates in the job; a gate the
+    tier's recipe runs and the list lacks runs on the laptop and never in CI.
+    """
+    path = WORKFLOWS / "ci.yml"
+    lines = (read(root / path) or "").split("\n")
+    matrix = static_matrix(lines, "tier1")
+    if matrix is None:
+        return
+    for row in project_bite.gate_rows(binding):
+        if row.tier != "1" or not project_bite.SHIPPED.fullmatch(row.tool):
+            continue
+        if row.gate in matrix.gates:
+            continue
+        problem = (
+            f"the tier1 job lists the gates it runs and not `{row.gate}`, which the binding binds"
+            f" to '{row.question}' at tier 1, so CI never runs that gate; add it to the list"
+        )
+        does = f"add `{row.gate}` to the gates the tier1 job lists"
+        edit = Edit(does, with_matrix_gate("tier1", row.gate), Agent())
+        yield Finding(str(path), problem, edit, stops=row.question)
 
 
 def asks_hooks(ratchet: str) -> bool:
@@ -1173,6 +1466,8 @@ def check_runner(root: Path) -> Iterable[Finding]:
     justfile = read_justfile(root)
     if justfile is None:
         return
+    yield from unrun_gates(read(root / BINDING_PATH) or "", justfile)
+    yield from ci_unrun(root, read(root / BINDING_PATH) or "")
     yield from check_tier_lists(root, justfile)
     code = justfile_text.code_of(justfile)
     gates = answered_gates(read(root / BINDING_PATH) or "")
@@ -1539,8 +1834,27 @@ def owed_split(root: Path, found: list[Finding]) -> tuple[list[Finding], list[Fi
     return red, [finding for finding, hit in zip(found, excused, strict=True) if hit]
 
 
+def not_running(root: Path, found: Sequence[Finding]) -> list[str]:
+    """The checks the binding asks for that do not run yet, as the owner reads them, once each.
+
+    Why: ADR 0037. An owed finding stops no merge, so the owner hears what stays off until it is
+    fixed: a Gates row that is missing, a gate that no tier or CI job runs, the weekly run, and a
+    `later:` row whose kind the Triggers table cannot count, which never starts by itself.
+    """
+    binding = read(root / BINDING_PATH) or ""
+    kinds, _ = triggers.parse(binding)
+    stuck = [
+        row.question
+        for row in project_bite.gate_rows(binding)
+        if (waits := application_types.LATER.match(row.tool))
+        and set(application_types.code_kinds(waits.group(1).strip())) - set(kinds)
+    ]
+    return list(dict.fromkeys([*(finding.stops for finding in found if finding.stops), *stuck]))
+
+
 def run(root: Path) -> int:
-    red, owing = owed_split(root, findings(root))
+    found = findings(root)
+    red, owing = owed_split(root, found)
     for finding in red:
         print(finding)
     for finding in owing:
@@ -1548,7 +1862,9 @@ def run(root: Path) -> int:
     autos = sum(isinstance(finding.fix, Auto) for finding in [*red, *owing])
     fixer = f"; `upgrade.py --apply` makes {autos} of them" if autos else ""
     since = f"; {len(owing)} owed since an upgrade, listed in {owed.LEDGER}" if owing else ""
-    print(f"conformance: {'red' if red else 'green'} ({len(red)} failures{since}{fixer})")
+    off = not_running(root, found)
+    waiting = f"; not running until fixed: {', '.join(off)}" if off else ""
+    print(f"conformance: {'red' if red else 'green'} ({len(red)} failures{since}{waiting}{fixer})")
     return 1 if red else 0
 
 
@@ -1646,6 +1962,10 @@ def upgrade_mutations() -> list[Mutation]:
             rewrite(BINDING_PATH, "| triggers | `just triggers` |\n", ""),
         ),
         ("justfile without a recipe the binding names", rewrite("justfile", "bite-one gate:", "")),
+        (
+            "justfile whose tier 1 never runs a gate the binding binds",
+            rewrite("justfile", " conformance triggers incidents ", " conformance triggers "),
+        ),
         (
             "justfile with no gate run through changed.py",
             rewrite("justfile", "/scripts/changed.py", "/scripts/base.py"),

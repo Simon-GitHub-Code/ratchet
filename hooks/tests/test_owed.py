@@ -436,7 +436,7 @@ def test_an_upgrade_that_does_not_move_the_pin_records_nothing(
     held = owed.read(repo).entries
     assert upgrade.main(["upgrade.py", "--root", str(repo), "--apply"]) == 1
     out = capsys.readouterr().out
-    assert set(owed.read(repo).entries) < set(held), "it drops what the edit fixed, adds nothing"
+    assert set(owed.read(repo).entries) <= set(held), "it adds nothing"
     assert "Red until fixed (no owed entry excuses these" in out
     assert "1 thing stops a merge until fixed." in out
 

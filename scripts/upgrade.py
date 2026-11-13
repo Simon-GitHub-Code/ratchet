@@ -93,7 +93,9 @@ class OwnerFinding(Finding):
 class Plan:
     """What an upgrade writes and what it leaves, for one repository and one plugin.
 
-    ``was`` and ``now`` are the two versions as the owner reads them.
+    ``was`` and ``now`` are the two versions as the owner reads them. ``waiting`` names the checks
+    that do not run until what is left is fixed, and ``approved`` counts the items left in files
+    whose changes the owner approves.
     """
 
     old: str
@@ -104,6 +106,8 @@ class Plan:
     owner: list[OwnerFinding]
     was: str
     now: str
+    waiting: tuple[str, ...] = ()
+    approved: int = 0
 
     @property
     def edits(self) -> int:
@@ -316,24 +320,30 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         if reason is not None:
             return Refused(reason)
         red, _ = conformance.owed_split(sandbox, converged.left)
-    reds = {id(finding) for finding in red}
+        waiting = tuple(conformance.not_running(sandbox, converged.left))
+        reds = {id(finding) for finding in red}
+        approved = sum(
+            editor(sandbox, f.path) != NOT_GUARDED for f in converged.left if id(f) not in reds
+        )
     return Plan(
         old=standing(root, plugin),
         new=plugin_pin.in_use(plugin),
         changes=changes,
         done={name: did for name, did in done.items() if name in changes},
         agent=[
-            AgentFinding(f.path, f.problem, f.fix, f.rule, f.identity, id(f) not in reds)
+            AgentFinding(f.path, f.problem, f.fix, f.rule, f.identity, f.stops, id(f) not in reds)
             for f in converged.left
             if isinstance(f.fix, Agent)
         ],
         owner=[
-            OwnerFinding(f.path, f.problem, f.fix, f.rule, f.identity, id(f) not in reds)
+            OwnerFinding(f.path, f.problem, f.fix, f.rule, f.identity, f.stops, id(f) not in reds)
             for f in converged.left
             if isinstance(f.fix, Owner)
         ],
         was=version_now(root, plugin),
         now=plugin_pin.version_of(plugin) or "an unknown version",
+        waiting=waiting,
+        approved=approved,
     )
 
 
@@ -602,21 +612,40 @@ def plain(result: Plan, *, applied: bool) -> str:
             f" {result.edits} {changes} in {len(result.changes)} {files}."
         )
     if result.owing:
-        things = "thing" if result.owing == 1 else "things"
-        text += (
-            f" The project owes {result.owing} {things} since the upgrade, which an agent works"
-            " through one at a time; none of them stops a merge."
-        )
+        text += " " + owing_words(result.owing, approved=result.approved)
     if result.red:
         count = len(result.red)
         text += f" {count} {'thing stops' if count == 1 else 'things stop'} a merge until fixed."
     lines = ["In plain words:", text]
+    if result.waiting:
+        lines.append(f"Checks that do not run until then: {', '.join(result.waiting)}.")
     assumed = list(dict.fromkeys(finding.fix.assumed for finding in result.owner))
     if assumed:
         lines += ["Assumed until you say otherwise:", *(f"- {line}" for line in assumed)]
     if result.changes:
         lines.append("Your one step is the merge.")
     return "\n".join(lines)
+
+
+def owing_words(count: int, *, approved: int) -> str:
+    """What the owner reads of the items the upgrade leaves: what they stop, and who fixes them.
+
+    Why: ADR 0037. Nothing works through the list by itself, and a fix in a file whose changes
+    the owner approves reaches the project only through a merge he makes.
+    """
+    things = "thing" if count == 1 else "things"
+    text = (
+        f"The project owes {count} {things} since the upgrade. None of them turns a check red or"
+        " stops a merge, and between upgrades the list only gets shorter. Nothing fixes them by"
+        " itself: ask an agent to."
+    )
+    if approved:
+        files = "Each is in a file" if approved >= count else f"{approved} of them are in files"
+        text += (
+            f" {files} whose changes you approve, so those fixes reach the project through merges"
+            " you make; one change can carry several."
+        )
+    return text
 
 
 def main(argv: list[str]) -> int:

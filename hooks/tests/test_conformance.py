@@ -541,10 +541,7 @@ def without_variable(repo: Path, name: str) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    ("name", "workflow"),
-    [("tier1_gates", CI), ("tier1_sharded", CI), ("tier2_gates", DEEP), ("tier2_sharded", DEEP)],
-)
+@pytest.mark.parametrize(("name", "workflow"), [("tier1_gates", CI), ("tier2_gates", DEEP)])
 def test_a_tier_list_a_workflow_reads_and_the_justfile_lacks_is_named_with_the_template_s(
     repo: Path, name: str, workflow: str
 ) -> None:
@@ -698,12 +695,17 @@ def test_the_life_events_line_is_asked_for_and_names_only_known_events(repo: Pat
     ]
 
 
-def test_the_triggers_table_is_asked_for_with_the_template_s_text(repo: Path) -> None:
+def test_the_triggers_table_is_written_from_the_template_s_text(repo: Path) -> None:
     replace(BINDING, "## Triggers\n", "## Hunches\n")(repo)
     [found] = conformance.findings(repo)
     assert found.problem.startswith("has no '## Triggers' section; add the template's")
-    assert start(found)[0] == "## Triggers"
-    assert "| Kind | Paths | Pattern |" in start(found)
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.fix.does == "add the template's '## Triggers' section"
+    written = markdown_text.section(
+        found.fix.want((repo / BINDING).read_text(encoding="utf-8")), "## Triggers"
+    )
+    assert "| Kind | Paths | Pattern |" in written
+    assert "| <kind> |" not in written
 
 
 def test_the_triggers_table_needs_a_row_per_kind_a_question_of_the_types_names(
@@ -737,15 +739,20 @@ def test_a_dropped_row_of_the_catalogue_prints_the_template_row_to_add(repo: Pat
         " add the template's row, bound, or `later: life:irreplaceable-data` only while that"
         " trigger has not fired"
     )
-    assert start(found) == ("| backup restores | | weekly | | `just restore-drill` |",)
-    assert isinstance(found.fix, conformance.Agent)
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.fix.does == "add the 'backup restores' row as `later: life:irreplaceable-data`"
+    written = found.fix.want((repo / BINDING).read_text(encoding="utf-8"))
+    assert "| backup restores | later: life:irreplaceable-data | weekly | |" in written
+    replace(BINDING, "- Life events: none", "- Life events: irreplaceable-data")(repo)
+    [fired] = [f for f in conformance.findings(repo) if "'backup restores'" in f.problem]
+    assert start(fired) == ("| backup restores | | weekly | | `just restore-drill` |",)
+    assert isinstance(fired.fix, conformance.Agent)
     needs = (
         "binding 'backup restores' to a tool needs a [[bite]] for gate 'restore-drill' in"
-        " quality/bites.toml; a row that says `later: life:irreplaceable-data` needs none while"
-        " that trigger has not fired"
+        " quality/bites.toml"
     )
-    assert found.fix.then == (
-        "the binding does not declare the life event 'irreplaceable-data'",
+    assert fired.fix.then == (
+        "the binding declares the life event 'irreplaceable-data'",
         needs,
     )
 

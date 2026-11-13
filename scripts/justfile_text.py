@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from gatelib import Want
 
@@ -320,6 +320,132 @@ def with_first_line(recipe: str, line: str) -> Want:
             return text
         indent = lines[first][: len(lines[first]) - len(lines[first].lstrip())]
         lines.insert(first, indent + line)
+        return "\n".join(lines)
+
+    return want
+
+
+VARIABLE = re.compile(r"^(?:export[ \t]+)?([A-Za-z_][\w-]*)[ \t]*:=[ \t]*(.*)$", re.MULTILINE)
+STRING = re.compile(r"\"([^\"]*)\"|'([^']*)'")
+QUOTED = re.compile(r'"([^"]*)"')
+
+
+def listed(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> set[str]:
+    """The words variable ``name`` lists, through each variable its value is built from."""
+    value = next((m.group(2) for m in VARIABLE.finditer(justfile) if m.group(1) == name), None)
+    if value is None or name in seen:
+        return set()
+    found = {word for one, other in STRING.findall(value) for word in (one or other).split()}
+    for built in BARE_NAME.findall(STRING.sub(" ", value)):
+        found |= listed(justfile, built, seen | {name})
+    return found
+
+
+def reaches(justfile: str, recipe: str) -> set[str]:
+    """Every name running ``recipe`` reaches.
+
+    That is the recipes it depends on or calls with ``just``, and every word a variable its lines
+    interpolate lists, such as a tier's list of gates, followed through each of those in turn.
+    """
+    lines = justfile.split("\n")
+    defined = {block.name: (block, block.parsed) for block in blocks(lines) if block.parsed}
+    waiting, found = [recipe], set()
+    while waiting:
+        name = waiting.pop()
+        if name in found:
+            continue
+        found.add(name)
+        if name not in defined:
+            continue
+        block, head = defined[name]
+        body = code_of("\n".join(lines[block.head + 1 : block.end]))
+        waiting += [*head.before, *head.after, *JUST_CALL.findall(body)]
+        for variable in INTERPOLATION.findall(body):
+            waiting += sorted(listed(justfile, variable))
+    return found - {recipe}
+
+
+def undefined(justfile: str, recipe: str) -> list[str]:
+    """The names a recipe's lines interpolate that are neither its parameters nor variables."""
+    lines = justfile.split("\n")
+    block = next((b for b in blocks(lines) if b.name == recipe and b.parsed), None)
+    if block is None or block.parsed is None:
+        return []
+    body = code_of("\n".join(lines[block.head + 1 : block.end]))
+    return [
+        name
+        for name in INTERPOLATION.findall(body)
+        if BARE_NAME.fullmatch(name)
+        and name not in block.parsed.params
+        and not defines_variable(justfile, name)
+    ]
+
+
+def dependencies(justfile: str, recipe: str) -> tuple[str, ...] | None:
+    """The dependencies of a recipe that has no body, which run it whole; ``None`` otherwise."""
+    lines = justfile.split("\n")
+    block = next((b for b in blocks(lines) if b.name == recipe), None)
+    if block is None or block.parsed is None or block.parsed.after:
+        return None
+    if code_of("\n".join(lines[block.head + 1 : block.end])).strip():
+        return None
+    return block.parsed.before
+
+
+def with_dependency(recipe: str, name: str) -> Want:
+    """The want of a justfile whose bodiless recipe ``recipe`` also depends on ``name``."""
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        before = dependencies(text, recipe)
+        if before is None or name in before:
+            return text
+        lines = text.split("\n")
+        block = next(b for b in blocks(lines) if b.name == recipe)
+        head = lines[block.head]
+        rest = head[block.parsed.colon + 1 :] if block.parsed else ""
+        end = len(head) - len(rest) + len(rest[: comment_at(rest)].rstrip())
+        lines[block.head] = f"{head[:end]} {name}{head[end:]}"
+        return "\n".join(lines)
+
+    return want
+
+
+def with_listed(name: str, word: str) -> Want:
+    """The want of a justfile whose variable ``name``, one quoted list, also lists ``word``.
+
+    A variable built any other way is left as it is.
+    """
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        match = next((m for m in VARIABLE.finditer(text) if m.group(1) == name), None)
+        quoted = QUOTED.fullmatch(match.group(2).strip()) if match else None
+        if match is None or quoted is None or word in quoted.group(1).split():
+            return text
+        listed = f"{quoted.group(1)} {word}".strip()
+        return f'{text[: match.start(2)]}"{listed}"{text[match.end(2) :]}'
+
+    return want
+
+
+def with_variable(name: str, value: Callable[[str], str]) -> Want:
+    """The want of a justfile that defines ``name``, after its last variable before any recipe.
+
+    ``value`` reads the justfile as it is then, so a list it gives holds every edit made before.
+    """
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        if defines_variable(text, name):
+            return text
+        lines = text.split("\n")
+        first_recipe = next((b.start for b in blocks(lines) if b.parsed), len(lines))
+        at = max(
+            (i + 1 for i in range(first_recipe) if VARIABLE.match(lines[i])),
+            default=first_recipe,
+        )
+        lines[at:at] = [f"{name} := {value(text)}"]
         return "\n".join(lines)
 
     return want
