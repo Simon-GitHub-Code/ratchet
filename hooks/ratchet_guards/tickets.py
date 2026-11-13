@@ -17,6 +17,11 @@ and with a glob in any part standing for whatever it could match. One call that 
 ticket of a spec is one ask, which names each of them. Out of reach, as for every shell rule
 (ADR 0024): a script run by path, a file copied into place, a label put together when the
 command runs.
+
+The ask is a courtesy on the honest path, not the control. A command can still give a ticket
+the label without one: copy a file that holds it into place (``cp notes/ready.md
+.scratch/feat/issues/01.md``), or hard-link a ticket, write the label through the second name
+and remove it. Catching a label the owner did not give is the merge judge's job, not this ask's.
 """
 
 import posixpath

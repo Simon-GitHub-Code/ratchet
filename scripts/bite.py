@@ -80,7 +80,7 @@ THRESHOLDS = (
     '[python.coverage.core]\npaths = ["src/**"]\nabsolute = true\n\n'
     "[ceilings.change]\nfiles = 1\nlines = 2\n"
 )
-# Why: the preflight reads a local ticket only where the guard keeps its label.
+# Why: the preflight reads a local ticket only where the guard asks about its label.
 TICKET_PATH = ".scratch/thing/issues/01-add-the-thing.md"
 TICKET = (
     "# 01: Add the thing\n\n**Status:** `ready-for-agent`\n\n## What to build\n\nThe thing.\n\n"

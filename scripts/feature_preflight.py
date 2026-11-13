@@ -7,7 +7,7 @@ ticket file. The preflight is a pure check over that ticket and the checkout, re
 failure and the skill that produces the missing piece:
 
 - the ticket exists and is open, and a local one is ``.scratch/<feature>/issues/<name>.md``, the
-  only file whose agent-ready label the guard keeps for the owner to set;
+  one file the guard asks the owner about before an agent writes the agent-ready label;
 - it carries a ``## Conjecture`` section that states something (the method's one addition to
   the ticket: the approach, the observation that would refute it, the alternatives and the
   criticism that kills each), on the ticket itself or on its parent spec, since ``to-tickets``
@@ -57,7 +57,7 @@ import application_types
 import gatelib
 import hooks_installed
 
-# Why: a local ticket is the file the guard keeps the label of; both read its shape from one place.
+# Why: a local ticket is the file the guard asks about the label on; both read its shape here.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards.tickets import TICKET_SUFFIX, TICKETS_DIRECTORY, TRACKER_DIRECTORY
 
@@ -225,13 +225,15 @@ def numbered_locally(ref: str, root: Path) -> list[str]:
     )
 
 
-def kept_by_the_guard(ref: str, root: Path) -> bool:
+def at_a_ticket_path(ref: str, root: Path) -> bool:
     """Whether the local file ``ref`` is ``.scratch/<feature>/issues/<name>.md`` under ``root``.
 
-    The guard asks the owner before an agent sets the agent-ready label only on such a file, so
-    the label on any other file may be the agent's own. ``ref`` must have that shape both as
-    written, with ``..`` folded, and as the filesystem resolves it, so no link leads elsewhere,
-    and no hard link may give it a second name the label could be written through.
+    The guard asks the owner before an agent writes the agent-ready label only on such a file,
+    so on any other file the label may be the agent's own without an ask. ``ref`` must have that
+    shape both as written, with ``..`` folded, and as the filesystem resolves it, so no link
+    leads elsewhere, and no hard link may give it a second name the label could be written
+    through. The ask is a courtesy on the honest path; catching a label the owner did not give
+    is the merge judge's job (``ratchet_guards.tickets``).
     """
     if (root / ref).stat().st_nlink > 1:
         return False
@@ -553,12 +555,12 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
     ticket = fetch(ref, root, gh)
     if ticket is None:
         report.fail("ticket", f"{ref}: no such ticket (a number on the tracker, or a file path)")
-    elif (root / ticket.ref).is_file() and not kept_by_the_guard(ticket.ref, root):
+    elif (root / ticket.ref).is_file() and not at_a_ticket_path(ticket.ref, root):
         report.fail(
             "ticket",
             f"{ref}: a local ticket is a file at .scratch/<feature>/issues/<name>.md with no"
-            " second name (a hard link), the only file whose agent-ready label the guard keeps"
-            " for the owner to set",
+            " second name (a hard link), the one file the guard asks the owner about before an"
+            " agent writes the agent-ready label",
             "/mattpocock-skills:to-tickets",
         )
     else:

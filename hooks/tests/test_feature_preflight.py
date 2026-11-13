@@ -242,7 +242,7 @@ ASTRAY = [
 @pytest.mark.parametrize(
     "ref", [*ASTRAY, ".scratch/f/issues/../ticket.md", ".scratch/f/issues/linked.md"]
 )
-def test_a_local_ticket_is_only_a_file_the_guard_keeps(tmp_path: Path, ref: str) -> None:
+def test_a_local_ticket_is_only_a_file_the_guard_asks_about(tmp_path: Path, ref: str) -> None:
     # Why: the guard asks the owner before an agent writes the agent-ready label only on
     # `.scratch/<feature>/issues/<name>.md`; a label anywhere else may be the agent's own.
     text = "# T\n\nStatus: ready-for-agent" + CONJECTURE
