@@ -197,7 +197,7 @@ Some behaviour of the merge judge and the pipeline protects people other than th
 
 - New surface with no flag that is off goes to the owner only once the project is `deployed`. Before that, nobody meets the surface. ([guards.md](guards.md#the-merge-judge))
 - A one-way door goes to the owner only once the project is `deployed` or holds `irreplaceable-data`. Before that, nothing is lost by walking back through it.
-- The pipeline's critic and its fix loop run only once the project is `depended-on`. Before that, a ticket is built by spec, implement and review, and a finding the review opens is still open. ([pipeline.md](pipeline.md))
+- The pipeline's critic and its fix loop run only once the project is `depended-on`. Before that, a ticket is built by spec, the ticket check, implement and review, and a finding the review opens is still open. ([pipeline.md](pipeline.md))
 
 ### How each concern splits across the tiers
 
