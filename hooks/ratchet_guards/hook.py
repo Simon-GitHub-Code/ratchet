@@ -154,6 +154,7 @@ class LocalFilesystem:
         The project's checkouts are the work trees git lists for it, read once, on first use.
         """
         self._project = project
+        self._root = None if project is None else self.canonical(project)
         self._trees: list[Path] | None = None
         self._submodules: dict[Path, bool] = {}
         self._manifests: dict[Path, Manifest | None] = {}
@@ -194,12 +195,14 @@ class LocalFilesystem:
 
         In the project it is the deepest of the project's work trees that holds ``path``, or a
         submodule of it: a ``.git`` an agent made in between is no checkout. Outside it, the
-        nearest ancestor holding ``.git``.
+        nearest ancestor holding ``.git``. When that ancestor is the project itself, nothing lies
+        in between to ask git about.
         """
+        nearest = next((c for c in (path, *path.parents) if (c / ".git").exists()), None)
+        if nearest is not None and nearest == self._root:
+            return nearest
         tree = next((tree for tree in self._worktrees() if path.is_relative_to(tree)), None)
-        if tree is None:
-            return next((c for c in (path, *path.parents) if (c / ".git").exists()), None)
-        return self._within(tree, path)
+        return nearest if tree is None else self._within(tree, path)
 
     def _worktrees(self) -> list[Path]:
         """The project's work trees, deepest first.
