@@ -37,11 +37,13 @@ sync:
     uv sync --locked
 
 lint:
-    uv run ruff check hooks scripts
-    uv run ruff format --check hooks scripts
+    uv run ruff check hooks scripts evals/first-hour
+    uv run ruff format --check hooks scripts evals/first-hour
 
+# The first-hour driver needs the Agent SDK, which the dev environment does not install.
 types:
     uv run mypy --strict hooks/ratchet_guards scripts
+    uv run mypy --strict evals/first-hour/first_hour --exclude 'first_hour/drive\.py$'
 
 validate:
     claude plugin validate .
@@ -63,7 +65,7 @@ parse-adapters:
 # tracer's cost (ADR 0038). An idle worker takes queued tests from a busy one, and the ten slowest
 # are named beside the budget line on every run.
 test:
-    uv run pytest -n auto --dist worksteal --durations=10 --cov --cov-report=term-missing:skip-covered hooks/tests
+    uv run pytest -n auto --dist worksteal --durations=10 --cov --cov-report=term-missing:skip-covered hooks/tests evals/first-hour/tests
 
 # The suite again on Python 3.11, the oldest the hook and the gate scripts support (ADR 0007),
 # without coverage and in an environment of its own.
@@ -80,6 +82,11 @@ bite:
 # The lowered gate on this repository's own thresholds: no ceiling raised against the merge base.
 lowered-smoke:
     python3 scripts/lowered.py
+
+# One unattended first-hour run of a scripted owner on a plugin checkout (evals/first-hour). It
+# costs real money and up to two hours, so no tier runs it.
+first-hour plugin dir *flags:
+    uv run evals/first-hour/run.py run --plugin {{plugin}} --dir {{dir}} {{flags}}
 
 # Time one gate against its ceiling in quality/thresholds.toml; CI wraps every matrix job in it.
 budget key *flags:

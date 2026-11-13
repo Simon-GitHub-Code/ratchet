@@ -25,11 +25,13 @@ package = false
 # Why: the gate scripts and the guard hook (the package, `hooks/guard.py` and `hooks/session.py`)
 # are the method's own checkers; a line of them nobody ran is a gate that may never fire, so they
 # are held at 100% by the tool, not by a number that could be lowered. Nothing is omitted but the
-# tests; `patch = ["subprocess"]` measures the shims the tests run as the hook runs them.
+# tests; `patch = ["subprocess"]` measures the shims the tests run as the hook runs them. The
+# first-hour eval's measurements are held the same way; its driver is omitted because it runs only
+# against a signed-in `claude` and the Agent SDK, which the suite has neither of.
 [tool.coverage.run]
 branch = true
-source = ["scripts", "hooks"]
-omit = ["*/hooks/tests/*"]
+source = ["scripts", "hooks", "evals/first-hour/first_hour"]
+omit = ["*/hooks/tests/*", "*/evals/first-hour/first_hour/drive.py"]
 parallel = true
 patch = ["subprocess"]
 
@@ -40,15 +42,15 @@ exclude_also = ['if __name__ == "__main__":']
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers --strict-config"
-testpaths = ["hooks/tests"]
-pythonpath = ["hooks", "scripts"]
+testpaths = ["hooks/tests", "evals/first-hour/tests"]
+pythonpath = ["hooks", "scripts", "evals/first-hour"]
 xfail_strict = true
 filterwarnings = ["error"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["hooks", "scripts"]
+src = ["hooks", "scripts", "evals/first-hour"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -82,6 +84,24 @@ ignore = [
     "S603", "S607", # subprocess runs git with a literal argv list, no shell
     "INP001", # standalone scripts, deliberately not a package
 ]
+"evals/first-hour/run.py" = [
+    "T201",   # the command prints the table by design
+    "S603",   # subprocess runs the resolved `claude` with a literal argv list
+    "INP001", # a script run by `uv run`, deliberately not a package
+]
+"evals/first-hour/first_hour/*.py" = [
+    "S603", "S607", # subprocess runs git, the route and the app with argv lists or the owner's line
+    "S108",         # the sandbox and the policy name /tmp to replace it with the run's own
+]
+"evals/first-hour/tests/**" = [
+    "INP001",  # pytest imports these by basename; a package would clash with hooks/tests
+    "S101",    # assert is the test idiom
+    "S603", "S607",
+    "S108",    # the policy and sandbox tables name the temp paths a session would write to
+    "ARG002",  # the fakes keep the signatures of the protocols they stand in for
+    "PLR2004", # magic numbers are the test fixtures
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+]
 "hooks/tests/**" = [
     "S101",    # assert is the test idiom
     "PLR2004", # magic numbers are the test fixtures
@@ -102,7 +122,7 @@ max-statements = 40      # PLR0915
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["ratchet_guards", "tests", "guard"]
+known-first-party = ["ratchet_guards", "tests", "guard", "first_hour"]
 
 [tool.mypy]
 files = ["hooks"]

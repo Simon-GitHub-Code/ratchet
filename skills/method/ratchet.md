@@ -58,9 +58,9 @@ date = 2026-11-06
 - Registers written before the place was part of the identity hold stryker entries without the `@` suffix. Each is red until replaced: the gate names it as the old identity, lists the live mutants it matched, and prints an entry to paste for each unregistered survivor. The owner reviews them and writes one entry per mutant they judge equivalent, with a reason of their own. Nothing carries over unreviewed. Entries for mutmut keep their identity.
 - Pull requests mutate changed functions (tier 1). The default branch mutates everything on the absolute paths (tier 2).
 
-## 5. Effective configuration is snapshotted
+## 5. Listed configuration is snapshotted
 
-`quality/snapshots/` holds each gate's configuration as the tool resolves it (presets, inherited defaults and upgrades included), normalised and sorted. The `snapshots-check` entry point (tier 0) regenerates and diffs. After an intended change, the `snapshots` entry point rewrites them and the diff is reviewed with the pull request. Loosening a gate therefore shows as a reviewed diff instead of a silent config edit.
+`quality/snapshots/` holds a copy of each file the `tool-config` group of `guards/manifest.toml` lists. The `snapshots-check` entry point (tier 0) copies them again and diffs. After an intended change, the `snapshots` entry point rewrites them and the diff is reviewed with the pull request. Loosening a listed config therefore shows as a reviewed diff instead of a silent config edit, and a config the group does not list is neither guarded nor recorded: an agent can loosen it and no gate sees it. Adoption lists each config it writes; after adoption the manifest is the owner's, so `/ratchet:safeguard` prints the lines for him to add.
 
 ## 6. Ceilings only fall
 

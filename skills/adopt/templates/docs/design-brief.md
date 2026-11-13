@@ -1,6 +1,10 @@
 # <Project>
 
-Agreed on <YYYY-MM-DD> after a structured interview. Lasting decisions live in `docs/adr/`; vocabulary in `GLOSSARY.md`.
+Agreed on <YYYY-MM-DD> from the owner's answers at init and adoption. Lasting decisions live in `docs/adr/`; vocabulary in `GLOSSARY.md`.
+
+## In the owner's words
+
+<Each question the owner answered at init and adoption, with the answer word for word where the record kept it: `/ratchet:conjecture` says what each one became.>
 
 ## Purpose
 
