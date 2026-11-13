@@ -18,6 +18,7 @@ import pytest
 import drain
 import hooks_installed
 import merge_ready
+import queue_notes
 from tests import servers
 from tests.repos import commit, git, repository, write
 from tests.test_merge_ready import GLOSSARY, MANIFEST
@@ -42,7 +43,10 @@ def ticket(number: int, title: str, extra: str = "", *, status: str = "ready-for
 def binding(merge: str | None, check: str = "true") -> str:
     rows = [("check", check), ("merge", merge)]
     table = "".join(f"| {name} | `{command}` |\n" for name, command in rows if command)
-    head = "# Binding\n\n- Default branch: `main`\n\n| Entry point | Command |\n| --- | --- |\n"
+    pin = f"- Ratchet plugin: 999.0.0 at {'0' * 40}\n"
+    head = (
+        f"# Binding\n\n{pin}- Default branch: `main`\n\n| Entry point | Command |\n| --- | --- |\n"
+    )
     return head + table
 
 
@@ -115,7 +119,7 @@ LIFE_DEPENDED_ON = "\n- Life events: depended-on\n"
 
 
 def note(root: Path, branch: str) -> dict[str, object]:
-    return drain.read_note(root, branch)
+    return queue_notes.read_note(root, branch)
 
 
 # --- the plan --------------------------------------------------------------------------------
@@ -699,9 +703,9 @@ def test_the_report_leaves_out_a_ticket_still_building_and_times_what_it_can(
 
 
 def test_what_is_not_the_expected_json_reads_as_nothing(tmp_path: Path) -> None:
-    assert drain.loaded("[1]") == drain.loaded("{") == drain.loaded(None) == {}
-    assert drain.texts("a") == drain.tables({"a": 1}) == []
-    assert drain.texts(["a", 1]) == ["a"]
+    assert queue_notes.loaded("[1]") == queue_notes.loaded("{") == queue_notes.loaded(None) == {}
+    assert queue_notes.texts("a") == queue_notes.tables({"a": 1}) == []
+    assert queue_notes.texts(["a", 1]) == ["a"]
     assert drain.key("#4") == drain.key("4") == "4"
     assert drain.main(["drain", "plan", "--root", str(tmp_path / "nowhere")]) == 2
     assert drain.timings(tmp_path) == {}
