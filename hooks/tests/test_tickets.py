@@ -1,5 +1,6 @@
 """The agent-ready status on a local ticket: an agent that writes it asks the owner."""
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -253,3 +254,88 @@ def test_antigravity_edits_that_give_the_status_ask(
     verdict = hook.decide(payload, make_guard(filesystem=FakeFilesystem(contents=contents)))
     assert verdict is not None
     assert verdict.rule == "agent-ready-label"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/repo/.scratch/f/issues/../issues/02-b.md",
+        "/repo/.scratch/f/./issues/02-b.md",
+        "/repo/.SCRATCH/f/Issues/02-b.MD",
+    ],
+)
+def test_a_ticket_named_another_way_still_asks(path: str) -> None:
+    content = "# 02: B\n\nStatus: agent:ready\n"
+    assert decide("Write", {"file_path": path, "content": content}) == "agent-ready-label"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/repo/.scratch/changes/feature-x.md",
+        "/repo/.scratch/f/spec.md",
+        "/repo/.scratch/f/notes.md",
+        "/repo/.scratch/f/issues/old/02-b.md",
+        "/repo/.scratch/issues/02-b.md",
+    ],
+)
+def test_a_tracker_file_that_is_no_ticket_does_not_ask(path: str) -> None:
+    content = "Status: agent:ready\n\nSplits the spec into tickets, each labelled agent:ready.\n"
+    assert decide("Write", {"file_path": path, "content": content}) is None
+
+
+def test_a_change_description_that_names_the_label_does_not_ask() -> None:
+    described = (
+        "mkdir -p .scratch/changes && cat > .scratch/changes/tickets.md <<EOF\n"
+        "## Summary\nSplits the spec into four tickets, each labelled agent:ready.\nEOF"
+    )
+    assert shell(described) is None
+    assert shell("echo 'Status: agent:ready' > .scratch/f/spec.md") is None
+
+
+READY = "echo 'Status: agent:ready' >"
+TEE = "echo 'Status: agent:ready' | tee"
+
+
+@pytest.mark.parametrize(
+    ("command", "named"),
+    [
+        (f"{READY} .scratch/f/issue?/04-d.md", "04-d.md gets"),
+        (f"{READY} .scratch/*/issues/04-d.md", "04-d.md gets"),
+        (f"{READY} .scratch/f/x/../issues/04-d.md", "04-d.md gets"),
+        (f"{READY} .SCRATCH/f/ISSUES/04-d.MD", "04-d.MD gets"),
+        (f"{READY} /tmp/t.md; mv /tmp/t.md .scratch/f/issues/", "issues/, t.md get"),
+        (f"{READY} .scratch/n/01.md; mv .scratch/n .scratch/g/issues", "issues/ gets"),
+        (f"{READY} /tmp/t/issues/01.md; cp -r /tmp/t .scratch/g", "g/ gets"),
+        (f"{READY} /tmp/s/g/issues/01.md; mv /tmp/s .scratch", ".scratch/, s/ get"),
+        (f"cd .scratch/f && {READY}> issues/04-d.md", "04-d.md gets"),
+        # Why: brace expansion, a variable or a substitution may spell any part of the path.
+        (f"{TEE} .scratch/f/{{issues,none}}/04-d.md", "04-d.md gets"),
+        (f"{TEE} .scratch/f/issues/04-d.{{md,txt}}", "04-d.{md,txt} gets"),
+        (f"{TEE} .scratch/f/$D/04-d.md", "04-d.md gets"),
+        (f"{TEE} .scratch/f/$(echo issues)/04-d.md", "04-d.md gets"),
+    ],
+)
+def test_every_other_way_to_write_a_ticket_with_the_status_asks(command: str, named: str) -> None:
+    asked = shell(command)
+    assert asked is not None
+    assert named in asked
+
+
+@dataclass
+class LinkedFilesystem(FakeFilesystem):
+    """``/repo/t`` is a link to the tickets of feature ``f``."""
+
+    def canonical(self, path: Path) -> Path:
+        here = super().canonical(path)
+        link = Path("/repo/t")
+        return Path(ISSUES) / here.relative_to(link) if here.is_relative_to(link) else here
+
+
+def test_a_ticket_written_through_a_link_asks() -> None:
+    guard = make_guard(filesystem=LinkedFilesystem(contents={}))
+    command = "echo 'Status: ready-for-agent' > t/04-d.md"
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(ROOT)}
+    verdict = hook.decide(payload, guard)
+    assert verdict is not None
+    assert verdict.detail == "04-d.md gets the status `ready-for-agent`"
