@@ -96,21 +96,88 @@ def read_log(data: bytes) -> tuple[dict[str, Entry], list[str]]:
 
 
 @dataclass(frozen=True)
+class Ending:
+    """What ``down`` added to a seal: when it came, and whether the proxy had stopped before."""
+
+    at: str
+    early: bool
+
+
+@dataclass(frozen=True)
 class Seal:
-    """What the proxy said it wrote, when it stopped."""
+    """What the proxy said it wrote when it stopped, and what ``down`` said about the stop.
+
+    ``ticket`` and ``session_file`` are the digests of the session's ``ticket.md`` and
+    ``session.json`` as they were when the proxy started, before the tester had an address.
+    """
 
     requests: int
     sha256: str
+    stopped: str
     ended: str
+    ticket: str | None
+    session_file: str | None
+    ending: Ending | None
 
 
-def seal_problems(data: bytes, seal: Seal | None) -> list[str]:
-    """Why the log on disk is not the log the proxy sealed; empty when it is."""
+def parse_seal(raw: object) -> Seal | None:
+    """The seal in ``seal.json``, or ``None`` when it does not read as one."""
+    if not isinstance(raw, dict):
+        return None
+    ending = raw.get("down")
+    ticket, session = (raw.get(key) for key in ("ticketSha256", "sessionSha256"))
+    try:
+        return Seal(
+            int(raw["requests"]),
+            str(raw["sha256"]),
+            str(raw["stopped"]),
+            str(raw["ended"]),
+            None if ticket is None else str(ticket),
+            None if session is None else str(session),
+            Ending(str(ending["at"]), ending["endedEarly"] is True)
+            if isinstance(ending, dict)
+            else None,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def seal_problems(data: bytes, seal: Seal | None, *, ticket: bytes, session: bytes) -> list[str]:
+    """Why the session on disk is not the one the proxy sealed and ``down`` ended; empty when it is.
+
+    ``data`` is the request log, ``ticket`` and ``session`` the session's copies of the ticket
+    and of ``session.json``.
+    """
     if seal is None:
-        said = "the request log was never sealed: the session did not end with `down`"
+        said = "the request log was never sealed: the proxy was stopped before it could seal it"
         return [f"{said}, so its requests cannot be trusted"]
+    problems = log_problems(data, seal)
+    if sha256(ticket) != seal.ticket:
+        problems.append("the session's copy of the ticket was changed after `up`")
+    if sha256(session) != seal.session_file:
+        problems.append("session.json was changed after `up`")
+    if seal.ending is None:
+        problems.append("the session was not ended by `down`: run `down`, which says how it ended")
+    elif seal.ending.early:
+        problems.append(early(seal))
+    return problems
+
+
+EARLY = "before `down` came: something stopped it early"
+
+
+def early(seal: Seal) -> str:
+    return f"the session ended at {seal.stopped}, {EARLY}"
+
+
+def log_problems(data: bytes, seal: Seal) -> list[str]:
+    """Why the log on disk is not the log the proxy sealed; empty when it is."""
     held = data.count(b"\n")
-    if hashlib.sha256(data).hexdigest() == seal.sha256 and held == seal.requests:
+    if sha256(data) == seal.sha256 and held == seal.requests:
         return []
     logged = f"the harness logged {seal.requests} requests"
     if held < seal.requests:

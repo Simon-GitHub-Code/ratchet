@@ -172,7 +172,7 @@ def test_the_seal_says_what_was_written_and_nothing_is_written_after_it(
     assert seal["sha256"] == hashlib.sha256(data).hexdigest()
     log = acceptance_proxy.Log(tmp_path / "again", "x")
     log.issue()
-    log.seal("again")
+    log.seal({"session": "again"})
     log.finish({"id": "x-1"})
     assert (tmp_path / "again" / "requests.jsonl").read_bytes() == b"", "it waited, then sealed"
 

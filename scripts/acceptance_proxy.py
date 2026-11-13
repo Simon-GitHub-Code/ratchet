@@ -130,15 +130,18 @@ class Log:
             self.digest.update(line)
             self.written += 1
 
-    def seal(self, session: str) -> None:
-        """Wait up to ``SETTLE`` for the open requests, then write nothing more and say what was."""
+    def seal(self, facts: dict[str, object]) -> None:
+        """Wait up to ``SETTLE`` for the open requests, then write nothing more and say what was.
+
+        ``facts`` are what the seal says besides the log: the session, when the stop was asked
+        for, and the digests of the session's files as they were when the proxy started.
+        """
         with self.lock:
             self.idle.wait_for(lambda: self.open == 0, timeout=SETTLE)
             self.sealed = True
             self.file.close()
-            seal: dict[str, object] = {"session": session, "requests": self.written}
-            seal |= {"sha256": self.digest.hexdigest(), "ended": now()}
-            write_json(self.directory / "seal.json", seal)
+            seal = facts | {"requests": self.written, "sha256": self.digest.hexdigest()}
+            write_json(self.directory / "seal.json", seal | {"ended": now()})
 
 
 def message(start: str, headers: list[tuple[str, str]], body: bytes) -> bytes:
@@ -307,20 +310,33 @@ def stopping(signum: int, frame: FrameType | None) -> None:
     STOP.set()
 
 
-def until_stopped(server: http.server.ThreadingHTTPServer, parent: int) -> None:
-    """Serve until a signal, or until ``parent``, which started this process, is gone."""
+def until_stopped(server: http.server.ThreadingHTTPServer, parent: int) -> str:
+    """Serve until a signal, or until ``parent``, which started this process, is gone.
+
+    Returns when the stop was asked for.
+    """
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
     thread.start()
     while not STOP.wait(WATCH):
         if os.getppid() != parent:
             break
+    stopped = now()
     server.shutdown()
     thread.join()
     server.server_close()
+    return stopped
+
+
+def digest_of(path: Path) -> str | None:
+    """The SHA-256 of a file, or ``None`` when there is none."""
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
 def serve(directory: Path, parent: int) -> int:
     session = str(json.loads((directory / "session.json").read_text(encoding="utf-8"))["session"])
+    facts: dict[str, object] = {"session": session}
+    facts |= {"ticketSha256": digest_of(directory / "ticket.md")}
+    facts |= {"sessionSha256": digest_of(directory / "session.json")}
     ready = urlsplit(os.environ[gatelib.READY_ENV])
     server = Proxy(("127.0.0.1", 0), Forward)
     server.log = Log(directory, session.rsplit("-", 1)[-1])
@@ -331,8 +347,7 @@ def serve(directory: Path, parent: int) -> int:
         directory / "proxy.json",
         {"url": f"http://127.0.0.1:{port}/", "upstream": origin, "pid": os.getpid()},
     )
-    until_stopped(server, parent)
-    server.log.seal(session)
+    server.log.seal(facts | {"stopped": until_stopped(server, parent)})
     return 0
 
 

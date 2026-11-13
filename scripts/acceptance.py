@@ -80,6 +80,7 @@ from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
 import acceptance_audit
+import acceptance_proxy
 import acceptance_record
 import application_types
 import gatelib
@@ -557,15 +558,44 @@ def end(directory: Path) -> list[str]:
 
 
 def stop_sessions(place: Path) -> int:
-    """Stop every running session under ``place`` and wait until nothing of it answers."""
-    running = [d for d in sessions(place, 2) if state(d) in (State.LIVE, State.STARTING)]
+    """Stop every running session under ``place``, wait until nothing of it answers, and end it.
+
+    Every sealed session ``down`` has not yet ended gets ``down``'s word on its seal: when it
+    came, and whether the proxy had stopped before then. Only one that ran until ``down`` came
+    is blessed, by printing the digest of its seal.
+    """
+    began = acceptance_proxy.now()
+    every = sessions(place, 2)
+    running = [d for d in every if state(d) in (State.LIVE, State.STARTING)]
     problems = [line for directory in running for line in end(directory)]
     for line in problems:
         print(line)
-    print(
-        f"acceptance down: {'stopped ' + str(len(running)) if running else 'nothing was running'}"
-    )
+    ended = [found for directory in every if (found := close(directory, began)) is not None]
+    for blessed, line in ended:
+        print(line)
+        problems += [] if blessed else [line]
+    if running or ended:
+        print(f"acceptance down: stopped {len(running)}")
+    else:
+        print("acceptance down: nothing was running")
     return 1 if problems else 0
+
+
+def close(directory: Path, began: str) -> tuple[bool, str] | None:
+    """Put ``down``'s word on the seal of a session it has not ended before; what it says of it.
+
+    ``None`` when there is nothing to end: no seal yet, or ``down`` ended it already.
+    """
+    path = directory / "seal.json"
+    raw = read_json(path)
+    seal = acceptance_record.parse_seal(raw)
+    if raw is None or seal is None or seal.ending is not None:
+        return None
+    early = seal.stopped < began
+    acceptance_proxy.write_json(path, raw | {"down": {"at": began, "endedEarly": early}})
+    if early:
+        return False, f"session {directory.name} ended at {seal.stopped}, {acceptance_record.EARLY}"
+    return True, f"session {directory.name}: seal {acceptance_record.sha256(path.read_bytes())}"
 
 
 def code_paths(root: Path) -> tuple[str, ...]:
@@ -621,7 +651,15 @@ def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None
     data = (directory / "requests.jsonl").read_bytes() if served else b""
     log, problems = acceptance_record.read_log(data)
     if served:
-        problems = acceptance_record.seal_problems(data, seal_of(directory)) + problems
+        problems = [
+            *acceptance_record.seal_problems(
+                data,
+                seal_of(directory),
+                ticket=(directory / "ticket.md").read_bytes(),
+                session=(directory / "session.json").read_bytes(),
+            ),
+            *problems,
+        ]
     every: list[acceptance_record.Criterion | acceptance_record.Finding] = [
         *record.criteria,
         *record.findings,
@@ -645,17 +683,19 @@ def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None
 
 
 def seal_of(directory: Path) -> acceptance_record.Seal | None:
-    seal = read_json(directory / "seal.json")
-    if seal is None:
-        return None
-    return acceptance_record.Seal(
-        int(str(seal["requests"])), str(seal["sha256"]), str(seal["ended"])
-    )
+    return acceptance_record.parse_seal(read_json(directory / "seal.json"))
 
 
-def check(root: Path, slug: str) -> int:
-    _, problems = judged(root, latest(root, slug))
-    return gatelib.report("acceptance check", problems)
+def check(root: Path, slug: str, kept: str | None) -> int:
+    """Judge the latest record; with ``kept``, the digest ``down`` printed, hold the seal to it."""
+    directory = latest(root, slug)
+    path = directory / "seal.json"
+    problems = []
+    if kept is not None and not path.is_file():
+        problems.append(f"session {directory.name} has no seal to hold to {kept[:12]}")
+    elif kept is not None and acceptance_record.sha256(path.read_bytes()) != kept:
+        problems.append(f"seal.json is not the seal `down` printed ({kept[:12]}): it was rewritten")
+    return gatelib.report("acceptance check", problems + judged(root, directory)[1])
 
 
 def replay_one(check: kept_checks.Check, boot: Boot, *, root: Path, scratch: Path) -> str | None:
@@ -769,6 +809,8 @@ def parse(argv: list[str]) -> argparse.Namespace:
         command.add_argument("--root", type=Path, default=Path.cwd())
         if name in ("up", "down", "check", "summary"):
             command.add_argument("--slug", required=True)
+        if name == "check":
+            command.add_argument("--seal")
         if name == "up":
             command.add_argument("--ticket", type=Path, required=True)
         if name == "replay":
@@ -791,7 +833,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "up": lambda o: up(o.root, o.slug, o.ticket),
     "down": lambda o: down(o.root, o.slug),
-    "check": lambda o: check(o.root, o.slug),
+    "check": lambda o: check(o.root, o.slug, o.seal),
     "replay": lambda o: replay(o.root, o.slug, o.checks, control=o.control),
     "summary": lambda o: summary(o.root, o.slug),
     "audit": lambda o: acceptance_audit.main(o.transcript, o.root, store(o.root)),

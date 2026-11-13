@@ -379,25 +379,61 @@ def test_the_log_reads_each_line_and_names_each_that_is_not_a_request() -> None:
     ]
 
 
+TICKET, SESSION_FILE = b"- [ ] One thing.\n", b'{"session": "s"}\n'
+SEALED = {
+    "requests": 2,
+    "sha256": sha(b'{"a": 1}\n{"b": 2}\n'),
+    "stopped": "2026-11-13T00:00:01.000Z",
+    "ended": "2026-11-13T00:00:01.100Z",
+    "ticketSha256": sha(TICKET),
+    "sessionSha256": sha(SESSION_FILE),
+    "down": {"at": "2026-11-13T00:00:00.900Z", "endedEarly": False},
+}
+
+
+def sealed(data: bytes, raw: object = SEALED, **files: bytes) -> list[str]:
+    given = {"ticket": TICKET, "session": SESSION_FILE} | files
+    return ar.seal_problems(data, ar.parse_seal(raw), **given)
+
+
 def test_a_log_is_held_to_its_seal() -> None:
     data = b'{"a": 1}\n{"b": 2}\n'
-    seal = ar.Seal(2, sha(data), "2026-11-13T00:00:00.000Z")
-    assert ar.seal_problems(data, seal) == []
-    assert ar.seal_problems(data[:9], seal) == [
+    assert sealed(data) == []
+    assert sealed(data[:9]) == [
         "the request log was cut short: the harness logged 2 requests and the file holds 1"
     ]
-    assert ar.seal_problems(data + b'{"c": 3}\n', seal) == [
+    assert sealed(data + b'{"c": 3}\n') == [
         "the request log holds 3 lines but the harness logged 2 requests: lines were added after it"
     ]
-    assert ar.seal_problems(data.replace(b"1", b"7"), seal) == [
+    assert sealed(data.replace(b"1", b"7")) == [
         "the request log was changed after the harness wrote it"
     ]
-    assert ar.seal_problems(data, None) == [
+    assert sealed(data, None) == [
         (
-            "the request log was never sealed: the session did not end with `down`, so its requests"
-            " cannot be trusted"
+            "the request log was never sealed: the proxy was stopped before it could seal it, so"
+            " its requests cannot be trusted"
         )
     ]
+
+
+def test_a_seal_covers_the_session_files_and_says_down_ended_it_in_time() -> None:
+    data = b'{"a": 1}\n{"b": 2}\n'
+    assert sealed(data, ticket=b"- [ ] Another.\n", session=b"{}") == [
+        "the session's copy of the ticket was changed after `up`",
+        "session.json was changed after `up`",
+    ]
+    assert sealed(data, {**SEALED, "down": None}) == [
+        "the session was not ended by `down`: run `down`, which says how it ended"
+    ]
+    early = {**SEALED, "down": {"at": "2026-11-13T00:00:02.000Z", "endedEarly": True}}
+    assert sealed(data, early) == [
+        (
+            "the session ended at 2026-11-13T00:00:01.000Z, before `down` came: something stopped"
+            " it early"
+        )
+    ]
+    for broken in ([], {**SEALED, "requests": "two"}, {**SEALED, "down": {}}):
+        assert ar.parse_seal(broken) is None
 
 
 def test_the_harness_record_for_a_product_that_cannot_start_is_accepted_and_blocks() -> None:
@@ -425,7 +461,10 @@ def test_what_blocks_the_merge_and_what_the_owner_decides() -> None:
 def test_the_summary_is_the_records_facts_and_the_replays_of_these_very_checks() -> None:
     record, _ = ar.parse_record(good())
     assert record is not None
-    seal = ar.Seal(3, "f" * 64, "2026-11-13T00:01:00.000Z")
+    seal = ar.parse_seal(
+        {**SEALED, "requests": 3, "sha256": "f" * 64, "ended": "2026-11-13T00:01:00.000Z"}
+    )
+    assert seal is not None
     session = ar.Session("save-link", "t" * 40, "2026-11-13T00:00:00Z", seal)
     checks = ar.digest(list(record.kept_raw))
     replay = {"checks": checks, "results": [{"holds": True}, {"holds": False}, "x"]}

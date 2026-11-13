@@ -95,13 +95,15 @@ def test_up_puts_the_proxy_before_the_head_and_down_stops_all_of_it(
     proxy = json.loads((directory / "proxy.json").read_text(encoding="utf-8"))
     supervisor = pid_of(directory / "live.lock")
     assert acceptance.state(directory) is acceptance.State.LIVE
-    assert down(product, capsys) == (0, ["acceptance down: stopped 1"])
+    code, out = down(product, capsys)
+    assert (code, out[1:]) == (0, ["acceptance down: stopped 1"])
     assert gone(supervisor)
     assert gone(proxy["pid"])
     assert not gatelib.listening(proxy["url"])
     assert not gatelib.listening(proxy["upstream"])
     seal = json.loads((directory / "seal.json").read_text(encoding="utf-8"))
     assert (seal["session"], seal["requests"]) == (facts["session"], 2)
+    assert seal["down"]["endedEarly"] is False
     assert acceptance.state(directory) is acceptance.State.ENDED
     assert down(product, capsys) == (0, ["acceptance down: nothing was running"])
 
@@ -174,6 +176,10 @@ def test_a_product_that_gives_no_way_to_start_gets_a_blocker_and_no_pass(
     assert record["author"] == "harness"
     assert [c["verdict"] for c in record["criteria"]] == ["unsure"] * 3
     assert check(root, capsys) == (0, ["acceptance check: green"])
+    assert run(root, "check", "--slug", SLUG, "--seal", "0" * 64, capsys=capsys) == (
+        1,
+        [f"session {directory.name} has no seal to hold to 000000000000", "acceptance check: red"],
+    )
     assert run(root, "summary", "--slug", SLUG, capsys=capsys)[0] == 0
     summary = json.loads((root / "docs/features" / SLUG / "acceptance.json").read_text("utf-8"))
     assert (summary["blocking"], summary["requests"], summary["log"]) == (["F1"], 0, None)
@@ -636,7 +642,8 @@ def test_down_while_a_request_is_in_flight_stops_everything_and_seals(
     waiting.start()
     products.wait_for(tmp_path / "slow")
     began = time.monotonic()
-    assert down(product, capsys) == (0, ["acceptance down: stopped 1"])
+    code, out = down(product, capsys)
+    assert (code, out[1:]) == (0, ["acceptance down: stopped 1"])
     assert time.monotonic() - began < acceptance.STOP_GRACE
     waiting.join()
     assert failed, "the request in flight ended with the session"
