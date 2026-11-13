@@ -254,3 +254,64 @@ def test_a_rule_against_asking_is_not_a_question(tmp_path: Path) -> None:
     )
     assert plant(tmp_path, page, ASKED) == []
     assert plant(tmp_path / "b", "Ask the owner whether to go on, and do not wait.\n") != []
+
+
+ONE_BY_ONE = re.compile(
+    r"\bone at a time\b|\b(?:owner|asked|questions?) alone\b"
+    r"|\bone per message\b|\bone after another\b",
+    re.IGNORECASE,
+)
+ABOUT_ASKING = re.compile(r"\bask(?:s|ed|ing)?\b|\bquestions?\b|\bdialogs?\b", re.IGNORECASE)
+ONE_MESSAGE = (
+    "in one message, each with your recommended answer first and why, so the owner can accept"
+    " them all at once"
+)
+
+
+def asked_one_by_one(root: Path = SKILLS) -> list[str]:
+    """Each sentence that tells an agent to ask the owner one question per message.
+
+    A sentence counts when it, or the sentence before it in the same paragraph, is about asking:
+    "One at a time, in this order" follows the sentence that names the questions.
+    """
+    found: list[str] = []
+    for page in pages(root):
+        text = FENCE.sub(lambda f: "\n" * f.group(0).count("\n"), page.read_text(encoding="utf-8"))
+        for block in re.finditer(r"[^\n]+(?:\n[^\n]+)*", text):
+            first, previous = text.count("\n", 0, block.start()), ""
+            for line, sentence in sentences(block.group(0)):
+                if ONE_BY_ONE.search(sentence) and ABOUT_ASKING.search(previous + sentence):
+                    found.append(f"{page.relative_to(root.parent)}:{first + line}: {sentence}")
+                previous = sentence + " "
+    return found
+
+
+def test_all_open_questions_of_a_step_go_in_one_message() -> None:
+    # Why: the skills said "one at a time" and "alone" while the spec step already put all of a
+    # step's questions in one dialog, and the conjecture asked again in a message of its own. An
+    # owner who accepts every recommendation should do it once per step.
+    assert asked_one_by_one() == []
+    places = ["init/templates/AGENTS.md", "method/SKILL.md", "method/records.md"]
+    places += ["method/pipeline.md"]
+    for page in places:
+        text = " ".join((SKILLS / page).read_text(encoding="utf-8").split())
+        assert ONE_MESSAGE in text, page
+    for page in ("init/templates/AGENTS.md", "conjecture/SKILL.md"):
+        text = " ".join((SKILLS / page).read_text(encoding="utf-8").split())
+        assert "join the same message as the spec's" in text, page
+
+
+def test_a_question_asked_one_by_one_is_caught(tmp_path: Path) -> None:
+    page = tmp_path / "skills/demo/SKILL.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(
+        "Ask the questions one at a time.\n\n"
+        "The owner is asked three things. One per message, in this order.\n\n"
+        "Write the answers. Commit the file alone.\n\n"
+        "Nothing is checked yet. Merge them one at a time.\n",
+        encoding="utf-8",
+    )
+    assert asked_one_by_one(tmp_path / "skills") == [
+        "skills/demo/SKILL.md:1: Ask the questions one at a time.",
+        "skills/demo/SKILL.md:3: One per message, in this order.",
+    ]
