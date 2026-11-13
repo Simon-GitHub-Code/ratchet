@@ -378,10 +378,10 @@ def reason(verdict: Verdict) -> str:
             f"stop, write a gate dispute ({DISPUTES}) and report it to whoever started you. If "
             f"the call also did unrelated work, redo that in a tool call of its own."
         )
+    choice = verdict.choice or "Approve only if you, the owner, intend this."
     return (
-        f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop} Approve only "
-        f"if you, the owner, intend this. An agent that thinks a gate is wrong writes a gate "
-        f"dispute ({DISPUTES}) instead."
+        f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop} {choice} An "
+        f"agent that thinks a gate is wrong writes a gate dispute ({DISPUTES}) instead."
     )
 
 

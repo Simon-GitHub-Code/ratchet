@@ -19,10 +19,15 @@ class Decision(IntEnum):
 
 @dataclass(frozen=True, slots=True)
 class Rule:
-    """One guard rule: what it decides and the sentence that explains it."""
+    """One guard rule: what it decides and the sentence that explains it.
+
+    ``choice`` tells the owner what an ask leaves to them and what each answer does, where the
+    general sentence would not.
+    """
 
     decision: Decision
     because: str
+    choice: str = ""
 
 
 RULES: dict[str, Rule] = {
@@ -78,7 +83,12 @@ RULES: dict[str, Rule] = {
     "unreadable": Rule(Decision.ASK, "could not be checked by the guard"),
     "unresolved-directory": Rule(
         Decision.ASK,
-        "writes a relative path after a cd the guard cannot resolve; it may be a guard path",
+        "changes a file after moving to a folder the guard cannot work out",
+        "In a project Ratchet guards, that file is one only you change, and the guard cannot "
+        "tell which project the folder is. Approve only if you expect the agent to change that "
+        "file. If you approve, the whole command runs as written, wherever the folder is. If "
+        "you deny, none of it runs, and the agent can run it again with the folder written "
+        "out, which the guard can check.",
     ),
 }
 
@@ -99,6 +109,11 @@ class Verdict:
     def because(self) -> str:
         """The rule's sentence."""
         return RULES[self.rule].because
+
+    @property
+    def choice(self) -> str:
+        """What an ask on this rule leaves to the owner, or ``""`` for the general sentence."""
+        return RULES[self.rule].choice
 
 
 def strictest(verdicts: Iterable[Verdict]) -> Verdict | None:
