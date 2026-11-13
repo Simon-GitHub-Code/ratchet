@@ -32,6 +32,7 @@ from pathlib import Path
 
 import gatelib
 import owed
+import plugin_pin
 
 CEILINGS = "ceilings."
 ADRS = "docs/adr"
@@ -157,6 +158,7 @@ def owed_grown(root: Path, base: str) -> list[str]:
         owed.parse(gatelib.show(root, base, str(owed.LEDGER))),
         owed.read(root),
         binding=(gatelib.show(root, base, binding), gatelib.read_text(root / binding)),
+        floor=plugin_pin.version_of(plugin_pin.PLUGIN),
     )
 
 

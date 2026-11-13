@@ -158,7 +158,11 @@ def test_the_ledger_may_grow_only_where_the_pin_moves_to_a_newer_version(
     def binding(version: str | None) -> str:
         return f"- Ratchet plugin: {version} at {'a' * 40}\n" if version else "# no pin\n"
 
-    assert (owed.moved(binding(before), binding(after)) is not None) is allowed
+    assert (owed.moved(binding(before), binding(after), floor=None) is not None) is allowed
+    assert owed.moved(None, binding("0.0.1"), floor="0.11.0") is None, (
+        "an unpinned base has a floor"
+    )
+    assert owed.moved(None, binding("0.11.0"), floor="0.11.0") is not None
 
 
 def test_the_plain_count_names_the_latest_upgrade(
@@ -253,7 +257,9 @@ def test_an_entry_cannot_excuse_a_placeholder_in_another_job_of_its_workflow(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     edit(repo / WEEKLY, MARKER, "      - run: ./scripts/install-toolchain\n")
-    other = "  other:\n    runs-on: ubuntu-latest\n    steps:\n" + MARKER + NEXT + "        run: true\n"
+    other = (
+        "  other:\n    runs-on: ubuntu-latest\n    steps:\n" + MARKER + NEXT + "        run: true\n"
+    )
     (repo / WEEKLY).write_text((repo / WEEKLY).read_text(encoding="utf-8") + other)
     code, out = checked(repo, capsys)
     assert code == 1, out
@@ -262,11 +268,11 @@ def test_an_entry_cannot_excuse_a_placeholder_in_another_job_of_its_workflow(
     assert any("an entry owes" in line and "job `weekly`" in line for line in red), red
 
 
-def test_every_stale_entry_goes_in_one_edit(
-    repo: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_every_stale_entry_goes_in_one_edit(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     held = owed.read(repo).entries
-    stale = [entry(problem=f"a finding fixed long ago, number {n}") for n in range(upgrade.PASSES + 2)]
+    stale = [
+        entry(problem=f"a finding fixed long ago, number {n}") for n in range(upgrade.PASSES + 2)
+    ]
     add(repo, *stale)
     code, out = checked(repo, capsys)
     assert code == 1
@@ -474,7 +480,7 @@ def keys_from(plugin: Path, place: Path) -> dict[str, list[list[str]]]:
         ignore = shutil.ignore_patterns("__pycache__")
         shutil.copytree(PLUGIN_ROOT / part, plugin / part, symlinks=True, ignore=ignore)
     fixtures = [adopted.copy(adopted.adopted(v), place / f"adopted-{v}") for v in adopted.RELEASES]
-    done = subprocess.run(  # -- a fixed argv, this interpreter on the plugin copy
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv, this interpreter on the plugin copy
         [sys.executable, "-c", KEYS_FROM, str(plugin), str(place / "mutated"), *map(str, fixtures)],
         capture_output=True,
         text=True,
@@ -484,7 +490,7 @@ def keys_from(plugin: Path, place: Path) -> dict[str, list[list[str]]]:
 
 
 def test_no_owed_key_holds_where_the_plugin_or_the_project_lies(tmp_path: Path) -> None:
-    """An owed entry is the same debt from any checkout of the plugin, so CI excuses what it lists."""
+    """An owed entry is the same debt from any checkout of the plugin, so CI excuses its list."""
     one = keys_from(tmp_path / "plugin-one", tmp_path / "here")
     two = keys_from(tmp_path / "elsewhere/plugin-two", tmp_path / "there/deeper")
     assert one.keys() == two.keys()

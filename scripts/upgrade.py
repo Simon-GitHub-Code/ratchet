@@ -341,7 +341,7 @@ def owing(root: Path, sandbox: Path, left: list[Finding]) -> list[Finding]:
     base = gatelib.base_commit(root)
     before = gatelib.show(root, base, str(gatelib.BINDING)) if base else None
     after = gatelib.read_text(sandbox / gatelib.BINDING)
-    pin = owed.moved(before, after)
+    pin = owed.moved(before, after, floor=plugin_pin.version_of(plugin_pin.PLUGIN))
     if pin is None:
         return []
     red, _ = conformance.owed_split(sandbox, left)

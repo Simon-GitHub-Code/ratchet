@@ -176,19 +176,34 @@ def recorded(added: Sequence[Entry]) -> gatelib.Want:
     return record
 
 
-def moved(before: str | None, after: str | None) -> plugin_pin.Pin | None:
+def moved(before: str | None, after: str | None, *, floor: str | None) -> plugin_pin.Pin | None:
     """The pin a change moves to, when it moves to a newer version; ``None`` when it does not.
 
     ``before`` and ``after`` are the binding at the merge base and at head. Only such a change may
-    add to the ledger. A binding that pinned nothing (an adoption older than the pin) moves to any.
+    add to the ledger. A binding that pinned nothing (an adoption older than the pin) moves to a
+    pin no older than ``floor``, the plugin judging the change: an older plugin would not read
+    the ledger at all.
     """
     old, new = plugin_pin.pinned(before), plugin_pin.pinned(after)
-    if new is None or (old is not None and not plugin_pin.newer(new.version, old.version)):
+    if new is None:
         return None
-    return new
+    if old is None:
+        return new if floor is None or not below(new.version, floor) else None
+    return new if plugin_pin.newer(new.version, old.version) else None
 
 
-def grown(before: Ledger, after: Ledger, *, binding: tuple[str | None, str | None]) -> list[str]:
+def below(version: str, floor: str) -> bool:
+    """Whether ``version`` is older than ``floor``, or cannot be ordered against it."""
+    return version != floor and plugin_pin.newer(version, floor) is not True
+
+
+def grown(
+    before: Ledger,
+    after: Ledger,
+    *,
+    binding: tuple[str | None, str | None],
+    floor: str | None,
+) -> list[str]:
     """Why the ledger at head is more than the one at the merge base allows, one line each.
 
     An entry may go. One that is new or changed is allowed only when the change moves the pin to
@@ -196,12 +211,19 @@ def grown(before: Ledger, after: Ledger, *, binding: tuple[str | None, str | Non
     """
     problems = [f"{LEDGER}: {problem}" for problem in after.problems]
     added = sorted((Counter(after.entries) - Counter(before.entries)).elements())
-    pin = moved(*binding)
+    pin = moved(*binding, floor=floor)
     if pin is None:
-        old, new = (pin_name(plugin_pin.pinned(text)) for text in binding)
+        old, new = (plugin_pin.pinned(text) for text in binding)
+        why = (
+            f"with a pin of {new.version}; {new.version} is older than the plugin in use, {floor},"
+            " and from a base that pins nothing the ledger grows only with a pin at least as new"
+            " as the plugin that judges it"
+            if old is None and new is not None and floor is not None
+            else f"without moving the plugin pin to a newer version ({pin_name(old)} at the merge"
+            f" base, {pin_name(new)} here)"
+        )
         return problems + [
-            f"{LEDGER}: adds or changes '{entry.problem}' for {entry.path} ({entry.rule}) without"
-            f" moving the plugin pin to a newer version ({old} at the merge base, {new} here);"
+            f"{LEDGER}: adds or changes '{entry.problem}' for {entry.path} ({entry.rule}) {why};"
             " an entry may only go"
             for entry in added
         ]
@@ -221,7 +243,13 @@ def pin_name(pin: plugin_pin.Pin | None) -> str:
 
 def summary(root: Path) -> str | None:
     """The plain line that says how much the project owes, or ``None`` when it owes nothing."""
-    entries = read(root).entries
+    ledger = read(root)
+    if ledger.problems:
+        return (
+            f"The list of what this project owes ({LEDGER}) cannot be read ({ledger.problems[0]}),"
+            " so every check it held back is red until it reads again."
+        )
+    entries = ledger.entries
     if not entries:
         return None
     count = len(entries)
