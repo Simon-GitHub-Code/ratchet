@@ -97,10 +97,15 @@ def read_log(data: bytes) -> tuple[dict[str, Entry], list[str]]:
 
 @dataclass(frozen=True)
 class Ending:
-    """What ``down`` added to a seal: when it came, and whether the proxy had stopped before."""
+    """What ``down`` added to a seal: when it came, and whether the session ended well.
+
+    ``early`` when the proxy had stopped before ``down`` came; ``stale`` when the work tree had
+    moved off the tree the session served.
+    """
 
     at: str
     early: bool
+    stale: bool
 
 
 @dataclass(frozen=True)
@@ -134,7 +139,7 @@ def parse_seal(raw: object) -> Seal | None:
             str(raw["ended"]),
             None if ticket is None else str(ticket),
             None if session is None else str(session),
-            Ending(str(ending["at"]), ending["endedEarly"] is True)
+            Ending(str(ending["at"]), ending["endedEarly"] is True, ending.get("stale") is True)
             if isinstance(ending, dict)
             else None,
         )
@@ -162,12 +167,18 @@ def seal_problems(data: bytes, seal: Seal | None, *, ticket: bytes, session: byt
         problems.append("session.json was changed after `up`")
     if seal.ending is None:
         problems.append("the session was not ended by `down`: run `down`, which says how it ended")
-    elif seal.ending.early:
+        return problems
+    if seal.ending.early:
         problems.append(early(seal))
+    if seal.ending.stale:
+        problems.append(
+            "the work tree changed while the session ran, so it may not be what was served"
+        )
     return problems
 
 
 EARLY = "before `down` came: something stopped it early"
+STALE = "the work tree changed while it ran, so what it served is not what is there now"
 
 
 def early(seal: Seal) -> str:
@@ -234,7 +245,7 @@ class Record:
     """A tester's record of one session, as read."""
 
     session: str
-    head: str
+    tree: str
     author: str
     criteria: tuple[Criterion, ...]
     findings: tuple[Finding, ...]
@@ -312,7 +323,7 @@ def parse_record(raw: object) -> tuple[Record | None, list[str]]:
     """The record, or ``None`` and a sentence for each field that is not as the shape says."""
     problems: list[str] = []
     shape = Shape(raw, "the record", problems)
-    session, head = shape.text("session"), shape.text("head")
+    session, tree = shape.text("session"), shape.text("tree")
     author = shape.text("author", required=False) or TESTER
     criteria = tuple(criterion(item) for item in objects(shape, "criteria"))
     findings = tuple(finding(item) for item in objects(shape, "findings"))
@@ -330,7 +341,7 @@ def parse_record(raw: object) -> tuple[Record | None, list[str]]:
     )
     record = Record(
         session,
-        head,
+        tree,
         author,
         criteria,
         findings,
@@ -353,7 +364,7 @@ class Facts:
     """
 
     session: str
-    head: str
+    tree: str
     web_ui: bool
     promises: tuple[str, ...]
     log: dict[str, Entry]
@@ -470,8 +481,8 @@ def identity_problems(record: Record, facts: Facts) -> list[str]:
     problems = []
     if record.session != facts.session:
         problems.append(f"the record is for session {record.session}, not {facts.session}")
-    if record.head != facts.head:
-        problems.append(f"the record is for commit {record.head}, but {facts.head} was tried")
+    if record.tree != facts.tree:
+        problems.append(f"the record is for tree {record.tree}, but tree {facts.tree} was served")
     if record.author not in (TESTER, HARNESS):
         problems.append(f"the record's author is {record.author!r}, not tester or harness")
     if record.author == HARNESS and facts.served:
@@ -538,7 +549,7 @@ def judge(record: Record, facts: Facts) -> list[str]:
     return problems + kept_problems(record) + mention_problems(record, code)
 
 
-def cannot_start(session: str, head: str, *, ticket: list[str], said: str) -> dict[str, object]:
+def cannot_start(session: str, tree: str, *, ticket: list[str], said: str) -> dict[str, object]:
     """The record the harness writes itself when the product cannot be started."""
     criteria = [
         {"id": f"C{n}", "text": text, "verdict": "unsure", "how": CANNOT_START, "why": CANNOT_START}
@@ -555,7 +566,7 @@ def cannot_start(session: str, head: str, *, ticket: list[str], said: str) -> di
     }
     return {
         "session": session,
-        "head": head,
+        "tree": tree,
         "author": HARNESS,
         "criteria": criteria,
         "findings": [blocker],
@@ -589,7 +600,6 @@ class Session:
     """What the harness recorded about a session: the summary's facts that are not the record's."""
 
     slug: str
-    tree: str
     started: str
     seal: Seal | None
 
@@ -617,8 +627,7 @@ def summary(record: Record, session: Session, replays: tuple[object, object]) ->
     return {
         "schema": SCHEMA,
         "slug": session.slug,
-        "head": record.head,
-        "tree": session.tree,
+        "tree": record.tree,
         "session": record.session,
         "started": session.started,
         "ended": session.seal.ended if session.seal else None,

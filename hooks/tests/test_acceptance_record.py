@@ -465,7 +465,7 @@ def test_the_summary_is_the_records_facts_and_the_replays_of_these_very_checks()
         {**SEALED, "requests": 3, "sha256": "f" * 64, "ended": "2026-11-13T00:01:00.000Z"}
     )
     assert seal is not None
-    session = ar.Session("save-link", "t" * 40, "2026-11-13T00:00:00Z", seal)
+    session = ar.Session("save-link", "2026-11-13T00:00:00Z", seal)
     checks = ar.digest(list(record.kept_raw))
     replay = {"checks": checks, "results": [{"holds": True}, {"holds": False}, "x"]}
     control = {"checks": checks, "results": [{"holds": False}]}

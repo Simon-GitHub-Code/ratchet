@@ -109,10 +109,11 @@ def test_an_interrupt_while_the_session_is_written_removes_it(
 ) -> None:
     root = products.make(tmp_path / "product")
 
-    def interrupted(_: Path) -> str:
+    def interrupted(path: Path, data: dict[str, object]) -> None:
+        del path, data
         raise gatelib.Interrupted(signal.SIGINT)
 
-    monkeypatch.setattr(acceptance, "work_tree", interrupted)
+    monkeypatch.setattr(acceptance.acceptance_proxy, "write_json", interrupted)
     ticket = str(root / "ticket.md")
     code = acceptance.main(["x", "up", "--slug", SLUG, "--ticket", ticket, "--root", str(root)])
     assert code == 128 + signal.SIGINT

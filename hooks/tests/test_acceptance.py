@@ -156,6 +156,25 @@ def test_a_commit_that_holds_less_than_was_served_has_no_evidence(
     assert code == 2
     said = f"no session of {SLUG} served the tree of HEAD ({tree[:12]}): run `up` on it first"
     assert out == [f"acceptance check: {said}"]
+    code, out = run(product, "check", "--slug", SLUG, "--commit", "nothing", capsys=capsys)
+    assert code == 2
+    assert out[0].startswith("acceptance check: git read-tree nothing^{tree} failed in ")
+
+
+def test_a_session_whose_work_tree_was_removed_is_stale(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    linked = product.parent / "linked"
+    products.repos.git(product, "worktree", "add", "-q", "--detach", str(linked))
+    _, (url, _) = run(
+        linked, "up", "--slug", SLUG, "--ticket", str(linked / "ticket.md"), capsys=capsys
+    )
+    products.tried(url)
+    directory = session(linked)
+    shutil.rmtree(linked)
+    code, out = down(product, capsys)
+    assert code == 1
+    assert out[0] == f"session {directory.name} is stale: {acceptance.acceptance_record.STALE}"
 
 
 def test_a_work_tree_that_changed_while_the_session_ran_makes_it_stale(
@@ -362,7 +381,7 @@ def test_check_refuses_a_session_still_running_and_one_never_begun(
 ) -> None:
     code, out = check(product, capsys)
     assert code == 2
-    assert out[0].startswith(f"acceptance check: no acceptance session for {SLUG} at ")
+    assert out[0].startswith(f"acceptance check: no session of {SLUG} served the work tree (")
     up(product, capsys)
     assert check(product, capsys) == (
         1,
@@ -394,6 +413,14 @@ def drop_web_ui(directory: Path) -> None:
     facts = json.loads((directory / "session.json").read_text(encoding="utf-8"))
     (directory / "session.json").write_text(json.dumps({**facts, "types": ["service"]}))
     edit_record(directory, lambda r: [c.pop("screenshots", None) for c in r["criteria"]])
+
+
+def file_under_another_tree(directory: Path) -> None:
+    root = directory.parents[5]
+    (root / "notes.txt").write_text("written after down\n", encoding="utf-8")
+    elsewhere = directory.parents[1] / acceptance.tree_of(root, SLUG) / directory.name
+    elsewhere.parent.mkdir()
+    directory.rename(elsewhere)
 
 
 def change_first_answer(directory: Path) -> None:
@@ -430,6 +457,7 @@ SEEDED: dict[str, tuple[Callable[[Path], object], str]] = {
     ),
     "ticket trimmed": (trim_ticket, "the session's copy of the ticket was changed after `up`"),
     "session file edited": (drop_web_ui, "session.json was changed after `up`"),
+    "filed under another tree": (file_under_another_tree, "but is filed under"),
 }
 
 

@@ -245,9 +245,12 @@ def store(root: Path) -> Path:
     return (root / common).resolve() / "ratchet" / "acceptance"
 
 
-def work_tree(root: Path) -> str:
-    """The id of the tree the work tree holds now, uncommitted changes and new files included.
+def tree_of(root: Path, slug: str, commit: str | None = None) -> str:
+    """The tree evidence of ``slug`` is filed under: ``commit``'s, or the work tree's at ``root``.
 
+    The work tree's is the tree a commit of all of it would have: tracked changes, and untracked
+    files git does not ignore. The slug's own summary files are left out of either, so the
+    evidence of a tree still holds once the orchestrator commits that tree with its summary.
     Built in an index of its own, so the project's index is untouched.
     """
     with tempfile.TemporaryDirectory(prefix="ratchet-tree-") as scratch:
@@ -261,10 +264,19 @@ def work_tree(root: Path) -> str:
                 text=True,
                 check=False,
             )
+            if done.returncode != 0:
+                said = (done.stderr.strip().splitlines() or ["no reason given"])[0]
+                message = f"git {' '.join(args)} failed in {root}: {said}"
+                raise Usage(message)
             return done.stdout.strip()
 
-        index("read-tree", "HEAD")
-        index("add", "-A")
+        if commit is None:
+            index("read-tree", "HEAD")
+            index("add", "-A")
+        else:
+            index("read-tree", f"{commit}^{{tree}}")
+        summaries = [f"docs/features/{slug}/{name}" for name in (SUMMARY, CHECKS)]
+        index("rm", "--cached", "-q", "--ignore-unmatch", "--", *summaries)
         return index("write-tree")
 
 
@@ -316,11 +328,14 @@ def serialized(place: Path, slug: str) -> Iterator[None]:
         yield
 
 
-def latest(root: Path, slug: str) -> Path:
-    head = git(root, "rev-parse", "HEAD")
-    found = sessions(store(root) / slug / head, 1)
+def latest(root: Path, slug: str, commit: str | None = None) -> Path:
+    """The newest session of ``slug`` that served the tree of ``commit``, or of the work tree."""
+    place = store(root)
+    tree = tree_of(root, slug, commit)
+    found = sessions(place / slug / tree, 1)
     if not found:
-        message = f"no acceptance session for {slug} at {head[:12]}: run `up` first"
+        where = "the work tree" if commit is None else f"the tree of {commit}"
+        message = f"no session of {slug} served {where} ({tree[:12]}): run `up` on it first"
         raise Usage(message)
     return found[-1]
 
@@ -364,7 +379,7 @@ def cannot_start(directory: Path, said: str) -> int:
     session = read_json(directory / "session.json") or {}
     ticket = acceptance_record.promises((directory / "ticket.md").read_text(encoding="utf-8"))
     record = acceptance_record.cannot_start(
-        str(session["session"]), str(session["head"]), ticket=ticket, said=said
+        str(session["session"]), str(session["tree"]), ticket=ticket, said=said
     )
     write_record(directory, record)
     print(said)
@@ -455,15 +470,16 @@ def up(root: Path, slug: str, ticket: Path) -> int:
     if text is None or not acceptance_record.promises(text):
         message = f"{ticket} has no checklist, so there is nothing to accept"
         raise Usage(message)
-    head, place = git(root, "rev-parse", "HEAD"), store(root)
+    place = store(root)
+    tree = tree_of(root, slug)
     with serialized(place, slug):
         prune(place, dt.datetime.now(dt.UTC))
-        for directory in sessions(place / slug / head, 1):
+        for directory in sessions(place / slug / tree, 1):
             if state(directory) is State.LIVE:
                 print((read_json(directory / "proxy.json") or {})["url"])
                 print(directory / "tester")
                 return 0
-        directory = begin(root, place / slug / head, ticket=text, binding=binding)
+        directory = begin(root, place / slug / tree, ticket=text, binding=binding)
         if binding.boot is None:
             return cannot_start(directory, binding.why)
         return launch(root, directory, binding.boot)
@@ -478,16 +494,13 @@ def begin(root: Path, under: Path, *, ticket: str, binding: Binding) -> Path:
     try:
         (directory / "ticket.md").write_text(ticket, encoding="utf-8")
         facts: dict[str, object] = {"session": session, "slug": under.parent.name}
-        facts |= {"head": under.name, "tree": work_tree(root), "root": str(root)}
-        facts |= {"types": list(binding.types)}
+        facts |= {"tree": under.name, "root": str(root), "types": list(binding.types)}
         facts |= {"started": begun.isoformat(timespec="seconds").replace("+00:00", "Z")}
         if binding.boot is not None:
             boot = binding.boot
             facts |= {"boot": boot.command, "ready": boot.ready, "timeout": boot.timeout}
             facts |= {"env": list(boot.env)}
-        (directory / "session.json").write_text(
-            json.dumps(facts, indent=2) + "\n", encoding="utf-8"
-        )
+        acceptance_proxy.write_json(directory / "session.json", facts)
     except gatelib.Interrupted:
         shutil.rmtree(directory)
         raise
@@ -570,10 +583,11 @@ def stop_sessions(place: Path) -> int:
     problems = [line for directory in running for line in end(directory)]
     for line in problems:
         print(line)
-    ended = [found for directory in every if (found := close(directory, began)) is not None]
-    for blessed, line in ended:
-        print(line)
-        problems += [] if blessed else [line]
+    ended = [found for directory in every if (found := close(directory, began))]
+    for said in ended:
+        for line in said.lines:
+            print(line)
+        problems += [] if said.blessed else said.lines
     if running or ended:
         print(f"acceptance down: stopped {len(running)}")
     else:
@@ -581,21 +595,45 @@ def stop_sessions(place: Path) -> int:
     return 1 if problems else 0
 
 
-def close(directory: Path, began: str) -> tuple[bool, str] | None:
+@dataclass(frozen=True)
+class Closed:
+    """What ``down`` said of a session it ended: blessed, or why not."""
+
+    blessed: bool
+    lines: list[str]
+
+
+def close(directory: Path, began: str) -> Closed | None:
     """Put ``down``'s word on the seal of a session it has not ended before; what it says of it.
 
-    ``None`` when there is nothing to end: no seal yet, or ``down`` ended it already.
+    ``None`` when there is nothing to end: no seal yet, or ``down`` ended it already. A session
+    whose proxy stopped before ``down`` came ended early; one whose work tree no longer holds
+    the tree it served is stale.
     """
     path = directory / "seal.json"
     raw = read_json(path)
     seal = acceptance_record.parse_seal(raw)
     if raw is None or seal is None or seal.ending is not None:
         return None
-    early = seal.stopped < began
-    acceptance_proxy.write_json(path, raw | {"down": {"at": began, "endedEarly": early}})
-    if early:
-        return False, f"session {directory.name} ended at {seal.stopped}, {acceptance_record.EARLY}"
-    return True, f"session {directory.name}: seal {acceptance_record.sha256(path.read_bytes())}"
+    early, stale = seal.stopped < began, not still_served(directory)
+    ending = {"at": began, "endedEarly": early, "stale": stale}
+    acceptance_proxy.write_json(path, raw | {"down": ending})
+    name = directory.name
+    lines = [f"session {name} ended at {seal.stopped}, {acceptance_record.EARLY}"] if early else []
+    lines += [f"session {name} is stale: {acceptance_record.STALE}"] if stale else []
+    if lines:
+        return Closed(blessed=False, lines=lines)
+    digest = acceptance_record.sha256(path.read_bytes())
+    return Closed(blessed=True, lines=[f"session {name}: seal {digest}"])
+
+
+def still_served(directory: Path) -> bool:
+    """Whether the work tree the session booted still holds the tree it served."""
+    facts = read_json(directory / "session.json") or {}
+    try:
+        return tree_of(Path(str(facts["root"])), str(facts["slug"])) == facts["tree"]
+    except (KeyError, Usage):
+        return False
 
 
 def code_paths(root: Path) -> tuple[str, ...]:
@@ -664,10 +702,12 @@ def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None
         *record.criteria,
         *record.findings,
     ]
-    types = session.get("types")
+    types, tree = session.get("types"), directory.parent.name
+    if session.get("tree") != tree:
+        problems.append(f"the session served tree {session.get('tree')}, but is filed under {tree}")
     facts = acceptance_record.Facts(
         session=str(session.get("session")),
-        head=str(session.get("head")),
+        tree=tree,
         web_ui=isinstance(types, list) and "web-ui" in types,
         promises=tuple(
             acceptance_record.promises((directory / "ticket.md").read_text(encoding="utf-8"))
@@ -686,9 +726,12 @@ def seal_of(directory: Path) -> acceptance_record.Seal | None:
     return acceptance_record.parse_seal(read_json(directory / "seal.json"))
 
 
-def check(root: Path, slug: str, kept: str | None) -> int:
-    """Judge the latest record; with ``kept``, the digest ``down`` printed, hold the seal to it."""
-    directory = latest(root, slug)
+def check(root: Path, slug: str, *, kept: str | None, commit: str | None) -> int:
+    """Judge the latest record of the tree asked about: ``commit``'s, else the work tree's.
+
+    With ``kept``, the digest ``down`` printed, the seal is also held to it.
+    """
+    directory = latest(root, slug, commit)
     path = directory / "seal.json"
     problems = []
     if kept is not None and not path.is_file():
@@ -780,9 +823,7 @@ def summary(root: Path, slug: str) -> int:
     if record is None:
         return gatelib.report("acceptance summary", problems)
     session = read_json(directory / "session.json") or {}
-    facts = acceptance_record.Session(
-        slug, str(session["tree"]), str(session["started"]), seal_of(directory)
-    )
+    facts = acceptance_record.Session(slug, str(session["started"]), seal_of(directory))
     data = acceptance_record.summary(
         record, facts, (read_json(directory / "replay.json"), read_json(directory / "control.json"))
     )
@@ -811,6 +852,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
             command.add_argument("--slug", required=True)
         if name == "check":
             command.add_argument("--seal")
+            command.add_argument("--commit")
         if name == "up":
             command.add_argument("--ticket", type=Path, required=True)
         if name == "replay":
@@ -833,7 +875,7 @@ def parse(argv: list[str]) -> argparse.Namespace:
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "up": lambda o: up(o.root, o.slug, o.ticket),
     "down": lambda o: down(o.root, o.slug),
-    "check": lambda o: check(o.root, o.slug, o.seal),
+    "check": lambda o: check(o.root, o.slug, kept=o.seal, commit=o.commit),
     "replay": lambda o: replay(o.root, o.slug, o.checks, control=o.control),
     "summary": lambda o: summary(o.root, o.slug),
     "audit": lambda o: acceptance_audit.main(o.transcript, o.root, store(o.root)),
