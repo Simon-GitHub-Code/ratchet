@@ -80,8 +80,7 @@ def test_each_answer_reaches_the_tester_unchanged_and_each_request_is_logged(
         chunked = exchange(url, "PUT", "/other", body=iter([b"he", b"llo"]), encode_chunked=True)
         assert chunked.body == b"PUT hello", "a chunked body reaches the product whole"
         assert exchange(url, "OPTIONS", "/").status == 501, "the product's answer, not the proxy's"
-    # Why sorted: a line is written once the answer is sent, so a large one can land after the next.
-    entries = sorted(products.log(directory), key=lambda e: int(str(e["id"]).split("-")[1]))
+    entries = products.log(directory)
     assert [(e["id"], e["method"], e["path"], e["status"]) for e in entries] == [
         ("abcd1234-1", "GET", "/", 200),
         ("abcd1234-2", "POST", "/items", 303),

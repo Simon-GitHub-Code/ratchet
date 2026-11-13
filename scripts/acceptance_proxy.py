@@ -10,9 +10,12 @@ Run as the command inside ``with_service.py``, it forwards every request on a lo
 its own to the booted product, at the origin of ``RATCHET_READY``, and back, changing nothing:
 the ``Host`` header, the method, the path, the body and the answer pass as they are, less the
 headers that describe one connection. Each request gets an id, ``<session suffix>-<n>``, and one
-line in ``requests.jsonl``; the request and the answer are stored as they were sent under
-``probes/<id>.request`` and ``probes/<id>.response``, each cut at 1 MB. The tester receives only
-the address; it never writes the log, so a request it cites is one it made through here.
+line in ``requests.jsonl``. ``n`` counts the requests in the order they arrived, and a line is
+written once its answer has gone out, so a slow request's line can follow one with a later id:
+a reader that wants the order of use sorts by ``n``. The request and the answer are stored as
+they were sent under ``probes/<id>.request`` and ``probes/<id>.response``, each cut at 1 MB.
+The tester receives only the address; it never writes the log, so a request it cites is one it
+made through here.
 
 The proxy is the log's only writer, and it keeps a running SHA-256 of every byte it wrote. On
 SIGTERM, SIGINT or SIGHUP, or when the process that started it is gone, it stops listening and

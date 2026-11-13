@@ -187,8 +187,10 @@ def png(path: Path) -> Path:
 
 
 def log(directory: Path) -> list[dict[str, object]]:
+    """The session's logged requests in the order they arrived, which is the order of their ids."""
     lines = (directory / "requests.jsonl").read_text(encoding="utf-8").splitlines()
-    return [json.loads(line) for line in lines]
+    entries = [json.loads(line) for line in lines]
+    return sorted(entries, key=lambda entry: int(str(entry["id"]).rsplit("-", 1)[1]))
 
 
 def wait_for(path: Path, limit: float = 30.0) -> None:
