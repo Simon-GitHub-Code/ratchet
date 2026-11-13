@@ -1682,9 +1682,13 @@ FROM_APP: list[tuple[str, list[str]]] = [
     ("shopt -s expand_aliases; alias up='cd ..'\nup; echo x > justfile", [UNRESOLVED]),
     ("function f { cd ..; }; f; echo x > justfile", [W]),
     ("f() { cd ..; }; f; echo x > justfile", [W]),
-    ("HOME=/repo cd; echo x > justfile", [UNRESOLVED]),
-    ("HOME=/repo; cd ~ && echo x > justfile", [UNRESOLVED]),
-    ("{ HOME=/repo; cd; echo x > justfile; }", [UNRESOLVED]),
+    # Why: `HOME=/x cd` goes to /x, as does `cd ~` once the line has set HOME.
+    ("HOME=/repo cd; echo x > justfile", [W]),
+    ("HOME=/repo builtin cd; rm -f justfile", [W]),
+    ("HOME=/repo; cd ~ && echo x > justfile", [W]),
+    ("{ HOME=/repo; cd; echo x > justfile; }", [W]),
+    ("HOME=/ ; cd ~/repo && echo x > justfile", [W]),
+    ("HOME=$1 cd; echo x > justfile", [UNRESOLVED]),
     ("CDPATH=/ cd repo; echo x > justfile", [UNRESOLVED]),
     # Why: bash falls back to the target as written, so that reading stays among the others.
     ("CDPATH=/tmp cd ..; echo x > justfile", [W]),
