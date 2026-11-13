@@ -20,7 +20,7 @@ redefines what those words do (ADR 0024).
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
-from itertools import pairwise, product
+from itertools import dropwhile, pairwise, product
 from pathlib import PurePosixPath
 
 from ratchet_guards import environment, gh, git, interpreters, tickets, writes
@@ -614,7 +614,9 @@ class _Checker:
         background job) moves nothing after it.
         """
         words = command.words
-        context = context.exporting(environment.carried(words))
+        # Why: `{ HOME=/x; ...` sets HOME as surely as `HOME=/x; ...` does.
+        unreserved = list(dropwhile(RESERVED.__contains__, words))
+        context = context.exporting(environment.carried(unreserved))
         rest = _mover(words)
         head = _name(rest[0]) if rest else ""
         bare = bool(rest) and list(words) == rest and rest[0] == head
