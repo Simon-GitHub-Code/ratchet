@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-The graceful-stop gate is no longer red on a service that stops correctly. It was red on about one run in twenty of a correct draining service on a loaded runner, and on Ratchet's own CI, for two reasons. A server stops by closing its listener, and the kernel resets every connection still waiting on it to be accepted: the service never took those, but the smoke counted each as a dropped request. And the signal was timed from the command's start, so a runner slow to start the smoke signalled before a request was sent, and the smoke was red under its floor.
+The graceful-stop gate is no longer red on a service that stops correctly. It was red on Ratchet's own CI, and on a busy host on 268 to 669 of 1500 runs of a correct draining service (none now), for two reasons. A server stops by closing its listener, and the kernel resets every connection still waiting on it to be accepted: the service never took those, but the smoke counted each as a dropped request. And the signal was timed from the command's start, so a runner slow to start the smoke signalled before a request was sent, and the smoke was red under its floor.
 
 ### Graceful stop
 
