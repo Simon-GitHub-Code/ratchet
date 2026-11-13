@@ -522,6 +522,25 @@ def test_an_interrupt_stops_the_gates_promptly_whichever_thread_receives_it(
     assert list((tmp_path / "scratch").iterdir()) == []
 
 
+def test_after_an_interrupt_the_gate_it_stopped_runs_no_other_bite_and_prints_no_verdict(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: a stopped lane still walked its gate's other bites, restoring the copy after each and
+    # printing a verdict for it, for seconds after the stop with hundreds of bites.
+    started = tmp_path / "started"
+    registry = "".join(bite("slow", f"bite {n}") for n in range(4))
+    root = project(tmp_path / "repo", {"slow": f"touch {started}; sleep 30"}, registry)
+
+    def interrupt() -> None:
+        while not started.exists():
+            time.sleep(0.01)
+        signal.pthread_kill(threading.main_thread().ident or 0, signal.SIGTERM)
+
+    threading.Thread(target=interrupt, daemon=True).start()
+    assert prove(root) == 128 + 15
+    assert capsys.readouterr().out == "bite: red: interrupted by signal 15\n"
+
+
 def test_an_interrupt_while_the_lanes_start_waits_for_every_lane_before_the_copies_go(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
