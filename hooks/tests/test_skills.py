@@ -28,6 +28,16 @@ def test_adopt_asks_two_dialogs_and_chooses_tools_itself() -> None:
     assert "the `bite-all` entry point plants each fault of `quality/bites.toml`" in ADOPT
 
 
+def test_adopt_binds_the_floor_and_what_has_arrived_and_builds_no_skeleton() -> None:
+    # Why: ADR 0028. A hobby project on its first day owes the floor alone; a skeleton built for
+    # the gates stood between the owner and the idea they sat down to write.
+    assert "walking skeleton" not in ADOPT
+    assert 'scripts/triggers.py" --count' in ADOPT
+    assert 'scripts/triggers.py" --json' in ADOPT
+    assert '`@echo "later: <trigger>"`' in ADOPT
+    assert "the recommended answer is `none` for a new project" in ADOPT
+
+
 def test_adopt_leaves_the_permission_rules_to_step_8() -> None:
     # Why: issue 20. Claude Code applies .claude/settings.json the moment it exists, so a copy at
     # step 2 locked guards/** before step 8 filled the manifest. The file is written last.
@@ -93,9 +103,31 @@ def test_init_passes_the_owners_answers_to_the_setups() -> None:
 def test_every_ratchet_skill_ends_with_the_route() -> None:
     # Why: the owner's next command is the method's promise at every stage (ADR 0009); a
     # hand-over that forgets it leaves the owner guessing which plugin's keystroke comes next.
-    for name in ("init", "adopt", "feature"):
+    for name in ("init", "adopt", "feature", "safeguard"):
         text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
         assert 'scripts/route.py" --root .' in text, name
+
+
+def test_the_safeguard_skill_asks_one_question_and_commits_as_the_gate_accepts() -> None:
+    # Why: ADR 0028 and the owner's principle: binding what is owed must not become a dialog.
+    safeguard = (SKILLS / "safeguard/SKILL.md").read_text(encoding="utf-8")
+    assert "One question, through the question tool, for every row at once" in safeguard
+    assert "--key safeguard.tools --kind tooling" in safeguard
+    assert "`just bite-one <gate>`" in safeguard
+    assert commits.SUBJECT.match("chore(method): safeguard outbound calls")
+    assert "`chore(method): safeguard <what>`" in safeguard
+
+
+def test_the_safeguard_skill_leaves_the_manifest_and_settings_to_the_owner() -> None:
+    # Why: both are in the manifest's `deny` group, so an agent that tried to write them is
+    # refused after adoption; the hand-over says what the owner adds and runs.
+    safeguard = (SKILLS / "safeguard/SKILL.md").read_text(encoding="utf-8")
+    assert "denied to an agent after adoption" in safeguard
+    assert "print the exact lines for the owner to add" in safeguard
+    assert "`just settings`" in safeguard
+    assert "`snapshots-check` holds the tool's effective configuration" in safeguard
+    guards = (SKILLS / "method/guards.md").read_text(encoding="utf-8")
+    assert "the owner does both" in guards
 
 
 def test_no_method_page_tells_an_agent_to_load_a_user_invoked_skill() -> None:

@@ -30,6 +30,7 @@ from unittest import mock
 import budget
 import change_size
 import commits
+import conformance
 import coverage_groups
 import drain
 import feature_preflight
@@ -49,6 +50,7 @@ import settings_rules
 import snapshots
 import suppressions
 import telemetry_sink
+import triggers
 import with_service
 
 # Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
@@ -99,7 +101,7 @@ TESTS_BITE = (
     '[[bite]]\ngate = "tests"\nname = "no test"\nremove = ["tests/**"]\nexpect = "no test to run"\n'
 )
 BINDING = (
-    "# Binding\n\n- Default branch: `main`\n"
+    "# Binding\n\n- Default branch: `main`\n- Life events: deployed\n"
     f"- Ratchet plugin: 1.0.0 at {'0' * 40}\n\n## Gates\n\n"
     "| Question | Tool | Tier | Threshold source | Entry point |\n|---|---|---|---|---|\n"
     "| lint | a linter | 0 | | `sh own-gates.sh lint` |\n"
@@ -371,6 +373,41 @@ VERDICT = {"slug": "the-thing", "ticket": "01", "verdict": "approve", **DONE}
 VERDICT_RECORD = "docs/features/the-thing/verdict.json"
 
 
+LATER_ROW = "| survives failing dependencies | later: code:outbound-call | 1 | | `just faults` |\n"
+TRIGGERS_TABLE = (
+    "\n## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n"
+    "| outbound-call | `src/**/*.py` | `requests\\.get\\(` |\n"
+)
+OUTBOUND_CALL = "import requests\nrequests.get('http://x')\n"
+
+
+def triggers_gate(argv: list[str]) -> int:
+    """The triggers gate on a repository whose base already holds one outbound call.
+
+    The first one is free, so the scratch repository is first given the call, committed, with the
+    row still ``later:``; the change is judged against that commit.
+    """
+    root = Path(argv[2])
+    if not (root / "src/client.py").is_file():
+        write(root, "docs/process/binding.md", BINDING + LATER_ROW + TRIGGERS_TABLE)
+        write(root, "src/client.py", OUTBOUND_CALL)
+        commit(root, "feat(core): the first outbound call")
+    return triggers.main([*argv, "--base", "HEAD"])
+
+
+def second_outbound_call(root: Path) -> None:
+    write(root, "src/other.py", OUTBOUND_CALL)
+
+
+def incidents_gate(argv: list[str]) -> int:
+    """The incidents check of the conformance gate, alone."""
+    return conformance.main(["conformance", "--incidents", argv[2]])
+
+
+def incident_without_a_bite(root: Path) -> None:
+    write(root, "docs/incidents/2026-01-01-outage.md", "# The outage\n\nIt went down.\n")
+
+
 def merge_judge(argv: list[str]) -> int:
     """The merge judge on the scratch change as the pipeline leaves one: committed, then recorded.
 
@@ -494,6 +531,8 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("project-bite: a gate green on its fault", project_bite.main, lint_green_on_its_fault, []),
     ("project-bite: a gate green on nothing to run", project_bite.main, tests_green_on_nothing, []),
     ("project-bite: a bound gate with no bite", project_bite.main, bite_dropped, []),
+    ("triggers: a second instance of an owed kind", triggers_gate, second_outbound_call, []),
+    ("incidents: a record that names no bite", incidents_gate, incident_without_a_bite, []),
     ("merge-ready: a guard path changed", merge_judge, change_config, []),
     ("merge-ready: a flag on by default", merge_judge, flag_born_on, []),
     ("merge-ready: a commit after the review", merge_judge, commit_after_the_review, []),
@@ -522,6 +561,37 @@ def python(code: str) -> str:
     return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
 
 
+STOPS = (
+    "import os, signal, threading, time, http.server as h\n"
+    "class S(h.ThreadingHTTPServer):\n"
+    "    daemon_threads = False\n"
+    "    block_on_close = True\n"
+    "    def handle_error(self, request, client_address): pass\n"
+    "class H(h.BaseHTTPRequestHandler):\n"
+    "    def log_message(self, *args): pass\n"
+    "    def do_GET(self):\n"
+    "        time.sleep(0.3)\n"
+    "        self.send_response(200); self.send_header('Content-Length', '0'); self.end_headers()\n"
+    "s = S(('127.0.0.1', int(os.environ['PORT'])), H)\n"
+    "def stop(*args):\n"
+    "    if os.environ['DROPS']: os._exit(0)\n"
+    "    threading.Thread(target=s.shutdown).start()\n"
+    "signal.signal(signal.SIGTERM, stop)\n"
+    "s.serve_forever(); s.server_close()"
+)
+# The held command: the load smoke, its own report kept out of this gate's output.
+HELD = (
+    "import subprocess, sys; sys.exit(subprocess.run(sys.argv[1:], capture_output=True).returncode)"
+)
+LOAD_SMOKE = str(Path(__file__).with_name("load_smoke.py"))
+GRACEFUL = [
+    *("--ready", "http://127.0.0.1:{port}/", "--graceful", "3", "--signal-after", "0.5"),
+    *("--", sys.executable, "-c", HELD, sys.executable, LOAD_SMOKE),
+    *("--url", "http://127.0.0.1:{port}/work", "--until-stopped", "--seconds", "2"),
+    *("--concurrency", "2", "--min-requests", "1"),
+]
+REFUSES = "import os, sys; 'BITE_SETTING' in os.environ or sys.exit('BITE_SETTING is not set')\n"
+
 READY = "http://127.0.0.1:{port}/"
 LOAD = ["--ready", "{stub}/health", "--seconds", "0.5", "--concurrency", "2", "--min-requests", "1"]
 SINK = ["--service", "bite", "--require", "traces"]
@@ -533,6 +603,18 @@ SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
         # starting interpreter may take on a machine running many of them at once.
         ["--boot", python(SERVE), "--ready", READY, "--timeout", "120"],
         ["--boot", python("import time; time.sleep(30)"), "--ready", READY, "--timeout", "0.5"],
+    ),
+    (
+        "smoke: a service that drops requests in flight when stopped",
+        with_service.main,
+        ["--boot", f"DROPS= exec {python(STOPS)}", *GRACEFUL],
+        ["--boot", f"DROPS=1 exec {python(STOPS)}", *GRACEFUL],
+    ),
+    (
+        "smoke: a service that boots without a required setting",
+        with_service.main,
+        ["--boot", python(REFUSES + SERVE), "--ready", READY, "--refuses", "BITE_SETTING"],
+        ["--boot", python(SERVE), "--ready", READY, "--refuses", "BITE_SETTING"],
     ),
     (
         "load-smoke: a 500 under load",

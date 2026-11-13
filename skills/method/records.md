@@ -88,6 +88,36 @@ A skill that finds a question's key there does not ask it, takes the answer, and
 
 The template and lifecycle are in [guards.md](guards.md).
 
+## Incident record: `docs/incidents/NNNN-<slug>.md`
+
+What went wrong for real, and the gate that now catches it. An incident nobody turned into a gate happens again. The question `incidents tighten a gate` is on the floor, so it holds from the first commit and judges nothing until the first record exists (ADR 0028).
+
+An agent writes it. When the owner reports an incident (something broke for them or for a user, data was lost, a deploy went wrong) the agent they told proposes one and writes it with them under the next free number. It is blameless: it names what the system allowed, never who did it.
+
+```markdown
+# NNNN: <one-line title>
+
+- Date: <YYYY-MM-DD>
+
+## What happened
+What was seen, in order, with times where they matter.
+
+## Impact
+Who met it, for how long, and what was lost or wrong.
+
+## Cause
+The first place the system went wrong, and what let it.
+
+## The gate that now catches it
+Bite: <name of a [[bite]] in quality/bites.toml>
+The fault that bite plants reproduces this incident, and the gate it names goes red on it.
+
+## Follow-ups
+Each with the change or ticket that carries it.
+```
+
+The `Bite:` line names a bite of `quality/bites.toml`, and the gate that answers `incidents tighten a gate` is red on a record whose line names no bite the registry holds. The bite and the gate it proves land with the record: an existing gate given the fault, or a new row bound. A follow-up that cannot be a gate (a runbook, a conversation with a user) is listed and the record still names a bite. The records are not guard paths; the registry they point into is.
+
 ## Pull request
 
 The body follows the repository's template at the path the binding names. `mattpocock-skills:pr` supplies Summary, Evidence and Merge Danger; the method adds Conjecture (the claim, its refuter, the assumptions the spec made where the ticket was silent, and for a fix the alternative explanation and the check that eliminated it), Operability (the flag and its default, the signals added, what the security and load gates ran), Criticism, Guard paths, Decisions (each ADR and each glossary term or _Avoid_ item the change added, as `guard-diff` lists them under `additions:`, with new dependencies and why) and Gates, and the conformance gate checks the template carries them. Every section is filled: an empty section is an open criticism of the pull request.

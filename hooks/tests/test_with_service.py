@@ -14,7 +14,7 @@ import pytest
 import gatelib
 import with_service
 from tests import servers
-from tests.servers import SERVE, gone, pid_of, python
+from tests.servers import NEEDS, SERVE, STOPS, gone, pid_of, python
 
 READY = "http://127.0.0.1:{port}/"
 SERVING = python(SERVE)
@@ -305,3 +305,155 @@ def test_a_bad_ready_url_or_env_pair_is_a_usage_error() -> None:
     with pytest.raises(SystemExit) as caught:
         with_service.main(["with_service.py", "--boot", "true", "--ready", READY, "--env", "NOPE"])
     assert caught.value.code == 2
+
+
+LOAD = Path(servers.__file__).parents[2] / "scripts" / "load_smoke.py"
+BUSY = ["--seconds", "2.5", "--concurrency", "4", "--min-requests", "4", "--until-stopped"]
+STOPPING = (
+    "import os, sys\n"
+    "open(sys.argv[1], 'w').write(str(os.path.exists(os.environ['RATCHET_STOPPING'])))"
+)
+
+
+def graceful(
+    mode: str, *extra: str, capsys: pytest.CaptureFixture[str], limit: str = "2"
+) -> tuple[int, str]:
+    """The load smoke run inside a service of ``mode`` that is signalled 0.5 s in."""
+    command = [sys.executable, str(LOAD), "--url", "http://127.0.0.1:{port}/work", *BUSY]
+    return run(
+        *("--boot", f"MODE={mode} exec {python(STOPS)}", "--ready", READY),
+        *("--graceful", limit, "--signal-after", "0.5", *extra),
+        *("--", *command),
+        capsys=capsys,
+    )
+
+
+def test_a_service_that_drains_and_exits_zero_is_green_under_load(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, out = graceful("drain", capsys=capsys)
+    assert out.endswith("with_service: green\n"), out
+    assert code == 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "said"),
+    [
+        ("drop", "the command exited with code 1"),
+        ("late", "the service exited with code 1 "),
+        ("ignore", "the service was still running 1s after SIGTERM"),
+        ("slow", "the service was still running 1s after SIGTERM"),
+        ("die", "the service exited with code 5 before it was signalled"),
+    ],
+)
+def test_each_way_of_stopping_badly_is_red(
+    mode: str, said: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out = graceful(mode, capsys=capsys, limit="1")
+    assert said in out, out
+    assert code == 1
+    assert out.endswith("with_service: red\n")
+
+
+def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is_red(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen = tmp_path / "seen"
+    code, out = run(
+        *("--boot", f"MODE=drain exec {python(STOPS)}", "--ready", READY, "--graceful", "2"),
+        *("--signal-after", "30", "--", sys.executable, "-c", STOPPING, str(seen)),
+        capsys=capsys,
+    )
+    assert seen.read_text(encoding="utf-8") == "False", "no signal yet, so no marker"
+    assert "the command ended before the 30s signal: nothing was in flight" in out
+    assert code == 1
+
+
+def test_a_service_killed_by_the_signal_is_told_to_exec(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    boot = f"MODE=ignore exec {python(STOPS)}"
+    shell_first = f"{boot} & wait"
+    code, out = run(
+        *("--boot", shell_first, "--ready", READY, "--graceful", "2", "--signal-after", "0.3"),
+        *("--", sys.executable, "-c", "import time; time.sleep(1)"),
+        capsys=capsys,
+    )
+    assert "was ended by signal 15, so boot with `exec`" in out, out
+    assert code == 1
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--graceful", "0"],
+        ["--graceful", "1", "--signal-after", "0", "--", "true"],
+        ["--graceful", "1"],
+        ["--refuses", "A", "--", "true"],
+        ["--refuses", "A", "--graceful", "1", "--", "true"],
+    ],
+)
+def test_a_bad_combination_of_the_new_flags_is_a_usage_error(
+    args: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        with_service.main(["with_service.py", "--boot", "true", "--ready", READY, *args])
+    assert exit_.value.code == 2
+    capsys.readouterr()
+
+
+def refuses(
+    mode: str,
+    name: str,
+    *,
+    capsys: pytest.CaptureFixture[str],
+    timeout: str = "20",
+    env: str = "A=1",
+) -> tuple[int, str]:
+    boot = f"NAME={shlex.quote(name)} MODE={mode} exec {python(NEEDS)}"
+    return run(
+        *("--boot", boot, "--ready", READY, "--timeout", timeout, "--env", env, "--refuses", name),
+        capsys=capsys,
+    )
+
+
+def test_a_service_that_names_the_missing_setting_and_exits_nonzero_refuses(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "x")
+    code, out = refuses("refuse", "DATABASE_URL", capsys=capsys, env="DATABASE_URL=again")
+    assert (code, out) == (0, "with_service: green\n")
+
+
+@pytest.mark.parametrize(
+    ("mode", "said"),
+    [
+        ("boot", "the service became ready without DATABASE_URL: it did not refuse"),
+        ("zero", "the service exited with code 0 without DATABASE_URL: a refusal is non-zero"),
+        ("silent", "the service exited with code 2 without DATABASE_URL but did not name it"),
+        ("hang", "neither refused nor became ready within 0.8s without DATABASE_URL"),
+    ],
+)
+def test_each_way_of_not_refusing_is_red_with_the_boot_output(
+    mode: str, said: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out = refuses(mode, "DATABASE_URL", capsys=capsys, timeout="0.8")
+    assert said in out, out
+    assert code == 1
+    assert out.endswith("with_service: red\n")
+
+
+def test_the_name_must_be_the_whole_setting_and_every_name_is_tried(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("DB", "x")
+    boot = f"NAME=DB_URL MODE=refuse exec {python(NEEDS)}"
+    code, out = run(
+        *("--boot", boot, "--ready", READY, "--refuses", "DB", "--refuses", "DB_URL"),
+        capsys=capsys,
+    )
+    assert code == 1
+    assert out.splitlines()[0] == (
+        "the service exited with code 1 without DB but did not name it"
+    ), "DB_URL is not DB"
+    assert out.count("without DB") == 1, "DB_URL itself was named"

@@ -20,7 +20,9 @@ failure and the skill that produces the missing piece:
 - in an adopted repository the ticket, or its parent, says how the change is operated under
   ``## Operability``: a ``Flag:``, ``Signal:``, ``Load:`` and ``Security:`` line, each asked only
   when the binding declares an application type its question is asked of
-  (``skills/method/application-types.toml``), and each a statement or ``none`` with the reason;
+  (``skills/method/application-types.toml``) and its row is not bound ``later: ...`` (the
+  ``Flag:`` line waits for the ``deployed`` life event instead), and each a statement or ``none``
+  with the reason (ADR 0028);
 - with ``--branch``, ``HEAD`` is that branch and it is not the base branch;
 - in an adopted repository (``docs/process/binding.md``), a commit would run tier 0:
   ``hooks_installed.py`` proves it by running the commit hooks, and its failure carries the
@@ -29,7 +31,9 @@ failure and the skill that produces the missing piece:
 The output is JSON: ``ok``, ``failures`` (each with ``check``, ``detail`` and ``produce``, the
 skill or action that supplies it), the ticket's ``number``, ``title`` and ``slug``, and the
 ``branch`` derived from them (``feature/<number>-<slug>``), and the ``base`` it starts from:
-``--base``, else the default branch as ``gatelib`` reads it. The ``/ratchet:feature`` skill runs
+``--base``, else the default branch as ``gatelib`` reads it. ``critic`` is true only when the
+binding declares the ``depended-on`` life event, and ``critic_reason`` says why either way: the
+pipeline runs its critique and fix phases only then (ADR 0028). The ``/ratchet:feature`` skill runs
 it before the workflow, so a red preflight spawns nothing; the workflow runs it again as its
 first stage, so the pipeline cannot be entered around the skill.
 
@@ -53,15 +57,22 @@ import hooks_installed
 
 CONJECTURE = "## Conjecture"
 OPERABILITY = "## Operability"
-# Why: ADR 0012 asks telemetry, flags, security and load of every change. A ticket's line is
+# Why: ADR 0012 asks telemetry, flags, security and load of a change. A ticket's line is
 # asked when the catalogue asks its question of a type the binding declares, so a library's
-# ticket is asked none and a command's only its flag.
+# ticket is asked none and a command's only its flag; and when its row is not bound `later:`
+# (ADR 0028), since a row that waits judges nothing yet.
 OPERABILITY_LINES = (
     ("Flag", "changed flags off and on", "the flag the behaviour ships behind"),
     ("Signal", "telemetry emitted", "the span, metric or log that shows it working"),
     ("Load", "load smoke", "the route or input the load gates gain"),
     ("Security", "dynamic security scan", "the surface it adds: routes, inputs, who may call"),
 )
+# Why: the Flag line is asked of the owner once others can reach what ships, not on its row.
+FLAG_LINE = "Flag"
+FLAG_EVENT = "deployed"
+CRITIC_EVENT = "depended-on"
+LATER = re.compile(r"^\|\s*([^|]+?)\s*\|\s*`?later:", re.MULTILINE | re.IGNORECASE)
+GATES = "## Gates"
 READY_ROLE = "ready-for-agent"
 LABELS_RECORD = Path("docs/agents/triage-labels.md")
 ROLE_COLUMN = "label in mattpocock/skills"
@@ -175,6 +186,8 @@ class Report:
     branch: str = ""
     base: str = ""
     label: str = READY_ROLE
+    critic: bool = False
+    critic_reason: str = ""
 
     def fail(self, check: str, detail: str, produce: str = "") -> None:
         """Record one failed check."""
@@ -353,15 +366,30 @@ def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     return f"{ticket.ref} has no `{CONJECTURE}` section and its parent {parent_ref} states none"
 
 
-def operability_asked(root: Path) -> list[tuple[str, str]]:
-    """The ``## Operability`` lines asked here, each with what it says; none before adoption."""
+def binding_text(root: Path) -> str | None:
+    """The binding in the checkout, or ``None`` before adoption."""
     binding = root / gatelib.BINDING
-    if not binding.is_file():
+    return binding.read_text(encoding="utf-8") if binding.is_file() else None
+
+
+def operability_asked(root: Path) -> list[tuple[str, str]]:
+    """The ``## Operability`` lines asked here, each with what it says; none before adoption.
+
+    A line is asked when its question is asked of a declared type and its row is not waiting
+    (``later: ...``); the ``Flag`` line is asked once ``deployed`` is declared.
+    """
+    text = binding_text(root)
+    if text is None:
         return []
-    kinds = frozenset(application_types.declared(binding.read_text(encoding="utf-8")) or ())
+    kinds = frozenset(application_types.declared(text) or ())
     asked_of = application_types.load().asked_of
+    waiting = {question.casefold() for question in LATER.findall(section(text, GATES))}
+    live = FLAG_EVENT in application_types.life_events(text)
     return [
-        (name, says) for name, question, says in OPERABILITY_LINES if asked_of(question) & kinds
+        (name, says)
+        for name, question, says in OPERABILITY_LINES
+        if asked_of(question) & kinds
+        and (live if name == FLAG_LINE else question.casefold() not in waiting)
     ]
 
 
@@ -464,6 +492,19 @@ def check_checkout(report: Report, root: Path, *, base: str, branch: str | None)
         report.fail("branch", f"`{branch}` is the base branch")
 
 
+def check_critic(report: Report, root: Path) -> None:
+    """Say whether the pipeline critiques: only a project people depend on (ADR 0028)."""
+    text = binding_text(root)
+    report.critic = text is not None and CRITIC_EVENT in application_types.declared_or_all(text)
+    report.critic_reason = (
+        f"the binding declares `{CRITIC_EVENT}`: others rely on it, so the change is attacked"
+        " before review"
+        if report.critic
+        else f"the binding declares no `{CRITIC_EVENT}` life event: nobody relies on it yet, so"
+        " the change goes spec, implement, review"
+    )
+
+
 def check_hooks(report: Report, root: Path) -> None:
     """Red when the repository is adopted and a commit would skip tier 0."""
     if not (root / gatelib.BINDING).is_file():
@@ -482,6 +523,7 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
         check_ticket(report, ticket, report.label, root=root, gh=gh)
     check_checkout(report, root, base=base, branch=branch)
     check_hooks(report, root)
+    check_critic(report, root)
     return report
 
 

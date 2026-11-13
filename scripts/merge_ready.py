@@ -15,6 +15,10 @@ only for ``agent``. The owner merges when any of these holds:
   registry and those files names one that is off. Asked only of the application types the method
   asks ``changed flags off and on`` of, read from the binding at the default branch's tip, so a
   library is exempt; a binding that names no known type is asked. ADR 0025.
+  Both ``door`` and ``unflagged`` wait for a life event the merge base's binding declares
+  (ADR 0028): ``unflagged`` for ``deployed``, ``door`` for ``deployed`` or ``irreplaceable-data``.
+  Before one is declared nobody is hurt by what they guard, so the judge lets the change through
+  and prints a ``note:`` line saying what it let through. The head's binding never counts.
 - ``dispute``: the change adds or edits a dispute, or an open dispute names a path it touches.
 - ``record``: no verdict record is part of the change, or the one there is not an approval of
   exactly this tree with nothing unresolved and no open question.
@@ -85,6 +89,8 @@ TREE = re.compile(r"[0-9a-f]{40,64}")
 APPROVE = "approve"
 TIER2_STATES = ("green", "red", "none")
 RED = "red"
+DOOR_EVENTS = frozenset({"deployed", "irreplaceable-data"})
+SURFACE_EVENTS = frozenset({"deployed"})
 FLAGS_QUESTION = "changed flags off and on"
 DOCS = "docs/"
 HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
@@ -118,6 +124,10 @@ class Change:
     def before(self, path: str) -> str | None:
         """``path`` at the merge base, or ``None`` when it is not there or is not text."""
         return git(self.root, "show", f"{self.fork}:{path}")
+
+    def tip(self, path: str) -> str | None:
+        """``path`` at the default branch's tip, or ``None`` when it is not there or is not text."""
+        return git(self.root, "show", f"{self.base}:{path}")
 
     def after(self, path: str) -> str | None:
         """``path`` at the head, or ``None`` when it is not there or is not text."""
@@ -408,18 +418,32 @@ def flag_doors(old: list[registry.Flag], new: list[registry.Flag]) -> list[str]:
     return found
 
 
-def flag_reasons(change: Change) -> list[Reason]:
-    """The flag registry's one-way doors; the registry is always one, whatever the manifest says."""
-    if registry.REGISTRY not in change.paths:
-        return []
+def registry_state(change: Change) -> list[str] | None:
+    """The registry's one-way doors, or ``None`` when it is gone or does not parse."""
     before, after = change.before(registry.REGISTRY), change.after(registry.REGISTRY)
     old, unread = registry.parse(before or "")
     new, unreadable = registry.parse(after or "")
     if after is None or unread or unreadable:
-        found = ["the registry is gone or does not parse, so no flag's default can be compared"]
-    else:
-        found = flag_doors(old, new)
-    return [Reason("door", f"{registry.REGISTRY}: {text}") for text in found]
+        return None
+    return flag_doors(old, new)
+
+
+def registry_reasons(change: Change) -> list[Reason]:
+    """Why a registry that changed cannot be read at all: the owner's, whatever the events.
+
+    Why: it is not a door the project may not have met yet; the judge is blind to every flag, so it
+    does not wait for a life event.
+    """
+    if registry.REGISTRY not in change.paths or registry_state(change) is not None:
+        return []
+    text = "the registry is gone or does not parse, so no flag's default can be compared"
+    return [Reason("door", f"{registry.REGISTRY}: {text}")]
+
+
+def flag_reasons(change: Change) -> list[Reason]:
+    """The flag registry's one-way doors; the registry is always one, whatever the manifest says."""
+    found = registry_state(change) if registry.REGISTRY in change.paths else None
+    return [Reason("door", f"{registry.REGISTRY}: {text}") for text in found or []]
 
 
 # --- new surface with no flag ----------------------------------------------------------------
@@ -636,8 +660,53 @@ def setting_reasons(change: Change, base_ref: str, asked: Asked) -> list[Reason]
     return reasons
 
 
-def judge(root: Path, base_ref: str, head_ref: str, *, asked: Asked | None = None) -> list[Reason]:
-    """Every reason the owner merges ``base_ref..head_ref``; with none, an agent may."""
+def waiting(
+    change: Change,
+    reasons: list[Reason],
+    *,
+    needs: frozenset[str],
+    notes: list[str],
+    what: str,
+) -> list[Reason]:
+    """``reasons`` once the merge base declares a life event in ``needs``, else none (ADR 0028).
+
+    Why: the events are read at the fork point and at the default branch's tip, never the head,
+    and the union counts. The fork point alone would let a change loosen its own judge; the tip
+    alone would too, for a branch cut before the owner declared an event and merged without
+    ``current``. A binding with no events line declares every event: see ``declared_or_all``. A
+    reason let through is named in ``notes``.
+    """
+    path = gatelib.BINDING.as_posix()
+    declared = frozenset().union(
+        *(
+            application_types.declared_or_all(text)
+            for text in (change.before(path), change.tip(path))
+            if text is not None
+        )
+    )
+    if not reasons or declared & needs:
+        return reasons
+    notes.append(
+        f"{what} let through: the merge base's binding declares none of"
+        f" {', '.join(sorted(needs))} under `- Life events:`, so nobody meets it yet (ADR 0028)"
+    )
+    return []
+
+
+def judge(
+    root: Path,
+    base_ref: str,
+    head_ref: str,
+    *,
+    asked: Asked | None = None,
+    notes: list[str] | None = None,
+) -> list[Reason]:
+    """Every reason the owner merges ``base_ref..head_ref``; with none, an agent may.
+
+    A reason that waits for a life event the project has not declared is left out, and a line
+    saying so is appended to ``notes`` when the caller passes one.
+    """
+    notes = [] if notes is None else notes
     change = read(root, base_ref, head_ref)
     if isinstance(change, Reason):
         return [change]
@@ -648,9 +717,21 @@ def judge(root: Path, base_ref: str, head_ref: str, *, asked: Asked | None = Non
         *setting_reasons(change, base_ref, asked or Asked()),
         *file_reasons(change, manifest),
         *guard_reasons(change, manifest),
-        *door_reasons(change, manifest),
-        *flag_reasons(change),
-        *unflagged_reasons(change, manifest),
+        *registry_reasons(change),
+        *waiting(
+            change,
+            [*door_reasons(change, manifest), *flag_reasons(change)],
+            needs=DOOR_EVENTS,
+            notes=notes,
+            what="a one-way door",
+        ),
+        *waiting(
+            change,
+            unflagged_reasons(change, manifest),
+            needs=SURFACE_EVENTS,
+            notes=notes,
+            what="new surface with no flag that is off",
+        ),
         *dispute_reasons(change),
         *record_reasons(change),
     ]
@@ -727,8 +808,11 @@ def main(argv: list[str]) -> int:
         return write_record(root, sys.stdin.read())
     base = options.base or default_ref(root)
     asked = Asked(options.target, options.current, options.tier2)
-    reasons = judge(root, base, options.head, asked=asked)
+    notes: list[str] = []
+    reasons = judge(root, base, options.head, asked=asked, notes=notes)
     print(render(reasons), end="")
+    for note in notes:
+        print(f"note: {note}")
     if options.report is not None:
         head = commit(root, options.head) or options.head
         options.report.write_text(report(reasons, head), encoding="utf-8")

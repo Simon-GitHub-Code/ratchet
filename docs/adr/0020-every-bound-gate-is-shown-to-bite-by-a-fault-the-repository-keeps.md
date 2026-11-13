@@ -21,6 +21,8 @@ One fault shows that a gate is alive and wired to the thing it judges. It does n
 
 The tier 1 `bite` no longer runs `bite.py`. The plugin's own gates are proven in the plugin's `just check` and again in every adopted repository's `bite-all`. Decided 2026-11-12.
 
+Superseded in part by ADR 0028: a gate with nothing to run is red once its question is asked. Before its trigger fires the row is bound `later: <trigger>`, judges nothing and needs no bite. The registry, the proof and its verdicts stand.
+
 ## Refutation criterion
 
 This is wrong if the proof is theatre or costs more than it finds. On the next two adoptions, count what the first `bite-all` reports besides `bites`: if every verdict is a mistake in the fault and none is a defect of a recipe, the registry is paperwork, and a shorter check replaces it. If a gate that bites later passes a real defect of the kind its bite planted, one fault was too few and the registry needs a rule about which faults. If the registries of three adoptions hold the same fault for the same tool, the shipped fault library rejected below has been earned. If a gate is green in CI and `RED BEFORE THE FAULT` in the copy for a reason other than leaning on what another recipe left, the copy is not the tree a CI job sees and its construction is wrong. If `bite` proves the gates on most pull requests, because the command contract changes with most features, the trigger is too wide. And time it: on a Python trial repository the whole proof took 208 seconds on four lanes, on a machine under heavy load. If `bite-all` comes to take longer than the rest of tier 2 together, it is sharded over the binding's count or split by tier.

@@ -18,10 +18,56 @@ cli = "a command a person or a script runs"
 job = "runs unattended on a schedule, a queue or a stream: a worker, a batch, a pipeline"
 library = "code other code imports; nothing to boot"
 
+# When a question is asked (ADR 0028). Every question carries a trigger; a row whose trigger has
+# not fired is bound `later: <trigger>` and judges nothing.
+#   always           the floor: no setup, seconds to run, asked from the first commit
+#   code:<kind>      asked once the first instance of a kind of code exists; the binding's
+#                    `## Triggers` table says what marks an instance in this stack. The change that
+#                    brings the first file of the kind is free; a later one that adds another while a row
+#                    is still owed is red.
+#   life:<event>     asked once the owner declares the event on the binding's `- Life events:`
+#                    line; the route proposes it when it sees one of its signs.
+
+# The kinds of code a trigger can name. The text is what the binding's Triggers row must match.
+[kinds]
+source = "a module of the project's own logic"
+entry-point = "a route, command, job handler or screen a user or caller reaches"
+listener = "a process that keeps running to serve: a server, a worker loop, a consumer"
+outbound-call = "a call across the network to something the project does not run"
+config-read = "a read of a setting from the environment or a configuration file"
+stored-format = "a schema, migration or file format the project writes and reads back later"
+public-interface = "an exported symbol, a published route or schema others build against"
+untrusted-input = "a parser or decoder of bytes from outside the process"
+user-interface = "a page, screen or component a person sees"
+container = "a container image or infrastructure file the deliverable ships in"
+dependency = "a third-party package the deliverable ships with"
+concurrency = "threads, shared memory, unsafe code or a lock"
+doc-example = "a code example in the documentation"
+flag = "a feature flag in flags.toml"
+layer = "a declared layer in AGENTS.md"
+formal-model = "a formal model or proof the project keeps"
+
+# The events in a project's life a trigger can name, and the signs the route reads to propose one.
+# `signs` are globs over the tree; the owner declares the event, never the route.
+[events.deployed]
+meaning = "it runs somewhere people other than the owner can reach"
+signs = ["fly.toml", "render.yaml", "vercel.json", "netlify.toml", "wrangler.toml", "Procfile", "app.yaml", "railway.json", ".github/workflows/*deploy*", "k8s/**", "deploy/**"]
+
+[events.irreplaceable-data]
+meaning = "it holds data the owner could not recreate: users' records, uploads, payments"
+signs = ["migrations/**", "**/migrations/**", "prisma/schema.prisma", "alembic.ini", "**/schema.sql"]
+
+[events.depended-on]
+meaning = "people outside the project rely on it: users, customers, other teams"
+# Why: files a maintainer writes for strangers (how to contribute, report a flaw, behave, file an
+# issue, fund the work). A README or a licence is no sign: a private project has them too.
+signs = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".github/ISSUE_TEMPLATE/**", ".github/FUNDING.yml"]
+
 # One [[question]] per question this file says something about. A question it does not list
-# applies to all six types and judges no collection.
+# applies to all six types, judges no collection and is asked always.
 #   name        the question, as the binding's Gates table spells it
 #   applies-to  the types the question is asked of; absent means all six
+#   trigger     when it is asked: `always` (the default), `code:<kind>` or `life:<event>`
 #   collection  true when the gate judges a set of things the project writes (tests, benchmarks,
 #               fuzz targets, scenarios). Such a gate is red when the set is empty, and the
 #               repository proves it: a `remove` bite in `quality/bites.toml` empties the set
@@ -40,72 +86,207 @@ erroring-route = "a route the smoke requests that answers with an error"
 
 [[question]]
 name = "unit, property and fitness tests"
+trigger = "code:source"
 collection = true
 
 [[question]]
 name = "contract drift"
+trigger = "code:public-interface"
 applies-to = ["service"]
 
 [[question]]
 name = "starts and answers"
+trigger = "code:entry-point"
 applies-to = ["service", "web-ui", "app", "cli", "job"]
 
 [[question]]
 name = "telemetry emitted"
+trigger = "code:entry-point"
 applies-to = ["service", "web-ui", "app", "job"]
 collection = true
 proofs = ["outside-the-seam"]
 
 [[question]]
 name = "changed flags off and on"
+trigger = "code:flag"
 applies-to = ["service", "web-ui", "app", "cli", "job"]
 proofs = ["broken-flag-state"]
 
 [[question]]
 name = "load smoke"
+trigger = "code:entry-point"
 applies-to = ["service", "job"]
 proofs = ["erroring-route"]
 
 [[question]]
 name = "documentation examples run"
+trigger = "code:doc-example"
 collection = true
 
 [[question]]
 name = "deep interface conformance"
+trigger = "code:public-interface"
 applies-to = ["service", "library"]
 
 [[question]]
 name = "fuzzing"
+trigger = "code:untrusted-input"
 collection = true
 
 [[question]]
 name = "end to end"
+trigger = "life:deployed"
 applies-to = ["service", "web-ui", "app", "cli", "job"]
 collection = true
 
 [[question]]
 name = "performance budget"
+trigger = "life:depended-on"
 collection = true
 
 [[question]]
 name = "dynamic security scan"
+trigger = "life:deployed"
 applies-to = ["service", "web-ui"]
 
 [[question]]
 name = "active security scan"
+trigger = "life:deployed"
 applies-to = ["service", "web-ui"]
 
 # The weekly `load-soak` entry point follows this row: where `load` does not apply, neither does it.
 [[question]]
 name = "load"
+trigger = "life:depended-on"
 applies-to = ["service", "job"]
 collection = true
 
 [[question]]
 name = "telemetry arrives"
+trigger = "life:deployed"
 applies-to = ["service", "web-ui", "app", "job"]
 
 [[question]]
 name = "accessibility"
+trigger = "code:user-interface"
 applies-to = ["web-ui", "app"]
 collection = true
+
+# Questions asked of every type that start later than the first commit.
+[[question]]
+name = "coverage, absolute and ratcheted"
+trigger = "code:source"
+
+[[question]]
+name = "diff coverage"
+trigger = "code:source"
+
+[[question]]
+name = "test count did not fall"
+trigger = "code:source"
+
+[[question]]
+name = "changed-code mutation"
+trigger = "life:depended-on"
+
+[[question]]
+name = "full mutation"
+trigger = "life:depended-on"
+
+[[question]]
+name = "static security analysis"
+trigger = "code:source"
+
+[[question]]
+name = "suite order-independent and repeatable"
+trigger = "code:source"
+
+[[question]]
+name = "type coverage, ratcheted"
+trigger = "code:source"
+
+[[question]]
+name = "dependency direction"
+trigger = "code:layer"
+
+[[question]]
+name = "shipped-dependency audit"
+trigger = "code:dependency"
+
+[[question]]
+name = "public surface changed on purpose"
+trigger = "code:public-interface"
+
+[[question]]
+name = "documentation coverage, ratcheted"
+trigger = "code:public-interface"
+
+[[question]]
+name = "old data still loads"
+trigger = "code:stored-format"
+
+[[question]]
+name = "configuration hardening"
+trigger = "code:container"
+
+[[question]]
+name = "artefact and image scan"
+trigger = "code:container"
+
+[[question]]
+name = "race and memory detectors"
+trigger = "code:concurrency"
+
+[[question]]
+name = "symbolic checking"
+trigger = "code:formal-model"
+
+[[question]]
+name = "formal verification"
+trigger = "code:formal-model"
+
+[[question]]
+name = "reproducible build"
+trigger = "life:deployed"
+
+[[question]]
+name = "no flag past its removal date"
+trigger = "code:flag"
+
+# The reliability questions of ADR 0028.
+[[question]]
+name = "rolls back safely"
+applies-to = ["service", "app", "cli", "job"]
+trigger = "life:deployed and code:stored-format"
+
+[[question]]
+name = "survives failing dependencies"
+applies-to = ["service", "web-ui", "app", "job"]
+trigger = "code:outbound-call"
+
+[[question]]
+name = "refuses bad configuration"
+applies-to = ["service", "app", "cli", "job"]
+trigger = "code:config-read"
+
+[[question]]
+name = "shuts down gracefully"
+applies-to = ["service", "job"]
+trigger = "code:listener"
+
+[[question]]
+name = "incidents tighten a gate"
+
+[[question]]
+name = "backup restores"
+applies-to = ["service", "app", "job"]
+trigger = "life:irreplaceable-data"
+
+[[question]]
+name = "production answers"
+applies-to = ["service", "web-ui"]
+trigger = "life:deployed"
+
+# The shipped gate that holds the first-one-free rule itself (scripts/triggers.py).
+[[question]]
+name = "safeguards bound before more instances"

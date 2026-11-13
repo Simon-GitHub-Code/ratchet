@@ -22,6 +22,7 @@ import hooks_installed
 import plugin_pin
 import project_bite
 import settings_rules
+import triggers
 
 ENTRY_POINTS = (
     "tier0",
@@ -51,6 +52,7 @@ ENTRY_POINTS = (
     "reports",
     "budget",
     "bite-one",
+    "triggers",
 )
 SPEED_SECTION = "## Speed"
 # Why: ADR 0019. Speed is asked by concept from the first commit; the binding says how this
@@ -110,7 +112,15 @@ OPERABILITY_QUESTIONS = (
     "telemetry arrives",
     "no flag past its removal date",
 )
-OPERABILITY_SECTIONS = ("## Telemetry", "## Feature flags")
+# Why: ADR 0028. A section describes how its rows are met, so it is asked for while any of them is
+# bound and not before: a repository whose rows all say `later:` has nothing yet to describe.
+OPERABILITY_SECTIONS = {
+    "## Telemetry": ("telemetry emitted", "telemetry arrives"),
+    "## Feature flags": ("changed flags off and on", "no flag past its removal date"),
+}
+INCIDENTS = Path("docs/incidents")
+INCIDENT_BITE = re.compile(r"^[-*\s]*bite:\s*`?(.+?)`?\s*$", re.IGNORECASE | re.MULTILINE)
+TRIGGERS_PATH = "docs/process/binding.md"
 FLAG_REGISTRY = Path("flags.toml")
 FIRST_CELL = re.compile(r"^\|\s*([^|]+?)\s*\|", re.MULTILINE)
 WORKFLOWS = Path(".github/workflows")
@@ -346,6 +356,19 @@ def template_rows() -> dict[str, tuple[str, str]]:
     }
 
 
+def template_gate_row(question: str) -> str:
+    """The template binding's Gates row for a question (a test holds that it has one)."""
+    body = section(read(ADOPT_TEMPLATES / "docs/process/binding.md") or "", "## Gates")
+    prefix = f"| {question} |"
+    return next(line for line in body.splitlines() if line.startswith(prefix))
+
+
+def template_block(heading: str) -> tuple[str, ...]:
+    """A section of the template binding, heading included, for the upgrade report to copy."""
+    text = read(ADOPT_TEMPLATES / "docs/process/binding.md") or ""
+    return (heading, *section(text, heading).rstrip().splitlines())
+
+
 def check_entry_points(root: Path, text: str) -> Iterable[str | Finding]:
     """Every entry point has a row naming its command, and a ``just`` command has its recipe."""
     commands = dict(table_cells(section(text, "## Entry points")))
@@ -389,8 +412,87 @@ def check_binding(root: Path) -> Iterable[str | Finding]:
     # Why: ADR 0017. The types decide which rows apply; a row that applies is bound or an
     # accepted gap, and one that does not may say which type the repository is not.
     adrs = {number for number, _ in numbered_files(root / "docs/adr")}
-    for failure in application_types.load().failures(text, table_cells(gates), adrs):
-        yield f"docs/process/binding.md: {failure}"
+    catalogue = application_types.load()
+    rows = table_cells(gates)
+    # Why: a row the catalogue gained since the adoption is an upgrade item with its template row.
+    dropped = {
+        application_types.dropped(question): question
+        for question in sorted(catalogue.questions - {question for question, _ in rows})
+    }
+    for failure in catalogue.failures(text, rows, adrs):
+        question = dropped.get(failure)
+        if question is None:
+            yield f"docs/process/binding.md: {failure}"
+            continue
+        yield Finding(
+            "docs/process/binding.md",
+            f"{failure}; add the template's row, bound or `later: <trigger>`",
+            (template_gate_row(question),),
+        )
+
+
+def declared_events(text: str) -> Iterable[str | Finding]:
+    """The ``- Life events:`` line (ADR 0028): present, and naming only events the catalogue has."""
+    match = application_types.EVENTS.search(text)
+    if match is None:
+        yield Finding(
+            TRIGGERS_PATH,
+            "has no '- Life events:' line; add it beside '- Application types:'. Without it every"
+            " event counts as declared; `none` turns off the owner's review of one-way doors and"
+            " unflagged surface and the critic, so a project that is live writes its events"
+            " instead (ADR 0028)",
+            ("- Life events: none",),
+        )
+        return
+    known = application_types.load().events
+    for name in sorted(application_types.life_events(text)):
+        if name not in known:
+            yield (
+                f"{TRIGGERS_PATH}: '- Life events:' names '{name}'; the events are"
+                f" {', '.join(known)}"
+            )
+
+
+def check_triggers(root: Path) -> Iterable[str | Finding]:
+    """The Life events line and the Triggers table: how a repository says a trigger has fired.
+
+    Why: ADR 0028. The ``triggers`` gate counts instances with this table, so every kind a question
+    asked of the repository's types names must have a row, or the trigger could never fire.
+    """
+    text = read(root / TRIGGERS_PATH)
+    if text is None:
+        return
+    yield from declared_events(text)
+    catalogue = application_types.load()
+    if triggers.SECTION.strip() not in text:
+        yield Finding(
+            TRIGGERS_PATH,
+            "has no '## Triggers' section; add the template's, one row per kind of code a question"
+            " asked of these types names (ADR 0028)",
+            template_block("## Triggers"),
+        )
+        return
+    kinds, problems = triggers.parse(text)
+    for problem in problems:
+        yield f"{TRIGGERS_PATH}: {problem}"
+    for name in kinds:
+        if name not in catalogue.kinds:
+            yield (
+                f"{TRIGGERS_PATH}: the Triggers table names kind '{name}', which the catalogue"
+                f" lacks; the kinds are {', '.join(catalogue.kinds)}"
+            )
+    types = set(application_types.declared(text) or [])
+    for name in sorted(catalogue.kinds_asked(types) - set(kinds)):
+        yield (
+            f"{TRIGGERS_PATH}: the Triggers table has no row for kind '{name}', which a question"
+            f" asked of these types is triggered by ({catalogue.kinds[name]});"
+            " write its Paths, or `none: <reason>`"
+        )
+
+
+def later(tool: str) -> bool:
+    """Whether a Tool cell says its trigger has not fired (ADR 0028)."""
+    return application_types.LATER.match(tool) is not None
 
 
 def check_operability(root: Path) -> Iterable[str]:
@@ -399,8 +501,9 @@ def check_operability(root: Path) -> Iterable[str]:
     for question in OPERABILITY_QUESTIONS:
         if text and question not in asked:
             yield f"docs/process/binding.md: the Gates table has no '{question}' row"
-    for heading in OPERABILITY_SECTIONS:
-        if text and empty_body(text, heading):
+    waiting = {row.question for row in project_bite.gate_rows(text) if later(row.tool)}
+    for heading, questions in OPERABILITY_SECTIONS.items():
+        if text and not waiting >= set(questions) and empty_body(text, heading):
             yield f"docs/process/binding.md: has no '{heading}' section, or it is empty"
     if not (root / FLAG_REGISTRY).is_file():
         yield f"{FLAG_REGISTRY}: missing; an empty file declares no flags"
@@ -584,7 +687,7 @@ def answered_gates(binding: str) -> set[str]:
     return {
         row.gate
         for row in project_bite.gate_rows(binding)
-        if row.tool and not application_types.NONE.match(row.tool)
+        if row.tool and not application_types.NONE.match(row.tool) and not later(row.tool)
     }
 
 
@@ -753,6 +856,29 @@ def check_bites(root: Path) -> Iterable[str]:
     return project_bite.failures(root)
 
 
+def check_incidents(root: Path) -> Iterable[str]:
+    """Each record under ``docs/incidents/`` names a fault in the bite registry that reproduces it.
+
+    Why: ADR 0028. An incident that taught the repository something must leave a gate that fails on
+    it, so the record carries a line ``bite: <gate>/<name>``, the gate's entry point and the name
+    of one ``[[bite]]`` of ``quality/bites.toml``.
+    """
+    records = sorted((root / INCIDENTS).glob("*.md"))
+    registry, _ = project_bite.read_registry(read(root / project_bite.REGISTRY) or "")
+    held = {f"{bite.gate}/{bite.name}" for bite in registry.bites}
+    for path in records:
+        named = INCIDENT_BITE.findall(path.read_text(encoding="utf-8"))
+        where = path.relative_to(root)
+        if not named:
+            yield (
+                f"{where}: names no bite; add a line `bite: <gate>/<name>` for a [[bite]] of"
+                f" {project_bite.REGISTRY} that reproduces it"
+            )
+        for name in named:
+            if name not in held:
+                yield f"{where}: names bite '{name}', which {project_bite.REGISTRY} does not hold"
+
+
 def check_disputes(root: Path) -> Iterable[str]:
     directory = root / "docs/disputes"
     if not directory.is_dir():
@@ -794,6 +920,7 @@ CHECKS: tuple[Check, ...] = (
     check_brief,
     check_adrs,
     check_binding,
+    check_triggers,
     check_operability,
     check_speed,
     check_manifest,
@@ -805,6 +932,7 @@ CHECKS: tuple[Check, ...] = (
     check_runner,
     check_quality,
     check_bites,
+    check_incidents,
     check_disputes,
     check_features,
     check_pr_template,
@@ -851,7 +979,59 @@ def mutations() -> list[Mutation]:
         *pin_mutations(),
         *weekly_mutations(),
         *record_mutations(),
+        *trigger_mutations(),
         *upgrade_mutations(),
+    ]
+
+
+def trigger_mutations() -> list[Mutation]:
+    """The `later:` cells, the Life events line, the Triggers table and the incident records."""
+    binding = "docs/process/binding.md"
+    later = "| rolls back safely | later: life:deployed and code:stored-format |"
+
+    def incident(text: str) -> Callable[[Path], None]:
+        def mutate(root: Path) -> None:
+            (root / INCIDENTS).mkdir(parents=True)
+            (root / INCIDENTS / "2026-01-01-outage.md").write_text(text, encoding="utf-8")
+
+        return mutate
+
+    return [
+        (
+            "later: row naming another question's trigger",
+            rewrite(binding, later, "| rolls back safely | later: code:outbound-call |"),
+        ),
+        (
+            "later: row of a question asked from the first commit",
+            rewrite(binding, "| format | a tool |", "| format | later: code:source |"),
+        ),
+        ("binding without a Life events line", rewrite(binding, "- Life events: none\n", "")),
+        (
+            "binding declaring a life event the catalogue lacks",
+            rewrite(binding, "- Life events: none", "- Life events: famous"),
+        ),
+        (
+            "binding without a Triggers section",
+            rewrite(binding, "## Triggers\n", "## Hunches\n"),
+        ),
+        (
+            "Triggers table without a kind a question is triggered by",
+            rewrite(binding, "| config-read | none: the self-test has none | |\n", ""),
+        ),
+        (
+            "Triggers row naming a kind the catalogue lacks",
+            rewrite(binding, "| flag | none:", "| gizmo | none:"),
+        ),
+        (
+            "Triggers row with a pattern that is not a regex",
+            rewrite(binding, "| flag | none: the self-test has none | |", "| flag | x | ( |"),
+        ),
+        (
+            "binding without the incidents row",
+            rewrite(binding, "| incidents tighten a gate |", "| incidents |"),
+        ),
+        ("incident record naming no bite", incident("# An outage\n\nIt went down.\n")),
+        ("incident record naming a bite that is not held", incident("bite: lint/never-planted\n")),
     ]
 
 
@@ -862,6 +1042,18 @@ def upgrade_mutations() -> list[Mutation]:
         (
             "binding without the tier0-tree row",
             rewrite("docs/process/binding.md", "| tier0-tree | `just tier0-tree` |\n", ""),
+        ),
+        (
+            "binding without a row the catalogue gained",
+            rewrite(
+                "docs/process/binding.md",
+                "| backup restores | a tool | weekly | | `just restore-drill` |\n",
+                "",
+            ),
+        ),
+        (
+            "binding without the triggers entry point",
+            rewrite("docs/process/binding.md", "| triggers | `just triggers` |\n", ""),
         ),
         ("justfile without a recipe the binding names", rewrite("justfile", "bite-one gate:", "")),
         (
@@ -1250,6 +1442,7 @@ def record_mutations() -> list[Mutation]:
 UNBOUND_GROUP = re.compile(r"paths = \[\n(?:\s*# bind:[^\n]*\n)+\]")
 TYPES_PLACEHOLDER = re.compile(r"^- Application types: <[^\n]*>$", re.MULTILINE)
 EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
+TRIGGERS_PLACEHOLDER = re.compile(r"^\| <kind> \|[^\n]*$", re.MULTILINE)
 SPEED_PLACEHOLDER = re.compile(r"^(- [A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
 
 
@@ -1258,8 +1451,20 @@ def fill_binding(text: str) -> str:
     text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40}")
     text = TYPES_PLACEHOLDER.sub("- Application types: cli", text)
     text = text.replace("| contract drift | |", "| contract drift | none: not a service |")
+    # Why: ADR 0028. One row waits on its trigger and so needs no bite; the rest are bound.
+    text = text.replace(
+        "| rolls back safely | |",
+        "| rolls back safely | later: life:deployed and code:stored-format |",
+    )
+    text = TRIGGERS_PLACEHOLDER.sub(triggers_rows, text)
     text = EMPTY_TOOL_CELL.sub(r"\1 a tool |", text)
     return SPEED_PLACEHOLDER.sub(r"\1stated for this stack", text)
+
+
+def triggers_rows(_: re.Match[str]) -> str:
+    """A row for each kind of code a question asked of a command line tool is triggered by."""
+    kinds = sorted(application_types.load().kinds_asked({"cli"}))
+    return "\n".join(f"| {kind} | none: the self-test has none | |" for kind in kinds)
 
 
 def fill_registry(binding: str) -> str:
@@ -1337,6 +1542,14 @@ def main(argv: list[str]) -> int:
     if argv[1:2] == ["--self-test"]:
         skills = Path(__file__).resolve().parents[1] / "skills"
         return self_test(skills / "adopt/templates", skills / "init/templates")
+    if argv[1:2] == ["--incidents"]:
+        # Why: the binding's `incidents` gate is this one check, so a red record is named alone.
+        root = Path(argv[2]) if argv[2:] else Path()
+        found = list(check_incidents(root.resolve()))
+        for line in found:
+            print(line)
+        print(f"incidents: {'red' if found else 'green'} ({len(found)} failures)")
+        return 1 if found else 0
     root = Path(argv[1]) if len(argv) > 1 else Path()
     return run(root.resolve())
 

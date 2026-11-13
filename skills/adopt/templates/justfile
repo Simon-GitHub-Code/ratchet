@@ -1,7 +1,10 @@
 # The `just` example of the method's entry points. `just` lists every recipe; CI runs these same
 # recipes. Bodies are the binding's job: fill each with the tool docs/process/binding.md names. A
-# gate the binding binds to `none` becomes `@echo "none: <reason>"` and exits 0. Any other gate
-# with nothing to run is red: no test, no benchmark or no fuzz target is a failure, never a pass.
+# gate the binding binds to `none` becomes `@echo "none: <reason>"` and exits 0. A gate whose
+# trigger has not fired (ADR 0028) is bound `later: <trigger>` and becomes
+# `@echo "later: <trigger>"`, which also exits 0; `/ratchet:safeguard` writes its body when the
+# trigger fires. Any other gate with nothing to run is red: no test, no benchmark or no fuzz
+# target is a failure, never a pass.
 # Each body you fill gets a fault in quality/bites.toml that `just bite-all` shows it red on.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
@@ -51,7 +54,7 @@ default:
 # and gives each gate a job of its own. `tier0_tree_gates` is tier 0 less the history gate.
 tier0_tree_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions"
 tier0_gates := tier0_tree_gates + " commits"
-tier1_gates := "test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance"
+tier1_gates := "test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
 tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all"
 
 # The gates of a tier whose tool can run one `SHARD` of `SHARDS`: CI runs each over the shard count.
@@ -152,6 +155,15 @@ settings:
 
 conformance:
     python3 "{{ratchet_plugin}}/scripts/conformance.py" .
+
+# The first file of a kind of code is free, and a second while a safeguard it owes is still
+# `later:` is red (ADR 0028). `just triggers --json` lists the rows head owes, for the route.
+triggers *flags:
+    python3 "{{ratchet_plugin}}/scripts/triggers.py" {{flags}}
+
+# Each record under docs/incidents/ names a fault of quality/bites.toml that reproduces it.
+incidents:
+    python3 "{{ratchet_plugin}}/scripts/conformance.py" --incidents .
 
 # Time one tier or gate against its ceiling in quality/thresholds.toml; `just budget tier1 --set`
 # records the first ceiling. CI wraps every job in it, holds each to its tier's ceiling
@@ -308,6 +320,30 @@ load-smoke:
 bite:
     python3 "{{ratchet_plugin}}/scripts/project_bite.py" --changed
 
+# Reliability gates (ADR 0028). Each is bound once its trigger has fired; until then its body is
+# `@echo "later: <trigger>"` and it exits 0.
+
+# Trigger life:deployed and code:stored-format. The merge base's build run against the data the head's migrations leave:
+# it must still read it.
+rollback:
+    @echo "bind: build the merge base ({base}) and run it against the data head's migrations leave; or later: life:deployed and code:stored-format"; exit 1
+
+# Trigger code:outbound-call. Every outbound call has a timeout, and a test meets the dependency
+# erroring, slow and gone.
+dependency-faults:
+    @echo "bind: the outbound-call timeout check and the fault tests; or later: code:outbound-call"; exit 1
+
+# Trigger code:config-read. Shipped: boot with one required setting removed (`--refuses NAME`);
+# green only when the deliverable exits non-zero before it is ready and names the setting.
+config-refusal:
+    {{booted}} --refuses "bind: the name of a setting the deliverable requires"
+
+# Trigger code:listener. Shipped: the load smoke keeps requests in flight while `--graceful` signals
+# the deliverable; green only when every request started before the signal finishes and it exits
+# within the seconds. A route that takes a moment shows the drain best.
+graceful-stop:
+    {{booted}} --graceful 10 -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --until-stopped --url "bind: METHOD URL STATUS BODY of a route that takes a moment, on port {port}"
+
 api-check:
     @echo "bind: snapshot the public surface and diff; a change needs a version bump or changelog line"; exit 1
 
@@ -404,7 +440,7 @@ formal:
 # workflow runs this on a schedule and keeps one issue while a run is red; with no forge the
 # machine's own scheduler runs it. One after another: `load-soak` judges elapsed time, which a
 # gate running beside it disturbs.
-weekly_gates := "audit-all licenses drift load-soak"
+weekly_gates := "audit-all licenses drift load-soak restore-drill prod-probe"
 
 weekly: plugin-pin
     {{parallel}} --serial {{weekly_gates}} -- {{weekly_gates}}
@@ -420,6 +456,16 @@ drift:
 
 load-soak:
     @echo "bind: hold the load for an hour, then raise it to the breaking point; advisory"; exit 1
+
+# Trigger life:irreplaceable-data. The latest backup restores into scratch and the deliverable
+# boots on it; or `later: life:irreplaceable-data`.
+restore-drill:
+    @echo "bind: restore the latest backup into scratch and boot the deliverable on it; or later: life:irreplaceable-data"; exit 1
+
+# Trigger life:deployed. Shipped: the load smoke against the live deployment, nothing booted; green
+# only when its readiness route and its real routes answer without error. Name routes safe to repeat.
+prod-probe:
+    python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --ready "bind: the live deployment's readiness URL" --url "bind: METHOD URL STATUS BODY of a live route safe to repeat"
 
 reports:
     @echo "bind: hotspots, coupling, complexity; advisory only"; exit 1

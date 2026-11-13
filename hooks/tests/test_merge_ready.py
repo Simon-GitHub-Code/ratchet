@@ -76,6 +76,7 @@ MORE_API = '{"paths": {"/a": {"get": {"tags": ["a", "b"], "ok": true}}, "/b": {}
 SURFACE = "pkg.a.f(x)\npkg.a.g(x)\n"
 MORE_SURFACE = "pkg.a.e(x)\n" + SURFACE + "pkg.b.h()\n"
 BINDING = "docs/process/binding.md"
+LIVE = "- Life events: deployed\n"
 UNFLAGGED = (
     "unflagged: {surface}: the change adds surface a consumer can meet, and it neither declares a"
     " flag that is off in flags.toml nor names one in the code it adds; ship it dark, or the owner"
@@ -92,7 +93,7 @@ BASE = {
     "lint.toml": "strict = true\n",
     "justfile": "check:\n    true\n",
     "flags.toml": FLAGS,
-    BINDING: "# Binding\n\n- Application types: service, library\n",
+    BINDING: f"# Binding\n\n- Application types: service, library\n{LIVE}",
     "src/a.py": "x = 1\n",
     "tests/contract/api.json": API,
     "tests/contract/surface.txt": SURFACE,
@@ -542,13 +543,16 @@ def test_a_flag_the_change_stops_reading_hides_nothing(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "binding", [None, "# Binding\n", "# Binding\n\n- Application types: library, daemon\n"]
+    "binding",
+    [
+        f"# Binding\n{LIVE}",
+        f"# Binding\n\n- Application types: library, daemon\n{LIVE}",
+    ],
 )
 def test_a_binding_that_names_no_known_type_is_asked_for_a_flag(
-    tmp_path: Path, binding: str | None
+    tmp_path: Path, binding: str
 ) -> None:
-    files = {path: text for path, text in BASE.items() if path != BINDING}
-    repository(tmp_path, files | ({BINDING: binding} if binding else {}))
+    repository(tmp_path, BASE | {BINDING: binding})
     branch(tmp_path, "feature/4-thing")
     change(tmp_path, {"tests/contract/surface.txt": MORE_SURFACE})
     assert codes(tmp_path) == ["unflagged"]
@@ -557,10 +561,128 @@ def test_a_binding_that_names_no_known_type_is_asked_for_a_flag(
 def test_the_binding_the_branch_holds_does_not_decide_the_types(root: Path) -> None:
     files = {
         "tests/contract/surface.txt": MORE_SURFACE,
-        BINDING: "# Binding\n\n- Application types: library\n",
+        BINDING: f"# Binding\n\n- Application types: library\n{LIVE}",
     }
     change(root, files)
     assert codes(root) == ["guard", "unflagged"]
+
+
+# --- what waits for a life event (ADR 0028) ----------------------------------------------------
+
+SURFACE_CHANGE = {"tests/contract/api.json": MORE_API}
+DOOR_CHANGE = {"tests/contract/surface.txt": "pkg.a.g(x)\n"}
+EVENTS = "# Binding\n\n- Application types: service\n- Life events: {events}\n"
+
+
+def young(tmp_path: Path, binding: str | None) -> Path:
+    files = {path: text for path, text in BASE.items() if path != BINDING}
+    repository(tmp_path, files | ({BINDING: binding} if binding is not None else {}))
+    branch(tmp_path, "feature/4-thing")
+    return tmp_path
+
+
+@pytest.mark.parametrize("binding", [None, EVENTS.format(events="none")])
+def test_new_surface_and_doors_wait_until_an_event_is_declared(
+    tmp_path: Path, binding: str | None
+) -> None:
+    repo = young(tmp_path, binding)
+    notes: list[str] = []
+    change(repo, SURFACE_CHANGE | DOOR_CHANGE | {"flags.toml": FLAGS + NEW_FLAG_ON})
+    reasons = merge_ready.judge(repo, "main", "HEAD", notes=notes)
+    assert reasons == []
+    assert [note.split(" let through")[0] for note in notes] == [
+        "a one-way door",
+        "new surface with no flag that is off",
+    ]
+    assert "deployed, irreplaceable-data" in notes[0]
+    assert "(ADR 0028)" in notes[1]
+
+
+@pytest.mark.parametrize(
+    ("events", "woken"),
+    [
+        ("deployed", {"door", "unflagged"}),
+        ("irreplaceable-data", {"door"}),
+        ("depended-on", set()),
+        ("depended-on, irreplaceable-data", {"door"}),
+    ],
+)
+def test_each_event_wakes_only_the_judgement_it_guards(
+    tmp_path: Path, events: str, woken: set[str]
+) -> None:
+    repo = young(tmp_path, EVENTS.format(events=events))
+    change(repo, SURFACE_CHANGE)
+    assert ("unflagged" in codes(repo)) is ("unflagged" in woken)
+    repo = young(tmp_path / "second", EVENTS.format(events=events))
+    change(repo, DOOR_CHANGE)
+    assert ("door" in codes(repo)) is ("door" in woken)
+
+
+def test_a_head_that_declares_the_event_does_not_wake_the_judge(tmp_path: Path) -> None:
+    repo = young(tmp_path, EVENTS.format(events="none"))
+    change(repo, SURFACE_CHANGE | DOOR_CHANGE | {BINDING: EVENTS.format(events="deployed")})
+    assert codes(repo) == ["guard"]
+
+
+def test_a_binding_with_no_events_line_declares_every_event(tmp_path: Path) -> None:
+    # Why: a 0.10 adoption that upgrades has no line yet and may already be deployed, so a missing
+    # line must keep the owner's review of doors and unflagged surface; only `none` turns it off.
+    repo = young(tmp_path, "# Binding\n")
+    change(repo, SURFACE_CHANGE | DOOR_CHANGE)
+    assert {"door", "unflagged"} <= set(codes(repo))
+
+
+@pytest.mark.parametrize("after", [None, "[[flag]\n"])
+def test_a_registry_that_cannot_be_read_reaches_the_owner_before_any_event(
+    tmp_path: Path, after: str | None
+) -> None:
+    # Why: the judge is blind to every flag then, which is no door the project has yet to meet.
+    repo = young(tmp_path, EVENTS.format(events="none"))
+    change(repo, {"flags.toml": after})
+    assert codes(repo) == ["door"]
+
+
+def test_a_branch_forked_before_the_declaration_still_meets_the_owner(tmp_path: Path) -> None:
+    files = {path: text for path, text in BASE.items() if path != BINDING}
+    repository(tmp_path, files | {BINDING: EVENTS.format(events="none")})
+    git(tmp_path, "branch", "old-point")
+    write(tmp_path, BINDING, EVENTS.format(events="deployed"))
+    commit(tmp_path, "chore: declare deployed")
+    git(tmp_path, "switch", "-q", "-c", "feature/4-thing", "old-point")
+    change(tmp_path, DOOR_CHANGE | SURFACE_CHANGE)
+    # Why: the declaration landed on the default branch after the fork, and merge.py passes no
+    # `current`, so the fork point's `none` must not let the change dodge it.
+    assert {"door", "unflagged"} <= set(codes(tmp_path))
+
+
+def test_guard_paths_and_disputes_do_not_wait_for_an_event(tmp_path: Path) -> None:
+    repo = young(tmp_path, None)
+    change(
+        repo,
+        {
+            "justfile": "check:\n    false\n",
+            "docs/disputes/0001-limit.md": DISPUTE.format(status="open"),
+        },
+    )
+    assert codes(repo) == ["guard", "dispute"]
+
+
+def test_a_record_needs_no_critic_fields(root: Path) -> None:
+    change(root, {"src/a.py": "x = 2\n"}, record=False)
+    stamp(root, {k: v for k, v in VERDICT.items() if k != "assumptions"})
+    assert codes(root) == []
+
+
+def test_the_command_prints_a_note_for_what_it_let_through(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = young(tmp_path, None)
+    change(repo, SURFACE_CHANGE)
+    capsys.readouterr()
+    assert merge_ready.main(["merge_ready", "--root", str(repo)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "merge: agent"
+    assert out[1].startswith("note: new surface with no flag that is off let through:")
 
 
 # --- disputes ---------------------------------------------------------------------------------

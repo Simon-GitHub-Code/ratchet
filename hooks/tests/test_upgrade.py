@@ -139,3 +139,18 @@ def test_a_plugin_older_than_the_pin_is_told_to_update_first(
         f"  - pins 0.1.0 at {'0' * 40}, newer than the plugin in use, 0.0.0; update the plugin"
         " and run this report again, since it reads the rules of the plugin it runs from"
     )
+
+
+def test_an_adoption_before_the_triggers_is_told_what_to_add(
+    repo: Path, plugin: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: ADR 0028. The Life events line, the Triggers section and the rows of the reliability
+    # questions arrived together; each is an item with the template text to copy.
+    replace(BINDING, "- Life events: none\n", "")(repo)
+    replace(BINDING, "## Triggers\n", "## Hunches\n")(repo)
+    code, out = report(repo, plugin, capsys)
+    assert code == 1
+    assert "has no '- Life events:' line; add it beside '- Application types:'" in out
+    assert "      - Life events: none" in out
+    assert "has no '## Triggers' section; add the template's" in out
+    assert "      | Kind | Paths | Pattern |" in out

@@ -21,7 +21,9 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   with what the merge judge printed: merged, or waiting for the owner with every reason verbatim.
 - ``close <ticket> --outcome merged|waits|parked`` removes the work tree, stashing what was left
   uncommitted, and writes the ticket's note for the report. ``--result FILE`` is the pipeline's
-  result: its open questions, guard edits and forced verdict become the reasons.
+  result: its open questions, guard edits and forced verdict become the reasons. A ``triggers``
+  red in its ``checkOutput`` (another instance of a kind whose safeguard is owed, ADR 0028) adds
+  a reason naming ``/ratchet:safeguard``, and the ticket is held only until no such kind is owed.
 - ``clean`` removes every queue work tree whose branch is merged or gone; ``--all`` removes the
   rest too, their uncommitted work stashed as ``<branch>: interrupted run``. A drain starts with
   ``clean --all``: one drain runs on a repository at a time, so every work tree found then is
@@ -45,6 +47,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -56,11 +59,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import application_types
 import feature_preflight as preflight
 import gatelib
 import merge
 import merge_ready
 import route
+import triggers
 
 # Why: the additive-record check the hook and the judge share lives under hooks/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -73,6 +78,8 @@ if TYPE_CHECKING:
 CONCURRENCY = 3
 # Preflight, spec, implement, critique, two rounds of fix and re-critique, review.
 PIPELINE_AGENTS = 9
+# Before the project is depended-on the critic and its fix loop do not run (ADR 0028).
+YOUNG_PIPELINE_AGENTS = 4
 # A branch brought up to date behind another merge: one agent to reconcile, one to review again.
 UPDATE_AGENTS = 2
 BUILDABLE, BUILDING, BUILT = "buildable", "building", "built"
@@ -90,6 +97,9 @@ NOT_OURS = "the queue's work trees go in a directory only this user can write; r
 NOT_A_TREE = "it is not a work tree of this repository or an empty directory, so it stays"
 MERGE = "merge"
 SLOWEST = 3
+# Why: the triggers gate's red line; the kind it names is what the safeguard binds (ADR 0028).
+OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
+DEFAULT_WORDS = "the default branch"
 
 
 @dataclass(frozen=True)
@@ -297,7 +307,19 @@ def reasons_of(result: dict[str, object]) -> list[str]:
     unresolved = texts(gatelib.table(result, "verdictRecord").get("unresolved"))
     found += [f"unresolved: {title}" for title in unresolved]
     disputes = tables(result.get("disputes"))
-    return found + [f"dispute: {d.get('path')}: {d.get('recommendation')}" for d in disputes]
+    found += [f"dispute: {d.get('path')}: {d.get('recommendation')}" for d in disputes]
+    return found + [
+        f"safeguard owed: `{kind}` gained an instance while a row it fires is still `later:`;"
+        f" run {route.SAFEGUARD} on {DEFAULT_WORDS}, and the drain builds this ticket again"
+        for kind in owed_kinds(result)
+    ]
+
+
+def owed_kinds(result: dict[str, object]) -> list[str]:
+    """The kinds whose ``triggers`` red the result's last ``check`` shows (ADR 0028)."""
+    output = result.get("checkOutput")
+    found = OWED_RED.findall(output) if isinstance(output, str) else []
+    return list(dict.fromkeys(found))
 
 
 # --- what a branch holds ---------------------------------------------------------------------
@@ -392,9 +414,19 @@ def classify(ticket: preflight.Ticket, drain: Drain, seen: Seen) -> Entry:
     if tree in seen.trees:
         return replace(entry, state=BUILDING)
     note = read_note(drain.root, branch)
-    if note.get("hold") is True and note.get("digest") == digest(ticket):
+    held = note.get("hold") is True and note.get("digest") == digest(ticket)
+    if held and not safeguarded(drain.root, note):
         return replace(entry, state=HELD, why=tuple(texts(note.get("reasons"))))
     return pending(entry, ticket, drain=drain, seen=seen)
+
+
+def safeguarded(root: Path, note: dict[str, object]) -> bool:
+    """Whether a ticket held for an owed safeguard is free: none of those kinds is owed now.
+
+    Why: the ticket's text need not change for it to build; binding the safeguard is the change.
+    """
+    owes = set(texts(note.get("owes")))
+    return bool(owes) and not owes & {row.name for row in triggers.owed(root)}
 
 
 def settled(entries: list[Entry]) -> list[Entry]:
@@ -438,6 +470,13 @@ def ordered(entries: list[Entry]) -> list[Entry]:
     return placed
 
 
+def pipeline_agents(root: Path) -> int:
+    """The most agents one pipeline runs here: the critic joins once the binding is depended-on."""
+    binding = gatelib.read_text(root / gatelib.BINDING) or ""
+    depended_on = preflight.CRITIC_EVENT in application_types.life_events(binding)
+    return PIPELINE_AGENTS if depended_on else YOUNG_PIPELINE_AGENTS
+
+
 def plan(drain: Drain) -> Plan:
     """What each open agent-ready ticket is to a drain now, and which to start."""
     root = drain.root
@@ -470,7 +509,7 @@ def plan(drain: Drain) -> Plan:
         blocked=blocked,
         tickets=tuple(entries),
         start=() if checkout.failures else tuple(buildable[: max(0, drain.concurrency - building)]),
-        agents_at_most=max(0, to_build * (PIPELINE_AGENTS + UPDATE_AGENTS) - UPDATE_AGENTS),
+        agents_at_most=max(0, to_build * (pipeline_agents(root) + UPDATE_AGENTS) - UPDATE_AGENTS),
     )
 
 
@@ -545,7 +584,14 @@ def update(drain: Drain, ticket: preflight.Ticket) -> int:
     return 2
 
 
-def close(root: Path, ticket: preflight.Ticket, *, outcome: str, reasons: list[str]) -> None:
+def close(
+    root: Path,
+    ticket: preflight.Ticket,
+    *,
+    outcome: str,
+    reasons: list[str],
+    owes: list[str] | None = None,
+) -> None:
     """Remove the ticket's work tree and write its note: the outcome and what the report prints."""
     branch = route.own_branch(ticket)
     tree = tree_of(root, branch)
@@ -563,6 +609,7 @@ def close(root: Path, ticket: preflight.Ticket, *, outcome: str, reasons: list[s
         "closed": now().isoformat(timespec="seconds"),
         "digest": digest(ticket),
         "hold": outcome != MERGED,
+        "owes": owes or [],
         "reported": False,
     }
     discard(root, tree, f"{branch}: {STASHED[outcome]} run")
@@ -742,7 +789,7 @@ def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
         return land(drain, ticket)
     result = loaded(gatelib.read_text(options.result) if options.result else None)
     reasons = [*options.reason, *reasons_of(result)]
-    close(drain.root, ticket, outcome=options.outcome, reasons=reasons)
+    close(drain.root, ticket, outcome=options.outcome, reasons=reasons, owes=owed_kinds(result))
     return 0
 
 
