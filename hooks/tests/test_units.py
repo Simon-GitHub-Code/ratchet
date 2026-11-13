@@ -63,7 +63,7 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "rewrite-history": ("DENY", "rewrites history"),
         "unresolved-directory": (
             "ASK",
-            "changes a file after moving to a folder the guard cannot work out",
+            "changes a file or folder after moving to a folder the guard cannot work out",
         ),
         "merge-pr": (
             "ASK",

@@ -83,12 +83,12 @@ RULES: dict[str, Rule] = {
     "unreadable": Rule(Decision.ASK, "could not be checked by the guard"),
     "unresolved-directory": Rule(
         Decision.ASK,
-        "changes a file after moving to a folder the guard cannot work out",
-        "In a project Ratchet guards, that file is one only you change, and the guard cannot "
-        "tell which project the folder is. Approve only if you expect the agent to change that "
-        "file. If you approve, the whole command runs as written, wherever the folder is. If "
-        "you deny, none of it runs, and the agent can run it again with the folder written "
-        "out, which the guard can check.",
+        "changes a file or folder after moving to a folder the guard cannot work out",
+        "In a project Ratchet guards, that file or folder is one only you change, and the guard "
+        "cannot tell which project the folder is. Approve only if you expect the agent to change "
+        "it. If you approve, the whole command runs as written, wherever the folder is. If you "
+        "deny, none of it runs, and the agent can run it again with the folder written out, "
+        "which the guard can check.",
     ),
 }
 

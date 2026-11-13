@@ -239,7 +239,7 @@ DENIED: list[tuple[str, list[str]]] = [
     ("echo ${ echo }; cd .github; }; echo x > workflows/ci.yml", [W]),
     ("(cd .github; true |<<E cat\n)\nE\necho x > workflows/ci.yml)", [W]),
     ("(cd .github;<<E cat\n)\nE\necho x > workflows/ci.yml)", [W]),
-    ("true |<<E cat\n'\nE\nrm -f justfile\necho '", [W]),
+    ("true |<<E cat\n'\nE\nrm -f justfile\necho '", [W, "unreadable"]),
     ("cd .github;>workflows/ci.yml", [W]),
     ("cd .github&&>workflows/ci.yml", [W]),
     ('(cd .github; echo "${v:-" ) "}"; echo x > workflows/ci.yml)', [W]),

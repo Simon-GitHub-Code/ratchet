@@ -162,13 +162,14 @@ def test_an_ask_about_a_folder_the_guard_cannot_work_out_says_what_each_answer_d
     verdict = hook.decide(payload("Bash", command=command), make_guard(manifest=EMPTY))
     assert verdict is not None
     assert hook.reason(verdict) == (
-        "Ratchet guard: this tool call changes a file after moving to a folder the guard cannot "
-        "work out: .github/workflows/ci.yml (sed). In a project Ratchet guards, that file is one "
-        "only you change, and the guard cannot tell which project the folder is. Approve only if "
-        "you expect the agent to change that file. If you approve, the whole command runs as "
-        "written, wherever the folder is. If you deny, none of it runs, and the agent can run it "
-        "again with the folder written out, which the guard can check. An agent that thinks a "
-        "gate is wrong writes a gate dispute (docs/disputes/NNNN-<slug>.md) instead."
+        "Ratchet guard: this tool call changes a file or folder after moving to a folder the "
+        "guard cannot work out: .github/workflows/ci.yml, changed by sed. In a project Ratchet "
+        "guards, that file or folder is one only you change, and the guard cannot tell which "
+        "project the folder is. Approve only if you expect the agent to change it. If you "
+        "approve, the whole command runs as written, wherever the folder is. If you deny, none of "
+        "it runs, and the agent can run it again with the folder written out, which the guard can "
+        "check. An agent that thinks a gate is wrong writes a gate dispute "
+        "(docs/disputes/NNNN-<slug>.md) instead."
     )
 
 

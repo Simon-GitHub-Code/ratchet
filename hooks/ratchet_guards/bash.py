@@ -15,6 +15,14 @@ in, and what any of them refuses is refused. One state is dropped only when the 
 guarantees it: the command is chained with ``&&`` to a plain ``cd <directory>`` or to a ``git``
 command that must have moved ``HEAD`` (``ratchet_guards.git.switch``), and nothing on the line
 redefines what those words do (ADR 0024).
+
+The guard follows the shell only through what it models, and ``_followed`` is where that rule
+lives. A ``cd`` inside a subshell is left behind at its ``)`` only on a line made wholly of
+constructs the lexer reads as bash does; on any other line every ``cd`` stays in force for what
+follows, the reading that protects. A command that may move the shell where the line does not
+show it (``eval``, ``source``, an alias, a function, a trap, ``shopt``) leaves the shell
+anywhere from there on, as a ``cd`` the guard cannot resolve does. A quote or a substitution left
+open asks: the lexer may have read commands as quoted text.
 """
 
 import re
@@ -26,7 +34,7 @@ from pathlib import PurePosixPath
 from ratchet_guards import environment, gh, git, interpreters, tickets, writes
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.options import Options, Spec, scan
-from ratchet_guards.shell import PLACEHOLDER, SimpleCommand, parse
+from ratchet_guards.shell import PLACEHOLDER, Script, SimpleCommand, parse
 from ratchet_guards.verdict import Verdict
 
 MAX_DEPTH = 8
@@ -86,13 +94,17 @@ _HARNESS_REMOVALS: dict[str, dict[str, tuple[frozenset[str], str]]] = {
 _PI_REMOVALS = frozenset({"remove", "uninstall"})
 MAX_STATES = 64
 _DIRECTORY_MOVERS = frozenset({"cd", "pushd", "popd"})
+_PUSHD = "pushd"
 _MOVERS = _DIRECTORY_MOVERS | {"git"}
 # Why: a `cd` to one of these goes where only the shell knows: the previous directory, a stack
 # entry, another user's home, a variable, a substitution, a glob.
 _UNREADABLE_STARTS = ("-", "+", "~")
 _UNREADABLE_MARKS = ("$", "*", "?", "[", PLACEHOLDER)
+_REDIRECT = "redirects into"
 _POPD = "popd"
 _CDPATH = "CDPATH"
+_HOME = "HOME"
+_FUNCTION = "function"
 # Why: after one of these the words `cd` and `git` may name a function, an alias or a trap's
 # command, so a move read from the line is no longer certain to be the one that happens.
 _REDEFINERS = frozenset({"function", "alias", "enable", "shopt", "eval", "source", ".", "trap"})
@@ -113,6 +125,9 @@ _FORGETTERS = frozenset({"unset", "for", "select"})
 # Why: the shell runs these in the shell itself, so what they set is there for the next command.
 _KEEPS = frozenset({";", "&&", "||", "\n", ""})
 _CROWDED = Verdict("unreadable", "the command line moves between too many directories")
+_UNCLOSED = Verdict(
+    "unreadable", "a quote or a substitution on the command line does not end where bash ends it"
+)
 _SHELL = Spec("oO", frozenset({"--rcfile", "--init-file"}))
 
 
@@ -121,12 +136,15 @@ def _name(word: str) -> str:
 
 
 def _assignments(words: Sequence[str]) -> tuple[list[str], list[str]]:
-    """Split leading assignments and reserved words from the command they prefix."""
+    """Split leading assignments, reserved words and ``function NAME`` from what they prefix."""
     index = 0
-    while index < len(words) and (
-        words[index] in RESERVED or environment.is_assignment(words[index])
-    ):
-        index += 1
+    while index < len(words):
+        if words[index] == _FUNCTION:
+            index += 2
+        elif words[index] in RESERVED or environment.is_assignment(words[index]):
+            index += 1
+        else:
+            break
     return list(words[:index]), list(words[index:])
 
 
@@ -226,11 +244,37 @@ def _left(entered: Sequence[Context], inside: Sequence[Context]) -> list[Context
 
 
 def _redefines(command: SimpleCommand) -> bool:
-    """Whether a command may change what ``cd`` or ``git`` means: a definition, ``eval``, a trap."""
-    _, rest = _assignments(command.words)
+    """Whether a command may move the shell, or change what moves it, where the line hides it.
+
+    A definition, ``function``, ``alias``, ``eval``, ``source``, a trap, ``shopt``, ``enable``,
+    also behind a wrapper (``command eval``).
+    """
+    lead, rest = _assignments(command.words)
     # Why: a wrapper before the name (`sudo cd() { :; }`) still defines it.
     defines = command.then == _DEFINITION and bool(rest)
-    return defines or bool(rest and {rest[0], _name(rest[0])} & _REDEFINERS)
+    named = [*rest[:1], *(rest[1:] if rest and _name(rest[0]) in WRAPPERS else [])]
+    return defines or _FUNCTION in lead or any({w, _name(w)} & _REDEFINERS for w in named)
+
+
+def _followed(text: str) -> Script:
+    """``text`` as the guard follows the shell through it: subshells only where it models all.
+
+    The lexer reads a subshell only on a line it models (``Script.modelled``). A command that may
+    move the shell where the line hides it (``_redefines``) unseats that reading as well, since
+    what it runs may hold a parenthesis or a ``cd`` of its own.
+    """
+    parsed = parse(text)
+    if parsed.modelled and any(map(_redefines, parsed.commands)):
+        return parse(text, subshells=False)
+    return parsed
+
+
+def _anywhere(context: Context, seen: Sequence[Context]) -> list[Context]:
+    """Where a move the guard cannot follow may leave the shell from ``context``.
+
+    Where it stood, somewhere unknown, or any directory the line has stood in so far.
+    """
+    return [context, context.adrift(), *(context.moved_to(place.cwd) for place in seen)]
 
 
 def _assigning(
@@ -439,7 +483,7 @@ class _Checker:
         if self.depth > MAX_DEPTH:
             return [Verdict("unreadable", "the command nests scripts too deeply")]
         inner = self._deeper()
-        parsed = parse(text)
+        parsed = _followed(text)
         trusted = not any(map(_redefines, parsed.commands))
         now = chain = seen = [context]
         previous = ""
@@ -449,6 +493,10 @@ class _Checker:
         pipeline: list[SimpleCommand] = []
         entered: list[tuple[list[Context], list[Context]]] = []
         for command in parsed.commands:
+            if _redefines(command):
+                now = _distinct(p for place in now for p in _anywhere(place, seen))
+                crowded = crowded or len(now) > MAX_STATES
+                now = now[:MAX_STATES]
             entered += [(now, chain)] * command.opens
             pipeline.append(command)
             position = len(pipeline)
@@ -476,6 +524,7 @@ class _Checker:
             seen = _distinct([*seen, *now])
             previous = command.then
         verdicts += [_CROWDED] if crowded else []
+        verdicts += [] if parsed.closed else [_UNCLOSED]
         nested = [(script, place) for script in parsed.nested for place in seen[:MAX_STATES]]
         inside = [v for script, place in nested for v in inner.script(script, place)]
         return list(dict.fromkeys([*inside, *verdicts]))
@@ -485,7 +534,7 @@ class _Checker:
     ) -> list[Verdict]:
         """Every verdict on the last command of ``pipeline``, run in ``context``."""
         command = pipeline[-1]
-        verdicts = self._writes(command.writes, (), context, verb="redirects into")
+        verdicts = self._writes(command.writes, (), context, verb=_REDIRECT)
         verdicts += self.words(command.words, context)
         if _reads_script_from_stdin(command.words):
             verdicts += self._fed(pipeline, heredocs, context)
@@ -535,8 +584,12 @@ class _Checker:
         ]
         if context.lost:
             locate = self.guard.locator.could_hit
-            lost = [*locate(written, destructive=False), *locate(removed, destructive=True)]
-            verdicts += [Verdict("unresolved-directory", f"{word} ({verb})") for word in lost]
+            by = "a redirect" if verb == _REDIRECT else verb
+            lost = [
+                *(f"{word}, changed by {by}" for word in locate(written, destructive=False)),
+                *(f"{word}, removed by {by}" for word in locate(removed, destructive=True)),
+            ]
+            verdicts += [Verdict("unresolved-directory", detail) for detail in lost]
         return verdicts + tickets.named(written, self.line, context, guard=self.guard)
 
     def words(self, words: Sequence[str], context: Context) -> list[Verdict]:
@@ -629,7 +682,7 @@ class _Checker:
         if head in _DIRECTORY_MOVERS:
             if command.then in _APART:
                 return [context]
-            return self._moved(rest, context, seen, plain=plain, values=values)
+            return self._moved(words, context, seen, plain=plain, values=values)
         move = git.switch(rest, context, self.guard)
         if move is None:
             return [context]
@@ -650,16 +703,20 @@ class _Checker:
 
         A name the line set to a literal is read as the shell will read it (ADR 0024). A target
         it cannot read leaves the directory unknown, which a later write must not take as a
-        directory it has already seen.
+        directory it has already seen: one only the shell knows (``popd``, a bare ``pushd``, a
+        variable, ``~`` once the line sets ``HOME``), or any target once it sets ``CDPATH``.
         """
+        # Why: `HOME=/x cd` and `CDPATH=/x cd y` read their own assignments.
+        lookups = context.exported | _assigned(_assignments(words)[0]).keys()
+        words = _mover(words)
         readings = _resolved(words[-1], values) if len(words) > 1 else ["~"]
+        stack = _name(words[0]) == _POPD or (_name(words[0]) == _PUSHD and len(words) == 1)
         places: list[Context] = []
         for word in readings:
             target = self.guard.locator.filesystem.expand(word)
-            hidden = _name(words[0]) == _POPD or _unreadable(target) or _CDPATH in context.exported
-            if hidden:
-                earlier = (context.moved_to(place.cwd) for place in seen)
-                places += [context, context.adrift(), *earlier]
+            home = _HOME in lookups and word.startswith("~")
+            if stack or home or _unreadable(target) or _CDPATH in lookups:
+                places += _anywhere(context, seen)
                 continue
             anchored = PurePosixPath(target).is_absolute()
             moved = context.moved_to(context.cwd / target, anchored=anchored)
