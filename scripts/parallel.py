@@ -28,11 +28,15 @@ Usage::
   is attached: no colour, no cursor movement, flushed gate by gate, so a CI log reads as a
   terminal does. A gate's output is captured, so a tool that colours only for a terminal prints
   plain text; give the recipe the tool's own force-colour switch to colour the replay.
-* A gate whose whole output is one ``later: <trigger>`` or ``none: <reason>`` line and that exits
-  0 judged nothing: it is the body a binding gives a question not asked yet (ADR 0028) or one
-  that does not apply. Its status line says so in place of green, and the closing line counts
-  the gates judged and green apart from these, so a run of mostly ``later:`` gates never reads
-  as all green. Such a gate is not red: the exit code is unchanged.
+* A gate the binding at ``--root`` leaves waiting judged nothing when it exits 0 and its whole
+  output is the one line the template gives its recipe: ``later: <trigger>``, the words of its
+  Tool cell, for a question not asked yet (ADR 0028), or ``none: <reason>`` for one that does
+  not apply. The gate is matched to its Gates row by its last word, the entry point's name. Its
+  status line says ``not run yet`` or ``not applicable`` in place of green, and the closing
+  lines count the checks that ran and passed apart from these, so a run of mostly ``later:``
+  gates never reads as all green: the last line is ``parallel: green (26 ran, 39 not run yet)``,
+  or ``parallel: no check ran (...)`` when none did. Such a gate is not red: the exit code is
+  unchanged. Any other gate's output, ``none: ...`` included, is a check that ran.
 * The exit code is 0 when every gate is green and 1 otherwise, and the closing lines name EVERY
   red gate, so one run shows all of them. 128 plus the signal after an interrupt; 2 for a
   usage error. ``--fail-fast`` stops at the first red instead, for an inner loop: it stops the
@@ -83,34 +87,56 @@ from enum import Enum
 from pathlib import Path
 from typing import IO
 
+import application_types
 import budget
 import gatelib
+import project_bite
 
 POLL = 0.05
 # The job a gate that is measured alone runs in; the units count from 0.
 ALONE = -1
-# Why: the body a binding gives a `later:` or `none:` row prints the Tool cell and exits 0; the
-# template writes it as `@echo "later: <trigger>"`, so that one line is all the gate says.
-WAITING = re.compile(r"(?P<standing>later|none): \S.*")
 
 
 class Standing(Enum):
     """How a finished gate stands, worded as the closing line counts it."""
 
-    GREEN = "judged and green"
-    RED = "red"
-    LATER = "not asked yet (later: each one's line names what it waits for)"
-    NONE = "not applicable (none)"
+    GREEN = "ran and passed"
+    RED = "failed"
+    LATER = "not run yet, each waiting for what its line names"
+    NONE = "not applicable, as its line says"
+
+
+def waiting(root: Path) -> dict[str, re.Pattern[str]]:
+    """What each gate the binding leaves waiting prints, by the name of its entry point.
+
+    Why: the template gives a ``later: <trigger>`` row the body ``@echo "later: <trigger>"``,
+    the words of its Tool cell, and a row bound ``none`` the body ``@echo "none: <reason>"``.
+    A gate counts as having judged nothing only when its row says so and it printed that line,
+    so a tool whose own output happens to read ``none: ...`` still counts as having run.
+    """
+    rows = project_bite.gate_rows(gatelib.read_text(root / gatelib.BINDING) or "")
+    lines = {}
+    for row in rows:
+        later = application_types.LATER.match(row.tool)
+        if later:
+            lines[row.gate] = re.compile(re.escape(f"later: {later[1].strip()}"))
+        elif application_types.NONE.match(row.tool):
+            lines[row.gate] = re.compile(r"none: \S.*")
+    return lines
 
 
 @dataclass(frozen=True, slots=True)
 class Finished:
-    """One gate that ran to its end: what it printed, how it ended and how long it took."""
+    """One gate that ran to its end: what it printed, how it ended and how long it took.
+
+    ``waits`` is the line a gate the binding leaves waiting prints in place of judging.
+    """
 
     name: str
     seconds: float
     exit_code: int
     output: str
+    waits: re.Pattern[str] | None = None
 
     @property
     def green(self) -> bool:
@@ -119,11 +145,13 @@ class Finished:
 
     @property
     def standing(self) -> Standing:
-        """Red, judged and green, or green having judged nothing: ``later:`` or ``none:``."""
+        """Red, ran and passed, or green having judged nothing: ``later:`` or ``none:``."""
         if not self.green:
             return Standing.RED
-        waiting = WAITING.fullmatch(self.output.strip())
-        return Standing[waiting["standing"].upper()] if waiting else Standing.GREEN
+        said = self.output.strip()
+        if self.waits is None or not self.waits.fullmatch(said):
+            return Standing.GREEN
+        return Standing.LATER if said.startswith("later:") else Standing.NONE
 
     def line(self) -> str:
         """The one status line the gate gets."""
@@ -132,8 +160,10 @@ class Finished:
                 how = "green"
             case Standing.RED:
                 how = f"red (exit {self.exit_code})"
-            case _:
-                how = f"judged nothing ({self.output.strip()})"
+            case Standing.LATER:
+                how = f"not run yet ({self.output.strip()})"
+            case Standing.NONE:
+                how = f"not applicable ({self.output.strip()})"
         return f"parallel: {self.name}: {how} in {self.seconds:.1f}s"
 
 
@@ -145,6 +175,7 @@ class Live:
     process: subprocess.Popen[bytes]
     log: IO[bytes]
     started: float
+    waits: re.Pattern[str] | None
 
 
 def say(text: str) -> None:
@@ -200,6 +231,7 @@ class Scheduler:
         self.jobs: int = options.jobs
         self.fail_fast: bool = options.fail_fast
         self.report_to: Path | None = options.report
+        self.waits = waiting(self.root)
         self.live: dict[int, Live] = {}
         self.finished: list[Finished] = []
         self.stopped: list[str] = []
@@ -268,7 +300,7 @@ class Scheduler:
         except OSError as error:
             log.close()
             return Finished(name, 0.0, 127, f"cannot run {command[0]}: {error}\n")
-        return Live(name, process, log, time.monotonic())
+        return Live(name, process, log, time.monotonic(), self.waits.get(shlex.split(name)[-1]))
 
     def settle_exited(self) -> None:
         """Settle every running gate whose process has exited."""
@@ -313,7 +345,7 @@ def collect(gate: Live, code: int) -> Finished:
     gate.log.close()
     if left:
         output += f"parallel: {gate.name}: {gatelib.LEFT_RUNNING}\n"
-    return Finished(gate.name, seconds, 128 - code if code < 0 else code, output)
+    return Finished(gate.name, seconds, 128 - code if code < 0 else code, output, gate.waits)
 
 
 def closing(scheduler: Scheduler, wall: float) -> list[str]:
@@ -322,14 +354,15 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     work = sum(result.seconds for result in scheduler.finished)
     total = len(scheduler.finished) + len(scheduler.stopped) + len(scheduler.not_started())
     counts = Counter(result.standing for result in scheduler.finished)
-    tally = ", ".join(
-        f"{counts[standing]} {standing.value}"
-        for standing in Standing
-        if counts[standing] or standing is Standing.GREEN
-    )
+    ran = f"{counts[Standing.GREEN]} {Standing.GREEN.value}"
+    failed = f", {counts[Standing.RED]} {Standing.RED.value}" if counts[Standing.RED] else ""
+    waits = [f"{counts[each]} {each.value}" for each in (Standing.LATER, Standing.NONE)]
+    tally = "; ".join([ran + failed, *(part for part in waits if not part.startswith("0 "))])
+    finished = len(scheduler.finished)
+    checks = f"{total} checks" if finished == total else f"{finished} of {total} checks finished"
     say(
-        f"parallel: {len(scheduler.finished)} of {total} gates finished in {wall:.1f}s "
-        f"({work:.1f}s of gate time): {tally}; slowest: {slowest.name} {slowest.seconds:.1f}s"
+        f"parallel: {checks} in {wall:.1f}s ({work:.1f}s of check time): {tally}; "
+        f"slowest: {slowest.name} {slowest.seconds:.1f}s"
     )
     problems = [
         f"{result.name}: red (exit {result.exit_code})"
@@ -341,6 +374,22 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     if scheduler.not_started():
         problems.append(f"not started, --fail-fast: {', '.join(scheduler.not_started())}")
     return problems
+
+
+def verdict(scheduler: Scheduler, problems: list[str]) -> str:
+    """The last line: red, green with what ran and what waits, or that no check ran."""
+    if problems:
+        return "parallel: red"
+    counts = Counter(result.standing for result in scheduler.finished)
+    waits = [
+        f"{counts[each]} {words}"
+        for each, words in ((Standing.LATER, "not run yet"), (Standing.NONE, "not applicable"))
+        if counts[each]
+    ]
+    if not counts[Standing.GREEN]:
+        # Why: a new repository whose every question waits is not failing, and not green either.
+        return f"parallel: no check ran ({', '.join(waits)})"
+    return f"parallel: green ({', '.join([f'{counts[Standing.GREEN]} ran', *waits])})"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -382,7 +431,11 @@ def main(argv: list[str]) -> int:
     except gatelib.Interrupted as stop:
         say(f"parallel: {stop}; stopped {', '.join(scheduler.stopped) or 'nothing'}")
         return 128 + stop.signum
-    return gatelib.report("parallel", closing(scheduler, time.monotonic() - started))
+    problems = closing(scheduler, time.monotonic() - started)
+    for line in problems:
+        say(line)
+    say(verdict(scheduler, problems))
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

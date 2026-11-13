@@ -92,7 +92,7 @@ def test_all_green_prints_each_gate_whole_then_one_line_with_its_seconds(
     code = run("--", gate(SAY, "out-a", "err-a"), gate(SAY, "out-b", "err-b"))
     out = capsys.readouterr().out
     assert code == 0
-    assert out.endswith("parallel: green\n")
+    assert out.endswith("parallel: green (2 ran)\n")
     for tag in "ab":
         assert f"out-{tag}\nerr-{tag}\n" in out
     assert out.count(": green in ") == 2
@@ -280,7 +280,7 @@ def test_the_last_line_counts_what_ran_and_what_waits(
 ) -> None:
     root = binding(tmp_path, {"one": "later: code:source"})
     one = named(SAY, "later: code:source", "", name="one")
-    assert run("--root", str(root), "--", one, gate(EXIT, 0), gate(EXIT, 0)) == 0
+    assert run("--root", str(root), "--", one, gate(EXIT, 0), gate(SAY, "ok", "")) == 0
     assert capsys.readouterr().out.endswith("\nparallel: green (2 ran, 1 not run yet)\n")
 
 
