@@ -15,7 +15,7 @@ A safeguard arrives with the first thing it guards, and the first one is free (A
 
 ### Seven reliability questions
 
-- `rolls back safely` (`code:stored-format`, tier 1): the merge base's build runs on the data the head's migrations leave.
+- `rolls back safely` (`life:deployed`, tier 1): the merge base's build runs on the data the head's migrations leave.
 - `survives failing dependencies` (`code:outbound-call`, tier 1): every outbound call has a timeout, and a test meets the dependency erroring, slow and gone.
 - `refuses bad configuration` (`code:config-read`, tier 1): `with_service.py --refuses NAME` boots with the setting missing and expects a non-zero exit that names it.
 - `shuts down gracefully` (`code:listener`, tier 1): `with_service.py --graceful SECONDS` signals it mid-request and expects the request finished and the process gone in time.
