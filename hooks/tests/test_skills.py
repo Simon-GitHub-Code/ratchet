@@ -7,6 +7,8 @@ import pytest
 
 import commits
 import feature_preflight as preflight
+import snapshots
+from tests.repos import commit, repository, write
 
 SKILLS = Path(__file__).resolve().parents[2] / "skills"
 INIT = (SKILLS / "init/SKILL.md").read_text(encoding="utf-8")
@@ -155,9 +157,41 @@ def test_the_safeguard_skill_leaves_the_manifest_and_settings_to_the_owner() -> 
     assert "denied to an agent after adoption" in safeguard
     assert "print the exact lines for the owner to add" in safeguard
     assert "`just settings`" in safeguard
-    assert "`snapshots-check` holds the tool's effective configuration" in safeguard
     guards = (SKILLS / "method/guards.md").read_text(encoding="utf-8")
     assert "the owner does both" in guards
+
+
+UNLISTED = '[[group]]\nname = "tool-config"\nreason = "Rule sets."\npaths = ["lint.toml"]\n'
+
+
+def test_a_config_the_manifest_does_not_list_is_said_to_be_unguarded(tmp_path: Path) -> None:
+    # Why: safeguard's hand-over told the owner that until he listed a new tool's config, the
+    # snapshot check held it, so loosening it still showed. The check copies only the files the
+    # `tool-config` group lists: a loosened unlisted config passes it, as the verifier showed.
+    root = repository(
+        tmp_path,
+        {"guards/manifest.toml": UNLISTED, "lint.toml": "a = 1\n", ".semgrep.yml": "rules: [x]\n"},
+    )
+    assert snapshots.write(root, "tool-config") == []
+    write(root, ".semgrep.yml", "rules: []\n")
+    commit(root, "chore: loosen the unlisted config")
+    assert snapshots.check(root, "tool-config") == [], "an unlisted config is not checked"
+    safeguard = flat("safeguard/SKILL.md")
+    hand_over = safeguard.split("6. **Hand over.**", 1)[1]
+    assert "holds the tool's effective configuration" not in safeguard
+    for part in (
+        "its settings are neither guarded nor recorded",
+        "an agent could loosen them and nobody would see it",
+        "worth doing now",
+    ):
+        assert part in hand_over, part
+    for page in ("method/SKILL.md", "method/ratchet.md"):
+        text = flat(page)
+        assert "a config the group does not list is neither guarded nor recorded" in text, page
+        assert "effective configuration is snapshotted" not in text.lower(), page
+        assert "as the tool resolves it" not in text, page
+    readme = " ".join((SKILLS.parent / "README.md").read_text(encoding="utf-8").split())
+    assert "each gate's effective configuration is snapshotted" not in readme
 
 
 def test_no_method_page_tells_an_agent_to_load_a_user_invoked_skill() -> None:
