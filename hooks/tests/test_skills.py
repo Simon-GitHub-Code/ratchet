@@ -180,12 +180,9 @@ def test_a_config_the_manifest_does_not_list_is_said_to_be_unguarded(tmp_path: P
     safeguard = flat("safeguard/SKILL.md")
     hand_over = safeguard.split("6. **Hand over.**", 1)[1]
     assert "holds the tool's effective configuration" not in safeguard
-    for part in (
-        "its settings are neither guarded nor recorded",
-        "an agent could loosen them and nobody would see it",
-        "worth doing now",
-    ):
-        assert part in hand_over, part
+    # Since ADR 0033 the agent lists the config itself on its branch, so the hand-over names the
+    # path it listed instead of asking the owner to list it.
+    assert "name the path you added to the manifest" in hand_over
     for page in ("method/SKILL.md", "method/ratchet.md"):
         text = flat(page)
         assert "a config the group does not list is neither guarded nor recorded" in text, page
@@ -495,7 +492,7 @@ def test_an_overturned_assumption_has_a_route_and_a_stated_cost() -> None:
 
 
 COST_PARTS = "(what changes, roughly how much work, and whether anything built is redone)"
-SWITCHES_A_TOOL = ("lock file", "`just settings`", "the merge is yours")
+SWITCHES_A_TOOL = ("lock file", "the merge is yours")
 
 
 def example_costs(page: str) -> list[str]:
