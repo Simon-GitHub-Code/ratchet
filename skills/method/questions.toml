@@ -4,8 +4,11 @@
 # kind `product`, with the text written here word for word; an `[[assume]]` key must appear in
 # its skill as the default the hand-over states.
 #
-# A product question is about what the thing should do, for whom, what matters, or a direction
-# with real consequences that no experiment settles. Its text is in plain words: no method term.
+# A product question is a choice that decides what becomes of something of the user's (kept,
+# deleted, merged, duplicated, overwritten, shared), who may see or do it, or what the user can
+# do at all, where nothing the owner said or answered settles it. Its text is in plain words: no
+# method term. Nothing reviews a change to this file on its own: a pull request that registers a
+# tooling question as `product`, with matching skill text, passes the test (ADR 0034).
 # Text in angle brackets is a question the agent writes at run time from what it found; the
 # words in the brackets say what kind of question it may be.
 
@@ -79,7 +82,7 @@ text = "Do people other than you now rely on it?"
 key = "conjecture.fork"
 skills = ["conjecture"]
 kind = "product"
-text = "<the one choice between two different products that nothing written down settles, asked as someone using it would put it>"
+text = "<one choice the fork test gives to the owner and nothing they said settles, asked as someone using it would put it>"
 
 [[ask]]
 key = "feature.open-question"

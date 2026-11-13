@@ -11,9 +11,15 @@ a sentence in any skill page or template that tells an agent to ask, confirm or 
 answer in the words below without an ``**Ask**`` key; a registered question no skill asks or an
 assumption no skill states; a product question whose text uses a method term.
 
-What it cannot catch: a question worded outside ``ASKING`` ("get the owner's OK"); a sentence
-that puts a negation before the asking words and still asks; a non-product question someone
-registered as ``product`` (a reviewer reads that diff of the registry); questions a companion
+A negation before the asking words ("never ask the owner") is a rule, not a question, unless
+``until`` comes between them ("do not start until you ask the owner"), which still asks.
+
+What it cannot catch: a question worded outside ``ASKING`` ("see what the owner thinks", "run
+the table past them"); a sentence that puts any other negation before the asking words and
+still asks ("do not bind a row before you ask the owner"); a quoted question with no word
+that addresses anyone within forty characters of it; a non-product question someone registers
+as ``product`` with matching skill text, since nothing reviews the registry's diff on its own
+(ADR 0034); questions a companion
 plugin's own skill asks, which only the rule in the ``AGENTS.md`` template governs; the
 pipeline's prompts in ``workflows/``, whose open questions are bounded by their schema's kinds;
 and whether an agent obeys the page at run time, which only a live run shows.
@@ -23,6 +29,8 @@ import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILLS = ROOT / "skills"
@@ -34,11 +42,18 @@ ASSUME_KEY = re.compile(r"\*\*Assume\*\* `([^`]+)`")
 ASKING = re.compile(
     r"question tool|AskUserQuestion|\bdialogs?\b"
     r"|\bask (?:the owner|the user|them|him|her|whether|if|for approval|for confirmation)\b"
-    r"|\bconfirm (?:with|it|that)\b|\bshall I\b|\bcheck with the (?:owner|user)\b"
-    r"|\bput\b[^.]{0,40}\bto the owner\b|\bwait for (?:the owner's|their) (?:answer|approval)\b",
+    r"|\bconfirm (?:with|it|that|before|first)\b|\bshall I\b|\bcheck with the (?:owner|user)\b"
+    r"|\bput\b[^.]{0,40}\bto the owner\b"
+    r"|\bwait for (?:a yes|an? (?:answer|reply)|the owner|the user|their|his|her|approval)\b"
+    r"|\blet the (?:owner|user) (?:pick|choose|decide|select)\b"
+    r"|\b(?:owner|user)'s (?:OK|okay|go-ahead|sign-off|yes)\b"
+    r"|\b(?:the owner|the user|them|him|her)\b[^.]{0,20}\bapprove\b"
+    r"|\b(?:get|seek|request) (?:\w+ )?approval\b"
+    r'|\b(?:say|tell|ask|to the owner|to the user)\b[^"]{0,40}"[^"]*\?"',
     re.IGNORECASE,
 )
 NEGATION = re.compile(r"\b(?:never|not|no|nothing|neither|nor|without)\b", re.IGNORECASE)
+UNTIL = re.compile(r"\buntil (?:you |they |the agent )?$", re.IGNORECASE)
 RULE = "product question"
 SENTENCE = re.compile(r"(?<=[.?!])\s+|\n\s*[-*|]\s+|\n\s*\d+\.\s+|\n\n")
 FENCE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
@@ -103,6 +118,8 @@ def asks_unmarked(sentence: str) -> bool:
     asking = ASKING.search(sentence)
     if asking is None or ASK_KEY.search(sentence) or RULE in sentence.lower():
         return False
+    if UNTIL.search(sentence, 0, asking.start()):
+        return True
     return NEGATION.search(sentence, 0, asking.start()) is None
 
 
@@ -204,6 +221,30 @@ def test_a_reworded_question_and_one_no_skill_asks_are_caught(tmp_path: Path) ->
         "questions.toml: `demo.what` is registered and no skill asks it",
         "questions.toml: `demo.tools` is assumed and no skill states it",
     ]
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Get the owner's OK on the tools table before you write the binding.",
+        "Check with the owner which linter they prefer.",
+        "Confirm before you install the tools.",
+        'Then say to the owner: "Do you want Vitest or Jest for the tests?" and go on.',
+        "Use AskUserQuestion to let the owner pick the test runner.",
+        "Let the owner pick the linter from the two you found.",
+        "Show the table and have the owner approve it.",
+        "Print the tools table and wait for a yes.",
+        "Do not start step 6 until you ask the owner whether the tools are fine.",
+        "Confirm with the owner that the tools are right.",
+        "Wait for the owner before you bind the rows.",
+        "Get the owner's go-ahead, then install.",
+        "Let the user choose the formatter.",
+    ],
+)
+def test_each_way_of_asking_the_verifier_planted_is_caught(tmp_path: Path, sentence: str) -> None:
+    # Why: the verifier of PR #47 planted ten phrasings that ask the owner a tooling question in
+    # the adopt skill, and the lint caught three of them.
+    assert plant(tmp_path, sentence + "\n") != [], sentence
 
 
 def test_a_rule_against_asking_is_not_a_question(tmp_path: Path) -> None:

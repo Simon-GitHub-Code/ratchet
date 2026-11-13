@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 import commits
 import feature_preflight as preflight
 
@@ -35,7 +37,7 @@ def test_adopt_binds_the_floor_and_what_has_arrived_and_builds_no_skeleton() -> 
     assert 'scripts/triggers.py" --count' in ADOPT
     assert 'scripts/triggers.py" --json' in ADOPT
     assert '`@echo "later: <trigger>"`' in ADOPT
-    assert "no life event on a tree with no sign of one" in ADOPT
+    assert "On an empty repository none of the three is asked." in ADOPT
 
 
 def test_adopt_provisions_what_the_first_slice_needs_and_rehearses_it() -> None:
@@ -80,7 +82,7 @@ def test_the_fork_test_has_one_wording_the_spec_role_and_the_conjecture_skill_sh
     # because only the role's prompt held the examples. A prompt cannot follow a link, so the
     # method page is the source and the prompt's copy is held to it here.
     page = (SKILLS / "method/pipeline.md").read_text(encoding="utf-8")
-    section = page.split("\n## The fork test\n", 1)[1].split("\n## ", 1)[0]
+    section = page.split("\n### The Spec role's copy\n", 1)[1].split("\n## ", 1)[0]
     shared = [line.removeprefix("- ") for line in section.splitlines() if line.startswith("- ")]
     assert len(shared) == 6
     shared += re.findall(r"^The test: .*the owner chooses\.", section, re.MULTILINE)
@@ -186,3 +188,78 @@ def test_no_method_page_tells_an_agent_to_load_a_user_invoked_skill() -> None:
 def test_the_remote_needs_an_accepting_answer() -> None:
     assert "never from the tracker choice alone" in INIT
     assert "--private --source . --remote origin --push" in INIT
+
+
+RULE_PARTS = (
+    (
+        "what becomes of something of the user's (kept, deleted, merged, duplicated, overwritten,"
+        " shared), who may see or do it, or what the user can do at all"
+    ),
+    "nothing the owner said or answered settles it",
+    (
+        "A choice an agent wrote down earlier (a spec, a conjecture, an **Assumed** line) does not"
+        " settle it"
+    ),
+    (
+        "anything a later change reverses without loss to the user: order, wording, layout, timing,"
+        " limits, tools, and how it is built"
+    ),
+)
+PLACES = ["init/templates/AGENTS.md", "method/SKILL.md", "method/records.md", "method/pipeline.md"]
+
+
+@pytest.mark.parametrize("page", PLACES)
+def test_the_rule_on_asking_has_one_meaning_in_each_place_an_agent_reads_it(page: str) -> None:
+    # Why: ADR 0034. "What this should do" covered every behaviour, so a rerun's spec decided what
+    # a re-pasted link becomes, and its conjecture called that settled because a spec said so.
+    text = " ".join((SKILLS / page).read_text(encoding="utf-8").split())
+    for part in RULE_PARTS:
+        assert part in text, (page, part)
+
+
+def test_the_conjecture_asks_every_open_fork_and_cites_what_it_built() -> None:
+    # Why: the rerun's table marked two rows "(left open)" as assumed and said no question was
+    # needed; two "built" rows named no criterion.
+    conjecture = " ".join((SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8").split())
+    assert "one thing at most" not in conjecture
+    assert "Ask each such fork, every one, one at a time" in conjecture
+    assert "Never write that no question was needed while a row says `(left open)`" in conjecture
+    assert "a **built** row with no criterion or story to name is not built" in conjecture
+    assert "A user story an agent wrote is not the owner's words unless" in conjecture
+    assert "correct the criterion to follow their words" in conjecture
+
+
+def test_adopt_asks_a_repository_with_code_whether_others_reach_it() -> None:
+    # Why: ADR 0028. The route's sign patterns miss a deploy job in release.yml and a production
+    # address in .env.example, so a deployed project with neither was asked nothing.
+    asked = ADOPT.split("## What the owner is asked", 1)[1].split("\n## ", 1)[0]
+    flat = " ".join(asked.split())
+    assert "On a repository that already has code, always ask the first" in flat
+    assert 'recommend "no" only when the tree shows none' in flat
+    assert "On an empty repository none of the three is asked." in flat
+    assert flat.index("always ask the first") < flat.index("**Ask** `event.deployed`")
+
+
+def test_init_and_adopt_take_the_owners_preferences_before_any_default() -> None:
+    # Why: ADR 0034 decision 7. With no interactive mode, a careful owner names a tool up front.
+    for name, text in (("init", INIT), ("adopt", ADOPT)):
+        assert "**What the owner asked for wins.**" in text, name
+        assert 'as "you asked for"' in text, name
+
+
+def test_an_overturned_assumption_has_a_route_and_a_stated_cost() -> None:
+    # Why: an overturn rerun told the owner to edit the binding by hand to declare a life event.
+    records = " ".join((SKILLS / "method/records.md").read_text(encoding="utf-8").split())
+    procedure = records.split("## Overturning an assumption", 1)[1].split(" ## ", 1)[0]
+    assert "the owner types `/ratchet:safeguard <event>`" in procedure
+    assert "Never tell the owner to edit the binding by hand" in procedure
+    assert "`/ratchet:conjecture` on it again" in procedure
+    for page in ("init/templates/AGENTS.md", "method/SKILL.md", "method/records.md"):
+        assert "what changing it later costs" in (SKILLS / page).read_text(encoding="utf-8"), page
+
+
+def test_adopt_hands_over_its_assumptions_without_question_keys() -> None:
+    # Why: the rerun's hand-over printed `adopt.types` and its siblings to the owner.
+    step_13 = ADOPT.split("13. **Hand over.**", 1)[1]
+    assert re.search(r"`(?:adopt|init|event|safeguard)\.[a-z-]+`", step_13) is None
+    assert "no question key, type name or other method term in it" in step_13

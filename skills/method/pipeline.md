@@ -31,18 +31,23 @@ At most nine agents run, the preflight's included, and at most two more when the
 
 ## The fork test
 
-It decides whether an undecided point is the owner's because the options are different products. The Spec role's prompt carries this text and `/ratchet:conjecture` applies it, so the owner is asked the same things before a drain as during one.
+It decides whether an undecided point is the owner's. `/ratchet:conjecture` applies it to every behaviour of a spec or ticket before anything is built, and the Spec role's prompt carries a copy (below), so the owner is asked before a drain what a drain would stop on.
+
+The rule, which says what a product question is: ask the owner when a choice decides what becomes of something of the user's (kept, deleted, merged, duplicated, overwritten, shared), who may see or do it, or what the user can do at all, and nothing the owner said or answered settles it. Ask one at a time, in the user's words, with your recommended answer first and why. A choice an agent wrote down earlier (a spec, a conjecture, an **Assumed** line) does not settle it. Assume, and list under **Assumed**, anything a later change reverses without loss to the user: order, wording, layout, timing, limits, tools, and how it is built.
+
+To apply it, describe the product to one of its users after each option, in the user's words and with no code in the sentence, and read the two descriptions against the rule. What the owner said or answered is what a record keeps as theirs ([records.md](records.md#questions-assumptions-and-standing-answers)): a user story an agent wrote settles nothing unless it quotes them. Where their words do settle a choice, the spec follows them; a criterion that contradicts them is a defect, and the conjecture says so.
+
+The owner's, for example: "When you paste a link you already saved, should it stay one item or become a second one?" (what becomes of their item: duplicated or kept); "When you paste a link you already marked read, should it come back as unread or stay read?" (what becomes of it); "May anyone with the link close a poll, or only the person who made it?" (who may do it). The agent's: the order of a list, the words on a button, a status code, where a check lives, a limit with one plainly safe value, how long to wait for a slow page.
+
+### The Spec role's copy
+
+The pipeline's Spec role reads the test from its prompt in `workflows/pipeline.js`, which a test holds to the text below. That copy is older and asks more than the rule in one place: it also sends a difference only in what the user sees, such as the expired-link page, to the owner. It never asks less. Bringing the prompt to the rule is a change to the pipeline of its own.
 
 The test: describe the product to one of its users after each option, in the user's words and with no code in the sentence. When the two descriptions differ in what the user sees, what they can do, who may do it or what becomes of something that is theirs, the owner chooses. When the user could not tell which option was built, the agent chooses.
-
-Three that are the owner's:
 
 - "Should an expired link show a page that says it expired, or send the visitor to the home page?" The visitor sees a different thing.
 - "May anyone with the link close a poll, or only the person who made it?" Who may do it.
 - "When a voter answers twice, does the second answer replace the first or is it refused?" What becomes of their answer.
-
-Three that are the agent's to assume:
-
 - Which HTTP status answers a reserved code. No user's product changes with it.
 - Whether the expiry is checked in the store or in the route. The user cannot tell.
 - A limit the ticket leaves unstated where one value is plainly the safe one: take it, and the owner relaxes it in a later change.
