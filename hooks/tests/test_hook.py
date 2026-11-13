@@ -12,7 +12,7 @@ import pytest
 
 from ratchet_guards import hook
 from ratchet_guards.context import Guard
-from ratchet_guards.manifest import MANIFEST_PATH, parse
+from ratchet_guards.manifest import EMPTY, MANIFEST_PATH, parse
 from ratchet_guards.paths import Checkout
 from ratchet_guards.verdict import Decision, Verdict
 from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, ROOT, FakeRepo, make_guard
@@ -154,6 +154,21 @@ def test_reasons_and_output_shape() -> None:
         "Ratchet guard: this tool call edits a guard path; only the owner approves a "
         "gate change: CLAUDE.md is in guard group 'g'. Because. Guard paths come from "
         "guards/manifest.toml as committed on the default branch. Approve only if"
+    )
+
+
+def test_an_ask_about_a_folder_the_guard_cannot_work_out_says_what_each_answer_does() -> None:
+    command = "cd $S && sed -i s/a/b/ .github/workflows/ci.yml"
+    verdict = hook.decide(payload("Bash", command=command), make_guard(manifest=EMPTY))
+    assert verdict is not None
+    assert hook.reason(verdict) == (
+        "Ratchet guard: this tool call changes a file after moving to a folder the guard cannot "
+        "work out: .github/workflows/ci.yml (sed). In a project Ratchet guards, that file is one "
+        "only you change, and the guard cannot tell which project the folder is. Approve only if "
+        "you expect the agent to change that file. If you approve, the whole command runs as "
+        "written, wherever the folder is. If you deny, none of it runs, and the agent can run it "
+        "again with the folder written out, which the guard can check. An agent that thinks a "
+        "gate is wrong writes a gate dispute (docs/disputes/NNNN-<slug>.md) instead."
     )
 
 

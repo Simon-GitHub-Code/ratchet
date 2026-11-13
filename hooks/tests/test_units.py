@@ -63,7 +63,7 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "rewrite-history": ("DENY", "rewrites history"),
         "unresolved-directory": (
             "ASK",
-            "writes a relative path after a cd the guard cannot resolve; it may be a guard path",
+            "changes a file after moving to a folder the guard cannot work out",
         ),
         "merge-pr": (
             "ASK",
@@ -191,8 +191,53 @@ def test_redirects_and_file_descriptors() -> None:
         SimpleCommand(("d",), then="\n"),
     )
     ends = [command.then for command in parse_shell("a && b || c & (d) ; e").commands]
-    assert ends == ["&&", "||", "&", ")", "\n"]
+    assert ends == ["&&", "||", "&", ";", "\n"]
     assert [c.then for c in parse_shell("f() { g; }").commands] == ["(", ";", "\n"]
+
+
+def _subshells(text: str) -> list[tuple[str, int, int, str]]:
+    return [(" ".join(c.words), c.opens, c.closes, c.then) for c in parse_shell(text).commands]
+
+
+def test_a_subshell_is_marked_where_it_opens_and_closes() -> None:
+    assert _subshells("(a && (b)) || c") == [
+        ("a", 1, 0, "&&"),
+        ("b", 1, 2, "||"),
+        ("c", 0, 0, "\n"),
+    ]
+    assert _subshells("(a;) | b") == [("a", 1, 1, "|"), ("b", 0, 0, "\n")]
+    assert parse_shell("(a) | b").commands[0].piped
+    assert _subshells("( ) ; a") == [("a", 0, 0, "\n")]
+    assert _subshells("(a) > f; b") == [("a", 1, 1, ";"), ("", 0, 0, ";"), ("b", 0, 0, "\n")]
+    assert _subshells("(a) esac") == [("a", 1, 1, ")"), ("esac", 0, 0, "\n")]
+
+
+def test_a_parenthesis_after_a_word_or_in_a_case_is_no_subshell() -> None:
+    assert _subshells("x=(1 2); a <(b)") == [
+        ("x=", 0, 0, "("),
+        ("1 2", 0, 0, ")"),
+        ("a", 0, 0, "("),
+        ("b", 0, 0, ")"),
+    ]
+    assert _subshells("case x in (y) a;; z) (b);; esac") == [
+        ("case x in", 0, 0, "("),
+        ("y", 0, 0, ")"),
+        ("a", 0, 0, ";;"),
+        ("z", 0, 0, ")"),
+        ("b", 1, 1, ";;"),
+        ("esac", 0, 0, "\n"),
+    ]
+    assert _subshells("(case x in y) a;; esac)") == [
+        ("case x in y", 1, 0, ")"),
+        ("a", 0, 0, ";;"),
+        ("esac", 0, 1, "\n"),
+    ]
+
+
+def test_an_unsure_case_keeps_the_subshell_open() -> None:
+    quoted = "(case x in y) 'esac';; z) a;; esac)"
+    assert [closes for _, _, closes, _ in _subshells(quoted)] == [0, 0, 0, 0, 1]
+    assert _subshells("(echo case; a)") == [("echo case", 1, 0, ";"), ("a", 0, 0, ")")]
 
 
 def test_unquote_falls_back_to_dropping_quotes() -> None:
