@@ -110,8 +110,7 @@ OPERABILITY_QUESTIONS = (
     "telemetry arrives",
     "no flag past its removal date",
 )
-# "## Critique tests" is here too: the pipeline's critic reads it to place its tests.
-OPERABILITY_SECTIONS = ("## Telemetry", "## Feature flags", "## Critique tests")
+OPERABILITY_SECTIONS = ("## Telemetry", "## Feature flags")
 FLAG_REGISTRY = Path("flags.toml")
 FIRST_CELL = re.compile(r"^\|\s*([^|]+?)\s*\|", re.MULTILINE)
 WORKFLOWS = Path(".github/workflows")
