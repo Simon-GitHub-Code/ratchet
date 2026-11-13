@@ -17,6 +17,8 @@ Every question the method asks carries a **trigger**, in `skills/method/applicat
 
 **The first one is free.** The change that brings the first file of a kind is never red for it, however many instances that one file holds: for a pattern kind, every matched line in one file; for a path kind, one file. A change that brings instances in two files or more is red, and says the first file is free and names the files; without that bound, a first change could bring forty instances and be green. The gate reports that the kind has arrived and which rows it makes **owed**. The route then makes binding them the next step: `/ratchet:safeguard`, where an agent chooses the tool, writes the recipe and the fault, and binds the row. A later change that adds another instance while a row is still owed is red. Retrofitting then costs one file, and the owner never stops mid-idea to build a safeguard. A declared life event makes its rows owed in the same way, and is never red: the route puts binding them first.
 
+Superseded in part by ADR 0030: the free arrival is per change, not per file. A change that takes a kind from no instances at the merge base to any number, in any number of files, is green for it and names the rows it made owed; the change-size ceiling, not a file count, bounds what one change brings once the repository records one, and a repository with none has no bound yet. A later change that adds another instance while a row is still owed is red, and the rest of this decision stands.
+
 **A gate once asked keeps ADR 0020.** A bound gate with nothing to run is red. A row only becomes bound after its trigger has fired, so the set it judges already has a member.
 
 **What waits for a life event.** Some behaviour of the merge judge and the pipeline protects people other than the owner, so it starts when they exist:
@@ -58,5 +60,3 @@ This is wrong if safeguards arrive too late to be cheap, or the triggers become 
 - **Keep ADR 0012's every row from the first commit.** Rejected by the owner's principle. Rows already bound in an adopted repository stay bound: the ratchet does not loosen, and nothing here unbinds a gate.
 
 Supersedes, in part: ADR 0012's "from the first commit" and its walking skeleton at adoption, and ADR 0020's red gate with nothing to run, before its trigger fires. The rest of both stands.
-
-Superseded in part by ADR 0030: the free arrival is per change, not per file. A change that takes a kind from no instances at the merge base to any number, in any number of files, is green for it and names the rows it made owed; the change-size ceiling, not a file count, bounds what one change brings. A later change that adds another instance while a row is still owed is red, and the rest of this decision stands.

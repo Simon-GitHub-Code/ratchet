@@ -27,7 +27,7 @@ is owed is red, and the event alone never is.
 A row is **owed** when its trigger has fired and it is still ``later:``. The change that brings a
 kind is free: it takes the count from none at the merge base to any number, in any number of
 files, and prints a note naming the rows it made owed (ADR 0030); the change-size ceiling bounds
-how much one change brings. A later change that adds another instance while a row it owes is
+how much one change brings once the repository records one; with none, nothing does yet. A later change that adds another instance while a row it owes is
 still ``later:`` is red, and says to run ``/ratchet:safeguard``, which chooses the tool, writes
 the recipe and the fault and binds the row.
 A change that binds the row itself is green. A declared life event owes its rows too, and is never
