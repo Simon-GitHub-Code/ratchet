@@ -290,6 +290,14 @@ def with_recipe(template: str, name: str) -> Want:
 
 def with_first_dependency(recipe: str, dependency_name: str) -> Want:
     """The want of a justfile whose recipe runs ``dependency_name`` first among its dependencies."""
+    return with_dependency_after(recipe, dependency_name, None)
+
+
+def with_dependency_after(recipe: str, dependency_name: str, after: str | None) -> Want:
+    """The want of a justfile whose recipe runs ``dependency_name`` right after ``after``.
+
+    With no ``after``, or when the recipe does not name it, the new dependency comes first.
+    """
 
     def want(current: str | None) -> str:
         text = current or ""
@@ -301,6 +309,11 @@ def with_first_dependency(recipe: str, dependency_name: str) -> Want:
         colon = block.parsed.colon
         rest = head[colon + 1 :]
         listed = rest[: comment_at(rest)]
+        named = re.search(rf"(?<![\w-]){re.escape(after)}(?![\w-])", listed) if after else None
+        if named is not None:
+            at = colon + 1 + named.end()
+            lines[block.head] = f"{head[:at]} {dependency_name}{head[at:]}"
+            return "\n".join(lines)
         gap = len(listed) - len(listed.lstrip())
         if listed.strip():
             at = colon + 1 + gap

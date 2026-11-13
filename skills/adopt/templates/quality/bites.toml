@@ -44,6 +44,9 @@
 #
 # setup = ["<the package manager's frozen, offline install>"]
 #
+# Where the justfile has an `install` recipe (ADR 0039), setup runs that and no copy of its command:
+# a gate that works only after a setup the merge's work tree never runs is red there.
+#
 # [[bite]]
 # gate = "lint"
 # name = "an unused import"

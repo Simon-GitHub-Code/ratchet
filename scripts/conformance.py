@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 import application_types
 import gatelib
 import hooks_installed
+import installs
 import justfile_text
 import markdown_text
 import owed
@@ -1281,6 +1282,70 @@ def check_pin_recipe(root: Path) -> Iterable[Finding]:
     yield Finding("justfile", problem, edit)
 
 
+def check_installs(root: Path) -> Iterable[Finding]:
+    """A recipe that runs a package manager's tool, though a fresh checkout has not installed it.
+
+    Why: ADR 0039. ``merge.py`` runs the gates in a new work tree and CI runs each in a new
+    checkout, with no ``node_modules``. ``uv run --frozen`` syncs as it runs and ``npx
+    --no-install`` does not, so every recipe that runs such a tool depends on the ``install``
+    recipe, and every tier runs it once before its gates start so no two install at once.
+    """
+    justfile = read_justfile(root)
+    manager = installs.manager_of(root)
+    if justfile is None or manager is None:
+        return
+    running = installs.tool_recipes(justfile)
+    if not running:
+        return
+    tiers = tier_recipes(read(root / BINDING_PATH) or "", justfile).values()
+    bare = [name for name in running if not installs.reaches_install(justfile, name)]
+    unrun = [name for name in tiers if not installs.depends_directly(justfile, name)]
+    locked = installs.installs_from_lock(justfile, manager)
+    if not (bare or unrun or not locked):
+        return
+    reasons = []
+    if not locked:
+        reasons.append(f"the justfile has no `install` recipe that runs `{manager.frozen_name}`")
+    if bare:
+        reasons.append(f"the recipes {_listed(bare)} do not depend on `install`")
+    if unrun:
+        reasons.append(f"the recipes {_listed(unrun)} do not run `install` before their gates")
+    # Why: the problem names every recipe that runs a tool, fixed or not, so an edit that mends
+    # some of them leaves it as it was and the trial does not count the edit as the fix.
+    problem = (
+        f"the recipes {_listed(running)} run {manager.name} tools that a fresh checkout does not"
+        f" have, so they fail in the merge's work tree and in CI; each must depend on an"
+        f" `install` recipe that runs `{manager.frozen_name}` from {manager.lockfile}, and every"
+        " tier must run it before its gates start"
+    )
+    wants = [
+        installs.with_install(manager),
+        *(justfile_text.with_first_dependency(name, installs.INSTALL) for name in bare),
+        *(
+            justfile_text.with_dependency_after(name, installs.INSTALL, PIN_RECIPE)
+            for name in unrun
+        ),
+    ]
+    start = tuple(installs.recipe_lines(manager))
+    edit = Edit(
+        f"write an `install` recipe for {manager.lockfile} and make every recipe that runs its"
+        " tools depend on it",
+        gatelib.chained(*wants),
+        Agent(start=start, then=tuple(reasons)),
+    )
+    yield Finding(
+        "justfile",
+        problem,
+        edit,
+        identity=f"{manager.name} tools are run with no install ahead of them",
+    )
+
+
+def _listed(names: Sequence[str]) -> str:
+    """Recipe names as code, for a sentence."""
+    return ", ".join(f"`{name}`" for name in names)
+
+
 def answered_gates(binding: str) -> set[str]:
     """The entry points of the Gates rows the binding answers with something other than none."""
     return {
@@ -1795,6 +1860,7 @@ CHECKS: tuple[Check, ...] = (
     check_settings,
     check_commit_hooks,
     check_runner,
+    check_installs,
     check_quality,
     check_bites,
     check_incidents,
@@ -1938,6 +2004,7 @@ def mutations() -> list[Mutation]:
         *guard_mutations(),
         *merge_mutations(),
         *pin_mutations(),
+        *install_mutations(),
         *weekly_mutations(),
         *record_mutations(),
         *trigger_mutations(),
@@ -2318,6 +2385,46 @@ def pin_mutations() -> list[Mutation]:
         (
             "justfile whose tiers skip the plugin pin",
             rewrite("justfile", "plugin_pin.py", "pin.py"),
+        ),
+    ]
+
+
+def install_mutations() -> list[Mutation]:
+    """An adopted JavaScript tree whose recipes would fail in a fresh checkout (ADR 0039)."""
+    manager = installs.NPM
+
+    def js_app(*, install: str | None, depend: bool, tiers: bool) -> Callable[[Path], None]:
+        def mutate(root: Path) -> None:
+            (root / manager.lockfile).write_text("{}\n", encoding="utf-8")
+            path = root / "justfile"
+            text = path.read_text(encoding="utf-8").replace(
+                '@echo "bind: formatter --check"; exit 1', "npx --no-install biome format ."
+            )
+            text = text.replace("fmt-check:\n", f"fmt-check:{' install' if depend else ''}\n", 1)
+            if install is not None:
+                text = installs.with_install(manager)(text).replace(manager.command, install)
+            if not tiers:
+                text = text.replace("plugin-pin install\n", "plugin-pin\n")
+            path.write_text(text, encoding="utf-8")
+
+        return mutate
+
+    return [
+        (
+            "npm tool run by a recipe with no install recipe",
+            js_app(install=None, depend=False, tiers=True),
+        ),
+        (
+            "npm tool run by a recipe that does not depend on install",
+            js_app(install=manager.command, depend=False, tiers=True),
+        ),
+        (
+            "install recipe that does not install from the lockfile",
+            js_app(install="npm install", depend=True, tiers=True),
+        ),
+        (
+            "tiers that start their gates before anything installs",
+            js_app(install=manager.command, depend=True, tiers=False),
         ),
     ]
 
