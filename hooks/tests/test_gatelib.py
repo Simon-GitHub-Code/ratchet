@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 import gatelib
 import listeners
@@ -409,3 +411,29 @@ def test_a_process_that_is_gone_or_cannot_be_read_is_passed_over(tmp_path: Path)
     (proc / "12").mkdir()
     assert gatelib.end_running_from(tree, proc) == []
     assert gatelib.end_running_from(tree, tmp_path / "no-such-directory") == []
+
+
+@given(text=st.text(), current=st.text())
+def test_created_gives_the_text_to_an_absent_file_and_leaves_any_other_alone(
+    text: str, current: str
+) -> None:
+    want = gatelib.created(text)
+    assert want(None) == text
+    assert want(current) == current
+    assert want(want(None)) == want(None)
+
+
+@given(text=st.text(), current=st.one_of(st.none(), st.text()))
+def test_chained_wants_apply_in_order_and_an_empty_chain_changes_nothing(
+    text: str, current: str | None
+) -> None:
+    assert gatelib.chained()(current) == (current or "")
+    both = gatelib.chained(gatelib.created(text), lambda made: f"{made}!")
+    assert both(current) == f"{text if current is None else current}!"
+
+
+def test_a_git_that_fails_raises_instead_of_answering(tmp_path: Path) -> None:
+    gatelib.git_checked(tmp_path, "init", "-q")
+    assert gatelib.git_checked(tmp_path, "check-ignore", "x", ok=(0, 1)) == ""
+    with pytest.raises(subprocess.CalledProcessError):
+        gatelib.git_checked(tmp_path, "check-ignore", "x")

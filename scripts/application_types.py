@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import gatelib
+
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
     from collections.abc import Set as AbstractSet
@@ -119,6 +121,14 @@ class Catalogue:
             part.startswith(LIFE) and part.removeprefix(LIFE) in self.events
         )
 
+    def owed_by(self, event: str) -> tuple[str, ...]:
+        """The questions whose trigger names ``event``, in the catalogue's order (ADR 0028)."""
+        return tuple(
+            question
+            for question, trigger in self.triggers.items()
+            if f"{LIFE}{event}" in parts(trigger)
+        )
+
     def kinds_asked(self, types: AbstractSet[str]) -> frozenset[str]:
         """The kinds of code a repository of these types must say how to find (ADR 0028)."""
         return frozenset(
@@ -138,7 +148,7 @@ class Catalogue:
         return "none: not " + (f"{', '.join(head)} or {last}" if head else last)
 
     def row_problem(
-        self, row: tuple[str, str], kinds: AbstractSet[str], adrs: AbstractSet[int]
+        self, row: tuple[str, str], kinds: AbstractSet[str] | None, adrs: AbstractSet[int]
     ) -> str | None:
         """What is wrong with one Gates row for a repository of these types."""
         question, tool = row
@@ -148,7 +158,7 @@ class Catalogue:
         if later is not None:
             return self.later_problem(question, later.group(1).strip())
         match = NONE.match(tool)
-        if match is None:
+        if match is None or kinds is None:
             return None
         asked_of = self.asked_of(question)
         applies = bool(asked_of & kinds)
@@ -176,27 +186,33 @@ class Catalogue:
             )
         return None
 
+    def types_problem(self, binding: str) -> str | None:
+        """What is wrong with the binding's ``- Application types:`` line, or ``None``."""
+        kinds = declared(binding)
+        known = ", ".join(self.types)
+        if kinds is None:
+            return f"has no '- Application types:' line; name one or more of {known}"
+        unknown = [kind for kind in kinds if kind not in self.types]
+        if unknown or not kinds:
+            named = f"'{unknown[0]}'" if unknown else "nothing"
+            return f"'- Application types:' names {named}; name one or more of {known}"
+        return None
+
     def failures(
         self, binding: str, rows: Sequence[tuple[str, str]], adrs: AbstractSet[int]
     ) -> Iterator[str]:
         """What a binding's types line and Gates rows get wrong; ``rows`` are (question, tool)."""
-        kinds = declared(binding)
-        known = ", ".join(self.types)
-        if kinds is None:
-            yield f"has no '- Application types:' line; name one or more of {known}"
-            return
-        unknown = [kind for kind in kinds if kind not in self.types]
-        if unknown or not kinds:
-            named = f"'{unknown[0]}'" if unknown else "nothing"
-            yield f"'- Application types:' names {named}; name one or more of {known}"
-            return
+        problem = self.types_problem(binding)
+        if problem:
+            yield problem
+        kinds = None if problem else frozenset(declared(binding) or ())
         asked = {question for question, _ in rows}
         for question in sorted(self.questions - asked):
             yield dropped(question)
         for row in rows:
-            problem = self.row_problem(row, frozenset(kinds), adrs)
-            if problem:
-                yield problem
+            row_problem = self.row_problem(row, kinds, adrs)
+            if row_problem:
+                yield row_problem
 
 
 def dropped(question: str) -> str:
@@ -240,6 +256,24 @@ def life_events(binding: str) -> frozenset[str]:
         return frozenset()
     named = (name.strip(" `") for name in match.group(1).split(","))
     return frozenset(name for name in named if name and name != "none")
+
+
+def signs_seen(root: Path) -> dict[str, dict[str, str]]:
+    """Per undeclared life event, each sign glob the tree matches and the first path it matched."""
+    binding = gatelib.read_text(root / gatelib.BINDING)
+    if binding is None:
+        return {}
+    declared = life_events(binding)
+    paths = gatelib.tracked_paths(root)
+    seen: dict[str, dict[str, str]] = {}
+    for name, event in load().events.items():
+        if name in declared:
+            continue
+        for sign in event.signs:
+            match = next((path for path in paths if gatelib.matches(path, [sign])), None)
+            if match is not None:
+                seen.setdefault(name, {})[sign] = match
+    return seen
 
 
 def declared_or_all(binding: str) -> frozenset[str]:
