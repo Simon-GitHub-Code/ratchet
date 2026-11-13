@@ -11,7 +11,8 @@ a sentence in any skill page or template that tells an agent to ask, confirm or 
 answer in the words below without an ``**Ask**`` key; a registered question no skill asks or an
 assumption no skill states; a product question whose text uses a method term; a sentence that
 puts questions to the owner one at a time, alone or one per message, where ADR 0034 puts all of
-a step's open questions in one message.
+a step's open questions in one message. That last check also reads ``workflows/pipeline.js``,
+whose strings tell the orchestrator how to put a blocked run's open questions to the owner.
 
 A negation before the asking words ("never ask the owner") is a rule, not a question, unless
 ``until`` comes between them ("do not start until you ask the owner"), which still asks.
@@ -22,8 +23,9 @@ still asks ("do not bind a row before you ask the owner"); a quoted question wit
 that addresses anyone within forty characters of it; a non-product question someone registers
 as ``product`` with matching skill text, since nothing reviews the registry's diff on its own
 (ADR 0034); questions a companion
-plugin's own skill asks, which only the rule in the ``AGENTS.md`` template governs; the
-pipeline's prompts in ``workflows/``, whose open questions are bounded by their schema's kinds;
+plugin's own skill asks, which only the rule in the ``AGENTS.md`` template governs; an unkeyed
+question in the pipeline's prompts in ``workflows/``, whose open questions are bounded by their
+schema's kinds, since only the one-message check reads that script;
 whether an agent obeys the page at run time, which only a live run shows; and a sentence that asks
 one by one in other words ("each in turn", "then the next"), or whose asking words are two
 sentences back.
@@ -38,6 +40,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILLS = ROOT / "skills"
+PIPELINE = ROOT / "workflows/pipeline.js"
 REGISTRY = SKILLS / "method/questions.toml"
 
 ASK_LINE = re.compile(r'\*\*Ask\*\* `([^`]+)`: "([^"]+)"')
@@ -272,14 +275,16 @@ ONE_MESSAGE = (
 )
 
 
-def asked_one_by_one(root: Path = SKILLS) -> list[str]:
+def asked_one_by_one(root: Path = SKILLS, also: tuple[Path, ...] = (PIPELINE,)) -> list[str]:
     """Each sentence that tells an agent to ask the owner one question per message.
 
     A sentence counts when it, or the sentence before it in the same paragraph, is about asking:
-    "One at a time, in this order" follows the sentence that names the questions.
+    "One at a time, in this order" follows the sentence that names the questions. Besides the
+    skill pages it reads ``also``, by default the pipeline script, whose strings tell the
+    orchestrator how to put a blocked run's open questions to the owner.
     """
     found: list[str] = []
-    for page in pages(root):
+    for page in [*pages(root), *also]:
         text = FENCE.sub(lambda f: "\n" * f.group(0).count("\n"), page.read_text(encoding="utf-8"))
         for block in re.finditer(r"[^\n]+(?:\n[^\n]+)*", text):
             first, previous = text.count("\n", 0, block.start()), ""
@@ -303,6 +308,19 @@ def test_all_open_questions_of_a_step_go_in_one_message() -> None:
     for page in ("init/templates/AGENTS.md", "conjecture/SKILL.md"):
         text = " ".join((SKILLS / page).read_text(encoding="utf-8").split())
         assert "join the same message as the spec's" in text, page
+    assert ONE_MESSAGE in " ".join(PIPELINE.read_text(encoding="utf-8").split())
+
+
+def test_the_pipeline_script_is_read_for_questions_asked_one_by_one(tmp_path: Path) -> None:
+    script = tmp_path / "pipeline.js"
+    script.write_text(
+        "const told = [\n  'Put each open question to the owner, one at a time',\n]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "skills").mkdir()
+    assert asked_one_by_one(tmp_path / "skills", also=(script,)) == [
+        "pipeline.js:1: const told = [ 'Put each open question to the owner, one at a time', ]"
+    ]
 
 
 def test_a_question_asked_one_by_one_is_caught(tmp_path: Path) -> None:
@@ -315,7 +333,7 @@ def test_a_question_asked_one_by_one_is_caught(tmp_path: Path) -> None:
         "Nothing is checked yet. Merge them one at a time.\n",
         encoding="utf-8",
     )
-    assert asked_one_by_one(tmp_path / "skills") == [
+    assert asked_one_by_one(tmp_path / "skills", also=()) == [
         "skills/demo/SKILL.md:1: Ask the questions one at a time.",
         "skills/demo/SKILL.md:3: One per message, in this order.",
     ]

@@ -319,7 +319,13 @@ def test_a_product_question_stops_the_run_with_its_options() -> None:
     assert ran["labels"] == ["preflight", "spec"]
     result = ran["result"]
     assert (result["verdict"], result["openQuestions"]) == ("blocked", [ASKED])
-    assert "under `## Answers`" in result["requiredByOrchestrator"][0]
+    told = result["requiredByOrchestrator"][0]
+    assert "under `## Answers`" in told
+    # Why: the skills put every open question of a step in one message, and the list a blocked
+    # run hands the orchestrator still said "one at a time".
+    assert "every open question to the owner in one message" in told
+    assert "each with your recommended answer first and why" in told
+    assert "one at a time" not in told
     prompt = ran["prompts"]["spec"]
     assert "Never ask the owner to confirm a choice" in prompt
     assert "When the user could not tell which option was built, you choose." in prompt
