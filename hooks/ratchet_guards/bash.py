@@ -704,7 +704,8 @@ class _Checker:
         A name the line set to a literal is read as the shell will read it (ADR 0024). A target
         it cannot read leaves the directory unknown, which a later write must not take as a
         directory it has already seen: one only the shell knows (``popd``, a bare ``pushd``, a
-        variable, ``~`` once the line sets ``HOME``), or any target once it sets ``CDPATH``.
+        variable). A target the shell may look up (any once the line sets ``CDPATH``, ``~`` once
+        it sets ``HOME``) leaves it unknown too, and also where the target as written leads.
         """
         # Why: `HOME=/x cd` and `CDPATH=/x cd y` read their own assignments.
         lookups = context.exported | _assigned(_assignments(words)[0]).keys()
@@ -714,9 +715,10 @@ class _Checker:
         places: list[Context] = []
         for word in readings:
             target = self.guard.locator.filesystem.expand(word)
-            home = _HOME in lookups and word.startswith("~")
-            if stack or home or _unreadable(target) or _CDPATH in lookups:
+            unknown = stack or _unreadable(target)
+            if unknown or _CDPATH in lookups or (_HOME in lookups and word.startswith("~")):
                 places += _anywhere(context, seen)
+            if unknown:
                 continue
             anchored = PurePosixPath(target).is_absolute()
             moved = context.moved_to(context.cwd / target, anchored=anchored)
