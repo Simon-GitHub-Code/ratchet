@@ -522,6 +522,37 @@ def python(code: str) -> str:
     return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
 
 
+STOPS = (
+    "import os, signal, threading, time, http.server as h\n"
+    "class S(h.ThreadingHTTPServer):\n"
+    "    daemon_threads = False\n"
+    "    block_on_close = True\n"
+    "    def handle_error(self, request, client_address): pass\n"
+    "class H(h.BaseHTTPRequestHandler):\n"
+    "    def log_message(self, *args): pass\n"
+    "    def do_GET(self):\n"
+    "        time.sleep(0.3)\n"
+    "        self.send_response(200); self.send_header('Content-Length', '0'); self.end_headers()\n"
+    "s = S(('127.0.0.1', int(os.environ['PORT'])), H)\n"
+    "def stop(*args):\n"
+    "    if os.environ['DROPS']: os._exit(0)\n"
+    "    threading.Thread(target=s.shutdown).start()\n"
+    "signal.signal(signal.SIGTERM, stop)\n"
+    "s.serve_forever(); s.server_close()"
+)
+# The held command: the load smoke, its own report kept out of this gate's output.
+HELD = (
+    "import subprocess, sys; sys.exit(subprocess.run(sys.argv[1:], capture_output=True).returncode)"
+)
+LOAD_SMOKE = str(Path(__file__).with_name("load_smoke.py"))
+GRACEFUL = [
+    *("--ready", "http://127.0.0.1:{port}/", "--graceful", "3", "--signal-after", "0.5"),
+    *("--", sys.executable, "-c", HELD, sys.executable, LOAD_SMOKE),
+    *("--url", "http://127.0.0.1:{port}/work", "--until-stopped", "--seconds", "2"),
+    *("--concurrency", "2", "--min-requests", "1"),
+]
+REFUSES = "import os, sys; 'BITE_SETTING' in os.environ or sys.exit('BITE_SETTING is not set')\n"
+
 READY = "http://127.0.0.1:{port}/"
 LOAD = ["--ready", "{stub}/health", "--seconds", "0.5", "--concurrency", "2", "--min-requests", "1"]
 SINK = ["--service", "bite", "--require", "traces"]
@@ -533,6 +564,18 @@ SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
         # starting interpreter may take on a machine running many of them at once.
         ["--boot", python(SERVE), "--ready", READY, "--timeout", "120"],
         ["--boot", python("import time; time.sleep(30)"), "--ready", READY, "--timeout", "0.5"],
+    ),
+    (
+        "smoke: a service that drops requests in flight when stopped",
+        with_service.main,
+        ["--boot", f"DROPS= exec {python(STOPS)}", *GRACEFUL],
+        ["--boot", f"DROPS=1 exec {python(STOPS)}", *GRACEFUL],
+    ),
+    (
+        "smoke: a service that boots without a required setting",
+        with_service.main,
+        ["--boot", python(REFUSES + SERVE), "--ready", READY, "--refuses", "BITE_SETTING"],
+        ["--boot", python(SERVE), "--ready", READY, "--refuses", "BITE_SETTING"],
     ),
     (
         "load-smoke: a 500 under load",

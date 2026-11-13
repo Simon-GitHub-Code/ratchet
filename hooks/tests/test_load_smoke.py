@@ -3,6 +3,7 @@
 import argparse
 import http.server
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -232,3 +233,54 @@ def test_a_non_positive_option_is_a_usage_error(flag: str) -> None:
     with pytest.raises(SystemExit) as caught:
         load_smoke.main(["load_smoke.py", "--url", "http://127.0.0.1:9/", flag, "0"])
     assert caught.value.code == 2
+
+
+def test_a_live_deployment_is_probed_with_no_service_booted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv(gatelib.READY_ENV)
+    with servers.server(handle) as url:
+        green = smoke("--ready", f"{url}/health", "--url", f"{url}/ok", *SHORT, capsys=capsys)
+        red = smoke("--ready", f"{url}/health", "--url", f"{url}/boom", *SHORT, capsys=capsys)
+    assert green[0] == 0
+    assert (red[0], "x GET " in red[1], red[1].endswith("load-smoke: red\n")) == (1, True, True)
+
+
+def closed_port() -> str:
+    return f"http://127.0.0.1:{gatelib.free_port()}/gone"
+
+
+def test_until_stopped_needs_the_marker_with_service_exports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(gatelib.STOPPING_ENV, raising=False)
+    with pytest.raises(SystemExit) as exit_:
+        load_smoke.main(["load_smoke.py", "--until-stopped", "--url", closed_port()])
+    assert exit_.value.code == 2
+
+
+def test_a_refusal_after_the_signal_is_expected_and_before_it_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    marker = tmp_path / "stopping"
+    monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
+    args = ["--until-stopped", "--url", closed_port(), "--min-requests", "0", "--seconds", "0.3"]
+    before = smoke(*args, capsys=capsys)
+    marker.touch()
+    after = smoke(*args, capsys=capsys)
+    assert before[0] == 1
+    assert "ConnectionRefusedError" in before[1]
+    assert after == (0, "load-smoke: green\n")
+
+
+def test_an_error_status_or_a_timeout_after_the_signal_is_still_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    marker = tmp_path / "stopping"
+    marker.touch()
+    monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
+    with servers.server(handle) as url:
+        code, out = smoke("--until-stopped", "--url", f"{url}/boom", *SHORT, capsys=capsys)
+    assert code == 1
+    assert "x GET " in out
+    assert "HTTP 500" in out
