@@ -26,6 +26,7 @@ GONE = (
 )
 COMMITTED = "Guard paths come from guards/manifest.toml"
 EXTRA_GROUP = '\n[[group]]\nname = "extra"\nreason = "More guard paths."\npaths = ["extra/**"]\n'
+TOOL_BIND = "    # bind: the config files of every gate tool\n"
 EXTRA_DOOR = '\n[[door]]\nname = "schema"\nreason = "A schema ships once."\npaths = ["db/**"]\n'
 
 
@@ -140,19 +141,17 @@ def test_a_patch_cannot_delete_or_change_the_manifest_on_a_branch(adopted: Path)
             "changes, removes or reorders a [[group]]",
         ),
         (
-            TEMPLATE.replace('    "quality/**",\n', '    "quality/**",\n]\nexclude = [\n    "x",\n'),
+            TEMPLATE.replace('"quality/**",\n', '"quality/**",\n]\nexclude = [\n    "x",\n'),
             "changes, removes or reorders a [[group]]",
         ),
         (TEMPLATE.replace('on = "rewrite"\n', ""), "changes, removes or reorders a [[door]]"),
         (EXTRA_GROUP + TEMPLATE, "changes, removes or reorders a [[group]]"),
         (
-            TEMPLATE.replace(
-                "    # bind: the config files of every gate tool\n", '    ".claude/settings.json",\n'
-            ),
+            TEMPLATE.replace(TOOL_BIND, '    ".claude/settings.json",\n'),
             "'.claude/settings.json' in [[group]] 'tool-config' also matches paths of 'harness'",
         ),
         (
-            TEMPLATE.replace("    # bind: the config files of every gate tool\n", '    ".c*/**",\n'),
+            TEMPLATE.replace(TOOL_BIND, '    ".c*/**",\n'),
             "'.c*/**' in [[group]] 'tool-config' also matches paths of 'harness'",
         ),
     ],
@@ -200,7 +199,7 @@ def test_a_write_or_edit_that_appends_whole_groups_or_doors_passes_on_a_branch(
 @pytest.mark.parametrize(
     ("bind", "pattern"),
     [
-        ("    # bind: the config files of every gate tool\n", '"eslint.config.js"'),
+        (TOOL_BIND, '"eslint.config.js"'),
         ("    # bind: the fitness test directories\n", '"tests/fitness/**"'),
         ("    # bind: migrations, schema definitions, infrastructure code\n", '"db/migrations/**"'),
     ],

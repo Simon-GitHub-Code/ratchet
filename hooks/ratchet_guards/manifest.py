@@ -28,14 +28,14 @@ The manifest is optional. When the default branch never held the file the hook j
 bypasses, force pushes, pushes to main, history rewrites, GitHub protection, label and settings
 changes, nested Claude Code sessions and plugin removal). When it held the file and lost it,
 every group of the last manifest it held is locked (``gone``). In an adopted checkout the file
-itself is locked on every branch (``MANIFEST_LOCK``), but for an Edit or Write that appends
-whole groups or doors (``grown``). Whether or not a manifest exists,
+itself is locked on every branch (``MANIFEST_LOCK``), but for an Edit or Write that only adds
+patterns or whole groups and doors (``grown``). Whether or not a manifest exists,
 ``with_plugin_group`` prepends the locked ``plugin`` group: the plugin's own directory, the
 installed plugins under ``~/.claude/plugins/`` and the user settings that enable them.
 """
 
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -47,8 +47,9 @@ COMMITTED = "Guard paths come from guards/manifest.toml as committed on the defa
 MANIFEST_GROUP = "manifest-file"
 MANIFEST_REASON = (
     "The guards are read from this file as the default branch holds it, so an agent only adds to "
-    "it: whole [[group]] or [[door]] tables after the ones there, with an Edit or Write on a "
-    "branch. Any other change, a deletion or a rename is the owner's, by hand."
+    "it: a path after the others in a group's or door's paths, or whole [[group]] or [[door]] "
+    "tables after the ones there, with an Edit or Write on a branch. Any other change, a deletion "
+    "or a rename is the owner's, by hand."
 )
 GONE = (
     f"{MANIFEST_PATH} is gone from the default branch, which held it, so every guard path it named "
@@ -267,21 +268,46 @@ def gone(manifest: Manifest) -> Manifest:
 
 
 def grown(before: Manifest, text: str) -> str | None:
-    """Why ``text`` does more than append whole groups and doors to ``before``, or ``None``.
+    """Why ``text`` does more than add to ``before``, or ``None``.
 
-    Why: the first group that matches a path wins, so a pattern added to a group already there may
-    take a path from a stricter group below it. One appended after every group takes only paths
+    An addition is a pattern after the others in a group's or a door's paths, or a whole group or
+    door after the ones there. Why: the first group that matches a path wins, so a pattern added
+    to a group may take paths from a group below it. One that matches a pattern of a group below,
+    or is matched by one, is not an addition; a group appended after every group takes only paths
     no group named, and every door is read.
     """
     try:
         after = parse(text)
     except ManifestError as error:
         return f"the manifest it leaves does not parse ({error})"
-    if after.groups[: len(before.groups)] != before.groups:
+    if not _extended(before.groups, after.groups):
         return "it changes, removes or reorders a [[group]] the default branch holds"
-    if after.doors[: len(before.doors)] != before.doors:
+    if not _extended(before.doors, after.doors):
         return "it changes, removes or reorders a [[door]] the default branch holds"
+    for index, (old, new) in enumerate(zip(before.groups, after.groups, strict=False)):
+        for pattern in new.patterns[len(old.patterns) :]:
+            below = (group for group in after.groups[index + 1 :] if _overlaps(pattern, group))
+            taken = next(below, None)
+            if taken is not None:
+                return (
+                    f"its pattern {pattern!r} in [[group]] {new.name!r} also matches paths of "
+                    f"{taken.name!r}, a group below it"
+                )
     return None
+
+
+def _extended(before: Sequence[Group | Door], after: Sequence[Group | Door]) -> bool:
+    """Whether ``after`` holds each of ``before`` in order, each with any new patterns last."""
+    kept = after[: len(before)]
+    return len(kept) == len(before) and all(
+        replace(new, patterns=new.patterns[: len(old.patterns)]) == old
+        for old, new in zip(before, kept, strict=True)
+    )
+
+
+def _overlaps(pattern: str, group: Group) -> bool:
+    """Whether ``pattern`` matches one of ``group``'s patterns as written, or one matches it."""
+    return any(matches(other, pattern) or matches(pattern, other) for other in group.patterns)
 
 
 def with_plugin_group(manifest: Manifest, plugin_root: Path) -> Manifest:
