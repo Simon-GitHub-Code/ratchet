@@ -45,7 +45,7 @@ ADR 0028 supersedes, in part, ADR 0012's "from the first commit" and its walking
 ### Upgrading a 0.10 adoption
 
 - Update the plugin and its pin line, and run `scripts/upgrade.py` for the edits it names.
-- Add `- Life events:` under `## Gates` in `docs/process/binding.md`, and declare what is already true: `deployed` if others can reach the project, `irreplaceable-data` if it holds data you could not recreate, `depended-on` if people outside rely on it. Leaving one out turns off the owner's review of doors and unflagged surface, or the critic, for a project that has them.
+- Add `- Life events:` under `## Gates` in `docs/process/binding.md`, and declare what is already true: `deployed` if others can reach the project, `irreplaceable-data` if it holds data you could not recreate, `depended-on` if people outside rely on it. A binding with no `- Life events:` line counts as declaring every event, so nothing is switched off by omission; `none` turns off the owner's review of one-way doors and unflagged surface and the pipeline's critic, so write `none` only for a project that is not live. Leaving one event out turns off what it guards for a project that has it.
 - Add the `## Triggers` table from the template, one row per kind your code has, saying what marks an instance in this stack.
 - Add the seven new rows to the Gates table. Each one whose trigger the code already fires is owed: bind it with `/ratchet:safeguard` before the next change that adds another instance. The rest are `later: <trigger>`.
 - Rows you already bound stay bound. Nothing here unbinds a gate, and the ratchet does not loosen.

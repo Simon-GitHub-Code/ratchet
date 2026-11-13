@@ -625,6 +625,10 @@ def test_the_life_events_line_is_asked_for_and_names_only_known_events(repo: Pat
     assert found.path == BINDING
     assert found.problem.startswith("has no '- Life events:' line; add it beside")
     assert found.add == ("- Life events: none",)
+    assert (
+        "`none` turns off the owner's review of one-way doors and unflagged surface"
+        in found.problem
+    )
     replace(BINDING, "- Application types: cli\n", f"- Application types: cli\n{line}")(repo)
     replace(BINDING, line, "- Life events: deployed, `irreplaceable-data`\n")(repo)
     assert red(repo) == []

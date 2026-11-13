@@ -160,6 +160,13 @@ def test_life_events_are_read_from_the_binding_and_default_to_none() -> None:
     }
 
 
+def test_a_missing_events_line_declares_every_event_to_a_judge() -> None:
+    every = frozenset(application_types.load().events)
+    assert application_types.declared_or_all("# Binding\n") == every
+    assert application_types.declared_or_all("- Life events: none\n") == frozenset()
+    assert application_types.declared_or_all("- Life events: deployed\n") == {"deployed"}
+
+
 TRIGGERED = Catalogue(
     types={"service": "answers requests", "cli": "a command", "library": "is imported"},
     narrowed={"listen": frozenset({"service"})},

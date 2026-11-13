@@ -659,12 +659,17 @@ def waiting(
     Why: the events are read at the fork point and at the default branch's tip, never the head,
     and the union counts. The fork point alone would let a change loosen its own judge; the tip
     alone would too, for a branch cut before the owner declared an event and merged without
-    ``current``. A reason let through is named in ``notes``.
+    ``current``. A binding with no events line declares every event: see ``declared_or_all``. A
+    reason let through is named in ``notes``.
     """
     path = gatelib.BINDING.as_posix()
-    declared = application_types.life_events(
-        change.before(path) or ""
-    ) | application_types.life_events(change.tip(path) or "")
+    declared = frozenset().union(
+        *(
+            application_types.declared_or_all(text)
+            for text in (change.before(path), change.tip(path))
+            if text is not None
+        )
+    )
     if not reasons or declared & needs:
         return reasons
     notes.append(

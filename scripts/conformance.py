@@ -437,8 +437,10 @@ def declared_events(text: str) -> Iterable[str | Finding]:
     if match is None:
         yield Finding(
             TRIGGERS_PATH,
-            "has no '- Life events:' line; add it beside '- Application types:', `none` until the"
-            " owner declares an event (ADR 0028)",
+            "has no '- Life events:' line; add it beside '- Application types:'. Without it every"
+            " event counts as declared; `none` turns off the owner's review of one-way doors and"
+            " unflagged surface and the critic, so a project that is live writes its events"
+            " instead (ADR 0028)",
             ("- Life events: none",),
         )
         return

@@ -581,7 +581,7 @@ def young(tmp_path: Path, binding: str | None) -> Path:
     return tmp_path
 
 
-@pytest.mark.parametrize("binding", [None, "# Binding\n", EVENTS.format(events="none")])
+@pytest.mark.parametrize("binding", [None, EVENTS.format(events="none")])
 def test_new_surface_and_doors_wait_until_an_event_is_declared(
     tmp_path: Path, binding: str | None
 ) -> None:
@@ -622,6 +622,14 @@ def test_a_head_that_declares_the_event_does_not_wake_the_judge(tmp_path: Path) 
     repo = young(tmp_path, EVENTS.format(events="none"))
     change(repo, SURFACE_CHANGE | DOOR_CHANGE | {BINDING: EVENTS.format(events="deployed")})
     assert codes(repo) == ["guard"]
+
+
+def test_a_binding_with_no_events_line_declares_every_event(tmp_path: Path) -> None:
+    # Why: a 0.10 adoption that upgrades has no line yet and may already be deployed, so a missing
+    # line must keep the owner's review of doors and unflagged surface; only `none` turns it off.
+    repo = young(tmp_path, "# Binding\n")
+    change(repo, SURFACE_CHANGE | DOOR_CHANGE)
+    assert {"door", "unflagged"} <= set(codes(repo))
 
 
 def test_a_branch_forked_before_the_declaration_still_meets_the_owner(tmp_path: Path) -> None:

@@ -242,6 +242,19 @@ def life_events(binding: str) -> frozenset[str]:
     return frozenset(name for name in named if name and name != "none")
 
 
+def declared_or_all(binding: str) -> frozenset[str]:
+    """The life events a judge may rely on: every event when the binding has no events line.
+
+    Why: ``life_events`` reads a missing line as "no events", right for a trigger waiting on an
+    owner's word, wrong for a judge that switches protection off. A 0.10 adoption that upgrades
+    has the line missing while it may already be deployed, so for it a missing line fails closed;
+    an explicit ``none`` is the owner saying the project is young.
+    """
+    if EVENTS.search(binding) is None:
+        return frozenset(load().events)
+    return life_events(binding)
+
+
 def a(kind: str) -> str:
     return f"{'an' if kind[0] in 'aeiou' else 'a'} {kind}"
 

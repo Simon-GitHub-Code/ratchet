@@ -548,6 +548,8 @@ def test_the_critic_runs_only_for_a_project_that_is_depended_on(tmp_path: Path) 
         report = adopted(tmp_path / name, "library", BODY, extra=events(named), gh=gh)
         assert not report.critic
         assert "declares no `depended-on` life event" in report.critic_reason
+    # Why: a binding with no events line may be a deployed 0.10 adoption, so the critic stays on.
+    assert adopted(tmp_path / "unlined", "library", BODY, extra=("", ""), gh=gh).critic
     bare = run(repository(tmp_path / "bare"), "4", gh)
     assert not bare.critic
     assert json.loads(json.dumps(asdict(asked)))["critic"] is True

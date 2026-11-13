@@ -495,7 +495,7 @@ def check_checkout(report: Report, root: Path, *, base: str, branch: str | None)
 def check_critic(report: Report, root: Path) -> None:
     """Say whether the pipeline critiques: only a project people depend on (ADR 0028)."""
     text = binding_text(root)
-    report.critic = CRITIC_EVENT in application_types.life_events(text or "")
+    report.critic = text is not None and CRITIC_EVENT in application_types.declared_or_all(text)
     report.critic_reason = (
         f"the binding declares `{CRITIC_EVENT}`: others rely on it, so the change is attacked"
         " before review"
