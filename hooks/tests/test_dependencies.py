@@ -582,3 +582,114 @@ def test_pnpm_lock_keeps_a_linked_workspace_package_and_a_registry_tarball() -> 
         "\nsnapshots:",
     )
     assert _shown("pnpm-lock.yaml", private, more) == ["idb (lockfile) (none) -> 8.0.0"]
+
+
+# pnpm 11 and later open the lockfile with a boot document, which locks the pnpm that runs and
+# the config dependencies, then write the project's own after a second marker.
+PNPM_BOOT = """---
+lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    configDependencies: {}
+    packageManagerDependencies:
+      pnpm:
+        specifier: 12.18.0
+        version: 12.18.0
+
+packages:
+
+  pnpm@12.18.0:
+    resolution: {integrity: sha512-pnpm}
+    engines: {node: '>=18'}
+    hasBin: true
+
+snapshots:
+
+  pnpm@12.18.0: {}
+
+---
+"""
+PNPM_12_LOCK = PNPM_BOOT + PNPM_LOCK.replace(
+    "      '@lit-labs/ssr-dom-shim': 1.2.0\n",
+    "      '@lit-labs/ssr-dom-shim': 1.2.0\n    transitivePeerDependencies:\n      - react\n"
+    "      - '@types/react'\n",
+)
+IDB = "packages:\n\n  idb@8.0.0:\n    resolution: {integrity: sha512-idb}\n"
+
+
+def _boot(text: str, old: str, new: str) -> str:
+    boot, marker, project = text.partition("\n---\n")
+    return boot.replace(old, new) + marker + project
+
+
+def test_a_pnpm_lockfile_with_a_boot_document_reads_both() -> None:
+    assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, PNPM_12_LOCK) == []
+    added = PNPM_12_LOCK[::-1].replace("packages:\n"[::-1], IDB[::-1], 1)[::-1]
+    assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, added) == ["idb (lockfile) (none) -> 8.0.0"]
+    raised = _boot(PNPM_12_LOCK, "12.18.0", "12.19.0")
+    assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, raised) == [
+        "pnpm (boot document) 12.18.0 -> 12.19.0"
+    ]
+    assert _shown("pnpm-lock.yaml", PNPM_LOCK, PNPM_12_LOCK) == [
+        "pnpm (boot document) (none) -> 12.18.0"
+    ]
+
+
+PNPM_IN_PROJECT = PNPM_12_LOCK.replace(
+    "      lit:\n", "      pnpm:\n        specifier: 13.0.0\n        version: 13.0.0\n      lit:\n"
+).replace(
+    "\n  lit@3.1.0:\n",
+    "\n  pnpm@13.0.0:\n    resolution: {integrity: sha512-p13}\n\n  lit@3.1.0:\n",
+)
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "reason"),
+    [
+        (PNPM_12_LOCK, _boot(PNPM_12_LOCK, "12.18.0", "12.17.0"), "pnpm falls from 12.18.0"),
+        (PNPM_IN_PROJECT, _boot(PNPM_IN_PROJECT, "12.18.0", "12.17.0"), "pnpm falls"),
+        (PNPM_12_LOCK, _boot(PNPM_12_LOCK, "sha512-pnpm", "sha512-evil"), "changed in place"),
+        (
+            PNPM_12_LOCK,
+            _boot(PNPM_12_LOCK, "sha512-pnpm}", "sha512-p, tarball: https://evil.example/p}"),
+            "changed in place",
+        ),
+        (
+            PNPM_12_LOCK,
+            _boot(PNPM_12_LOCK, "    configDependencies: {}\n", "    dependencies: {}\n"),
+            "its boot document locks dependencies",
+        ),
+        (
+            PNPM_12_LOCK,
+            _boot(PNPM_12_LOCK, "  .:\n    configDependencies: {}\n", "  .: x\n"),
+            "its boot document locks",
+        ),
+        (
+            PNPM_12_LOCK,
+            _boot(PNPM_12_LOCK, "\nsnapshots:", "\noverrides:\n  a: 1\nsnapshots:"),
+            "v9",
+        ),
+        (PNPM_12_LOCK, PNPM_12_LOCK + "---\n" + PNPM_LOCK, "not in the shape"),
+        (PNPM_12_LOCK, PNPM_LOCK + "---\n" + PNPM_LOCK, "not in the shape"),
+        (PNPM_12_LOCK, "---\n" + PNPM_LOCK, "not in the shape"),
+        (PNPM_12_LOCK, PNPM_12_LOCK.replace("\n---\n", "\n--- \n"), "not in the shape"),
+        (
+            PNPM_12_LOCK,
+            PNPM_12_LOCK.replace(
+                "      lit:\n        specifier", "      - lit\n      x:\n        s"
+            ),
+            "not in the shape",
+        ),
+        (
+            PNPM_12_LOCK,
+            PNPM_12_LOCK.replace("      - react\n", "      - react\n      evil: 1\n"),
+            "not in the shape",
+        ),
+    ],
+)
+def test_a_pnpm_boot_document_is_held_to_the_same_rules(
+    before: str, after: str, reason: str
+) -> None:
+    assert reason in _reason("pnpm-lock.yaml", before, after)
