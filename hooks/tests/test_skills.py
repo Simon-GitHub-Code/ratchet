@@ -417,6 +417,48 @@ def test_a_typed_preference_chooses_among_allowed_options_and_never_loosens_a_sa
     assert "declares or denies a life event" in decision
 
 
+PREFERENCE_LIMITS = [
+    ("method/records.md", "a ceiling raised is a threshold lowered"),
+    ("method/records.md", "with the route that exists, and the default stands"),
+    ("method/records.md", "Nothing a preference says skips that."),
+    ("method/records.md", "An event once declared stays."),
+    ("adopt/SKILL.md", "It chooses among the options a row allows and never loosens a safeguard"),
+    ("init/SKILL.md", "It chooses among the options a choice allows and never loosens a safeguard"),
+    ("adopt/SKILL.md", "except a life event's: the owner's answer to that question is the only"),
+    ("adopt/SKILL.md", 'as "you asked for", or as not applied with the route that exists'),
+    ("init/SKILL.md", 'as "you asked for", or as not applied with the route that exists'),
+    ("adopt/SKILL.md", "says: read it before you act on one"),
+    ("init/SKILL.md", "says: read it before you act on one"),
+]
+
+
+@pytest.mark.parametrize(("page", "part"), PREFERENCE_LIMITS)
+def test_each_limit_on_a_preference_is_stated_where_it_is_taken(page: str, part: str) -> None:
+    # Why: the verifier deleted each of these and every test stayed green. Each is what keeps a
+    # typed preference from loosening a bar or declaring a life event without the owner's answer.
+    text = flat(page)
+    if page == "method/records.md":
+        text = text.split(PREFERENCE_RULE, 1)[1].split(" ## ", 1)[0]
+    else:
+        text = text.split("**What the owner asked for wins.**", 1)[1]
+        text = text.split("**Everything else is assumed.**", 1)[0]
+    assert part in text
+
+
+def test_a_preference_not_applied_is_named_in_the_hand_over() -> None:
+    # Why: the preference paragraphs list a refused preference under **Assumed** as not applied,
+    # but the hand-over steps that build that block named only "you asked for", so the owner
+    # never saw that what he typed was not done.
+    hand_overs = {
+        "adopt": flat("adopt/SKILL.md").split("13. **Hand over.**", 1)[1],
+        "init": flat("init/SKILL.md").split("9. **Hand over.**", 1)[1].split(" ## ", 1)[0],
+    }
+    for name, step in hand_overs.items():
+        assert "as not applied, with what was asked for, why not and the route that exists" in (
+            step
+        ), name
+
+
 def test_an_overturned_assumption_has_a_route_and_a_stated_cost() -> None:
     # Why: an overturn rerun told the owner to edit the binding by hand to declare a life event.
     records = " ".join((SKILLS / "method/records.md").read_text(encoding="utf-8").split())
