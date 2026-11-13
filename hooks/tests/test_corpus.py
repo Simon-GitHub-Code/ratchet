@@ -1686,6 +1686,10 @@ FROM_APP: list[tuple[str, list[str]]] = [
     ("HOME=/repo; cd ~ && echo x > justfile", [UNRESOLVED]),
     ("{ HOME=/repo; cd; echo x > justfile; }", [UNRESOLVED]),
     ("CDPATH=/ cd repo; echo x > justfile", [UNRESOLVED]),
+    # Why: bash falls back to the target as written, so that reading stays among the others.
+    ("CDPATH=/tmp cd ..; echo x > justfile", [W]),
+    ("export CDPATH=/tmp; cd sub && rm -f ../../justfile", [W]),
+    ("HOME=/tmp; cd ~/../../repo && rm -f justfile", [W]),
     ("cd .. && pushd app && pushd && echo x > justfile", [W]),
     ("v=${ cd ..; }; cp notes.md justfile", [W]),
     ("echo ${ cd ..; }; cp notes.md justfile", [W]),
