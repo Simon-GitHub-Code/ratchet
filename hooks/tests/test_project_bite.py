@@ -1607,3 +1607,13 @@ def test_a_rules_file_that_exists_may_be_changed_or_removed(
     out = capsys.readouterr().out
     assert "bite: lint: rules: bites\n" in out
     assert "bite: lint: blind: DOES NOT BITE\n" in out
+
+
+def test_a_copy_its_directories_cannot_reach_is_red_and_says_why(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: an error the system gave on the way to a file of the copy ended the run in a traceback.
+    registry = "setup = [\"sh -c 'rm -r .git/info && echo x > .git/info'\"]\n" + bite("lint", "a")
+    root = project(tmp_path / "repo", {"lint": LINT}, registry)
+    assert prove(root) == 1
+    assert capsys.readouterr().out == "[Errno 20] Not a directory: '.git/info'\nbite: red\n"
