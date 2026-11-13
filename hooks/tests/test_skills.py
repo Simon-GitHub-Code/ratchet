@@ -417,6 +417,29 @@ def test_a_typed_preference_chooses_among_allowed_options_and_never_loosens_a_sa
     assert "declares or denies a life event" in decision
 
 
+KIND_OF_SOFTWARE = (
+    "The kind of software is what the tree shows, not an option: a preference picks it only where"
+    " the tree leaves it open, and one that contradicts the tree is listed as not applied, with"
+    " what the tree shows"
+)
+
+
+def test_a_preference_never_declares_a_kind_of_software_the_tree_contradicts() -> None:
+    # Why: the records listed the kind of software among the options a preference chooses, and
+    # nothing checks the declared types against the tree, so "it's just a little command-line
+    # script" on a tree that runs a server could drop every service row with no decision record.
+    rule = flat("method/records.md").split(PREFERENCE_RULE, 1)[1].split(" ## ", 1)[0]
+    options = rule.split("A preference chooses among the options a row allows:", 1)[1]
+    assert "kind of software" not in options.split(".", 1)[0]
+    assert KIND_OF_SOFTWARE in rule
+    adr_page = next((SKILLS.parent / "docs/adr").glob("0034-*.md"))
+    adr = " ".join(adr_page.read_text(encoding="utf-8").split())
+    decision = adr.split("7. **Preferences come first, in words.**", 1)[1].split(" 8. ", 1)[0]
+    assert KIND_OF_SOFTWARE in decision
+    residue = adr.split("Known residue.", 1)[1].split(" ## ", 1)[0]
+    assert "No script checks the declared application types against the tree" in residue
+
+
 PREFERENCE_LIMITS = [
     ("method/records.md", "a ceiling raised is a threshold lowered"),
     ("method/records.md", "with the route that exists, and the default stands"),
