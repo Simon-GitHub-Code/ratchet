@@ -304,6 +304,7 @@ def _pnpm_tree(text: str) -> Data:
     """
     root: Data = {}
     stack: list[tuple[int, Data | list[str]]] = [(-1, root)]
+    leaf = len(text)
     for line in text.splitlines():
         body = line.strip()
         if not body or body.startswith("#"):
@@ -314,9 +315,13 @@ def _pnpm_tree(text: str) -> Data:
         while stack[-1][0] >= indent:
             stack.pop()
         parent = stack[-1][1]
-        if line[:indent].strip(" ") or (match is None and item is None):
+        # Why: a line indented under a value, not under a key that opens a block, would land in
+        # the block above it instead.
+        if line[:indent].strip(" ") or (match is None and item is None) or indent > leaf:
             msg = "it is not in the shape pnpm writes"
             raise NotDependencyOnlyError(msg)
+        opens = item is None and match is not None and match.group(4) is None
+        leaf = len(text) if opens else indent
         if isinstance(parent, list) and item is not None:
             parent.append(_unquoted(item))
             continue
@@ -336,6 +341,20 @@ def _pnpm_tree(text: str) -> Data:
     return root
 
 
+def _block(value: object) -> Data:
+    """A mapping pnpm writes as a block, or ``{}`` for an empty one.
+
+    Why: the tree keeps a one-line mapping as text, so ``packages: {a@1.0.0: {...}}`` would read
+    as no packages at all; pnpm writes none but the empty one there.
+    """
+    if value is None or value == "{}":
+        return {}
+    if not isinstance(value, dict):
+        msg = "it is not in the shape pnpm writes"
+        raise NotDependencyOnlyError(msg)
+    return value
+
+
 def _unquoted(match: re.Match[str]) -> str:
     """The key or item a matched line names, without its quotes."""
     return match.group(1) or match.group(2) or match.group(3)
@@ -351,8 +370,7 @@ def _pnpm_load(text: str) -> object:
         msg = "it is not in the shape pnpm writes"
         raise NotDependencyOnlyError(msg)
     boot = _pnpm_document("\n".join(lines[1 : starts[1]]))
-    importers = _table(boot, "importers").values()
-    groups = {g for i in importers for g in (i if isinstance(i, dict) else [str(i)])}
+    groups = {group for i in _block(boot.get("importers")).values() for group in _block(i)}
     if not groups <= _PNPM_BOOT_GROUPS:
         msg = f"its boot document locks {', '.join(sorted(groups - _PNPM_BOOT_GROUPS))}"
         raise NotDependencyOnlyError(msg)
@@ -390,15 +408,15 @@ def _pnpm_lock(data: Data) -> Inventories:
 
 def _pnpm_inventory(data: Data) -> Locked:
     locked: Locked = {}
-    for key, entry in _table(data, "packages").items():
+    for key, entry in _block(data.get("packages")).items():
         match = _PNPM_PACKAGE.match(key)
         if match is None or not isinstance(entry, dict):
             msg = f"{key} is not a name and version pnpm locks from a registry"
             raise NotDependencyOnlyError(msg)
         _lock(locked, match.group(1), version=match.group(2), artifact=_pnpm_artifact(entry))
-    for path, importer in _table(data, "importers").items():
-        for group in importer.values() if isinstance(importer, dict) else []:
-            for name, spec in group.items() if isinstance(group, dict) else []:
+    for path, importer in _block(data.get("importers")).items():
+        for group in _block(importer).values():
+            for name, spec in _block(group).items():
                 pinned = spec.get("version", "") if isinstance(spec, dict) else ""
                 if pinned.startswith("link:"):
                     _lock(locked, name, version=pinned, artifact=Artifact("local", path, ""))
