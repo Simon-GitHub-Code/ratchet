@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Bind what is owed
 
-Load the `ratchet:method` skill first. A question is asked once its trigger fires (ADR 0028): the first file of a kind of code is free, and a second, added while a row it fires is still `later:`, is red. The route names `/ratchet:safeguard` when a row is owed. This skill binds those rows, so the owner's next change is never the one that stalls.
+Load the `ratchet:method` skill first. A question is asked once its trigger fires (ADR 0028): the change that brings a kind of code is free, however many files it touches (ADR 0030), and a later one that adds another instance while a row it fires is still `later:` is red. The route names `/ratchet:safeguard` when a row is owed. This skill binds those rows, so the owner's next change is never the one that stalls.
 
 `/ratchet:safeguard` binds every owed row. `/ratchet:safeguard <event>` (`deployed`, `irreplaceable-data` or `depended-on`) declares that life event first, then binds what it owes with the rest.
 

@@ -1,4 +1,4 @@
-"""The triggers gate: the first instance of a kind is free, the next one owes a bound safeguard."""
+"""The triggers gate: the change that brings a kind is free, the next one owes a bound safeguard."""
 
 import json
 from pathlib import Path
@@ -181,28 +181,30 @@ def test_the_first_instance_is_free_and_noted(tmp_path: Path, capsys: Out) -> No
     assert out.endswith("triggers: green against " + git(root, "rev-parse", "HEAD")[:12] + "\n")
 
 
-def test_the_free_arrival_is_one_file_not_forty_instances(tmp_path: Path, capsys: Out) -> None:
-    # Why: "the first one is free" has a bound, or a first change could bring forty unguarded calls.
-    root = project(tmp_path, None, LATER_CALL)
-    write(root, "src/a.py", "import requests\n" + "requests.get(1)\n" * 40)
-    assert run(root) == 0
-    assert "has arrived (src/a.py:2, src/a.py:3" in capsys.readouterr().out
+def test_the_change_that_brings_a_kind_is_free_however_many_files_it_touches(
+    tmp_path: Path, capsys: Out
+) -> None:
+    # Why: a first feature brings a kind in several files at once; one-file arrivals made it red.
+    root = project(tmp_path, None, LATER_CALL, LATER_LISTENER)
+    write(root, "src/a.py", CALL * 3)
     write(root, "src/b.py", CALL)
-    assert run(root) == 1
-    out = capsys.readouterr().out
-    assert (
-        "triggers: 'outbound-call' arrives in 2 files (src/a.py, src/b.py); the first file that"
-        " brings the kind is free, not several. These rows are still `later:`: survives failing"
-        " dependencies. Run /ratchet:safeguard to bind them before adding more (ADR 0028)"
-    ) in out
-
-
-def test_two_files_of_a_path_kind_are_not_one_arrival(tmp_path: Path, capsys: Out) -> None:
-    root = project(tmp_path, None, LATER_LISTENER)
     write(root, "src/server.py", "x = 1\n")
     write(root, "src/worker.py", "x = 1\n")
+    assert run(root) == 0
+    out = capsys.readouterr().out
+    assert (
+        "triggers: note: 'outbound-call' has arrived (src/a.py:2, src/a.py:4, src/a.py:6,"
+        " src/b.py:2) and owes survives failing dependencies; the change that brings a kind is"
+        " free. Run /ratchet:safeguard next to bind them before another is added (ADR 0030)"
+    ) in out
+    assert "'listener' has arrived (src/server.py, src/worker.py) and owes shuts down" in out
+    commit(root, "feat(core): the first calls and listeners")
+    git(root, "branch", "-f", "main")
+    write(root, "src/c.py", CALL)
     assert run(root) == 1
-    assert "arrives in 2 files (src/server.py, src/worker.py)" in capsys.readouterr().out
+    assert "'outbound-call' gained 1 instance(s) (src/c.py:2) while the base already held 4" in (
+        capsys.readouterr().out
+    )
 
 
 def test_a_second_instance_while_a_row_is_owed_is_red(tmp_path: Path, capsys: Out) -> None:
