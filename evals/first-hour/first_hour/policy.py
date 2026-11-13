@@ -196,9 +196,8 @@ class Scope:
 # Why: a refusal that names only what is refused leaves a model to guess the rest, and it guessed
 # that the whole network was gone. Every refusal says what still works.
 STILL_WORKS = (
-    "Only this call is refused. Package installs and reads of public package-registry metadata "
-    "still work (for example `curl -s https://pypi.org/pypi/<name>/json`, `curl -s "
-    "https://registry.npmjs.org/<name>`), and so do the project's files, tests and gates."
+    "Only this call is refused. Package installs and unauthenticated HTTPS GET reads of public "
+    "package-registry metadata still work, and so do the project's files, tests and gates."
 )
 
 

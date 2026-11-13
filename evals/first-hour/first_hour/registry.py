@@ -1,11 +1,12 @@
 """The one network read a session may make: public package-registry metadata, with ``curl``.
 
 A normal owner's session picks tools by looking up what is current: ``curl -s
-https://pypi.org/pypi/<name>/json``. The harness refuses ``WebFetch`` and ``WebSearch`` (they run
+<registry>/<package>``. The harness refuses ``WebFetch`` and ``WebSearch`` (they run
 in the Claude Code process, outside the sandbox, which holds the model's token), so this is how a
 session reads a registry. A ``curl`` is allowed when every flag is on a short list that cannot
-send or sign anything, and every URL is ``https`` on a host named here. The sandbox has no
-credential to send (README, "Safety"); the rule keeps a read a read.
+send or sign anything, and every URL is ``https`` on a named public host: any ecosystem's
+registry, none favoured. The sandbox has no credential to send (README, "Safety"); the rule keeps
+a read a read.
 """
 
 from __future__ import annotations
@@ -16,20 +17,20 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-# Why: the registries a session needs to see what is current, each served read-only to anyone.
-# One host per ecosystem, and the index host of crates. Not the forges, which the policy names
-# as forbidden, and not the hosts that serve package files, since a metadata read is enough.
-HOSTS = (
-    "pypi.org",
-    "registry.npmjs.org",
-    "crates.io",
-    "index.crates.io",
-    "rubygems.org",
-    "proxy.golang.org",
+# Why: forge hosts are refused here as the policy refuses them everywhere. A name ending in one of
+# these suffixes is not a public host: a session must not reach a machine on the local network.
+FORGES = (
+    "github.com",
+    "githubusercontent.com",
+    "gitlab.com",
+    "bitbucket.org",
+    "codeberg.org",
+    "sr.ht",
 )
-
-_HOST = "|".join(re.escape(host) for host in HOSTS)
-_URL = re.compile(rf"https://(?:{_HOST})(?:/[\w./:%?=&+,~@${{}}-]*)?")
+LOCAL_SUFFIXES = ("localhost", "local", "internal", "lan", "home", "corp", "arpa")
+# Why: a host is letters, digits, dots and hyphens, then a path or nothing: no userinfo, no port,
+# no `$VAR`, no bracketed address.
+_URL = re.compile(r"https://([A-Za-z0-9][A-Za-z0-9.-]*)(?:/[\w./:%?=&+,~@${}-]*)?")
 _SHORT_FLAGS = frozenset("sSfLg")
 _SHORT_VALUES = {
     "m": "--max-time",
@@ -76,11 +77,23 @@ def is_registry_read(args: tuple[str, ...]) -> bool:
         elif arg.startswith("-") and len(arg) > 1:
             if not _short_ok(arg[1:], words):
                 return False
-        elif _URL.fullmatch(arg):
+        elif _public_url(arg):
             urls += 1
         else:
             return False
     return urls > 0
+
+
+def _public_url(arg: str) -> bool:
+    """An ``https`` URL on a named public host: not a forge, an address or a local name."""
+    match = _URL.fullmatch(arg)
+    if match is None:
+        return False
+    host = match.group(1).lower().rstrip(".")
+    last = host.rsplit(".", 1)[-1]
+    if "." not in host or last.isdigit() or last in LOCAL_SUFFIXES:
+        return False
+    return not any(host == forge or host.endswith("." + forge) for forge in FORGES)
 
 
 def _short_ok(cluster: str, words: Iterator[str]) -> bool:
