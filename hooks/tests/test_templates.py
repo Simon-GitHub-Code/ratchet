@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 import change_size
+import conformance
 import pins
 import plugin_pin
 
@@ -345,14 +346,42 @@ def test_start_and_test_files_are_entry_points_and_in_no_tier() -> None:
     assert {"start", "test-files"} <= all_recipes()
 
 
+def entry_point_blocks() -> tuple[list[str], list[list[str]]]:
+    """The template binding's Entry points section: its paragraphs, and each table's rows."""
+    section = BINDING.split("\n## Entry points\n", 1)[1].split("\n## ", 1)[0]
+    blocks = section.strip().split("\n\n")
+    tables = [block.splitlines()[2:] for block in blocks if block.startswith("|")]
+    return [block for block in blocks if not block.startswith("|")], tables
+
+
 def test_every_entry_point_the_binding_names_is_a_recipe_of_the_justfile() -> None:
     needs_just()
-    section = BINDING.split("## Entry points", 1)[1].split("\n## ", 1)[0]
-    rows = [line for line in section.splitlines() if line.startswith("|")][2:]
+    rows = [row for table in entry_point_blocks()[1] for row in table]
     row = re.compile(r"^\| [^|]+ \| `just ([a-z][a-z0-9-]*)[^`]*` \|$", re.MULTILINE)
     named = row.findall("\n".join(rows))
-    assert len(named) == len(rows), "every row of the table is read"
+    assert len(named) == len(rows), "every row of the tables is read"
     assert set(named) <= all_recipes(), set(named) - all_recipes()
+
+
+def test_the_binding_says_which_entry_points_the_conformance_gate_requires() -> None:
+    # Why: PR 43 added `test-files` and `start` to the one table its sentence said the conformance
+    # gate requires, and the gate requires neither, so every new binding said something untrue.
+    paragraphs, tables = entry_point_blocks()
+    names = [[row.split("|")[1].strip() for row in table] for table in tables]
+    assert set(names[0]) == set(conformance.ENTRY_POINTS), "the first table is what it requires"
+    assert len(names[0]) == len(conformance.ENTRY_POINTS), "each once"
+    assert len(paragraphs) == len(tables) == 2, "a paragraph above each table"
+    (intro, between), (gated_names, convenience_names) = paragraphs, names
+    assert not set(convenience_names) & set(conformance.ENTRY_POINTS), (
+        "the second, nothing it requires"
+    )
+    assert set(gated_names + convenience_names) <= set(conformance.template_rows())
+    assert "every entry point of the first table below" in intro
+    assert "the conformance gate requires each" in intro
+    assert "which no gate requires or runs" in between
+    for name in convenience_names:
+        assert f"`{name}" in between, name
+        assert f"`{name}" not in intro, name
 
 
 def test_the_binding_names_the_tests_every_role_writes_and_how_they_run() -> None:
