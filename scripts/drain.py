@@ -76,12 +76,19 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 CONCURRENCY = 3
-# Preflight, spec, implement, critique, two rounds of fix and re-critique, review.
-PIPELINE_AGENTS = 9
-# Before the project is depended-on the critic and its fix loop do not run (ADR 0028).
-YOUNG_PIPELINE_AGENTS = 4
+# Why: the workflow declares the most agents a run spawns, by role, and a test counts them in a
+# worst-case run, so a new role changes one line there and not a number here.
+_DECLARED = re.findall(
+    r"^const AGENTS_AT_MOST = (\{.*\})$",
+    (Path(__file__).resolve().parents[1] / "workflows/pipeline.js").read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+_AGENTS: dict[str, int] = json.loads(_DECLARED[0])
+# The critic and its fix loop join once the project is depended-on (ADR 0028).
+PIPELINE_AGENTS = _AGENTS["dependedOn"]
+YOUNG_PIPELINE_AGENTS = _AGENTS["young"]
 # A branch brought up to date behind another merge: one agent to reconcile, one to review again.
-UPDATE_AGENTS = 2
+UPDATE_AGENTS = _AGENTS["rejudge"]
 BUILDABLE, BUILDING, BUILT = "buildable", "building", "built"
 WAITING, HELD, MERGED, REFUSED = "waiting", "held", "merged", "refused"
 LIVE = frozenset({BUILDABLE, BUILDING, BUILT})
