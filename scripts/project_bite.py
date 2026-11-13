@@ -794,7 +794,7 @@ def run_lanes(
 
     with (
         tempfile.TemporaryDirectory(prefix="ratchet-bite-") as scratch,
-        ThreadPoolExecutor(max_workers=lanes) as pool,
+        ThreadPoolExecutor(max_workers=lanes, thread_name_prefix="bite-lane") as pool,
     ):
         paths = [Path(scratch) / f"copy-{n}" for n in range(lanes)]
         try:

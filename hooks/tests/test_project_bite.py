@@ -1,7 +1,10 @@
 """``project_bite.py``: every gate a repository bound goes red on its planted fault."""
 
 import os
+import signal
 import tempfile
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,6 +21,9 @@ TABLE = "| Question | Tool | Tier | Threshold source | Entry point |\n|---|---|-
 LINT = 'if grep -rl planted src; then echo "L001 a planted fault"; exit 1; fi'
 TESTS = 'ls tests/*.t >/dev/null 2>&1 || { echo "no test to run"; exit 1; }'
 PLANT = 'write = { path = "src/_bite.txt", content = "planted\\n" }'
+# Seconds from a signal to the end of the proof, on a shared machine: the runner wakes every tenth
+# of a second, and the gate's group ends at once on SIGTERM.
+STOPS_WITHIN = 3
 MANIFEST = (
     '[[group]]\nname = "tool-config"\nreason = "The rules of a gate."\npaths = ["lint.cfg"]\n'
 )
@@ -477,17 +483,60 @@ def test_a_gate_in_the_copy_judges_the_copy_and_knows_it_is_being_bitten(
     assert "bite: env: a planted word: bites" in capsys.readouterr().out
 
 
-def test_an_interrupt_stops_the_gates_and_removes_the_copies(
-    tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
+def lanes() -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate() if thread.name.startswith("bite-lane")]
+
+
+@pytest.mark.parametrize("receiver", ["the main thread", "a lane's thread"])
+def test_an_interrupt_stops_the_gates_promptly_whichever_thread_receives_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], receiver: str
 ) -> None:
-    gates = {"slow": "kill -TERM $PPID; sleep 60", "next": LINT}
+    # Why: the kernel hands a process-directed signal to any thread. One handed to a lane's
+    # thread waited for the gate to finish, while the main thread slept in a blocking call.
+    started, stopped = tmp_path / "started", tmp_path / "stopped"
+    slow = f"trap 'echo ended by the runner > {stopped}; exit 143' TERM\ntouch {started}\nsleep 60"
     registry = bite("slow", "a planted word") + bite("next", "a planted word")
-    root = project(tmp_path / "repo", gates, registry)
+    root = project(tmp_path / "repo", {"slow": slow, "next": LINT}, registry)
+    sent: list[float] = []
+
+    def interrupt() -> None:
+        while not started.exists():
+            time.sleep(0.01)
+        target = threading.main_thread() if receiver == "the main thread" else lanes()[0]
+        sent.append(time.monotonic())
+        signal.pthread_kill(target.ident or 0, signal.SIGTERM)
+
+    threading.Thread(target=interrupt, daemon=True).start()
     assert prove(root) == 128 + 15
+    assert time.monotonic() - sent[0] < STOPS_WITHIN
     out = capsys.readouterr().out
     assert out.endswith("bite: red: interrupted by signal 15\n")
     assert "bite: next" not in out
-    assert list(scratch.iterdir()) == []
+    assert stopped.read_text(encoding="utf-8") == "ended by the runner\n"
+    assert lanes() == []
+    assert list((tmp_path / "scratch").iterdir()) == []
+
+
+def test_an_interrupt_while_the_lanes_start_waits_for_every_lane_before_the_copies_go(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Why: a signal between a lane's start and the pool recording it left a lane the pool did not
+    # wait for, writing into a copy that was being removed.
+    gates = {"one": LINT, "two": LINT}
+    registry = bite("one", "a planted word") + bite("two", "a planted word")
+    root = project(tmp_path / "repo", gates, registry)
+    start = threading.Thread.start
+
+    def start_then_interrupt(thread: threading.Thread) -> None:
+        start(thread)
+        if thread.name.startswith("bite-lane") and len(lanes()) == 2:
+            signal.raise_signal(signal.SIGTERM)
+
+    monkeypatch.setattr(threading.Thread, "start", start_then_interrupt)
+    assert prove(root, "--jobs", "2") == 128 + 15
+    assert capsys.readouterr().out.endswith("bite: red: interrupted by signal 15\n")
+    assert lanes() == []
+    assert list((tmp_path / "scratch").iterdir()) == []
 
 
 def test_what_a_gate_leaves_running_ends_with_it_and_cannot_hold_the_run_open(
