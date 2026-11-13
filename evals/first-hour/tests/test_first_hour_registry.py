@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from first_hour import policy, registry, shellpaths
+from first_hour import policy, shellpaths
 from first_hour.policy import Scope
 
 ROOT = Path("/tmp/fh-run")
@@ -23,6 +23,11 @@ SCOPE = Scope(
 
 READS = [
     "curl -s https://pypi.org/pypi/ruff/json",
+    "curl -s https://api.nuget.org/v3-flatcontainer/newtonsoft.json/index.json",
+    "curl -s https://repo.maven.apache.org/maven2/junit/junit/maven-metadata.xml",
+    "curl -s https://pkg.go.dev/example.com/mod",
+    "curl -s https://hex.pm/api/packages/phoenix",
+    "curl -s https://packages.example.org./x",
     "curl -sSL --max-time 10 https://registry.npmjs.org/vite | head -c 300",
     (
         "for p in ruff mypy; do curl -s --max-time 10 https://pypi.org/pypi/$p/json |"
@@ -62,9 +67,22 @@ SENDS_OR_LEAVES = [
     "curl -s --netrc https://pypi.org/pypi/ruff/json",
     "curl -s -X DELETE https://registry.npmjs.org/ruff",
     "curl -s --request=PUT https://registry.npmjs.org/ruff",
-    "curl -s https://example.com/",
     "curl -s http://pypi.org/pypi/ruff/json",
-    "curl -s https://pypi.org.example.com/pypi/ruff/json",
+    "curl -s https://github.com/a/b",
+    "curl -s https://raw.githubusercontent.com/a/b/main/x",
+    "curl -s https://api.gitlab.com/x",
+    "curl -s https://sr.ht/x",
+    "curl -s https://127.0.0.1/",
+    "curl -s https://10.0.0.5/x",
+    "curl -s https://169.254.169.254/latest",
+    "curl -s https://[::1]/x",
+    "curl -s https://localhost/x",
+    "curl -s https://app.localhost/x",
+    "curl -s https://printer.local/x",
+    "curl -s https://db.internal/x",
+    "curl -s https://intranet/x",
+    "curl -s https://example.com:8443/x",
+    "curl -s https://-bad.example.com/x",
     "curl -s https://pypi.org@example.com/x",
     "curl -s https://$HOST/x",
     "curl -s http://127.0.0.1:8000/",
@@ -77,7 +95,7 @@ SENDS_OR_LEAVES = [
     "curl -s --header",
     "curl -s --silent=1 https://pypi.org/pypi/ruff/json",
     "curl -s --no-such-flag https://pypi.org/pypi/ruff/json",
-    "curl -s https://pypi.org/pypi/ruff/json https://example.com",
+    "curl -s https://pypi.org/pypi/ruff/json http://example.com",
     "curl -s https://pypi.org/pypi/ruff/json -o /home/someone/x",
     "echo use curl",
     "bash -c \"echo 'curl -s https://pypi.org/x'\"",
@@ -89,11 +107,6 @@ SENDS_OR_LEAVES = [
 def test_a_curl_that_could_send_sign_or_leave_the_registries_is_refused(command: str) -> None:
     decision = policy.decide("Bash", {"command": command}, SCOPE)
     assert not decision.allowed, command
-
-
-def test_the_registries_are_a_short_list_of_https_hosts() -> None:
-    assert len(registry.HOSTS) <= 8
-    assert not any("github" in host or "gitlab" in host for host in registry.HOSTS)
 
 
 # Each was refused as a registry publish, a network connection or a path in an eval run: text that
@@ -192,8 +205,8 @@ def test_a_refused_shell_command_says_what_is_refused_and_what_still_works(comma
     assert told.startswith("This call is refused: it ")
     assert "Only this call is refused." in told
     assert "Package installs" in told
-    assert "public package-registry metadata still work" in told
-    assert "curl -s https://pypi.org/pypi/<name>/json" in told
+    assert "unauthenticated HTTPS GET reads of public package-registry metadata" in told
+    assert "still work" in told
 
 
 @pytest.mark.parametrize(
@@ -211,3 +224,8 @@ def test_a_refused_tool_call_says_what_still_works(tool: str, tool_input: dict[s
     assert not decision.allowed
     assert decision.told == f"This call is refused: it {decision.why}. {policy.STILL_WORKS}"
     assert "registry" in decision.told
+
+
+@pytest.mark.parametrize("name", ["pypi", "npm", "crates", "nuget", "maven", "python", "rust"])
+def test_what_the_session_is_told_names_no_registry_language_or_tool(name: str) -> None:
+    assert name not in policy.STILL_WORKS.lower()
