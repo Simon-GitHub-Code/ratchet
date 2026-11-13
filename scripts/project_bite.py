@@ -122,6 +122,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
 REGISTRY = Path("quality/bites.toml")
+MISSING = "missing; every gate bound to a tool needs a [[bite]]"
 PATCHES = "quality/bites/"
 KINDS = ("write", "patch", "remove", "replace")
 # Why: a path in one of these defines what a gate runs or judges. A threshold or a register entry
@@ -555,9 +556,7 @@ def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
     """The binding's rows, the registry, what is wrong in it, and each gate it leaves unproven."""
     rows = gate_rows(gatelib.read_text(root / gatelib.BINDING) or "")
     source = gatelib.read_text(root / REGISTRY)
-    if source is None:
-        return rows, Registry(), ["missing; every gate bound to a tool needs a [[bite]]"], []
-    registry, problems = read_registry(source)
+    registry, problems = read_registry(source) if source is not None else (Registry(), [MISSING])
     problems += misplaced(root, rows, registry.bites)
     gaps = list(unproven(rows, registry.bites, application_types.load()))
     return rows, registry, problems, gaps

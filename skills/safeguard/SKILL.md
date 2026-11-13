@@ -23,7 +23,7 @@ One question, through the question tool, for every row at once: accept the propo
 3. **Ask the one question**, then act on it with no further question. A named tool that cannot answer its row: bind your proposal and say why in the hand-over.
 
 4. **Bind each row.** Read [what a recipe must get right](../method/tiers.md#what-a-recipe-must-get-right) first. For each row, in this order:
-   - Install the tool through the package manager, and add what it writes to `.gitignore`.
+   - Install the tool through the package manager, and add what it writes to `.gitignore`. A tool adoption provisioned, such as the test runner the binding's Tests section names, is already installed: bind its row by writing that runner into the recipe (`{{test_runner}}` with its shard flags), and install nothing.
    - Replace the recipe's `@echo "later: <trigger>"` body in the `justfile` with the real command. A gate with nothing to run is red, and the trigger fired, so what it judges has a member.
    - Change the row's Tool cell in `docs/process/binding.md` from `later: <trigger>` to the tool, and fill its threshold source. A row whose Telemetry or Feature flags section was one line says how it is met now.
    - Add its `[[bite]]` to `quality/bites.toml`: the smallest fault the gate exists to catch and the words it prints for it, a second bite that empties a collection, and a `proof = "<name>"` bite where the question requires one. Write a fault inside a file other changes also edit (a manifest, a lockfile) as `replace`, not `patch`. Run `just bite-one <gate>` and see it red with the fault and green without. A verdict other than `bites` is a defect of the recipe or the fault: fix it, never loosen `expect`.

@@ -10,6 +10,7 @@ It starts small and never stops you mid-idea. On the first commit only the floor
 
 - **Four plugins.** Ratchet composes with `mattpocock-skills` (how the work is done: `tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grilling`, `pr`, `research`), `pstack` (style and levers: `poteto-mode`, `architect`, `interrogate`, `arena`, `correct`) and `impeccable` (how anything a person sees is designed). In Claude Code they install with it.
 - **Tools on the machine.** `git` 2.36 or later, `python3` 3.11 or later, `just` (or another task runner, rebuilt by hand), the `pre-commit` framework, and `gh` signed in when the repository is on GitHub. Each tool your stack's gates use is chosen and installed at adoption.
+- **Time at adoption.** Adopting an empty repository took 19.5 minutes in a dogfood run on 2026-11-13. Adoption now also rehearses the first slice, which took 8.5 minutes on a heavily loaded machine and, as an estimate, would take 3 to 5 minutes on an idle one. A repository with code takes longer, since it binds the safeguards its code already needs.
 - **Agents.** A ticket built while you are away takes four agents until you declare that people depend on the project, and then at most nine, since a critic and its fix loop join; two more when it is judged again behind another merge. A drain says the number before it starts.
 - **Your keystrokes.** Up to two dialogs at init, one setup command, two dialogs at adoption, and one merge: the adoption's pull request changes guarded paths, so you merge it yourself. After that you write tickets, apply the agent-ready label, answer the questions that shape the product, declare the project's life events when they happen (deployed, holding irreplaceable data, depended on), and merge what the gates leave to you.
 - **Safeguards as you go.** Each one is bound by an agent, in a change of its own, when the project first needs it (`/ratchet:safeguard`, which `/ratchet:next` names). Before you deploy, a one-way door and a route with no flag merge without you.
@@ -90,7 +91,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/mutation_survivors.py` | 1 and 2 | is every surviving mutant registered, and no entry stale? Fed by any mutation tool: one JSON line per mutant, or the reports of mutmut and Stryker as they are |
 | `scripts/change_size.py` | 1 | is the change within its files and lines ceiling? (records, generated lockfiles and their snapshots are not counted; a moved file counts by its changed lines) |
 | `ratchet_guards.diff` | 1 | which guard paths changed? |
-| `scripts/settings_rules.py` | 1 | do the permission rules still mirror the manifest? |
+| `scripts/settings_rules.py` | 1 | do the permission rules still mirror the manifest? `--write` (the `settings` entry point) writes them, and refuses under a plugin other than the one CI runs, whose check would reject what it wrote |
 | `scripts/conformance.py` | 1 | does the repository still carry the method: its records, its binding, its application types, its Speed section, its CI shape? `--self-test` shows it bites |
 | `scripts/with_service.py` | 1 | does the deliverable start and answer? Boots a service by any command, waits until a URL answers, stops the whole process tree, retrying once on a new port when a service on a port it picked exits before it answers; with a command after `--` it holds the service up for that command. `--refuses NAME` asks whether it exits non-zero, naming the setting, when `NAME` is missing; `--graceful SECONDS` whether, signalled mid-request, it finishes the request and exits in time |
 | `scripts/triggers.py` | 1 | did the change add another instance of a kind whose safeguards are still owed? Counts each kind's instances at the merge base and at head by the binding's Triggers table; the change that brings a kind is green, however many files it touches, and names the rows it made owed |
@@ -104,7 +105,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/parallel.py` | every tier | not a gate: runs a tier's gates at once through the repository's own runner, each gate's output whole, every red one named, so local wall clock is the slowest gate and not the sum |
 | `scripts/changed.py` | every gate over the change | not a gate: hands such a gate the commit the change is compared with, and runs nothing on the adoption, the change whose base holds no binding |
 | `scripts/plugin_pin.py` | every tier | is the plugin this run uses the version and commit the binding pins, the one CI checks out? Red when it is older or cannot be ordered, with both ways out; green when it is newer, saying so on every run with the line to change |
-| `scripts/upgrade.py` | after the plugin updates | not a gate: what this plugin version needs that the repository lacks, file by file with the pin first, each with the text to add and who may edit the file; it reads the conformance gate's rules and changes nothing |
+| `scripts/upgrade.py` | after the plugin updates | not a gate: what this plugin version needs that the repository lacks, each item marked `auto`, `agent` or `owner`; it reads the conformance gate's rules and plans on a copy of the repository. `--apply` writes the pin, the workflow refs, the permission rules and every other `auto` item in one run, and lists the rest |
 | `scripts/hooks_installed.py` | before a feature | would a commit here run tier 0? Red with the repair when not: the `hooks-install` entry point (`scripts/hooks_install.py`) where the repository's own hooks are missing, the owner's one command where git config must change; asked by the preflight, the route and `just ratchet`, not by CI |
 
 Every other gate is the repository's: a tool it chose, behind an entry point the binding names. The plugin cannot vouch for a tool it did not choose, so the repository does: `quality/bites.toml` holds a fault for each such gate, `just bite-all` plants each one and requires the gate red, and the conformance gate is red on a bound gate with no fault (ADR 0020).
@@ -134,6 +135,16 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 | `docs/harness/` | one page per harness: install commands, how the guard is wired, the names mapped, what was verified |
 | `docs/adr/` | the plugin's own decisions; 0004 is the harness decision, made for five and since extended to Antigravity, 0017 the one that removed the presets |
 | `docs/research/` | the sources behind the stance |
+
+## Upgrade
+
+When the plugin updates, every tier says so on its first line, and the route offers the upgrade. In the repository, run:
+
+```bash
+python3 ~/.claude/plugins/marketplaces/ratchet/scripts/upgrade.py --apply
+```
+
+It moves the binding's pin, every workflow `ref` and the permission rules to the plugin in use in one run, and adds what the plugin's templates hold and the repository lacks: entry points, the method's own recipes, records and workflows. It adds and never removes: a workflow or recipe that holds the project's own lines is left as it is, and a permission rule the plugin did not write is kept. It then prints what is left, marked `agent` (an edit that needs judgement, with what to do) or `owner` (a question only you can answer, with what the repository shows, such as which life events are true). An agent does the first, you answer the second, and running it again is always safe. Without `--apply` it prints the same plan and writes nothing. The upgrade is then one change. It touches guard paths, so the merge judge leaves it to you (ADR 0029).
 
 ## Install notes
 

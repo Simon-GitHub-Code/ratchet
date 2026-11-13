@@ -772,8 +772,16 @@ def test_conformance_hears_of_every_gap_in_the_registry(tmp_path: Path) -> None:
         ),
     ]
     (root / "quality/bites.toml").unlink()
-    assert project_bite.failures(root) == [
-        "quality/bites.toml: missing; every gate bound to a tool needs a [[bite]]"
+    absent = project_bite.failures(root)
+    assert absent[0] == "quality/bites.toml: missing; every gate bound to a tool needs a [[bite]]"
+    assert absent[1:] == [
+        f"quality/bites.toml: gate '{gate}' ({question}) is bound to a tool and no [[bite]]"
+        " plants a fault for it"
+        for gate, question in (
+            ("lint", "lint"),
+            ("tests", "unit, property and fitness tests"),
+            ("perf", "performance budget"),
+        )
     ]
     (root / "docs/process/binding.md").unlink()
     assert project_bite.failures(root) == [
