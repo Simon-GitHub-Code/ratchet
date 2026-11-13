@@ -18,7 +18,7 @@ fewer:
 
 import re
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 PLACEHOLDER = "_substitution_"
 HEREDOC_MARK = "_heredoc_"
@@ -32,6 +32,11 @@ _OPERATOR_RUN = re.compile(r"[;&|<>]+")
 _HEREDOC = re.compile(r"<<(?!<)(?P<strip>-?)[ \t\r]*(?P<delimiter>[^ \t\r;&|<>\n()]*)")
 _QUOTES = str.maketrans("", "", "'\"")
 _DELIMITER_QUOTING = str.maketrans("", "", "'\"\\")
+_PIPES = frozenset({"|", "|&"})
+_SUBSHELL = "subshell"
+_GROUP = "group"
+_CASE = "case"
+_ESAC = "esac"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +54,9 @@ class SimpleCommand:
     ``piped`` is true when its output feeds the next command through ``|`` or ``|&``;
     ``herestrings`` are the words it reads through ``<<<``; ``then`` is the operator that ends
     it (``&&``, ``;``, ``|``, a parenthesis, a newline), which says whether the next command
-    runs only when this one succeeded.
+    runs only when this one succeeded. ``opens`` counts the subshells that start just before it
+    and ``closes`` those that end just after it; when it closes one, ``then`` is the operator
+    after the closing parenthesis, which joins the subshell to what follows.
     """
 
     words: tuple[str, ...]
@@ -58,6 +65,8 @@ class SimpleCommand:
     piped: bool = False
     herestrings: tuple[str, ...] = ()
     then: str = ""
+    opens: int = 0
+    closes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,16 +266,29 @@ def _is_fd_target(operator: str, word: str) -> bool:
 
 @dataclass(slots=True)
 class _Splitter:
+    """Groups tokens into simple commands and tells a subshell's parentheses from the others.
+
+    A ``(`` where a command starts opens a subshell. One after a word (a definition, an array,
+    a process substitution, a ``case`` pattern) does not, nor does the ``)`` that closes it or
+    one that ends a ``case`` pattern. Where it is unsure it reads no subshell, which keeps a
+    ``cd`` inside in force for what follows: the reading that protects.
+    """
+
     commands: list[SimpleCommand] = field(default_factory=list)
     words: list[str] = field(default_factory=list)
     writes: list[str] = field(default_factory=list)
     heredocs: list[int] = field(default_factory=list)
     herestrings: list[str] = field(default_factory=list)
     redirect: str | None = None
+    nesting: list[str] = field(default_factory=list)
+    opens: int = 0
+    closed: bool = False
 
-    def word(self, word: str) -> None:
+    def word(self, word: str, raw: str) -> None:
         redirect, self.redirect = self.redirect, None
         if redirect is None:
+            self._nest(word, raw)
+            self.closed = False
             self.words.append(word)
         elif redirect == "<<<":
             self.herestrings.append(word)
@@ -275,21 +297,61 @@ class _Splitter:
         elif ">" in redirect and not _is_fd_target(redirect, word):
             self.writes.append(word)
 
+    def _nest(self, word: str, raw: str) -> None:
+        # Why: a `case` seen where there is none only keeps a subshell open; an `esac` seen where
+        # there is none would close one early, so only a bare one in command position counts.
+        if word == _CASE:
+            self.nesting.append(_CASE)
+        elif raw == _ESAC and not self.words and self.nesting[-1:] == [_CASE]:
+            self.nesting.pop()
+
     def operator(self, operator: str) -> None:
         if "<" in operator or ">" in operator:
             self.redirect = operator
             return
+        if operator == "(" and not (self.words or self.writes or self.redirect):
+            self.nesting.append(_SUBSHELL)
+            self.opens += 1
+            return
+        if operator == ")" and self.nesting[-1:] == [_SUBSHELL]:
+            self.nesting.pop()
+            self._close()
+            return
+        if operator == "(":
+            self.nesting.append(_GROUP)
+        elif operator == ")" and self.nesting[-1:] == [_GROUP]:
+            self.nesting.pop()
+        if self.closed:
+            last = self.commands[-1]
+            self.commands[-1] = replace(last, then=operator, piped=operator in _PIPES)
+            self.closed = False
+        self._end(operator)
+
+    def _close(self) -> None:
         if self.words or self.writes:
-            piped = operator in {"|", "|&"}
+            self._end(")", closes=1)
+        elif self.opens:
+            self.opens -= 1
+            return
+        else:
+            last = self.commands[-1]
+            self.commands[-1] = replace(last, closes=last.closes + 1)
+        self.closed = True
+
+    def _end(self, operator: str, closes: int = 0) -> None:
+        if self.words or self.writes:
             command = SimpleCommand(
                 tuple(self.words),
                 tuple(self.writes),
                 tuple(self.heredocs),
-                piped,
+                operator in _PIPES,
                 tuple(self.herestrings),
                 operator,
+                self.opens,
+                closes,
             )
             self.commands.append(command)
+            self.opens = 0
         self.words, self.writes, self.heredocs, self.redirect = [], [], [], None
         self.herestrings = []
 
@@ -301,7 +363,7 @@ def split(tokens: list[Token]) -> list[SimpleCommand]:
         if token.operator:
             splitter.operator(token.text)
         else:
-            splitter.word(unquote(token.text))
+            splitter.word(unquote(token.text), token.text)
     return splitter.commands
 
 
