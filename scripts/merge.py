@@ -221,6 +221,51 @@ def commit_records(root: Path, default: str, paths: list[str]) -> str | Reason:
     return Reason("gates", f"the records stay uncommitted on the default branch, since {said}")
 
 
+def again(root: Path) -> str:
+    """The binding's ``merge`` entry point with ``--records``, as its table names the command."""
+    command = gatelib.entry_point(root, "merge")
+    return f"`{command} --records`" if command else "the binding's `merge` entry point --records"
+
+
+def come_back(root: Path, default: str, branch: str) -> int | None:
+    """Leave the records branch a stopped run left checked out; ``None`` once back on ``default``.
+
+    Why: a run killed in the commit hooks leaves HEAD on its branch, the records staged and not
+    committed; one killed after its commit leaves them committed there. Either way the next run
+    goes back to ``default``, carrying what is uncommitted, and lands the records from there.
+    """
+    committed = gatelib.git(root, "merge-base", "--is-ancestor", branch, default) is None
+    switched = porcelain(root, "switch", "--quiet", default)
+    if on_branch(root) != default:
+        said = (switched.stdout + switched.stderr).strip().splitlines()[:1]
+        print(
+            f"merge: a run that stopped left the records on `{branch}`, and git cannot switch back"
+            f" to `{default}`: {''.join(said)}"
+        )
+        lock = root / (gatelib.git(root, "rev-parse", "--git-path", "index.lock") or "")
+        if lock.is_file():
+            print(
+                f"{NEXT}once no git command runs in this repository, type `rm {lock}`, then"
+                f" {again(root)}"
+            )
+        else:
+            print(f"{NEXT}commit or set aside what git names on `{branch}`, then {again(root)}")
+        return 2
+    print(f"records: a run that stopped left them on `{branch}`; back on `{default}`", flush=True)
+    if committed:
+        return merge_records(root, branch)
+    gatelib.git(root, "branch", "--quiet", "-D", branch)
+    return None
+
+
+def merge_records(root: Path, branch: str) -> int:
+    """Merge a records branch as any branch is merged; delete it once it is merged."""
+    code = merge(root, branch)
+    if code == 0:
+        gatelib.git(root, "branch", "--quiet", "-d", branch)
+    return code
+
+
 def land_records(root: Path) -> int:
     """Commit the records the default branch's work tree holds on a branch, then merge it."""
     default = local_default(root)
@@ -230,7 +275,12 @@ def land_records(root: Path) -> int:
             " their own and open the pull request; its merge job merges records alone"
         )
         return 2
-    if default is None or gatelib.git(root, "symbolic-ref", "--short", "HEAD") != default:
+    current = on_branch(root) or ""
+    if default is not None and current.startswith(RECORDS):
+        code = come_back(root, default, current)
+        if code is not None:
+            return code
+    if default is None or on_branch(root) != default:
         print("merge: records land from the default branch; on a working branch, commit them there")
         return 2
     paths = merge_ready.uncommitted(root)
@@ -247,10 +297,7 @@ def land_records(root: Path) -> int:
         print(f"records: {branch}")
         return 1
     print(f"records: {len(paths)} path(s) committed on `{branch}`", flush=True)
-    code = merge(root, branch)
-    if code == 0:
-        gatelib.git(root, "branch", "--quiet", "-d", branch)
-    return code
+    return merge_records(root, branch)
 
 
 def main(argv: list[str]) -> int:

@@ -17,7 +17,7 @@ BOTH = "python3 -c \"import os, sys; sys.exit(not all(map(os.path.exists, 'mb'))
 
 
 def binding(check: str | None = "true", deep: str | None = "just check-deep") -> str:
-    rows = [("check", check), ("check-deep", deep)]
+    rows = [("check", check), ("check-deep", deep), ("merge", "just merge")]
     table = "".join(f"| {name} | `{command}` |\n" for name, command in rows if command)
     return f"# Binding\n\n## Entry points\n\n| Entry point | Command |\n| --- | --- |\n{table}"
 
@@ -380,6 +380,81 @@ def test_a_failing_checkout_hook_does_not_stop_records_landing(
     assert "merge: agent\nmerged: `records/" in capsys.readouterr().out
     assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "main"
     assert git(root, "status", "--porcelain") == ""
+
+
+STOPPED = "records/20261113-064102"
+
+
+def stopped_on_its_branch(root: Path, *, committed: bool) -> None:
+    """What a ``--records`` run killed in the commit hooks, or after its commit, leaves."""
+    git(root, "switch", "-q", "-c", STOPPED)
+    git(root, "add", "--all")
+    if committed:
+        git(root, "commit", "-q", "-m", merge.SUBJECT)
+
+
+@pytest.mark.parametrize(
+    "committed", [False, True], ids=["in the commit hooks", "after its commit"]
+)
+def test_a_run_stopped_on_its_records_branch_is_finished_by_the_next(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, committed: bool
+) -> None:
+    # Why: a run killed while the commit hooks ran leaves HEAD on its records branch, and the
+    # same command is the one the route names again; it must pick up where the last one stopped.
+    root = on_main(tmp_path, {SPEC: "# Thing\n"})
+    stopped_on_its_branch(root, committed=committed)
+    capsys.readouterr()
+    assert records(root) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"records: a run that stopped left them on `{STOPPED}`; back on `main`\n")
+    assert "merge: agent\nmerged: `records/" in out
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert git(root, "status", "--porcelain") == ""
+    assert git(root, "show", f"main:{SPEC}") == "# Thing"
+    assert record_branches(root) == []
+
+
+def test_a_stopped_run_git_cannot_leave_says_what_to_type(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: git killed partway leaves its index lock behind, and only one who knows no git runs
+    # may delete it; the run says so and names the command after it.
+    root = on_main(tmp_path, {SPEC: "# Thing\n"})
+    stopped_on_its_branch(root, committed=False)
+    lock = root / ".git" / "index.lock"
+    lock.touch()
+    capsys.readouterr()
+    assert records(root) == 2
+    out = capsys.readouterr().out
+    assert out.startswith(
+        f"merge: a run that stopped left the records on `{STOPPED}`, and git cannot switch back to"
+        " `main`: fatal: Unable to create"
+    )
+    assert out.endswith(
+        f"next: once no git command runs in this repository, type `rm {lock}`, then"
+        " `just merge --records`\n"
+    )
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == STOPPED
+    lock.unlink()
+    assert records(root) == 0
+    assert record_branches(root) == []
+
+
+def test_a_stopped_run_whose_branch_was_edited_since_is_left_as_it_is(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = on_main(tmp_path, {SPEC: "# Thing\n"})
+    stopped_on_its_branch(root, committed=True)
+    write(root, SPEC, "# Edited since\n")
+    capsys.readouterr()
+    assert records(root) == 2
+    out = capsys.readouterr().out
+    assert "git cannot switch back to `main`: error: Your local changes" in out
+    assert out.endswith(
+        f"next: commit or set aside what git names on `{STOPPED}`, then `just merge --records`\n"
+    )
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == STOPPED
+    assert (root / SPEC).read_text(encoding="utf-8") == "# Edited since\n"
 
 
 @pytest.mark.parametrize(

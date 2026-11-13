@@ -162,8 +162,55 @@ def test_a_records_branch_the_judge_left_to_the_owner_is_named(tmp_path: Path) -
     assert step.command == (
         "`git switch main && git merge --no-ff records/20261113-031415`, typed by the owner"
     )
-    assert "`just merge records/20261113-031415` prints why" in step.why
+    assert step.why == (
+        "the merge judge leaves branch `records/20261113-031415` to the owner: no verdict record"
+        " (docs/features/<slug>/verdict.json) is part of the change, so it is not the product of"
+        " the pipeline; its paths are records, but .scratch/f/issues/01-x.md gives a ticket the"
+        " agent-ready label `ready-for-agent`, which is the owner's act;"
+        " `just merge records/20261113-031415` prints every reason"
+    )
     assert step.stage == "records"
+
+
+def test_a_records_branch_a_stopped_run_committed_is_an_agents_to_merge(tmp_path: Path) -> None:
+    # Why: a run killed while `check` ran on the merge result never heard the judge's answer; the
+    # route asks the judge itself, and says nothing the judge did not say.
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    branch(root, "records/20261113-064145")
+    write(root, ".scratch/f/spec.md", "# F\n")
+    commit(root, "docs(records): land what the owner's conversation wrote")
+    git(root, "checkout", "-q", "main")
+    step = route.decide(root, None)
+    assert step == route.Step(
+        "`just merge records/20261113-064145`",
+        "branch `records/20261113-064145` holds records a run of `just merge --records` committed"
+        " and did not merge; the merge judge passes them, so an agent runs this, and it merges"
+        " them when `check` is green on the merge result",
+        route.NEXT,
+        "records",
+    )
+
+
+@pytest.mark.parametrize(
+    "committed", [False, True], ids=["in the commit hooks", "after its commit"]
+)
+def test_a_run_stopped_on_its_records_branch_is_resumed_by_the_same_command(
+    tmp_path: Path, *, committed: bool
+) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    branch(root, "records/20261113-064102")
+    write(root, ".scratch/f/spec.md", "# F\n")
+    git(root, "add", "--all")
+    if committed:
+        commit(root, "docs(records): land what the owner's conversation wrote")
+    step = route.decide(root, None)
+    assert step == route.Step(
+        "`just merge --records`",
+        "a run of `just merge --records` stopped on branch `records/20261113-064102` before it"
+        " switched back to `main`: an agent runs it again, and it picks up where that run stopped",
+        route.NEXT,
+        "records",
+    )
 
 
 def test_a_working_branch_waits_for_its_pull_request(tmp_path: Path) -> None:

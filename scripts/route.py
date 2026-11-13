@@ -57,6 +57,7 @@ import application_types
 import feature_preflight as preflight
 import gatelib
 import hooks_installed
+import merge
 import merge_ready
 import plugin_pin
 import questions
@@ -570,19 +571,55 @@ def dirty_step(checkout: Checkout) -> Step:
     )
 
 
+def records_stopped(checkout: Checkout) -> Step | None:
+    """A ``merge --records`` run that stopped on its records branch, which the same command ends."""
+    if checkout.forge or not (checkout.branch or "").startswith(merge.RECORDS):
+        return None
+    again = merge_command(checkout.root, "--records")
+    return Step(
+        again,
+        f"a run of {again} stopped on branch `{checkout.branch}` before it switched back to"
+        f" `{checkout.default_branch}`: an agent runs it again, and it picks up where that run"
+        " stopped",
+        NEXT,
+        "records",
+    )
+
+
 def records_waiting(checkout: Checkout) -> Step | None:
-    """A records branch the merge judge left to the owner, which ``merge.py --records`` keeps."""
+    """A records branch ``merge --records`` left unmerged; the judge says whose merge it is.
+
+    Why the judge is asked here: a run stopped while ``check`` ran never heard its answer, and the
+    branch it leaves looks like one the judge left to the owner.
+    """
     root, default = checkout.root, checkout.default_branch
     listed = gatelib.git(
-        root, "branch", "--list", "records/*", "--no-merged", default, "--format=%(refname:short)"
+        root,
+        "branch",
+        "--list",
+        f"{merge.RECORDS}*",
+        "--no-merged",
+        default,
+        "--format=%(refname:short)",
     )
     waiting = (listed or "").split()
     if not waiting:
         return None
+    name = waiting[0]
+    reasons = merge_ready.judge(root, f"{merge.HEADS}{default}", f"{merge.HEADS}{name}")
+    if not reasons:
+        return Step(
+            merge_command(root, name),
+            f"branch `{name}` holds records a run of {merge_command(root, '--records')} committed"
+            " and did not merge; the merge judge passes them, so an agent runs this, and it merges"
+            " them when `check` is green on the merge result",
+            NEXT,
+            "records",
+        )
     return Step(
-        f"`git switch {default} && git merge --no-ff {waiting[0]}`, typed by the owner",
-        f"branch `{waiting[0]}` holds records the merge judge left to the owner, as a ticket given"
-        f" the agent-ready label is; {merge_command(root, waiting[0])} prints why",
+        f"`git switch {default} && git merge --no-ff {name}`, typed by the owner",
+        f"the merge judge leaves branch `{name}` to the owner: {reasons[0].text};"
+        f" {merge_command(root, name)} prints every reason",
         NEXT,
         "records",
     )
@@ -593,9 +630,9 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
     checkout = observe(root)
     if checkout is None:
         return Step(INIT, f"{root} is not a git repository", TRACKER_SETUP, "init")
-    setup = setup_step(root)
-    if setup is not None:
-        return setup
+    first = setup_step(root) or records_stopped(checkout)
+    if first is not None:
+        return first
     if checkout.dirty:
         return dirty_step(checkout)
     if not checkout.on_default:
