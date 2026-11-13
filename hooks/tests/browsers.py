@@ -14,8 +14,9 @@ choose what it does, so each way a browser can fail is a real process on a real 
 * opening an address that says ``unreachable`` fails, ``stuck`` never loads, ``crash`` closes
   the browser;
 * a window 999 pixels wide is refused;
-* ``FAKE_BROWSER=die`` exits at once, ``mute`` never answers, and ``deaf`` stops reading
-  once it has a tab, before it answers that.
+* ``FAKE_BROWSER=die`` exits at once, ``mute`` never answers, ``slow`` answers only after 1.5
+  seconds as a browser read cold from disk does, and ``deaf`` stops reading once it has a tab,
+  before it answers that.
 """
 
 import os
@@ -34,6 +35,8 @@ if MODE == "die":
     sys.exit("the stand-in browser gives up")
 if MODE == "mute":
     time.sleep(60)
+if MODE == "slow":
+    time.sleep(1.5)
 PROFILE = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--user-data-dir="))
 TMPDIR = os.environ.get("TMPDIR", "")
 open(os.path.join(PROFILE, "tmpdir"), "w").write(TMPDIR)

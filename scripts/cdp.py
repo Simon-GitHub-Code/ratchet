@@ -53,6 +53,11 @@ FLAGS = (
     "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
 )
 ANSWER = 30.0
+# Why: the first answer comes after the browser has started, and a browser read cold from disk
+# (a CI runner's Chromium took 33 s the first time and 7 s the next) can take longer than any
+# later command does. Only that first wait is this long; a browser that dies still ends it at
+# once, as the pipe closes.
+STARTUP = 120.0
 # Why: a pipe end the shell maps to 3 or 4 must not itself be 3 or 4, or one redirection would
 # close the other's file.
 HIGH_FD = 10
@@ -134,9 +139,17 @@ class Pipe:
         return message
 
     def call(
-        self, method: str, params: dict[str, object], session: str | None = None
+        self,
+        method: str,
+        params: dict[str, object],
+        session: str | None = None,
+        *,
+        within: float | None = None,
     ) -> dict[str, object]:
-        """Send one command and return its result; events that arrive first are kept."""
+        """Send one command and return its result; events that arrive first are kept.
+
+        The answer is due in ``within`` seconds, ``ANSWER`` when not given.
+        """
         self.sent += 1
         message: dict[str, object] = {"id": self.sent, "method": method, "params": params}
         if session:
@@ -147,7 +160,7 @@ class Pipe:
         except BrokenPipeError:
             said = f"the browser closed while it was asked {method}"
             raise BrowserError(said) from None
-        deadline = time.monotonic() + ANSWER
+        deadline = time.monotonic() + (ANSWER if within is None else within)
         while True:
             answer = self.next(deadline, method)
             if answer.get("id") != self.sent:
@@ -282,7 +295,7 @@ def page(browser: str, profile: Path, *, width: int, height: int) -> Iterator[Pa
             stack.callback(pipe.close)
             stack.callback(gatelib.stop_group, process)
         try:
-            target = pipe.call("Target.createTarget", {"url": "about:blank"})
+            target = pipe.call("Target.createTarget", {"url": "about:blank"}, within=STARTUP)
         except BrowserError as error:
             said = f"{error}; {stderr_tail(profile)}"
             raise BrowserError(said) from None

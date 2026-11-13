@@ -103,10 +103,20 @@ def test_a_browser_that_never_answers_is_given_up_on(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     browsers.fake(tmp_path, monkeypatch, "mute")
-    monkeypatch.setattr(cdp, "ANSWER", 0.5)
+    monkeypatch.setattr(cdp, "STARTUP", 0.5)
     said = "the browser did not answer Target.createTarget in time; it printed nothing"
     with pytest.raises(cdp.BrowserError, match=re.escape(said)), tab(tmp_path):
         pass
+    assert products.processes_naming(str(tmp_path)) == []
+
+
+def test_a_browser_slow_to_start_is_waited_for_longer_than_a_command_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    browsers.fake(tmp_path, monkeypatch, "slow")
+    monkeypatch.setattr(cdp, "ANSWER", 0.5)
+    with tab(tmp_path) as page:
+        assert page.evaluate("true") is False
     assert products.processes_naming(str(tmp_path)) == []
 
 
