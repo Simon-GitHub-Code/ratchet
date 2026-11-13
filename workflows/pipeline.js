@@ -435,10 +435,68 @@ const CRITIQUE_SCHEMA = {
   ],
 }
 
+// Why: the spec is what the implementer builds and what the review judges the build against, so a
+// spec that drops or bends a promise of the ticket passed every check after it. The reviewer reads
+// the ticket, and a review that does not account for each promise, or for each input the product
+// accepts, does not fit this schema. Each reading carries the evidence that shows it.
+const SAID = { type: 'string', pattern: '\\S' }
+function promiseReading(reading, description, evidence) {
+  return {
+    type: 'object',
+    description,
+    properties: {
+      promise: { ...SAID, description: 'The promise in the ticket\'s own words' },
+      reading: { type: 'string', enum: [reading] },
+      ...evidence,
+    },
+    required: ['promise', 'reading', ...Object.keys(evidence)],
+    additionalProperties: false,
+  }
+}
+const SPEC_LINE = { specLine: { ...SAID, description: 'The spec.md line this reading rests on, quoted, or the section a dropped promise is missing from' } }
+const TICKET_PROMISES_FIELD = {
+  type: 'array',
+  minItems: 1,
+  description: 'Every promise the ticket makes about what the product does or does not do, one entry each, read against spec.md',
+  items: {
+    anyOf: [
+      promiseReading('covered', 'spec.md criteria carry it as the ticket says it', {
+        criteria: { type: 'array', minItems: 1, items: SAID, description: 'What in spec.md carries it: criterion numbers, or for how the change is built or tested the section entry that states it' },
+      }),
+      promiseReading('dropped', 'no criterion carries it', SPEC_LINE),
+      promiseReading('bent', 'a criterion carries less than the ticket asks, makes it optional or contradicts it', {
+        ...SPEC_LINE,
+        change: { ...SAID, description: 'What the spec says instead of what the ticket asks' },
+      }),
+      promiseReading('assumed', 'the ticket leaves part of it open and the spec decided that part for the owner', {
+        ...SPEC_LINE,
+        ownerSees: { ...SAID, description: 'What the owner would see in the product because of the assumption' },
+      }),
+    ],
+  },
+}
+const INPUT_CASES = { empty: 'an empty value', oversized: 'an oversized value', hostile: 'a hostile value' }
+const DECIDED_BY = { type: ['string', 'null'], pattern: '\\S', description: 'The spec.md criterion that says what happens, by its number and words; null when none does' }
+const ACCEPTED_INPUTS_FIELD = {
+  type: 'array',
+  description: 'Each thing the change makes the product accept from outside, with the criterion that decides each case of it; empty only when it accepts nothing',
+  items: {
+    type: 'object',
+    properties: {
+      input: { ...SAID, description: 'The input as a user meets it: a form field, a request body, a file, an argument' },
+      ...Object.fromEntries(Object.keys(INPUT_CASES).map(c => [c, DECIDED_BY])),
+    },
+    required: ['input', ...Object.keys(INPUT_CASES)],
+    additionalProperties: false,
+  },
+}
+
 const REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     verdict: { type: 'string', enum: ['approve', 'request_changes'] },
+    ticketPromises: TICKET_PROMISES_FIELD,
+    acceptedInputs: ACCEPTED_INPUTS_FIELD,
     issues: {
       type: 'array',
       items: {
@@ -475,7 +533,7 @@ const REVIEW_SCHEMA = {
     checkPasses: { type: 'boolean', description: 'true only if `check` exited 0 when you ran it' },
     ...checkOutputField(),
   },
-  required: ['verdict', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'recordNotes', 'disputeCoverage', 'checkPasses', 'checkOutput'],
+  required: ['verdict', 'ticketPromises', 'acceptedInputs', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'recordNotes', 'disputeCoverage', 'checkPasses', 'checkOutput'],
 }
 
 // ---------------------------------------------------------------------------
@@ -560,7 +618,12 @@ Inputs you may read:
 Your tasks, in order:
 1. The slug is \`${SLUG}\`. Write \`docs/features/${SLUG}/spec.md\` containing:
    - Problem (one paragraph, from the ticket)
-   - Acceptance criteria: numbered, each in Given / When / Then form, each testable
+   - Acceptance criteria: numbered, each in Given / When / Then form, each testable. Every
+     promise the ticket makes about what the product does has a criterion, a sentence in its
+     Problem or What to build included. For each thing users or other systems send the running
+     product (a form field, a request body, a file), criteria say what happens to an empty, an
+     oversized and a hostile value. The reviewer reads the ticket and refuses a spec that
+     misses either.
    - Glossary terms used (exact GLOSSARY.md names) and each term you added to the glossary
    - Placement: for each piece of the feature, which declared path or layer it lives in (using
      the names AGENTS.md and binding.md define, or the module when none are declared) and why
@@ -880,6 +943,8 @@ top; \`git diff ${BASE}\` shows both, and nothing of the other change.
 You are the independent REVIEWER for feature \`${spec.slug}\` of this repository.
 ${commonRules()}${second}
 Inputs you may read, and nothing else:
+- The ticket: ${ticketHint()}, with its comments and its \`## Answers\` section: what the owner
+  asked for and agreed. Read it; never edit it or comment on it.
 - The spec: \`${spec.specPath}\`
 - The diff: the change is on branch \`${BRANCH}\`, uncommitted unless this is a second review.
   Enumerate it with
@@ -888,7 +953,7 @@ Inputs you may read, and nothing else:
 - AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
 - Any generated contract artefacts that binding.md names
 ${outsideInputs(CRITIC)} are outside your inputs:
-judge the code against the spec and the standards only.
+judge the spec against the ticket, and the code against the spec and the standards.
 
 Load the \`mattpocock-skills:code-review\` skill and apply its two axes in-process, as both of
 its sub-agents (the pipeline fixes the agent count): the spec source is spec.md; the standards
@@ -934,14 +999,48 @@ C. Guard paths: run \`guard-diff\` and list every guard path it prints in \`guar
    reads shape, not meaning, so read each addition against the records: a new term that
    restates a concept the glossary already names, or a new ADR that contradicts an existing one,
    is a major issue on the standards axis.
+D. The ticket. Nobody after the spec role reads the ticket but you, so a spec that drops or
+   bends what the owner asked for passes every other axis. List in \`ticketPromises\` every
+   promise the ticket makes about what the product does or does not do: each checklist item
+   and acceptance criterion, and each promise in its other sections ("it has no client
+   JavaScript", "the list survives a restart"), in the ticket's words, one entry each, with
+   the reading that fits:
+   - \`covered\`: spec.md carries it as the ticket says it; name what carries it in
+     \`criteria\`. A promise about what the product does is carried by a criterion, or by
+     criteria it follows from, never by the Problem section alone. A promise about how the
+     change is built or tested is carried by the criterion, Placement, Seams under test or
+     Test plan entry that states it.
+   - \`dropped\`: no criterion carries it; \`specLine\` quotes the line that drops it (an Out of
+     scope entry, a sentence no criterion checks) or names the section it is missing from.
+   - \`bent\`: a criterion carries less than the ticket asks, makes it optional, or contradicts
+     it; \`specLine\` quotes the criterion and \`change\` says what differs.
+   - \`assumed\`: the ticket leaves part of it open and the spec decided that part for the
+     owner, under Assumptions or without saying so; \`specLine\` quotes where, and \`ownerSees\`
+     says what the owner would see in the product because of it. Read each entry under the
+     spec's Assumptions this way: one that decides part of a promise makes the promise
+     \`assumed\`, and one that contradicts the ticket makes it \`bent\`.
+   What the ticket puts out of scope or leaves to a later ticket is no promise of this one.
+E. Inputs. List in \`acceptedInputs\` each thing the change makes the running product accept
+   from its users or from other systems (a form field, a request body, a query parameter, an
+   uploaded file, a command-line argument). A setting the operator gives it at start is not
+   one. For each, quote the spec.md criterion that says what happens to an \`empty\` value,
+   an \`oversized\` one and a \`hostile\` one, or null where no criterion says. A hostile value
+   is decided only when criteria cover each kind that applies to the input: markup where it is
+   shown, a value that runs where it is followed, a path that leaves its directory. A
+   criterion that leaves the case to a later ticket decides it only if it says what happens
+   until then, and an assumption decides no case.
+The script files every \`dropped\` or \`bent\` promise and every null case as a major issue, and
+lists every \`assumed\` promise with the spec's assumptions for the owner to overrule. Do not
+repeat them in \`issues\`.
 
 ${SEVERITY}
 
-Verdict: \`approve\` only if there are no blocker or major issues on any axis, every changed
-guard path is covered by a dispute record, is a dependency the spec decided or is a record the
-change only adds to, and \`check\` exits 0; otherwise
-\`request_changes\`. The script re-derives the verdict from your \`issues\`, \`guardChanges\`,
-\`dependencyNotes\`, \`recordNotes\` and \`disputeCoverage\`, so make them complete.`
+Verdict: \`approve\` only if there are no blocker or major issues on any axis, no promise is
+dropped or bent, no input case is null, every changed guard path is covered by a dispute
+record, is a dependency the spec decided or is a record the change only adds to, and \`check\`
+exits 0; otherwise \`request_changes\`. The script re-derives the verdict from your \`issues\`,
+\`ticketPromises\`, \`acceptedInputs\`, \`guardChanges\`, \`dependencyNotes\`, \`recordNotes\` and
+\`disputeCoverage\`, so make them complete.`
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,7 +1107,7 @@ function criticEstimate(critic) {
 }
 
 function outsideInputs(critic) {
-  return critic ? "The implementer's notes, the critic's findings and the ticket" : "The implementer's notes and the ticket"
+  return critic ? "The implementer's notes and the critic's findings" : "The implementer's notes"
 }
 
 // Whether the critic ran and came back with nothing and no attempt: silence is not a refutation.
@@ -1099,6 +1198,49 @@ function verdictRecord({ slug, ticket, verdict, forcedBy, findings, openQuestion
   }
 }
 
+// Every issue the review opens: the ones it filed, and a major one for each promise of the ticket
+// the spec drops or bends and each input case no criterion decides. They take the path of any
+// other issue, so the verdict record lists them as unresolved and the merge judge refuses.
+function reviewIssues(review) {
+  const issues = [...(review.issues || [])]
+  for (const p of review.ticketPromises || []) {
+    if (p.reading !== 'dropped' && p.reading !== 'bent') continue
+    const verb = p.reading === 'dropped' ? 'drops' : 'bends'
+    issues.push({
+      axis: 'ticket',
+      severity: 'major',
+      title: `the spec ${verb} the ticket's promise "${p.promise}"`,
+      location: p.specLine,
+      evidence: p.change || 'no criterion carries it',
+    })
+  }
+  for (const input of review.acceptedInputs || []) {
+    for (const [c, value] of Object.entries(INPUT_CASES)) {
+      if (input[c] !== null) continue
+      issues.push({
+        axis: 'input',
+        severity: 'major',
+        title: `no criterion says what happens to ${value} of ${input.input}`,
+        location: input.input,
+        evidence: `spec.md decides no ${c} value`,
+      })
+    }
+  }
+  return issues
+}
+
+// The assumptions the owner may overrule: the spec's own, and each part of a promise the review
+// found the spec decided for the owner, once.
+function withSurfaced(assumptions, review) {
+  const all = [...(assumptions || [])]
+  for (const p of review.ticketPromises || []) {
+    if (p.reading !== 'assumed') continue
+    if (all.some(a => a && a.question === p.promise && a.assumed === p.specLine)) continue
+    all.push({ question: p.promise, assumed: p.specLine, refuter: p.ownerSees })
+  }
+  return all
+}
+
 // The judge reads an open question as a text; the spec role returns it with its options.
 function questionText(question) {
   return String(question && typeof question === 'object' ? question.question || '' : question)
@@ -1112,7 +1254,7 @@ function rejudged({ review, reconcile, dependencies }) {
   for (const p of specDecidedDependencies(dependencies, review.dependencyNotes)) covered.add(p)
   for (const p of additiveRecords(review.recordNotes)) covered.add(p)
   const undisputed = (review.guardChanges || []).filter(p => p && !covered.has(p))
-  const issues = blocking(review.issues)
+  const issues = blocking(reviewIssues(review))
   const forced = []
   if (undisputed.length) forced.push(`guard paths changed without a dispute record, a spec-named dependency or an additions note covering them: ${undisputed.join(', ')}`)
   if (issues.length) forced.push(`${issues.length} blocker/major review issue(s)`)
@@ -1151,6 +1293,7 @@ if (REJUDGE) {
   phase('Review')
   const review = must(await agent(reviewPrompt(spec, true), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
   const judged = rejudged({ review, reconcile, dependencies: REJUDGE.dependencies })
+  const assumptions = withSurfaced(REJUDGE.assumptions, review)
   log(`Review again: ${review.verdict}` + (judged.forced.length ? `; forced to request_changes: ${judged.forced.join('; ')}` : ''))
   return {
     slug: SLUG,
@@ -1161,15 +1304,17 @@ if (REJUDGE) {
     filesChanged: reconcile ? reconcile.filesChanged : [],
     reconcileNotes: reconcile ? reconcile.notes : '',
     disputes: reconcile ? reconcile.disputes || [] : [],
-    reviewIssues: review.issues,
+    reviewIssues: reviewIssues(review),
     reviewVerdict: review.verdict,
+    ticketPromises: review.ticketPromises,
+    acceptedInputs: review.acceptedInputs,
     adrSuggested: review.adrSuggested,
     guardChanges: review.guardChanges,
     undisputedGuardChanges: judged.undisputed,
     dependencyNotes: review.dependencyNotes ?? [],
     recordNotes: review.recordNotes ?? [],
     specPath: spec.specPath,
-    assumptions: REJUDGE.assumptions ?? [],
+    assumptions,
     checkPasses: review.checkPasses === true,
     checkOutput: review.checkOutput,
     branch: BRANCH,
@@ -1180,7 +1325,7 @@ if (REJUDGE) {
       forcedBy: judged.forced,
       findings: judged.issues,
       openQuestions: [],
-      assumptions: REJUDGE.assumptions,
+      assumptions,
     }),
     requiredByOrchestrator: [
       'verdict is "approve": anything else leaves the branch to the owner, with verdictForcedBy as the reasons',
@@ -1334,7 +1479,8 @@ const review = must(await agent(reviewPrompt(spec), { label: 'review', phase: 'R
 const builderOutput = lastCheckOutput
 lastCheckOutput = review.checkOutput
 if (OWED_RED.test(builderOutput || '') && !OWED_RED.test(lastCheckOutput || '')) lastCheckOutput = `${builderOutput}\n${lastCheckOutput}`
-log(`Review: ${review.verdict}, ${review.issues.length} issue(s)` + (review.adrSuggested ? `, ADR suggested: ${review.adrSuggested}` : ''))
+const issues = reviewIssues(review)
+log(`Review: ${review.verdict}, ${issues.length} issue(s)` + (review.adrSuggested ? `, ADR suggested: ${review.adrSuggested}` : ''))
 
 // The verdict is derived from the evidence the agents returned, never taken on the reviewer's
 // word alone. Pure over the agents' own reports, so it resumes deterministically.
@@ -1345,7 +1491,8 @@ for (const p of decidedDependencies) covered.add(p)
 const addedRecords = additiveRecords(review.recordNotes)
 for (const p of addedRecords) covered.add(p)
 const undisputedGuardChanges = guardChanges.filter(p => !covered.has(p))
-const blockingReviewIssues = blocking(review.issues)
+const blockingReviewIssues = blocking(issues)
+const assumptions = withSurfaced(spec.assumptions, review)
 
 const forcedReasons = []
 if (undisputedGuardChanges.length) forcedReasons.push(`guard paths changed without a dispute record, a spec-named dependency or an additions note covering them: ${undisputedGuardChanges.join(', ')}`)
@@ -1375,8 +1522,10 @@ return {
   criticFindings: critique.findings,
   criticFindingsByRound: allCriticFindings,
   unresolvedBlockingFindings: unresolved,
-  reviewIssues: review.issues,
+  reviewIssues: issues,
   reviewVerdict: review.verdict,
+  ticketPromises: review.ticketPromises,
+  acceptedInputs: review.acceptedInputs,
   adrSuggested: review.adrSuggested,
   disputes,
   guardChanges,
@@ -1390,7 +1539,7 @@ return {
   specPath: spec.specPath,
   testFiles: spec.testFiles,
   openQuestions: spec.openQuestions,
-  assumptions: spec.assumptions ?? [],
+  assumptions,
   fitnessSabotageConfirmed: critique.fitnessSabotageConfirmed,
   fitnessSabotageSummary: critique.fitnessSabotageSummary,
   specFailures: spec.failures,
@@ -1405,7 +1554,7 @@ return {
     forcedBy: forcedReasons,
     findings: [...unresolved, ...blockingReviewIssues],
     openQuestions: spec.openQuestions,
-    assumptions: spec.assumptions,
+    assumptions,
   }),
   requiredByOrchestrator: [
     'verdict is "approve" (the script forces request_changes when its evidence says otherwise)',

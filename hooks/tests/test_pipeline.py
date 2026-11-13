@@ -1,6 +1,7 @@
 """The pipeline script's verdict helpers, run in node over the agents' reports."""
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -154,20 +155,49 @@ const [args, answers] = JSON.parse(process.argv[2])
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 const labels = []
 const prompts = {}
+const schemas = {}
 const logs = []
 const agent = async (prompt, options) => {
   labels.push(options.label)
   prompts[options.label] = prompt
+  schemas[options.label] = options.schema
   return answers[options.label] ?? null
 }
 const run = new AsyncFunction('args', 'agent', 'phase', 'log', source)
 run(args, agent, () => {}, line => logs.push(line)).then(
-  result => console.log(JSON.stringify({ result, labels, prompts, logs })),
+  result => console.log(JSON.stringify({ result, labels, prompts, schemas, logs })),
   error => console.log(JSON.stringify({ error: error.message, labels })),
 )
 """
+
+
+# The promises of the dogfood's ticket 01 (a read-later list), as a reviewer reads them against a
+# faithful spec: each one carried by a criterion, each case of the one field decided.
+def _covered(promise: str, *criteria: str) -> dict[str, object]:
+    return {"promise": promise, "reading": "covered", "criteria": list(criteria)}
+
+
+NEW_TAB = "Each item's title links to the article and opens it in a new tab"
+PROMISES = [
+    _covered("The page lists the unread items newest first", "1", "3"),
+    _covered("Saving a link answers `303` to the list", "2"),
+    _covered("Reloading the page afterwards does not save it again", "4"),
+    _covered("Two items saved in the same second keep a stable newest-first order", "5", "11"),
+    _covered("The same link saved twice makes two items", "6"),
+    _covered(NEW_TAB, "7"),
+    _covered("An empty list shows one plain sentence saying nothing is left", "8"),
+    _covered("It has no client JavaScript", "15"),
+]
+LINK_FIELD = {
+    "input": "the link field of the save form",
+    "empty": "16: a blank or missing link answers 400 and saves nothing",
+    "oversized": "17: a link over 2048 characters answers 400 and saves nothing",
+    "hostile": "9: markup characters show as text in the title and the href",
+}
 REVIEW = {
     "verdict": "approve",
+    "ticketPromises": PROMISES,
+    "acceptedInputs": [LINK_FIELD],
     "issues": [],
     "adrSuggested": "",
     "guardChanges": [],
@@ -545,9 +575,9 @@ def test_the_review_does_not_name_findings_that_do_not_exist() -> None:
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     young = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)["prompts"]["review"]
     assert "critic" not in young.split("Inputs you may read")[1].lower()
-    assert "The implementer's notes and the ticket are outside your inputs" in young
+    assert "The implementer's notes are outside your inputs" in young
     old = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)["prompts"]["review"]
-    assert "the critic's findings and the ticket are outside your inputs" in old
+    assert "the critic's findings are outside your inputs" in old
 
 
 def test_what_the_review_opens_is_open_without_a_critic() -> None:
@@ -607,3 +637,159 @@ def test_the_fix_agent_is_told_the_same_about_a_red_triggers_gate() -> None:
     answers |= {"fix-1": IMPLEMENTED, "critique-1": CRITIQUED}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
     assert "red on the `triggers` gate" in ran["prompts"]["fix-1"]
+
+
+# --- the review reads the ticket the spec was written from ---------------------------------------
+
+KINDS: dict[str, type] = {
+    "object": dict,
+    "array": list,
+    "string": str,
+    "boolean": bool,
+    "integer": int,
+    "null": type(None),
+}
+
+
+def _valid(value: object, schema: dict[str, Any]) -> bool:
+    """Whether ``value`` meets ``schema``, in the subset of JSON Schema the workflow uses."""
+    if "anyOf" in schema:
+        return any(_valid(value, option) for option in schema["anyOf"])
+    kinds = schema.get("type", [])
+    kinds = [kinds] if isinstance(kinds, str) else kinds
+    checks = [
+        not kinds or any(type(value) is KINDS[kind] for kind in kinds),
+        "enum" not in schema or value in schema["enum"],
+        not isinstance(value, str) or re.search(schema.get("pattern", ""), value) is not None,
+    ]
+    if isinstance(value, list):
+        checks.append(len(value) >= schema.get("minItems", 0))
+        checks.extend(_valid(item, schema.get("items", {})) for item in value)
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        checks.extend(key in value for key in schema.get("required", []))
+        checks.extend(_valid(item, properties.get(key, {})) for key, item in value.items())
+        if schema.get("additionalProperties") is False:
+            checks.extend(key in properties for key in value)
+    return all(checks)
+
+
+def _built(review: dict[str, object], ref: str = "4") -> dict[str, Any]:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": review}
+    return _run({"ref": ref}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+
+
+def _review_schema() -> dict[str, Any]:
+    schema: dict[str, Any] = _built(REVIEW)["schemas"]["review"]
+    return schema
+
+
+def _reread(promise: str, reading: dict[str, str]) -> list[dict[str, object]]:
+    """The faithful promises, with ``promise`` read as ``reading`` instead."""
+    return [p if p["promise"] != promise else {"promise": promise, **reading} for p in PROMISES]
+
+
+def test_the_review_reads_the_ticket_the_spec_was_written_from() -> None:
+    prompt = _built(REVIEW, ".scratch/list/issues/01-save-a-link.md")["prompts"]["review"]
+    inputs = prompt.split("Inputs you may read")[1].split("Load the")[0]
+    assert "The ticket: the file `.scratch/list/issues/01-save-a-link.md`" in inputs
+    assert "`## Answers`" in inputs
+    assert "the ticket are outside your inputs" not in prompt
+    tracker = "`gh issue view 4 --json number,title,body,labels,comments`"
+    assert tracker in _built(REVIEW)["prompts"]["review"]
+    assert tracker in _again({}, **{"review-again": REVIEW})["prompts"]["review-again"]
+
+
+def test_a_review_that_skips_the_ticket_or_the_inputs_is_not_a_review() -> None:
+    schema = _review_schema()
+    assert _valid(REVIEW, schema)
+    for axis in ("ticketPromises", "acceptedInputs"):
+        assert not _valid({k: v for k, v in REVIEW.items() if k != axis}, schema), axis
+    assert not _valid({**REVIEW, "ticketPromises": []}, schema), "every ticket promises something"
+    assert _valid({**REVIEW, "acceptedInputs": []}, schema), "a change may accept nothing"
+
+
+def test_each_reading_of_a_promise_carries_what_shows_it() -> None:
+    schema = _review_schema()
+
+    def holds(entry: dict[str, object]) -> bool:
+        return _valid({**REVIEW, "ticketPromises": [entry]}, schema)
+
+    promise = {"promise": NEW_TAB}
+    assert not holds({**promise, "reading": "covered", "criteria": []}), "covered by nothing"
+    assert not holds({**promise, "reading": "dropped"}), "dropped with no spec line"
+    assert not holds({**promise, "reading": "dropped", "specLine": " "})
+    assert not holds({**promise, "reading": "bent", "specLine": "7: opens it"}), "bent how"
+    assert not holds({**promise, "reading": "assumed", "specLine": "Assumptions: any link"})
+    assert not holds({**promise, "reading": "kept", "criteria": ["7"]})
+    assert not holds({**promise, "reading": "covered", "criteria": ["7"], "specLine": "7"})
+    assert holds({**promise, "reading": "dropped", "specLine": "Acceptance criteria: none"})
+    assert holds({**promise, "reading": "bent", "specLine": "7: opens it", "change": "no tab"})
+    seen = {"specLine": "Assumptions: any link", "ownerSees": "a blank item"}
+    assert holds({**promise, "reading": "assumed", **seen})
+    undecided = {k: v for k, v in LINK_FIELD.items() if k != "hostile"}
+    assert not _valid({**REVIEW, "acceptedInputs": [undecided]}, schema), "a case left out"
+    assert _valid({**REVIEW, "acceptedInputs": [{**LINK_FIELD, "hostile": None}]}, schema)
+
+
+def test_a_spec_that_drops_a_ticket_promise_is_refused(tmp_path: Path) -> None:
+    # Why: the spec is what the implementer builds and what the review judged the build against,
+    # so a spec that left out a promise of the ticket was built to the letter, approved and merged.
+    dropped = {"reading": "dropped", "specLine": "Acceptance criteria: no criterion names a tab"}
+    result = _built({**REVIEW, "ticketPromises": _reread(NEW_TAB, dropped)})["result"]
+    assert result["verdict"] == "request_changes"
+    assert result["verdictForcedBy"] == ["1 blocker/major review issue(s)"]
+    title = f'the spec drops the ticket\'s promise "{NEW_TAB}"'
+    assert result["verdictRecord"]["unresolved"] == [title]
+    assert [i["location"] for i in result["reviewIssues"]] == [dropped["specLine"]]
+
+    root = repository(tmp_path, {"guards/manifest.toml": MANIFEST_TOML, "src/a.py": "x = 1\n"})
+    branch(root, "feature/4-thing")
+    write(root, "src/a.py", "x = 2\n")
+    commit(root, "feat(thing): the change")
+    record = {**result["verdictRecord"], "slug": "thing"}
+    assert merge_ready.write_record(root, json.dumps(record)) == 0
+    commit(root, "docs(thing): the verdict record")
+    refused = " ".join(reason.text for reason in merge_ready.judge(root, "main", "HEAD"))
+    assert title in refused
+
+
+def test_a_bent_promise_blocks_and_an_assumed_one_goes_to_the_owner() -> None:
+    bent = {"reading": "bent", "specLine": "7: opens it in place", "change": "no new tab"}
+    result = _built({**REVIEW, "ticketPromises": _reread(NEW_TAB, bent)})["result"]
+    assert result["verdictRecord"]["unresolved"] == [
+        f'the spec bends the ticket\'s promise "{NEW_TAB}"'
+    ]
+    saved = "Saving a link answers `303` to the list"
+    assumed = {
+        "reading": "assumed",
+        "specLine": "Ticket 01 saves whatever is pasted (no check that it is a web link)",
+        "ownerSees": "a blank save makes an item with no title",
+    }
+    result = _built({**REVIEW, "ticketPromises": _reread(saved, assumed)})["result"]
+    assert (result["verdict"], result["verdictRecord"]["unresolved"]) == ("approve", [])
+    surfaced = {"question": saved, "assumed": assumed["specLine"], "refuter": assumed["ownerSees"]}
+    assert result["assumptions"] == [*SPECIFIED["assumptions"], surfaced]
+    assert result["verdictRecord"]["assumptions"] == result["assumptions"]
+
+
+def test_an_input_case_no_criterion_decides_blocks() -> None:
+    undecided = {**LINK_FIELD, "empty": None, "hostile": None}
+    result = _built({**REVIEW, "acceptedInputs": [undecided]})["result"]
+    assert result["verdict"] == "request_changes"
+    assert result["verdictRecord"]["unresolved"] == [
+        "no criterion says what happens to an empty value of the link field of the save form",
+        "no criterion says what happens to a hostile value of the link field of the save form",
+    ]
+
+
+def test_the_second_review_reads_the_ticket_by_the_same_rules() -> None:
+    dropped = {"reading": "dropped", "specLine": "Out of scope: client JavaScript"}
+    review = {**REVIEW, "ticketPromises": _reread("It has no client JavaScript", dropped)}
+    assumption = {"question": "q", "assumed": "a", "refuter": "r"}
+    result = _again({"assumptions": [assumption]}, **{"review-again": review})["result"]
+    assert result["verdict"] == "request_changes"
+    assert result["verdictRecord"]["unresolved"] == [
+        'the spec drops the ticket\'s promise "It has no client JavaScript"'
+    ]
+    assert result["verdictRecord"]["assumptions"] == [assumption]
