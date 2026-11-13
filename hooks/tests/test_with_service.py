@@ -349,6 +349,17 @@ def test_a_service_that_drains_and_exits_zero_is_green_under_load(
     assert code == 0
 
 
+def test_a_service_that_leaves_connections_in_its_accept_queue_is_green(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Why: a correct server stops by closing its listener, and the kernel resets every connection
+    # still queued on it. The service never accepted them, so nothing it owed was dropped, though
+    # each was made before the signal and fails with no response, as a dropped request does.
+    code, out = graceful("queue", capsys=capsys)
+    assert out.endswith("with_service: green\n"), out
+    assert code == 0
+
+
 def test_a_smoke_slow_to_start_still_has_requests_in_flight_at_the_signal(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

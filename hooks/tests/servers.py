@@ -115,18 +115,25 @@ def sleeper(tree: Path) -> subprocess.Popen[bytes]:
 # request is in flight at any moment while a load smoke runs. Modes: ``drain`` finishes the
 # requests in flight and exits 0; ``ignore`` never stops; ``drop`` exits 0 at once and cuts them
 # off; ``late`` drains but exits 1; ``slow`` drains after a 3 s pause; ``die`` exits before it
-# is signalled.
+# is signalled. ``queue`` serves one request at a time, answers the first four ``/work`` at once
+# and holds the fifth until the signal, so the connections behind it wait in the kernel's accept
+# queue; on the signal it answers the fifth and exits 0, and the kernel resets the connections it
+# never accepted, as any correct server's listener close does.
 STOPS = (
     "import os, signal, sys, threading, time, http.server as h\n"
     "MODE = os.environ['MODE']\n"
-    "class Server(h.ThreadingHTTPServer):\n"
+    "held, stopping = [], threading.Event()\n"
+    "class Server(h.HTTPServer if MODE == 'queue' else h.ThreadingHTTPServer):\n"
     "    daemon_threads = False\n"
     "    block_on_close = True\n"
     "    def handle_error(self, request, client_address): pass\n"
     "class Handler(h.BaseHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
     "    def do_GET(self):\n"
-    "        if self.path == '/work': time.sleep(0.3)\n"
+    "        if self.path == '/work' and MODE != 'queue': time.sleep(0.3)\n"
+    "        if self.path == '/work' and MODE == 'queue':\n"
+    "            held.append(self.connection)\n"
+    "            if len(held) == 5: stopping.wait()\n"
     "        self.send_response(200)\n"
     "        self.send_header('Content-Length', '2')\n"
     "        self.end_headers()\n"
@@ -135,6 +142,7 @@ STOPS = (
     "def stop(*args):\n"
     "    if MODE == 'drop': os._exit(0)\n"
     "    if MODE == 'slow': time.sleep(3)\n"
+    "    stopping.set()\n"
     "    threading.Thread(target=server.shutdown).start()\n"
     "if MODE == 'die': threading.Timer(0.3, os._exit, [5]).start()\n"
     "signal.signal(signal.SIGTERM, signal.SIG_IGN if MODE == 'ignore' else stop)\n"
