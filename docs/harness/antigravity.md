@@ -25,7 +25,7 @@ The answer is Antigravity's:
 | ask | `{"decision": "force_ask", "reason": ...}` |
 | no rule fires | `{"decision": "ask"}` |
 
-`ask` becomes `force_ask` because Antigravity's `ask` respects a cached "Always Allow", which would let a later guard-path edit through without the owner.
+`ask` becomes `force_ask` because Antigravity's `ask` respects a cached "Always Allow", which would let a later merge, agent-ready label, or write of a CI workflow or an agent-instruction file through without the owner. A guard path change on a branch gets no verdict from the guard (ADR 0033), so it meets Antigravity's normal prompt, as any edit does.
 
 Antigravity has no answer for "no opinion". A missing or empty `decision` is a deny: under 0.9.0 and 0.9.1 the guard answered `{}` when no rule fired, and agy 1.5.6 refused every command and edit, `git status` included, with `tool call denied by pre-tool hook:` and an empty reason. `allow` would auto-approve past Antigravity's own permission prompt. So when no rule fires the guard answers a plain `ask`: Antigravity's normal prompt, which honours a cached "Always Allow" as it would without the guard.
 

@@ -1,0 +1,129 @@
+# Every question a Ratchet skill tells an agent to put to the owner, and every question that
+# became an assumption instead (ADR 0034). `hooks/tests/test_owner_questions.py` holds the skills
+# to this file: a skill line that asks the owner something must name an `[[ask]]` key below, of
+# kind `product`, with the text written here word for word; an `[[assume]]` key must appear in
+# its skill as the default the hand-over states.
+#
+# A product question is a choice that decides what becomes of something of the user's (kept,
+# deleted, merged, duplicated, overwritten, shared), who may see or do it, or what the user can
+# do at all, where nothing the owner said or answered settles it. Its text is in plain words: no
+# method term. Nothing reviews a change to this file on its own: a pull request that registers a
+# tooling question as `product`, with matching skill text, passes the test (ADR 0034).
+# Text in angle brackets is a question the agent writes at run time from what it found; the
+# words in the brackets say what kind of question it may be.
+
+[[ask]]
+key = "init.purpose"
+skills = ["init"]
+kind = "product"
+text = "What are you making? Tell me in a sentence or two what it should do."
+
+[[ask]]
+key = "init.user"
+skills = ["init"]
+kind = "product"
+text = "Who is it for, and what are they doing when they reach for it?"
+
+[[ask]]
+key = "init.difference"
+skills = ["init"]
+kind = "product"
+text = "What should make it better for them than what they use today?"
+
+[[ask]]
+key = "init.place"
+skills = ["init"]
+kind = "product"
+text = "Where will people use it: on this computer only, on other devices at home, or from anywhere?"
+
+[[ask]]
+key = "init.online"
+skills = ["init"]
+kind = "product"
+text = "Should this project be kept on this computer only, or also as a private copy on your GitHub account?"
+
+[[ask]]
+key = "adopt.first"
+skills = ["adopt"]
+kind = "product"
+text = "What is the first thing you want to be able to do with it, from start to finish?"
+
+[[ask]]
+key = "adopt.later"
+skills = ["adopt"]
+kind = "product"
+text = "Which of these can wait until that first part works?"
+
+[[ask]]
+key = "adopt.hard-to-undo"
+skills = ["adopt"]
+kind = "product"
+text = "<a choice about what happens to someone's things that would be hard to undo later, asked as someone using it would put it>"
+
+[[ask]]
+key = "event.deployed"
+skills = ["adopt", "next"]
+kind = "product"
+text = "Is it now running somewhere that people other than you can reach?"
+
+[[ask]]
+key = "event.irreplaceable-data"
+skills = ["adopt", "next"]
+kind = "product"
+text = "Does it now hold anything that could not be got back if it were lost?"
+
+[[ask]]
+key = "event.depended-on"
+skills = ["adopt", "next"]
+kind = "product"
+text = "Do people other than you now rely on it?"
+
+[[ask]]
+key = "conjecture.fork"
+skills = ["conjecture"]
+kind = "product"
+text = "<one choice the fork test gives to the owner and nothing they said settles, asked as someone using it would put it>"
+
+[[ask]]
+key = "feature.open-question"
+skills = ["feature"]
+kind = "product"
+text = "<the question the build stopped on, in the words of someone using the product>"
+
+# Questions the first-hour dogfood of 2026-11-13 recorded, or the skills asked before ADR 0034,
+# that a sensible default answers. Each is taken, acted on, and stated in the hand-over.
+
+[[assume]]
+key = "init.defaults"
+skills = ["init"]
+replaces = "Accept the defaults table (name, tracker, private remote, platform)?"
+
+[[assume]]
+key = "init.stack"
+skills = ["init"]
+replaces = "Which stack? (your recommendation, plain static HTML and CSS, or one the owner names)"
+
+[[assume]]
+key = "init.interface"
+skills = ["init"]
+replaces = "Does the product have a user interface? (web, native, none)"
+
+[[assume]]
+key = "adopt.types"
+skills = ["adopt"]
+replaces = "What kind of software is this app? (the application types)"
+
+[[assume]]
+key = "adopt.events"
+skills = ["adopt"]
+replaces = "Which life events already hold for this app?"
+
+[[assume]]
+key = "adopt.tools"
+skills = ["adopt"]
+replaces = "Do you accept the proposed tools for the floor?"
+
+[[assume]]
+key = "safeguard.tools"
+skills = ["safeguard"]
+replaces = "Accept the proposed tools, or name others for any row?"

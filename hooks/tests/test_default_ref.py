@@ -20,7 +20,8 @@ from ratchet_guards import hook
 from tests.repos import commit, git, repository, write
 from tests.support import MANIFEST_TEXT
 
-PROBE = "scripts/gate.py"
+# A path only the owner changes: refused on any branch while the path guards are on.
+PROBE = "tools/guards/gate.py"
 EDITORS = frozenset({"GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "VISUAL", "EDITOR"})
 
 
@@ -71,7 +72,7 @@ def decision(root: Path, tool: str, tool_input: dict[str, str]) -> str:
 
 
 def probe(root: Path) -> str:
-    """The decision on a Write of a guard path: ``ask`` while the path guards are on."""
+    """The decision on a Write of a locked guard path: ``deny`` while the path guards are on."""
     return decision(root, "Write", {"file_path": str(root / PROBE)})
 
 
@@ -192,7 +193,7 @@ def test_the_command_switches_the_path_guards_off_when_nothing_stops_it(
     tmp_path: Path, scenario: Scenario, command: str
 ) -> None:
     root = scenario(tmp_path)
-    assert probe(root) == "ask"
+    assert probe(root) == "deny"
     run(root, command)
     assert probe(root) == ""
 
@@ -204,4 +205,4 @@ def test_an_agent_cannot_move_the_default_ref_and_then_write_a_guard_path(
     root = scenario(tmp_path)
     if decision(root, "Bash", {"command": command}) == "":
         run(root, command)
-    assert probe(root) == "ask"
+    assert probe(root) == "deny"

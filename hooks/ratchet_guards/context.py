@@ -1,12 +1,16 @@
 """What a rule may consult: the working directory, the branch, the locator and git state."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
-from ratchet_guards.paths import Locator
+from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
+from ratchet_guards.verdict import ACTING_RULES, Verdict
+
+# Why: what git prints for a detached HEAD, and a name git refuses to give a branch.
+DETACHED = "HEAD"
 
 
 class RepoState(Protocol):
@@ -14,6 +18,17 @@ class RepoState(Protocol):
 
     def current_branch(self, cwd: Path) -> str | None:
         """The checked-out branch in ``cwd``."""
+        ...
+
+    def checked_out(self, root: Path) -> str | None:
+        """The branch the checkout at ``root`` has, ``DETACHED`` for a detached ``HEAD``."""
+        ...
+
+    def default_branches(self, root: Path) -> frozenset[str]:
+        """The branch names a commit at ``root`` reaches the default branch under.
+
+        ``main``, ``master`` and the branch the guard reads the committed manifest from.
+        """
         ...
 
     def head_is_pushed(self, cwd: Path) -> bool | None:
@@ -42,7 +57,10 @@ class Context:
     line may have changed what a ref name or an upstream resolves to, so what git says of them
     now is not what the command will meet. ``lost`` marks a ``cwd`` that a ``cd`` the guard could
     not resolve may have replaced: the command then runs somewhere unknown, and a relative path
-    it writes may be a guard path of whatever repository that is.
+    it writes may be a guard path of whatever repository that is. ``hidden_switch`` is set once
+    an earlier command may have moved ``HEAD`` in a way the guard does not read: a ``git switch``
+    inside a shell's script, a substitution, ``eval``, ``xargs`` or an alias. Any checkout may
+    then be on its default branch.
     """
 
     cwd: Path
@@ -52,6 +70,7 @@ class Context:
     unread: bool = False
     unsettled: bool = False
     lost: bool = False
+    hidden_switch: bool = False
 
     def moved_to(self, cwd: Path, *, anchored: bool = True) -> "Context":
         """This context after a ``cd``: the branch known here may still be the one there.
@@ -83,6 +102,10 @@ class Context:
         """This context after a command that may have changed what a name resolves to."""
         return replace(self, unsettled=True)
 
+    def switching_unseen(self) -> "Context":
+        """This context after a command that may have moved ``HEAD`` where the guard cannot see."""
+        return replace(self, hidden_switch=True)
+
     def elsewhere(self) -> "Context":
         """This context for a ``git`` aimed at a repository the guard does not read."""
         return replace(self, unread=True)
@@ -109,3 +132,49 @@ class Guard:
     def on_main(self, context: Context, cwd: Path) -> bool:
         """Whether one of them is a default branch."""
         return bool(self.branches(context, cwd) & MAIN_BRANCHES)
+
+    def lands_now(self, context: Context, path: Path) -> bool:
+        """Whether a change to ``path`` takes effect before any merge the judge reads.
+
+        It does not when the checkout holding ``path`` has a branch other than its default one,
+        or a detached ``HEAD``: a commit there reaches the default branch only through a merge.
+        It does for a file in no checkout, in a checkout git cannot read, and in any checkout a
+        switch earlier on the line may leave on a default branch, a switch the guard cannot read
+        included (ADR 0033). A switch the line makes for certain counts for its own checkout.
+        """
+        filesystem = self.locator.filesystem
+        root = filesystem.checkout(filesystem.canonical(path))
+        if root is None or context.hidden_switch:
+            return True
+        names = self.repo.default_branches(root)
+        own = root == filesystem.checkout(filesystem.canonical(context.cwd))
+        head = context.branch if own and context.branch is not None else self.repo.checked_out(root)
+        return head is None or bool((context.maybe | {head}) & names)
+
+    def writes(
+        self, context: Context, hits: Iterable[Hit], detail: Callable[[Hit], str]
+    ) -> list[Verdict]:
+        """The verdicts on changing ``hits`` from the shell.
+
+        A path only the owner changes is refused anywhere; any other guard path only where the
+        change takes effect before a merge. One that may land there only because of a switch the
+        guard could not read gets a refusal of its own, whose way out is to run the switch alone.
+        """
+        seen = replace(context, hidden_switch=False)
+        verdicts: list[Verdict] = []
+        for hit in hits:
+            if hit.group.locked:
+                rule = "guard-path-write"
+            elif self.lands_now(seen, hit.at):
+                rule = "guard-path-default"
+            elif context.hidden_switch:
+                rule = "guard-path-unseen-switch"
+            else:
+                continue
+            verdicts.append(Verdict(rule, detail(hit), hit.group.source))
+        return verdicts
+
+    def acting(self, paths: Iterable[Path]) -> list[Verdict]:
+        """The owner's question on each of ``paths`` that acts before the merge, on any branch."""
+        found = (self.locator.acting(path) for path in paths)
+        return [Verdict(ACTING_RULES[file.kind], file.path) for file in found if file is not None]

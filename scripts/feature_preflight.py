@@ -390,7 +390,7 @@ def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
         if states_a_conjecture(own):
             return None
         return f"{ticket.ref}: `{CONJECTURE}` states no conjecture"
-    parent_ref = ticket.parent or beside_spec(ticket.ref, root)
+    parent_ref = parent_of(ticket, root)
     if parent_ref is None:
         return f"{ticket.ref} has no `{CONJECTURE}` section and names no parent"
     parent = fetch(parent_ref, root, gh)
@@ -435,7 +435,7 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     if not asked:
         return None
     block = section(ticket.body, OPERABILITY)
-    parent_ref = ticket.parent or beside_spec(ticket.ref, root)
+    parent_ref = parent_of(ticket, root)
     if not block.strip() and parent_ref is not None:
         parent = fetch(parent_ref, root, gh)
         block = section(parent.body, OPERABILITY) if parent is not None else ""
@@ -457,6 +457,30 @@ def operability_line(name: str) -> re.Pattern[str]:
     return re.compile(
         rf"^[-* \t]*\*{{0,2}}{name}:?\*{{0,2}}:?[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE
     )
+
+
+def parent_of(ticket: Ticket, root: Path) -> str | None:
+    """The ref of the spec ``ticket`` inherits its conjecture and operability from, if any."""
+    return ticket.parent or beside_spec(ticket.ref, root)
+
+
+def reads(ticket: Ticket, root: Path) -> tuple[frozenset[str], frozenset[str]]:
+    """Every local file the preflight reads to decide whether, and what, to build ``ticket``.
+
+    The first set it reads whole: the ticket and the spec it inherits from. The second it reads
+    for the ``Status:`` line alone: each ticket it is blocked by. A ref is normalised, and a
+    number is every local ticket it could name. ADR 0031 holds both still while the ticket
+    carries the label, and a test holds the preflight's readers to them.
+    """
+
+    def local(ref: str | None) -> frozenset[str]:
+        if ref is None or not ref.endswith(".md"):
+            return frozenset(numbered_locally(ref or "", root))
+        return frozenset({posixpath.normpath(ref)})
+
+    whole = {posixpath.normpath(ticket.ref), *local(parent_of(ticket, root))}
+    status = frozenset().union(*(local(blocker_ref(ticket, ref, root)) for ref in ticket.blockers))
+    return frozenset(whole), status - whole
 
 
 def beside_spec(ref: str, root: Path) -> str | None:
@@ -537,7 +561,7 @@ def check_critic(report: Report, root: Path) -> None:
         " before review"
         if report.critic
         else f"the binding declares no `{CRITIC_EVENT}` life event: nobody relies on it yet, so"
-        " the change goes spec, implement, review"
+        " the change goes spec, ticket check, implement, review"
     )
 
 

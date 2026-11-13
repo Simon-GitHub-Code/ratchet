@@ -131,7 +131,7 @@ def test_the_plan_orders_tickets_by_their_blockers_and_starts_the_buildable(tmp_
     ]
     assert drafted.start == (ALPHA, GAMMA)
     assert (drafted.base, drafted.forge, drafted.blocked) == ("main", False, ())
-    assert drafted.agents_at_most == 3 * 6 - 2, "four per pipeline before depended-on, plus two"
+    assert drafted.agents_at_most == 3 * (drain.YOUNG_PIPELINE_AGENTS + drain.UPDATE_AGENTS) - 2
     home = Path(tempfile.gettempdir()).resolve() / f"ratchet-queue-{os.getuid()}"
     assert Path(drafted.tickets[0].worktree).parent.parent == home
     assert Path(drafted.tickets[0].worktree).name == "feature-1-alpha"
@@ -140,7 +140,10 @@ def test_the_plan_orders_tickets_by_their_blockers_and_starts_the_buildable(tmp_
 
 def test_a_depended_on_project_counts_the_critic_and_its_fix_loop(tmp_path: Path) -> None:
     root = project(tmp_path, **{"docs/process/binding.md": binding(MERGE) + LIFE_DEPENDED_ON})
-    assert drain.plan(offline(root)).agents_at_most == 3 * 11 - 2
+    assert (
+        drain.plan(offline(root)).agents_at_most
+        == 3 * (drain.PIPELINE_AGENTS + drain.UPDATE_AGENTS) - 2
+    )
 
 
 def test_main_prints_the_plan_as_json(tmp_path: Path, capsys: Out) -> None:

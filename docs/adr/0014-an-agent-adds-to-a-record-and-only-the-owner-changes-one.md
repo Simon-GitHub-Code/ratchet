@@ -13,6 +13,8 @@ The permission rules change with it. `settings_rules.py` writes no `Edit` rule f
 
 An adopted repository gets this when its owner moves the two patterns into a group marked `edit = "append"` and runs `just settings`; the manifest is locked, so that change is the owner's.
 
+Superseded in part by ADR 0033: on a branch every change to a record passes the hook, and the merge judge reads it. The additive check decides in the hook only where the commit lands on the default branch, and what it does not find additive is denied there, not asked. A shell write to a record on a branch passes too. The check itself, `guard-diff` and the judge's use of it stand.
+
 ## Refutation criterion
 
 This is wrong if a changed record reaches the default branch as an addition. The standing attempt is the property test in `hooks/tests/test_records.py`: it edits a glossary at random and, for every edit the function accepts, compares the banned words and the lines before and after with readers that share no code with the function (the prose gate's, and a plain line comparison). One accepted edit that loses a banned word or a line refutes the parser, and the two patterns go back to `ask` until it is fixed. It is also wrong if additions carry decisions the owner would have refused: read the Decisions section of the first ten pull requests built this way, and if the owner reverts or rewrites more than one added term or ADR in five, an addition is not cheap to take back and the group returns to `ask`.

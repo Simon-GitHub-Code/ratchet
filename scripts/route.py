@@ -17,12 +17,18 @@ The stages, in order; the first that does not hold is the answer:
 5. the commit hooks, which run tier 0 on every commit (``hooks_installed.py`` proves they would;
    the step is the ``hooks-install`` entry point, which an agent runs, or the owner's command
    where git config must change, since the guard refuses that from an agent);
-6. a clean tree (finish the change: ``check``, commit, pull request);
+6. a clean tree (finish the change: ``check``, commit on a branch, pull request; nothing is
+   committed on the default branch itself, and records alone left there land through the
+   ``merge`` entry point's ``--records``, which an agent runs, or a pull request on a forge);
+   with no forge, a ``records/<time>`` branch checked out is a ``--records`` run that stopped,
+   and the same command finishes it;
 7. on a working branch: the pull request is open, else open it, and its merge job merges what
    the merge judge passes (ADR 0021); with no forge (no ``origin``) the binding's ``merge``
    entry point judges the branch, runs ``check`` on the merge result and merges it, or says
    why the merge is the owner's;
-8. on the default branch: the glossary and design brief (``grill-with-docs``), then an
+8. on the default branch: a ``records/<time>`` branch not yet merged, which the merge judge is
+   asked about (the owner's merge command with its first reason, or the ``merge`` entry point
+   for an agent when it passes); the glossary and design brief (``grill-with-docs``), then an
    agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
    away, ``/pstack:poteto-mode`` when they stay). With more than one ticket ready the build is
@@ -55,6 +61,8 @@ import application_types
 import feature_preflight as preflight
 import gatelib
 import hooks_installed
+import merge
+import merge_ready
 import plugin_pin
 import questions
 import triggers
@@ -96,6 +104,7 @@ EVENTS_HEADER = "date\tevent\tsign\tanswer"
 DECLINED = "declined"
 CHANGES = ".scratch/changes"
 BLOCKED_RUN = ": blocked run"
+SHOWN = 3
 
 
 @dataclass(frozen=True)
@@ -334,19 +343,34 @@ def blocked_runs(root: Path, default_branch: str) -> dict[str, str]:
     """Branches whose last feature run blocked and whose block still stands, with its stash.
 
     The feature skill stashes a blocked run as ``<branch>: blocked run``. The block stands while
-    the default branch has not moved past the run: the owner answers the ticket or lands the
-    guard edits there, so a newer default branch is the cue to build again.
+    the default branch has not moved past the run, or has gained only records the merge judge
+    lets an agent land alone: the owner answers the ticket or lands the guard edits there, so a
+    newer default branch that holds what the owner merged is the cue to build again.
     """
     listing = gatelib.git(root, "stash", "list", "--format=%gd%x09%gs") or ""
     found: dict[str, str] = {}
     for line in listing.splitlines():
         ref, _, subject = line.partition("\t")
         run = subject.split(": ", 1)[-1]
-        if run.endswith(BLOCKED_RUN) and (
-            gatelib.git(root, "merge-base", "--is-ancestor", default_branch, ref) is not None
-        ):
+        if run.endswith(BLOCKED_RUN) and not answered(root, default_branch, ref):
             found.setdefault(run.removesuffix(BLOCKED_RUN), run)
     return found
+
+
+def answered(root: Path, default_branch: str, stash: str) -> bool:
+    """Whether the default branch gained, since the blocked run, a change the owner merged.
+
+    Why: records alone land without the owner (ADR 0031), so a move made of them answers
+    nothing; the answers on the held ticket, its spec or an ADR are the owner's to merge.
+    """
+    if gatelib.git(root, "merge-base", "--is-ancestor", default_branch, stash) is not None:
+        return False
+    fork = gatelib.git(root, "merge-base", default_branch, stash) or default_branch
+    listed = gatelib.git(root, "diff", "--name-only", "-z", fork, default_branch) or ""
+    paths = [path for path in listed.split("\0") if path]
+    return bool(
+        merge_ready.not_records(root, fork, paths) or merge_ready.judge(root, fork, default_branch)
+    )
 
 
 def stalled(ticket: preflight.Ticket, runs: dict[str, str]) -> str | None:
@@ -523,23 +547,118 @@ def setup_step(root: Path) -> Step | None:
     return None if hooks is None else Step(hooks.fix, hooks.detail, NEXT, "hooks")
 
 
+def dirty_step(checkout: Checkout) -> Step:
+    """Uncommitted changes: records land through the merge judge, anything else on a branch.
+
+    Why: nothing is committed on the default branch itself (ADR 0031). Records the owner's
+    conversation wrote there land through the ``merge`` entry point, which an agent runs.
+    """
+    root, default = checkout.root, checkout.default_branch
+    if not checkout.on_default:
+        return Step(
+            f"run {check_command(root)}, then commit on branch `{checkout.branch}`",
+            "the working tree has uncommitted changes",
+            review(checkout),
+            "change",
+        )
+    paths = merge_ready.uncommitted(root)
+    named = checkout.branch == default
+    if named and paths and not merge_ready.not_records(root, merge_ready.default_ref(root), paths):
+        more = len(paths) - SHOWN
+        listed = ", ".join(paths[:SHOWN]) + (f" and {more} more" if more > 0 else "")
+        if checkout.forge:
+            return Step(
+                f"commit them on a branch of their own, then {PULL_REQUEST}",
+                f"the work tree of `{default}` holds records alone ({listed}); the merge judge"
+                " asks no verdict record of them",
+                WAIT,
+                "records",
+            )
+        return Step(
+            merge_command(root, "--records"),
+            f"the work tree of `{default}` holds records alone ({listed}): an agent runs this; it"
+            " commits them on a branch of their own and merges it when the merge judge and"
+            " `check` pass it",
+            NEXT,
+            "records",
+        )
+    return Step(
+        f"run {check_command(root)}, then commit on a branch of its own, never on `{default}`",
+        f"the work tree of `{default}` has uncommitted changes",
+        review(checkout),
+        "change",
+    )
+
+
+def records_stopped(checkout: Checkout) -> Step | None:
+    """A ``merge --records`` run that stopped on its records branch, which the same command ends."""
+    if checkout.forge or not (checkout.branch or "").startswith(merge.RECORDS):
+        return None
+    again = merge_command(checkout.root, "--records")
+    return Step(
+        again,
+        f"a run of {again} stopped on branch `{checkout.branch}` before it switched back to"
+        f" `{checkout.default_branch}`: an agent runs it again, and it picks up where that run"
+        " stopped",
+        NEXT,
+        "records",
+    )
+
+
+def records_waiting(checkout: Checkout) -> Step | None:
+    """A records branch ``merge --records`` left unmerged; the judge says whose merge it is.
+
+    Why the judge is asked here: a run stopped while ``check`` ran never heard its answer, and the
+    branch it leaves looks like one the judge left to the owner.
+    """
+    root, default = checkout.root, checkout.default_branch
+    listed = gatelib.git(
+        root,
+        "branch",
+        "--list",
+        f"{merge.RECORDS}*",
+        "--no-merged",
+        default,
+        "--format=%(refname:short)",
+    )
+    waiting = (listed or "").split()
+    if not waiting:
+        return None
+    name = waiting[0]
+    reasons = merge_ready.judge(root, f"{merge.HEADS}{default}", f"{merge.HEADS}{name}")
+    if not reasons:
+        return Step(
+            merge_command(root, name),
+            f"branch `{name}` holds records a run of {merge_command(root, '--records')} committed"
+            " and did not merge; the merge judge passes them, so an agent runs this, and it merges"
+            " them when `check` is green on the merge result",
+            NEXT,
+            "records",
+        )
+    return Step(
+        f"`git switch {default} && git merge --no-ff {name}`, typed by the owner",
+        f"the merge judge leaves branch `{name}` to the owner: {reasons[0].text};"
+        f" {merge_command(root, name)} prints every reason",
+        NEXT,
+        "records",
+    )
+
+
 def decide(root: Path, gh: preflight.Runner | None) -> Step:
     """The owner's next command for the checkout at ``root``; ``gh=None`` stays offline."""
     checkout = observe(root)
     if checkout is None:
         return Step(INIT, f"{root} is not a git repository", TRACKER_SETUP, "init")
-    setup = setup_step(root)
-    if setup is not None:
-        return setup
+    first = setup_step(root) or records_stopped(checkout)
+    if first is not None:
+        return first
     if checkout.dirty:
-        return Step(
-            f"run {check_command(root)}, then commit on branch `{checkout.branch}`",
-            "the working tree has uncommitted changes",
-            NEXT if checkout.on_default else review(checkout),
-            "change",
-        )
+        return dirty_step(checkout)
     if not checkout.on_default:
         return pull_request_step(checkout, gh)
+    waiting = records_waiting(checkout)
+    if waiting is not None:
+        return waiting
     missing = records_missing(root)
     step = (
         Step(GRILL, missing, f"{SPEC}, then {TICKETS}", "records")

@@ -4,8 +4,9 @@ A change reaches the default branch in two ways (ADR 0021). On a forge the pull 
 job merges it, and ``ratchet_guards.gh`` asks on an agent's own ``gh pr merge``. With no forge the
 binding's ``merge`` entry point runs ``scripts/merge.py``, which judges the branch and runs
 ``check`` on the merge result before the branch moves. Every other way of bringing another
-branch's commits onto ``main`` or ``master`` asks the owner: ``git merge``, ``git cherry-pick``
-and a ``git pull`` that names another repository or branch, while on a default branch.
+branch's commits onto ``main`` or ``master`` asks the owner: ``git merge``, ``git cherry-pick``,
+``git am``, ``git read-tree`` and a ``git pull`` that names another repository or branch, while
+on a default branch.
 
 What still passes there is the sync with the remote's own default branch: ``git pull``, ``git
 pull origin``, ``git pull origin main``, and ``git merge --ff-only`` of ``origin/main`` or the
@@ -101,6 +102,15 @@ def pull(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
 
 def cherry_pick(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git cherry-pick`` on a default branch: another branch's commits, one by one."""
+    """``git cherry-pick`` or ``git am`` on a default branch: commits made elsewhere, one by one."""
     resumes = set(expand_long(call.args, _RESUMES)) & _RESUMES
     return [] if resumes or not guard.on_main(context, call.cwd) else _asks(call)
+
+
+def read_tree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
+    """``git read-tree`` on a default branch: another commit's files, ready to commit there.
+
+    Why: on a branch a guard path changes with no prompt (ADR 0033), so a tree read from that
+    branch onto the default one would take the change past the merge judge.
+    """
+    return _asks(call) if guard.on_main(context, call.cwd) else []
