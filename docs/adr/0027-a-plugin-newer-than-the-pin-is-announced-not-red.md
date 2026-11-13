@@ -20,6 +20,8 @@ A local run is never silently on other rules than CI: when the plugins differ, e
 
 Decided 2026-11-12.
 
+Extended by ADR 0029: a newer plugin judges and is announced, but never writes a file CI reads. `just settings` refuses under it, since CI on the pin would reject the rules it wrote, and `upgrade.py --apply` moves the pin, the workflow refs and the rules in one run instead of the line to change by hand.
+
 ## What this does not see
 
 A newer plugin can judge a change differently from the pinned one. Where the newer gate is stricter, a local tier is red on something CI would pass, and the developer sees which gate and that the plugin is newer. Where it is laxer, a local tier is green on something CI then fails; with a forge, CI on the pin still decides the merge. With no forge there is no CI: the local `merge` entry point runs `check` on the newer plugin's gates, and the pin then records what the repository was last upgraded to rather than what judged the merge. The line on every run says so, and nothing stops it.

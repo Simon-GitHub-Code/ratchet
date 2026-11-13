@@ -13,11 +13,13 @@ import contextlib
 import fnmatch
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
 import time
 import tomllib
+from collections.abc import Callable
 from functools import lru_cache
 from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path, PurePosixPath
@@ -38,6 +40,25 @@ STOPPING_ENV = "RATCHET_STOPPING"
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
+
+# Why: a hook exports these, and `git -C` obeys them over the directory it is given; a scratch
+# copy must be a repository of its own, not the one the hook is committing in.
+REPOSITORY_VARIABLES = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_PREFIX",
+    }
+)
+
+# Why: an edit the upgrade makes to one file: the text the file holds now (``None``: absent) to
+# the text it must hold. It reads nothing else, never drops a line it did not write and, applied
+# twice, changes nothing the second time.
+Want = Callable[[str | None], str]
 
 
 def git(root: Path, *args: str) -> str | None:
@@ -156,6 +177,106 @@ def read_text(path: Path) -> str | None:
     if b"\0" in data[:8000]:
         return None
     return data.decode("utf-8", errors="replace")
+
+
+def edited(want: Want, data: bytes | None) -> bytes | None:
+    """The bytes ``want`` makes of a file's, or ``None`` when it leaves the file as it is.
+
+    A file whose every line ends in CRLF is edited as LF and written back in CRLF. A file that is
+    not UTF-8 raises ``UnicodeDecodeError``: decoded leniently and written back, its other bytes
+    would be lost.
+    """
+    text = None if data is None else data.decode("utf-8")
+    crlf = text is not None and "\r\n" in text and text.count("\n") == text.count("\r\n")
+    plain = text.replace("\r\n", "\n") if text is not None and crlf else text
+    made = want(plain)
+    if plain is not None and made == plain:
+        return None
+    return (made.replace("\n", "\r\n") if crlf else made).encode("utf-8")
+
+
+def seen(root: Path) -> list[str]:
+    """What git sees of ``root``: tracked files and those it does not ignore.
+
+    Where ``root`` is not a git work tree, it is every file and link below it.
+    """
+    listed = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    if listed is not None:
+        return sorted({name for name in listed.split("\0") if name})
+    found = []
+    for directory, folders, names in os.walk(root):
+        here = Path(directory)
+        links = [folder for folder in folders if (here / folder).is_symlink()]
+        found += [str((here / name).relative_to(root)) for name in [*names, *links]]
+    return sorted(found)
+
+
+def copy_seen(root: Path, target: Path) -> dict[str, str]:
+    """What git sees of ``root`` copied to ``target``, made a repository whose index holds it.
+
+    A link that stays in the tree is a link in the copy. What is not this repository's to write
+    is copied as ``root`` reads it, and returned by name with why: a link that leads out of the
+    tree, copied as what it leads to, and a submodule, copied as its files.
+    """
+    home = root.resolve()
+    foreign = {}
+    for name in seen(root):
+        source, copy = root / name, target / name
+        lands, link = Path(os.path.realpath(source)), source.is_symlink()
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        if link and lands.is_relative_to(home):
+            copy.symlink_to(os.path.relpath(target / lands.relative_to(home), copy.parent))
+            continue
+        if lands.is_file():
+            shutil.copy2(lands, copy)
+        elif lands.is_dir():
+            shutil.copytree(lands, copy, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        if link:
+            foreign[name] = "leads outside the repository"
+        elif lands.is_dir():
+            foreign[name] = f"is in the submodule {name}"
+    git_checked(target, "init", "-q")
+    git_checked(target, "add", "--all", "--force")
+    return foreign
+
+
+def git_checked(root: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
+    """``git -C root args`` stdout, whatever repository a hook exported.
+
+    An exit status outside ``ok`` raises, so a git that failed is never read as an answer.
+    """
+    environment = {k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES}
+    result = subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+    if result.returncode not in ok:
+        raise subprocess.CalledProcessError(result.returncode, result.args, result.stderr)
+    return result.stdout
+
+
+def chained(*wants: Want) -> Want:
+    """The want that applies each of ``wants`` to the text the one before it made."""
+
+    def want(current: str | None) -> str:
+        text = current
+        for step in wants:
+            text = step(text)
+        return text or ""
+
+    return want
+
+
+def created(text: str) -> Want:
+    """The want of a file the plugin supplies whole, only while it is absent."""
+
+    def want(current: str | None) -> str:
+        return text if current is None else current
+
+    return want
 
 
 def thresholds(root: Path) -> dict[str, object]:
