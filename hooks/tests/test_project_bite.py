@@ -1,5 +1,6 @@
 """``project_bite.py``: every gate a repository bound goes red on its planted fault."""
 
+import contextlib
 import os
 import signal
 import tempfile
@@ -1327,3 +1328,98 @@ def test_a_fault_inside_a_repository_setup_made_is_not_planted(
     assert "bite: lint: first: THE FAULT WAS NOT PLANTED\n" in out
     assert "vendor/x/planted.txt is inside vendor/x, a repository of its own" in out
     assert "bite: lint: blind: DOES NOT BITE\n" in out
+
+
+def fingerprint(root: Path) -> list[tuple[str, int, bytes]]:
+    """Every entry of a work tree but ``.git``: its path, its mode, and what it holds."""
+    entries = []
+    for path in sorted(root.rglob("*")):
+        if ".git" in path.relative_to(root).parts:
+            continue
+        mode = path.lstat().st_mode
+        held = (
+            os.readlink(path).encode()
+            if path.is_symlink()
+            else path.read_bytes()
+            if path.is_file()
+            else b""
+        )
+        entries.append((str(path.relative_to(root)), mode, held))
+    return entries
+
+
+SWAPPED = {
+    "write": 'write = { path = "src/deep/planted.txt", content = "planted\\n" }',
+    "replace": 'replace = { path = "src/deep/inner.txt", old = "clean", new = "planted" }',
+    "remove": 'remove = ["src/deep/inner.txt"]',
+    "patch": 'patch = "quality/bites/inner.patch"',
+}
+
+
+@pytest.mark.parametrize("swapped", ["src", "src/deep"])
+@pytest.mark.parametrize("kind", sorted(SWAPPED))
+def test_a_directory_swapped_for_a_link_between_the_check_and_the_plant_is_refused(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    swapped: str,
+) -> None:
+    # Why: a process setup left running swapped a directory of the copy for a link to the real
+    # tree after the fault's path was checked and before it was written, and the fault landed in
+    # the real tree. The swap is made at that seam here, so no race decides the test.
+    patch = "--- a/src/deep/inner.txt\n+++ b/src/deep/inner.txt\n@@ -1 +1 @@\n-clean\n+planted\n"
+    write(tmp_path / "repo", "quality/bites/inner.patch", patch)
+    write(tmp_path / "repo", "src/deep/inner.txt", "clean\n")
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "swapped", SWAPPED[kind]))
+    before = fingerprint(root)
+    checked = project_bite.owned
+
+    def check_then_swap(copy: Path, *paths: str) -> object:
+        verdict = checked(copy, *paths)
+        (copy / swapped).rename(copy / "aside")
+        (copy / swapped).symlink_to(root / swapped, target_is_directory=True)
+        return verdict
+
+    monkeypatch.setattr(project_bite, "owned", check_then_swap)
+    prove(root)
+    assert fingerprint(root) == before
+    out = capsys.readouterr().out
+    assert "bite: lint: swapped: THE FAULT WAS NOT PLANTED\n" in out
+    assert "is reached through a symbolic link; a fault changes the copy's own file" in out
+
+
+def test_a_process_setup_left_swapping_a_directory_for_a_link_never_changes_the_real_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: the race the seam test fixes in place, run for real. The swapper ends by itself a
+    # little after the proof would, and is killed by its pid once the proof is done.
+    pidfile, swapper = tmp_path / "swapper.pid", tmp_path / "swap.sh"
+    faults = [
+        'write = { path = "src/w{n}.txt", content = "planted\\n" }',
+        'replace = { path = "src/code.txt", old = "clean", new = "planted" }',
+        'remove = ["src/code.txt"]',
+    ]
+    registry = 'setup = ["setsid -f sh ' + str(swapper) + '"]\n' + "".join(
+        bite("lint", f"f{n}", faults[n % 3].replace("{n}", str(n))) for n in range(24)
+    )
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, registry)
+    until = int(time.time()) + 20
+    swapper.write_text(
+        f"echo $$ > {pidfile}\n"
+        f'while [ "$(date +%s)" -lt {until} ]; do\n'
+        f"  [ -d src ] && [ ! -L src ] && mv src aside && ln -s {root / 'src'} src\n"
+        "  sleep 0.001\n"
+        "  [ -L src ] && rm src && mv aside src\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    before = fingerprint(root)
+    try:
+        prove(root)
+    finally:
+        if pidfile.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pidfile.read_text(encoding="utf-8")), signal.SIGKILL)
+    assert "bite: lint: f0: " in capsys.readouterr().out
+    assert fingerprint(root) == before
