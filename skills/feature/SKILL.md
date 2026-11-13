@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Build features from tickets
 
-`/ratchet:feature <ticket>` builds one ticket: a number on the tracker (`4` or `#4`) or the path of a local ticket file (`.scratch/<slug>/issues/02-<slug>.md`). `/ratchet:feature` with no ticket, or `/ratchet:feature all`, builds every agent-ready ticket: [the drain](#the-drain-every-agent-ready-ticket). Load the `ratchet:method` skill first; [pipeline.md](../method/pipeline.md) says what the roles do (spec, implement and review always; the critic and its fix loop once the project is depended-on) and [records.md](../method/records.md) what the ticket carries.
+`/ratchet:feature <ticket>` builds one ticket: a number on the tracker (`4` or `#4`) or the path of a local ticket file (`.scratch/<slug>/issues/02-<slug>.md`). `/ratchet:feature` with no ticket, or `/ratchet:feature all`, builds every agent-ready ticket: [the drain](#the-drain-every-agent-ready-ticket). Load the `ratchet:method` skill first; [pipeline.md](../method/pipeline.md) says what the roles do (spec, the ticket check, implement and review always; the critic and its fix loop once the project is depended-on) and [records.md](../method/records.md) what the ticket carries.
 
 The input is the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` wrote, with the method's `## Conjecture` and `## Operability` sections, and the agent-ready label the owner applies (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it). The label is the owner's agreement; nothing below infers it or applies it (ADR 0008).
 
@@ -25,7 +25,7 @@ Stay in the turn until every workflow you start has returned: in a headless sess
    args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
    ```
 
-   It runs the same preflight as its first stage, which is where it reads `critic` (the arguments carry only the script's path): Spec, Implement, then Critique and the fix loop only when `critic` is true (the binding declares the `depended-on` life event, ADR 0028), then Review. When it did not run the critic, the result's `critic` says so and why; put that line in the pull request. It never commits, pushes or opens a pull request.
+   It runs the same preflight as its first stage, which is where it reads `critic` (the arguments carry only the script's path): Spec, the ticket check (with one amend of the spec when it finds a gap), Implement, then Critique and the fix loop only when `critic` is true (the binding declares the `depended-on` life event, ADR 0028), then Review. When it did not run the critic, the result's `critic` says so and why; put that line in the pull request. It never commits, pushes or opens a pull request.
 
 4. **A result that is not approved.** A `verdict` other than `approve`, an open `unresolvedBlockingFindings` or a red `checkOutput` tail commits nothing. Clear what the agents left with `git stash push -u -m "<branch>: <verdict> run"`, then `git switch <base>`, and name the stash in the hand-over; a `blocked` stash holds the ticket in the route until the default branch moves past the run. Then:
    - `openQuestions`: put them to the owner as [Questions for the owner](#questions-for-the-owner) says. When every one is answered and there is no guard edit, build the ticket again from step 1 in the same turn.

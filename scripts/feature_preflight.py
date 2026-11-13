@@ -537,7 +537,7 @@ def check_critic(report: Report, root: Path) -> None:
         " before review"
         if report.critic
         else f"the binding declares no `{CRITIC_EVENT}` life event: nobody relies on it yet, so"
-        " the change goes spec, implement, review"
+        " the change goes spec, ticket check, implement, review"
     )
 
 
