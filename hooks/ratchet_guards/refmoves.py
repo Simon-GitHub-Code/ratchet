@@ -13,7 +13,7 @@ from itertools import pairwise
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gitcall import Invocation
 from ratchet_guards.options import Spec, expand_long, scan
-from ratchet_guards.refs import REMOTE, default_branch, protected, protects, pushed
+from ratchet_guards.refs import MAIN_BRANCHES, REMOTE, default_branch, protected, protects, pushed
 from ratchet_guards.verdict import Verdict
 
 # Why: a config key that decides what a fetch writes into a remote-tracking ref (`remote.*`,
@@ -100,9 +100,12 @@ def _refused(call: Invocation, because: str = "") -> list[Verdict]:
     return [Verdict("default-ref", because or " ".join(("git", call.subcommand, *call.args)))]
 
 
-def _writes(call: Invocation, names: Sequence[str | None]) -> list[Verdict]:
-    """A verdict when any of ``names`` is a ref the call writes and the guard reads."""
-    return _refused(call) if any(protects(n) for n in names if n) else []
+def _writes(
+    call: Invocation, written: Sequence[str | None], guard: Guard, context: Context
+) -> list[Verdict]:
+    """A verdict when any of ``written`` is a ref the call writes and the guard reads."""
+    names = guard.defaults(context, call.cwd)
+    return _refused(call) if any(protects(n, names) for n in written if n) else []
 
 
 def trusted_key(key: str) -> bool:
@@ -140,7 +143,7 @@ def _branch_names(call: Invocation, context: Context, guard: Guard) -> list[str]
 
 def branch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     """``git branch`` creating, forcing, deleting, renaming or copying onto a default branch."""
-    return _writes(call, _branch_names(call, context, guard))
+    return _writes(call, _branch_names(call, context, guard), guard, context)
 
 
 def update_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -151,31 +154,28 @@ def update_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict
         return _refused(call)
     if ref == "HEAD" and "--no-deref" not in options.flags:
         return _refused(call) if guard.on_main(context, call.cwd) else []
-    return _writes(call, [ref])
+    return _writes(call, [ref], guard, context)
 
 
 def symbolic_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     """``git symbolic-ref`` setting or deleting a protected ref; reading one is fine."""
-    del context, guard
     options = scan(expand_long(call.args, _SYMBOLIC_REF_LONG), _SYMBOLIC_REF)
     writes = bool(options.flags & {"-d", "--delete"}) or len(options.operands) > 1
-    return _writes(call, options.operands[:1]) if writes else []
+    return _writes(call, options.operands[:1], guard, context) if writes else []
 
 
 def creates(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     """``git switch`` and ``git checkout`` creating or resetting a branch named like a default."""
-    del context, guard
     options = scan(expand_long(call.args, _CREATE_LONG), _CREATE)
-    return _writes(call, [options.values.get(flag) for flag in _CREATE_FLAGS])
+    return _writes(call, [options.values.get(flag) for flag in _CREATE_FLAGS], guard, context)
 
 
 def worktree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     """``git worktree add -b`` or ``-B`` naming a default branch."""
-    del context, guard
     if call.args[:1] != ("add",):
         return []
     options = scan(call.args[1:], _WORKTREE_ADD)
-    return _writes(call, [options.values.get("-b"), options.values.get("-B")])
+    return _writes(call, [options.values.get("-b"), options.values.get("-B")], guard, context)
 
 
 def fetch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -183,19 +183,19 @@ def fetch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
 
     ``tag <name>`` is ``refs/tags/<name>`` on both sides.
     """
-    del context, guard
     options = scan(expand_long(call.args, _FETCH_LONG), _FETCH)
     refspecs = [*options.operands[1:], options.values.get("--refmap", "")]
     tags = [f"refs/tags/{name}" for word, name in pairwise(refspecs) if word == "tag"]
-    return _writes(call, [*tags, *(spec.removeprefix("+").partition(":")[2] for spec in refspecs)])
+    destinations = (spec.removeprefix("+").partition(":")[2] for spec in refspecs)
+    return _writes(call, [*tags, *destinations], guard, context)
 
 
 def tag(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     """``git tag`` creating a tag named as a default branch; listing and deleting are fine."""
-    del context, guard
     options = scan(expand_long(call.args, _TAG_LONG), _TAG)
     reads = bool(options.flags & _TAG_READS)
-    return [] if reads else _writes(call, [f"refs/tags/{name}" for name in options.operands[:1]])
+    created = [f"refs/tags/{name}" for name in options.operands[:1]]
+    return [] if reads else _writes(call, created, guard, context)
 
 
 def push_targets(refspecs: Sequence[str]) -> Iterator[str | None]:
@@ -217,21 +217,23 @@ def push_targets(refspecs: Sequence[str]) -> Iterator[str | None]:
             yield None if target in _HEAD else target
 
 
-def pushes(call: Invocation, targets: Sequence[str]) -> list[Verdict]:
+def pushes(
+    call: Invocation, targets: Sequence[str], names: frozenset[str] = MAIN_BRANCHES
+) -> list[Verdict]:
     """A push that writes a remote-tracking ref, a replace ref or a tag named as a default branch.
 
     ``git push .`` writes this repository's own refs, and a short destination reaches them by
     every rule ``ratchet_guards.refs.pushed`` lists. A push to a default branch itself is
     ``push-main``'s.
     """
-    names = [pushed(target) for target in targets]
-    strays = [full for full in names if not any(map(default_branch, full))]
-    return _refused(call) if any(protected(name) for full in strays for name in full) else []
+    spelled = [pushed(target) for target in targets]
+    strays = [full for full in spelled if not any(default_branch(name, names) for name in full)]
+    return _refused(call) if any(protected(n, names) for full in strays for n in full) else []
 
 
-def pushes_default(targets: Sequence[str]) -> bool:
+def pushes_default(targets: Sequence[str], names: frozenset[str] = MAIN_BRANCHES) -> bool:
     """Whether a push to ``targets`` writes a default branch, in any spelling git matches."""
-    return any(default_branch(name) for target in targets for name in pushed(target))
+    return any(default_branch(name, names) for target in targets for name in pushed(target))
 
 
 def rebase(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -239,7 +241,7 @@ def rebase(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     options = scan(expand_long(call.args, _REBASE_LONG), _REBASE)
     operands = options.operands
     named = operands[:1] if "--root" in options.flags else operands[1:2]
-    return _refused(call) if _writes(call, named) or guard.on_main(context, call.cwd) else []
+    return _refused(call) if _writes(call, named, guard, context) or guard.on_main(context, call.cwd) else []
 
 
 def reset(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:

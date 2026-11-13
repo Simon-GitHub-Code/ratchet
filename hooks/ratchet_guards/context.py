@@ -129,9 +129,18 @@ class Guard:
         here = context.branch if certain else self.repo.current_branch(cwd)
         return context.maybe | (frozenset({here}) if here else frozenset())
 
+    def defaults(self, context: Context, cwd: Path) -> frozenset[str]:
+        """The default branches of the repository ``cwd`` is in: ``main``, ``master`` and the one
+        the committed manifest is read from, whatever it is called.
+
+        A command that names a repository the guard cannot read is judged against ``main`` and
+        ``master`` alone, as its branch is.
+        """
+        return MAIN_BRANCHES if context.unread else self.repo.default_branches(cwd)
+
     def on_main(self, context: Context, cwd: Path) -> bool:
         """Whether one of them is a default branch."""
-        return bool(self.branches(context, cwd) & MAIN_BRANCHES)
+        return bool(self.branches(context, cwd) & self.defaults(context, cwd))
 
     def lands_now(self, context: Context, path: Path) -> bool:
         """Whether a change to ``path`` takes effect before any merge the judge reads.

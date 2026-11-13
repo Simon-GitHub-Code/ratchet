@@ -30,24 +30,35 @@ _DEFAULTS = frozenset({"heads", "tags"})
 _QUALIFIED = ("heads/", "tags/", "remotes/")
 # A tag pattern is left out: `git fetch` follows tags whatever the hook says, so refusing
 # `refs/tags/*` would cost every tag fetch and stop nothing.
-_SAMPLES = (*LOCAL, REMOTE_HEAD, *TRACKING, "refs/replace/x")
 
 
-def protected(ref: str) -> bool:
+def local(names: frozenset[str]) -> tuple[str, ...]:
+    """The full names of the local branches ``names``."""
+    return tuple(f"refs/heads/{name}" for name in sorted(names))
+
+
+def tracking(names: frozenset[str]) -> tuple[str, ...]:
+    """The full names of the remote's tracking refs for ``names``."""
+    return tuple(f"refs/remotes/{REMOTE}/{name}" for name in sorted(names))
+
+
+def protected(ref: str, names: frozenset[str] = MAIN_BRANCHES) -> bool:
     """Whether the full name ``ref``, or a pattern with ``*``, is or covers a ref the guard reads.
 
     Those are the local default branches, a tag named as one, and everything under
-    ``refs/remotes`` and ``refs/replace``.
+    ``refs/remotes`` and ``refs/replace``. ``names`` are the default branches: ``main`` and
+    ``master``, and whichever other the repository's own state says is the default one.
     """
     if "*" in ref:
-        return any(fnmatchcase(sample, ref) for sample in _SAMPLES)
+        samples = (*local(names), REMOTE_HEAD, *tracking(names), "refs/replace/x")
+        return any(fnmatchcase(sample, ref) for sample in samples)
     space, _, name = ref.removeprefix("refs/").partition("/")
     return ref.startswith("refs/") and (
-        space in _NAMESPACES or (space in _DEFAULTS and name in MAIN_BRANCHES)
+        space in _NAMESPACES or (space in _DEFAULTS and name in names)
     )
 
 
-def protects(ref: str) -> bool:
+def protects(ref: str, names: frozenset[str] = MAIN_BRANCHES) -> bool:
     """Whether writing ``ref``, as a command line spells it, can move what the guard reads.
 
     ``ref`` may carry ``+``, may be fully qualified (``refs/heads/main``), may start from a
@@ -57,8 +68,10 @@ def protects(ref: str) -> bool:
     """
     name = ref.removeprefix("+")
     if name.startswith("refs/"):
-        return protected(name)
-    return protected(f"refs/{name}" if name.startswith(_QUALIFIED) else f"refs/heads/{name}")
+        return protected(name, names)
+    return protected(
+        f"refs/{name}" if name.startswith(_QUALIFIED) else f"refs/heads/{name}", names
+    )
 
 
 def pushed(ref: str) -> tuple[str, ...]:
@@ -79,6 +92,6 @@ def pushed(ref: str) -> tuple[str, ...]:
     return (f"refs/{name}", f"refs/tags/{name}", f"refs/heads/{name}", *tracking)
 
 
-def default_branch(ref: str) -> bool:
+def default_branch(ref: str, names: frozenset[str] = MAIN_BRANCHES) -> bool:
     """Whether the full name ``ref``, or a pattern with ``*``, is or covers a default branch."""
-    return any(fnmatchcase(local, ref) for local in LOCAL)
+    return any(fnmatchcase(name, ref) for name in local(names))

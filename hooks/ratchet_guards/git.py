@@ -14,7 +14,7 @@ from ratchet_guards import environment, merges, refmoves
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gitcall import Invocation, invocation
 from ratchet_guards.options import NO_VALUES, Options, Spec, expand_long, scan
-from ratchet_guards.refs import MAIN_BRANCHES, TRACKING
+from ratchet_guards.refs import MAIN_BRANCHES, tracking
 from ratchet_guards.shell import PLACEHOLDER
 from ratchet_guards.verdict import Verdict
 
@@ -134,10 +134,11 @@ def _push(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     pushed = (
         guard.repo.full_name(call.cwd, f"{name}{_PUSHED}") for name in (*sorted(current), *bare)
     )
-    default = current & MAIN_BRANCHES or refmoves.pushes_default(named)
-    if options.flags & _ALL_BRANCHES or default or any(name in TRACKING for name in pushed):
+    names = guard.defaults(context, call.cwd)
+    default = current & names or refmoves.pushes_default(named, names)
+    if options.flags & _ALL_BRANCHES or default or any(name in tracking(names) for name in pushed):
         verdicts.append(Verdict("push-main", "git push " + " ".join(call.args)))
-    return verdicts + refmoves.pushes(call, named)
+    return verdicts + refmoves.pushes(call, named, names)
 
 
 def _commit_tree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -345,7 +346,9 @@ class Switch:
     certain: bool = False
 
 
-_ANYWHERE = Switch(MAIN_BRANCHES)
+def _anywhere(guard: Guard, cwd: Path) -> Switch:
+    """A move that may land on any default branch of the repository in ``cwd``."""
+    return Switch(MAIN_BRANCHES | guard.repo.default_branches(cwd))
 
 
 def _unknown(name: str) -> bool:
@@ -365,11 +368,11 @@ def _checked_out(call: Invocation, guard: Guard, *, here: bool) -> Switch | None
     created = next((options.values[flag] for flag in _SWITCH_FLAGS if flag in options.values), None)
     name = options.operands[0] if options.operands else None
     if created is not None:
-        return _ANYWHERE if _unknown(created) else Switch(frozenset({created}), here)
+        return _anywhere(guard, call.cwd) if _unknown(created) else Switch(frozenset({created}), here)
     if name is None or paths or options.flags & _DETACHES:
         return None
     if options.flags & _TRACKS or _unknown(name):
-        return _ANYWHERE
+        return _anywhere(guard, call.cwd)
     branch = call.subcommand == "switch" or (
         guard.repo.full_name(call.cwd, name) == f"refs/heads/{name}"
     )
@@ -387,7 +390,7 @@ def switch(words: Sequence[str], context: Context, guard: Guard) -> Switch | Non
     here = call.cwd == context.cwd and not call.redirected
     here = here and not context.exported & (environment.REPOSITORIES | environment.LOOKUPS)
     if call.subcommand == "bisect":
-        return _ANYWHERE
+        return _anywhere(guard, call.cwd)
     if call.subcommand == "symbolic-ref":
         pointed = _pointed_head(call)
         return None if pointed is None else Switch(frozenset({pointed}), here)

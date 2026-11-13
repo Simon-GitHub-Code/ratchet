@@ -18,6 +18,16 @@ of ``refs/remotes/origin/main``, ``refs/remotes/origin/master``, ``refs/heads/ma
 ``.git/main``, ``refs/main`` and ``refs/tags/main`` before ``refs/heads/main``, so a tag or a ref an
 agent made under the short name would be read in place of the branch. ``ratchet_guards.refmoves``
 refuses the commands that move these refs (ADR 0016).
+
+A repository with no remote whose default branch has another name (``trunk``, ``develop``) has none
+of those refs. Then the default branch is the one the repository's main work tree has checked out,
+the first entry of ``git worktree list``: git keeps it, outside ``refs/``, and a ref an agent
+creates or renames elsewhere does not change it. An agent works in a linked work tree or on a
+branch of its own and cannot switch the main work tree's ``HEAD`` without a ``git`` command that
+names that directory, which the owner's prompt shows. Were it the other way round, a guard that
+took any local branch holding the manifest for the default one would read an adoption branch's
+own manifest before the owner had merged it. A main work tree on a detached ``HEAD``, or a
+repository that is bare, names no branch, and then no default branch is found, as before.
 """
 
 import subprocess
@@ -59,13 +69,22 @@ def run_git(cwd: Path, args: Sequence[str]) -> str | None:
     return completed.stdout.strip() if completed.returncode == 0 else None
 
 
+def _main_worktree_branch(checkout: Path, git: Git) -> str | None:
+    """The full name of the branch the repository's main work tree has checked out, if any."""
+    listed = git(checkout, ["worktree", "list", "--porcelain"])
+    first = (listed or "").split("\n\n", 1)[0]
+    lines = (line for line in first.splitlines() if line.startswith("branch refs/heads/"))
+    return next(lines, "").removeprefix("branch ") or None
+
+
 def default_branch(checkout: Path, git: Git = run_git) -> str | None:
     """The full name of the ref the default branch's tip is read from, else ``None``."""
     remote_head = git(checkout, ["symbolic-ref", REMOTE_HEAD])
     for ref in (*([remote_head] if remote_head else []), *FALLBACK_BRANCHES):
         if git(checkout, ["show-ref", "--verify", "--hash", ref]):
             return ref
-    return None
+    ref = _main_worktree_branch(checkout, git)
+    return ref if ref and git(checkout, ["show-ref", "--verify", "--hash", ref]) else None
 
 
 def committed_manifest(checkout: Path, git: Git = run_git) -> Committed | None:
