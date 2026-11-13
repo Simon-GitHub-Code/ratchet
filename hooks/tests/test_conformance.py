@@ -10,7 +10,12 @@ from pathlib import Path
 
 import pytest
 
+import application_types
 import conformance
+import justfile_text
+import markdown_text
+from tests import adopted
+from tests.repos import repository
 from tests.support import PLUGIN_ROOT
 
 SKILLS = PLUGIN_ROOT / "skills"
@@ -80,6 +85,12 @@ def adr(status: str) -> str:
 
 def red(root: Path) -> list[str]:
     return conformance.failures(root)
+
+
+def start(finding: conformance.Finding) -> tuple[str, ...]:
+    """The template text an agent starts from, for a finding an agent fixes."""
+    assert isinstance(finding.fix, conformance.Agent), finding
+    return finding.fix.start
 
 
 def test_the_pristine_templates_pass() -> None:
@@ -283,7 +294,10 @@ def test_claude_md_stands_in_for_agents_md_and_a_glossary_map_for_the_glossary(
             write("quality/mutation-register.toml", "survivor = 3\n"),
             "quality/mutation-register.toml: 'survivor' is not an array of tables",
         ),
-        (remove("docs/disputes"), "docs/disputes: missing"),
+        (
+            remove("docs/disputes"),
+            "docs/disputes/.gitkeep: the directory docs/disputes is missing",
+        ),
         (
             write("docs/disputes/0001-gate.md", "- Status: maybe\n"),
             "docs/disputes/0001-gate.md: needs '- Status: open|upheld|rejected'",
@@ -358,6 +372,37 @@ def test_a_one_way_door_needs_a_reason(repo: Path) -> None:
     assert f"guards/manifest.toml: {expected}" in red(repo)
 
 
+def test_a_missing_kind_of_door_and_a_door_with_no_paths_are_the_owner_s_to_settle(
+    repo: Path,
+) -> None:
+    replace(MANIFEST, 'on = "removal"\n', 'on = "rewrite"\n')(repo)
+    [missing] = conformance.findings(repo)
+    assert missing.problem.startswith("no [[door]] with on = 'removal'")
+    assert isinstance(missing.fix, conformance.Owner)
+    assert missing.fix.ask.startswith("Does this repository have a door of kind 'removal'")
+    write(MANIFEST, (pristine() / MANIFEST).read_text(encoding="utf-8"))(repo)
+    bound = 'on = "removal"\npaths = [\n    "bound/**",\n]'
+    replace(MANIFEST, bound, 'on = "removal"\npaths = []')(repo)
+    [unbound] = conformance.findings(repo)
+    assert unbound.problem.startswith("door 'contracts' has no paths yet")
+    assert isinstance(unbound.fix, conformance.Owner)
+    assert unbound.fix.ask.startswith("Which paths shut the door 'contracts' (Contract artefacts")
+
+
+def test_the_life_events_question_shows_the_signs_the_tree_holds(tmp_path: Path) -> None:
+    files = {
+        str(path.relative_to(pristine())): path.read_text(encoding="utf-8")
+        for path in pristine().rglob("*")
+        if path.is_file() and ".git" not in path.parts
+    }
+    files[BINDING] = files[BINDING].replace("- Life events: none\n", "")
+    files["fly.toml"] = "app = 'a'\n"
+    root = repository(tmp_path / "repo", files)
+    [event] = [f for f in conformance.findings(root) if "Life events" in f.problem]
+    assert isinstance(event.fix, conformance.Owner)
+    assert event.fix.evidence == ("`fly.toml` matches `fly.toml`, a sign of `deployed`",)
+
+
 def test_a_self_test_mutation_refuses_a_template_it_no_longer_fits(repo: Path) -> None:
     with pytest.raises(SystemExit, match="has no 'absent text' to mutate"):
         conformance.rewrite(MANIFEST, "absent text", "anything")(repo)
@@ -391,12 +436,11 @@ def test_an_entry_point_whose_recipe_is_missing_names_the_recipe_to_copy(repo: P
         )
     ]
     [finding] = conformance.findings(repo)
-    assert finding.add[-2:] == (
-        "hooks-install:",
-        '    python3 "{{ratchet_plugin}}/scripts/hooks_install.py"',
-    )
+    assert isinstance(finding.fix, conformance.Auto)
+    assert finding.fix.does == "copy the template's `hooks-install` recipe"
     replace(JUSTFILE, "set shell", 'import "more.just"\n\nset shell')(repo)
-    assert red(repo) == [], "a justfile that imports another is not read for recipes"
+    write("more.just", "hooks-install:\n    echo installed\n")(repo)
+    assert red(repo) == [], "a recipe an imported file defines is the justfile's own"
 
 
 def test_a_missing_pin_prints_the_line_for_the_plugin_in_use(repo: Path) -> None:
@@ -411,7 +455,8 @@ def test_a_missing_pin_prints_the_line_for_the_plugin_in_use(repo: Path) -> None
             f" for the plugin in use: {line}"
         ),
         (
-            "justfile: no tier runs plugin_pin.py, so a local run can use a plugin other than"
+            "justfile: not every tier runs plugin_pin.py, so a local run can use a plugin other"
+            " than"
             " the one"
             " the binding pins; copy `plugin-pin` from the template justfile, as the first"
             " dependency of each tier"
@@ -509,10 +554,12 @@ def test_a_tier_list_a_workflow_reads_and_the_justfile_lacks_is_named_with_the_t
     found = conformance.findings(repo)
     assert len(found) == 1, found
     assert found[0].path == JUSTFILE
-    assert found[0].problem.startswith(f"has no `{name}` variable, which the `shape` job of `")
+    assert found[0].problem.startswith(
+        f"has no `{name}` variable, which the template's `shape` job of `"
+    )
     assert f"`{Path(workflow).name}`" in found[0].problem
-    assert found[0].add == conformance.template_definition(name)
-    assert found[0].add[-1].startswith(f"{name} :=")
+    assert start(found[0]) == conformance.template_definition(name)
+    assert start(found[0])[-1].startswith(f"{name} :=")
 
 
 def test_a_tier_list_may_be_empty_or_exported(repo: Path) -> None:
@@ -521,19 +568,21 @@ def test_a_tier_list_may_be_empty_or_exported(repo: Path) -> None:
     assert red(repo) == []
 
 
-def test_a_tier_list_is_asked_only_of_a_workflow_that_reads_it(repo: Path) -> None:
-    for name in ("tier1_gates", "tier1_sharded", "tier2_gates", "tier2_sharded"):
+def test_a_tier_list_is_asked_wherever_a_tier_workflow_exists(repo: Path) -> None:
+    names = ("tier1_gates", "tier1_sharded", "tier2_gates", "tier2_sharded")
+    for name in names:
         without_variable(repo, name)
     for workflow in (CI, DEEP):
         text = (repo / workflow).read_text(encoding="utf-8")
         (repo / workflow).write_text(text.replace("--evaluate", "--list"), encoding="utf-8")
-    assert [line for line in red(repo) if "variable" in line] == []
+    asked = [line for line in red(repo) if "variable" in line]
+    assert [line.split("`")[1] for line in asked] == list(names)
     remove(CI, DEEP)(repo)
     assert [line for line in red(repo) if "variable" in line] == []
 
 
 def test_the_template_justfile_names_each_runner_item_in_code() -> None:
-    code = conformance.code_of(TEMPLATE_JUSTFILE)
+    code = justfile_text.code_of(TEMPLATE_JUSTFILE)
     for item in ("changed.py", "RATCHET_JOBS", "--alone", "--temporary"):
         assert item in code, item
 
@@ -542,11 +591,12 @@ def test_a_repository_whose_runner_is_not_just_is_not_read_for_recipes(repo: Pat
     replace(BINDING, "| tier0-tree | `just tier0-tree` |\n", "")(repo)
     remove(JUSTFILE)(repo)
     assert [line.split(":")[0] for line in red(repo)] == [BINDING]
-    assert conformance.definition(TEMPLATE_JUSTFILE, "no-such-recipe") == ()
+    assert justfile_text.definition(TEMPLATE_JUSTFILE, "no-such-recipe") == ()
 
 
 LATER = "| rolls back safely | later: life:deployed and code:stored-format |"
 GATE = "docs/process/binding.md"
+GATES = "## Gates"
 
 
 def waiting(root: Path, question: str, trigger: str) -> None:
@@ -624,7 +674,14 @@ def test_the_life_events_line_is_asked_for_and_names_only_known_events(repo: Pat
     [found] = conformance.findings(repo)
     assert found.path == BINDING
     assert found.problem.startswith("has no '- Life events:' line; add it beside")
-    assert found.add == ("- Life events: none",)
+    assert isinstance(found.fix, conformance.Owner)
+    assert found.fix.ask.startswith("Which of these has already happened to this project:")
+    assert (
+        "`deployed`, when it runs somewhere people other than the owner can reach" in found.fix.ask
+    )
+    assert found.fix.evidence == ("no file in the tree is a sign of a life event",)
+    owed = application_types.load().owed_by("irreplaceable-data")
+    assert f"`irreplaceable-data` owes the Gates rows {', '.join(owed)}" in found.fix.then
     assert (
         "`none` turns off the owner's review of one-way doors and unflagged surface"
         in found.problem
@@ -645,8 +702,8 @@ def test_the_triggers_table_is_asked_for_with_the_template_s_text(repo: Path) ->
     replace(BINDING, "## Triggers\n", "## Hunches\n")(repo)
     [found] = conformance.findings(repo)
     assert found.problem.startswith("has no '## Triggers' section; add the template's")
-    assert found.add[0] == "## Triggers"
-    assert "| Kind | Paths | Pattern |" in found.add
+    assert start(found)[0] == "## Triggers"
+    assert "| Kind | Paths | Pattern |" in start(found)
 
 
 def test_the_triggers_table_needs_a_row_per_kind_a_question_of_the_types_names(
@@ -677,14 +734,95 @@ def test_a_dropped_row_of_the_catalogue_prints_the_template_row_to_add(repo: Pat
     found = conformance.findings(repo)[0]
     assert found.problem == (
         "the Gates table has no 'backup restores' row; a row is bound or none, never dropped;"
-        " add the template's row, bound or `later: <trigger>`"
+        " add the template's row, bound, or `later: life:irreplaceable-data` only while that"
+        " trigger has not fired"
     )
-    assert found.add == ("| backup restores | | weekly | | `just restore-drill` |",)
+    assert start(found) == ("| backup restores | | weekly | | `just restore-drill` |",)
+    assert isinstance(found.fix, conformance.Agent)
+    needs = (
+        "binding 'backup restores' to a tool needs a [[bite]] for gate 'restore-drill' in"
+        " quality/bites.toml; a row that says `later: life:irreplaceable-data` needs none while"
+        " that trigger has not fired"
+    )
+    assert found.fix.then == (
+        "the binding does not declare the life event 'irreplaceable-data'",
+        needs,
+    )
+
+
+def test_a_missing_types_line_names_the_triggers_each_type_will_ask(repo: Path) -> None:
+    replace(BINDING, "- Application types: cli\n", "")(repo)
+    [found] = conformance.findings(repo)
+    assert found.problem.startswith("has no '- Application types:' line")
+    assert isinstance(found.fix, conformance.Agent)
+    asks = application_types.load().kinds_asked({"service"})
+    assert f"`service` asks the Triggers table for the kinds {', '.join(sorted(asks))}" in (
+        found.fix.then
+    )
+
+
+def test_nothing_hides_a_gates_row_behind_the_types_line(tmp_path: Path) -> None:
+    root = adopted.copy(adopted.adopted("0.8.2"), tmp_path / "repo")
+
+    def gates() -> list[str]:
+        return [f.problem for f in conformance.findings(root) if "Gates table has no" in f.problem]
+
+    without = gates()
+    text = (root / BINDING).read_text(encoding="utf-8")
+    held = {
+        question for question, _ in markdown_text.table_cells(markdown_text.section(text, GATES))
+    }
+    owed = application_types.load().questions - held
+    assert owed, "an 0.8.2 adoption lacks rows the catalogue has since gained"
+    for question in owed:
+        assert any(line.startswith(application_types.dropped(question)) for line in without)
+    assert len(without) == len(set(without)), "no row is asked twice"
+    assert any("'backup restores'" in line for line in without)
+    assert any("types:' line" in f.problem for f in conformance.findings(root))
+    (root / BINDING).write_text("- Application types: cli\n" + text, encoding="utf-8")
+    assert gates() == without
+    assert not any("types:' line" in f.problem for f in conformance.findings(root))
 
 
 def test_every_question_of_the_catalogue_has_a_row_in_the_template_binding() -> None:
     for question in conformance.application_types.load().questions:
         assert conformance.template_gate_row(question).startswith(f"| {question} |")
+
+
+WEEKLY = ".github/workflows/weekly.yml"
+
+
+def test_a_workflow_with_the_toolchain_placeholder_in_front_of_the_template_s_step_is_red(
+    repo: Path,
+) -> None:
+    replace(WEEKLY, conformance.TOOLCHAIN_STEP, conformance.TOOLCHAIN_PLACEHOLDER)(repo)
+    [found] = conformance.findings(repo)
+    assert found.path == WEEKLY
+    assert found.problem.startswith("line 39 still says '# bind: toolchain setup' and the next")
+    assert isinstance(found.fix, conformance.Agent)
+
+
+def test_a_toolchain_the_project_bound_is_not_asked_for_again(repo: Path) -> None:
+    marker = conformance.TOOLCHAIN_PLACEHOLDER
+    project = "      - uses: actions/setup-node@v5"
+    replace(WEEKLY, conformance.TOOLCHAIN_STEP, f"{marker}\n{project}")(repo)
+    assert red(repo) == [], "the comment may stay above the project's own step"
+    text = (repo / WEEKLY).read_text(encoding="utf-8")
+    (repo / WEEKLY).write_text(text.rstrip("\n") + f"\n{marker}", encoding="utf-8")
+    assert red(repo) == [], "a marker with nothing after it has no template line to match"
+    write(".github/workflows/release.yml", f"concurrency: cache\n{marker}\n- run: x\n")(repo)
+    assert red(repo) == [], "a workflow the template lacks has no unbound toolchain to compare"
+
+
+def test_a_question_the_catalogue_asks_is_not_asked_twice_of_a_binding_without_types(
+    repo: Path,
+) -> None:
+    replace(BINDING, "- Application types: cli\n", "")(repo)
+    replace(BINDING, "| telemetry emitted |", "| tracing |")(repo)
+    lines = red(repo)
+    assert len([line for line in lines if "'telemetry emitted'" in line]) == 1
+    replace(BINDING, "| feature flags declared |", "| flags |")(repo)
+    assert f"{BINDING}: the Gates table has no 'feature flags declared' row" in red(repo)
 
 
 def record(name: str, text: str) -> Mutate:
