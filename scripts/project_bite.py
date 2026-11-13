@@ -87,9 +87,19 @@ A scratch copy is the work tree as git sees it (tracked and untracked files, not
 a repository of its own under ``$TMPDIR`` with the same index and commit, borrowing the object
 store read-only. ``HEAD`` is detached there and the default branch's refs point at it, so a gate
 over the change sees what the tree holds beyond ``HEAD``: once the work is committed, the planted
-fault and nothing else. The real work tree is never written. What is ignored is not copied, on
-purpose: a virtualenv or a build cache holds the absolute paths of the tree it was built in, and
-a gate run through one would judge the real tree. ``setup`` rebuilds them in the copy from the
+fault and nothing else.
+
+The real work tree is never written by the script's own writes. A fault, and the index and
+exclude file that restoring puts back, are read and written only through descriptors of the
+copy's own directories, opened one name at a time from the copy as it stood before setup ran,
+never through a link. So a process setup left running that swaps a directory of the copy for a
+link to the real tree makes the fault ``THE FAULT WAS NOT PLANTED`` and cannot steer such a write
+out of the copy. The rest of restoring is git's (``checkout-index``, ``clean``): git checks each
+path for a link before it writes there, and then writes by path. Setup code runs as the user, and
+nothing here stops it writing the real tree itself.
+
+What is ignored is not copied, on purpose: a virtualenv or a build cache holds the absolute paths
+of the tree it was built in, and a gate run through one would judge the real tree. ``setup`` rebuilds them in the copy from the
 lockfile, as a CI job does. So a gate must build what it runs, the first run in a copy is a cold
 one, and whatever lives outside the tree (a port, a database, a tool reached by an absolute path)
 is shared with the real one. A submodule's files are not copied. Gates run at once, one copy per
@@ -113,6 +123,7 @@ there, and the whole proof runs once in tier 2.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import queue
 import re
@@ -126,6 +137,7 @@ import threading
 import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -162,9 +174,26 @@ BITING = "RATCHET_BITING"
 SNAPSHOT = ".git/bite-index"
 # Why: a gate that adds a rule here hides from the restore what it, or a fault, left behind.
 EXCLUDE = ".git/info/exclude"
+INDEX = ".git/index"
 # Why: restoring the copy cleans by the one and writes files by the other, so a new one planted
 # would decide how the copy it planted in is put back.
 RULES = (".gitignore", ".gitattributes")
+CHECK = ".git/bite-check-index"
+# A file's mode in the index, as the mode a fault writes it with.
+FILE_MODES = {"100644": 0o644, "100755": 0o755}
+NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+DIRECTORY = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NOFOLLOW
+# Why: without these a directory is opened only by following whatever link its name holds.
+DESCRIPTORS = (
+    bool(NOFOLLOW)
+    and DIRECTORY != os.O_RDONLY | NOFOLLOW
+    and {os.open, os.mkdir, os.rmdir, os.stat, os.unlink} <= os.supports_dir_fd
+    and os.listdir in os.supports_fd
+)
+UNSUPPORTED = (
+    "this system cannot open a directory without following a link, so the scratch copy is"
+    " neither written nor put back"
+)
 TAIL = 15
 MAX_LANES = 4
 # Seconds the main thread waits on the lanes at a time: the most a signal waits for its handler.
@@ -216,25 +245,29 @@ def gate_rows(binding: str) -> list[Row]:
 
 def run_git(
     root: Path, *args: str, index: Path | None = None, stdin: str | None = None
-) -> subprocess.CompletedProcess[str]:
+) -> subprocess.CompletedProcess[bytes]:
     """``git -C root args``, judging ``root`` and no other tree, through ``index`` when given."""
     return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True,
-        text=True,
         check=False,
-        input=stdin,
+        input=None if stdin is None else stdin.encode(),
         env=environment() | ({"GIT_INDEX_FILE": str(index)} if index else {}),
     )
 
 
-def git_in(root: Path, *args: str, index: Path | None = None, stdin: str | None = None) -> str:
+def git_bytes(root: Path, *args: str, index: Path | None = None, stdin: str | None = None) -> bytes:
     """The stdout of ``run_git``; raises ``Unprovable`` when git fails."""
     result = run_git(root, *args, index=index, stdin=stdin)
     if result.returncode != 0:
-        message = f"git {' '.join(args)} failed in {root}: {result.stderr.strip()}"
+        message = f"git {' '.join(args)} failed in {root}: {result.stderr.decode().strip()}"
         raise Unprovable(message)
-    return result.stdout.strip()
+    return result.stdout
+
+
+def git_in(root: Path, *args: str, index: Path | None = None, stdin: str | None = None) -> str:
+    """The stdout of ``run_git`` as text; raises ``Unprovable`` when git fails."""
+    return git_bytes(root, *args, index=index, stdin=stdin).decode().strip()
 
 
 def environment() -> dict[str, str]:
@@ -249,10 +282,11 @@ class Write:
     path: str
     content: str
 
-    def plant(self, copy: Path) -> None:
+    def plant(self, copy: Tree) -> None:
         """Write the file, as a change git sees."""
-        put(owned(copy, self.path)[0], self.content.encode())
-        git_in(copy, "add", "--intent-to-add", "--", self.path)
+        owned(copy.path, self.path)
+        copy.write(self.path, self.content.encode(), create=creatable(self.path))
+        git_in(copy.path, "add", "--intent-to-add", "--", self.path)
 
 
 @dataclass(frozen=True)
@@ -261,17 +295,36 @@ class Patch:
 
     path: str
 
-    def plant(self, copy: Path) -> None:
+    def plant(self, copy: Tree) -> None:
         """Apply the diff; a new file in it is a change git sees."""
         # Why: `git apply` writes any file of the work tree, ignored ones too. With `--index` it
         # finds every file the diff reads in the copy as it stood, which holds only what git sees.
-        check = copy / ".git/bite-check-index"
-        shutil.copyfile(copy / SNAPSHOT, check)
-        git_in(copy, "update-index", "-q", "--refresh", index=check)
-        git_in(copy, "apply", "--check", "--index", self.path, index=check)
-        written = git_in(copy, "apply", "--numstat", "-z", self.path).split("\0")
-        owned(copy, *(line.split("\t", 2)[-1] for line in written if line))
-        git_in(copy, "apply", "--intent-to-add", "--whitespace=nowarn", self.path)
+        # It writes the work tree by path, so the diff goes to an index and the files from there.
+        check = copy.path / CHECK
+        copy.write(CHECK, copy.read(SNAPSHOT) or b"")
+        git_in(copy.path, "update-index", "-q", "--refresh", index=check)
+        git_in(copy.path, "apply", "--check", "--index", self.path, index=check)
+        git_in(copy.path, "apply", "--cached", "--whitespace=nowarn", self.path, index=check)
+        before, after = staged(copy.path, copy.path / SNAPSHOT), staged(copy.path, check)
+        changed = sorted(
+            path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
+        )
+        owned(copy.path, *changed)
+        for path in changed:
+            if path not in after:
+                copy.remove(path)
+                continue
+            mode, blob = after[path]
+            if mode not in FILE_MODES:
+                message = (
+                    f"{path} would be a symbolic link or a submodule, and a fault writes a file"
+                )
+                raise Unprovable(message)
+            content = git_bytes(copy.path, "cat-file", "--filters", f"--path={path}", blob)
+            copy.write(path, content, mode=FILE_MODES[mode], create=creatable(path))
+        added = [path for path in changed if path not in before]
+        if added:
+            git_in(copy.path, "add", "--intent-to-add", "--", *added)
 
 
 @dataclass(frozen=True)
@@ -280,23 +333,23 @@ class Remove:
 
     patterns: tuple[str, ...]
 
-    def plant(self, copy: Path) -> None:
+    def plant(self, copy: Tree) -> None:
         """Delete the files; ``Unprovable`` when the globs match none."""
-        found = [p for p in visible(copy) if gatelib.matches(p, list(self.patterns))]
-        files = [p for p in found if (copy / p).is_file()]
+        found = [p for p in visible(copy.path) if gatelib.matches(p, list(self.patterns))]
+        files = [p for p in found if (copy.path / p).is_file()]
         if not files:
             message = (
                 f"no file matches {', '.join(self.patterns)}: the collection is empty already, "
                 "and the gate was green on it"
             )
             raise Unprovable(message)
-        paths = owned(copy, *files)
-        for path in paths:
-            path.unlink()
+        owned(copy.path, *files)
+        for path in files:
+            copy.remove(path)
         # Why: git holds no empty directory, so a collection with no file has no directory either.
-        for directory in sorted({path.parent for path in paths}, reverse=True):
-            if directory != copy and not any(directory.iterdir()):
-                directory.rmdir()
+        parents = {str(PurePosixPath(path).parent) for path in files} - {"."}
+        for directory in sorted(parents, reverse=True):
+            copy.prune(directory)
 
 
 @dataclass(frozen=True)
@@ -314,14 +367,14 @@ class Replace:
 
     swaps: tuple[Swap, ...]
 
-    def plant(self, copy: Path) -> None:
+    def plant(self, copy: Tree) -> None:
         """Replace each text; ``Unprovable`` when one stands nowhere or in more than one place."""
         for swap in self.swaps:
-            target = owned(copy, swap.path)[0]
-            if not target.is_file():
+            owned(copy.path, swap.path)
+            content, old = copy.read(swap.path), swap.old.encode()
+            if content is None:
                 message = f"{swap.path} is not a file in the copy, and 'replace' changes a file"
                 raise Unprovable(message)
-            content, old = target.read_bytes(), swap.old.encode()
             first = content.find(old)
             if first == -1:
                 message = (
@@ -335,19 +388,20 @@ class Replace:
                     f" lengthen 'old' until it names one: {swap.old!r}"
                 )
                 raise Unprovable(message)
-            put(target, content[:first] + swap.new.encode() + content[first + len(old) :])
+            copy.write(swap.path, content[:first] + swap.new.encode() + content[first + len(old) :])
 
 
 Fault = Write | Patch | Remove | Replace
 
 
-def owned(copy: Path, *paths: str) -> list[Path]:
-    """Each path in the copy, when a fault may change it: one restoring the copy puts back.
+def owned(copy: Path, *paths: str) -> None:
+    """Whether a fault may change each path in the copy: one restoring the copy puts back.
 
     Restoring puts back what the snapshot holds and removes what git sees beside it, so a fault
     anywhere else would stay planted for the runs after it: through a link, inside another
-    repository, in a file git ignores, or in a new file of the rules restoring works by.
-    ``Unprovable`` says why the first such path is not one.
+    repository, or in a file git ignores. ``Unprovable`` says why the first such path is not one.
+    A link is refused here before git is asked about a path beyond one, and again where the
+    fault is written (``Tree``), which holds whatever changed in between.
     """
     for path in paths:
         parts = PurePosixPath(path).parts
@@ -355,15 +409,7 @@ def owned(copy: Path, *paths: str) -> list[Path]:
             message = f"{path} is not a path in the work tree git sees"
             raise Unprovable(message)
         if any(copy.joinpath(*parts[:depth]).is_symlink() for depth in range(1, len(parts) + 1)):
-            message = (
-                f"{path} is reached through a symbolic link; a fault changes the copy's own file"
-            )
-            raise Unprovable(message)
-        if parts[-1] in RULES and not copy.joinpath(*parts).exists():
-            message = (
-                f"{path} would be a new {parts[-1]}, and restoring the copy works by those rules"
-            )
-            raise Unprovable(message)
+            raise Unprovable(linked(path))
     parents = sorted({name for path in paths for name in above(path)})
     staged = git_in(copy, "ls-files", "-z", "--stage", "--", *parents) if parents else ""
     gitlinks = {line.partition("\t")[2] for line in staged.split("\0") if line.startswith("160000")}
@@ -382,10 +428,9 @@ def owned(copy: Path, *paths: str) -> list[Path]:
         copy, "check-ignore", "-z", "--stdin", index=copy / SNAPSHOT, stdin="\0".join(paths)
     )
     if ignored.returncode != 1:
-        named = ignored.stdout.partition("\0")[0] or " or ".join(paths)
+        named = ignored.stdout.decode().partition("\0")[0] or " or ".join(paths)
         message = f"{named} is ignored by git, and restoring the copy puts back only what git sees"
         raise Unprovable(message)
-    return [copy.joinpath(*PurePosixPath(path).parts) for path in paths]
 
 
 def above(path: str) -> list[str]:
@@ -394,18 +439,145 @@ def above(path: str) -> list[str]:
     return ["/".join(parts[:depth]) for depth in range(1, len(parts))]
 
 
-def put(target: Path, content: bytes) -> None:
-    """``content`` as a new file at ``target``, with the mode the file had.
+def staged(copy: Path, index: Path) -> dict[str, tuple[str, str]]:
+    """Each path ``index`` holds, with its mode and blob."""
+    listed = git_in(copy, "ls-files", "-z", "--stage", index=index).split("\0")
+    entries = [line.partition("\t") for line in listed if line]
+    return {path: (entry.split()[0], entry.split()[1]) for entry, _, path in entries}
 
-    A file written in place would change every other name for it too (a hard link a setup made),
-    and restoring the copy gives back only the name git sees.
+
+def creatable(path: str) -> bool:
+    """Whether a fault may make ``path`` where no file stands: any file but a rules file."""
+    return PurePosixPath(path).name not in RULES
+
+
+def linked(path: str) -> str:
+    return f"{path} is reached through a symbolic link; a fault changes the copy's own file"
+
+
+@dataclass(frozen=True)
+class Tree:
+    """The scratch copy, read and written only through descriptors of its own directories.
+
+    What setup leaves running can swap a directory of the copy for a link to the real tree
+    between a check and a write. Each directory on a path is opened from the one before it,
+    starting from the copy as it was before setup ran, and never through a link: a link swapped
+    in anywhere on the way fails the open, and a directory once open stays the copy's own,
+    whatever its name comes to point at. No read or write here follows a link.
     """
-    mode = target.stat().st_mode if target.exists() else None
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.unlink(missing_ok=True)
-    target.write_bytes(content)
-    if mode is not None:
-        target.chmod(stat.S_IMODE(mode))
+
+    path: Path
+    made: tuple[int, int]
+
+    @classmethod
+    def pin(cls, path: Path) -> Tree:
+        """The directory at ``path``, as the one every later walk must start from."""
+        found = path.lstat()
+        return cls(path, (found.st_dev, found.st_ino))
+
+    @contextmanager
+    def at(self, path: str, *, make: bool = False) -> Iterator[tuple[int, str]]:
+        """The open directory ``path`` lies in, and its last name; ``make`` makes the way."""
+        if not DESCRIPTORS:
+            raise Unprovable(UNSUPPORTED)
+        *way, name = PurePosixPath(path).parts
+        here = os.open(self.path, DIRECTORY)
+        try:
+            found = os.fstat(here)
+            if (found.st_dev, found.st_ino) != self.made:
+                message = f"{self.path} is no longer the directory the scratch copy was made in"
+                raise Unprovable(message)
+            for depth, part in enumerate(way, 1):
+                if make:
+                    with contextlib.suppress(FileExistsError):
+                        os.mkdir(part, dir_fd=here)
+                try:
+                    below = os.open(part, DIRECTORY, dir_fd=here)
+                except OSError as error:
+                    where = "/".join(way[:depth])
+                    raise refusal(error, path, at=(here, part), where=where) from error
+                os.close(here)
+                here = below
+            yield here, name
+        finally:
+            os.close(here)
+
+    def read(self, path: str) -> bytes | None:
+        """What the file at ``path`` holds; ``None`` when no file is there."""
+        with self.at(path) as (here, name):
+            try:
+                opened = os.open(name, os.O_RDONLY | os.O_NONBLOCK | NOFOLLOW, dir_fd=here)
+            except FileNotFoundError:
+                return None
+            except OSError as error:
+                raise refusal(error, path, at=(here, name), where=path) from error
+            if not stat.S_ISREG(os.fstat(opened).st_mode):
+                os.close(opened)
+                return None
+            with os.fdopen(opened, "rb") as file:
+                return file.read()
+
+    def write(
+        self, path: str, content: bytes, *, mode: int | None = None, create: bool = True
+    ) -> None:
+        """``content`` as a new file at ``path``, with ``mode`` or else the mode the file had.
+
+        A file written in place would change every other name for it too (a hard link setup
+        made), and restoring the copy gives back only the name git sees. With ``create`` false,
+        a path where no file stands is refused.
+        """
+        with self.at(path, make=True) as (here, name):
+            old = entry(here, name)
+            if old is None and not create:
+                message = (
+                    f"{path} would be a new {name}, and restoring the copy works by those rules"
+                )
+                raise Unprovable(message)
+            if old is not None:
+                if stat.S_ISLNK(old.st_mode):
+                    raise Unprovable(linked(path))
+                os.unlink(name, dir_fd=here)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW
+            with os.fdopen(os.open(name, flags, 0o666, dir_fd=here), "wb") as file:
+                file.write(content)
+                kept = stat.S_IMODE(old.st_mode) if old is not None and mode is None else mode
+                if kept is not None:
+                    os.fchmod(file.fileno(), kept)
+
+    def remove(self, path: str) -> None:
+        """Delete the file at ``path``."""
+        with self.at(path) as (here, name):
+            old = entry(here, name)
+            if old is not None and stat.S_ISLNK(old.st_mode):
+                raise Unprovable(linked(path))
+            os.unlink(name, dir_fd=here)
+
+    def prune(self, path: str) -> None:
+        """Delete the directory at ``path`` when it holds nothing."""
+        with self.at(path) as (here, name):
+            opened = os.open(name, DIRECTORY, dir_fd=here)
+            try:
+                empty = not os.listdir(opened)  # noqa: PTH208 # -- a descriptor, not a path
+            finally:
+                os.close(opened)
+            if empty:
+                os.rmdir(name, dir_fd=here)
+
+
+def entry(here: int, name: str) -> os.stat_result | None:
+    """``name`` in the open directory ``here``, not followed; ``None`` when nothing is there."""
+    try:
+        return os.stat(name, dir_fd=here, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def refusal(error: OSError, path: str, *, at: tuple[int, str], where: str) -> Exception:
+    """Why ``path`` was not reached: the name ``at`` is a link, or what the system said."""
+    found = entry(*at)
+    if found is not None and stat.S_ISLNK(found.st_mode):
+        return Unprovable(linked(path))
+    return OSError(error.errno, error.strerror, where)
 
 
 @dataclass(frozen=True)
@@ -420,12 +592,12 @@ class Bite:
     commit: bool = False
     proof: str = ""
 
-    def plant(self, copy: Path) -> None:
+    def plant(self, copy: Tree) -> None:
         """Plant the fault in ``copy`` as a change git sees, committed when the bite says so."""
         self.fault.plant(copy)
         if self.commit:
-            git_in(copy, "add", "-A")
-            git_in(copy, *COMMIT, f"test(bite): {self.name}")
+            git_in(copy.path, "add", "-A")
+            git_in(copy.path, *COMMIT, f"test(bite): {self.name}")
 
 
 @dataclass(frozen=True)
@@ -750,11 +922,16 @@ def judge(bite: Bite, green: str, planted: tuple[int, str]) -> Outcome:
 class Copy:
     """One lane's scratch copy, and how it stood once its setup had run."""
 
-    path: Path
+    tree: Tree
     shell: Shell
     head: str
     staged: bytes
     exclude: bytes
+
+    @property
+    def path(self) -> Path:
+        """Where the copy is."""
+        return self.tree.path
 
     def restore(self) -> None:
         """Put back what the snapshot holds, the index, ``HEAD`` and the exclude file.
@@ -763,8 +940,8 @@ class Copy:
         """
         snapshot = self.path / SNAPSHOT
         git_in(self.path, "reset", "-q", "--soft", self.head)
-        (self.path / ".git/index").write_bytes(self.staged)
-        put(self.path / EXCLUDE, self.exclude)
+        self.tree.write(INDEX, self.staged)
+        self.tree.write(EXCLUDE, self.exclude)
         git_in(self.path, "checkout-index", "--all", "--force", index=snapshot)
         git_in(self.path, "clean", "-ffdq", index=snapshot)
 
@@ -793,7 +970,7 @@ class Copy:
                 outcomes.append(Outcome(bite, Verdict.RED_BEFORE, tail(green)))
                 continue
             try:
-                bite.plant(self.path)
+                bite.plant(self.tree)
             # Why: every way a fault fails to plant is one verdict, a file the system refuses too.
             except (Unprovable, OSError) as error:
                 self.restore()
@@ -827,6 +1004,8 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Co
         return Path(git_in(root, "rev-parse", "--path-format=absolute", "--git-path", name))
 
     git_in(root, "init", "-q", str(copy))
+    # Why: pinned before setup runs, so nothing setup leaves running decides what the copy is.
+    tree = Tree.pin(copy)
     (copy / ".git/objects/info/alternates").write_text(f"{git_path('objects')}\n", encoding="utf-8")
     git_in(copy, "fetch", "-q", "--update-head-ok", str(root), "+refs/*:refs/*")
     head = git_in(root, "rev-parse", "HEAD")
@@ -852,13 +1031,12 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Co
             message = f"setup `{command}` exited {code} in the scratch copy\n{tail(output)}"
             raise Unprovable(message)
     snapshot(copy)
-    exclude = copy / EXCLUDE
     made = Copy(
-        copy,
+        tree,
         shell,
         git_in(copy, "rev-parse", "HEAD"),
-        (copy / ".git/index").read_bytes(),
-        exclude.read_bytes() if exclude.is_file() else b"",
+        tree.read(INDEX) or b"",
+        tree.read(EXCLUDE) or b"",
     )
     # Why: every run then starts from the copy as restoring leaves it, the first green run too;
     # where setup left what restoring takes away (an empty directory), every run judges without it.
@@ -913,7 +1091,8 @@ def run_lanes(
         return outcomes
 
     with (
-        tempfile.TemporaryDirectory(prefix="ratchet-bite-") as scratch,
+        # Why: a process setup left running may still be writing in a copy as it is removed.
+        tempfile.TemporaryDirectory(prefix="ratchet-bite-", ignore_cleanup_errors=True) as scratch,
         ThreadPoolExecutor(max_workers=lanes, thread_name_prefix="bite-lane") as pool,
     ):
         paths = [Path(scratch) / f"copy-{n}" for n in range(lanes)]
