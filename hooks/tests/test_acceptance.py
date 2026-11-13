@@ -80,6 +80,22 @@ def tried(product: Path, capsys: pytest.CaptureFixture[str]) -> Path:
     return directory
 
 
+def test_a_process_left_running_is_seen_however_narrow_the_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COLUMNS", "80")
+    left = subprocess.Popen(  # noqa: S603 # -- this interpreter, fixed arguments
+        [sys.executable, "-c", "import time; time.sleep(30)", f"{'x' * 100}{tmp_path}"]
+    )
+    try:
+        assert [int(line.split()[0]) for line in products.processes_naming(str(tmp_path))] == [
+            left.pid
+        ]
+    finally:
+        left.kill()
+        left.wait()
+
+
 def test_up_puts_the_proxy_before_the_head_and_down_stops_all_of_it(
     product: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
