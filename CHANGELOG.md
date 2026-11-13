@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+An adopted JavaScript project merges through `just merge` with nothing installed by hand (ADR 0039).
+
+- The template `justfile` has an `install` recipe, run by every tier right after `plugin-pin`. A stack whose tools come from npm, pnpm, yarn or bun binds it to the frozen install of the lockfile, and each recipe that runs one of those tools depends on it, so a fresh checkout works as CI does.
+- `conformance` is red on a lockfile whose tools run without it (`installs`), `upgrade.py --apply` writes the dependency, and the finding is never owed.
+- Step 12 of `/ratchet:adopt` rehearses in a fresh worktree with no setup by hand, where the merge runs.
+
 ## 0.11.0
 
 A safeguard arrives with the first thing it guards, and the first one is free (ADR 0028). The method is for hobby and solo projects first, and it must never stop the owner in the middle of an idea. Telemetry, flags, security, load and the new reliability questions are no longer asked of every repository from the first commit. Each question carries a trigger, and is asked once that trigger fires.
