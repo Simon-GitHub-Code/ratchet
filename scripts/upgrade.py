@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
@@ -271,6 +272,16 @@ def converge(sandbox: Path, done: dict[str, list[str]]) -> Converged:
         touched |= changed
 
 
+def pinned_to(plugin: Path) -> Finding:
+    """The edit that moves the binding's pin to ``plugin``, which every plan makes first."""
+    line = plugin_pin.line_for(plugin)
+    return Finding(
+        str(gatelib.BINDING),
+        "the pin moves to the plugin in use",
+        Auto(f"pinned: {line}", plugin_pin.with_pin(line)),
+    )
+
+
 def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     """What upgrading ``root`` to ``plugin`` writes, and what it leaves for others."""
     reason = refusal(root, plugin)
@@ -280,17 +291,13 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     changes: dict[str, Change] = {}
     with tempfile.TemporaryDirectory(prefix="ratchet-upgrade-") as scratch:
         sandbox = Path(scratch) / "tree"
-        line = plugin_pin.line_for(plugin)
-        pin = Finding(
-            str(gatelib.BINDING),
-            "the pin moves to the plugin in use",
-            Auto(f"pinned: {line}", plugin_pin.with_pin(line)),
-        )
         try:
             foreign = conformance.copied(root, sandbox)
-            touched = pass_over(sandbox, [pin], done)
+            touched = pass_over(sandbox, [pinned_to(plugin)], done)
             first = converge(sandbox, done)
-            touched |= first.touched | pass_over(sandbox, owing(root, sandbox, first.left), done)
+            touched |= first.touched | pass_over(
+                sandbox, owing(root, sandbox, first.left, plugin=plugin), done
+            )
             converged = converge(sandbox, done)
         except StuckError as error:
             return Stuck(error.autos)
@@ -330,31 +337,52 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     )
 
 
-def owing(root: Path, sandbox: Path, left: list[Finding]) -> list[Finding]:
+def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> list[Finding]:
     """The edit that writes down what the upgrade leaves, when the change moves the pin.
 
-    Why: ADR 0037. A release never turns an adopted repository red: what it newly asks is owed,
-    one entry per finding no entry excuses yet. The ledger grows only in the change that moves the
-    pin to a newer version, against the base the ratchet-lowered gate compares with, so the gate
-    and this agree on every run.
+    Why: ADR 0037. A release never turns an adopted repository red: what it newly asks is owed.
+    An entry is written for a finding no entry excuses yet, and only as many times as the same
+    plan, run on the merge base, leaves it red there: what the change itself brought stays red.
+    The ledger grows only in the change that moves the pin to a newer version, against the base
+    the ratchet-lowered gate compares with, so the gate and this agree on every run.
     """
     base = gatelib.base_commit(root)
     before = gatelib.show(root, base, str(gatelib.BINDING)) if base else None
     after = gatelib.read_text(sandbox / gatelib.BINDING)
-    pin = owed.moved(before, after, floor=plugin_pin.version_of(plugin_pin.PLUGIN))
+    pin = owed.moved(before, after, floor=plugin_pin.version_of(plugin))
     if pin is None:
         return []
     red, _ = conformance.owed_split(sandbox, left)
-    added = [
-        owed.Entry(path, rule, problem, pin.version)
-        for rule, path, problem in (finding.key() for finding in red)
-        if rule != owed.OWN
-    ]
+    allowed = red_at_base(root, base, plugin)
+    added = []
+    for finding in red:
+        key = finding.key()
+        if allowed[key] > 0 and finding.rule not in owed.NEVER:
+            allowed[key] -= 1
+            added.append(owed.Entry(key[1], key[0], key[2], pin.version))
     if not added:
         return []
     count = len(added)
     does = f"write down {count} {'thing' if count == 1 else 'things'} owed since {pin.version}"
     return [Finding(str(owed.LEDGER), "", Auto(does, owed.recorded(added)))]
+
+
+def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]:
+    """The keys the plan for ``plugin`` leaves red on what git holds at ``base``, by count.
+
+    Why: ADR 0037. What the upgrade may write down is what the release asks of the project as it
+    stood before the change, findings of the files the upgrade copies included; a violation the
+    change brought is not there, so it stays red.
+    """
+    if base is None:
+        return Counter()
+    with tempfile.TemporaryDirectory(prefix="ratchet-base-") as scratch:
+        tree = Path(scratch) / "tree"
+        gatelib.export(root, base, tree)
+        pass_over(tree, [pinned_to(plugin)], {})
+        left = converge(tree, {}).left
+        red, _ = conformance.owed_split(tree, left)
+    return Counter(finding.key() for finding in red if finding.rule not in owed.NEVER)
 
 
 def version_now(root: Path, plugin: Path) -> str:

@@ -250,6 +250,40 @@ def copy_seen(root: Path, target: Path) -> dict[str, str]:
     return foreign
 
 
+def export(root: Path, ref: str, target: Path) -> None:
+    """The files git holds at ``ref``, written to ``target`` and held by a new repository's index.
+
+    Read through git's plumbing, so no filter, attribute or hook of the repository runs, and its
+    own index, work tree and refs are left as they are. A submodule is left out.
+    """
+    listed = git_checked(root, "ls-tree", "-r", "-z", "--full-tree", ref).split("\0")
+    entries = [(line.split("\t", 1)[0].split(), line.split("\t", 1)[1]) for line in listed if line]
+    blobs = [(mode, sha, name) for (mode, _, sha), name in entries if mode != "160000"]
+    batch = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "--batch"],
+        input="".join(f"{sha}\n" for _, sha, _ in blobs).encode(),
+        capture_output=True,
+        check=True,
+        env={k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES},
+    ).stdout
+    at = 0
+    for mode, _, name in blobs:
+        header_end = batch.index(b"\n", at)
+        size = int(batch[at:header_end].split()[2])
+        data = batch[header_end + 1 : header_end + 1 + size]
+        at = header_end + 2 + size
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if mode == "120000":
+            path.symlink_to(data.decode())
+            continue
+        path.write_bytes(data)
+        path.chmod(0o755 if mode == "100755" else 0o644)
+    target.mkdir(parents=True, exist_ok=True)
+    git_checked(target, "init", "-q")
+    git_checked(target, "add", "--all", "--force")
+
+
 def git_checked(root: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
     """``git -C root args`` stdout, whatever repository a hook exported.
 

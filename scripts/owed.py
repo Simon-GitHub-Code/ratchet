@@ -47,6 +47,7 @@ LEDGER = Path("quality/owed.toml")
 # Why: the ledger's own findings (an entry no finding matches, a ledger that does not parse) are
 # never owed, or an entry could excuse the stale entry it sits beside.
 OWN = "owed"
+NEVER = frozenset({OWN})
 TABLE = "owed"
 FIELDS = ("rule", "path", "problem", "since")
 HEADER = """\
@@ -131,12 +132,12 @@ def render(entries: Sequence[Entry]) -> str:
 def excused(keys: Sequence[Key], entries: Sequence[Entry]) -> tuple[list[bool], Counter[Key]]:
     """Which findings, by key in order, an entry excuses, and the entries left over, by key.
 
-    Each entry excuses one finding. A finding of the ledger's own is never excused.
+    Each entry excuses one finding. A finding of a check in ``NEVER`` is never excused.
     """
     left = Counter(entry.key for entry in entries)
     owed = []
     for key in keys:
-        hit = key[0] != OWN and left[key] > 0
+        hit = key[0] not in NEVER and left[key] > 0
         left[key] -= hit
         owed.append(hit)
     return owed, +left

@@ -28,6 +28,7 @@ import math
 import re
 import sys
 import tomllib
+from collections import Counter
 from pathlib import Path
 
 import gatelib
@@ -154,12 +155,50 @@ def main(argv: list[str]) -> int:
 def owed_grown(root: Path, base: str) -> list[str]:
     """What the owed ledger at head adds against ``base`` that no move of the pin allows."""
     binding = str(gatelib.BINDING)
-    return owed.grown(
-        owed.parse(gatelib.show(root, base, str(owed.LEDGER))),
-        owed.read(root),
-        binding=(gatelib.show(root, base, binding), gatelib.read_text(root / binding)),
-        floor=plugin_pin.version_of(plugin_pin.PLUGIN),
+    before, after = owed.parse(gatelib.show(root, base, str(owed.LEDGER))), owed.read(root)
+    pins = (gatelib.show(root, base, binding), gatelib.read_text(root / binding))
+    floor = plugin_pin.version_of(plugin_pin.PLUGIN)
+    problems = owed.grown(before, after, binding=pins, floor=floor)
+    added = Counter(after.entries) - Counter(before.entries)
+    pin = owed.moved(*pins, floor=floor)
+    if problems or not added or pin is None:
+        return problems
+    return unfound(root, base, pin=pin, added=added)
+
+
+def unfound(root: Path, base: str, *, pin: plugin_pin.Pin, added: Counter[owed.Entry]) -> list[str]:
+    """Each entry the change adds that its upgrade could not have written, one line each.
+
+    Why: ADR 0037. An entry may be added only for a finding red at head that the same plan also
+    leaves red on the merge base, so a violation the change itself brought is never owed. The plan
+    is the plugin's, so the answer is the pinned plugin's: another plugin skips this, and says so.
+    CI always runs the pinned one.
+    """
+    if plugin_pin.relation(pin, plugin_pin.PLUGIN) is not plugin_pin.Relation.PINNED:
+        print(
+            f"ratchet-lowered: note: whether the merge base also owes each entry this change adds"
+            f" is asked of the plugin the binding pins, {pin.version} at {pin.commit[:12]}; this"
+            f" run uses {plugin_pin.in_use(plugin_pin.PLUGIN)}, so it is not asked here, and CI,"
+            " which runs the pinned plugin, asks it"
+        )
+        return []
+    import conformance  # noqa: PLC0415 -- only a change that moves the pin and adds pays for it
+    import upgrade  # noqa: PLC0415
+
+    allowed = upgrade.red_at_base(root, base, plugin_pin.PLUGIN) & Counter(
+        finding.key() for finding in conformance.findings(root)
     )
+    problems = []
+    for entry in sorted(added.elements()):
+        if allowed[entry.key] > 0:
+            allowed[entry.key] -= 1
+            continue
+        problems.append(
+            f"{owed.LEDGER}: adds '{entry.problem}' for {entry.path} ({entry.rule}), which the"
+            f" upgrade's own plan does not leave red on the merge base {base[:12]}: a change owes"
+            " only what the new version asks of the project as it stood, so this stays red"
+        )
+    return problems
 
 
 if __name__ == "__main__":
