@@ -49,6 +49,10 @@ def test_adopt_provisions_what_the_first_slice_needs_and_rehearses_it() -> None:
     assert "`just start` and the address it prints" in ADOPT
     assert "python3 -m ratchet_guards.diff --root . --base HEAD" in ADOPT
     assert 'Set the four to "none"' not in ADOPT
+    assert "Slice one is the one step 11's design brief names. When the brief names none" in ADOPT
+    assert "Rehearse at most twice" in ADOPT
+    assert "for a `cli`, `job` or `app` the run step 9's table gives its `smoke`" in ADOPT
+    assert "rehearse again" not in ADOPT, "the rehearsal is bounded"
 
 
 def test_adopt_leaves_the_permission_rules_to_step_8() -> None:
