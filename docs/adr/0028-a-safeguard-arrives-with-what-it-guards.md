@@ -33,13 +33,15 @@ Guard paths, disputes and the ratchet hold from the first commit. They protect t
 
 | Question | Trigger | Applies to | Tier |
 | --- | --- | --- | --- |
-| rolls back safely | `code:stored-format` | service, app, cli, job | 1: the merge base's build runs against the data the head's migrations leave |
+| rolls back safely | `life:deployed` | service, app, cli, job | 1: the merge base's build runs against the data the head's migrations leave |
 | survives failing dependencies | `code:outbound-call` | service, web-ui, app, job | 1: every outbound call has a timeout, and a test meets the dependency erroring, slow and gone |
 | refuses bad configuration | `code:config-read` | service, app, cli, job | 1: with a required setting missing, it exits non-zero before it is ready and names the setting |
 | shuts down gracefully | `code:listener` | service, job | 1: signalled while serving, it finishes the work in flight and exits within the limit |
 | incidents tighten a gate | `always` | all | 1: each record under `docs/incidents/` names a fault in `quality/bites.toml` that reproduces it |
 | backup restores | `life:irreplaceable-data` | service, app, job | weekly: the latest backup restores into scratch and the deliverable boots on it |
 | production answers | `life:deployed` | service, web-ui | weekly and after a deploy: the live deployment answers its real routes |
+
+A rollback has nothing to roll back before a deploy, and running the merge base's build on the head's data costs the same whenever it is added, so it waits for `deployed`; the old data loading, whose fixtures can only be captured while that version exists, starts at the first stored format. For the same reason mutation testing waits for `depended-on` and the end-to-end suite for `deployed`: neither costs more to add later, since mutation judges only changed code and an end-to-end suite judges flows, not instances.
 
 Service-level objectives and error budgets were considered and left out: they need traffic most of these projects do not have, and the owner chose not to carry them.
 

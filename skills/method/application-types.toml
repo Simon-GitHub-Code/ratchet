@@ -133,7 +133,7 @@ collection = true
 
 [[question]]
 name = "end to end"
-trigger = "code:entry-point"
+trigger = "life:deployed"
 applies-to = ["service", "web-ui", "app", "cli", "job"]
 collection = true
 
@@ -185,11 +185,11 @@ trigger = "code:source"
 
 [[question]]
 name = "changed-code mutation"
-trigger = "code:source"
+trigger = "life:depended-on"
 
 [[question]]
 name = "full mutation"
-trigger = "code:source"
+trigger = "life:depended-on"
 
 [[question]]
 name = "static security analysis"
@@ -255,7 +255,7 @@ trigger = "code:flag"
 [[question]]
 name = "rolls back safely"
 applies-to = ["service", "app", "cli", "job"]
-trigger = "code:stored-format"
+trigger = "life:deployed"
 
 [[question]]
 name = "survives failing dependencies"
