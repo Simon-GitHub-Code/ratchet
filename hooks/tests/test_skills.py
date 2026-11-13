@@ -341,6 +341,39 @@ def test_an_overturned_assumption_has_a_route_and_a_stated_cost() -> None:
         assert "what changing it later costs" in (SKILLS / page).read_text(encoding="utf-8"), page
 
 
+COST_PARTS = "(what changes, roughly how much work, and whether anything built is redone)"
+SWITCHES_A_TOOL = ("lock file", "`just settings`", "the merge is yours")
+
+
+def example_costs(page: str) -> list[str]:
+    """Each example **Assumed** line a page gives, in double backticks after "such as"."""
+    return re.findall(r"such as ``(.+?)``", flat(page))
+
+
+def test_every_cost_line_the_owner_reads_says_what_is_redone() -> None:
+    # Why: three example cost lines understated or were false. "Free until the first feature is
+    # built" is false once adoption has bound tools to the stack, and "two protected files you
+    # approve" left out the package list, its lock file, the tool's settings, the list of checks,
+    # the planted mistakes, the saved copies, and the owner's own edit and `just settings`.
+    for page in ("init/templates/AGENTS.md", "method/SKILL.md", "method/records.md"):
+        assert COST_PARTS in flat(page), page
+    examples = {page: example_costs(f"{page}/SKILL.md") for page in ("init", "adopt", "safeguard")}
+    for page, spans in examples.items():
+        assert spans, page
+        for span in spans:
+            assert "free until" not in span, (page, span)
+            assert re.search(r"\bbuilt\b", span), (page, span)
+    for page in ("adopt", "safeguard"):
+        for part in SWITCHES_A_TOOL:
+            assert any(part in span for span in examples[page]), (page, part)
+    assert any("no step yet" in span for span in examples["init"])
+    records = flat("method/records.md")
+    route = records.split("## Overturning an assumption", 1)[1].split(" ## ", 1)[0]
+    assert "its lockfile" in route
+    assert "the old tool's config removed" in route
+    assert "nothing yet binds the gates again for another stack" in route
+
+
 def test_adopt_hands_over_its_assumptions_without_question_keys() -> None:
     # Why: the rerun's hand-over printed `adopt.types` and its siblings to the owner.
     step_13 = ADOPT.split("13. **Hand over.**", 1)[1]
