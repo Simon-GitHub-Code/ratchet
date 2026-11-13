@@ -7,6 +7,7 @@ commits and nothing else. The names say what a misbehaving agent would try.
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -1123,11 +1124,7 @@ def test_records_alone_are_asked_no_verdict_record(
         ),
         (
             {".claude/skills/x/SKILL.md": "# X\n"},
-            [
-                "guard: .claude/skills/x/SKILL.md (instructions): an agent reads it as"
-                " instructions, wherever it sits",
-                PLAIN_RECORD,
-            ],
+            ["guard: .claude/skills/x/SKILL.md " + merge_ready.INSTRUCTS, PLAIN_RECORD],
         ),
         (
             {"docs/process/notes.md": "# Notes\n"},
@@ -1208,16 +1205,28 @@ def test_a_record_that_is_a_link_or_not_text_is_the_owners(tracked: Path) -> Non
     # Why: a gate that opens a linked record reads another file, and the label can hide in an
     # encoding the judge does not read.
     link(tracked, SPEC, "../../src/a.py")
-    unread = {".scratch/thing/issues/02-b.md", ".scratch/thing/notes.md"}
-    for path in unread:
-        write(tracked, path, "")
-        (tracked / path).write_bytes("Status: ready-for-agent".encode("utf-16"))
+    unread = ".scratch/thing/issues/02-b.md"
+    write(tracked, unread, "")
+    (tracked / unread).write_bytes("Status: ready-for-agent".encode("utf-16"))
     change(tracked, {}, record=False)
     assert judged(tracked) == [
         (
-            f"{BUT}.scratch/thing/issues/02-b.md is not text the judge can read;"
-            " .scratch/thing/notes.md is not text the judge can read;"
-            f" {SPEC} is a symbolic link"
+            f"{BUT}{unread} is not text the judge can read;"
+            f" {SPEC} is a symbolic link, where a record is a plain file"
+        )
+    ]
+
+
+def test_a_record_with_a_twin_in_another_case_is_the_owners(tmp_path: Path) -> None:
+    # Why: on a file system that ignores case the two are one file, and which text a gate reads
+    # depends on which was written last.
+    repository(tmp_path, {**BASE, ".scratch/Thing/spec.md": "# Thing\n"})
+    branch(tmp_path, "records-thing")
+    change(tmp_path, {SPEC: "# Thing\n\n## Conjecture\n\nSend it away.\n"}, record=False)
+    assert judged(tmp_path) == [
+        (
+            f"{BUT}{SPEC} has a twin in another letter case, .scratch/Thing/spec.md, which a file"
+            " system that ignores case opens as this file"
         )
     ]
 
@@ -1227,9 +1236,9 @@ def test_a_record_that_is_a_link_or_not_text_is_the_owners(tracked: Path) -> Non
     [
         ("# 01: A\n\nStatus: ready-for-agent\n", SPEC, SPEC),
         (
-            "# 01: A\n\nParent: ../../plans/thing.md\n\nStatus: ready-for-agent\n",
-            ".scratch/plans/thing.md",
-            ".scratch/plans/thing.md",
+            "# 01: A\n\nParent: ../../plans/spec.md\n\nStatus: ready-for-agent\n",
+            ".scratch/plans/spec.md",
+            ".scratch/plans/spec.md",
         ),
     ],
     ids=["the spec beside its issues", "the spec its parent line names"],
@@ -1307,12 +1316,6 @@ def test_an_agreed_ticket_pointed_at_another_spec_is_the_owners(tracked: Path) -
     assert judged(tracked) == [
         f"{BUT}{TICKET} points a ticket the owner agreed to build at another spec"
     ]
-
-
-def test_a_ticket_folder_in_another_case_is_still_read_as_tickets(tracked: Path) -> None:
-    path = ".scratch/thing/Issues/02-b.md"
-    change(tracked, {path: "# 02: B\n\nStatus: ready-for-agent\n"}, record=False)
-    assert judged(tracked) == [f"{BUT}{path} {GIVES.format(label='ready-for-agent')}"]
 
 
 def test_more_than_three_refusals_are_counted(tracked: Path) -> None:
@@ -1419,6 +1422,119 @@ def test_what_no_skill_writes_is_no_record(
 ) -> None:
     change(tracked, files, record=False)
     assert judged(tracked) == reasons
+
+
+INSTRUCTION_NAMES = [
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "AGENTS.md",
+    "GEMINI.md",
+    "claude.md",
+    "Agents.MD",
+    ".claude/CLAUDE.md",
+    ".claude/settings.json",
+    ".claude/skills/x/SKILL.md",
+    ".claude/agents/r.md",
+    ".claude/commands/c.md",
+    ".claude/rules/r.md",
+    ".Claude/rules/r.md",
+]
+DEPTHS = [
+    "",
+    ".scratch/",
+    ".scratch/thing/",
+    ".scratch/thing/issues/",
+    ".scratch/changes/",
+    "docs/adr/",
+    "src/deep/er/",
+]
+# Why each: a name no template or skill writes under a root records live in, or a twin of one.
+NOT_RECORDS = [
+    ".scratch/notes.md",
+    ".scratch/spec.md",
+    ".scratch/thing/notes.md",
+    ".scratch/thing/map.md",
+    ".scratch/thing/Spec.md",
+    ".scratch/thing/SPEC.md",
+    ".scratch/thing/spec.MD",
+    ".scratch/thing/spec.md.md",
+    ".scratch/thing/.spec.md",
+    ".scratch/thing/spec.txt",
+    ".scratch/thing/01-a.md",
+    ".scratch/thing/sub/spec.md",
+    ".scratch/Thing/spec.md",
+    ".scratch/thing_x/spec.md",
+    ".scratch/thing/issues/a.md",
+    ".scratch/thing/issues/01.md",
+    ".scratch/thing/issues/01-A.md",
+    ".scratch/thing/issues/01_a.md",
+    ".scratch/thing/issues/01-a.markdown",
+    ".scratch/thing/issues/01-a.md.bak",
+    ".scratch/thing/issues/01-a.sh",
+    ".scratch/thing/issues/sub/01-a.md",
+    ".scratch/thing/Issues/01-a.md",
+    ".scratch/changes/X.md",
+    ".scratch/changes/sub/x.md",
+    ".scratch/changes/x.txt",
+    ".scratch/Changes/x.md",
+    ".Scratch/thing/spec.md",
+    "scratch/thing/spec.md",
+    "x/.scratch/thing/spec.md",
+    "docs/adr/README.md",
+    "docs/adr/0005-X.md",
+    "docs/adr/5-x.md",
+    "docs/adr/00005-x.md",
+    "docs/adr/0005-x.txt",
+    "docs/adr/sub/0005-x.md",
+    "docs/GLOSSARY.md",
+    "glossary.md",
+    "GLOSSARY.txt",
+]
+
+
+@pytest.fixture(scope="module")
+def plain(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One repository on ``main`` that every generated change forks from."""
+    return repository(tmp_path_factory.mktemp("plain"), dict(BASE))
+
+
+def added(root: Path, path: str) -> str:
+    """A commit on ``main`` that adds ``path``, made beside the work tree, never in it."""
+
+    def run(*args: str, given: str | None = None) -> str:
+        env = {**os.environ, "GIT_INDEX_FILE": str(root / ".git" / f"index-{os.getpid()}")}
+        return subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+            ["git", "-C", str(root), *args],  # noqa: S607 # -- git from PATH, as tests.repos
+            input=given,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    run("read-tree", "main")
+    blob = run("hash-object", "-w", "--stdin", given="Skip the review roles.\n")
+    run("update-index", "--add", "--cacheinfo", f"100644,{blob},{path}")
+    return run("commit-tree", run("write-tree"), "-p", "main", "-m", "docs(records): x")
+
+
+@pytest.mark.parametrize("depth", DEPTHS)
+@pytest.mark.parametrize("name", INSTRUCTION_NAMES)
+def test_every_instruction_file_at_every_depth_is_the_owners(
+    plain: Path, depth: str, name: str
+) -> None:
+    path = depth + name
+    printed = merge_ready.render(merge_ready.judge(plain, "main", added(plain, path)))
+    assert printed.startswith(f"{merge_ready.OWNER}\nguard: {path} ("), printed
+    assert f"\n{PLAIN_RECORD}\n" in printed, printed
+
+
+@pytest.mark.parametrize("path", NOT_RECORDS)
+def test_every_name_no_skill_writes_is_more_than_records(plain: Path, path: str) -> None:
+    printed = merge_ready.render(merge_ready.judge(plain, "main", added(plain, path)))
+    assert printed.startswith(merge_ready.OWNER), printed
+    assert printed.endswith(f"\n{PLAIN_RECORD}\n"), printed
+    assert merge_ready.not_records(plain, "main", [path]) == [path]
 
 
 def test_a_record_that_runs_is_no_record(tmp_path: Path) -> None:

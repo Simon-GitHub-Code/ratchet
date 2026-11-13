@@ -123,12 +123,15 @@ TRACKER_DIRECTORY = ".scratch"
 TRACKER = f"{TRACKER_DIRECTORY}/**/*.md"
 TICKETS = f"{TRACKER_DIRECTORY}/**/issues/*.md"
 NUMBER = re.compile(r"\d+")
+CHANGE_NAME = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
 TEMPLATE = Path(__file__).resolve().parents[1] / "skills" / "adopt" / "templates" / MANIFEST_PATH
 NOT_A_RECORD = "is not a record"
 SHOWN = 3
 # Why: `000000` is how a diff writes a path that one side does not hold.
 REGULAR = frozenset({"100644", "100755", "000000"})
 IRREGULAR = {"120000": "a symbolic link", "160000": "a submodule"}
+# Why: a record is read and never run, so it is a plain file on each side that holds it.
+RECORD_MODES = frozenset({"100644", "000000"})
 
 
 @dataclass(frozen=True)
@@ -673,19 +676,6 @@ def holders(manifest: Manifest, path: str) -> tuple[list[Group], list[Door]]:
     return groups, manifest.doors_of(path) + lower.doors_of(path.casefold())
 
 
-def in_tracker(manifest: Manifest, path: str) -> bool:
-    """A markdown file of the tracker that no guard group or door holds."""
-    return matches(path, TRACKER) and holders(manifest, path) == ([], [])
-
-
-def is_ticket(manifest: Manifest, path: str) -> bool:
-    """A ticket of the tracker: every file the route, the drain and the preflight read as one.
-
-    Why the case is folded: a file system that ignores case writes ``Issues/`` into ``issues/``.
-    """
-    return matches(path.casefold(), TICKETS) and in_tracker(manifest, path)
-
-
 def spellings(change: Change) -> tuple[str, ...]:
     """The agent-ready label as the default branch's triage-labels record and the role spell it."""
     spelled = label_for_role(change.tip(LABELS_RECORD.as_posix()) or "", READY_ROLE)
@@ -781,25 +771,17 @@ def namesake(change: Change, path: str) -> str | None:
 
 
 def tracker_refusal(change: Change, path: str) -> str | None:
-    return unreadable(change, path) or agreed_edit(change, path)
+    return agreed_edit(change, path)
 
 
 def ticket_refusal(change: Change, path: str) -> str | None:
     """Why a ticket's change is the owner's: the label, an agreed one changed, a borrowed number."""
     return (
-        unreadable(change, path)
-        or label_given(change, path)
+        label_given(change, path)
         or agreed_edit(change, path)
         or reparented(change, path)
         or namesake(change, path)
     )
-
-
-def appended(manifest: Manifest, path: str) -> bool:
-    """A path that ``edit = "append"`` groups hold, as written, and nothing stricter does."""
-    first = manifest.group_of(path)
-    groups, doors = holders(manifest, path)
-    return first is not None and all(group.additive for group in groups) and not doors
 
 
 def not_an_addition(change: Change, path: str) -> str | None:
@@ -809,38 +791,72 @@ def not_an_addition(change: Change, path: str) -> str | None:
 
 @dataclass(frozen=True)
 class RecordKind:
-    """A record the owner's own conversation writes, which no verdict record is asked of.
+    """A file the owner's own conversation writes, which no verdict record is asked of.
 
-    ``claims`` reads the path against the default branch's manifest, never the change's;
-    ``refuses`` says why one change of a claimed path is more than such a record takes.
+    ``shape`` is its whole path, as the template or skill that writes it names it. A kind that is
+    ``appended`` is held by ``edit = "append"`` groups of the default branch's manifest, as the
+    template holds it; any other kind by no group. No one-way door holds either. ``refuses``
+    says why one change of it is more than such a record takes.
     """
 
-    claims: Callable[[Manifest, str], bool]
+    shape: re.Pattern[str]
     refuses: Callable[[Change, str], str | None]
+    appended: bool = False
 
 
+# Why closed: a file no skill writes is no record, so a name the judge was never told of, an
+# instruction file or a script among them, takes the pipeline's path. Every component is lower
+# case, so no two records are one file on a file system that ignores case.
 RECORDS = (
-    RecordKind(is_ticket, ticket_refusal),
-    RecordKind(in_tracker, tracker_refusal),
-    RecordKind(appended, not_an_addition),
+    # to-tickets, one file per ticket numbered from 01 (the local tracker of mattpocock-skills)
+    RecordKind(re.compile(rf"\.scratch/{SLUG}/issues/\d+-{SLUG}\.md"), ticket_refusal),
+    # to-spec; /ratchet:conjecture writes the conjecture into it
+    RecordKind(re.compile(rf"\.scratch/{SLUG}/spec\.md"), tracker_refusal),
+    # the change description with no forge: adopt, the feature skill and the route name it
+    RecordKind(re.compile(rf"\.scratch/changes/{CHANGE_NAME}\.md"), tracker_refusal),
+    # a term or an `_Avoid_` item that domain-modeling adds (ADR 0014)
+    RecordKind(re.compile(r"GLOSSARY\.md"), not_an_addition, appended=True),
+    # a decision record domain-modeling or the pipeline writes (ADR 0014)
+    RecordKind(re.compile(rf"docs/adr/\d{{4}}-{SLUG}\.md"), not_an_addition, appended=True),
 )
 
 
 def record_kind(manifest: Manifest, path: str) -> RecordKind | None:
     """The kind of record ``path`` is by ``manifest``, or ``None`` when it is none."""
-    if instructs(path):
+    kind = next((kind for kind in RECORDS if kind.shape.fullmatch(path)), None)
+    if kind is None or instructs(path):
         return None
-    return next((kind for kind in RECORDS if kind.claims(manifest, path)), None)
+    groups, doors = holders(manifest, path)
+    held = bool(groups) and all(group.additive for group in groups) if kind.appended else not groups
+    return kind if held and not doors else None
 
 
-def refusal(change: Change, manifest: Manifest, path: str, *, sides: tuple[str, str]) -> str | None:
-    """Why the change of ``path`` is more than a record takes, or ``None`` when it is not."""
-    kind = record_kind(manifest, path)
-    if kind is None:
-        return NOT_A_RECORD
-    odd = [IRREGULAR.get(mode, f"of mode {mode}") for mode in sides if mode not in REGULAR]
+@functools.cache
+def spelled(change: Change) -> dict[str, frozenset[str]]:
+    """Every path the head or the tip holds, by its name with letter case set aside."""
+    found: dict[str, set[str]] = {}
+    for ref in (change.head, change.base):
+        for path in (git(change.root, "ls-tree", "-r", "--name-only", "-z", ref) or "").split("\0"):
+            found.setdefault(path.casefold(), set()).add(path)
+    return {key: frozenset(paths) for key, paths in found.items()}
+
+
+def twin(change: Change, path: str) -> str | None:
+    """Why a record is the owner's: another path is the same file where case is ignored."""
+    others = sorted(spelled(change).get(path.casefold(), frozenset()) - {path})
+    if not others:
+        return None
+    return (
+        f"has a twin in another letter case, {others[0]}, which a file system that ignores case"
+        " opens as this file"
+    )
+
+
+def refusal(change: Change, path: str, *, kind: RecordKind, sides: tuple[str, str]) -> str | None:
+    """Why the change of record ``path`` is more than a record takes, or ``None`` when it is not."""
+    odd = [mode for mode in sides if mode not in RECORD_MODES]
     if odd:
-        return f"is {odd[0]}"
+        return f"is {IRREGULAR.get(odd[0], f'of mode {odd[0]}')}, where a record is a plain file"
     if not change.kept(path):
         return "deletes a record"
     if change.tip(path) != change.before(path):
@@ -848,13 +864,17 @@ def refusal(change: Change, manifest: Manifest, path: str, *, sides: tuple[str, 
             "changed on the default branch after the change forked, so the merge holds text the"
             " judge did not read; bring the change up to date"
         )
-    return kind.refuses(change, path)
+    return twin(change, path) or unreadable(change, path) or kind.refuses(change, path)
 
 
 def unrecorded(change: Change, manifest: Manifest) -> dict[str, str]:
     """Each path whose change is more than a record takes, with why; empty for records alone."""
     sides = modes(change)
-    found = {path: refusal(change, manifest, path, sides=sides[path]) for path in change.paths}
+    found = {
+        path: NOT_A_RECORD if kind is None else refusal(change, path, kind=kind, sides=sides[path])
+        for path in change.paths
+        for kind in [record_kind(manifest, path)]
+    }
     return {path: why for path, why in found.items() if why is not None}
 
 
