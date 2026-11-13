@@ -39,11 +39,12 @@ BINDING = Path("docs/process/binding.md")
 # readiness route from the routes a user requests.
 READY_ENV = "RATCHET_READY"
 # Why: a path that exists only once ``with_service.py --graceful`` has sent the stop signal, and
-# holds what it read of the service's accept queues: a ``Stopping``.
+# holds what the gate knows of the service's listeners: a ``Stopping``.
 STOPPING_ENV = "RATCHET_STOPPING"
 # Why: a path the command creates once it is sending requests; ``with_service.py --graceful``
 # counts ``--signal-after`` from then, so a command slow to start still has requests in flight.
 SENDING_ENV = "RATCHET_SENDING"
+ANSWER_POLL = 0.002
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
@@ -484,18 +485,31 @@ def end(address: tuple[object, ...]) -> tuple[str, int]:
 class Stopping:
     """What ``with_service.py --graceful`` tells the command, from the stop signal on.
 
-    ``taken`` are the connections that the gate accepted from a listener the service had let go
-    of, and then reset: the service never accepted them. ``unread`` says why the gate could not
-    take them, when it could not.
+    ``ports`` are the ports the gate found the service listening on, each with ``None`` while the
+    gate holds its listener, or why it no longer can. ``elsewhere`` says why the gate held no
+    listener on any other port. ``taken`` are the connections that the gate accepted from a
+    listener the service had let go of, and then reset: the service never accepted them.
+    ``answered`` is whether the gate has looked at the listeners again since the command asked.
     """
 
+    ports: dict[int, str | None]
+    elsewhere: str
     taken: frozenset[Connection]
-    unread: str | None
+    answered: bool = False
+
+    def inexact(self, port: int) -> str | None:
+        """Why the gate cannot tell which connections to ``port`` the service accepted, if so."""
+        return self.ports.get(port, self.elsewhere)
 
 
 def write_stopping(path: Path, stopping: Stopping) -> None:
     """Replace ``path`` with ``stopping`` whole, so a reader never sees half of it."""
-    data = {"taken": sorted(stopping.taken), "unread": stopping.unread}
+    data = {
+        "ports": stopping.ports,
+        "elsewhere": stopping.elsewhere,
+        "taken": sorted(stopping.taken),
+        "answered": stopping.answered,
+    }
     pending = path.with_name(f"{path.name}.pending")
     pending.write_text(json.dumps(data), encoding="utf-8")
     pending.replace(path)
@@ -504,7 +518,33 @@ def write_stopping(path: Path, stopping: Stopping) -> None:
 def read_stopping(path: Path) -> Stopping:
     """What ``path`` holds; it exists from the stop signal on."""
     data = json.loads(path.read_text(encoding="utf-8"))
-    return Stopping(frozenset(Connection(*taken) for taken in data["taken"]), data["unread"])
+    return Stopping(
+        {int(port): why for port, why in data["ports"].items()},
+        data["elsewhere"],
+        frozenset(Connection(*taken) for taken in data["taken"]),
+        data["answered"],
+    )
+
+
+def asking(path: Path) -> Path:
+    """The path the command creates beside the stop marker ``path`` to ask the gate to answer."""
+    return path.with_name(f"{path.name}.asked")
+
+
+def ask(path: Path, within: float) -> Stopping:
+    """What the stop marker ``path`` says once the gate has looked at the listeners again.
+
+    Asking orders the answer after every reset the command saw before it asked, so it says so
+    when one of them came from a listener shut down rather than closed. A gate that does not
+    answer within ``within`` seconds leaves every port to be judged by when its requests started.
+    """
+    asking(path).touch()
+    deadline = time.monotonic() + within
+    while not (told := read_stopping(path)).answered:
+        if time.monotonic() >= deadline:
+            return Stopping({}, f"the gate did not answer within {within:g}s", told.taken)
+        time.sleep(ANSWER_POLL)
+    return told
 
 
 def reach(

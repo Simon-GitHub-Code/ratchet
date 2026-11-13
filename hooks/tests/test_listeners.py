@@ -106,7 +106,8 @@ def service(shape: str = "plain") -> Iterator[Service]:
 
 @contextmanager
 def taking(held: list[listeners.Listener], marker: Path) -> Iterator[threading.Event]:
-    """``take`` running on ``held`` until the block ends."""
+    """``take`` running on ``held`` until the block ends, from what the gate wrote at the signal."""
+    gatelib.write_stopping(marker, listeners.told(held))
     ended = threading.Event()
     taker = threading.Thread(target=listeners.take, args=(held, marker, ended))
     taker.start()
@@ -213,15 +214,15 @@ def test_a_process_that_hides_after_the_signal_stops_the_gate_taking(tmp_path: P
         waiting = socket.create_connection(("127.0.0.1", running.port))
         with taking(held, marker):
             assert running.tell("hide") == "done"
-            until(lambda: marker.exists() and gatelib.read_stopping(marker).unread is not None)
-        stopping = gatelib.read_stopping(marker)
+            stopping = gatelib.ask(marker, 10)
         waiting.settimeout(0.2)
         with pytest.raises(TimeoutError):
             waiting.recv(1)
         waiting.close()
     assert stopping.taken == frozenset(), "it took nothing from a listener the service may hold"
-    assert stopping.unread is not None
-    assert stopping.unread.startswith(
+    why = stopping.inexact(running.port)
+    assert why is not None
+    assert why.startswith(
         f"the gate is not allowed to look at the open files of process {running.process.pid} "
     )
 
@@ -242,9 +243,9 @@ def test_a_connection_the_service_never_accepted_is_written_down_before_it_is_re
                 waiting.recv(1)
             stopping = gatelib.read_stopping(marker)
         waiting.close()
-    assert stopping == gatelib.Stopping(frozenset({name}), None), (
-        "the client found its connection in the marker once it saw the reset"
-    )
+    assert stopping == gatelib.Stopping(
+        {running.port: None}, listeners.ELSEWHERE, frozenset({name})
+    ), "the client found its connection in the marker once it saw the reset"
     assert held[0].copy.fileno() == -1, "the copy is let go of when the command ends"
 
 
@@ -273,19 +274,23 @@ def test_a_listener_shut_down_is_said_to_be_so_while_the_service_still_holds_it(
     tmp_path: Path,
 ) -> None:
     # Why: a shutdown resets the connections waiting on the listener at once, before the gate can
-    # take them, and the service may hold the listener long after. The client sees those resets
-    # then, so the gate must say why it cannot judge that port exactly as soon as it happens.
+    # take them, and the service may hold the listener long after. A client that saw one of those
+    # resets and then asks must be told why that port cannot be judged exactly.
     marker = tmp_path / "stopping"
-    with service() as running:
+    with service("two") as running:
         held = listeners.grab(running.process.pid)
         assert isinstance(held, list)
+        second = int(running.tell("second"))
         with taking(held, marker):
             assert running.tell("shut") == "done"
-            until(lambda: marker.exists() and gatelib.read_stopping(marker).unread is not None)
-    assert gatelib.read_stopping(marker).unread == (
-        "the service shut its listener down instead of closing it, which reset the connections "
-        "waiting on it before the gate could take them"
-    )
+            told = gatelib.ask(marker, 10)
+    assert told.ports == {
+        running.port: (
+            "the service shut its listener down instead of closing it, which reset the "
+            "connections waiting on it before the gate could take them"
+        ),
+        second: None,
+    }, "the other listener is still held"
 
 
 def test_a_process_forked_after_the_signal_still_holds_the_listener() -> None:

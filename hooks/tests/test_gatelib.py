@@ -212,10 +212,40 @@ def test_the_stop_marker_is_replaced_whole_and_read_back(tmp_path: Path) -> None
     marker = tmp_path / "stopping"
     first = gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)
     then = gatelib.Connection("::1", 81, "::1", 6)
-    gatelib.write_stopping(marker, gatelib.Stopping(frozenset({first}), None))
-    gatelib.write_stopping(marker, gatelib.Stopping(frozenset({then}), "no Linux"))
-    assert gatelib.read_stopping(marker) == gatelib.Stopping(frozenset({then}), "no Linux")
+    gatelib.write_stopping(marker, gatelib.Stopping({80: None}, "none", frozenset({first})))
+    told = gatelib.Stopping({80: None, 81: "shut"}, "no Linux", frozenset({then}), answered=True)
+    gatelib.write_stopping(marker, told)
+    assert gatelib.read_stopping(marker) == told
+    assert [told.inexact(port) for port in (80, 81, 82)] == [None, "shut", "no Linux"]
     assert [path.name for path in tmp_path.iterdir()] == ["stopping"]
+
+
+def test_asking_the_gate_waits_for_its_answer(tmp_path: Path) -> None:
+    marker = tmp_path / "stopping"
+    taken = frozenset({gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)})
+    gatelib.write_stopping(marker, gatelib.Stopping({80: None}, "none", taken))
+    answer = gatelib.Stopping({80: "shut"}, "none", taken, answered=True)
+
+    def gate() -> None:
+        while not gatelib.asking(marker).exists():
+            time.sleep(0.01)
+        gatelib.write_stopping(marker, answer)
+
+    answering = threading.Thread(target=gate)
+    answering.start()
+    assert gatelib.ask(marker, 10) == answer
+    answering.join()
+
+
+def test_a_gate_that_does_not_answer_leaves_every_port_judged_the_older_way(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "stopping"
+    taken = frozenset({gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)})
+    gatelib.write_stopping(marker, gatelib.Stopping({80: None}, "none", taken))
+    assert gatelib.ask(marker, 0.05) == gatelib.Stopping(
+        {}, "the gate did not answer within 0.05s", taken
+    )
 
 
 def test_interrupts_raise_once_then_ignore_and_restore_the_handlers() -> None:

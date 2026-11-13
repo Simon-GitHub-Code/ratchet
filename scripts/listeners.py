@@ -16,10 +16,16 @@ tells the two apart with this module, on Linux 5.6 or later:
 
 So a reset the client sees after the signal is either the gate's, and its ports are in the
 marker, or the service's own: a connection it accepted and dropped. No clock decides which.
-Where the gate cannot hold the listeners, ``grab`` says why. So does ``take`` when a process of
-the service hides its open files after the signal, since the gate can then no longer tell that
-the service has let go; it takes nothing more. The smoke then judges as it did before the gate
-held listeners.
+
+The marker says this port by port. Where the gate cannot hold the listeners, ``grab`` says why,
+and every port is judged as the smoke judged it before the gate held listeners. ``take`` says why
+for one port when the service shuts that listener down rather than closing it, since the
+shutdown resets the queue before the gate can take it. It says why for every port not yet let go
+of when a process of the service hides its open files after the signal, since the gate can then
+no longer tell that the service has let go. A port no process of the service listened on before
+the signal is judged the older way too. The command asks before it judges, and the gate answers
+once it has looked at every listener again, so a shutdown behind a reset the command saw is in
+the answer.
 """
 
 from __future__ import annotations
@@ -53,6 +59,14 @@ ZOMBIE = (b"Z", b"X")  # the states of a process that has exited
 NOT_LINUX = "the gate can copy a service's listener only on Linux 5.6 or later"
 OLD_KERNEL = (
     "this Linux kernel cannot copy another process's socket, which needs Linux 5.6 or later"
+)
+ELSEWHERE = (
+    "no process the boot command started, nor any child of one, was listening on that port "
+    "just before the signal"
+)
+SHUT = (
+    "the service shut its listener down instead of closing it, which reset the connections "
+    "waiting on it before the gate could take them"
 )
 NONE_FOUND = (
     "no process the boot command started, nor any child of one, was listening on a TCP port "
@@ -289,46 +303,50 @@ def queued(listener: socket.socket) -> list[tuple[socket.socket, gatelib.Connect
     return taken
 
 
-def take(held: list[Listener], marker: Path, ended: threading.Event) -> None:
+def told(held: list[Listener] | str) -> gatelib.Stopping:
+    """What the gate tells the command at the signal, from what ``grab`` found."""
+    if isinstance(held, str):
+        return gatelib.Stopping({}, held, frozenset())
+    return gatelib.Stopping({listener.port: None for listener in held}, ELSEWHERE, frozenset())
+
+
+def take(held: list[Listener] | str, marker: Path, ended: threading.Event) -> None:
     """Until ``ended``, take what queues on each listener the service has let go of.
 
-    Each connection's name, both its addresses and ports, goes into ``marker`` before the gate
-    resets it, so a client that sees the reset finds it there. A listener that no longer listens
-    when the service lets go of it was shut down rather than closed, which reset its queue before
-    the gate could take it; the marker's ``unread`` then says so. The copies are closed on return.
+    ``held`` is what ``grab`` found, and ``marker`` already says ``told(held)``. Each connection's
+    name, both its addresses and ports, goes into ``marker`` before the gate resets it, so a
+    client that sees the reset finds it there. A listener that stops listening was shut down
+    rather than closed, which reset its queue before the gate could take it, so its port is no
+    longer judged exactly; a process of the service that hides its open files does the same for
+    every port not yet let go of. When the command asks, the gate answers once it has looked at
+    every listener again. The copies are closed on return.
     """
-    taken: set[gatelib.Connection] = set()
-    waiting, free = list(held), []
-    unread = said = None
+    first = told(held)
+    copies = [] if isinstance(held, str) else held
+    ports, taken, answered = dict(first.ports), set(first.taken), False
+    waiting, free = list(copies), []
     try:
         while not ended.wait(POLL):
+            asked = gatelib.asking(marker).exists()
+            before = dict(ports)
             for listener in list(waiting):
-                state = listener.released()
-                if isinstance(state, str):
-                    # Why: a process the gate cannot see may hold any listener not yet let go of.
-                    unread = state
-                    for each in waiting:
-                        each.copy.close()
-                    waiting = []
-                    break
-                if not state:
-                    continue
-                waiting.remove(listener)
-                if listens(listener.copy):
+                state = listener.released() if listens(listener.copy) else SHUT
+                if state is True:
+                    waiting.remove(listener)
                     free.append(listener)
-                else:
-                    unread = (
-                        f"the service shut its listener on port {listener.port} down instead of "
-                        "closing it, which reset the connections waiting on it"
-                    )
+                elif state:
+                    waiting.remove(listener)
+                    listener.copy.close()
+                    ports[listener.port] = state
             fresh = [one for each in free for one in queued(each.copy)]
-            if fresh or unread != said:
+            if fresh or ports != before or (asked and not answered):
                 taken.update(name for _, name in fresh)
-                gatelib.write_stopping(marker, gatelib.Stopping(frozenset(taken), unread))
-                said = unread
+                answered = asked
+                now = gatelib.Stopping(ports, first.elsewhere, frozenset(taken), answered)
+                gatelib.write_stopping(marker, now)
             for connection, _ in fresh:
                 connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, RESET)
                 connection.close()
     finally:
-        for listener in held:
+        for listener in copies:
             listener.copy.close()

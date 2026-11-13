@@ -60,15 +60,16 @@ that ignores the signal is red, and is stopped with its whole group at the end a
 A server that stops closes its listener, and the kernel then resets every connection still
 waiting on it to be accepted. The service never accepted those, so it dropped nothing, though
 the client sees the reset a dropped request gives. So just before the signal the gate takes a
-copy of each TCP listener of the service's process group, which keeps it open, and writes the
-file it exports as ``RATCHET_STOPPING``, which exists from the signal on. Once no process of the
-service holds a listener, the gate accepts what is queued there, writes each connection's ports
-to that file, and only then resets it. ``load_smoke.py --until-stopped`` reads the file to tell
-those resets from the service's own, and a refusal after the signal (expected, nothing listens)
-from one before it (a fault). The copy needs Linux 5.6 or later and the permission ptrace needs
-over the service, which a service the gate started gives unless the host forbids ptrace; where
-the gate cannot take it, every reset after the signal counts and the smoke says why. See
-``listeners.py``.
+copy of each TCP listener of the service, its process group and every process descended from
+one, which keeps the listener open. It writes the file it exports as ``RATCHET_STOPPING``, which
+exists from the signal on. Once no process of the service holds a listener, the gate accepts
+what is queued there, writes each connection's ports to that file, and only then resets it.
+``load_smoke.py --until-stopped`` reads the file to tell those resets from the service's own,
+and a refusal after the signal (expected, nothing listens) from one before it (a fault). The
+copy needs Linux 5.6 or later and the permission ptrace needs over the service, which a service
+the gate started gives unless the host forbids ptrace. On a port where the gate holds no
+listener, the smoke judges a reset by when its request started, as it did before the gate held
+listeners, and says why. See ``listeners.py``.
 
 ``--refuses NAME`` (repeatable) is the "refuses bad configuration" check, with no command. For each
 NAME the service boots with the environment variable NAME removed, an ``--env`` of that name too.
@@ -215,14 +216,11 @@ def signal_midway(
     if process.poll() is not None:
         return [f"the service exited with code {process.returncode} before it was signalled"]
     held = listeners.grab(process.pid)
-    unread = held if isinstance(held, str) else None
     # Why: before the signal, so whatever fails after it is judged by what the marker says.
-    gatelib.write_stopping(marker, gatelib.Stopping(frozenset(), unread))
+    gatelib.write_stopping(marker, listeners.told(held))
     signalled = time.monotonic()
     process.send_signal(signal.SIGTERM)
-    taker = threading.Thread(
-        target=listeners.take, args=([] if isinstance(held, str) else held, marker, ended)
-    )
+    taker = threading.Thread(target=listeners.take, args=(held, marker, ended))
     taker.start()
     try:
         return stopped(process, options.graceful, signalled)
