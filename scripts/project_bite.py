@@ -64,16 +64,21 @@ absent from every run: an empty directory setup made is gone, since git holds no
 For each bite the script runs the gate and requires green, plants the fault, runs the gate again,
 and requires red with ``expect`` in its output more often than in that green run (a recipe's own
 text is echoed on every run). No green run serves two bites: what an earlier fault's run left
-behind would be judged as this fault. After a gate's last bite the gate runs once more with no
-fault, once for each set of ``args`` its bites that bit use. A bite stands only while every later
-run of its command with no fault is green. So ``bites`` proves three things of one command: green
-on the copy as restoring leaves it, red with ``expect`` once the fault is planted, and green again
-on every later run without it. It does not prove the red came from the fault when the gate's
-verdict hangs on state restoring does not put back (what git ignores, the copy's ``.git`` beyond
-the index and the exclude file, anything outside the copy, the clock): such a gate can still flip
-between two runs on its own, and one that alternates green and red bites without reading the
-fault. The closing run costs one run per gate (per set of ``args``): a gate with ``B`` bites runs
-``2B + 1`` times.
+behind would be judged as this fault. After a gate's last bite the gate runs again with no fault,
+once for each set of ``args`` among its bites that bit, and not at all when none bit. A bite
+stands only while every later run of its command with no fault is green. So ``bites`` proves
+three things of one command: green on the copy as restoring leaves it, red with ``expect`` once
+the fault is planted, and green again on every later run without it. It does not prove the red
+came from the fault in three cases. A gate whose verdict hangs on state restoring does not put
+back (what git ignores, the copy's ``.git`` beyond the index and the exclude file, anything
+outside the copy, the clock) can flip between two runs on its own, and one that alternates green
+and red bites without reading the fault. A gate that reads ``RATCHET_BITING`` can behave
+differently in the copy than anywhere else. And ``args`` that narrow the command prove the
+narrowed command, not the gate as the tier runs it. A gate with ``B`` bites runs at most ``2B``
+times, plus one closing run for each set of ``args`` among the bites that bit. Every run with no
+fault is one more chance for a gate that flips on its own to go red: one red one run in twenty
+fails the proof of five bites about twice as often as when one green run served every bite, near
+one proof in two, and those reds are named ``RED BEFORE THE FAULT`` or ``NOT PROVEN``.
 
 One line per bite: ``bites``, ``DOES NOT BITE`` (green with the fault), ``RED BEFORE THE FAULT``
 (red with no fault planted, on the copy as setup made it or as an earlier bite left it), ``RED
