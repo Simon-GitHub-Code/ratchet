@@ -1127,7 +1127,8 @@ def proof(root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int) 
     try:
         with gatelib.interrupts_raise():
             outcomes = run_lanes(root, registry, tasks, lanes=lanes)
-    except Unprovable as error:
+    # Why: a copy no walk can reach, or a system that refuses one, is a run that proves nothing.
+    except (Unprovable, OSError) as error:
         return gatelib.report("bite", [str(error)])
     except gatelib.Interrupted as stop:
         print(f"bite: red: {stop}")
