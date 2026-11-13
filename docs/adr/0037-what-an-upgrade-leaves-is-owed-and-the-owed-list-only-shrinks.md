@@ -49,7 +49,7 @@ The merge judge sends every change to `quality/owed.toml` to the owner, since `q
 
 An entry's identity is the check's wording at the pinned version. A later release that rewords a check makes its old entries stale and its findings unexcused. That release's upgrade is the change that moves the pin, so it drops the stale entries and records the reworded findings. Between a plugin update and that upgrade, a newer plugin's conformance is red where the pinned one is not, as ADR 0027 already says.
 
-A missing `- Life events:` line still reads as no event for the triggers gate, so an agent working through the owed Gates rows is offered `later: life:<event>` for an event that may have happened. The owed item names the event as undeclared. The project's stage is the owner's to state.
+A missing `- Life events:` line still reads as no event for the triggers gate, so the upgrade writes a row that waits on an event as `later: life:<event>`, though the event may have happened. Those rows are the checks the owner's summary names as waiting for his word, and the owed stage item names the line as unwritten. The project's stage is the owner's to state.
 
 ## Refutation criterion
 
