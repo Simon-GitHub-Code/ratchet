@@ -556,7 +556,7 @@ def safeguard_step(root: Path, instead: Step) -> Step | None:
     """``/ratchet:safeguard`` when the repository owes a row, offering ``instead`` beside it.
 
     Why: it comes before any build, since the next change that adds an instance of an owed kind
-    is red; it never hides the build, since the owner may be mid-idea and the first one is free.
+    is red; it never hides the build, since the owner may be mid-idea and the first file is free.
     """
     owing = triggers.owed(root)
     if not owing:
@@ -577,7 +577,7 @@ def safeguard_step(root: Path, instead: Step) -> Step | None:
             said.append(f"the declared life event `{rows[0].name}` owes {questions_owed}")
     code = any(application_types.code_kinds(row.trigger) for row in owing)
     cost = (
-        "the first instance is free, a second waits for this"
+        "the first file that brings the kind is free, a second waits for this"
         if code
         else "a declared event is never red"
     )

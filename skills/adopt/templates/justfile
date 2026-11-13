@@ -156,7 +156,7 @@ settings:
 conformance:
     python3 "{{ratchet_plugin}}/scripts/conformance.py" .
 
-# The first instance of a kind of code is free, and a second while a safeguard it owes is still
+# The first file of a kind of code is free, and a second while a safeguard it owes is still
 # `later:` is red (ADR 0028). `just triggers --json` lists the rows head owes, for the route.
 triggers *flags:
     python3 "{{ratchet_plugin}}/scripts/triggers.py" {{flags}}

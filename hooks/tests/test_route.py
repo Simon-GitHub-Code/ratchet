@@ -527,7 +527,7 @@ def test_an_owed_safeguard_comes_first_and_offers_the_build_beside_it(tmp_path: 
     assert step == route.Step(
         route.SAFEGUARD,
         "`outbound-call` has arrived (1 instance) and owes survives failing dependencies."
-        f" Or carry on with {route.SPEC}: the first instance is free, a second waits for this",
+        f" Or carry on with {route.SPEC}: the first file that brings the kind is free, a second waits for this",
         route.SPEC,
         "safeguard",
     )
@@ -595,7 +595,7 @@ def test_a_compound_owed_row_is_said_by_its_code_kind(tmp_path: Path) -> None:
     assert step.why.startswith(
         "`outbound-call` has arrived (1 instance) and owes survives failing dependencies"
     )
-    assert "the first instance is free" in step.why
+    assert "the first file that brings the kind is free" in step.why
 
 
 def test_a_file_written_for_outside_contributors_is_a_sign_of_depended_on(tmp_path: Path) -> None:

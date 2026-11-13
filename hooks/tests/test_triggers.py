@@ -10,6 +10,7 @@ from tests.repos import branch, commit, git, repository, write
 
 Out = pytest.CaptureFixture[str]
 LATER_CALL = "| survives failing dependencies | later: code:outbound-call | 1 | | `just faults` |"
+LATER_LISTENER = "| shuts down gracefully | later: code:listener | 1 | | `just drain` |"
 LATER_BACKUP = "| backup restores | later: life:irreplaceable-data | weekly | | `just restore` |"
 TABLE = """
 ## Triggers
@@ -178,6 +179,30 @@ def test_the_first_instance_is_free_and_noted(tmp_path: Path, capsys: Out) -> No
     )
     assert "/ratchet:safeguard" in out
     assert out.endswith("triggers: green against " + git(root, "rev-parse", "HEAD")[:12] + "\n")
+
+
+def test_the_free_arrival_is_one_file_not_forty_instances(tmp_path: Path, capsys: Out) -> None:
+    # Why: "the first one is free" has a bound, or a first change could bring forty unguarded calls.
+    root = project(tmp_path, None, LATER_CALL)
+    write(root, "src/a.py", "import requests\n" + "requests.get(1)\n" * 40)
+    assert run(root) == 0
+    assert "has arrived (src/a.py:2, src/a.py:3" in capsys.readouterr().out
+    write(root, "src/b.py", CALL)
+    assert run(root) == 1
+    out = capsys.readouterr().out
+    assert (
+        "triggers: 'outbound-call' arrives in 2 files (src/a.py, src/b.py); the first file that"
+        " brings the kind is free, not several. These rows are still `later:`: survives failing"
+        " dependencies. Run /ratchet:safeguard to bind them before adding more (ADR 0028)"
+    ) in out
+
+
+def test_two_files_of_a_path_kind_are_not_one_arrival(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path, None, LATER_LISTENER)
+    write(root, "src/server.py", "x = 1\n")
+    write(root, "src/worker.py", "x = 1\n")
+    assert run(root) == 1
+    assert "arrives in 2 files (src/server.py, src/worker.py)" in capsys.readouterr().out
 
 
 def test_a_second_instance_while_a_row_is_owed_is_red(tmp_path: Path, capsys: Out) -> None:
