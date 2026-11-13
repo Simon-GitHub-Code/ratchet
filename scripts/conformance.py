@@ -1242,10 +1242,12 @@ def check_commit_hooks(root: Path) -> Iterable[Finding]:
         yield from check_other_hooks(name, text, install)
     justfile = read_justfile(root)
     if justfile is not None and hooks_installed.PROBE_ENV not in justfile:
+        # Why: an owed entry holds this text, so it names no path of the plugin's checkout.
         yield agent(
             f"justfile: the `pre-commit` and `commit-msg` recipes do not answer "
             f"{hooks_installed.PROBE_ENV}, so `hooks_installed.py` cannot tell whether a commit "
-            f"would run tier 0; copy them from {hooks_installed.TEMPLATE}"
+            "would run tier 0; copy them from the template justfile",
+            start=template_definition("pre-commit") + template_definition("commit-msg"),
         )
 
 
