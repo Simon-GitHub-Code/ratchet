@@ -146,6 +146,7 @@ def test_a_product_that_does_not_answer_is_a_502_the_log_names(
 def test_the_seal_says_what_was_written_and_nothing_is_written_after_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(acceptance_proxy, "SETTLE", 0.2)
     directory = tmp_path / "session"
     with products.serving(tmp_path) as upstream, proxied(tmp_path, upstream, monkeypatch) as url:
         products.request(url)
