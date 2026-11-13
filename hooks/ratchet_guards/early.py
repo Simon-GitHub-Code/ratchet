@@ -3,9 +3,10 @@
 The merge judge reads a change once it is committed and decides at the merge, so it cannot
 protect against a file that has already acted. Two kinds of file do:
 
-- A CI workflow directly under ``.github/workflows/``, or that directory itself. GitHub runs a
-  branch's own workflows on a push or a pull request, with the repository's token and secrets.
-  It reads no subdirectory of it.
+- A CI workflow directly under ``.github/workflows/``, that directory itself, or ``.github``,
+  whose removal, move or copy removes, moves or fills the workflows. GitHub runs a branch's own
+  workflows on a push or a pull request, with the repository's token and secrets. It reads no
+  subdirectory of ``.github/workflows/``.
 - An agent-instruction file at any depth: ``CLAUDE.md``, ``CLAUDE.local.md``, ``AGENTS.md``,
   ``GEMINI.md``, a ``.claude/`` directory itself, or anything under one but its ``worktrees/``.
   Claude Code loads a nested ``CLAUDE.md`` when it reads a file beside it, and follows it. An
@@ -55,6 +56,10 @@ def is_instruction(relative: str) -> bool:
 def kind_of(relative: str) -> Kind | None:
     """The kind of ``relative``, a path from the checkout's root, or ``None`` when it waits."""
     parts = tuple(part.lower() for part in PurePosixPath(relative).parts)
-    if parts[: len(WORKFLOWS)] == WORKFLOWS and len(parts) <= len(WORKFLOWS) + 1:
+    if (
+        parts
+        and parts[: len(WORKFLOWS)] == WORKFLOWS[: len(parts)]
+        and len(parts) <= len(WORKFLOWS) + 1
+    ):
         return Kind.WORKFLOW
     return Kind.INSTRUCTIONS if is_instruction(relative) else None
