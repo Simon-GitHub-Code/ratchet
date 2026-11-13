@@ -860,6 +860,7 @@ def test_a_promise_the_amend_still_leaves_out_is_kept_from_the_ticket_and_asks_n
         "reading": "covered",
         "criteria": [f"Kept from the ticket by the run, as no criterion carries it: {NO_SCRIPT}"],
     }
+    assert "settled" in result, "the result returns the readings it settled"
     assert reading in result["settled"]["ticketPromises"], "the settled reading, in its words"
     assert left_out not in result["settled"]["ticketPromises"]
     built = _said(ran["prompts"]["implement"])
@@ -884,8 +885,11 @@ def test_a_promise_the_spec_role_will_not_build_is_its_question_never_a_silent_d
         " the plan leaves out as the ticket says it, and asks the owner nothing."
     )
     ran = _built(REVIEW, **{"ticket-check": GAP, "spec-amend": SPECIFIED, "ticket-recheck": GAP})
-    for role in ("spec", "spec-amend"):
-        assert raised in _said(ran["prompts"][role]), role
+    assert raised in _said(ran["prompts"]["spec"])
+    note = (
+        ran["prompts"]["spec-amend"].split("This is an AMEND.")[1].split("Inputs you may read")[0]
+    )
+    assert raised in _said(note), "the amend's own instructions say it, beside the promise"
     assert "is that what you want" not in json.dumps(ran)
 
 
@@ -1147,6 +1151,7 @@ def test_a_rejudge_holds_the_review_to_the_readings_the_first_run_settled() -> N
     gap = {**CHECKED, "acceptedInputs": [{**LINK_FIELD, "empty": None}]}
     answers = {"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": gap}
     first = _built(REVIEW, **answers)["result"]
+    assert "settled" in first, "the first result returns the readings it settled"
     reading = "Assumed by the run, as no criterion decides it: nothing is saved and nothing breaks"
     assert first["settled"]["acceptedInputs"][0]["empty"] == reading
     rejudge = {"settled": first["settled"], "assumptions": first["assumptions"]}
