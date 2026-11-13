@@ -31,7 +31,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from itertools import dropwhile, pairwise, product
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from ratchet_guards import environment, gh, git, interpreters, tickets, writes
 from ratchet_guards.context import Context, Guard
@@ -127,6 +127,16 @@ _FORGETTERS = frozenset({"unset", "for", "select"})
 # Why: the shell runs these in the shell itself, so what they set is there for the next command.
 _KEEPS = frozenset({";", "&&", "||", "\n", ""})
 _CROWDED = Verdict("unreadable", "the command line moves between too many directories")
+# Why: a `git switch` the guard does not read as a command of its own (in a shell's script, a
+# substitution, `eval`, `xargs`, `find -exec`, an alias) still moves `HEAD`. The words are
+# enough to say that it may have.
+_HIDDEN_SWITCH = re.compile(
+    r"(?<![\w.-])git(?![\w.-]).*(?<![\w-])(?:switch|checkout|symbolic-ref|bisect)(?![\w-])",
+    re.DOTALL,
+)
+_XARGS = "xargs"
+_PATH_REFUSALS = frozenset({"guard-path-write", "guard-path-default", "guard-path-unseen-switch"})
+
 _UNCLOSED = Verdict(
     "unreadable", "the guard cannot tell where a quote or a substitution on the command line ends"
 )
@@ -173,11 +183,15 @@ def _distinct(contexts: Iterable[Context]) -> list[Context]:
 def _levelled(contexts: Sequence[Context]) -> list[Context]:
     """``contexts`` with what the line has set so far carried by every one of them.
 
-    A variable set and a name unsettled are facts about the line, not about where it stands.
+    A variable set, a name unsettled and a switch unseen are facts about the line, not about
+    where it stands.
     """
     exported = frozenset(name for context in contexts for name in context.exported)
     unsettled = any(context.unsettled for context in contexts)
-    return _distinct(replace(c, exported=exported, unsettled=unsettled) for c in contexts)
+    hidden = any(context.hidden_switch for context in contexts)
+    return _distinct(
+        replace(c, exported=exported, unsettled=unsettled, hidden_switch=hidden) for c in contexts
+    )
 
 
 def _bindings(words: Sequence[str]) -> dict[str, str | None]:
@@ -442,6 +456,20 @@ def _mover(words: Sequence[str]) -> list[str]:
     return rest
 
 
+def _hides_switch(words: Sequence[str], rest: Sequence[str], cwd: Path) -> bool:
+    """Whether ``words`` may move ``HEAD`` in a way ``git.switch`` does not read.
+
+    ``rest`` is the ``git`` command in ``words``, if any. Any other command hides a switch its
+    words name; a ``git`` hides one in a script it runs (an alias, ``rebase -x``, ``bisect run``,
+    ``submodule foreach``), or in its own words when ``xargs`` adds to them.
+    """
+    if not rest or _name(rest[0]) != "git":
+        return bool(_HIDDEN_SWITCH.search(" ".join(words)))
+    fed = _XARGS in map(_name, words[: len(words) - len(rest)])
+    texts = [" ".join(rest)] if fed else git.scripts(rest, cwd)
+    return any(map(_HIDDEN_SWITCH.search, texts))
+
+
 def _directories(words: Sequence[str]) -> list[str]:
     """The directories a wrapper among ``words`` is told to run its command in.
 
@@ -487,9 +515,12 @@ class _Checker:
     def script(self, text: str, context: Context) -> list[Verdict]:
         if self.depth > MAX_DEPTH:
             return [Verdict("unreadable", "the command nests scripts too deeply")]
-        inner = self._deeper()
         parsed = _followed(text)
         self.modelled = parsed.modelled
+        if any(map(_HIDDEN_SWITCH.search, parsed.nested)):
+            # Why: the lexer lifts a substitution out of its command, so where on the line it
+            # runs is not kept; a switch in one may come before any write.
+            context = context.switching_unseen()
         trusted = not any(map(_redefines, parsed.commands))
         now = chain = seen = [context]
         previous = ""
@@ -531,9 +562,13 @@ class _Checker:
             previous = command.then
         verdicts += [_CROWDED] if crowded else []
         verdicts += [] if parsed.closed else [_UNCLOSED]
-        nested = [(script, place) for script in parsed.nested for place in seen[:MAX_STATES]]
-        inside = [v for script, place in nested for v in inner.script(script, place)]
+        inside = self._nested(parsed.nested, seen[:MAX_STATES])
         return list(dict.fromkeys([*inside, *verdicts]))
+
+    def _nested(self, scripts: Sequence[str], places: Sequence[Context]) -> list[Verdict]:
+        """Check each script a line nests, in each place the line may have run it."""
+        inner = self._deeper()
+        return [v for script in scripts for place in places for v in inner.script(script, place)]
 
     def _command(
         self, pipeline: Sequence[SimpleCommand], heredocs: Sequence[str], context: Context
@@ -575,8 +610,11 @@ class _Checker:
             names = interpreters.named_paths(program)
             verdicts += tickets.named(names, self.line, context, guard=self.guard)
             hits = self.guard.locator.words(names, context.cwd, destructive=call.removes(program))
-            details = (interpreters.detail(call.name, hit.path, hit.group.name) for hit in hits)
-            verdicts += [Verdict("guard-path-write", detail) for detail in details]
+            verdicts += self.guard.writes(
+                context, hits, lambda hit: interpreters.detail(call.name, hit.path, hit.group.name)
+            )
+            written = interpreters.written_names(program)
+            verdicts += self.guard.acting(self.guard.locator.named(written, context.cwd))
         return verdicts
 
     def _writes(
@@ -585,10 +623,13 @@ class _Checker:
         find, cwd = self.guard.locator.words, context.cwd
         hits = find(written, cwd, destructive=False)  # pragma: no mutate # -- None is False
         hits += find(removed, cwd, destructive=True)
-        verdicts = [
-            Verdict("guard-path-write", f"{verb} {hit.path} ({hit.group.name})") for hit in hits
-        ]
+        verdicts = self.guard.writes(
+            context, hits, lambda hit: f"{verb} {hit.path} ({hit.group.name})"
+        )
+        verdicts += self.guard.acting(self.guard.locator.paths([*written, *removed], cwd))
         if context.lost:
+            # Why: the shell may be in any checkout, one on its default branch among them, so a
+            # guard path there is refused whatever branch the line's own checkout has.
             locate = self.guard.locator.could_hit
             by = "a redirect" if verb == _REDIRECT else verb
             lost = [
@@ -682,14 +723,14 @@ class _Checker:
         quiet = head in _DIRECTORY_MOVERS or (head == "git" and git.settled(rest, context.cwd))
         still = bare and quiet
         context = context if still else context.unsettling()
-        if head not in _MOVERS:
-            return [context]
         plain = sure and bare
         if head in _DIRECTORY_MOVERS:
             if self.modelled and command.then in _APART:
                 return [context]
             return self._moved(words, context, seen, plain=plain, values=values)
-        move = git.switch(rest, context, self.guard)
+        if _hides_switch(words, rest, context.cwd):
+            return [context.switching_unseen()]
+        move = git.switch(rest, context, self.guard) if head == "git" else None
         if move is None:
             return [context]
         if plain and move.certain:
@@ -746,6 +787,6 @@ class _Checker:
 def check(command: str, context: Context, guard: Guard) -> list[Verdict]:
     """Every verdict the rules give on a Bash command line run in ``context``."""
     verdicts = tickets.together(_Checker(guard, 0, command).script(command, context))
-    # Why: a write that is refused outright needs no question about where it ran.
-    refused = any(verdict.rule == "guard-path-write" for verdict in verdicts)
+    # Why: a write that is refused outright needs no second refusal about where it ran.
+    refused = any(verdict.rule in _PATH_REFUSALS for verdict in verdicts)
     return [v for v in verdicts if not (refused and v.rule == "unresolved-directory")]

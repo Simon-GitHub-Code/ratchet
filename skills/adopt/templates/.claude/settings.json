@@ -9,10 +9,6 @@
       "Edit(/.claude/agents/**)",
       "Edit(/.claude/skills/**)",
       "Edit(/.claude/commands/**)",
-      "Edit(/.claude/rules/**)",
-      "Edit(/guards/**)",
-      "Edit(~/.claude/settings.json)",
-      "Edit(~/.claude/settings.local.json)",
       "Edit(/.git/hooks/**)",
       "Edit(/.git/config)",
       "Edit(/.git/refs)",
@@ -23,6 +19,9 @@
       "Edit(/.git/shallow)",
       "Edit(/.git/objects/info)",
       "Edit(/.git/objects/info/**)",
+      "Edit(~/.claude/settings.json)",
+      "Edit(~/.claude/settings.local.json)",
+      "Edit(~/.claude/plugins/**)",
       "Bash(git push --force:*)",
       "Bash(git push * --force*)",
       "Bash(git push -f:*)",
@@ -40,6 +39,8 @@
       "Bash(gh label delete:*)",
       "Bash(gh label clone:*)",
       "Bash(gh run delete:*)",
+      "Bash(git config core.hooksPath:*)",
+      "Bash(git -c core.hooksPath*)",
       "Bash(git branch -f main:*)",
       "Bash(git branch -d main:*)",
       "Bash(git branch -D main:*)",
@@ -71,21 +72,6 @@
       "Bash(git remote remove:*)",
       "Bash(git remote rm:*)"
     ],
-    "ask": [
-      "Bash(gh pr merge:*)",
-      "Edit(/justfile)",
-      "Edit(/scripts/**)",
-      "Edit(/.pre-commit-config.yaml)",
-      "Edit(/quality/**)",
-      "Edit(/.github/**)",
-      "Edit(/formal/**)",
-      "Edit(/docs/agents/**)",
-      "Edit(/docs/process/**)",
-      "Edit(/AGENTS.md)",
-      "Edit(/CLAUDE.md)",
-      "Edit(/GLOSSARY-MAP.md)",
-      "Edit(/PRODUCT.md)",
-      "Edit(/DESIGN.md)"
-    ]
+    "ask": []
   }
 }

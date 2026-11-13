@@ -21,11 +21,9 @@ import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-ADVICE = (
-    "Write the guard path with the Edit or Write tool so the owner is asked (one Write for "
-    "many changes in one file, since each Edit asks), and split a read of a guard path from "
-    "an unrelated write."
-)
+from ratchet_guards.writes import WRITERS
+
+ADVICE = "A read of a guard path goes in a tool call of its own, apart from an unrelated write."
 _NEVER = re.compile(r"(?!)")
 # One call argument: quoted strings and balanced parentheses (two deep) hide their commas.
 _ARG = r"""(?:'[^'\n]*'|"[^"\n]*"|[^,()'"]|\((?:[^()]|\([^()]*\))*\))*"""
@@ -50,6 +48,8 @@ _ARGV = re.compile(
 )
 _ARGV_ITEM = re.compile(r"""'(?P<a>[^'\n]*)'|"(?P<b>[^"\n]*)"|(?P<c>[\w.]+(?:\([^()]*\))?)""")
 _COMMAND_STRING = re.compile(r"(?:^|[\s;&|(/])git\s")
+# A `<name>` a prose string or a comment holds in place of a value: its `>` is no redirection.
+_PLACEHOLDER = re.compile(r"<[\w./-]*>")
 UNKNOWN = "$ratchet_unknown"
 
 
@@ -252,6 +252,23 @@ def named_paths(program: str) -> list[str]:
     for literal in _LITERAL.finditer(program):
         text = next(group for group in literal.groups() if group is not None)
         found += [text, *(word for word in _WORD.findall(text) if word.strip("/"))]
+    return list(dict.fromkeys(word for word in found if word))
+
+
+def written_names(program: str) -> list[str]:
+    """The words a program's literals could name a file it writes with, for the owner's question.
+
+    A literal is a candidate whole. Its words are candidates only when it reads as a command: it
+    holds a redirection, or its first word is a writer the shell rules know (``"cp t AGENTS.md"``).
+    A word of prose (``"Edit `AGENTS.md` first"``) or of a comment the program edits names no file
+    it writes, and the owner would be asked about one it does not.
+    """
+    found: list[str] = []
+    for literal in _LITERAL.finditer(program):
+        text = next(group for group in literal.groups() if group is not None)
+        words = [word for word in _WORD.findall(text) if word.strip("/")]
+        command = ">" in _PLACEHOLDER.sub("", text) or bool(words and words[0] in WRITERS)
+        found += [text, *(words if command else [])]
     return list(dict.fromkeys(word for word in found if word))
 
 

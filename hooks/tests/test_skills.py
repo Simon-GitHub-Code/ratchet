@@ -150,15 +150,16 @@ def test_the_safeguard_skill_asks_nothing_and_commits_as_the_gate_accepts() -> N
     assert "`chore(method): safeguard <what>`" in safeguard
 
 
-def test_the_safeguard_skill_leaves_the_manifest_and_settings_to_the_owner() -> None:
-    # Why: both are in the manifest's `deny` group, so an agent that tried to write them is
-    # refused after adoption; the hand-over says what the owner adds and runs.
+def test_the_safeguard_skill_guards_a_new_config_on_its_own_branch() -> None:
+    # Why: the hook and the merge judge read the manifest as the default branch holds it, so the
+    # agent adds the path on its branch and the owner merges it, and the settings are a fixed list
+    # no tool's config changes (ADR 0033).
     safeguard = (SKILLS / "safeguard/SKILL.md").read_text(encoding="utf-8")
-    assert "denied to an agent after adoption" in safeguard
-    assert "print the exact lines for the owner to add" in safeguard
-    assert "`just settings`" in safeguard
+    assert "Add the tool's config path to the `tool-config` paths" in safeguard
+    assert "`.claude/settings.json` needs no change" in safeguard
+    assert "just settings" not in safeguard
     guards = (SKILLS / "method/guards.md").read_text(encoding="utf-8")
-    assert "the owner does both" in guards
+    assert "the agent adds it to `guards/manifest.toml` on its branch" in guards
 
 
 UNLISTED = '[[group]]\nname = "tool-config"\nreason = "Rule sets."\npaths = ["lint.toml"]\n'
@@ -179,12 +180,9 @@ def test_a_config_the_manifest_does_not_list_is_said_to_be_unguarded(tmp_path: P
     safeguard = flat("safeguard/SKILL.md")
     hand_over = safeguard.split("6. **Hand over.**", 1)[1]
     assert "holds the tool's effective configuration" not in safeguard
-    for part in (
-        "its settings are neither guarded nor recorded",
-        "an agent could loosen them and nobody would see it",
-        "worth doing now",
-    ):
-        assert part in hand_over, part
+    # Since ADR 0033 the agent lists the config itself on its branch, so the hand-over names the
+    # path it listed instead of asking the owner to list it.
+    assert "name the path you added to the manifest" in hand_over
     for page in ("method/SKILL.md", "method/ratchet.md"):
         text = flat(page)
         assert "a config the group does not list is neither guarded nor recorded" in text, page
@@ -494,7 +492,7 @@ def test_an_overturned_assumption_has_a_route_and_a_stated_cost() -> None:
 
 
 COST_PARTS = "(what changes, roughly how much work, and whether anything built is redone)"
-SWITCHES_A_TOOL = ("lock file", "`just settings`", "the merge is yours")
+SWITCHES_A_TOOL = ("lock file", "the merge is yours")
 
 
 def example_costs(page: str) -> list[str]:

@@ -1,22 +1,29 @@
 """The Claude Code PreToolUse hook: JSON in on stdin, a decision out on stdout.
 
 ``hooks/guard.py`` puts ``hooks/`` on ``sys.path`` and calls ``main`` with the repository
-root. For Edit, Write, MultiEdit and NotebookEdit on a guard path, and for a Codex ``apply_patch``
-whose headers name one, the hook answers ``ask``. Grok's own tool names
-(``run_terminal_command``, ``search_replace``, ``write``, ...) are judged as the Claude tools
-they stand for. Antigravity's input (``toolCall`` with ``name`` and ``args``) is translated to
-Claude's shape first, and the answer goes back in Antigravity's (``decision`` and ``reason``).
-It answers ``ask``,
-which needs a human at the permission prompt, or ``deny`` in a group whose ``edit`` is
-``"deny"`` (paths Claude Code's bypass mode would let through an ``ask``). In a group whose
-``edit`` is ``"append"`` (the glossary and the decision records) an Edit, Write or MultiEdit that
-only adds gets no verdict: ``ratchet_guards.records`` compares the file the call would leave
-with the merge base of ``HEAD`` and the default branch, and anything it does not find additive
-asks, with the reason (ADR 0014). For a Bash
-command that bypasses a gate, rewrites history, removes a plugin or writes a guard path it
-answers ``deny``. When no rule fires it prints nothing, so Claude Code's own permission rules
-decide; Antigravity, which reads no answer as a deny, gets a plain ``ask``, its own prompt. It
-never answers ``allow``. Any failure answers ``ask``.
+root. Grok's own tool names (``run_terminal_command``, ``search_replace``, ``write``, ...) are
+judged as the Claude tools they stand for. Antigravity's input (``toolCall`` with ``name`` and
+``args``) is translated to Claude's shape first, and the answer goes back in Antigravity's
+(``decision`` and ``reason``).
+
+A change to a guard path, by Edit, Write, MultiEdit, NotebookEdit, a Codex ``apply_patch`` or the
+shell, gets no verdict when its commit lands on a branch other than the default: it reaches the
+default branch only through a merge, and the merge judge sends it to the owner (ADR 0033). Where
+the commit would land on the default branch it is denied, with the way out: make it on a branch.
+In a group whose ``edit`` is ``"deny"`` (the files the owner edits by hand) every change is
+denied. A write the hook reads of a file that acts the moment it is written, a CI workflow or an
+agent-instruction file at any depth (``ratchet_guards.early``), asks the owner on every branch, in
+one plain sentence. The hook reads a write whose path the tool call names: it is a check on
+ordinary writes, not a boundary against an agent that sets out to get round it (ADR 0033). In a
+group whose ``edit`` is ``"append"`` (the glossary and the decision
+records) an Edit, Write or MultiEdit that only adds passes on the default branch too:
+``ratchet_guards.records`` compares the file the call would leave with the merge base of ``HEAD``
+and the default branch (ADR 0014). For a Bash command that bypasses a gate, rewrites history or
+removes a plugin it answers ``deny``. It answers ``ask`` on a merge into the default branch and on
+the agent-ready label, the owner's to give. When no rule fires it prints nothing, so the harness's
+own permission rules decide; Antigravity, which reads no answer as a deny, gets a plain ``ask``,
+its own prompt. It never answers ``allow``. Any failure answers ``ask``, but a git that cannot
+start or runs out of time reads as no manifest, and the path rules then give no verdict.
 
 A verdict covers the whole tool call: Claude Code runs none of a denied Bash command line,
 so a write chained before the refused command is lost with it. The deny message says so and
@@ -33,13 +40,18 @@ One forge write is allowed by a record: ``gh label create <name>`` in a checkout
 is adopted, so the list is the owner's.
 
 The guard paths come from ``guards/manifest.toml`` as committed on the default branch of the
-nearest checkout holding the path being judged (an ancestor with ``.git``), read from git
-(``ratchet_guards.committed``) once per checkout. The session's working directory does not
-choose the manifest: an edit from a subagent, a monorepo parent or a sibling checkout is
-judged by the manifest of the checkout it lands in. An uncommitted manifest, or one committed
+checkout holding the path being judged, read from git (``ratchet_guards.committed``) once per
+checkout. In the session's project (``$CLAUDE_PROJECT_DIR``) that checkout is one git records:
+the project's own work tree, a worktree under ``.claude/worktrees/`` or a recorded submodule, so
+a ``.git`` an agent makes moves nothing; elsewhere it is the nearest ancestor holding ``.git``.
+The session's working directory does not choose the manifest: an edit from a subagent, a
+monorepo parent or a sibling checkout is judged by the manifest of the checkout it lands in.
+An uncommitted manifest, or one committed
 only on a branch, guards nothing yet: that is the adoption in progress, and only the command
-rules apply until it merges. The plugin's own files are locked either way: ``PLUGIN_ROOT`` (two
-parents above this package) and ``~/.claude/plugins/**``, together with
+rules apply until it merges. Once merged, the manifest file itself takes only appended groups
+and doors from an agent, and a default branch that loses it keeps every path its last version
+named locked (``ratchet_guards.manifest``). The plugin's own files are locked either way:
+``PLUGIN_ROOT`` (two parents above this package) and ``~/.claude/plugins/**``, together with
 ``~/.claude/settings.json`` and ``~/.claude/settings.local.json``, and the same switches of
 the other harnesses (``ratchet_guards.manifest.PLUGIN_HOME_PATTERNS``).
 """
@@ -56,10 +68,19 @@ from typing import TextIO
 
 from ratchet_guards import bash, records, tickets
 from ratchet_guards.committed import committed_manifest, default_branch
-from ratchet_guards.context import Context, Guard
-from ratchet_guards.manifest import EMPTY, Manifest, parse, with_plugin_group
+from ratchet_guards.context import DETACHED, Context, Guard
+from ratchet_guards.manifest import (
+    EMPTY,
+    MANIFEST_LOCK,
+    Manifest,
+    gone,
+    grown,
+    parse,
+    with_plugin_group,
+)
 from ratchet_guards.paths import Checkout, Hit, Locator
-from ratchet_guards.verdict import Decision, Verdict, strictest
+from ratchet_guards.refs import MAIN_BRANCHES, REMOTE
+from ratchet_guards.verdict import OWNER_ASKS, Decision, Verdict, strictest
 
 EDIT_TOOLS = {
     "Edit": "file_path",
@@ -101,7 +122,7 @@ ANTIGRAVITY_ARGS = {
 }
 ANTIGRAVITY_CHUNKS = "ReplacementChunks"
 # Why: ratchet's `ask` means the owner approves this one call. Antigravity's `ask` honours a
-# cached "Always Allow", which would let a later guard-path edit through unseen; `force_ask`
+# cached "Always Allow", which would let a later merge or label through unseen; `force_ask`
 # always prompts. It never answers `allow`, which would skip Antigravity's own prompts.
 ANTIGRAVITY_DECISIONS = {Decision.DENY: "deny", Decision.ASK: "force_ask"}
 # Why: Antigravity has no "no opinion" answer. A missing or empty `decision` is a deny (seen live
@@ -116,8 +137,6 @@ PATCH_HEADER = re.compile(
 )
 PATCH_DESTRUCTIVE = frozenset({"Delete File", "Move to"})
 GIT_TIMEOUT_SECONDS = 5
-DISPUTES = "docs/disputes/NNNN-<slug>.md"
-COMMITTED = "Guard paths come from guards/manifest.toml as committed on the default branch."
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 STANDARD_MANIFEST = "skills/adopt/templates/guards/manifest.toml"
 
@@ -134,6 +153,17 @@ class Call:
 class LocalFilesystem:
     """The real filesystem."""
 
+    def __init__(self, project: Path | None = None) -> None:
+        """A filesystem whose checkouts are judged from ``project``'s, when one is named.
+
+        The project's checkouts are the work trees git lists for it, read once, on first use.
+        """
+        self._project = project
+        self._root = None if project is None else self.canonical(project)
+        self._trees: list[Path] | None = None
+        self._submodules: dict[Path, bool] = {}
+        self._manifests: dict[Path, Manifest | None] = {}
+
     @property
     def home(self) -> Path:
         """The user's home directory."""
@@ -143,30 +173,87 @@ class LocalFilesystem:
         """``path`` with symlinks and ``..`` resolved."""
         return Path(os.path.realpath(path))
 
-    def __init__(self) -> None:
-        """An empty cache of committed manifests, by checkout root."""
-        self._manifests: dict[Path, Manifest | None] = {}
-
     def committed(self, root: Path) -> Manifest | None:
         """The manifest committed on the default branch of the checkout at ``root``.
 
-        Read from git once per checkout per process. A manifest that does not parse raises
-        ``ManifestError`` and is not cached, so every judged path in that checkout asks.
+        Read from git once per checkout per process. When the branch's tip lost the file, it is
+        the last one the branch held with every group locked. A manifest that does not parse
+        raises ``ManifestError`` and is not cached, so every judged path in that checkout asks.
         """
         if root not in self._manifests:
-            text = committed_manifest(root)
-            self._manifests[root] = None if text is None else parse(text)
+            found = committed_manifest(root)
+            if found is None:
+                self._manifests[root] = None
+            else:
+                manifest = parse(found.text)
+                self._manifests[root] = gone(manifest) if found.gone else manifest
         return self._manifests[root]
 
     def guarded_checkout(self, path: Path) -> Checkout | None:
-        """The nearest ancestor holding ``.git`` with its committed manifest, if it has one."""
+        """The checkout holding ``path`` with its committed manifest, if it has one."""
         root = self.checkout(path)
         manifest = None if root is None else self.committed(root)
         return None if root is None or manifest is None else Checkout(root, manifest)
 
     def checkout(self, path: Path) -> Path | None:
-        """The nearest ancestor holding ``.git``."""
-        return next((c for c in (path, *path.parents) if (c / ".git").exists()), None)
+        """The checkout holding ``path``.
+
+        In the project it is the deepest of the project's work trees that holds ``path``, or a
+        submodule of it: a ``.git`` an agent made in between is no checkout. Outside it, the
+        nearest ancestor holding ``.git``. When that ancestor is the project itself, nothing lies
+        in between to ask git about.
+        """
+        nearest = next((c for c in (path, *path.parents) if (c / ".git").exists()), None)
+        if nearest is not None and nearest == self._root:
+            return nearest
+        tree = next((tree for tree in self._worktrees() if path.is_relative_to(tree)), None)
+        return nearest if tree is None else self._within(tree, path)
+
+    def _worktrees(self) -> list[Path]:
+        """The project's work trees, deepest first.
+
+        Why: a work tree inside another is a checkout of its own only under that one's
+        ``.claude/worktrees/``, where Claude Code puts its agents' worktrees. One added at
+        ``.claude/skills/x`` would otherwise make a skill written there a file at its root.
+        """
+        if self._trees is None:
+            project = self._project
+            listed = "" if project is None else _output(project, "worktree", "list", "--porcelain")
+            trees = [
+                self.canonical(Path(line.removeprefix("worktree ")))
+                for line in (listed or "").splitlines()
+                if line.startswith("worktree ")
+            ]
+            admitted = [
+                tree
+                for tree in trees
+                if all(
+                    tree.is_relative_to(other / ".claude/worktrees")
+                    for other in trees
+                    if other != tree and tree.is_relative_to(other)
+                )
+            ]
+            self._trees = sorted(admitted, key=lambda tree: len(tree.parts), reverse=True)
+        return self._trees
+
+    def _within(self, root: Path, path: Path) -> Path:
+        """``root``, or the submodule its default branch records that holds ``path``."""
+        below = (c for c in (path, *path.parents) if c != root and c.is_relative_to(root))
+        held = next((c for c in below if (c / ".git").exists() and self._recorded(root, c)), None)
+        return root if held is None else self._within(held, path)
+
+    def _recorded(self, root: Path, directory: Path) -> bool:
+        """Whether the default branch of ``root`` records ``directory`` as a submodule.
+
+        Why: the default branch is the owner's. A gitlink in the index or on a branch is one
+        ``git add`` of a directory holding ``git init`` away.
+        """
+        if directory not in self._submodules:
+            ref = default_branch(root)
+            relative = directory.relative_to(root).as_posix()
+            entry = _git(root, "ls-tree", ref, "--", relative) if ref else None
+            self._submodules[directory] = bool(entry) and str(entry).startswith(_GITLINK)
+        return self._submodules[directory]
 
     def read_text(self, path: Path) -> str | None:
         """The file's text, or ``None`` when it is missing or unreadable."""
@@ -188,28 +275,39 @@ class LocalFilesystem:
         return records.before(lambda args: _output(checkout, *args), commit, relative)
 
     def glob(self, pattern: Path) -> list[Path]:
-        """Existing paths matching ``pattern``."""
+        """Existing paths matching ``pattern``, as a shell without ``globstar`` expands it.
+
+        Why: ``**`` is ``*`` to such a shell, and read as Python reads it a word like ``/** A
+        doc comment`` in a program's text walked the whole filesystem and outran the hook's
+        timeout, which lets the tool call run unjudged.
+        """
         anchor = Path(pattern.anchor)
-        return sorted(anchor.glob(str(pattern.relative_to(anchor))))
+        shell = re.sub(r"\*\*+", "*", str(pattern.relative_to(anchor)))
+        return sorted(anchor.glob(shell))
 
     def expand(self, word: str) -> str:
         """``word`` with ``~`` and ``$VARIABLES`` expanded from this process's environment."""
         return os.path.expandvars(Path(word).expanduser())
 
 
-def _output(cwd: Path, *args: str) -> str | None:
-    """``git -C cwd args`` stdout as git wrote it, or ``None`` when git fails or is missing."""
+def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
+    """``git -C cwd args`` as it finished, or ``None`` when git is missing or hangs."""
     try:
-        completed = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        return subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
             ["git", "-C", str(cwd), *args],  # noqa: S607 # -- git is resolved from PATH on purpose
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT_SECONDS,  # pragma: no mutate # -- only bounds a hung git
-            check=False,  # pragma: no mutate # -- a failure returns None either way
+            check=False,  # pragma: no mutate # -- the caller reads the exit status
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    return completed.stdout if completed.returncode == 0 else None
+
+
+def _output(cwd: Path, *args: str) -> str | None:
+    """``git -C cwd args`` stdout as git wrote it, or ``None`` when git fails or is missing."""
+    completed = _run(cwd, *args)
+    return completed.stdout if completed is not None and completed.returncode == 0 else None
 
 
 def _git(cwd: Path, *args: str) -> str | None:
@@ -218,10 +316,35 @@ def _git(cwd: Path, *args: str) -> str | None:
 
 
 _HEADS = "refs/heads/"
+# What `git ls-tree` prints first for a submodule.
+_GITLINK = "160000 commit "
+_TRACKING = f"refs/remotes/{REMOTE}/"
+# `git symbolic-ref -q` exits 1, silently, when HEAD names a commit rather than a branch.
+_NOT_SYMBOLIC = 1
+
+
+def _head(root: Path) -> str | None:
+    completed = _run(root, "symbolic-ref", "-q", "HEAD")
+    if completed is None:
+        return None
+    if completed.returncode == _NOT_SYMBOLIC:
+        return DETACHED
+    head = completed.stdout.strip() if completed.returncode == 0 else ""
+    return head.removeprefix(_HEADS) or None
 
 
 class GitRepoState:
-    """Git state read with the ``git`` command."""
+    """Git state read with the ``git`` command.
+
+    What branch a checkout has, and which are its default ones, is read once per instance: one
+    tool call may name hundreds of files in one checkout, and git's answer does not change while
+    the guard judges it.
+    """
+
+    def __init__(self) -> None:
+        """Empty caches of what each checkout has checked out and calls its default branches."""
+        self._heads: dict[Path, str | None] = {}
+        self._defaults: dict[Path, frozenset[str]] = {}
 
     def current_branch(self, cwd: Path) -> str | None:
         """The checked-out branch, or ``None`` when detached or not a repository.
@@ -231,6 +354,22 @@ class GitRepoState:
         """
         head = _git(cwd, "symbolic-ref", "HEAD")
         return head.removeprefix(_HEADS) if head else None
+
+    def checked_out(self, root: Path) -> str | None:
+        """The branch the checkout at ``root`` has, ``DETACHED``, or ``None`` when git fails.
+
+        A branch with no commit yet is still a branch: ``HEAD`` names it.
+        """
+        if root not in self._heads:
+            self._heads[root] = _head(root)
+        return self._heads[root]
+
+    def default_branches(self, root: Path) -> frozenset[str]:
+        """``main``, ``master`` and the branch the committed manifest is read from at ``root``."""
+        if root not in self._defaults:
+            name = (default_branch(root) or "").removeprefix(_TRACKING).removeprefix(_HEADS)
+            self._defaults[root] = MAIN_BRANCHES | ({name} if name else frozenset())
+        return self._defaults[root]
 
     def head_is_pushed(self, cwd: Path) -> bool | None:
         """Whether any remote-tracking branch contains ``HEAD`` (``--contains`` defaults to it)."""
@@ -309,27 +448,36 @@ def _judge(call: Call, target: str, context: Context, *, guard: Guard) -> Verdic
         return strictest(bash.check(target, context, guard))
     path = context.cwd / target
     label = tickets.check(call.tool, call.tool_input, path, guard=guard)
-    return strictest(v for v in (_edit(call, path, guard), label) if v is not None)
+    verdicts = [v for v in (_edit(call, path, context, guard=guard), label) if v is not None]
+    return strictest(verdicts + guard.acting([path]))
 
 
 def _patch(tool_input: dict[str, object], cwd: Path, guard: Guard) -> Verdict | None:
-    """The strictest verdict over the files an ``apply_patch`` adds, updates, deletes or moves."""
+    """The strictest verdict over the files an ``apply_patch`` adds, updates, deletes or moves.
+
+    A patch is not computed, so on the default branch even an addition to a record is refused.
+    """
     text = "\n".join(value for value in tool_input.values() if isinstance(value, str))
+    context = Context(cwd)
     verdicts = []
     for match in PATCH_HEADER.finditer(text):
         destructive = match.group("verb") in PATCH_DESTRUCTIVE
         hit = guard.locator.classify(cwd / match.group("path").strip(), destructive=destructive)
-        if hit is not None:
+        if hit is not None and (hit.group.locked or guard.lands_now(context, hit.at)):
             verdicts.append(_hit_verdict(hit))
     paths = [match.group("path").strip() for match in PATCH_HEADER.finditer(text)]
-    return strictest(verdicts + tickets.named(paths, text, Context(cwd), guard=guard))
+    acting = guard.acting(cwd / path for path in paths)
+    return strictest(verdicts + acting + tickets.named(paths, text, context, guard=guard))
 
 
-def _edit(call: Call, path: Path, guard: Guard) -> Verdict | None:
+def _edit(call: Call, path: Path, context: Context, *, guard: Guard) -> Verdict | None:
+    """A locked path is refused; any other guard path only where the edit lands on main."""
     hit = guard.locator.classify(path, destructive=False)  # pragma: no mutate # -- None is False
-    if hit is None:
+    if hit is None or not (hit.group.locked or guard.lands_now(context, hit.at)):
         return None
-    if not hit.group.additive:
+    if hit.group == MANIFEST_LOCK:
+        return _manifest_edit(call, hit, context, guard=guard)
+    if hit.group.locked or not hit.group.additive:
         return _hit_verdict(hit)
     reason = _not_additive(call, path, guard)
     return None if reason is None else _hit_verdict(hit, f" This edit is not an addition: {reason}")
@@ -358,30 +506,50 @@ def _not_additive(call: Call, path: Path, guard: Guard) -> str | None:
     return None
 
 
-def _hit_verdict(hit: Hit, more: str = "") -> Verdict:
+def _manifest_edit(call: Call, hit: Hit, context: Context, *, guard: Guard) -> Verdict | None:
+    """An Edit or Write that only adds patterns, groups or doors to the manifest, on a branch.
+
+    It is compared with the manifest the default branch holds, which the guards are read from.
+    """
+    filesystem = guard.locator.filesystem
+    after = records.written(call.reported, call.tool_input, filesystem.read_text(hit.at))
+    checkout = filesystem.guarded_checkout(hit.at)
+    reason: str | None = f"the guard cannot tell what this {call.reported} call would write"
+    if after is not None and checkout is not None:
+        reason = grown(checkout.manifest, after)
+    if reason is not None:
+        return _hit_verdict(hit, f" This edit is not an addition: {reason}.")
+    if guard.lands_now(context, hit.at):
+        return _hit_verdict(hit, rule="guard-path-default")
+    return None
+
+
+def _hit_verdict(hit: Hit, more: str = "", rule: str | None = None) -> Verdict:
     detail = f"{hit.path} is in guard group '{hit.group.name}'. {hit.group.reason}{more}"
-    return Verdict("guard-path-locked" if hit.group.locked else "guard-path-edit", detail)
+    named = rule or ("guard-path-locked" if hit.group.locked else "guard-path-default")
+    return Verdict(named, detail, hit.group.source)
 
 
 def reason(verdict: Verdict) -> str:
-    """The sentence Claude (deny) or the human (ask) reads."""
+    """The sentence the agent (deny) or the owner (ask) reads, ending in what to do next."""
+    if verdict.rule in OWNER_ASKS:
+        return f"Ratchet: {verdict.because} ({verdict.detail}). {verdict.way_out}"
     stop = "" if verdict.detail.endswith(".") else "."
-    if verdict.rule.startswith("guard-path"):
-        # Why: the agent should know where the rule comes from, and that it is not in the tree.
-        stop += f" {COMMITTED}"
+    if verdict.source:
+        # Why: the agent should know where a guard path comes from, and that it is not the tree.
+        stop += f" {verdict.source}"
     if verdict.decision is Decision.DENY:
         # Why: a denied Bash call runs none of its commands, so an unrelated write chained
         # with the refused one is lost; the agent must hear that, and the matched token.
         return (
             f"Ratchet guard denied this tool call; no part of it ran. It {verdict.because}: "
-            f"{verdict.detail}{stop} Do not work around it. If you believe the gate is wrong, "
-            f"stop, write a gate dispute ({DISPUTES}) and report it to whoever started you. If "
-            f"the call also did unrelated work, redo that in a tool call of its own."
+            f"{verdict.detail}{stop} {verdict.way_out} If the call also did unrelated work, redo "
+            f"that in a tool call of its own."
         )
-    choice = verdict.choice or "Approve only if you, the owner, intend this."
     return (
-        f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop} {choice} An "
-        f"agent that thinks a gate is wrong writes a gate dispute ({DISPUTES}) instead."
+        f"Ratchet: an agent asks to run a tool call that {verdict.because}: {verdict.detail}"
+        f"{stop} {verdict.way_out} Approve only if you have read them and want this change in "
+        f"now."
     )
 
 
@@ -421,7 +589,9 @@ def repository_root(path: Path) -> Path:
 
 def read_manifest(root: Path, filesystem: LocalFilesystem | None = None) -> Manifest:
     """The manifest committed on the default branch of the checkout holding ``root``."""
-    manifest = (filesystem or LocalFilesystem()).committed(repository_root(root))
+    filesystem = filesystem or LocalFilesystem()
+    checkout = filesystem.checkout(filesystem.canonical(root))
+    manifest = filesystem.committed(checkout or root)
     return EMPTY if manifest is None else manifest
 
 
@@ -436,22 +606,29 @@ def standard_manifest(plugin_root: Path) -> Manifest:
         return EMPTY
 
 
-def local_guard(root: Path, plugin_root: Path = PLUGIN_ROOT) -> Guard:
+def local_guard(root: Path, plugin_root: Path = PLUGIN_ROOT, project: Path | None = None) -> Guard:
     """The guard over the real filesystem and git.
 
-    ``root`` is the session's working directory. Its checkout's manifest answers the home and
-    absolute patterns; a path in the repository is judged by the manifest of the checkout
-    holding that path, ``root``'s or not.
+    ``root`` is the session's working directory and ``project`` the directory the harness
+    started the session in, ``root`` when it names none. Its checkout's manifest answers the home
+    and absolute patterns; a path in the repository is judged by the manifest of the checkout
+    holding that path, ``root``'s or not, and a path in the project from the project's checkout.
     """
-    filesystem = LocalFilesystem()
+    filesystem = LocalFilesystem(project or root)
     manifest = with_plugin_group(read_manifest(root, filesystem), plugin_root)
     standard = standard_manifest(plugin_root)
     return Guard(Locator(manifest, filesystem, standard), GitRepoState())
 
 
-def main(root: Path, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> int:
+def main(
+    root: Path,
+    stdin: TextIO = sys.stdin,
+    stdout: TextIO = sys.stdout,
+    *,
+    project: Path | None = None,
+) -> int:
     """Read the payload, write the decision, exit 0 (a decision is carried in the JSON)."""
-    answer = run(stdin.read(), lambda: local_guard(root))
+    answer = run(stdin.read(), lambda: local_guard(root, project=project))
     if answer:
         stdout.write(answer + "\n")
     return 0

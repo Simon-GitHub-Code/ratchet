@@ -280,6 +280,10 @@ def test_claude_md_stands_in_for_agents_md_and_a_glossary_map_for_the_glossary(
             "guards/manifest.toml: group '<unnamed>' has no paths yet; bind or remove it",
         ),
         (
+            replace(MANIFEST, '    "guards/**",\n', ""),
+            "guards/manifest.toml: 'guards/**' is in no group",
+        ),
+        (
             remove(".pre-commit-config.yaml"),
             ".pre-commit-config.yaml: missing; the tier 0 commit hooks are installed from it",
         ),
