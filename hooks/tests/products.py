@@ -224,15 +224,15 @@ def good_record(directory: Path) -> dict[str, object]:
     entries = log(directory)
     png(directory / "tester" / "shots" / "list.png")
     ids = tuple(str(entry["id"]) for entry in entries[:3])
-    return record(str(session["session"]), str(session["head"]), ids)
+    return record(str(session["session"]), str(session["tree"]), ids)
 
 
-def record(session: str, head: str, ids: tuple[str, ...]) -> dict[str, object]:
-    """The good record of ``session``, whose requests ``ids`` were ``tried``."""
+def record(session: str, tree: str, ids: tuple[str, ...]) -> dict[str, object]:
+    """The good record of ``session``, which served ``tree``; ``ids`` are what was ``tried``."""
     first, saved, after = ({"id": ident} for ident in ids)
     return {
         "session": session,
-        "head": head,
+        "tree": tree,
         "criteria": [
             {
                 "id": "C1",

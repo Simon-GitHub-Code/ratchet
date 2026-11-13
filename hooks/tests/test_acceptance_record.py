@@ -13,7 +13,7 @@ from tests import products
 from tests.products import PROMISES
 
 SESSION = "20261113T000000000000Z-abcd1234"
-HEAD = "a" * 40
+TREE = "a" * 40
 IDS = ("abcd1234-1", "abcd1234-2", "abcd1234-3")
 EMPTY = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<p>There is nothing left to read.</p>"
 SAVED = b"HTTP/1.1 303 See Other\r\nLocation: /\r\n\r\n"
@@ -32,7 +32,7 @@ LOG = {
 }
 FACTS = ar.Facts(
     session=SESSION,
-    head=HEAD,
+    tree=TREE,
     web_ui=True,
     promises=PROMISES,
     log=LOG,
@@ -44,7 +44,7 @@ FACTS = ar.Facts(
 
 
 def good() -> dict[str, object]:
-    return products.record(SESSION, HEAD, IDS)
+    return products.record(SESSION, TREE, IDS)
 
 
 def judged(raw: object, **facts: object) -> list[str]:
@@ -137,9 +137,9 @@ REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
     ),
     (
         "a record for another commit",
-        lambda r: r.update(head="b" * 40),
+        lambda r: r.update(tree="b" * 40),
         {},
-        f"the record is for commit {'b' * 40}, but {HEAD} was tried",
+        f"the record is for tree {'b' * 40}, but tree {TREE} was served",
     ),
     # Ours.
     (
@@ -438,7 +438,7 @@ def test_a_seal_covers_the_session_files_and_says_down_ended_it_in_time() -> Non
 
 def test_the_harness_record_for_a_product_that_cannot_start_is_accepted_and_blocks() -> None:
     said = "It was started with `node src/server.js` and did not answer: Error: no dist"
-    raw = ar.cannot_start(SESSION, HEAD, ticket=list(PROMISES), said=said)
+    raw = ar.cannot_start(SESSION, TREE, ticket=list(PROMISES), said=said)
     assert judged(raw, served=False, log={}, answers={}) == [], "it may quote the boot command"
     record, _ = ar.parse_record(raw)
     assert record is not None

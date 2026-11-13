@@ -87,9 +87,8 @@ def test_up_puts_the_proxy_before_the_head_and_down_stops_all_of_it(
     assert Path(tester) == directory / "tester"
     assert directory.is_relative_to(product / ".git" / "ratchet" / "acceptance" / SLUG)
     facts = json.loads((directory / "session.json").read_text(encoding="utf-8"))
-    head = products.repos.git(product, "rev-parse", "HEAD")
-    assert (facts["slug"], facts["head"], facts["types"]) == (SLUG, head, ["service", "web-ui"])
-    assert facts["tree"] == products.repos.git(product, "rev-parse", "HEAD^{tree}")
+    tree = products.repos.git(product, "rev-parse", "HEAD^{tree}")
+    assert (facts["slug"], facts["tree"], facts["types"]) == (SLUG, tree, ["service", "web-ui"])
     assert products.request(url)[0] == 200
     assert products.request(url, path="/flag") == (200, b"")
     proxy = json.loads((directory / "proxy.json").read_text(encoding="utf-8"))
@@ -106,6 +105,81 @@ def test_up_puts_the_proxy_before_the_head_and_down_stops_all_of_it(
     assert seal["down"]["endedEarly"] is False
     assert acceptance.state(directory) is acceptance.State.ENDED
     assert down(product, capsys) == (0, ["acceptance down: nothing was running"])
+
+
+def commit_all(root: Path, message: str) -> str:
+    """Commit everything the work tree holds, as the orchestrator does; the commit's tree."""
+    products.repos.git(root, "add", "-A")
+    products.repos.git(root, "commit", "-qm", message)
+    return products.repos.git(root, "rev-parse", "HEAD^{tree}")
+
+
+def test_the_evidence_is_filed_under_the_tree_that_was_served_and_holds_once_committed(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (product / ".gitignore").write_text("", encoding="utf-8")
+    commit_all(product, "summaries are committed")
+    (product / "src" / "settings.py").write_text("PORT = 1\n", encoding="utf-8")
+    (product / "notes.txt").write_text("not committed yet\n", encoding="utf-8")
+    code, (url, _) = up(product, capsys)
+    assert code == 0
+    products.tried(url)
+    assert down(product, capsys)[0] == 0
+    directory = session(product)
+    facts = json.loads((directory / "session.json").read_text(encoding="utf-8"))
+    assert "head" not in facts
+    assert directory.parent == acceptance.store(product) / SLUG / facts["tree"]
+    write_record(directory, products.good_record(directory))
+    assert check(product, capsys) == (0, ["acceptance check: green"])
+    assert run(product, "summary", "--slug", SLUG, capsys=capsys)[0] == 0
+    summary = json.loads((product / "docs/features" / SLUG / "acceptance.json").read_text("utf-8"))
+    assert (summary["tree"], "head" in summary) == (facts["tree"], False)
+    assert check(product, capsys) == (0, ["acceptance check: green"]), "its own summary aside"
+    commit_all(product, "the change and its acceptance")
+    assert run(product, "check", "--slug", SLUG, "--commit", "HEAD", capsys=capsys) == (
+        0,
+        ["acceptance check: green"],
+    )
+
+
+def test_a_commit_that_holds_less_than_was_served_has_no_evidence(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (product / "notes.txt").write_text("served, never committed\n", encoding="utf-8")
+    _, (url, _) = up(product, capsys)
+    products.tried(url)
+    down(product, capsys)
+    directory = session(product)
+    write_record(directory, products.good_record(directory))
+    tree = products.repos.git(product, "rev-parse", "HEAD^{tree}")
+    code, out = run(product, "check", "--slug", SLUG, "--commit", "HEAD", capsys=capsys)
+    assert code == 2
+    said = f"no session of {SLUG} served the tree of HEAD ({tree[:12]}): run `up` on it first"
+    assert out == [f"acceptance check: {said}"]
+
+
+def test_a_work_tree_that_changed_while_the_session_ran_makes_it_stale(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, (url, _) = up(product, capsys)
+    products.tried(url)
+    directory = session(product)
+    settings = product / "src" / "settings.py"
+    settings.write_text("PORT = 2\n", encoding="utf-8")
+    code, out = down(product, capsys)
+    assert code == 1
+    assert out[0] == (
+        f"session {directory.name} is stale: the work tree changed while it ran, so what it"
+        " served is not what is there now"
+    )
+    write_record(directory, products.good_record(directory))
+    code, out = check(product, capsys)
+    assert code == 2
+    assert out[0].startswith(f"acceptance check: no session of {SLUG} served the work tree (")
+    products.repos.git(product, "checkout", "--", "src/settings.py")
+    code, out = check(product, capsys)
+    assert code == 1
+    assert "the work tree changed while the session ran, so it may not be what was served" in out
 
 
 def test_up_again_while_it_runs_gives_the_same_address(
