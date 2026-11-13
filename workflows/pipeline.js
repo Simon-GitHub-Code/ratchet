@@ -112,7 +112,20 @@ Guard paths and gate disputes:
   owner decides.
 `
 
-function commonRules(rebasing) {
+// Why: one `check` took 70 to 95 seconds on the first service built this way and every role ran
+// it several times. A role whose tree is red on purpose (the spec's tests fail until the
+// implementation exists; the critic keeps tests that fail) cannot get a green `check` anyway, so
+// it runs tier 0 and only the tests it wrote. Implement, fix and review run the full `check`,
+// and the review's run on the final tree is the one that counts.
+const CHECK_RULE = `- Before returning, run \`check\` from the repository root and include the LAST ~40 lines of
+  its output verbatim in the \`checkOutput\` field of your structured result.`
+const OWN_TESTS_RULE = `- Your tree is red on purpose, so do not run \`check\`. Before returning, run the \`tier0\`
+  entry point from the repository root, then only the tests you wrote, with the test runner
+  binding.md names. Include the LAST ~40 lines of that output verbatim in the \`checkOutput\`
+  field of your structured result. The implementer, the fixer and the reviewer run the full
+  \`check\`; the reviewer's run on the final tree is the one that counts.`
+
+function commonRules(rebasing, ownTestsOnly) {
   const uncommitted = rebasing
     ? `- The branch holds the change as commits. Every edit you make stays uncommitted on the
   working tree; the orchestrator commits it. The git commands you run are read-only, plus the
@@ -131,17 +144,18 @@ ${uncommitted}
 - The project's non-negotiables are whatever AGENTS.md lists; its declared paths and their
   dependency direction are whatever AGENTS.md and docs/process/binding.md define. Each is a
   hard rule.
-- Before returning, run \`check\` from the repository root and include the LAST ~40 lines of
-  its output verbatim in the \`checkOutput\` field of your structured result.
+${ownTestsOnly ? OWN_TESTS_RULE : CHECK_RULE}
 - Your final output is consumed by a script, not a human: return only the structured object.
 ${GUARD_RULES}`
 }
 
-function checkOutputField() {
+function checkOutputField(ownTestsOnly) {
   return {
     checkOutput: {
       type: 'string',
-      description: 'Last ~40 lines of the `check` entry point output, verbatim, run from the repo root before returning',
+      description: ownTestsOnly
+        ? 'Last ~40 lines of the `tier0` entry point and your own tests, verbatim, run from the repo root before returning; not `check`, since your tree is red on purpose'
+        : 'Last ~40 lines of the `check` entry point output, verbatim, run from the repo root before returning',
     },
   }
 }
@@ -165,10 +179,40 @@ const CHANGE_SIZE_RULE = 'Run the binding\'s change-size entry point last and re
 const ROOM_NUMERATOR = 2
 const ROOM_DENOMINATOR = 3
 
+// Why: the later stages' lines are known in advance. On one ticket the spec and its tests were
+// about 830 lines, the critic's tests about 350 and the dispute records about 140, before any
+// implementation. The spec stage adds up the whole change and splits the ticket now, instead of
+// nine agents later.
+const ESTIMATE_FIELD = {
+  changeEstimate: {
+    type: 'object',
+    description: 'What the whole change will weigh against the change-size ceiling, estimated before you return; omit when the binding binds no change-size gate',
+    properties: {
+      implementationLines: { type: 'integer', description: 'Lines the implementation will add or change, by the seams the tests exercise' },
+      criticLines: { type: 'integer', description: 'Lines the critic\'s tests will add: about two fifths of the lines of your own tests, more for a user interface or an endpoint' },
+      recordLines: { type: 'integer', description: 'Lines of dispute records, ADRs and glossary entries the change is likely to add; 0 when none' },
+      proposedSplit: {
+        type: 'array',
+        description: 'When the sum of these three and the lines already measured would pass the ceiling: two or more tickets that each fit, with the acceptance criteria each carries; empty when the change fits',
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            criteria: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['title', 'criteria'],
+        },
+      },
+    },
+    required: ['implementationLines', 'criticLines', 'recordLines', 'proposedSplit'],
+  },
+}
+
 const SPEC_SCHEMA = {
   type: 'object',
   properties: {
     ...CHANGE_SIZE_FIELD,
+    ...ESTIMATE_FIELD,
     slug: {
       type: 'string',
       pattern: '^[a-z0-9]+(-[a-z0-9]+)*$',
@@ -260,7 +304,7 @@ const SPEC_SCHEMA = {
         required: ['testFile', 'content'],
       },
     },
-    ...checkOutputField(),
+    ...checkOutputField(true),
   },
   required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'assumptions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
 }
@@ -346,8 +390,9 @@ const CRITIQUE_SCHEMA = {
           evidence: { type: 'string', description: 'Command run and the output that demonstrates the problem' },
           suggestedTest: { type: 'string', description: 'Path of a test you added that exposes it, or a sketch of one' },
           testFails: { type: 'boolean', description: 'true when you kept a test for this finding that fails now, so `check` is red on it' },
+          heldByKeptTest: { type: 'boolean', description: 'true when you kept a test for this finding that PASSES because the code already holds; false when no test was kept. Never true with testFails' },
         },
-        required: ['severity', 'title', 'evidence', 'suggestedTest', 'testFails'],
+        required: ['severity', 'title', 'evidence', 'suggestedTest', 'testFails', 'heldByKeptTest'],
       },
     },
     testsAdded: { type: 'array', items: { type: 'string' }, description: 'Repo-relative test files you created or extended' },
@@ -367,7 +412,7 @@ const CRITIQUE_SCHEMA = {
       description: 'The violation introduced and the failing output, or "not applicable" with the reason',
     },
     guardFilesChanged: GUARD_PATHS_FIELD,
-    ...checkOutputField(),
+    ...checkOutputField(true),
   },
   required: [
     'findings', 'testsAdded', 'attempted', 'mutationSummary', 'fuzzSummary', 'fitnessSabotageConfirmed',
@@ -478,7 +523,7 @@ it, return ok: false with one failure { check: "script", detail: <what happened>
 function specPrompt() {
   return `${PREAMBLE}
 You are the SPEC agent for one feature of this repository.
-${commonRules()}
+${commonRules(false, true)}
 Load the \`mattpocock-skills:tdd\` skill: it says what a good test is and how the seams under
 test are chosen. The spec names those seams; the owner has agreed the approach through the
 ticket's \`## Conjecture\` section and the agent-ready label.
@@ -533,10 +578,17 @@ Your tasks, in order:
    the predicted one, and return the quoted content per test file in \`failures\`; the script
    blocks the run when a test file has no quoted failure. Put the same quotes in spec.md's
    test plan, so the reviewer sees what each test refuted.
-4. Run \`check\` and capture its tail. It is expected to be red only on your new tests.
+4. Run \`tier0\` and your new tests, and capture the tail. Tier 0 is expected green and the
+   new tests red. Do not run \`check\`: the implementer runs it once the code exists.
 5. ${CHANGE_SIZE_RULE} The tests you wrote are most of what the change will
    weigh: when they alone pass two thirds of the ceiling the run stops here, and the owner
    splits the ticket. Write the tests the criteria need, never fewer to fit.
+6. Estimate the whole change against that ceiling and return it as \`changeEstimate\`: the
+   lines already measured (spec, tests, fixtures), plus the implementation, plus the critic's
+   tests (about two fifths of yours), plus any dispute records and ADRs. Be honest and not
+   hopeful: the fix agent cannot cut a change down by revising code. When the sum passes the
+   ceiling, put the split in \`proposedSplit\`: two or more tickets, each of which fits, each
+   with the acceptance criteria it carries. The run then stops for the owner, who files them.
 
 An undecided point is the owner's in two cases, and yours in every other.
 
@@ -629,7 +681,7 @@ If you cannot get there, return anyway with \`checkPasses: false\` and explain i
 
 function fixPrompt(spec, findings, testsAdded, iteration) {
   const blockingFindings = owed(findings)
-  const minors = findings.filter(f => !blockingFindings.includes(f))
+  const minors = findings.filter(f => f.severity === 'minor' && !blockingFindings.includes(f))
   return `${PREAMBLE}
 You are the FIX agent (iteration ${iteration} of ${MAX_FIX_ITERATIONS}) for feature \`${spec.slug}\` of this repository.
 ${commonRules()}
@@ -708,7 +760,7 @@ in-process; the owner may run \`/pstack:interrogate\` on the branch afterwards, 
 to type, not yours to imitate). The rule of evidence: a finding survives only when a run proves
 it, so each carries the exact command, the output it printed and the output the spec requires;
 leave out anything you did not run; "no findings" is a valid result when you name what you ran.
-${commonRules()}
+${commonRules(false, true)}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The spec's tests: ${JSON.stringify(spec.testFiles)}
@@ -723,8 +775,10 @@ Do all of the following and report evidence for each:
    idempotence, ordering, anything an AGENTS.md non-negotiable implies for the values touched).
    Add edge-case tests you EXPECT to fail: zero, negative and boundary values, empty
    collections, duplicates, unknown identifiers, unit, period or time-zone boundaries where
-   the domain has them, very large values, unicode. Put them in the test directory binding.md
-   names, next to the spec's tests, clearly named with the slug and the word critique.
+   the domain has them, very large values, unicode. Put them in the critique directory
+   binding.md's Critique tests section names, flat, one file per layer touched, named
+   \`<slug>.<layer>.critique.test.<ext>\` (\`tests/critique/\` when the section names none).
+   Never put them beside the code: a critique file is organised by feature, not by module.
 2. Mutation testing: if binding.md names a mutation gate, run it targeted at the modules in
    filesChanged with the configured invocation. Report survived mutants as findings with the
    mutant diff as evidence, and add a test that kills each if you can. Otherwise write
@@ -775,11 +829,17 @@ List every command you ran trying to break the change in \`attempted\`, with its
 outcome. Nothing found refutes only the attempts that would have hit; the script blocks a
 run whose critic found nothing and attempted nothing.
 
-${SEVERITY} \`check\` is expected to be red only on the failing tests you kept; say so in the
+${SEVERITY} The suite is expected to be red only on the failing tests you kept; say so in the
 finding evidence, and set \`testFails: true\` on each such finding. A finding whose test you
 kept failing is fixed before the review whatever its severity, since a red \`check\` cannot
 be approved: keep a failing test only for a defect the code should lose, and for anything
-else say it in the evidence and keep no failing test.`
+else say it in the evidence and keep no failing test.
+
+When the test you kept for a finding PASSES because the code already holds (the attack failed,
+or showed the code correct), set \`testFails: false\` and \`heldByKeptTest: true\`. The finding is
+then resolved by that test: no fix round runs for it, and the reviewer still reads it. A
+finding with no test kept, or with a test that proves nothing yet, leaves both false and stays
+owed a fix if it is a blocker or major.`
 }
 
 function reviewPrompt(spec, again) {
@@ -879,6 +939,23 @@ function noRoom(stage, size) {
   }
 }
 
+// The stop for a ticket whose whole change cannot fit under the ceiling, or null. The lines
+// already measured are the spec's own; the estimate adds what the later stages will.
+function cannotFit(size, estimate) {
+  const lines = size && size.lines
+  const ceiling = size && size.ceiling
+  if (!estimate || !Number.isInteger(lines) || !Number.isInteger(ceiling) || ceiling <= 0) return null
+  const total = lines + (estimate.implementationLines || 0) + (estimate.criticLines || 0) + (estimate.recordLines || 0)
+  if (total <= ceiling) return null
+  return {
+    stage: 'the spec',
+    lines: total,
+    ceiling,
+    proposedSplit: estimate.proposedSplit || [],
+    reason: `too large: the spec estimates ${total} lines for the whole change (spec and tests ${lines}, implementation ${estimate.implementationLines || 0}, the critic's tests ${estimate.criticLines || 0}, records ${estimate.recordLines || 0}), over the change-size ceiling of ${ceiling}`,
+  }
+}
+
 function tooLarge(stop, spec, extra) {
   log(`Blocked after ${stop.stage}: ${stop.reason}`)
   return {
@@ -895,7 +972,7 @@ function tooLarge(stop, spec, extra) {
     ...extra,
     requiredByOrchestrator: [
       'Commit nothing and open no PR. Tell the owner the ticket is too large to build as one change, with the two numbers',
-      'The owner splits the ticket into smaller ones (`/mattpocock-skills:to-tickets` on the same spec); the spec this run wrote, at `specPath`, says which criteria and tests there are to divide',
+      'The owner splits the ticket into smaller ones (`/mattpocock-skills:to-tickets` on the same spec); the spec this run wrote, at `specPath`, says which criteria and tests there are to divide, and `tooLarge.proposedSplit`, when the spec stage gave one, is where to start',
     ],
   }
 }
@@ -904,11 +981,13 @@ function blocking(findings) {
   return (findings || []).filter(f => f && (f.severity === 'blocker' || f.severity === 'major'))
 }
 
-// What the fix loop owes the review: every blocker and major, and every finding whose test the
-// critic kept failing. Such a test leaves \`check\` red, and a red \`check\` is never approved, so
-// a minor finding with a failing test would otherwise skip the loop and fail the review.
+// What the fix loop owes the review: every blocker and major that no kept passing test resolves,
+// and every finding whose test the critic kept failing. Such a test leaves \`check\` red, and a red
+// \`check\` is never approved, so a minor finding with a failing test would otherwise skip the loop
+// and fail the review. A finding whose kept test already passes shows the code holds: a fix round
+// would have nothing to change, and the review still reads the finding.
 function owed(findings) {
-  return (findings || []).filter(f => f && (f.severity !== 'minor' || f.testFails === true))
+  return (findings || []).filter(f => f && (f.testFails === true || (f.severity !== 'minor' && f.heldByKeptTest !== true)))
 }
 
 function union(...lists) {
@@ -1106,7 +1185,7 @@ log(`Spec ${spec.slug}: ${spec.testFiles.length} test file(s), layers ${spec.lay
   (spec.failingForRightReason ? '' : ' -- WARNING: tests not failing for the right reason') +
   (spec.openQuestions.length ? `, ${spec.openQuestions.length} open question(s)` : ''))
 
-const specStop = noRoom('the spec', spec.changeSize)
+const specStop = noRoom('the spec', spec.changeSize) || cannotFit(spec.changeSize, spec.changeEstimate)
 if (specStop) return tooLarge(specStop, spec, { checkOutput: spec.checkOutput })
 
 // An open question is the owner's to answer, not the implementer's to guess, and a guard path
@@ -1217,6 +1296,7 @@ if (undisputedGuardChanges.length) forcedReasons.push(`guard paths changed witho
 if (unresolved.length) forcedReasons.push(`${unresolved.length} unresolved blocker/major critic finding(s)`)
 if (blockingReviewIssues.length) forcedReasons.push(`${blockingReviewIssues.length} blocker/major review issue(s)`)
 if (!lastCheckPasses) forcedReasons.push('the last implement/fix result reported checkPasses: false')
+if (review.checkPasses !== true) forcedReasons.push('the review\'s run of check on the final tree was not green')
 if (!spec.failingForRightReason) forcedReasons.push('the spec reported failingForRightReason: false')
 const unquoted = (spec.testFiles || []).filter(f => !(spec.failures || []).some(x => x && x.testFile === f && String(x.content || '').trim()))
 if (unquoted.length) forcedReasons.push(`spec test files with no quoted failure content: ${unquoted.join(', ')}`)
