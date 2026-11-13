@@ -20,7 +20,7 @@ The plugin version has this one home. Every workflow checks the plugin out at th
 
 ## Entry points
 
-Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. `tier0-tree` is tier 0 less the history gate, which the pre-commit hook runs; `hooks-installed` is red while a commit would not run tier 0, and `hooks-install` installs the repository's own hooks and asks it again; `settings` writes the permission rules from the manifest; `bite-one <gate>` shows one gate's bites while its recipe is written. The method's skills and hooks call every entry point below by name, and the conformance gate requires each. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
+Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. `tier0-tree` is tier 0 less the history gate, which the pre-commit hook runs; `hooks-installed` is red while a commit would not run tier 0, and `hooks-install` installs the repository's own hooks and asks it again; `settings` writes the permission rules from the manifest; `bite-one <gate>` shows one gate's bites while its recipe is written. The method's skills and hooks call every entry point of the first table below by name, and the conformance gate requires each. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
 
 | Entry point | Command |
 | --- | --- |
@@ -52,6 +52,13 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | reports | `just reports` |
 | bite-one | `just bite-one` |
 | triggers | `just triggers` |
+
+The second table's entry points are conveniences for the roles and the owner, which no gate requires or runs: `test-files <file>...` runs the tests named, or every test, with the runner the Tests section names, bound or not; `start` runs the deliverable for a person and prints where to open it.
+
+| Convenience | Command |
+| --- | --- |
+| test-files | `just test-files` |
+| start | `just start` |
 
 ## Gates
 
@@ -145,6 +152,10 @@ Where each `code:<kind>` trigger of the Gates table finds its instances in this 
 ## Absolute paths
 
 <The paths held at 100% line and branch coverage with no exclusion: the gate tools always, plus whatever the owner declares pure.>
+
+## Tests
+
+<The test frameworks and directories every role writes tests with, chosen and installed at adoption so the first feature has nothing to install: the test runner and its configuration file; the property-testing library, or `built in` where the runner has one; where unit and property tests live and how their files are named. The `unit, property and fitness tests` row stays `later: code:source` until the first module of logic arrives: no gate runs these tests until then, each role runs its own with `just test-files <file>...`, and `/ratchet:safeguard` binds the row to what this section names.>
 
 ## Critique tests
 
