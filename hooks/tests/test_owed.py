@@ -582,3 +582,51 @@ def test_another_plugin_than_the_pin_skips_the_question_and_says_so(
     assert code == 0
     assert "is asked of the plugin the binding pins, 999.0.0 at dddddddddddd" in out
     assert "CI, which runs the pinned plugin, asks it" in out
+
+
+# --- what another gate judges is never owed -----------------------------------------------------
+
+OWN_RULE = "Bash(my-own-tool:*)"
+
+
+def test_a_rule_of_the_project_s_own_stays_red_and_stays_a_question(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """settings-check judges the same drift, so owing it here would print green over a red gate."""
+    root = adopted.copy(adopted.adopted("0.9.2"), tmp_path / "repo")
+    branch(root, "feature")
+    path = root / ".claude/settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.setdefault("permissions", {}).setdefault("ask", []).append(OWN_RULE)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    commit(root, "chore: a rule of the project's own")
+    capsys.readouterr()
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 1
+    out = capsys.readouterr().out
+    assert not [entry for entry in owed.read(root).entries if entry.rule == "settings"]
+    assert OWN_RULE in out.split("Red until fixed")[1].split("Owed, ")[0]
+    assert "and 0 red" not in out
+    assert "1 thing stops a merge until fixed." in out
+    plain = out.split("In plain words:")[1]
+    assert "asks you before it runs `my-own-tool`" in plain
+    assert "one you added" not in plain
+    commit(root, "chore(method): upgrade the Ratchet plugin")
+    code, said = checked(root, capsys)
+    assert code == 1
+    assert "in ask mirrors no manifest pattern" in said.split("owed: ")[0]
+
+
+@pytest.mark.parametrize(
+    ("rule", "path"),
+    [
+        ("settings", ".claude/settings.json"),
+        ("incidents", "docs/incidents/2026-01-01-outage.md"),
+        ("glossary", "GLOSSARY.md (or GLOSSARY-MAP.md)"),
+        ("quality", "quality/thresholds.toml"),
+        (owed.OWN, LEDGER),
+    ],
+)
+def test_an_entry_never_excuses_what_another_gate_judges(rule: str, path: str) -> None:
+    key = (rule, path, "a finding")
+    hits, _ = owed.excused([key], [owed.Entry(path, rule, "a finding", "0.12.0")])
+    assert hits == [False]
