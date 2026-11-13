@@ -542,7 +542,8 @@ def dirty_step(checkout: Checkout) -> Step:
             "change",
         )
     paths = merge_ready.uncommitted(root)
-    if paths and not merge_ready.not_records(root, merge_ready.default_ref(root), paths):
+    named = checkout.branch == default
+    if named and paths and not merge_ready.not_records(root, merge_ready.default_ref(root), paths):
         more = len(paths) - SHOWN
         listed = ", ".join(paths[:SHOWN]) + (f" and {more} more" if more > 0 else "")
         if checkout.forge:
@@ -569,6 +570,24 @@ def dirty_step(checkout: Checkout) -> Step:
     )
 
 
+def records_waiting(checkout: Checkout) -> Step | None:
+    """A records branch the merge judge left to the owner, which ``merge.py --records`` keeps."""
+    root, default = checkout.root, checkout.default_branch
+    listed = gatelib.git(
+        root, "branch", "--list", "records/*", "--no-merged", default, "--format=%(refname:short)"
+    )
+    waiting = (listed or "").split()
+    if not waiting:
+        return None
+    return Step(
+        f"`git switch {default} && git merge --no-ff {waiting[0]}`, typed by the owner",
+        f"branch `{waiting[0]}` holds records the merge judge left to the owner, as a ticket given"
+        f" the agent-ready label is; {merge_command(root, waiting[0])} prints why",
+        NEXT,
+        "records",
+    )
+
+
 def decide(root: Path, gh: preflight.Runner | None) -> Step:
     """The owner's next command for the checkout at ``root``; ``gh=None`` stays offline."""
     checkout = observe(root)
@@ -581,6 +600,9 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         return dirty_step(checkout)
     if not checkout.on_default:
         return pull_request_step(checkout, gh)
+    waiting = records_waiting(checkout)
+    if waiting is not None:
+        return waiting
     missing = records_missing(root)
     step = (
         Step(GRILL, missing, f"{SPEC}, then {TICKETS}", "records")

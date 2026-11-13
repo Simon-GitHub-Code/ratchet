@@ -144,6 +144,28 @@ def test_more_than_records_on_the_default_branch_goes_on_a_branch(
     assert route.decide(root, None).stage == "change"
 
 
+def test_records_on_a_detached_head_go_on_a_branch(tmp_path: Path) -> None:
+    # Why: `merge --records` lands from the default branch by name, and refuses a detached HEAD.
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    git(root, "checkout", "-q", "--detach")
+    write(root, ".scratch/f/spec.md", "# F\n")
+    assert route.decide(root, None).stage == "change"
+
+
+def test_a_records_branch_the_judge_left_to_the_owner_is_named(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    branch(root, "records/20261113-031415")
+    write(root, ".scratch/f/issues/01-x.md", "Status: ready-for-agent\n")
+    commit(root, "docs(records): land what the owner's conversation wrote")
+    git(root, "checkout", "-q", "main")
+    step = route.decide(root, None)
+    assert step.command == (
+        "`git switch main && git merge --no-ff records/20261113-031415`, typed by the owner"
+    )
+    assert "`just merge records/20261113-031415` prints why" in step.why
+    assert step.stage == "records"
+
+
 def test_a_working_branch_waits_for_its_pull_request(tmp_path: Path) -> None:
     root = repository(tmp_path, ADOPTED)
     git(root, "remote", "add", "origin", "https://example.invalid/r.git")
