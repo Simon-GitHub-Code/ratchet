@@ -38,6 +38,7 @@ import argparse
 import gzip
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -241,6 +242,16 @@ def exporter_env(port: int) -> dict[str, str]:
     return env
 
 
+def serve(receiver: Receiver) -> None:
+    """Answer exports until shut down, on a thread an interrupt never lands on.
+
+    Why: the kernel hands a signal sent to the process to any thread that does not block it, and
+    Python runs the handler only on the main thread, which sleeps until the command exits.
+    """
+    signal.pthread_sigmask(signal.SIG_BLOCK, gatelib.INTERRUPTS)
+    receiver.serve_forever(0.02)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="telemetry_sink.py", usage="%(prog)s [options] -- cmd...")
     parser.add_argument("--service", required=True, help="the service.name every signal must carry")
@@ -259,7 +270,7 @@ def main(argv: list[str]) -> int:
         parser.error("needs signals from traces,metrics,logs and a command after --")
     interrupted = 0
     with Receiver(options.port) as receiver, gatelib.interrupts_raise():
-        threading.Thread(target=receiver.serve_forever, args=(0.02,), daemon=True).start()
+        threading.Thread(target=serve, args=(receiver,), daemon=True).start()
         try:
             _, problems = gatelib.run_command(command, exporter_env(receiver.server_address[1]))
             deadline = time.monotonic() + options.wait

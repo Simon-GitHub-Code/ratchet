@@ -8,6 +8,9 @@ permissions:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  # Why: runners vary, so a ceiling reports on a pull request and blocks on the default branch.
+  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}
 jobs:
   gates:
     runs-on: ubuntu-latest
@@ -34,7 +37,7 @@ jobs:
           restore-keys: |
             tools-${{ runner.os }}-${{ matrix.gate }}-
       - run: uv sync --frozen
-      - run: python3 scripts/budget.py "${{ matrix.gate }}" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+      - run: python3 scripts/budget.py "${{ matrix.gate }}" --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
