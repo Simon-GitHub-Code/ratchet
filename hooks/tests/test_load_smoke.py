@@ -292,39 +292,46 @@ def test_a_refusal_raced_against_the_signal_is_closed(
         load_smoke.attempt(goal, 1, marker)
 
 
-def queued_then_closed(
-    marker: Path, monkeypatch: pytest.MonkeyPatch, *, signalled: bool
+def reset_on_the_signal(
+    marker: Path, monkeypatch: pytest.MonkeyPatch, *, connected_first: bool
 ) -> tuple[float | None, str | None]:
-    """A request sent to a listener that never accepts it, which closes while the client waits."""
+    """A request whose listener closes on the signal, which lands before or after it connects."""
     with socket.create_server(("127.0.0.1", 0)) as listener:
         goal = load_smoke.Target(
             "GET", f"http://127.0.0.1:{listener.getsockname()[1]}/", None, None
         )
-        read = http.client.HTTPConnection.getresponse
+        connect, read = http.client.HTTPConnection.connect, http.client.HTTPConnection.getresponse
 
-        def close_first(connection: http.client.HTTPConnection) -> http.client.HTTPResponse:
-            if signalled:
+        def signal_then_connect(connection: http.client.HTTPConnection) -> None:
+            if not connected_first:
                 marker.touch()
+            connect(connection)
+
+        def close_then_read(connection: http.client.HTTPConnection) -> http.client.HTTPResponse:
+            marker.touch()
             listener.close()
             return read(connection)
 
-        monkeypatch.setattr(http.client.HTTPConnection, "getresponse", close_first)
+        monkeypatch.setattr(http.client.HTTPConnection, "connect", signal_then_connect)
+        monkeypatch.setattr(http.client.HTTPConnection, "getresponse", close_then_read)
         return load_smoke.attempt(goal, 1, marker)
 
 
-def test_a_request_still_queued_when_the_listener_closes_on_the_signal_is_closed(
+def test_a_request_connected_after_the_signal_meets_a_closed_listener(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: the request began before the signal and its connection was made, but the service
-    # never accepted it; closing a listener resets what is queued on it, as every server does.
+    # Why: the request began before the signal, but its connection was made after it, so it
+    # queued on a listener that was closing; the start line is the connection, not the attempt.
     with pytest.raises(load_smoke.Closed):
-        queued_then_closed(tmp_path / "stopping", monkeypatch, signalled=True)
+        reset_on_the_signal(tmp_path / "stopping", monkeypatch, connected_first=False)
 
 
-def test_a_reset_before_the_signal_is_an_error(
+def test_a_request_connected_before_the_signal_is_owed_an_answer_even_when_reset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    result = queued_then_closed(tmp_path / "stopping", monkeypatch, signalled=False)
+    # Why: with_service.py signals only once the service has accepted every queued connection,
+    # so a reset of one made before the signal is a request the service took and cut off.
+    result = reset_on_the_signal(tmp_path / "stopping", monkeypatch, connected_first=True)
     assert result[0] is None
     assert result[1] is not None
     assert result[1].endswith(": ConnectionResetError")

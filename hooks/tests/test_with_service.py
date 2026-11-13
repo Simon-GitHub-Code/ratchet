@@ -1,12 +1,15 @@
 """``with_service``: boot, wait, run, stop, against real child processes on loopback."""
 
+import argparse
 import errno
 import os
 import re
 import shlex
 import signal
+import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -367,6 +370,82 @@ def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is
     assert seen.read_text(encoding="utf-8") == "False", "no signal yet, so no marker"
     assert "the command ended before the 30s signal: nothing was in flight" in out
     assert code == 1
+
+
+@pytest.mark.skipif(not Path("/proc/net/tcp").exists(), reason="Linux shows the accept queue")
+def test_the_accept_queue_of_the_listener_is_read_from_the_kernel() -> None:
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        port = listener.getsockname()[1]
+        assert with_service.queued(port) == 0
+        clients = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
+        assert with_service.queued(port) == 2
+        listener.accept()[0].close()
+        assert with_service.queued(port) == 1
+        for client in clients:
+            client.close()
+    assert with_service.queued(port) is None, "no listener on the port"
+
+
+def test_no_table_to_read_is_no_queue_seen(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(with_service, "TABLES", ("/nonexistent/tcp",))
+    assert with_service.queued(80) is None
+
+
+class Stops:
+    """A service process that exits 0 on SIGTERM, and the queue lengths read before it."""
+
+    def __init__(self, reads: list[int]) -> None:
+        self.returncode: int | None = None
+        self.reads = reads
+        self.read_before_signal = -1
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def send_signal(self, _signum: int) -> None:
+        self.read_before_signal, self.returncode = len(self.reads), 0
+
+    def wait(self, timeout: float) -> int:  # noqa: ARG002 # -- the Popen signature
+        return 0
+
+
+def signalled_after(
+    lengths: list[int | None], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> int:
+    """How many queue lengths ``signal_midway`` read before it signalled; each from port 8123."""
+    seen: list[int] = []
+    left = iter(lengths)
+
+    def queued(port: int) -> int | None:
+        seen.append(port)
+        return next(left)
+
+    monkeypatch.setattr(with_service, "queued", queued)
+    process = Stops(seen)
+    options = argparse.Namespace(ready="http://127.0.0.1:8123/", signal_after=0.01, graceful=0.2)
+    found = with_service.signal_midway(
+        process,  # type: ignore[arg-type] # -- a stand-in for Popen
+        options,
+        tmp_path / "stopping",
+        ended=threading.Event(),
+    )
+    assert found == []
+    assert set(seen) == {8123}
+    return process.read_before_signal
+
+
+@pytest.mark.parametrize(("lengths", "reads"), [([2, 1, 0], 3), ([None], 1)])
+def test_the_signal_waits_until_the_service_has_accepted_every_queued_connection(
+    lengths: list[int | None], reads: int, *, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert signalled_after(lengths, tmp_path, monkeypatch) == reads
+
+
+def test_a_queue_that_never_empties_is_signalled_after_the_graceful_seconds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lengths: list[int | None] = [1] * 10_000
+    assert 1 < signalled_after(lengths, tmp_path, monkeypatch) < len(lengths)
 
 
 def test_a_service_killed_by_the_signal_is_told_to_exec(
