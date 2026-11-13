@@ -716,24 +716,6 @@ def declined_signs(root: Path) -> set[tuple[str, str]]:
     return {(c[1], c[2]) for c in cells if len(c) == len(EVENTS_HEADER.split("\t"))}
 
 
-def signs_seen(root: Path) -> dict[str, dict[str, str]]:
-    """Per undeclared life event, each sign glob the tree matches and the first path it matched."""
-    binding = gatelib.read_text(root / BINDING)
-    if binding is None:
-        return {}
-    declared = application_types.life_events(binding)
-    paths = gatelib.tracked_paths(root)
-    seen: dict[str, dict[str, str]] = {}
-    for name, event in application_types.load().events.items():
-        if name in declared:
-            continue
-        for sign in event.signs:
-            match = next((path for path in paths if gatelib.matches(path, [sign])), None)
-            if match is not None:
-                seen.setdefault(name, {})[sign] = match
-    return seen
-
-
 def event_proposals(root: Path) -> list[str]:
     """One sentence per undeclared life event the tree shows a sign of that was not declined.
 
@@ -743,7 +725,7 @@ def event_proposals(root: Path) -> list[str]:
     declined = declined_signs(root)
     events = application_types.load().events
     lines = []
-    for name, signs in signs_seen(root).items():
+    for name, signs in application_types.signs_seen(root).items():
         fresh = [path for sign, path in signs.items() if (name, sign) not in declined]
         if fresh:
             lines.append(
@@ -756,7 +738,7 @@ def event_proposals(root: Path) -> list[str]:
 
 def decline(root: Path, event: str) -> int:
     """Record that the owner said no to ``event`` for every sign of it the tree now shows."""
-    signs = signs_seen(root).get(event, {})
+    signs = application_types.signs_seen(root).get(event, {})
     if not signs:
         print(f"route: no sign of `{event}` is proposed, so there is nothing to decline")
         return 2
@@ -782,8 +764,8 @@ def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
     return [
         (
             f"the Ratchet plugin in use is {plugin_pin.version_of(plugin)}, newer than the"
-            f" {pin.version} the binding pins: run `python3 {plugin / 'scripts/upgrade.py'}`, then"
-            " change the binding's pin line"
+            f" {pin.version} the binding pins: run `{plugin_pin.upgrade_command(plugin)}`, which"
+            " moves the pin, the workflow refs and the permission rules together"
         )
     ]
 
