@@ -191,7 +191,8 @@ PROMISES = [
     _covered("It has no client JavaScript", "15"),
 ]
 LINK_FIELD = {
-    "input": "the link field of the save form",
+    "input": "the `link` field of `POST /items`",
+    "plainName": "The link you paste",
     "empty": "16: a blank or missing link answers 400 and saves nothing",
     "oversized": "17: a link over 2048 characters answers 400 and saves nothing",
     "hostile": "9: markup characters show as text in the title and the href",
@@ -833,34 +834,59 @@ def test_a_gap_the_check_finds_is_amended_once_and_the_run_goes_on() -> None:
     assert "tests/test_no_script.py" in ran["prompts"]["implement"], "the amended spec is built"
     result = ran["result"]
     assert (result["verdict"], result["testFiles"]) == ("approve", tests)
+    assert result["assumptions"] == SPECIFIED["assumptions"], "the amend closed every gap"
 
 
-def test_a_promise_the_amend_still_leaves_out_is_asked_before_anything_is_built() -> None:
-    # Why: the owner cannot read code, so the question quotes his ticket, not the plan, and says
-    # in plain words what the plan would do; a promise that ends a sentence got two periods.
-    left_out = {"promise": f"{NO_SCRIPT}.", **OUT_OF_SCOPE}
+def test_a_promise_the_amend_still_leaves_out_is_kept_from_the_ticket_and_asks_nothing() -> None:
+    # Why: the script asked the owner to confirm what his ticket already says, with "build it as
+    # the ticket says" as the answer he had to pick, and stopped him once on a promise the plan
+    # kept. A promise still left out is built as the ticket says it, and listed for him to overrule.
+    left_out = {"promise": NO_SCRIPT, **OUT_OF_SCOPE}
     promises = [left_out if p["promise"] == NO_SCRIPT else p for p in PROMISES]
-    gap = {"ticketPromises": promises, "acceptedInputs": [{**LINK_FIELD, "empty": None}]}
+    gap = {"ticketPromises": promises, "acceptedInputs": [LINK_FIELD]}
     ran = _built(REVIEW, **{"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": gap})
-    assert ran["labels"] == ["preflight", "spec", "ticket-check", "spec-amend", "ticket-recheck"]
+    assert ran["labels"][-5:] == ["spec-amend", "ticket-recheck", "implement", "critique", "review"]
     result = ran["result"]
-    assert result["verdict"] == "blocked"
-    asked = result["openQuestions"]
-    assert [q["question"] for q in asked] == [
-        (
-            f'Your ticket says "{NO_SCRIPT}", but the plan leaves that out, so the app would be'
-            " built without it; is that what you want?"
-        )
-    ], "one question, for the promise; the input case is not the owner's"
-    assert (asked[0]["kind"], asked[0]["options"]) == (
-        "direction",
-        [
-            "No: the plan is changed so the app does what the ticket says",
-            "Yes: the app is built without it, and a later ticket can add it",
-        ],
+    assert (result["verdict"], result["openQuestions"]) == ("approve", [])
+    kept = {
+        "question": NO_SCRIPT,
+        "assumed": "the plan left this out, so it was built as your ticket says",
+        "refuter": "Wrong if you no longer want what your ticket says here",
+    }
+    assert result["assumptions"] == [*SPECIFIED["assumptions"], kept]
+    assert result["verdictRecord"]["assumptions"] == result["assumptions"]
+    reading = {
+        "promise": NO_SCRIPT,
+        "reading": "covered",
+        "criteria": [f"Kept from the ticket by the run, as no criterion carries it: {NO_SCRIPT}"],
+    }
+    assert reading in result["settled"]["ticketPromises"], "the settled reading, in its words"
+    assert left_out not in result["settled"]["ticketPromises"]
+    built = _said(ran["prompts"]["implement"])
+    assert "the run keeps them as the ticket says them. Build each, with a test that fails" in built
+    assert f'"{NO_SCRIPT}"' in built
+    judged = _said(ran["prompts"]["review"])
+    assert json.dumps(reading["criteria"][0]) in judged
+    assert (
+        'A promise whose reading starts "Kept from the ticket by the run, as no criterion carries'
+        ' it:" is one the run kept from the ticket: the reading carries it, not spec.md, and it is'
+        " dropped only when the tests and the code do not do what the ticket says."
+    ) in judged
+    plain = _built(REVIEW)
+    assert "the run keeps them as the ticket says" not in plain["prompts"]["implement"]
+    assert plain["result"]["settled"] == CHECKED, "nothing left out, nothing changed"
+
+
+def test_a_promise_the_spec_role_will_not_build_is_its_question_never_a_silent_drop() -> None:
+    raised = (
+        "A promise of the ticket you believe cannot or should not be built as it says is an open"
+        " question under the fork test below, never one you leave out: the run builds a promise"
+        " the plan leaves out as the ticket says it, and asks the owner nothing."
     )
-    assert "under `## Answers`" in result["requiredByOrchestrator"][0]
-    assert result.get("ticketPromises") == promises, "the readings the stop rests on"
+    ran = _built(REVIEW, **{"ticket-check": GAP, "spec-amend": SPECIFIED, "ticket-recheck": GAP})
+    for role in ("spec", "spec-amend"):
+        assert raised in _said(ran["prompts"][role]), role
+    assert "is that what you want" not in json.dumps(ran)
 
 
 # What the owner reads in the pull request for a case the run assumed: the case in his words, the
@@ -868,7 +894,7 @@ def test_a_promise_the_amend_still_leaves_out_is_asked_before_anything_is_built(
 ASSUMED_CASES = {
     "empty": (
         "left empty",
-        "the app refuses it with a message and saves nothing",
+        "nothing is saved and nothing breaks",
         "an empty value is something a user means to send, such as clearing a note",
     ),
     "oversized": (
@@ -899,7 +925,7 @@ def test_an_input_case_the_amend_leaves_undecided_is_built_safe_and_asks_nothing
     result = ran["result"]
     assert (result["verdict"], result["openQuestions"]) == ("approve", [])
     assumed = {
-        "question": f"What the app does when the link field of the save form is {words}",
+        "question": f"What the app does when the link you paste is {words}",
         "assumed": safe,
         "refuter": f"Wrong if {refuter}",
     }
@@ -912,6 +938,11 @@ def test_an_input_case_the_amend_leaves_undecided_is_built_safe_and_asks_nothing
     assert f'"{case}": "Assumed by the run, as no criterion decides it: {safe}"' in judged
     assert f'"{case}": null' not in judged
     assert "as that reading states" in judged
+    assert "or as the settled reading states where the run assumed it." in judged
+    assert (
+        "the run took the safe answer for each. Build each as its `assumed` says, with a test that"
+        " fails without it"
+    ) in built
     plain = _said(_built(REVIEW)["prompts"]["implement"])
     assert "the run took the safe answer" not in plain
 
@@ -938,11 +969,20 @@ def test_the_amend_closes_each_gap_with_the_smallest_safe_change() -> None:
     for rule in (
         (
             "Close each gap with the smallest change that makes the plan do what this ticket says,"
-            " or that makes an accepted input safe. Change nothing the gaps do not touch."
+            " or that makes an accepted input safe. Change nothing the gaps do not touch: leave"
+            " every other criterion's wording exactly as it is, not split, joined or reworded."
         ),
         (
-            "An input case: decide it yourself with the safe answer (the app refuses the value with"
-            " a message and keeps what the user typed, or keeps it as plain text that does nothing)"
+            "An input case: decide it yourself with the safe answer, the narrowest that keeps the"
+            " app safe (an empty value: nothing is saved and nothing breaks; an oversized one: the"
+            " app refuses it with a message and keeps what the user typed; a hostile one: kept as"
+            " plain text that does nothing)"
+        ),
+        "Never ask the owner to confirm it.",
+        (
+            "For an empty value the safe answer is nothing saved and nothing broken, with no"
+            " message or rule of its own: a message or a rule is a product another ticket may"
+            " promise."
         ),
         (
             "Never bring forward what another ticket of this feature promises (its rule, its"
@@ -953,7 +993,7 @@ def test_the_amend_closes_each_gap_with_the_smallest_safe_change() -> None:
         assert rule in amend, rule
     spec = _said(ran["prompts"]["spec"])
     assert "Close each gap" not in spec
-    assert "Decide each such case the ticket leaves open with the safe answer (" in spec
+    assert "Decide each such case the ticket leaves open with the safe answer, the" in spec
     assert (
         "Every promise the ticket makes about what the product does has a criterion, a sentence"
         " in its Problem or What to build included. For each thing users or other systems send the"
@@ -1052,18 +1092,12 @@ def test_a_bent_reading_at_the_review_holds_no_merge() -> None:
     assert result["assumptions"] == [*SPECIFIED["assumptions"], surfaced]
 
 
-@pytest.mark.parametrize(
-    ("case", "value"),
-    [
-        ("empty", "an empty value"),
-        ("oversized", "an oversized value"),
-        ("hostile", "a hostile value"),
-    ],
-)
-def test_an_input_case_the_change_leaves_undecided_blocks(case: str, value: str) -> None:
+@pytest.mark.parametrize("case", list(ASSUMED_CASES))
+def test_an_input_case_the_change_leaves_undecided_blocks(case: str) -> None:
+    words = ASSUMED_CASES[case][0]
     result = _built({**REVIEW, "acceptedInputs": [{**LINK_FIELD, case: None}]})["result"]
     assert result["verdict"] == "request_changes"
-    title = f"no criterion says what happens to {value} of the link field of the save form"
+    title = f"the change does not say what the app does when the link you paste is {words}"
     assert result["verdictRecord"]["unresolved"] == [title]
     assert [i["title"] for i in result["ticketFindings"]] == [title]
 
@@ -1104,6 +1138,52 @@ def test_the_second_review_reads_the_ticket_by_the_same_rules() -> None:
     surfaced = {"question": SAVED, "assumed": seen["specLine"], "refuter": seen["ownerSees"]}
     assert result["assumptions"] == [*given, surfaced], "each promise once"
     assert result["verdictRecord"]["assumptions"] == result["assumptions"]
+
+
+def test_a_rejudge_holds_the_review_to_the_readings_the_first_run_settled() -> None:
+    # Why: the second review was told nothing of a case the first run assumed, read it as
+    # undecided and refused the change in 3 of 3 real runs, and the drain parked a ticket the
+    # owner had nothing to answer for.
+    gap = {**CHECKED, "acceptedInputs": [{**LINK_FIELD, "empty": None}]}
+    answers = {"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": gap}
+    first = _built(REVIEW, **answers)["result"]
+    reading = "Assumed by the run, as no criterion decides it: nothing is saved and nothing breaks"
+    assert first["settled"]["acceptedInputs"][0]["empty"] == reading
+    rejudge = {"settled": first["settled"], "assumptions": first["assumptions"]}
+    kept = {**REVIEW, "acceptedInputs": first["settled"]["acceptedInputs"]}
+    ran = _again(rejudge, **{"review-again": kept})
+    prompt = _said(ran["prompts"]["review-again"])
+    assert "They are decided: do not argue them again." in prompt
+    assert f'"empty": "{reading}"' in prompt
+    assert "or as the settled reading states where the run assumed it." in prompt
+    result = ran["result"]
+    assert (result["verdict"], result["verdictRecord"]["unresolved"]) == ("approve", [])
+    assert result["assumptions"] == first["assumptions"]
+    feature = (PIPELINE.parents[1] / "skills/feature/SKILL.md").read_text(encoding="utf-8")
+    assert '"settled": <the first result\'s settled>' in feature, "the skill passes them back"
+    assert "dependencies?, assumptions?, settled? }" in PIPELINE.read_text(encoding="utf-8")
+
+
+def test_the_owner_reads_each_input_by_its_plain_name() -> None:
+    # Why: an assumption read "What the app does when The `POST /items` request body as a whole
+    # (the form post carrying `link`) is far longer than anyone would type".
+    asked = (
+        "Give each a `plainName`: what a person who cannot read code calls it, in a few everyday"
+        " words and no code terms"
+    )
+    prompts = _built(REVIEW)["prompts"]
+    for role in ("ticket-check", "review"):
+        assert asked in _said(prompts[role]), role
+    schema = _schema("ticket-check")
+    unnamed = {k: v for k, v in LINK_FIELD.items() if k != "plainName"}
+    coded, blank = {**LINK_FIELD, "plainName": "the `link` field"}, {**LINK_FIELD, "plainName": " "}
+    for entry in (unnamed, coded, blank):
+        assert not _valid({**CHECKED, "acceptedInputs": [entry]}, schema), entry
+    named = {**LINK_FIELD, "plainName": "URL you paste.", "oversized": None}
+    gap = {**CHECKED, "acceptedInputs": [named]}
+    ran = _built(REVIEW, **{"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": gap})
+    questions = [a["question"] for a in ran["result"]["assumptions"]]
+    assert "What the app does when URL you paste is far longer than anyone would type" in questions
 
 
 def test_the_drain_counts_every_agent_a_run_can_spawn() -> None:
