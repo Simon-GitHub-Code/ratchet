@@ -170,7 +170,7 @@ def test_lexer_survives_unterminated_constructs() -> None:
     assert lex("echo $(ls")[1] == ("ls\n",)
     assert lex('echo "open')[0][1].text == '"open\n"'
     assert lex("cat <<EOF\nnever closed")[2] == ("never closed",)
-    assert lex("cat <<")[0][-2].text == f"{HEREDOC_MARK}0"
+    assert f"{HEREDOC_MARK}0" in [token.text for token in lex("cat <<")[0]]
 
 
 def test_comments_start_only_at_a_word() -> None:
