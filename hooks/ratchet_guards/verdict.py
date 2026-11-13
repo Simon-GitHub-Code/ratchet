@@ -31,6 +31,10 @@ NAME_THE_DIRECTORY = (
     "Give the file a path the guard can follow, an absolute one or one after a `cd` to a literal "
     "directory, and it is judged where it lands."
 )
+SWITCH_ALONE = (
+    "Run the branch switch in a tool call of its own and make the change in the next one: the "
+    "guard reads the branch then."
+)
 
 
 class Decision(IntEnum):
@@ -64,11 +68,22 @@ RULES: dict[str, Rule] = {
         Decision.DENY,
         "writes, moves or deletes, from the shell, a guard path that only the owner changes",
     ),
+    "guard-path-unseen-switch": Rule(
+        Decision.DENY,
+        "changes a guard path after a command that may switch branches in a way the guard cannot "
+        "read, so the change may land on the default branch",
+        SWITCH_ALONE,
+    ),
     "no-verify": Rule(Decision.DENY, "skips the git hooks"),
     "skip-hooks": Rule(Decision.DENY, "skips or uninstalls the pre-commit hooks"),
     "hooks-path": Rule(Decision.DENY, "redirects git hooks or overrides git config"),
     "force-push": Rule(Decision.DENY, "force-pushes, which rewrites published history"),
-    "push-main": Rule(Decision.DENY, "pushes to main; changes reach main through a reviewed PR"),
+    "push-main": Rule(
+        Decision.DENY,
+        "pushes to the default branch directly, where the method lands a change only through a "
+        "merged pull request",
+        "Push a branch and open a pull request instead.",
+    ),
     "reset-main": Rule(Decision.DENY, "moves main back or sideways with a reset"),
     "default-ref": Rule(
         Decision.DENY,
@@ -79,9 +94,9 @@ RULES: dict[str, Rule] = {
     "merge-pr": Rule(
         Decision.ASK,
         "merges a pull request",
-        "The merge judge merges a pull request by itself when the checks pass and nothing in it "
-        "needs you, so one still open is waiting for you for a reason: the judge's comment on the "
-        "pull request gives each one in a line.",
+        "The merge job merges a pull request by itself once its checks pass and nothing in it "
+        "needs you. Once they pass, it comments on the pull request with each reason it waits for "
+        "you, one a line, and `just merge-ready --head <branch>` prints the same reasons here.",
     ),
     "merge-default": Rule(
         Decision.ASK,
@@ -97,7 +112,8 @@ RULES: dict[str, Rule] = {
     "labels": Rule(Decision.DENY, "manages labels"),
     "agent-ready-label": Rule(
         Decision.ASK,
-        "applies the agent-ready label, the owner's agreement that a ticket is ready to build",
+        "This marks a ticket ready for agents to build without you, which is yours to decide",
+        ALLOW,
     ),
     "workflow-runs": Rule(Decision.DENY, "deletes or cancels workflow runs"),
     "nested-settings": Rule(
@@ -109,7 +125,11 @@ RULES: dict[str, Rule] = {
     ),
     "workflow-write": Rule(Decision.ASK, Kind.WORKFLOW.value, ALLOW),
     "instructions-write": Rule(Decision.ASK, Kind.INSTRUCTIONS.value, ALLOW),
-    "unreadable": Rule(Decision.ASK, "could not be checked by the guard"),
+    "unreadable": Rule(
+        Decision.ASK,
+        "The guard could not check this tool call",
+        "Allow it only if you know what it does.",
+    ),
     "unresolved-directory": Rule(
         Decision.DENY,
         "writes a relative path after a cd the guard cannot follow; it may be a guard path that "
@@ -120,6 +140,9 @@ RULES: dict[str, Rule] = {
 
 
 ACTING_RULES = {Kind.WORKFLOW: "workflow-write", Kind.INSTRUCTIONS: "instructions-write"}
+# Why: the owner answers these at the prompt, so each says in plain words what is at stake, the
+# matched detail in brackets, and nothing about how the guard works.
+OWNER_ASKS = frozenset({*ACTING_RULES.values(), "agent-ready-label", "unreadable"})
 
 
 @dataclass(frozen=True, slots=True)

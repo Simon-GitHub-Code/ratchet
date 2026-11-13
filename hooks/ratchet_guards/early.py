@@ -3,18 +3,21 @@
 The merge judge reads a change once it is committed and decides at the merge, so it cannot
 protect against a file that has already acted. Two kinds of file do:
 
-- A CI workflow under ``.github/workflows/``. GitHub runs a branch's own workflows on a push or a
-  pull request, with the repository's token and secrets.
+- A CI workflow directly under ``.github/workflows/``, or that directory itself. GitHub runs a
+  branch's own workflows on a push or a pull request, with the repository's token and secrets.
+  It reads no subdirectory of it.
 - An agent-instruction file at any depth: ``CLAUDE.md``, ``CLAUDE.local.md``, ``AGENTS.md``,
-  ``GEMINI.md``, or anything under a ``.claude/`` directory but its ``worktrees/``. Claude Code
-  loads a nested ``CLAUDE.md`` when it reads a file beside it, and follows it. An agent could
-  write one, let other agents work under it, and delete it before the commit, so the judge never
-  sees it.
+  ``GEMINI.md``, a ``.claude/`` directory itself, or anything under one but its ``worktrees/``.
+  Claude Code loads a nested ``CLAUDE.md`` when it reads a file beside it, and follows it. An
+  agent could write one, let other agents work under it, and delete it before the commit, so the
+  judge never sees it.
 
-In a checkout whose default branch holds the manifest, the hook asks the owner before a write of
-either kind, on every branch. Names are compared without letter case, as a case-insensitive
-filesystem opens them. This is the one definition of an instruction file: the merge judge imports
-it from here.
+A directory counts as the files it holds: a ``mv notes sub/.claude`` makes every file in
+``notes`` an instruction file, and the owner is asked about ``sub/.claude``, the path the call
+names. In a checkout whose default branch holds the manifest, the hook asks the owner before a
+write of either kind, on every branch. Names are compared without letter case, as a
+case-insensitive filesystem opens them. This is the one definition of an instruction file: the
+merge judge will import it from here.
 """
 
 from enum import Enum
@@ -46,12 +49,12 @@ def is_instruction(relative: str) -> bool:
         part == INSTRUCTION_DIRECTORY and parts[index + 1] != WORKTREES
         for index, part in enumerate(parts[:-1])
     )
-    return parts[-1] in INSTRUCTION_NAMES or any(below)
+    return parts[-1] in {*INSTRUCTION_NAMES, INSTRUCTION_DIRECTORY} or any(below)
 
 
 def kind_of(relative: str) -> Kind | None:
     """The kind of ``relative``, a path from the checkout's root, or ``None`` when it waits."""
     parts = tuple(part.lower() for part in PurePosixPath(relative).parts)
-    if len(parts) > len(WORKFLOWS) and parts[: len(WORKFLOWS)] == WORKFLOWS:
+    if parts[: len(WORKFLOWS)] == WORKFLOWS and len(parts) <= len(WORKFLOWS) + 1:
         return Kind.WORKFLOW
     return Kind.INSTRUCTIONS if is_instruction(relative) else None

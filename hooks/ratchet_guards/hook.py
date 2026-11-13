@@ -75,7 +75,7 @@ from ratchet_guards.manifest import (
 )
 from ratchet_guards.paths import Checkout, Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES, REMOTE
-from ratchet_guards.verdict import ACTING_RULES, DISPUTE, Decision, Verdict, strictest
+from ratchet_guards.verdict import OWNER_ASKS, Decision, Verdict, strictest
 
 EDIT_TOOLS = {
     "Edit": "file_path",
@@ -132,7 +132,6 @@ PATCH_HEADER = re.compile(
 )
 PATCH_DESTRUCTIVE = frozenset({"Delete File", "Move to"})
 GIT_TIMEOUT_SECONDS = 5
-DISPUTES = "docs/disputes/NNNN-<slug>.md"
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 STANDARD_MANIFEST = "skills/adopt/templates/guards/manifest.toml"
 
@@ -525,9 +524,7 @@ def _hit_verdict(hit: Hit, more: str = "", rule: str | None = None) -> Verdict:
 
 def reason(verdict: Verdict) -> str:
     """The sentence the agent (deny) or the owner (ask) reads, ending in what to do next."""
-    if verdict.rule in ACTING_RULES.values():
-        # Why: the owner answers this one at the prompt, so it says what is at stake and nothing
-        # about how the guard works.
+    if verdict.rule in OWNER_ASKS:
         return f"Ratchet: {verdict.because} ({verdict.detail}). {verdict.way_out}"
     stop = "" if verdict.detail.endswith(".") else "."
     if verdict.source:
@@ -540,12 +537,6 @@ def reason(verdict: Verdict) -> str:
             f"Ratchet guard denied this tool call; no part of it ran. It {verdict.because}: "
             f"{verdict.detail}{stop} {verdict.way_out} If the call also did unrelated work, redo "
             f"that in a tool call of its own."
-        )
-    if verdict.way_out == DISPUTE:
-        return (
-            f"Ratchet guard: this tool call {verdict.because}: {verdict.detail}{stop} Approve "
-            f"only if you, the owner, intend this. An agent that thinks a gate is wrong writes a "
-            f"gate dispute ({DISPUTES}) instead."
         )
     return (
         f"Ratchet: an agent asks to run a tool call that {verdict.because}: {verdict.detail}"

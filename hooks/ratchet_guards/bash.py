@@ -110,7 +110,7 @@ _HIDDEN_SWITCH = re.compile(
     re.DOTALL,
 )
 _XARGS = "xargs"
-_PATH_REFUSALS = frozenset({"guard-path-write", "guard-path-default"})
+_PATH_REFUSALS = frozenset({"guard-path-write", "guard-path-default", "guard-path-unseen-switch"})
 _SHELL = Spec("oO", frozenset({"--rcfile", "--init-file"}))
 
 
@@ -501,7 +501,8 @@ class _Checker:
             verdicts += self.guard.writes(
                 context, hits, lambda hit: interpreters.detail(call.name, hit.path, hit.group.name)
             )
-            verdicts += self.guard.acting(self.guard.locator.named(names, context.cwd))
+            written = interpreters.written_names(program)
+            verdicts += self.guard.acting(self.guard.locator.named(written, context.cwd))
         return verdicts
 
     def _writes(

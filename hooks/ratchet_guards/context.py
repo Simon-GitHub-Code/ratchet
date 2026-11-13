@@ -157,17 +157,22 @@ class Guard:
         """The verdicts on changing ``hits`` from the shell.
 
         A path only the owner changes is refused anywhere; any other guard path only where the
-        change takes effect before a merge.
+        change takes effect before a merge. One that may land there only because of a switch the
+        guard could not read gets a refusal of its own, whose way out is to run the switch alone.
         """
-        return [
-            Verdict(
-                "guard-path-write" if hit.group.locked else "guard-path-default",
-                detail(hit),
-                hit.group.source,
-            )
-            for hit in hits
-            if hit.group.locked or self.lands_now(context, hit.at)
-        ]
+        seen = replace(context, hidden_switch=False)
+        verdicts: list[Verdict] = []
+        for hit in hits:
+            if hit.group.locked:
+                rule = "guard-path-write"
+            elif self.lands_now(seen, hit.at):
+                rule = "guard-path-default"
+            elif context.hidden_switch:
+                rule = "guard-path-unseen-switch"
+            else:
+                continue
+            verdicts.append(Verdict(rule, detail(hit), hit.group.source))
+        return verdicts
 
     def acting(self, paths: Iterable[Path]) -> list[Verdict]:
         """The owner's question on each of ``paths`` that acts before the merge, on any branch."""
