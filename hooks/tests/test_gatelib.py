@@ -2,8 +2,10 @@
 
 import http.server
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 import gatelib
+import listeners
 from tests import servers
 from tests.repos import branch, commit, git, repository, write
 
@@ -157,6 +160,94 @@ def test_http_status_refuses_what_is_not_an_http_url_and_raises_for_a_dead_port(
         pytest.raises(OSError),  # noqa: PT011 # -- TLS to a plain port: a reset or a timeout
     ):
         gatelib.http_status("GET", url.replace("http:", "https:"), timeout=0.5)
+
+
+@pytest.mark.parametrize("scheme", ["http", "https"])
+def test_http_status_names_the_client_port_however_soon_the_connection_is_reset(
+    scheme: str,
+) -> None:
+    # Why: the load smoke matches a connection reset after the stop signal against the ones the
+    # gate took, by both of its ends. A reset can land before the connect returns, or during the
+    # TLS handshake, and the connection must be named all the same, as the gate names it.
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        clients: list[gatelib.Connection] = []
+        accepted: list[gatelib.Connection] = []
+        url = f"{scheme}://127.0.0.1:{listener.getsockname()[1]}/"
+
+        def cut() -> None:
+            connection, client = listener.accept()
+            accepted.append(gatelib.connection(connection.getsockname(), client))
+            connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, listeners.RESET)
+            connection.close()
+
+        cutter = threading.Thread(target=cut)
+        cutter.start()
+        with pytest.raises(OSError):  # noqa: PT011 # -- a reset, or a broken pipe while sending
+            gatelib.http_status("GET", url, timeout=5, connecting=clients.append)
+        cutter.join()
+    assert clients == accepted
+
+
+def test_http_status_says_why_a_connect_failed_or_that_it_timed_out() -> None:
+    tried: list[gatelib.Connection] = []
+    with pytest.raises(OSError, match="Network is unreachable"):
+        gatelib.http_status("GET", "http://255.255.255.255/", connecting=tried.append)
+    assert [each.host for each in tried] == ["255.255.255.255"], (
+        "the connection is named even when the connect fails at once"
+    )
+    # A listener whose accept queue is full drops the next connect's SYN, so it never connects.
+    with socket.create_server(("127.0.0.1", 0), backlog=0) as listener:
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}/"
+        with socket.create_connection(listener.getsockname()), pytest.raises(TimeoutError):
+            gatelib.http_status("GET", url, timeout=0.2)
+
+
+def test_an_ipv4_client_of_a_dual_stack_listener_is_named_alike_from_both_ends() -> None:
+    # Why: a listener on [::] sees an IPv4 client mapped into IPv6; the client writes it as IPv4.
+    seen_by_gate = gatelib.connection(("::ffff:127.0.0.1", 80, 0, 0), ("::ffff:127.0.0.1", 5, 0, 0))
+    seen_by_client = gatelib.connection(("127.0.0.1", 80), ("127.0.0.1", 5))
+    assert seen_by_gate == seen_by_client == gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)
+    assert gatelib.connection(("::1", 80, 0, 0), ("::1", 5, 0, 0)).host == "::1"
+
+
+def test_the_stop_marker_is_replaced_whole_and_read_back(tmp_path: Path) -> None:
+    marker = tmp_path / "stopping"
+    first = gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)
+    then = gatelib.Connection("::1", 81, "::1", 6)
+    gatelib.write_stopping(marker, gatelib.Stopping({80: None}, "none", frozenset({first})))
+    told = gatelib.Stopping({80: None, 81: "shut"}, "no Linux", frozenset({then}), answered=True)
+    gatelib.write_stopping(marker, told)
+    assert gatelib.read_stopping(marker) == told
+    assert [told.inexact(port) for port in (80, 81, 82)] == [None, "shut", "no Linux"]
+    assert [path.name for path in tmp_path.iterdir()] == ["stopping"]
+
+
+def test_asking_the_gate_waits_for_its_answer(tmp_path: Path) -> None:
+    marker = tmp_path / "stopping"
+    taken = frozenset({gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)})
+    gatelib.write_stopping(marker, gatelib.Stopping({80: None}, "none", taken))
+    answer = gatelib.Stopping({80: "shut"}, "none", taken, answered=True)
+
+    def gate() -> None:
+        while not gatelib.asking(marker).exists():
+            time.sleep(0.01)
+        gatelib.write_stopping(marker, answer)
+
+    answering = threading.Thread(target=gate)
+    answering.start()
+    assert gatelib.ask(marker, 10) == answer
+    answering.join()
+
+
+def test_a_gate_that_does_not_answer_leaves_every_port_judged_the_older_way(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "stopping"
+    taken = frozenset({gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)})
+    gatelib.write_stopping(marker, gatelib.Stopping({80: None}, "none", taken))
+    assert gatelib.ask(marker, 0.05) == gatelib.Stopping(
+        {}, "the gate did not answer within 0.05s", taken
+    )
 
 
 def test_interrupts_raise_once_then_ignore_and_restore_the_handlers() -> None:
