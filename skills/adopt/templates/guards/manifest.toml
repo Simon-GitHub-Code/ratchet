@@ -1,9 +1,12 @@
 # Guard paths (Ratchet method): the single list of files that define, run or record the quality gates.
 # Globs are matched against repository-relative paths; `*` stays within a segment, `**` spans any.
-# A `~/` pattern matches against the home directory. `edit = "deny"` locks a group: the owner edits
-# those files by hand. `edit = "append"` marks records an agent may add to: a new glossary term, a
-# new `_Avoid_` item or a new ADR passes, and changing or removing what is there asks the owner.
-# The hook, `just guard-diff` and a fitness test all read this file.
+# A `~/` pattern matches against the home directory. On a branch an agent changes a guard path with
+# no prompt: the merge judge reads the change and sends it to the owner. Where the commit would land
+# on the default branch the hook refuses it, since no judge reads that. `edit = "deny"` locks a
+# group whose files act before any merge: the owner edits those by hand. `edit = "append"` marks
+# records an agent may add to: on the default branch a new glossary term, a new `_Avoid_` item or a
+# new ADR still passes. The hook, the merge judge, `just guard-diff` and a fitness test read this
+# file as the default branch holds it.
 
 [[group]]
 name = "tool-config"
@@ -29,6 +32,14 @@ paths = [
 ]
 
 [[group]]
+name = "workflows"
+reason = "The forge runs a branch's own workflow files on a push or a pull request, with the repository's token and secrets, before any merge; the owner edits them by hand."
+edit = "deny"
+paths = [
+    ".github/workflows/**",
+]
+
+[[group]]
 name = "ci"
 reason = "CI config and the pull-request template decide what runs before a change merges, and the merge job is the one agent path to the default branch."
 paths = [
@@ -38,11 +49,9 @@ paths = [
 
 [[group]]
 name = "harness"
-reason = "Settings, hooks and workflows and this manifest enforce the guards; changing them can switch the guards off, so the owner edits them by hand."
+reason = "Settings, hooks, workflows, agents, skills and commands enforce the guards and act in any session started in the checkout that holds them, before a merge; changing them can switch the guards off, so the owner edits them by hand."
 edit = "deny"
 paths = [
-    # Listed, not `.claude/**`: `just settings` mirrors every pattern as a permission rule, and a
-    # rule cannot exclude the agent worktrees under .claude/worktrees/ as a group's `exclude` can.
     ".claude/settings.json",
     ".claude/settings.local.json",
     ".claude/hooks/**",
@@ -50,10 +59,15 @@ paths = [
     ".claude/agents/**",
     ".claude/skills/**",
     ".claude/commands/**",
-    ".claude/rules/**",
-    "guards/**",
     "~/.claude/settings.json",
     "~/.claude/settings.local.json",
+]
+
+[[group]]
+name = "manifest"
+reason = "This file says what a guard path and a one-way door are; the hook and the merge judge read it as the default branch holds it, so a change acts only once the owner merges it."
+paths = [
+    "guards/**",
 ]
 
 [[group]]
@@ -110,6 +124,7 @@ reason = "The agent instructions, the glossary map, the design records, the proc
 paths = [
     "docs/agents/**",
     "docs/process/**",
+    ".claude/rules/**",
     "AGENTS.md",
     "CLAUDE.md",
     "GLOSSARY-MAP.md",

@@ -162,7 +162,10 @@ PR_SECTIONS = (
     "## Decisions",
     "## Gates",
 )
-LOCKED_PATTERNS = {".claude/settings.json", ".claude/hooks/**", "guards/**"}
+LOCKED_PATTERNS = {".claude/settings.json", ".claude/hooks/**"}
+# Why: the hook and the judge read the manifest as the default branch holds it, so a change to it
+# needs no lock, only to stay a guard path the judge sends to the owner (ADR 0033).
+GUARDED_PATTERNS = {"guards/**"}
 TABLE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|")
 # Why: a repository with no forge names a change template; adopt's own wording for it follows
 # the path with a clause, so the line is read up to the closing backtick.
@@ -567,7 +570,6 @@ def check_manifest(root: Path) -> Iterable[str]:
     if not isinstance(groups, list) or not groups:
         yield "guards/manifest.toml: has no [[group]]"
         return
-    locked: set[str] = set()
     for group in groups:
         name = group.get("name", "<unnamed>")
         if len(str(group.get("reason", ""))) < MIN_REASON:
@@ -576,10 +578,15 @@ def check_manifest(root: Path) -> Iterable[str]:
             yield f"guards/manifest.toml: group '{name}' needs a paths list"
         elif not group["paths"]:
             yield f"guards/manifest.toml: group '{name}' has no paths yet; bind or remove it"
-        elif group.get("edit") == "deny":
-            locked.update(group["paths"])
+    bound = [group for group in groups if isinstance(group.get("paths"), list)]
+    guarded = {pattern for group in bound for pattern in group["paths"]}
+    locked = {
+        pattern for group in bound if group.get("edit") == "deny" for pattern in group["paths"]
+    }
     for pattern in sorted(LOCKED_PATTERNS - locked):
         yield f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group"
+    for pattern in sorted(GUARDED_PATTERNS - guarded):
+        yield f"guards/manifest.toml: '{pattern}' is in no group"
 
 
 def check_doors(root: Path) -> Iterable[str]:
@@ -1307,13 +1314,13 @@ def guard_mutations() -> list[Mutation]:
 
     def settings_missing_a_rule(root: Path) -> None:
         path = root / settings_rules.SETTINGS
-        path.write_text(path.read_text().replace('      "Edit(/GLOSSARY-MAP.md)",\n', ""))
+        path.write_text(path.read_text().replace('      "Edit(/.claude/hooks/**)",\n', ""))
 
     return [
         ("manifest with the harness unlocked", unlock_harness),
         ("manifest with a group still unbound", unbound_group),
         ("settings denying what the hook allows", settings_with_a_foreign_deny),
-        ("settings missing a manifest rule", settings_missing_a_rule),
+        ("settings missing a fixed rule", settings_missing_a_rule),
     ]
 
 

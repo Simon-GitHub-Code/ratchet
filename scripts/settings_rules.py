@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Permission rules from the guard manifest: ``.claude/settings.json`` mirrors the manifest.
+"""Permission rules: ``.claude/settings.json`` holds a fixed list of denies and asks nothing.
 
-Every pattern in ``guards/manifest.toml`` becomes one ``Edit`` rule: ``deny`` in a group with
-``edit = "deny"``, ``ask`` in the rest. A group with ``edit = "append"`` gets none: a permission
-rule matches a path and cannot read the edit, so an ``ask`` there would prompt for the additions
-the hook lets through, and the hook is the one layer on those paths (ADR 0014). A
-repository-relative pattern becomes ``Edit(/pattern)``
+The ``deny`` list is the same in every repository and does not read the manifest. It names what
+takes effect before any merge, as ``Edit`` rules: the harness's settings, hooks, workflows, agents,
+skills and commands (Claude Code reads them from the checkout a session runs in), the git hooks,
+config and the refs the guards read the default branch through (ADR 0016), and the user's settings
+and installed plugins. Beside them are the command rules the hook also denies: the gate bypasses,
+history rewrites and forge changes, and the commands that write the default branch's ref in their
+plain spellings. ``gh label create`` is not denied, because the hook lets a recorded label through
+and a settings deny would refuse that one too (ADR 0006).
+
+The ``ask`` list is empty. An edit of any other guard path meets no rule here: on a branch the
+merge judge reads it, and where it lands on the default branch the hook refuses it. The hook is
+the one layer that asks, on a merge and on the agent-ready label, so its prompt is the one the
+owner reads, with its reasons (ADR 0033). A repository-relative pattern becomes ``Edit(/pattern)``
 (Claude Code reads a leading ``/`` as the project root) and a ``~/`` pattern stays as it is. The
-command rules are fixed here: the gate bypasses, history rewrites and forge changes the hook
-denies, the commands that write the default branch's ref in their plain spellings (ADR 0016),
-and ``gh pr merge`` as an ask. ``gh label create`` is not denied, because the hook lets a
-recorded label through and a settings deny would refuse that one too (ADR 0006).
-
-A group's ``exclude`` has no permission-rule equivalent, so a manifest that uses it is reported:
-list the paths the group should cover instead. The ``deny`` and ``ask`` lists are owned by this
-tool in full; a project's own rules go in ``allow``.
+``deny`` and ``ask`` lists are owned by this tool in full; a project's own rules go in ``allow``.
 
 Usage: ``settings_rules.py [--root DIR] [--check | --write]``. ``--check`` (the default) prints
 one line per rule missing from or foreign to the lists and exits 1 on any. ``--write`` replaces
-the two lists and keeps every other key; it refuses while the manifest cannot be mirrored.
+the two lists and keeps every other key.
 """
 
 from __future__ import annotations
@@ -26,9 +27,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import tomllib
 from pathlib import Path
 
+# Why: the conformance gate checks the settings only in a repository that has adopted the method.
 MANIFEST = Path("guards/manifest.toml")
 SETTINGS = Path(".claude/settings.json")
 SCHEMA = "https://json.schemastore.org/claude-code-settings.json"
@@ -86,51 +87,43 @@ COMMAND_DENIES = (
     "Bash(gh label delete:*)",
     "Bash(gh label clone:*)",
     "Bash(gh run delete:*)",
+    "Bash(git config core.hooksPath:*)",
+    "Bash(git -c core.hooksPath*)",
     *DEFAULT_BRANCH_DENIES,
     *OTHER_REF_DENIES,
 )
-COMMAND_ASKS = ("Bash(gh pr merge:*)",)
-APPEND = "append"
-Rules = tuple[list[str], list[str]]
+# Why: each of these acts before a merge, so no merge judge reads a change to one.
+TAMPER = (
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".claude/hooks/**",
+    ".claude/workflows/**",
+    ".claude/agents/**",
+    ".claude/skills/**",
+    ".claude/commands/**",
+    ".git/hooks/**",
+    ".git/config",
+    ".git/refs",
+    ".git/refs/**",
+    ".git/packed-refs",
+    ".git/HEAD",
+    ".git/info/grafts",
+    ".git/shallow",
+    ".git/objects/info",
+    ".git/objects/info/**",
+    "~/.claude/settings.json",
+    "~/.claude/settings.local.json",
+    "~/.claude/plugins/**",
+)
 
 
 def edit_rule(pattern: str) -> str:
-    """The ``Edit`` permission rule that covers one manifest pattern."""
+    """The ``Edit`` permission rule that covers one pattern."""
     return f"Edit({pattern})" if pattern.startswith("~/") else f"Edit(/{pattern})"
 
 
-def rules(manifest: dict[str, object]) -> tuple[Rules, list[str]]:
-    """The (deny, ask) lists the manifest asks for, and what in it cannot be mirrored."""
-    deny: list[str] = []
-    ask: list[str] = []
-    problems: list[str] = []
-    groups = manifest.get("group")
-    for group in groups if isinstance(groups, list) else []:
-        if not isinstance(group, dict):
-            continue
-        name = str(group.get("name", "<unnamed>"))
-        if group.get("exclude"):
-            problems.append(
-                f"guards/manifest.toml: group '{name}' uses exclude, which no permission rule "
-                f"can express; list the paths it should cover instead"
-            )
-        paths = group.get("paths")
-        patterns = [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
-        if group.get("edit") == APPEND:
-            continue
-        target = deny if group.get("edit") == "deny" else ask
-        target.extend(map(edit_rule, patterns))
-    return (deny + list(COMMAND_DENIES), list(COMMAND_ASKS) + ask), problems
-
-
-def read_manifest(root: Path) -> dict[str, object] | None:
-    path = root / MANIFEST
-    if not path.is_file():
-        return None
-    try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError:
-        return None
+DENY = [*map(edit_rule, TAMPER), *COMMAND_DENIES]
+ASK: list[str] = []
 
 
 def read_settings(root: Path) -> dict[str, object]:
@@ -153,42 +146,32 @@ def listed(settings: dict[str, object], key: str) -> list[str]:
 
 
 def drift(root: Path) -> list[str]:
-    """One line per manifest fault, missing rule or foreign rule; empty when settings mirror."""
-    manifest = read_manifest(root)
-    if manifest is None:
-        return [f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"]
-    (deny, ask), problems = rules(manifest)
+    """One line per missing or foreign rule; empty when the settings hold the fixed lists."""
     settings = read_settings(root)
-    for key, expected in (("deny", deny), ("ask", ask)):
+    problems: list[str] = []
+    for key, expected in (("deny", DENY), ("ask", ASK)):
         actual = listed(settings, key)
         problems.extend(
             f"{SETTINGS}: '{r}' is missing from {key}" for r in expected if r not in actual
         )
         problems.extend(
-            f"{SETTINGS}: '{r}' in {key} mirrors no manifest pattern"
+            f"{SETTINGS}: '{r}' in {key} is not a rule this tool writes"
             for r in actual
             if r not in expected
         )
     return problems
 
 
-def write(root: Path) -> list[str]:
-    """Replace the deny and ask lists from the manifest; the faults that stopped it, if any."""
-    manifest = read_manifest(root)
-    if manifest is None:
-        return [f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"]
-    (deny, ask), problems = rules(manifest)
-    if problems:
-        return problems
+def write(root: Path) -> None:
+    """Replace the deny and ask lists with the fixed ones and keep every other key."""
     settings = read_settings(root)
     permissions = settings.get("permissions")
     if not isinstance(permissions, dict):
         permissions = {}
-    settings["permissions"] = {**permissions, "deny": deny, "ask": ask}
+    settings["permissions"] = {**permissions, "deny": DENY, "ask": ASK}
     path = root / SETTINGS
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    return []
 
 
 def main(argv: list[str]) -> int:
@@ -199,15 +182,14 @@ def main(argv: list[str]) -> int:
     mode.add_argument("--write", action="store_true")
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
-    problems = write(root) if options.write else drift(root)
+    if options.write:
+        write(root)
+        print(f"settings-check: {SETTINGS} written")
+        return 0
+    problems = drift(root)
     for line in problems:
         print(line)
-    if problems:
-        print("settings-check: red")
-    elif options.write:
-        print(f"settings-check: {SETTINGS} written from {MANIFEST}")
-    else:
-        print("settings-check: green")
+    print("settings-check: red" if problems else "settings-check: green")
     return 1 if problems else 0
 
 
