@@ -1497,3 +1497,76 @@ def test_a_patch_deletes_a_file_and_a_patch_that_makes_a_link_is_not_planted(
         "bite: lint: a link: THE FAULT WAS NOT PLANTED\n  src/link would be a symbolic link or a"
         " submodule, and a fault writes a file\n" in out
     )
+
+
+def test_the_closing_run_runs_once_for_each_set_of_args_among_the_bites_that_bit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: a closing run with no args proves nothing of a bite whose command had args, and one
+    # for the last set alone proves nothing of the others.
+    log = tmp_path / "runs"
+    gate = f'echo "${{2:-none}}" >> {log}\n{LINT}'
+    registry = (
+        bite("lint", "a", f'{PLANT}\nargs = ["a"]')
+        + bite("lint", "b", f'{PLANT}\nargs = ["b"]')
+        + bite("lint", "a again", f'{PLANT}\nargs = ["a"]')
+        + bite("lint", "c, blind", f'{BLIND}\nargs = ["c"]')
+    )
+    root = project(tmp_path / "repo", {"lint": gate}, registry)
+    assert prove(root) == 1
+    assert "bite: lint: c, blind: DOES NOT BITE" in capsys.readouterr().out
+    assert log.read_text(encoding="utf-8").split() == [*"aabbaacc", "a", "b"]
+
+
+def test_a_gate_stopped_during_its_closing_run_prints_no_verdict(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs, started = tmp_path / "runs", tmp_path / "started"
+    until = int(time.time()) + 60
+    gate = (
+        f"n=$(($(cat {runs} 2>/dev/null || echo 0) + 1)); echo $n > {runs}\n"
+        f'test $n -ge 3 && while [ "$(date +%s)" -lt {until} ]; do touch {started}; sleep 0.05;'
+        f" done\n{LINT}"
+    )
+    root = project(tmp_path / "repo", {"lint": gate}, bite("lint", "a planted word"))
+
+    def interrupt() -> None:
+        while not started.exists():
+            time.sleep(0.01)
+        signal.pthread_kill(threading.main_thread().ident or 0, signal.SIGTERM)
+
+    threading.Thread(target=interrupt, daemon=True).start()
+    assert prove(root) == 128 + 15
+    assert runs.read_text(encoding="utf-8") == "3\n"
+    assert capsys.readouterr().out == "bite: red: interrupted by signal 15\n"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ('write = { path = ".gitignore", content = "planted\\n" }', "grep -l planted .gitignore"),
+        (
+            'replace = { path = "src/.gitattributes", old = "text", new = "planted" }',
+            "grep -l planted src/.gitattributes",
+        ),
+        ('remove = ["src/.gitattributes"]', "test ! -e src/.gitattributes"),
+    ],
+    ids=["a write over .gitignore", "a replace in .gitattributes", "a remove of .gitattributes"],
+)
+def test_a_rules_file_that_exists_may_be_changed_or_removed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], case: tuple[str, str]
+) -> None:
+    # Why: only a new rules file decides how the copy is put back; one the snapshot holds is put
+    # back as it stood, like any other file.
+    fault, red = case
+    write(tmp_path / "repo", "src/.gitattributes", "*.txt text\n")
+    gate = f'{red} && {{ echo "L001 rules changed"; exit 1; }}; exit 0'
+    root = project(
+        tmp_path / "repo",
+        {"lint": gate},
+        bite("lint", "rules", fault) + bite("lint", "blind", BLIND),
+    )
+    assert prove(root) == 1
+    out = capsys.readouterr().out
+    assert "bite: lint: rules: bites\n" in out
+    assert "bite: lint: blind: DOES NOT BITE\n" in out
