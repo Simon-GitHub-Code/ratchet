@@ -26,7 +26,8 @@ APP = r"""
 import html, json, os, time, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 if os.environ.get("BOOTING"):
-    open(os.environ["BOOTING"], "w").write(str(os.getpid()))
+    open(os.environ["BOOTING"] + ".partial", "w").write(str(os.getpid()))
+    os.replace(os.environ["BOOTING"] + ".partial", os.environ["BOOTING"])
 time.sleep(float(os.environ.get("DELAY", "0")))
 ITEMS = []
 class Server(ThreadingHTTPServer):
