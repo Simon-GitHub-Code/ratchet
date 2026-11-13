@@ -209,6 +209,66 @@ def test_up_again_while_it_runs_gives_the_same_address(
     assert len(acceptance.sessions(acceptance.store(product) / SLUG, 2)) == 1
 
 
+def test_up_after_an_up_killed_mid_boot_waits_for_that_boot_and_starts_no_other(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = products.make(tmp_path / "product", env=f"BOOTING={tmp_path / 'booting'} DELAY=1")
+    argv = [sys.executable, str(SCRIPT), "up", "--slug", SLUG, "--ticket", "ticket.md"]
+    first = subprocess.Popen(argv, cwd=root, stdout=subprocess.DEVNULL)  # noqa: S603 # -- this interpreter and the harness
+    try:
+        products.wait_for(tmp_path / "booting")
+        first.kill()
+        first.wait()
+        directory = session(root)
+        assert acceptance.state(directory) is acceptance.State.STARTING
+        code, (_, tester) = up(root, capsys)
+        assert (code, Path(tester).parent) == (0, directory)
+        assert len(acceptance.sessions(acceptance.store(root) / SLUG, 2)) == 1
+        assert len(products.running(root)) == 1
+    finally:
+        down(root, capsys)
+    assert products.processes_naming(str(tmp_path)) == []
+
+
+@pytest.mark.parametrize("when", ["serving", "booting"])
+def test_a_session_whose_supervisor_was_killed_stops_all_it_started(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], when: str
+) -> None:
+    root = products.make(tmp_path / "product", env=f"BOOTING={tmp_path / 'booting'} DELAY=1")
+    argv = [sys.executable, str(SCRIPT), "up", "--slug", SLUG, "--ticket", "ticket.md"]
+    started = subprocess.Popen(argv, cwd=root, stdout=subprocess.DEVNULL)  # noqa: S603 # -- this interpreter and the harness
+    try:
+        products.wait_for(tmp_path / "booting")
+        booted = pid_of(tmp_path / "booting")
+        directory = session(root)
+        if when == "serving":
+            assert started.wait(timeout=120) == 0
+        os.kill(pid_of(directory / "live.lock"), signal.SIGKILL)
+        started.wait(timeout=120)
+        assert gone(booted, wait=60), "the product outlived the session's supervisor"
+        code, _ = up(root, capsys)
+        assert code == 0
+        assert len(products.running(root)) == 1
+        assert (acceptance.state(directory) is acceptance.State.ENDED) == (when == "serving")
+    finally:
+        down(root, capsys)
+    assert products.processes_naming(str(tmp_path)) == []
+
+
+def test_up_on_a_changed_work_tree_stops_the_session_of_the_old_one(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, (old, _) = up(product, capsys)
+    before = session(product)
+    (product / "src" / "settings.py").write_text("PORT = 3\n", encoding="utf-8")
+    code, (new, _) = up(product, capsys)
+    assert code == 0
+    assert new != old
+    assert not gatelib.listening(old)
+    assert json.loads((before / "seal.json").read_text(encoding="utf-8"))["down"]["stale"] is True
+    assert len(products.running(product)) == 1
+
+
 def test_two_ups_at_once_share_one_session(product: Path) -> None:
     argv = [sys.executable, str(SCRIPT), "up", "--slug", SLUG, "--ticket", "ticket.md"]
     started = [
@@ -517,6 +577,31 @@ def test_a_session_that_ended_before_down_came_is_not_blessed(
     assert code == 1
     assert any(line.endswith("before `down` came: something stopped it early") for line in out)
     assert down(product, capsys) == (0, ["acceptance down: nothing was running"])
+
+
+def test_no_text_names_a_file_of_the_code_but_those_the_ticket_names(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ticket = product / "ticket.md"
+    ticket.write_text(ticket.read_text("utf-8") + "\nThe `justfile` says how it starts.\n", "utf-8")
+    (product / "notes.txt").write_text("served, not yet committed\n", encoding="utf-8")
+    _, (url, _) = up(product, capsys)
+    products.tried(url)
+    down(product, capsys)
+    directory = session(product)
+    write_record(directory, products.good_record(directory))
+    how = "Read app.py, notes.txt and the justfile; opened /app.py on the site."
+    edit_record(directory, lambda r: r["criteria"][0].update(how=how))
+    code, out = check(product, capsys)
+    reads = "a file of the product's code; the tester judges by use and never by reading"
+    assert (code, out) == (
+        1,
+        [
+            f"criterion C1 names app.py, {reads}",
+            f"criterion C1 names notes.txt, {reads}",
+            "acceptance check: red",
+        ],
+    )
 
 
 @pytest.mark.parametrize(

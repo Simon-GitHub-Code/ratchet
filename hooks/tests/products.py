@@ -212,6 +212,11 @@ def processes_naming(text: str) -> list[str]:
     return [line for line in listed if text in line and "ps -eo" not in line]
 
 
+def running(root: Path) -> list[str]:
+    """The products of ``root`` that run now, ``with_service.py`` that started them aside."""
+    return [line for line in processes_naming(str(root / "app.py")) if "with_service" not in line]
+
+
 def tried(url: str) -> None:
     """What the good record says was done: the empty list, a link saved, the list again."""
     assert request(url)[0] == 200
