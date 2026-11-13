@@ -388,17 +388,16 @@ def own_branch(ticket: preflight.Ticket) -> str:
     return preflight.branch_of(ticket, preflight.slug_of(ticket.title, ticket.number))
 
 
-def releases(hold: queue_notes.Hold, ref: str, default_branch: str) -> list[str]:
+def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: str) -> list[str]:
     """What the owner does to free a ticket the drain parked, one step for each kind of hold.
 
     Why: the drain keeps a parked ticket until its text changes, so a bare ``/ratchet:feature``
     would only be refused again; each kind names the step that changes what it was parked for.
     """
+    ref = ticket.ref
     steps = []
     if queue_notes.SIZE in hold.kinds:
-        steps.append(
-            f"split ticket {ref} with {TICKETS} on its spec: it is too large for one change"
-        )
+        steps.append(f"{TICKETS} {ticket.parent or f'<the spec of ticket {ref}>'}")
     if queue_notes.QUESTIONS in hold.kinds:
         steps.append(f"answer the open questions the run of {ref} named, on the ticket")
     if queue_notes.GUARD in hold.kinds:
@@ -479,8 +478,9 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             hold = drained[held.ref]
             why = hold.reasons[0] if hold.reasons else "the drain parked it"
             return Step(
-                "; ".join(releases(hold, held.ref, checkout.default_branch)),
-                f"the drain parked ticket {held.ref} and holds it until the ticket changes ({why});"
+                "; ".join(releases(hold, held, checkout.default_branch)),
+                f'the drain parked ticket {held.ref} "{held.title}" and holds it until its text'
+                f" changes ({why});"
                 f" {FEATURE} would be refused again",
                 f"{FEATURE}, or {POTETO} {held.ref} now to make the change as the guard asks",
                 "blocked-run",
