@@ -98,6 +98,19 @@ def test_a_browser_that_fails_says_how(
     assert products.processes_naming(str(tmp_path)) == []
 
 
+def test_the_browser_keeps_its_temporary_files_in_a_short_directory_that_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    browsers.fake(tmp_path, monkeypatch)
+    monkeypatch.setenv("TMPDIR", str(tmp_path / ("a-long-name" * 12)))
+    with tab(tmp_path):
+        used = Path((tmp_path / "profile" / "tmpdir").read_text(encoding="utf-8"))
+        socket = used / ".org.chromium.Chromium.XXXXXX" / "SingletonSocket"
+        assert len(str(socket)) < 108, "a socket's path has room for 107 bytes"
+        assert (used / "org.chromium.Chromium.fake").is_file()
+    assert not used.exists()
+
+
 def test_a_browser_that_cannot_be_started_is_a_browser_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

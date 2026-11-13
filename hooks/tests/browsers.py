@@ -1,8 +1,9 @@
 """A stand-in browser that speaks the debugging pipe, and the real one when this machine has it.
 
 The stand-in answers on descriptor 4 what it reads on descriptor 3, as Chromium does with
-``--remote-debugging-pipe``, and runs no page. Words in what it is asked choose what it does, so
-each way a browser can fail is a real process on a real pipe:
+``--remote-debugging-pipe``, and runs no page. It writes the ``TMPDIR`` it was given to
+``tmpdir`` in its profile and leaves a file there, as Chromium does. Words in what it is asked
+choose what it does, so each way a browser can fail is a real process on a real pipe:
 
 * every script is ``false`` the first time it is asked and ``true`` after, so a step waits once;
   one that says ``never`` is never ``true``;
@@ -33,6 +34,11 @@ if MODE == "die":
     sys.exit("the stand-in browser gives up")
 if MODE == "mute":
     time.sleep(60)
+PROFILE = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--user-data-dir="))
+TMPDIR = os.environ.get("TMPDIR", "")
+open(os.path.join(PROFILE, "tmpdir"), "w").write(TMPDIR)
+if TMPDIR:
+    open(os.path.join(TMPDIR, "org.chromium.Chromium.fake"), "w").write("")
 asked = set()
 
 def send(message):
