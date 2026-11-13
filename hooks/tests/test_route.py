@@ -147,7 +147,7 @@ def test_tickets_on_the_tracker_route_to_conjecture_then_feature(tmp_path: Path)
 def test_a_ticket_that_does_not_say_how_it_is_operated_routes_to_conjecture(
     tmp_path: Path,
 ) -> None:
-    typed = BINDING + "\n## Gates\n\n- Application types: cli\n"
+    typed = BINDING + "\n- Life events: deployed\n\n## Gates\n\n- Application types: cli\n"
     root = repository(tmp_path, ADOPTED | {"docs/process/binding.md": typed})
     step = route.decide(root, FakeGh(issues=issues((5, "Five", "X." + CONJECTURE))))
     assert step.command == f"{route.CONJECTURE} 5"

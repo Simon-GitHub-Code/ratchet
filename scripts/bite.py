@@ -99,7 +99,7 @@ TESTS_BITE = (
     '[[bite]]\ngate = "tests"\nname = "no test"\nremove = ["tests/**"]\nexpect = "no test to run"\n'
 )
 BINDING = (
-    "# Binding\n\n- Default branch: `main`\n"
+    "# Binding\n\n- Default branch: `main`\n- Life events: deployed\n"
     f"- Ratchet plugin: 1.0.0 at {'0' * 40}\n\n## Gates\n\n"
     "| Question | Tool | Tier | Threshold source | Entry point |\n|---|---|---|---|---|\n"
     "| lint | a linter | 0 | | `sh own-gates.sh lint` |\n"

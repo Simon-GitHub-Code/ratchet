@@ -17,17 +17,21 @@
 // once in the /ratchet:feature skill, deterministically, before this workflow is invoked, and
 // once here as the first stage, through one low-effort agent, so the pipeline cannot be
 // entered around the skill.
+//
+// The critic and the fix loop run only for a project people depend on (ADR 0028): the preflight's
+// `critic` field, true when the binding declares the `depended-on` life event. Before that a
+// ticket is built by spec, implement and review, and the merge rule is unchanged.
 
 export const meta = {
   name: 'pipeline',
-  description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> implement -> adversarial critique -> fix loop -> independent review',
+  description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> implement -> adversarial critique -> fix loop (only when the project is depended-on) -> independent review',
   whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight? } after its own preflight is green; not by hand. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, assumptions? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
   phases: [
     { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
     { title: 'Spec', detail: 'ticket -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the ticket leaves open questions' },
     { title: 'Implement', detail: 'make the new tests pass test-first with tdd; check green' },
-    { title: 'Critique', detail: 'one adversary with the rule of evidence: properties, edge cases, mutation, fuzz, fitness sabotage as binding.md names them' },
-    { title: 'Fix', detail: 'fresh implementer per blocker/major round (max 2), re-critique after each' },
+    { title: 'Critique', detail: 'only when the preflight says critic: true (the binding declares depended-on): one adversary with the rule of evidence: properties, edge cases, mutation, fuzz, fitness sabotage as binding.md names them' },
+    { title: 'Fix', detail: 'only with the Critique: fresh implementer per blocker/major round (max 2), re-critique after each' },
     { title: 'Reconcile', detail: 'rejudge only: the rebase onto the moved default branch finished and check green again' },
     { title: 'Review', detail: 'independent code-review of the diff on the spec, standards and guard axes; the script forces the verdict from the evidence' },
   ],
@@ -59,6 +63,10 @@ const REJUDGE = ARGS.rejudge && typeof ARGS.rejudge === 'object' ? ARGS.rejudge 
 // The branch is the preflight's to derive (feature/<number>-<slug>) unless the skill passed it.
 let BRANCH = typeof ARGS.branch === 'string' && ARGS.branch ? ARGS.branch : ''
 let SLUG = ''
+// Whether the critic and the fix loop run: the preflight says (ADR 0028). A preflight that does
+// not say runs them, since the older script predates the field and more scrutiny is the safe side.
+let CRITIC = true
+let CRITIC_REASON = ''
 
 const ROOT_HINT = ROOT
   ? `the repository root (${ROOT}, the directory holding AGENTS.md)`
@@ -476,6 +484,8 @@ const PREFLIGHT_SCHEMA = {
     branch: { type: 'string', description: 'the "branch" field' },
     base: { type: 'string', description: 'the "base" field: the default branch the feature branches from' },
     label: { type: 'string', description: 'the "label" field: the agent-ready label as this tracker spells it' },
+    critic: { type: 'boolean', description: 'the "critic" field: whether the project is depended-on, so the critique and fix phases run' },
+    critic_reason: { type: 'string', description: 'the "critic_reason" field, verbatim' },
     failures: {
       type: 'array',
       description: 'the "failures" field, verbatim; when the script could not run, one entry with check "script"',
@@ -513,7 +523,7 @@ In ${ROOT_HINT}, run, in a single Bash call:
     python3 ${script} "${REF}" --root .${baseFlag}${branchFlag}
 
 It prints a JSON object on stdout ({ ok, ref, failures: [{ check, detail, produce }], number,
-title, slug, branch, base, label }) and a verdict line on stderr. Return that JSON's fields in the
+title, slug, branch, base, label, critic, critic_reason }) and a verdict line on stderr. Return that JSON's fields in the
 structured result, verbatim, plus the full output. Do not fix, label, edit or commit anything,
 and do not re-run with different arguments. If the script cannot be found or Python refuses
 it, return ok: false with one failure { check: "script", detail: <what happened>, produce:
@@ -584,8 +594,8 @@ Your tasks, in order:
    weigh: when they alone pass two thirds of the ceiling the run stops here, and the owner
    splits the ticket. Write the tests the criteria need, never fewer to fit.
 6. Estimate the whole change against that ceiling and return it as \`changeEstimate\`: the
-   lines already measured (spec, tests, fixtures), plus the implementation, plus the critic's
-   tests (about two fifths of yours), plus any dispute records and ADRs. Be honest and not
+   lines already measured (spec, tests, fixtures), plus the implementation, ${criticEstimate(CRITIC)}
+   plus any dispute records and ADRs. Be honest and not
    hopeful: the fix agent cannot cut a change down by revising code. When the sum passes the
    ceiling, put the split in \`proposedSplit\`: two or more tickets, each of which fits, each
    with the acceptance criteria it carries. The run then stops for the owner, who files them.
@@ -864,7 +874,7 @@ Inputs you may read, and nothing else:
   new files: read them). If the branch has commits, \`git diff ${BASE}...${BRANCH}\` is equivalent.
 - AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
 - Any generated contract artefacts that binding.md names
-The implementer's notes, the critic's findings and the ticket are outside your inputs:
+${outsideInputs(CRITIC)} are outside your inputs:
 judge the code against the spec and the standards only.
 
 Load the \`mattpocock-skills:code-review\` skill and apply its two axes in-process, as both of
@@ -926,7 +936,7 @@ change only adds to, and \`check\` exits 0; otherwise
 // ---------------------------------------------------------------------------
 // The stop for a change with no room left under the ceiling, or null. \`stage\` is the role
 // that just returned.
-function noRoom(stage, size) {
+function noRoom(stage, size, critic = true) {
   const lines = size && size.lines
   const ceiling = size && size.ceiling
   if (!Number.isInteger(lines) || !Number.isInteger(ceiling) || ceiling <= 0) return null
@@ -935,24 +945,25 @@ function noRoom(stage, size) {
     stage,
     lines,
     ceiling,
-    reason: `too large: ${lines} lines after ${stage}, over two thirds of the change-size ceiling of ${ceiling}, with the critic's tests and the fixes still to come`,
+    reason: `too large: ${lines} lines after ${stage}, over two thirds of the change-size ceiling of ${ceiling}, ${critic ? "with the critic's tests and the fixes still to come" : 'with the review still to come'}`,
   }
 }
 
 // The stop for a ticket whose whole change cannot fit under the ceiling, or null. The lines
 // already measured are the spec's own; the estimate adds what the later stages will.
-function cannotFit(size, estimate) {
+function cannotFit(size, estimate, critic = true) {
   const lines = size && size.lines
   const ceiling = size && size.ceiling
   if (!estimate || !Number.isInteger(lines) || !Number.isInteger(ceiling) || ceiling <= 0) return null
-  const total = lines + (estimate.implementationLines || 0) + (estimate.criticLines || 0) + (estimate.recordLines || 0)
+  const criticLines = critic ? estimate.criticLines || 0 : 0
+  const total = lines + (estimate.implementationLines || 0) + criticLines + (estimate.recordLines || 0)
   if (total <= ceiling) return null
   return {
     stage: 'the spec',
     lines: total,
     ceiling,
     proposedSplit: estimate.proposedSplit || [],
-    reason: `too large: the spec estimates ${total} lines for the whole change (spec and tests ${lines}, implementation ${estimate.implementationLines || 0}, the critic's tests ${estimate.criticLines || 0}, records ${estimate.recordLines || 0}), over the change-size ceiling of ${ceiling}`,
+    reason: `too large: the spec estimates ${total} lines for the whole change (spec and tests ${lines}, implementation ${estimate.implementationLines || 0}, ${critic ? `the critic's tests ${criticLines}` : 'no critic'}, records ${estimate.recordLines || 0}), over the change-size ceiling of ${ceiling}`,
   }
 }
 
@@ -975,6 +986,24 @@ function tooLarge(stop, spec, extra) {
       'The owner splits the ticket into smaller ones (`/mattpocock-skills:to-tickets` on the same spec); the spec this run wrote, at `specPath`, says which criteria and tests there are to divide, and `tooLarge.proposedSplit`, when the spec stage gave one, is where to start',
     ],
   }
+}
+
+// The critic's share of the spec's size estimate, and of the reviewer's inputs it is not given
+// (ADR 0028): when the critic does not run, neither refers to findings that do not exist.
+function criticEstimate(critic) {
+  return critic ? "plus the critic's tests (about two fifths of yours)," : 'and no critic tests (the critic does not run, so return criticLines: 0),'
+}
+
+function outsideInputs(critic) {
+  return critic ? "The implementer's notes, the critic's findings and the ticket" : "The implementer's notes and the ticket"
+}
+
+// Whether the critic ran and came back with nothing and no attempt: silence is not a refutation.
+// A critic that did not run is not silent; the result says it was not run, and why.
+function criticSilent(critic, critique) {
+  if (!critic) return false
+  const attempted = (critique.attempted || []).filter(a => a && String(a).trim())
+  return critique.findings.length === 0 && attempted.length === 0
 }
 
 function blocking(findings) {
@@ -1172,6 +1201,8 @@ if (!preflight.ok) {
 SLUG = preflight.slug
 BRANCH = BRANCH || preflight.branch
 BASE = BASE || preflight.base || ''
+CRITIC = preflight.critic !== false
+CRITIC_REASON = String(preflight.critic_reason || '')
 if (!SLUG || !BRANCH) throw new Error(`preflight returned ok without a slug and branch: ${JSON.stringify(preflight)}`)
 log(`Preflight green: ticket ${preflight.number || REF} "${preflight.title}" on branch ${BRANCH}`)
 
@@ -1185,7 +1216,7 @@ log(`Spec ${spec.slug}: ${spec.testFiles.length} test file(s), layers ${spec.lay
   (spec.failingForRightReason ? '' : ' -- WARNING: tests not failing for the right reason') +
   (spec.openQuestions.length ? `, ${spec.openQuestions.length} open question(s)` : ''))
 
-const specStop = noRoom('the spec', spec.changeSize) || cannotFit(spec.changeSize, spec.changeEstimate)
+const specStop = noRoom('the spec', spec.changeSize, CRITIC) || cannotFit(spec.changeSize, spec.changeEstimate, CRITIC)
 if (specStop) return tooLarge(specStop, spec, { checkOutput: spec.checkOutput })
 
 // An open question is the owner's to answer, not the implementer's to guess, and a guard path
@@ -1221,56 +1252,64 @@ const impl = must(
 )
 let filesChanged = union(spec.testFiles, impl.filesChanged)
 const disputes = [...(impl.disputes || [])]
-const implStop = noRoom('the implementation', impl.changeSize)
+const implStop = noRoom('the implementation', impl.changeSize, CRITIC)
 if (implStop) return tooLarge(implStop, spec, { filesChanged, disputes, checkOutput: impl.checkOutput })
 let lastCheckOutput = impl.checkOutput
 let lastCheckPasses = impl.checkPasses === true
 log(`Implement: ${impl.filesChanged.length} file(s), tests pass=${impl.allNewTestsPass}, check=${impl.checkPasses}`)
 
 // ---------------------------------------------------------------------------
-// Phase 3: Critique
+// Phase 3: Critique, and Phase 4: Fix loop (fresh implementer per round, then re-critique).
+// Both run only when the preflight says the project is depended-on (ADR 0028); otherwise the
+// critique is an empty one and the review follows the implementation.
 // ---------------------------------------------------------------------------
-phase('Critique')
-let critique = must(
-  await agent(critiquePrompt(spec, filesChanged, null), { label: 'critique', phase: 'Critique', schema: CRITIQUE_SCHEMA }),
-  'critique',
-)
-filesChanged = union(filesChanged, critique.testsAdded)
-const allCriticFindings = [{ round: 0, findings: critique.findings }]
-log(`Critique: ${critique.findings.length} finding(s), ${owed(critique.findings).length} owed a fix; ` +
-  `fitness sabotage confirmed=${critique.fitnessSabotageConfirmed}`)
-
-// ---------------------------------------------------------------------------
-// Phase 4: Fix loop (fresh implementer per round, then re-critique)
-// ---------------------------------------------------------------------------
-phase('Fix')
+let critique = {
+  findings: [], testsAdded: [], attempted: [], guardFilesChanged: [],
+  fitnessSabotageConfirmed: false, fitnessSabotageSummary: '',
+}
+const allCriticFindings = []
 let iterations = 0
-while (owed(critique.findings).length > 0 && iterations < MAX_FIX_ITERATIONS) {
-  iterations += 1
-  log(`Fix ${iterations}/${MAX_FIX_ITERATIONS}: ${owed(critique.findings).length} finding(s) owed a fix`)
-  const fix = must(
-    await agent(fixPrompt(spec, critique.findings, critique.testsAdded, iterations), {
-      label: `fix-${iterations}`, phase: 'Fix', schema: IMPLEMENT_SCHEMA,
-    }),
-    `fix-${iterations}`,
-  )
-  filesChanged = union(filesChanged, fix.filesChanged)
-  disputes.push(...(fix.disputes || []))
-  lastCheckOutput = fix.checkOutput
-  lastCheckPasses = fix.checkPasses === true
+if (CRITIC) {
+  phase('Critique')
   critique = must(
-    await agent(critiquePrompt(spec, filesChanged, critique), {
-      label: `critique-${iterations}`, phase: 'Fix', schema: CRITIQUE_SCHEMA,
-    }),
-    `critique-${iterations}`,
+    await agent(critiquePrompt(spec, filesChanged, null), { label: 'critique', phase: 'Critique', schema: CRITIQUE_SCHEMA }),
+    'critique',
   )
   filesChanged = union(filesChanged, critique.testsAdded)
-  allCriticFindings.push({ round: iterations, findings: critique.findings })
-  log(`Re-critique ${iterations}: ${critique.findings.length} finding(s), ${owed(critique.findings).length} still owed a fix`)
+  allCriticFindings.push({ round: 0, findings: critique.findings })
+  log(`Critique: ${critique.findings.length} finding(s), ${owed(critique.findings).length} owed a fix; ` +
+    `fitness sabotage confirmed=${critique.fitnessSabotageConfirmed}`)
+
+  phase('Fix')
+  while (owed(critique.findings).length > 0 && iterations < MAX_FIX_ITERATIONS) {
+    iterations += 1
+    log(`Fix ${iterations}/${MAX_FIX_ITERATIONS}: ${owed(critique.findings).length} finding(s) owed a fix`)
+    const fix = must(
+      await agent(fixPrompt(spec, critique.findings, critique.testsAdded, iterations), {
+        label: `fix-${iterations}`, phase: 'Fix', schema: IMPLEMENT_SCHEMA,
+      }),
+      `fix-${iterations}`,
+    )
+    filesChanged = union(filesChanged, fix.filesChanged)
+    disputes.push(...(fix.disputes || []))
+    lastCheckOutput = fix.checkOutput
+    lastCheckPasses = fix.checkPasses === true
+    critique = must(
+      await agent(critiquePrompt(spec, filesChanged, critique), {
+        label: `critique-${iterations}`, phase: 'Fix', schema: CRITIQUE_SCHEMA,
+      }),
+      `critique-${iterations}`,
+    )
+    filesChanged = union(filesChanged, critique.testsAdded)
+    allCriticFindings.push({ round: iterations, findings: critique.findings })
+    log(`Re-critique ${iterations}: ${critique.findings.length} finding(s), ${owed(critique.findings).length} still owed a fix`)
+  }
+} else {
+  log(`Critique and Fix skipped: ${CRITIC_REASON || 'the preflight says the critic does not run'}`)
 }
 const unresolved = owed(critique.findings)
 if (unresolved.length) log(`Fix loop exhausted with ${unresolved.length} unresolved blocking finding(s); review runs anyway`)
-else if (iterations === 0) log('No blocking findings; fix loop skipped')
+else if (CRITIC && iterations === 0) log('No blocking findings; fix loop skipped')
 
 // ---------------------------------------------------------------------------
 // Phase 5: Review (independent)
@@ -1300,8 +1339,7 @@ if (review.checkPasses !== true) forcedReasons.push('the review\'s run of check 
 if (!spec.failingForRightReason) forcedReasons.push('the spec reported failingForRightReason: false')
 const unquoted = (spec.testFiles || []).filter(f => !(spec.failures || []).some(x => x && x.testFile === f && String(x.content || '').trim()))
 if (unquoted.length) forcedReasons.push(`spec test files with no quoted failure content: ${unquoted.join(', ')}`)
-const lastAttempted = (critique.attempted || []).filter(a => a && String(a).trim())
-if (critique.findings.length === 0 && lastAttempted.length === 0) forcedReasons.push('the critic found nothing and lists nothing attempted')
+if (criticSilent(CRITIC, critique)) forcedReasons.push('the critic found nothing and lists nothing attempted')
 const verdict = forcedReasons.length ? 'request_changes' : review.verdict
 if (verdict !== review.verdict) log(`Verdict forced to request_changes: ${forcedReasons.join('; ')}`)
 else if (forcedReasons.length) log(`Reviewer and script agree on request_changes: ${forcedReasons.join('; ')}`)
@@ -1316,6 +1354,7 @@ return {
   verdictForcedBy: forcedReasons,
   iterations,
   filesChanged,
+  critic: { ran: CRITIC, reason: CRITIC ? CRITIC_REASON : `the critic was not run: ${CRITIC_REASON || 'the preflight says it does not run'}` },
   criticFindings: critique.findings,
   criticFindingsByRound: allCriticFindings,
   unresolvedBlockingFindings: unresolved,
@@ -1354,6 +1393,7 @@ return {
   requiredByOrchestrator: [
     'verdict is "approve" (the script forces request_changes when its evidence says otherwise)',
     'unresolvedBlockingFindings is empty and reviewIssues has no blocker or major entry',
+    'when critic.ran is false, the pull request says the critic was not run and gives critic.reason: no adversary attacked this change, and the review is the only independent look',
     'checkOutput tail shows check green and checkPasses is true',
     'undisputedGuardChanges is empty; every entry in disputes has been relayed to the owner, who decides',
     'adrSuggested, if set, is written in docs/adr/ in the same PR, under the next free number; the guard lets a new ADR through and asks the owner for one that supersedes another or carries a Relaxes: line',

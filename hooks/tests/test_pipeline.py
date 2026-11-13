@@ -487,3 +487,89 @@ def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> 
     unmeasured = {**SPECIFIED, "changeEstimate": over}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=unmeasured, **answers)
     assert ran["result"]["verdict"] == "approve", "no change-size gate, no estimate to hold"
+
+
+# --- the critic waits for a project that is depended-on (ADR 0028) ------------------------------
+
+YOUNG = {
+    **PREFLIGHT,
+    "critic": False,
+    "critic_reason": "the binding declares no `depended-on` life event: nobody relies on it yet",
+}
+
+
+def test_a_project_nobody_depends_on_goes_spec_implement_review() -> None:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+    assert ran["labels"] == ["preflight", "spec", "implement", "review"]
+    assert any(line.startswith("Critique and Fix skipped: the binding") for line in ran["logs"])
+    result = ran["result"]
+    assert result["verdict"] == "approve"
+    assert result["verdictForcedBy"] == []
+    assert result["critic"] == {
+        "ran": False,
+        "reason": f"the critic was not run: {YOUNG['critic_reason']}",
+    }
+    assert (result["criticFindings"], result["criticAttempted"], result["iterations"]) == (
+        [],
+        [],
+        0,
+    )
+    assert result["unresolvedBlockingFindings"] == []
+    assert any("critic.ran is false" in line for line in result["requiredByOrchestrator"])
+
+
+def test_a_project_that_is_depended_on_runs_the_critic() -> None:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    old = {**PREFLIGHT, "critic": True, "critic_reason": "others rely on it"}
+    for preflight in (old, PREFLIGHT):
+        ran = _run({"ref": "4"}, preflight=preflight, spec=SPECIFIED, **answers)
+        assert ran["labels"] == ["preflight", "spec", "implement", "critique", "review"]
+        assert ran["result"]["critic"]["ran"] is True
+    assert ran["result"]["critic"]["reason"] == ""
+
+
+def test_a_silent_critic_is_forced_but_an_absent_one_is_not() -> None:
+    silent = {**CRITIQUED, "attempted": []}
+    answers = {"implement": IMPLEMENTED, "critique": silent, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert ran["result"]["verdictForcedBy"] == [
+        "the critic found nothing and lists nothing attempted"
+    ]
+    absent = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+    assert absent["result"]["verdict"] == "approve"
+
+
+def test_the_review_does_not_name_findings_that_do_not_exist() -> None:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    young = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)["prompts"]["review"]
+    assert "critic" not in young.split("Inputs you may read")[1].lower()
+    assert "The implementer's notes and the ticket are outside your inputs" in young
+    old = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)["prompts"]["review"]
+    assert "the critic's findings and the ticket are outside your inputs" in old
+
+
+def test_what_the_review_opens_is_open_without_a_critic() -> None:
+    finding = {"severity": "major", "title": "loses the order"}
+    review = {**REVIEW, "issues": [finding], "verdict": "approve"}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, implement=IMPLEMENTED, review=review)
+    result = ran["result"]
+    assert result["verdict"] == "request_changes"
+    assert result["verdictForcedBy"] == ["1 blocker/major review issue(s)"]
+    assert result["verdictRecord"]["unresolved"] == ["loses the order"]
+
+
+def test_the_critics_share_of_the_size_is_not_counted_when_it_does_not_run() -> None:
+    sized = {**SPECIFIED, "changeSize": {"lines": 700, "ceiling": 1500}}
+    over = {"implementationLines": 451, "criticLines": 300, "recordLines": 50, "proposedSplit": []}
+    answers = {"implement": IMPLEMENTED, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec={**sized, "changeEstimate": over}, **answers)
+    assert ran["result"]["verdict"] == "approve", "1,201 of 1,500 without the critic's 300"
+    assert "plus the critic's tests" not in ran["prompts"]["spec"]
+    assert "return criticLines: 0" in ran["prompts"]["spec"]
+    heavy = {**SPECIFIED, "changeSize": {"lines": 1001, "ceiling": 1500}}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=heavy)
+    assert ran["result"]["verdictForcedBy"][0].endswith("with the review still to come")
+    full = {**over, "implementationLines": 800}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec={**sized, "changeEstimate": full})
+    assert "no critic, records 50" in ran["result"]["verdictForcedBy"][0]
