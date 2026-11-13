@@ -188,7 +188,10 @@ function checkOutputField(ownTestsOnly) {
 // Why: a change must leave room under the binding's change-size ceiling for what the later
 // stages add. On the first tickets built this way the critic's tests were two fifths of the
 // change and the spec's tests most of the rest, so a change that is already over two thirds of
-// the ceiling cannot end green, and each stage it still runs is paid for nothing.
+// the ceiling cannot end green, and each stage it still runs is paid for nothing. That holds
+// only while the critic runs (ADR 0028). Without it what is still to come is the review, whose
+// verdict record and findings the change-size gate does not count, so the room left is all of
+// the ceiling (ADR 0040).
 const CHANGE_SIZE_FIELD = {
   changeSize: {
     type: 'object',
@@ -207,6 +210,13 @@ const TRIGGERS_RULE = 'If `check` is red on the `triggers` gate (a line `trigger
 const OWED_RED = /triggers: '[^']+' gained \d+ instance/
 const ROOM_NUMERATOR = 2
 const ROOM_DENOMINATOR = 3
+
+// The share of the ceiling a change may fill before the stages still to come would push it over,
+// as [numerator, denominator]: two thirds while the critic and its fixes are to come, all of it
+// when only the review is.
+function roomShare(critic) {
+  return critic ? [ROOM_NUMERATOR, ROOM_DENOMINATOR] : [1, 1]
+}
 
 // Why: the later stages' lines are known in advance. On one ticket the spec and its tests were
 // about 830 lines, the critic's tests about 350 and the dispute records about 140, before any
@@ -793,7 +803,7 @@ Your tasks, in order:
 4. Run \`tier0\` and your new tests, and capture the tail. Tier 0 is expected green and the
    new tests red. Do not run \`check\`: the implementer runs it once the code exists.
 5. ${CHANGE_SIZE_RULE} The tests you wrote are most of what the change will
-   weigh: when they alone pass two thirds of the ceiling the run stops here, and the owner
+   weigh: when they alone pass ${CRITIC ? 'two thirds of' : ''} the ceiling the run stops here, and the owner
    splits the ticket. Write the tests the criteria need, never fewer to fit.
 6. Estimate the whole change against that ceiling and return it as \`changeEstimate\`: the
    lines already measured (spec, tests, fixtures), plus the implementation, ${criticEstimate(CRITIC)}
@@ -1232,12 +1242,15 @@ function noRoom(stage, size, critic = true) {
   const lines = size && size.lines
   const ceiling = size && size.ceiling
   if (!Number.isInteger(lines) || !Number.isInteger(ceiling) || ceiling <= 0) return null
-  if (lines * ROOM_DENOMINATOR <= ceiling * ROOM_NUMERATOR) return null
+  const [numerator, denominator] = roomShare(critic)
+  if (lines * denominator <= ceiling * numerator) return null
   return {
     stage,
     lines,
     ceiling,
-    reason: `too large: ${lines} lines after ${stage}, over two thirds of the change-size ceiling of ${ceiling}, ${critic ? "with the critic's tests and the fixes still to come" : 'with the review still to come'}`,
+    reason: critic
+      ? `too large: ${lines} lines after ${stage}, over two thirds of the change-size ceiling of ${ceiling}, with the critic's tests and the fixes still to come`
+      : `too large: ${lines} lines after ${stage}, over the change-size ceiling of ${ceiling}, and the review that is still to come adds nothing the gate counts`,
   }
 }
 
