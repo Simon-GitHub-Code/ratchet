@@ -26,7 +26,7 @@ An unlisted capability is out by default. A listed exclusion needs a document ch
 
 The format is domain-modeling's `GLOSSARY-FORMAT.md`: one concept, one name, the synonyms under _Avoid_. The method adds enforcement where the stack allows it: a fitness test scans every identifier defined on the absolute and declared paths, splits at word boundaries, and fails on any _Avoid_ term as consecutive whole words. The check cannot see meaning, so the whole word is banned; a collision is allow-listed with a `Why:` and an ADR.
 
-An agent adds to the glossary and does not change it. A new term with its _Avoid_ list, and a new _Avoid_ item on an existing term, pass the guard; a changed definition, a renamed or removed term and a shortened _Avoid_ list ask the owner ([guards.md](guards.md), ADR 0014). The check reads lines, not meaning: before you add a term, read the glossary for the concept under another word, and add the word to that term's _Avoid_ list instead of defining it twice.
+An agent adds to the glossary and does not change it. A new term with its _Avoid_ list, and a new _Avoid_ item on an existing term, pass the guard; the guard asks the owner about a changed definition, a renamed or removed term and a shortened _Avoid_ list ([guards.md](guards.md), ADR 0014). The check reads lines, not meaning: before you add a term, read the glossary for the concept under another word, and add the word to that term's _Avoid_ list instead of defining it twice.
 
 ## Architecture decision records: `docs/adr/NNNN-<slug>.md`
 
@@ -71,15 +71,17 @@ The owner's answers to a run's open questions are a section of the ticket too, w
 
 The spec role reads each line as decided. A changed ticket is also what releases one the drain parked.
 
-## Questions and standing answers
+## Questions, assumptions and standing answers
 
-A skill asks the owner for a choice that shapes the product (`direction`), one that cannot be taken back (`irreversible`), or a tooling preference the owner said they want (`tooling`), and for nothing it would do anyway (ADR 0022). Each answer is one line of `.ratchet/questions.tsv`, written by `scripts/questions.py record`: the date, the skill, the question's key, its kind and whether the recommended option was taken. The file is one clone's and no commit carries it. A key is stable, so the same question asked again has the same key (`adopt.tools`); a question about one ticket carries its slug (`feature.<slug>.1`).
+A skill asks the owner only a product question: what the thing should do, for whom, what matters, or a direction with real consequences that no experiment settles (ADR 0034). [questions.toml](questions.toml) lists each one a Ratchet skill asks, its key and its words, and each question a default now answers instead; a test holds the skills to it. Every other choice is an assumption: the agent takes the default, acts, and ends its reply with an **Assumed** block, one plain line each, what it chose, why, and what the owner can say to change it.
+
+The pipeline's open questions are product questions of two sorts (ADR 0022): `direction`, where the options are different products, and `irreversible`, where a wrong guess cannot be taken back. The feature skill logs each answer as one line of `.ratchet/questions.tsv`, written by `scripts/questions.py record`: the date, the skill, the question's key, its kind and whether the recommended option was taken. The file is one clone's and no commit carries it. A question about one ticket carries its slug (`feature.<slug>.1`).
 
 When a key's last three answers all took the recommendation the route prints an `also:` line that offers a standing answer. The owner says yes, and the key goes into `AGENTS.md`, a guard path, so the edit asks them once:
 
 ```markdown
 ## Standing answers
-- `adopt.tools`: accept the proposed tools.
+- `feature.short-links.2`: keep what the visitor sent.
 ```
 
 A skill that finds a question's key there does not ask it, takes the answer, and says so in its hand-over. A `direction` key is never proposed.

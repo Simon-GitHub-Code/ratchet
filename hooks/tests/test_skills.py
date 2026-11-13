@@ -11,13 +11,13 @@ INIT = (SKILLS / "init/SKILL.md").read_text(encoding="utf-8")
 ADOPT = (SKILLS / "adopt/SKILL.md").read_text(encoding="utf-8")
 
 
-def test_adopt_asks_two_dialogs_and_chooses_tools_itself() -> None:
-    # Why: ADR 0017. The owner is asked what the software is and whether to accept the tools,
-    # then about the brief; a third dialog, or a tool the plugin ships, is a regression.
-    dialogs = re.findall(r"\*\*Dialog (\d), ([^.]+)\.", ADOPT)
-    assert dialogs == [("1", "what this is and what judges it"), ("2", "the design brief")]
-    assert "Dialog 3" not in ADOPT
-    assert "`/ratchet:adopt interactive`" in ADOPT
+def test_adopt_asks_its_product_questions_first_and_chooses_tools_itself() -> None:
+    # Why: ADRs 0017 and 0034. The owner is asked about the product at step 3, in the first
+    # minutes, and the tools are the agent's; a tool the plugin ships is a regression.
+    step_3 = ADOPT.split("3. **Recognise the repository.**", 1)[1].split("\n4. ", 1)[0]
+    assert "nothing after this step asks the owner anything" in step_3
+    assert "**Assume** `adopt.tools`" in ADOPT
+    assert "interactive" not in ADOPT
     assert not (SKILLS / "adopt/presets").exists()
     assert "preset" not in ADOPT
     assert 'scripts/application_types.py" <type>...' in ADOPT
@@ -35,7 +35,7 @@ def test_adopt_binds_the_floor_and_what_has_arrived_and_builds_no_skeleton() -> 
     assert 'scripts/triggers.py" --count' in ADOPT
     assert 'scripts/triggers.py" --json' in ADOPT
     assert '`@echo "later: <trigger>"`' in ADOPT
-    assert "the recommended answer is `none` for a new project" in ADOPT
+    assert "no life event on a tree with no sign of one" in ADOPT
 
 
 def test_adopt_provisions_what_the_first_slice_needs_and_rehearses_it() -> None:
@@ -100,14 +100,12 @@ def test_the_conjecture_skill_writes_the_block_the_preflight_asks() -> None:
         assert f"`- {name}:` {says}" in conjecture, name
 
 
-def test_init_asks_two_dialogs_by_default_and_everything_under_interactive() -> None:
-    # Why: the brief's target is two owner dialogs on an empty directory; a live run proves
-    # it, and this pins the text that run follows so a later edit cannot add a third quietly.
-    dialogs = re.findall(r"\*\*Dialog (\d), ([^.]+)\.", INIT)
-    assert dialogs == [("1", "always: what this is"), ("2", "greenfield only: the stack")]
-    assert "Dialog 3" not in INIT
-    assert "`/ratchet:init interactive`" in INIT
-    assert "defaults table" in INIT
+def test_init_asks_about_the_product_one_question_at_a_time() -> None:
+    # Why: ADR 0034. The owner is asked four product questions, and a fifth only before a
+    # remote would be made; the registry test holds their words, this holds their order.
+    asked = re.findall(r"^\d\. \*\*Ask\*\* `([^`]+)`", INIT, re.MULTILINE)
+    assert asked == ["init.purpose", "init.user", "init.difference", "init.place", "init.online"]
+    assert "interactive" not in INIT
 
 
 def test_init_passes_the_owners_answers_to_the_setups() -> None:
@@ -125,11 +123,11 @@ def test_every_ratchet_skill_ends_with_the_route() -> None:
         assert 'scripts/route.py" --root .' in text, name
 
 
-def test_the_safeguard_skill_asks_one_question_and_commits_as_the_gate_accepts() -> None:
-    # Why: ADR 0028 and the owner's principle: binding what is owed must not become a dialog.
+def test_the_safeguard_skill_asks_nothing_and_commits_as_the_gate_accepts() -> None:
+    # Why: ADRs 0028 and 0034 and the owner's principle: binding what is owed is not a question.
     safeguard = (SKILLS / "safeguard/SKILL.md").read_text(encoding="utf-8")
-    assert "One question, through the question tool, for every row at once" in safeguard
-    assert "--key safeguard.tools --kind tooling" in safeguard
+    assert "**Assume** `safeguard.tools`" in safeguard
+    assert "**Ask**" not in safeguard
     assert "`just bite-one <gate>`" in safeguard
     assert commits.SUBJECT.match("chore(method): safeguard outbound calls")
     assert "`chore(method): safeguard <what>`" in safeguard

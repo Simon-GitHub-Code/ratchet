@@ -9,7 +9,9 @@ Four plugins build software here, and each owns one question. `CLAUDE.md` is a s
 
 ## Asking the owner
 
-Every question to the owner goes through the harness's question tool, whichever plugin's skill is asking: one decision per question, two to four options, the recommended one first with its reason. Never a list of questions as free text. With no question tool, one question per message with numbered options.
+The owner is asked about the product and about nothing else, whichever plugin's skill is running. A product question is about what this should do, for whom, what matters, or a direction with real consequences that no experiment settles. Ask a product question through the harness's question tool, one at a time, in the words of someone using the product and with no method term, two to four options with the recommended one first and its reason; with no question tool, one per message with numbered options.
+
+Every other choice is yours, a companion plugin's included: a tool, a tracker or labels already recorded here, where tests reach the code, how to split work into tickets, a draft to confirm, whether to go on. Take the recommended or recorded answer, act on it, and list it at the end of your reply under **Assumed**: one line each, what you chose and why in a clause, and what the owner can say to change it, in plain words. The owner reads that block and overturns any line in their own words.
 
 ## What this is
 

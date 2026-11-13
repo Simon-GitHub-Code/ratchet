@@ -606,8 +606,11 @@ def test_a_tier_is_red_until_the_binding_pins_the_plugin_it_runs_from(tmp_path: 
     assert (code, said.splitlines()[-1]) == (0, "plugin-pin: green")
 
 
-def test_adopt_names_the_two_skills_and_the_owner_s_steps() -> None:
-    assert "`mattpocock-skills:grilling`" in ADOPT
+def test_adopt_names_the_records_skill_and_the_owner_s_steps() -> None:
+    # Why: ADR 0034. `grilling` ran only in the deleted interactive mode; the deeper interview
+    # is the owner's own `/mattpocock-skills:grill-with-docs`.
+    assert "mattpocock-skills:grilling" not in ADOPT
+    assert "`/mattpocock-skills:grill-with-docs`" in ADOPT
     assert "`mattpocock-skills:domain-modeling`" in ADOPT
     assert "Run `mattpocock-skills:grill-with-docs`" not in ADOPT
     assert "do not create `DESIGN.md`" in ADOPT
