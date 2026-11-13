@@ -22,7 +22,7 @@ Use these words, in code, tests, records and prose. Each one is a hook for the b
 - **ratchet**: a recorded threshold that only rises. The `ratchet` entry point raises it to the measured value.
 - **ceiling**: a recorded wall-clock limit per tier or gate, in seconds, that only falls. The `budget` entry point measures against it.
 - **absolute path**: code held at 100% coverage with no exclusion reaching it: the gate tools, and whatever the binding declares pure.
-- **guard path**: a file that defines, runs or records a gate. Listed in `guards/manifest.toml`. An agent changes one on a branch and the merge judge sends the change to the owner; the harness denies a change that would land on the default branch, and any change to a locked one.
+- **guard path**: a file that defines, runs or records a gate. Listed in `guards/manifest.toml`. An agent changes one on a branch and the merge judge sends the change to the owner; the harness denies a change that would land on the default branch, and any change to a locked one. Edit-time control stays for exactly the files whose effect comes before the merge: the harness also asks the owner before each write of a CI workflow or an agent-instruction file, guard path or not.
 - **dispute**: the record an agent writes when it believes a gate, not the code, is wrong. The owner decides.
 - **record**: the design brief, the glossary, an ADR, a feature brief, a dispute, an incident record, and for a user interface `PRODUCT.md` and `DESIGN.md`. Records are the standards a review judges against.
 - **owner**: the human. Decides disputes, changes gates by hand, and merges every change the merge judge does not pass.
