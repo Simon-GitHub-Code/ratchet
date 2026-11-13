@@ -492,3 +492,12 @@ def test_a_project_justfile_edited_in_both_ways_still_loads(indent: str, tmp_pat
 def test_the_recipes_that_run_a_dependency_first_are_found_in_the_template() -> None:
     assert justfile_text.first_dependents(TEMPLATE, "plugin-pin") == ("tier0", "weekly")
     assert justfile_text.first_dependents(TEMPLATE, "tier0") == ()
+
+
+def test_a_recipe_runs_a_line_through_what_it_depends_on_and_calls_and_never_loops() -> None:
+    text = (
+        "a: b missing\n    echo a\n\nb:\n    just c\n\nc: a\n    run the pin\n\nd: d\n    echo d\n"
+    )
+    assert justfile_text.runs(text, "a", "the pin")
+    assert not justfile_text.runs(text, "d", "the pin")
+    assert not justfile_text.runs(text, "nowhere", "the pin")

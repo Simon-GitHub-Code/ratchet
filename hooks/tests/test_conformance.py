@@ -439,7 +439,8 @@ def test_an_entry_point_whose_recipe_is_missing_names_the_recipe_to_copy(repo: P
     assert isinstance(finding.fix, conformance.Auto)
     assert finding.fix.does == "copy the template's `hooks-install` recipe"
     replace(JUSTFILE, "set shell", 'import "more.just"\n\nset shell')(repo)
-    assert red(repo) == [], "a justfile that imports another is not read for recipes"
+    write("more.just", "hooks-install:\n    echo installed\n")(repo)
+    assert red(repo) == [], "a recipe an imported file defines is the justfile's own"
 
 
 def test_a_missing_pin_prints_the_line_for_the_plugin_in_use(repo: Path) -> None:
@@ -454,7 +455,8 @@ def test_a_missing_pin_prints_the_line_for_the_plugin_in_use(repo: Path) -> None
             f" for the plugin in use: {line}"
         ),
         (
-            "justfile: no tier runs plugin_pin.py, so a local run can use a plugin other than"
+            "justfile: not every tier runs plugin_pin.py, so a local run can use a plugin other"
+            " than"
             " the one"
             " the binding pins; copy `plugin-pin` from the template justfile, as the first"
             " dependency of each tier"
@@ -732,15 +734,20 @@ def test_a_dropped_row_of_the_catalogue_prints_the_template_row_to_add(repo: Pat
     found = conformance.findings(repo)[0]
     assert found.problem == (
         "the Gates table has no 'backup restores' row; a row is bound or none, never dropped;"
-        " add the template's row, bound or `later: <trigger>`"
+        " add the template's row, bound, or `later: life:irreplaceable-data` only while that"
+        " trigger has not fired"
     )
     assert start(found) == ("| backup restores | | weekly | | `just restore-drill` |",)
     assert isinstance(found.fix, conformance.Agent)
     needs = (
         "binding 'backup restores' to a tool needs a [[bite]] for gate 'restore-drill' in"
-        " quality/bites.toml; a row that says `later: <trigger>` needs none"
+        " quality/bites.toml; a row that says `later: life:irreplaceable-data` needs none while"
+        " that trigger has not fired"
     )
-    assert found.fix.then == (needs,)
+    assert found.fix.then == (
+        "the binding does not declare the life event 'irreplaceable-data'",
+        needs,
+    )
 
 
 def test_a_missing_types_line_names_the_triggers_each_type_will_ask(repo: Path) -> None:

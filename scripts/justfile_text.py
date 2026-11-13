@@ -20,6 +20,8 @@ HEAD_NAME = re.compile(r"@?([A-Za-z_][\w-]*)")
 INTERPOLATION = re.compile(r"\{\{\s*([^}]*?)\s*\}\}")
 JUST_CALL = re.compile(r"\bjust[ \t]+(?:-\S+[ \t]+)*@?([A-Za-z_][\w-]*)")
 BARE_NAME = re.compile(r"[A-Za-z_][\w-]*")
+IMPORT = re.compile(r"""^import\??[ \t]+(['"])(.+?)\1""", re.MULTILINE)
+MODULE = re.compile(r"^mod\??[ \t]+([A-Za-z_][\w-]*)", re.MULTILINE)
 BINDS = "bind:"
 CHAIN = "&&"
 SHEBANG = "#!"
@@ -46,6 +48,38 @@ def definition(text: str, name: str) -> tuple[str, ...]:
             end += 1
         return tuple(lines[start:end])
     return ()
+
+
+def imports(text: str) -> list[str]:
+    """The paths a justfile's ``import`` lines name, as written: relative to the file itself."""
+    return [match.group(2) for match in IMPORT.finditer(text)]
+
+
+def modules(text: str) -> set[str]:
+    """The modules a justfile declares with ``mod``, whose recipes ``just`` runs by their name."""
+    return set(MODULE.findall(text))
+
+
+def runs(justfile: str, recipe: str, needle: str) -> bool:
+    """Whether running ``recipe`` runs a line holding ``needle``.
+
+    It does when the recipe's own lines hold it, or a recipe it depends on or calls with ``just``
+    runs it.
+    """
+    lines = justfile.split("\n")
+    defined = {block.name: (block, block.parsed) for block in blocks(lines) if block.parsed}
+    waiting, visited = [recipe], set()
+    while waiting:
+        name = waiting.pop()
+        if name in visited or name not in defined:
+            continue
+        visited.add(name)
+        block, head = defined[name]
+        body = code_of("\n".join(lines[block.head + 1 : block.end]))
+        if needle in body:
+            return True
+        waiting += [*head.before, *head.after, *JUST_CALL.findall(body)]
+    return False
 
 
 def defines_recipe(justfile: str, name: str) -> bool:

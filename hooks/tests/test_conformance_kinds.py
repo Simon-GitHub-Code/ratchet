@@ -82,8 +82,8 @@ AUTO = [
         "justfile: the `ratchet` recipe raises",
     ),
     (
-        lambda root: move_rule(root, "Edit(/GLOSSARY-MAP.md)", source="ask", target="deny"),
-        f"{SETTINGS}: 'Edit(/GLOSSARY-MAP.md)' in deny",
+        lambda root: move_rule(root, "Bash(git push --force:*)", source="deny", target="ask"),
+        f"{SETTINGS}: 'Bash(git push --force:*)' in ask",
     ),
     (
         replace(SETTINGS, '      "Edit(/GLOSSARY-MAP.md)",\n', ""),
@@ -103,7 +103,7 @@ def test_a_plugin_pin_recipe_is_copied_and_run_first_when_it_stands_on_its_own(
 ) -> None:
     replace(JUSTFILE, "plugin_pin.py", "pin.py")(repo)
     replace(JUSTFILE, "plugin-pin", "pinned")(repo)
-    [found] = [f for f in conformance.findings(repo) if f.problem.startswith("no tier runs")]
+    [found] = [f for f in conformance.findings(repo) if f.problem.startswith("not every tier runs")]
     assert isinstance(found.fix, conformance.Auto)
     made = found.fix.want((repo / JUSTFILE).read_text(encoding="utf-8"))
     assert "plugin-pin:" in made
@@ -112,10 +112,10 @@ def test_a_plugin_pin_recipe_is_copied_and_run_first_when_it_stands_on_its_own(
 
 def test_a_plugin_pin_recipe_that_cannot_be_copied_is_left_to_an_agent(repo: Path) -> None:
     replace(JUSTFILE, "plugin_pin.py", "pin.py")(repo)
-    assert kind(repo, "justfile: no tier runs plugin_pin.py") == "Agent"
+    assert kind(repo, "justfile: not every tier runs plugin_pin.py") == "Agent"
     replace(JUSTFILE, "plugin-pin", "pinned")(repo)
     replace(JUSTFILE, "ratchet_plugin", "plugin_home")(repo)
-    [found] = [f for f in conformance.findings(repo) if f.problem.startswith("no tier runs")]
+    [found] = [f for f in conformance.findings(repo) if f.problem.startswith("not every tier runs")]
     assert isinstance(found.fix, conformance.Agent)
     assert any("ratchet_plugin" in reason for reason in found.fix.then)
 
@@ -188,22 +188,28 @@ def test_nothing_under_guards_is_ever_an_auto_finding() -> None:
     assert conformance.Finding("guardsmith.toml", "a problem", fix).path == "guardsmith.toml"
 
 
-def test_an_edit_that_would_change_nothing_or_clear_nothing_is_not_auto() -> None:
-    other = conformance.Owner("which?")
-    same = conformance.edit(
-        "a", "p", "d", lambda text: text or "", "x", lambda _: True, otherwise=conformance.Agent()
-    )
-    unsolved = conformance.edit(
-        "a", "p", "d", lambda text: f"{text}!", "x", lambda _: False, otherwise=conformance.Agent()
-    )
-    works = conformance.edit(
-        "a", "p", "d", lambda text: f"{text}!", "x", lambda _: True, otherwise=conformance.Agent()
-    )
-    owned = conformance.edit(
-        "a", "p", "d", lambda text: text or "", "x", lambda _: True, otherwise=other
-    )
-    assert [type(f.fix).__name__ for f in (same, unsolved, works)] == ["Agent", "Agent", "Auto"]
-    assert owned.fix is other
+def test_an_edit_that_changes_nothing_or_clears_nothing_is_left_to_its_otherwise(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "notes.md").write_text("a\n")
+
+    def check(root: Path) -> list[conformance.Finding]:
+        done = (root / "notes.md").read_text() == "a\ndone\n"
+        return [] if done else [conformance.Finding("notes.md", "is not done", conformance.Agent())]
+
+    def trial(want: gatelib.Want, otherwise: conformance.Agent | conformance.Owner) -> object:
+        edit = conformance.Edit("d", want, otherwise)
+        fix = conformance.tried(
+            tmp_path, check, conformance.Finding("notes.md", "is not done", edit)
+        ).fix
+        assert (tmp_path / "notes.md").read_text() == "a\n"
+        return fix
+
+    agent, owner = conformance.Agent(), conformance.Owner("which?")
+    assert trial(lambda text: text or "", agent) is agent
+    assert trial(lambda text: f"{text}more\n", agent) is agent
+    assert trial(lambda text: text or "", owner) is owner
+    assert isinstance(trial(lambda text: f"{text}done\n", agent), conformance.Auto)
 
 
 def test_the_footer_names_how_many_findings_the_upgrade_makes(

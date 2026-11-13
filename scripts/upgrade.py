@@ -14,14 +14,16 @@ reaches the default branch only once the owner merges it (ADR 0029).
 Usage: ``upgrade.py [--root DIR] [--apply]``. Without ``--apply`` it writes nothing. Exit status:
 0 when nothing is left to write or to do, 1 when edits are unwritten or items remain, 2 when it
 refuses (the plugin is older than the pin, its order against the pin cannot be told, it has no
-commit to pin, or the root is not an adopted git repository), 3 when the plan does not settle,
-which is a bug in the plugin and leaves the repository as it was.
+commit to pin, the root is not an adopted git repository, a file it would write leads out of
+the repository or is one git ignores, or ``just`` cannot read the justfile it would write), 3 when
+the plan does not settle, which is a bug in the plugin and leaves the repository as it was.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import json
 import os
 import shutil
@@ -53,19 +55,9 @@ EDITORS = {
 }
 NOT_GUARDED = "not a guard path: an agent edits it"
 REFUSED, STUCK = 2, 3
-# Why: a hook exports these, and `git -C` obeys them over the directory it is given; the scratch
-# copy must be a repository of its own, not the one the hook is committing in.
-REPOSITORY_VARIABLES = frozenset(
-    {
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_COMMON_DIR",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_PREFIX",
-    }
-)
+JUSTFILE = "justfile"
+LOCK = ".lock"
+TEMPORARY = ".upgrade-"
 
 
 @dataclass(frozen=True)
@@ -126,25 +118,6 @@ class Stuck:
     findings: list[Finding]
 
 
-def git(root: Path, *args: str) -> None:
-    """Run git in the scratch copy."""
-    environment = {k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES}
-    subprocess.run(
-        ["git", "-C", str(root), *args], capture_output=True, check=True, env=environment
-    )
-
-
-def edited(want: gatelib.Want, data: bytes | None) -> bytes | None:
-    """The bytes ``want`` makes of a file's, or ``None`` when it leaves the file as it is."""
-    text = None if data is None else data.decode("utf-8", errors="replace")
-    crlf = text is not None and "\r\n" in text and text.count("\n") == text.count("\r\n")
-    plain = text.replace("\r\n", "\n") if text is not None and crlf else text
-    made = want(plain)
-    if plain is not None and made == plain:
-        return None
-    return (made.replace("\n", "\r\n") if crlf else made).encode("utf-8")
-
-
 def standing(root: Path, plugin: Path) -> str:
     """The plugin version and commit the repository runs now, as the report's first line says."""
     pin = plugin_pin.pinned(gatelib.read_text(root / gatelib.BINDING))
@@ -197,25 +170,6 @@ def refusal(root: Path, plugin: Path) -> str | None:
     return None
 
 
-def copy_tree(root: Path, sandbox: Path) -> None:
-    """What git sees of ``root`` (tracked, not ignored), copied to ``sandbox`` as a repository."""
-    listed = gatelib.git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-    for name in sorted({name for name in (listed or "").split("\0") if name}):
-        source, target = root / name, sandbox / name
-        if source.is_symlink():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.symlink_to(source.readlink())
-        elif source.is_file():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-    git(sandbox, "init", "-q")
-    git(sandbox, "add", "-A")
-
-
-class EscapeError(Exception):
-    """A file the plan must write leads out of the repository's tree."""
-
-
 class StuckError(Exception):
     """Auto findings that no edit clears."""
 
@@ -226,13 +180,11 @@ class StuckError(Exception):
 
 
 def inside(sandbox: Path, name: str) -> str:
-    """The path of ``name`` once symlinks are followed, relative to the sandbox."""
-    resolved = (sandbox / name).resolve()
-    try:
-        return str(resolved.relative_to(sandbox.resolve()))
-    except ValueError:
-        message = f"{name} leads outside the repository, so the upgrade does not write it"
-        raise EscapeError(message) from None
+    """The path of ``name`` once symlinks are followed, relative to the sandbox.
+
+    An auto edit always lands inside: its trial never writes outside the tree it is made in.
+    """
+    return str((sandbox / name).resolve().relative_to(sandbox.resolve()))
 
 
 def pass_over(sandbox: Path, autos: list[Finding], done: dict[str, list[str]]) -> set[str]:
@@ -245,7 +197,7 @@ def pass_over(sandbox: Path, autos: list[Finding], done: dict[str, list[str]]) -
         target = sandbox / name
         data = target.read_bytes() if target.is_file() else None
         for fix in wants:
-            made = edited(fix.want, data)
+            made = gatelib.edited(fix.want, data)
             if made is None:
                 continue
             data = made
@@ -272,7 +224,7 @@ def converge(sandbox: Path, done: dict[str, list[str]]) -> Converged:
     number = 0
     while True:
         number += 1
-        found = conformance.findings(sandbox)
+        found = conformance.findings(sandbox, owned=True)
         autos = [finding for finding in found if isinstance(finding.fix, Auto)]
         if not autos:
             return Converged(touched, found)
@@ -291,8 +243,7 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     changes: dict[str, Change] = {}
     with tempfile.TemporaryDirectory(prefix="ratchet-upgrade-") as scratch:
         sandbox = Path(scratch) / "tree"
-        sandbox.mkdir()
-        copy_tree(root, sandbox)
+        outside = gatelib.copy_seen(root, sandbox)
         line = plugin_pin.line_for(plugin)
         pin = Finding(
             str(gatelib.BINDING),
@@ -302,13 +253,18 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         try:
             touched = pass_over(sandbox, [pin], done)
             converged = converge(sandbox, done)
-            for name in touched | converged.touched:
-                before = (root / name).read_bytes() if (root / name).is_file() else None
-                changes[name] = Change(before, (sandbox / name).read_bytes())
-        except EscapeError as error:
-            return Refused(str(error))
         except StuckError as error:
             return Stuck(error.autos)
+        for name in sorted(touched | converged.touched):
+            before = (root / name).read_bytes() if (root / name).is_file() else None
+            changes[name] = Change(before, (sandbox / name).read_bytes())
+        reason = (
+            (unwritable(sandbox, changes, outside) or unreadable(root, sandbox))
+            if changes
+            else None
+        )
+        if reason is not None:
+            return Refused(reason)
     return Plan(
         old=standing(root, plugin),
         new=plugin_pin.in_use(plugin),
@@ -327,16 +283,70 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     )
 
 
+def joined(names: list[str]) -> str:
+    """``a``, ``a and b``, or ``a, b and c``."""
+    *head, last = names
+    return f"{', '.join(head)} and {last}" if head else last
+
+
+def unwritable(sandbox: Path, changes: dict[str, Change], outside: frozenset[str]) -> str | None:
+    """Why the plan must not write what it changed, or ``None``.
+
+    A file that leads out of the repository through a link would be written outside it. A file
+    git ignores is one the plan, which reads only what git sees, would write over unread, and one
+    the change git carries would never hold. Git is asked in the sandbox, which ignores what the
+    repository does and already holds each planned file, so a directory the plan makes counts.
+    """
+    names = write_order(changes)
+    out = [name for name in names if any(name == o or name.startswith(f"{o}/") for o in outside)]
+    if out:
+        return f"{out[0]} leads outside the repository, so the upgrade does not write it"
+    asked = ("-c", "core.quotepath=off", "check-ignore", "--", *names)
+    ignored = gatelib.scratch_git(sandbox, *asked, ok=(0, 1)).splitlines()
+    if ignored:
+        return (
+            f"git ignores {joined(ignored)}, so the upgrade, which reads only what git sees, would"
+            " write there unread and the change would not carry it; track it (`git add -f`) or"
+            " stop ignoring it, then run this again"
+        )
+    return None
+
+
+def unreadable(root: Path, sandbox: Path) -> str | None:
+    """What ``just`` says of the planned justfile when it reads the repository's and not that one.
+
+    Why: a justfile ``just`` cannot read turns every gate red. Without ``just`` on the path there
+    is nothing to ask, and the edits stand on the checks alone.
+    """
+    just = shutil.which("just")
+    if just is None:
+        return None
+
+    def error(tree: Path) -> str | None:
+        done = subprocess.run(  # -- a fixed argv, `just` from PATH
+            [just, "--justfile", str(tree / JUSTFILE), "--list"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return done.stderr.strip().splitlines()[0] if done.returncode else None
+
+    planned = error(sandbox)
+    if planned is None or error(root) is not None:
+        return None
+    return f"`just` cannot read the planned justfile, so nothing is written: {planned}"
+
+
 def write_order(changes: dict[str, Change]) -> list[str]:
     """The files in the order they are written: the binding last, so the pin moves after them."""
     binding = str(gatelib.BINDING)
     return sorted(changes, key=lambda name: (name == binding, name))
 
 
-def write_atomically(path: Path, data: bytes) -> None:
-    """Replace ``path`` with ``data`` by renaming a file made beside it, keeping its mode."""
+def write_atomically(path: Path, data: bytes, holder: Path) -> None:
+    """Replace ``path`` with ``data`` by renaming a file made in ``holder``, keeping its mode."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".upgrade-")
+    handle, temporary = tempfile.mkstemp(dir=holder, prefix=TEMPORARY)
     try:
         with os.fdopen(handle, "wb") as out:
             out.write(data)
@@ -351,9 +361,22 @@ def write_atomically(path: Path, data: bytes) -> None:
 
 
 def apply(root: Path, changes: dict[str, Change]) -> None:
-    """Write each changed file, the binding last."""
-    for name in write_order(changes):
-        write_atomically(root / name, changes[name].after)
+    """Write each changed file, the binding last, one apply at a time.
+
+    Why: each file is made whole in the repository's uncommitted state, which git ignores, and
+    renamed into place. A run stopped between the two leaves nothing git sees or the plan reads,
+    and the next one clears it; a lock keeps that clearing from taking a running apply's file.
+    """
+    if not changes:
+        return
+    holder = gatelib.state_dir(root) / "upgrade"
+    holder.mkdir(exist_ok=True)
+    with (holder / LOCK).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for left in holder.glob(f"{TEMPORARY}*"):
+            left.unlink()
+        for name in write_order(changes):
+            write_atomically(root / name, changes[name].after, holder)
 
 
 def editor(root: Path, path: str) -> str:

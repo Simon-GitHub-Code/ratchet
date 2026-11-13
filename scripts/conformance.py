@@ -8,12 +8,13 @@ to pass and each mutated one to fail, so the checker is shown to bite.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
 import sys
 import tempfile
 import tomllib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -142,6 +143,7 @@ GLOSSARY_PLACEHOLDER = "<project>"
 PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 PIN_RECIPE = "plugin-pin"
+PIN_SCRIPT = "plugin_pin.py"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
@@ -185,7 +187,6 @@ INIT_TEMPLATES = TEMPLATES / "init/templates"
 AGENTS_TEMPLATE = INIT_TEMPLATES / "AGENTS.md"
 ASKING = "## Asking the owner"
 RUNS_JUST = re.compile(r"^just\s+@?([A-Za-z_][\w-]*)")
-INCLUDES = re.compile(r"^(?:import|mod)\b", re.MULTILINE)
 # Why: a gate over the change compares with a base; `changed.py` hands it one, and judges nothing
 # on the adoption, whose base holds no binding.
 OVER_THE_CHANGE = frozenset({"diff-coverage", "test-counts", "mutation-changed"})
@@ -195,7 +196,10 @@ TIMED = frozenset({"perf", "load"})
 
 @dataclass(frozen=True)
 class Auto:
-    """A fix the upgrade makes itself: one line for the report, and the text it makes of a file."""
+    """A fix the upgrade makes itself: one line for the report, and the text it makes of a file.
+
+    Only ``tried`` makes one, from an ``Edit`` its check offered.
+    """
 
     does: str
     want: gatelib.Want
@@ -218,7 +222,16 @@ class Owner:
     then: tuple[str, ...] = ()
 
 
-Fix = Auto | Agent | Owner
+@dataclass(frozen=True)
+class Edit:
+    """An edit a check offers, and who fixes the finding when the edit does not clear it."""
+
+    does: str
+    want: gatelib.Want
+    otherwise: Agent | Owner
+
+
+Fix = Auto | Edit | Agent | Owner
 
 
 @dataclass(frozen=True)
@@ -230,8 +243,8 @@ class Finding:
     fix: Fix
 
     def __post_init__(self) -> None:
-        """Refuse an auto fix under ``guards/``: the manifest says who may edit those paths."""
-        if isinstance(self.fix, Auto) and PurePosixPath(self.path).parts[:1] == ("guards",):
+        """Refuse an edit under ``guards/``: the manifest says who may edit those paths."""
+        if isinstance(self.fix, Auto | Edit) and PurePosixPath(self.path).parts[:1] == ("guards",):
             message = f"{self.path}: an upgrade never writes under guards/ by itself"
             raise ValueError(message)
 
@@ -257,24 +270,75 @@ def owner(
     return Finding(path, problem, Owner(ask, evidence, then))
 
 
-def edit(  # noqa: PLR0913, PLR0917 # -- a finding is its path, problem and fix, and the edit is three more
-    path: str,
-    problem: str,
-    does: str,
-    want: gatelib.Want,
-    current: str | None,
-    solved: Callable[[str], bool],
-    *,
-    otherwise: Fix,
-) -> Finding:
-    """A finding the upgrade fixes when ``want`` turns ``current`` into a text that ``solved``."""
-    after = want(current)
-    fixes = (current is None or after != current) and solved(after)
-    return Finding(path, problem, Auto(does, want) if fixes else otherwise)
+@contextlib.contextmanager
+def made(tree: Path, name: str, want: gatelib.Want) -> Iterator[bool]:
+    """The tree with ``want`` made of its file ``name`` until the block ends; whether it changed.
+
+    The file is followed through links inside the tree and never written outside it. When the
+    block ends the file holds its bytes again, or is gone with the directories made for it.
+    """
+    target = (tree / name).resolve()
+    data = target.read_bytes() if target.is_file() else None
+    after = gatelib.edited(want, data)
+    if after is None or not target.is_relative_to(tree.resolve()):
+        yield False
+        return
+    created = [parent for parent in target.parents if not parent.exists()]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(after)
+    try:
+        yield True
+    finally:
+        if data is not None:
+            target.write_bytes(data)
+        elif created:
+            shutil.rmtree(created[-1])
+        else:
+            target.unlink()
+
+
+def tried(tree: Path, check: Check, finding: Finding) -> Finding:
+    """The finding with its offered edit made ``Auto`` or ``otherwise``, as the check then says.
+
+    Why: an edit counts as the fix only when the check that raised the finding, run again on the
+    tree the edit made, no longer raises it. A test of the edit's own could be weaker than its
+    finding, and a gate the upgrade claims to have fixed would stay loose without a sound.
+    """
+    fix = finding.fix
+    if not isinstance(fix, Edit):
+        return finding
+    with made(tree, finding.path, fix.want) as changed:
+        cleared = changed and all(
+            (again.path, again.problem) != (finding.path, finding.problem) for again in check(tree)
+        )
+    return Finding(
+        finding.path, finding.problem, Auto(fix.does, fix.want) if cleared else fix.otherwise
+    )
 
 
 def read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
+
+
+def read_justfile(root: Path) -> str | None:
+    """The justfile and every file it imports, in the order ``just`` reads them, as one text.
+
+    Why: ``just`` reads an imported recipe as the justfile's own, so a check that read the
+    justfile alone would ask for a recipe it already has, and an edit would define it twice.
+    """
+    texts: list[str] = []
+    read_already: set[Path] = set()
+    waiting = [root / "justfile"]
+    while waiting:
+        path = waiting.pop(0)
+        text = None if path.resolve() in read_already else read(path)
+        read_already.add(path.resolve())
+        if text is not None:
+            texts.append(text)
+            waiting += [
+                path.parent / Path(name).expanduser() for name in justfile_text.imports(text)
+            ]
+    return "\n".join(texts) if texts else None
 
 
 def template_file(path: str) -> str:
@@ -290,9 +354,7 @@ def headings(text: str) -> tuple[str, ...]:
 def whole_file(path: str, problem: str, template: str | None = None) -> Finding:
     """A file missing that the template supplies whole, under ``template`` or its own path."""
     want = gatelib.created(template_file(template or path))
-    return edit(
-        path, problem, "add the template's file", want, None, lambda _: True, otherwise=Agent()
-    )
+    return Finding(path, problem, Edit("add the template's file", want, Agent()))
 
 
 def kept_directory(path: str) -> Finding:
@@ -300,20 +362,13 @@ def kept_directory(path: str) -> Finding:
     return whole_file(f"{path}/.gitkeep", f"the directory {path} is missing")
 
 
-def missing_section(
-    path: str, problem: str, heading: str, *, text: str, template_text: str
-) -> Finding:
+def missing_section(path: str, problem: str, heading: str, *, template_text: str) -> Finding:
     """A ``## `` section the template has and the file lacks: the upgrade adds it verbatim."""
     block = heading + markdown_text.section(template_text, heading).rstrip()
     want = markdown_text.with_section(heading, block, headings(template_text))
-    return edit(
-        path,
-        problem,
-        f"add the template's '{heading}' section",
-        want,
-        text,
-        lambda after: heading in headings(after),
-        otherwise=Agent(start=(heading, *block.splitlines()[1:])),
+    start = (heading, *block.splitlines()[1:])
+    return Finding(
+        path, problem, Edit(f"add the template's '{heading}' section", want, Agent(start))
     )
 
 
@@ -330,11 +385,9 @@ def check_agent_instructions(root: Path) -> Iterable[Finding]:
         yield agent("AGENTS.md (or CLAUDE.md): missing")
     elif "ratchet:method" not in text:
         yield agent("AGENTS.md: does not tell agents to load the ratchet:method skill")
-    elif ASKING not in text:
+    elif not markdown_text.has_section(text, ASKING):
         problem = f"has no '{ASKING}' section; copy it from the template AGENTS.md"
-        yield missing_section(
-            name, problem, ASKING, text=text, template_text=read(AGENTS_TEMPLATE) or ""
-        )
+        yield missing_section(name, problem, ASKING, template_text=read(AGENTS_TEMPLATE) or "")
 
 
 def check_glossary(root: Path) -> Iterable[Finding]:
@@ -343,7 +396,7 @@ def check_glossary(root: Path) -> Iterable[Finding]:
     text = read(root / "GLOSSARY.md")
     if text is None:
         yield agent("GLOSSARY.md (or GLOSSARY-MAP.md): missing")
-    elif "## Language" not in text:
+    elif not markdown_text.has_section(text, "## Language"):
         yield agent("GLOSSARY.md: has no '## Language' section")
     elif GLOSSARY_PLACEHOLDER in text:
         yield agent(f"GLOSSARY.md: still names '{GLOSSARY_PLACEHOLDER}'; name the project")
@@ -354,8 +407,9 @@ def check_brief(root: Path) -> Iterable[Finding]:
     if text is None:
         yield agent("docs/design-brief.md: missing")
         return
+    lines = text.splitlines()
     for heading in ("## Slice one", "## Explicitly out"):
-        if heading not in text:
+        if not any(line.startswith(heading) for line in lines):
             yield agent(f"docs/design-brief.md: has no '{heading}' section")
 
 
@@ -395,7 +449,7 @@ def check_adr(number: int, path: Path, rel: Path) -> Iterable[Finding]:
         yield agent(f"{rel}: status '{status}' is not {ADR_STATUS_WORDS}")
     if status == "superseded" and superseded_by is None:
         yield agent(f"{rel}: a superseded ADR names its successor: 'superseded-by: NNNN'")
-    if REFUTATION_SECTION not in text:
+    if not markdown_text.has_section(text, REFUTATION_SECTION):
         yield agent(f"{rel}: has no '{REFUTATION_SECTION}' section")
     elif markdown_text.empty_body(text, REFUTATION_SECTION):
         yield agent(f"{rel}: '{REFUTATION_SECTION}' names no observation that would show it wrong")
@@ -434,7 +488,7 @@ def entry_points(text: str) -> dict[str, str]:
     return dict(markdown_text.table_cells(markdown_text.section(text, ENTRY_POINTS_SECTION)))
 
 
-def entry_row(name: str, rows: dict[str, tuple[str, str]], text: str, *, on_just: bool) -> Finding:
+def entry_row(name: str, rows: dict[str, tuple[str, str]], *, on_just: bool) -> Finding:
     """A missing Entry points row, which the upgrade adds when the runner is ``just``."""
     row = rows[name][0]
     problem = (
@@ -443,15 +497,9 @@ def entry_row(name: str, rows: dict[str, tuple[str, str]], text: str, *, on_just
     )
     if not on_just:
         return Finding(BINDING_PATH, problem, Agent(start=(row,)))
-    return edit(
-        BINDING_PATH,
-        problem,
-        f"add the template's row for '{name}'",
-        markdown_text.with_row(ENTRY_POINTS_SECTION, row, tuple(rows)),
-        text,
-        lambda made: name in entry_points(made),
-        otherwise=Agent(start=(row,)),
-    )
+    want = markdown_text.with_row(ENTRY_POINTS_SECTION, row, tuple(rows))
+    edit = Edit(f"add the template's row for '{name}'", want, Agent(start=(row,)))
+    return Finding(BINDING_PATH, problem, edit)
 
 
 def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
@@ -469,33 +517,31 @@ def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
             f"{problem}; it cannot be copied as it stands: {'; '.join(reasons)}",
             Agent(start=start),
         )
-    return edit(
-        "justfile",
-        problem,
-        f"copy the template's `{recipe}` recipe",
-        justfile_text.with_recipe(text, recipe),
-        justfile,
-        lambda made: justfile_text.defines_recipe(made, recipe),
-        otherwise=Agent(start=start),
-    )
+    want = justfile_text.with_recipe(text, recipe)
+    edit = Edit(f"copy the template's `{recipe}` recipe", want, Agent(start=start))
+    return Finding("justfile", problem, edit)
 
 
 def check_entry_points(root: Path, text: str) -> Iterable[Finding]:
-    """Every entry point has a row naming its command, and a ``just`` command has its recipe."""
+    """Every entry point has a row naming its command, and a ``just`` command has its recipe.
+
+    A command that names a module the justfile declares with ``mod`` runs that module's recipe,
+    which this check does not read.
+    """
     commands = entry_points(text)
     rows = template_rows()
     on_just = all(command.strip("`").split()[:1] == ["just"] for command in commands.values())
-    justfile = read(root / "justfile")
+    justfile = read_justfile(root)
     for name in ENTRY_POINTS:
         command = commands.get(name)
         if command is None:
             command = rows[name][1]
-            yield entry_row(name, rows, text, on_just=on_just)
+            yield entry_row(name, rows, on_just=on_just)
         elif not command or "<" in command:
             yield agent(f"{BINDING_PATH}: entry point '{name}' names no command")
             continue
         recipe = RUNS_JUST.match(command.strip("`"))
-        if justfile is None or INCLUDES.search(justfile) or recipe is None:
+        if justfile is None or recipe is None or recipe.group(1) in justfile_text.modules(justfile):
             continue
         if not justfile_text.defines_recipe(justfile, recipe.group(1)):
             yield missing_recipe(justfile, recipe.group(1), name)
@@ -522,30 +568,78 @@ def check_binding(root: Path) -> Iterable[Finding]:
         for question in sorted(catalogue.questions - {question for question, _ in rows})
     }
     typing = catalogue.types_problem(text)
+    fired = Fired.of(root, text) if dropped else Fired({}, frozenset())
     for failure in catalogue.failures(text, rows, adrs):
         question = dropped.get(failure)
         if question is not None:
-            yield Finding(
-                BINDING_PATH,
-                f"{failure}; add the template's row, bound or `later: <trigger>`",
-                Agent(start=(template_gate_row(question),), then=bite_follows(question)),
-            )
+            trigger = catalogue.trigger_of(question)
+            yield dropped_row(failure, question, trigger=trigger, fired=fired)
         elif failure == typing:
             yield agent(f"{BINDING_PATH}: {failure}", then=triggers_follow(catalogue))
         else:
             yield agent(f"{BINDING_PATH}: {failure}")
 
 
-def bite_follows(question: str) -> tuple[str, ...]:
-    """What binding a Gates row asks next: a bite of the gate it names, unless it waits."""
+@dataclass(frozen=True)
+class Fired:
+    """What says whether a trigger has fired here: each kind's instances, the declared events."""
+
+    found: dict[str, list[str]]
+    events: frozenset[str]
+
+    @classmethod
+    def of(cls, root: Path, binding: str) -> Fired:
+        """What the binding's Triggers table finds in the tree, and the events it declares."""
+        kinds, _ = triggers.parse(binding)
+        return cls(triggers.instances(root, None, kinds), application_types.life_events(binding))
+
+    def part(self, part: str) -> tuple[bool | None, str]:
+        """Whether one part of a trigger has fired (``None``: it cannot be told), and why."""
+        if part.startswith(application_types.LIFE):
+            event = part.removeprefix(application_types.LIFE)
+            said = "declares" if event in self.events else "does not declare"
+            return event in self.events, f"the binding {said} the life event '{event}'"
+        kind = part.removeprefix(application_types.CODE)
+        if kind not in self.found:
+            return None, (
+                f"the Triggers table has no row for '{kind}', so whether it has fired here is"
+                " not known; write that row first"
+            )
+        count = len(self.found[kind])
+        if not count:
+            return False, f"'{kind}' has no instance here yet"
+        many = "instances" if count > 1 else "instance"
+        return True, f"'{kind}' has {count} {many} here: {triggers.listing(self.found[kind])}"
+
+
+def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> Finding:
+    """A Gates row the catalogue gained since the adoption: its template row, and how to fill it.
+
+    Why: ADR 0028. `later:` is for a trigger that has not fired; written for one that has, it is
+    green and defers a safeguard already owed. So the item says which this repository is.
+    """
     gate = next(
         row.gate for row in project_bite.gate_rows(template_binding()) if row.question == question
     )
-    needs = (
+    bite = (
         f"binding '{question}' to a tool needs a [[bite]] for gate '{gate}' in"
-        f" {project_bite.REGISTRY}; a row that says `later: <trigger>` needs none"
+        f" {project_bite.REGISTRY}"
     )
-    return (needs,)
+    start = (template_gate_row(question),)
+    if trigger == application_types.ALWAYS:
+        fill = "add the template's row and bind it: the question is asked from the first commit"
+        return Finding(BINDING_PATH, f"{failure}; {fill}", Agent(start, (bite,)))
+    said = [fired.part(part) for part in application_types.parts(trigger)]
+    shown = tuple(why for _, why in said)
+    if {state for state, _ in said} == {True}:
+        fill = f"add the template's row and bind it: its trigger `{trigger}` has fired here"
+        return Finding(BINDING_PATH, f"{failure}; {fill}", Agent(start, (*shown, bite)))
+    fill = (
+        f"add the template's row, bound, or `later: {trigger}` only while that trigger has not"
+        " fired"
+    )
+    waits = f"; a row that says `later: {trigger}` needs none while that trigger has not fired"
+    return Finding(BINDING_PATH, f"{failure}; {fill}", Agent(start, (*shown, bite + waits)))
 
 
 def triggers_follow(catalogue: application_types.Catalogue) -> tuple[str, ...]:
@@ -612,7 +706,7 @@ def check_triggers(root: Path) -> Iterable[Finding]:
         return
     yield from declared_events(root, text)
     catalogue = application_types.load()
-    if triggers.SECTION.strip() not in text:
+    if not markdown_text.has_section(text, triggers.SECTION.strip()):
         yield Finding(
             BINDING_PATH,
             "has no '## Triggers' section; add the template's, one row per kind of code a question"
@@ -666,7 +760,7 @@ def pr_template_path(root: Path) -> str:
 
 def check_speed(root: Path) -> Iterable[Finding]:
     text = read(root / BINDING_PATH) or ""
-    if text and SPEED_SECTION not in text:
+    if text and not markdown_text.has_section(text, SPEED_SECTION):
         yield agent(f"{BINDING_PATH}: has no '{SPEED_SECTION}' section (ceilings, shards)")
     elif text:
         yield from check_speed_parts(markdown_text.section(text, SPEED_SECTION))
@@ -803,16 +897,14 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
     pin = plugin_pin.pinned(binding)
     if pin is None:
         line = plugin_pin.line_for(plugin_pin.PLUGIN)
-        yield edit(
-            BINDING_PATH,
+        problem = (
             "no '- Ratchet plugin: <version> at <commit>' line; add under '## Runner', for the"
-            f" plugin in use: {line}",
-            "add the pin line for the plugin in use",
-            plugin_pin.with_pin(line),
-            binding,
-            lambda made: plugin_pin.pinned(made) is not None,
-            otherwise=Agent(start=(line,)),
+            f" plugin in use: {line}"
         )
+        edit = Edit(
+            "add the pin line for the plugin in use", plugin_pin.with_pin(line), Agent((line,))
+        )
+        yield Finding(BINDING_PATH, problem, edit)
     yield from check_pin_recipe(root)
     if pin is None:
         return
@@ -824,16 +916,16 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
                 f"{WORKFLOWS / name}: checks no plugin out by `repository:` then `ref:`, so "
                 "nothing holds it to the commit the binding pins"
             )
+        moved = Edit(
+            f"set the plugin `ref` to the pinned {pin.commit[:12]}",
+            plugin_pin.with_refs(pin.commit),
+            Agent(),
+        )
         for ref in sorted(refs - {pin.commit}):
-            yield edit(
-                str(WORKFLOWS / name),
-                f"checks the plugin out at '{ref}', not the commit the binding pins ({pin.commit})",
-                f"set the plugin `ref` to the pinned {pin.commit[:12]}",
-                plugin_pin.with_refs(pin.commit),
-                text,
-                lambda made: plugin_pin.refs(made) <= {pin.commit},
-                otherwise=Agent(),
+            problem = (
+                f"checks the plugin out at '{ref}', not the commit the binding pins ({pin.commit})"
             )
+            yield Finding(str(WORKFLOWS / name), problem, moved)
 
 
 def check_toolchain(root: Path) -> Iterable[Finding]:
@@ -863,37 +955,66 @@ def after_marker(lines: list[str]) -> dict[int, str]:
     }
 
 
+def tier_recipes(binding: str, justfile: str) -> dict[str, str]:
+    """The recipe each tier runs, by entry point, for every tier the justfile defines.
+
+    The tiers are those the template runs `plugin-pin` first in. Each is named as the binding's
+    Entry points row names it, or as the template's row does while the binding has none.
+    """
+    commands = entry_points(binding)
+    rows = template_rows()
+    named = {}
+    for tier in justfile_text.first_dependents(template_file("justfile"), PIN_RECIPE):
+        recipe = RUNS_JUST.match((commands.get(tier) or rows[tier][1]).strip("`"))
+        if recipe is not None and justfile_text.defines_recipe(justfile, recipe.group(1)):
+            named[tier] = recipe.group(1)
+    return named
+
+
 def check_pin_recipe(root: Path) -> Iterable[Finding]:
-    justfile = read(root / "justfile")
-    if justfile is None or "plugin_pin.py" in justfile:
+    """Every tier runs plugin_pin.py, so no local run of one uses a plugin other than the pin.
+
+    Why: a recipe that exists but that no tier runs checks nothing. A tier runs the pin check when
+    its recipe, or a recipe it depends on or calls with ``just``, does. A justfile with no tier
+    recipe at all is held to naming the script.
+    """
+    justfile = read_justfile(root)
+    if justfile is None:
+        return
+    tiers = tier_recipes(read(root / BINDING_PATH) or "", justfile)
+    unpinned = {
+        tier: recipe
+        for tier, recipe in tiers.items()
+        if not justfile_text.runs(justfile, recipe, PIN_SCRIPT)
+    }
+    if not unpinned and (tiers or PIN_SCRIPT in justfile_text.code_of(justfile)):
         return
     text = template_file("justfile")
     problem = (
-        "no tier runs plugin_pin.py, so a local run can use a plugin other than the one the"
-        " binding pins; copy `plugin-pin` from the template justfile, as the first dependency"
-        " of each tier"
+        f"not every tier runs {PIN_SCRIPT}, so a local run can use a plugin other than the one"
+        " the binding pins; copy `plugin-pin` from the template justfile, as the first"
+        " dependency of each tier"
     )
     start = template_definition(PIN_RECIPE)
-    reasons = justfile_text.unmet(text, justfile, PIN_RECIPE)
-    if reasons or justfile_text.defines_recipe(justfile, PIN_RECIPE):
-        yield Finding("justfile", problem, Agent(start=start, then=reasons))
-        return
-    wants = [
-        justfile_text.with_recipe(text, PIN_RECIPE),
-        *(
-            justfile_text.with_first_dependency(recipe, PIN_RECIPE)
-            for recipe in justfile_text.first_dependents(text, PIN_RECIPE)
-        ),
-    ]
-    yield edit(
-        "justfile",
-        problem,
-        f"copy the template's `{PIN_RECIPE}` recipe and run it first in each tier",
-        gatelib.chained(*wants),
-        justfile,
-        lambda made: "plugin_pin.py" in made,
-        otherwise=Agent(start=start),
+    unrun = tuple(
+        f"`{recipe}`, the binding's {tier}, does not run it" for tier, recipe in unpinned.items()
     )
+    defined = justfile_text.defines_recipe(justfile, PIN_RECIPE)
+    reasons = () if defined else justfile_text.unmet(text, justfile, PIN_RECIPE)
+    if reasons:
+        yield Finding("justfile", problem, Agent(start=start, then=reasons + unrun))
+        return
+    copied = [] if defined else [justfile_text.with_recipe(text, PIN_RECIPE)]
+    wants = [
+        justfile_text.with_first_dependency(recipe, PIN_RECIPE) for recipe in unpinned.values()
+    ]
+    does = f"run `{PIN_RECIPE}` first in each tier"
+    edit = Edit(
+        does if defined else f"copy the template's `{PIN_RECIPE}` recipe and {does}",
+        gatelib.chained(*copied, *wants),
+        Agent(start=start, then=unrun),
+    )
+    yield Finding("justfile", problem, edit)
 
 
 def answered_gates(binding: str) -> set[str]:
@@ -938,24 +1059,15 @@ def ratchet_asks(justfile: str) -> Finding:
     reasons = () if stands else justfile_text.unmet(text, justfile, "hooks-installed")
     if reasons:
         return Finding("justfile", problem, Agent(start=start, then=reasons))
-    want = gatelib.chained(
-        justfile_text.with_recipe(text, "hooks-installed"),
-        justfile_text.with_first_line("ratchet", first),
-    )
-    return edit(
-        "justfile",
-        problem,
-        "ask `hooks-installed` first in the `ratchet` recipe, as the template does",
-        want,
-        justfile,
-        lambda made: asks_hooks("\n".join(justfile_text.definition(made, "ratchet"))),
-        otherwise=Agent(start=start),
-    )
+    copied = [] if stands else [justfile_text.with_recipe(text, "hooks-installed")]
+    want = gatelib.chained(*copied, justfile_text.with_first_line("ratchet", first))
+    does = "ask `hooks-installed` first in the `ratchet` recipe, as the template does"
+    return Finding("justfile", problem, Edit(does, want, Agent(start=start)))
 
 
 def check_runner(root: Path) -> Iterable[Finding]:
     """What the template justfile's tiers rely on, read only where a justfile is the runner."""
-    justfile = read(root / "justfile")
+    justfile = read_justfile(root)
     if justfile is None:
         return
     yield from check_tier_lists(root, justfile)
@@ -1043,7 +1155,7 @@ def check_commit_hooks(root: Path) -> Iterable[Finding]:
         yield from check_framework_hooks(text)
     else:
         yield from check_other_hooks(name, text, install)
-    justfile = read(root / "justfile")
+    justfile = read_justfile(root)
     if justfile is not None and hooks_installed.PROBE_ENV not in justfile:
         yield agent(
             f"justfile: the `pre-commit` and `commit-msg` recipes do not answer "
@@ -1068,21 +1180,14 @@ def settings_finding(
     if found.fault is settings_rules.Fault.MANIFEST:
         return agent(found.line)
     path, _, problem = found.line.partition(": ")
-    broken = settings_rules.parse_settings(text) is None
-    return edit(
-        path,
-        problem,
-        "regenerate the permission rules from the manifest, keeping the project's own",
-        settings_rules.regenerated(manifest),
-        text,
-        lambda made: (
-            found
-            not in settings_rules.drifts_of(manifest, settings_rules.parse_settings(made) or {})
-        ),
-        otherwise=Agent(
-            then=(f"{path} is not a JSON object, so it is left as it is",) if broken else ()
-        ),
-    )
+    settings = settings_rules.parse_settings(text)
+    kept = settings_rules.stricter(settings or {}, manifest)
+    does = "regenerate the permission rules from the manifest, keeping the project's own"
+    if kept:
+        does += f"; keeping in deny what the plugin asks: {', '.join(f'`{r}`' for r in kept)}"
+    broken = (f"{path} is not a JSON object, so it is left as it is",) if settings is None else ()
+    edit = Edit(does, settings_rules.regenerated(manifest), Agent(then=broken))
+    return Finding(path, problem, edit)
 
 
 def check_settings(root: Path) -> Iterable[Finding]:
@@ -1172,7 +1277,7 @@ def check_disputes(root: Path) -> Iterable[Finding]:
         if match is None or match.group(1) not in DISPUTE_STATUSES:
             yield agent(f"{path.relative_to(root)}: needs '- Status: open|upheld|rejected'")
         for section in DISPUTE_SECTIONS:
-            if section not in text:
+            if not markdown_text.has_section(text, section):
                 yield agent(f"{path.relative_to(root)}: has no '{section}' section")
 
 
@@ -1193,10 +1298,9 @@ def check_pr_template(root: Path) -> Iterable[Finding]:
         )
         return
     for heading in PR_SECTIONS:
-        if not re.search(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE):
-            yield missing_section(
-                relative, f"has no '{heading}' section", heading, text=text, template_text=wanted
-            )
+        if not markdown_text.has_section(text, heading):
+            problem = f"has no '{heading}' section"
+            yield missing_section(relative, problem, heading, template_text=wanted)
 
 
 # Why: the pin comes first, since an upgrade reads the plugin's commit from it.
@@ -1227,13 +1331,34 @@ CHECKS: tuple[Check, ...] = (
 )
 
 
-def findings(root: Path) -> list[Finding]:
-    """Every failure of every check, in the order of ``CHECKS``."""
-    return [failure for check in CHECKS for failure in check(root)]
+def raised(root: Path) -> list[tuple[Check, Finding]]:
+    """Every failure of every check, in the order of ``CHECKS``, with the check that raised it."""
+    found = [(check, failure) for check in CHECKS for failure in check(root)]
+    if any(isinstance(failure.fix, Auto) for _, failure in found):
+        message = "a check offers an Edit: only the trial makes a finding auto"
+        raise TypeError(message)
+    return found
+
+
+def findings(root: Path, *, owned: bool = False) -> list[Finding]:
+    """Every failure of every check, each edit a check offers tried by ``tried``.
+
+    The edits are tried in a copy of what git sees of ``root``, or in ``root`` itself when the
+    caller ``owned`` it: the upgrade's own copy, which nothing else reads while it runs.
+    """
+    found = raised(root)
+    if not any(isinstance(failure.fix, Edit) for _, failure in found):
+        return [failure for _, failure in found]
+    with contextlib.ExitStack() as stack:
+        tree = root
+        if not owned:
+            tree = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="ratchet-trial-")))
+            gatelib.copy_seen(root, tree)
+        return [tried(tree, check, failure) for check, failure in found]
 
 
 def failures(root: Path) -> list[str]:
-    return [str(finding) for finding in findings(root)]
+    return [str(finding) for _, finding in raised(root)]
 
 
 def run(root: Path) -> int:

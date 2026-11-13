@@ -16,6 +16,8 @@ A group's ``exclude`` has no permission-rule equivalent, so a manifest that uses
 list the paths the group should cover instead. The rules the plugin generates are the whole of
 what it writes: a rule no version of it generates is the project's own, and ``regenerated`` keeps
 it where it stood, so ``--check`` still reports it and no write removes it. A rule the plugin
+writes in ``ask`` that the project holds in ``deny`` is stricter than the plugin's: it stays in
+``deny``, and neither list reports it. A rule the plugin
 generated under an earlier mapping, such as the ``ask`` an append group once had, is regenerated.
 
 Usage: ``settings_rules.py [--root DIR] [--check | --write]``. ``--check`` (the default) prints
@@ -197,16 +199,24 @@ def drifts(root: Path) -> list[Drift]:
     return drifts_of(manifest, read_settings(root))
 
 
+def stricter(settings: dict[str, object], manifest: dict[str, object]) -> list[str]:
+    """The rules the plugin asks for that the project denies: stricter than the plugin's, kept."""
+    (_, ask), _ = rules(manifest)
+    denied = listed(settings, "deny")
+    return [rule for rule in ask if rule in denied]
+
+
 def drifts_of(manifest: dict[str, object], settings: dict[str, object]) -> list[Drift]:
     """The drift of ``settings`` from what ``manifest`` asks for."""
     (deny, ask), problems = rules(manifest)
+    kept = stricter(settings, manifest)
     found = [Drift(problem, Fault.MANIFEST) for problem in problems]
-    for key, expected in (("deny", deny), ("ask", ask)):
+    for key, expected in (("deny", [*deny, *kept]), ("ask", ask)):
         actual = listed(settings, key)
         found.extend(
             Drift(f"{SETTINGS}: '{r}' is missing from {key}", Fault.MISSING)
             for r in expected
-            if r not in actual
+            if r not in actual and r not in kept
         )
         found.extend(
             Drift(
@@ -250,7 +260,6 @@ def own_rules(settings: dict[str, object], manifest: dict[str, object]) -> list[
 def regenerated(manifest: dict[str, object]) -> gatelib.Want:
     """The want over ``settings.json`` text, which leaves text that is not a JSON object alone."""
     (deny, ask), _ = rules(manifest)
-    ours = {"deny": deny, "ask": ask}
 
     def want(text: str | None) -> str:
         settings = parse_settings(text)
@@ -259,6 +268,8 @@ def regenerated(manifest: dict[str, object]) -> gatelib.Want:
         permissions = settings.get("permissions")
         held = permissions if isinstance(permissions, dict) else {}
         own = own_rules(settings, manifest)
+        kept = stricter(settings, manifest)
+        ours = {"deny": [*deny, *kept], "ask": [rule for rule in ask if rule not in kept]}
         lists = {
             key: [*rules_, *(rule for k, rule in own if k == key)] for key, rules_ in ours.items()
         }

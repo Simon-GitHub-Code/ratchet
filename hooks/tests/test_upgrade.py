@@ -218,37 +218,42 @@ def test_the_dropped_gates_rows_appear_without_a_types_line_and_the_line_adds_no
     assert dropped(root) == without
 
 
+def flip_flop(root: Path) -> list[conformance.Finding]:
+    """Two edits of one file, each clearing its own finding and raising the other's."""
+    text = (root / "AGENTS.md").read_text()
+    if text.endswith("left\n"):
+        right = conformance.Edit("lean right", lambda now: f"{now}right\n", conformance.Agent())
+        return [conformance.Finding("AGENTS.md", "leans left", right)]
+    left = conformance.Edit("lean left", lambda now: f"{now}left\n", conformance.Agent())
+    return [conformance.Finding("AGENTS.md", "does not lean left", left)]
+
+
 def test_a_plan_that_never_settles_is_stuck_and_touches_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = fixture("0.9.2", tmp_path)
     before = files(root)
-
-    def check(_: Path) -> list[conformance.Finding]:
-        auto = conformance.Auto("do nothing", lambda text: text or "")
-        return [conformance.Finding("AGENTS.md", "never clears", auto)]
-
-    monkeypatch.setattr(conformance, "CHECKS", (check,))
+    monkeypatch.setattr(conformance, "CHECKS", (flip_flop,))
     assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 3
     out = capsys.readouterr().out
     assert "does not settle, which is a bug in the plugin; nothing was written" in out
-    assert "AGENTS.md: never clears" in out
+    assert "AGENTS.md: " in out
     assert files(root) == before
 
 
-def test_a_plan_that_keeps_changing_a_file_without_clearing_its_finding_is_stuck(
+def test_an_edit_that_keeps_changing_a_file_without_clearing_its_finding_is_never_planned(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = fixture("0.9.2", tmp_path)
 
     def check(_: Path) -> list[conformance.Finding]:
-        auto = conformance.Auto("grow", lambda text: f"{text or ''}more\n")
-        return [conformance.Finding("flags.toml", "always more", auto)]
+        grows = conformance.Edit("grow", lambda text: f"{text or ''}more\n", conformance.Agent())
+        return [conformance.Finding("flags.toml", "always more", grows)]
 
     monkeypatch.setattr(conformance, "CHECKS", (check,))
-    result = upgrade.plan(root, PLUGIN_ROOT)
-    assert isinstance(result, upgrade.Stuck)
-    assert [str(f) for f in result.findings] == ["flags.toml: always more"]
+    result = planned(root)
+    assert "flags.toml" not in result.changes
+    assert [str(f) for f in result.agent] == ["flags.toml: always more"]
 
 
 @pytest.mark.parametrize(
@@ -330,16 +335,19 @@ def test_a_refusal_exits_2_and_a_stuck_plan_exits_3_with_nothing_written(
     assert files(root) == before
 
 
-def test_a_file_the_plan_must_write_outside_the_tree_is_refused(tmp_path: Path) -> None:
+def test_a_file_named_outside_the_tree_is_never_written_and_is_left_to_an_agent(
+    tmp_path: Path,
+) -> None:
     root = fixture("0.9.2", tmp_path)
     shutil.rmtree(root / ".github/pull_request_template.md", ignore_errors=True)
     (root / ".github/pull_request_template.md").unlink()
     replace(BINDING, "- Pull request template: `.github/pull_request_template.md`", "")(root)
     binding = root / BINDING
     binding.write_text(binding.read_text() + "\n- Change template: `../outside.md`\n")
-    result = upgrade.plan(root, PLUGIN_ROOT)
-    assert isinstance(result, upgrade.Refused)
-    assert "../outside.md leads outside the repository" in result.reason
+    result = planned(root)
+    assert [name for name in result.changes if name.startswith("..")] == []
+    assert "../outside.md" in [finding.path for finding in result.agent]
+    upgrade.apply(root, result.changes)
     assert not (tmp_path / "outside.md").exists()
 
 
@@ -385,11 +393,11 @@ def test_a_file_with_crlf_endings_keeps_them(tmp_path: Path) -> None:
 
 def test_edited_gives_none_for_an_unchanged_file_and_bytes_for_a_changed_or_absent_one() -> None:
     same = gatelib.created("x")
-    assert upgrade.edited(same, b"kept\n") is None
-    assert upgrade.edited(same, None) == b"x"
-    assert upgrade.edited(lambda text: (text or "") + "b\n", b"a\n") == b"a\nb\n"
-    assert upgrade.edited(lambda text: (text or "") + "b\n", b"a\r\n") == b"a\r\nb\r\n"
-    assert upgrade.edited(lambda text: (text or "") + "b\n", b"a\r\nc\n") == b"a\r\nc\nb\n"
+    assert gatelib.edited(same, b"kept\n") is None
+    assert gatelib.edited(same, None) == b"x"
+    assert gatelib.edited(lambda text: (text or "") + "b\n", b"a\n") == b"a\nb\n"
+    assert gatelib.edited(lambda text: (text or "") + "b\n", b"a\r\n") == b"a\r\nb\r\n"
+    assert gatelib.edited(lambda text: (text or "") + "b\n", b"a\r\nc\n") == b"a\r\nc\nb\n"
 
 
 def test_a_written_file_keeps_its_mode_and_a_new_one_is_not_executable(tmp_path: Path) -> None:
@@ -397,8 +405,10 @@ def test_a_written_file_keeps_its_mode_and_a_new_one_is_not_executable(tmp_path:
     kept.parent.mkdir()
     kept.write_text("old\n")
     kept.chmod(0o755)
-    upgrade.write_atomically(kept, b"new\n")
-    upgrade.write_atomically(tmp_path / "docs/new.md", b"fresh\n")
+    holder = tmp_path / ".ratchet/upgrade"
+    holder.mkdir(parents=True)
+    upgrade.write_atomically(kept, b"new\n", holder)
+    upgrade.write_atomically(tmp_path / "docs/new.md", b"fresh\n", holder)
     assert kept.read_text() == "new\n"
     assert os.access(kept, os.X_OK)
     assert (tmp_path / "docs/new.md").stat().st_mode & 0o777 == 0o644
@@ -424,7 +434,7 @@ def test_only_what_git_sees_is_copied_and_a_link_stays_a_link(tmp_path: Path) ->
     (root / "link.md").symlink_to("kept.md")
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
-    upgrade.copy_tree(root, sandbox)
+    assert gatelib.copy_seen(root, sandbox) == frozenset()
     assert sorted(
         str(p.relative_to(sandbox))
         for p in sandbox.rglob("*")

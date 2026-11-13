@@ -244,7 +244,9 @@ def test_own_rules_are_those_no_version_generates_with_their_list() -> None:
     assert settings_rules.own_rules({}, PARSED) == []
 
 
-def test_regenerated_keeps_own_rules_other_keys_and_moves_a_misplaced_generated_rule() -> None:
+def test_regenerated_keeps_own_rules_other_keys_and_a_stricter_rule_and_moves_a_looser_one() -> (
+    None
+):
     held = {
         "$schema": "s",
         "env": {"X": "1"},
@@ -257,8 +259,11 @@ def test_regenerated_keeps_own_rules_other_keys_and_moves_a_misplaced_generated_
     }
     out = json.loads(settings_rules.regenerated(PARSED)(json.dumps(held)))
     (deny, ask), _ = settings_rules.rules(PARSED)
-    assert out["permissions"]["deny"] == [*deny, "Bash(rm:*)"]
-    assert out["permissions"]["ask"] == [*ask, "mine"]
+    assert out["permissions"]["deny"] == [*deny, "Edit(/GLOSSARY-MAP.md)", "Bash(rm:*)"]
+    assert out["permissions"]["ask"] == [
+        *(rule for rule in ask if rule != "Edit(/GLOSSARY-MAP.md)"),
+        "mine",
+    ]
     assert out["permissions"]["allow"] == ["Bash(ls:*)"]
     assert out["permissions"]["defaultMode"] == "plan"
     assert (out["$schema"], out["env"]) == ("s", {"X": "1"})
@@ -461,12 +466,13 @@ def test_each_drift_says_whether_it_is_missing_misplaced_the_projects_own_or_the
     settings["permissions"]["ask"].remove("Edit(/GLOSSARY-MAP.md)")
     settings["permissions"]["deny"].append("Bash(gh label create:*)")
     settings["permissions"]["deny"].append("Bash(gh pr merge:*)")
+    settings["permissions"]["ask"].append("Bash(git push --force:*)")
     path.write_text(json.dumps(settings))
     fault = settings_rules.Fault
     assert [(found.fault, found.line.split("'")[1]) for found in settings_rules.drifts(root)] == [
         (fault.OWN, "Bash(gh label create:*)"),
-        (fault.MISPLACED, "Bash(gh pr merge:*)"),
         (fault.MISSING, "Edit(/GLOSSARY-MAP.md)"),
+        (fault.MISPLACED, "Bash(git push --force:*)"),
     ]
     assert settings_rules.drifts(tmp_path / "none")[0].fault is fault.MANIFEST
     assert [found.line for found in settings_rules.drifts(root)] == settings_rules.drift(root)

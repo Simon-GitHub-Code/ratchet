@@ -21,13 +21,27 @@ MIN_WIDTH = 3
 MIN_TABLE_LINES = 2
 
 
+def _headings_at(lines: Sequence[str], heading: str) -> list[int]:
+    """Every line that is ``heading``: the whole line, less the whitespace after it, a CR too."""
+    return [i for i, line in enumerate(lines) if line.rstrip() == heading]
+
+
+def has_section(text: str, heading: str) -> bool:
+    """Whether a line of the text is the heading, as every reader and writer here finds it."""
+    return bool(_headings_at(text.split("\n"), heading))
+
+
 def section(text: str, heading: str) -> str:
-    start = text.find(heading)
-    if start < 0:
-        return ""
-    body = text[start + len(heading) :]
-    end = body.find("\n## ")
-    return body if end < 0 else body[:end]
+    """What the ``heading`` sections hold, from the end of each heading line to the next ``## ``.
+
+    Why: a text that repeats a heading holds the section's lines under every copy, so a reader
+    that took the first copy alone would miss the table an old edit left below another.
+    """
+    lines = text.split("\n")
+    bodies = [
+        "\n".join(lines[at + 1 : _section_end(lines, at)]) for at in _headings_at(lines, heading)
+    ]
+    return "".join(f"\n{body}" for body in bodies)
 
 
 def empty_body(text: str, heading: str) -> bool:
@@ -111,7 +125,7 @@ def _align(rule: re.Match[str]) -> str:
 
 
 def _heading_at(lines: Sequence[str], heading: str) -> int | None:
-    return next((i for i, line in enumerate(lines) if line.rstrip(" \t") == heading), None)
+    return next(iter(_headings_at(lines, heading)), None)
 
 
 def _section_end(lines: Sequence[str], heading_index: int) -> int:
@@ -125,12 +139,12 @@ def _section_end(lines: Sequence[str], heading_index: int) -> int:
 def table(text: str, heading: str) -> Table | None:
     """The first table under ``heading``, or ``None`` when there is none or it does not split."""
     lines = text.split("\n")
-    at = _heading_at(lines, heading)
-    if at is None:
-        return None
-    end = _section_end(lines, at)
-    first = next((i for i in range(at + 1, end) if lines[i].startswith("|")), None)
-    if first is None:
+    for at in _headings_at(lines, heading):
+        end = _section_end(lines, at)
+        first = next((i for i in range(at + 1, end) if lines[i].startswith("|")), None)
+        if first is not None:
+            break
+    else:
         return None
     last = first
     while last < end and lines[last].startswith("|"):

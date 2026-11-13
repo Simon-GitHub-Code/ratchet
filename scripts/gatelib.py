@@ -13,6 +13,7 @@ import contextlib
 import fnmatch
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -39,6 +40,20 @@ STOPPING_ENV = "RATCHET_STOPPING"
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
+
+# Why: a hook exports these, and `git -C` obeys them over the directory it is given; a scratch
+# copy must be a repository of its own, not the one the hook is committing in.
+REPOSITORY_VARIABLES = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_PREFIX",
+    }
+)
 
 # Why: an edit the upgrade makes to one file: the text the file holds now (``None``: absent) to
 # the text it must hold. It reads nothing else, never drops a line it did not write and, applied
@@ -162,6 +177,86 @@ def read_text(path: Path) -> str | None:
     if b"\0" in data[:8000]:
         return None
     return data.decode("utf-8", errors="replace")
+
+
+def edited(want: Want, data: bytes | None) -> bytes | None:
+    """The bytes ``want`` makes of a file's, or ``None`` when it leaves the file as it is.
+
+    A file whose every line ends in CRLF is edited as LF and written back in CRLF.
+    """
+    text = None if data is None else data.decode("utf-8", errors="replace")
+    crlf = text is not None and "\r\n" in text and text.count("\n") == text.count("\r\n")
+    plain = text.replace("\r\n", "\n") if text is not None and crlf else text
+    made = want(plain)
+    if plain is not None and made == plain:
+        return None
+    return (made.replace("\n", "\r\n") if crlf else made).encode("utf-8")
+
+
+def seen(root: Path) -> list[str]:
+    """What git sees of ``root``: tracked files and those it does not ignore.
+
+    Where ``root`` is not a git work tree, it is every file and link below it.
+    """
+    listed = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    if listed is not None:
+        return sorted({name for name in listed.split("\0") if name})
+    found = []
+    for directory, folders, names in os.walk(root):
+        here = Path(directory)
+        links = [folder for folder in folders if (here / folder).is_symlink()]
+        found += [str((here / name).relative_to(root)) for name in [*names, *links]]
+    return sorted(found)
+
+
+def copy_seen(root: Path, target: Path) -> frozenset[str]:
+    """What git sees of ``root`` copied to ``target``, made a repository that holds it.
+
+    The copy's index holds every file copied, and it ignores what ``root`` ignores, so git says
+    of a file made there what it would say of it in ``root``. A link that stays in the tree is a
+    link in the copy. One that leads out of the tree is copied
+    as what it leads to, so the copy reads as ``root`` does, and its name is returned: a write
+    there would land outside the repository.
+    """
+    home = root.resolve()
+    outside = set()
+    for name in seen(root):
+        source, copy = root / name, target / name
+        lands, link = Path(os.path.realpath(source)), source.is_symlink()
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        if link and lands.is_relative_to(home):
+            copy.symlink_to(os.path.relpath(target / lands.relative_to(home), copy.parent))
+            continue
+        if link:
+            outside.add(name)
+        if lands.is_file():
+            shutil.copy2(lands, copy)
+        elif link and lands.is_dir():
+            shutil.copytree(lands, copy, symlinks=True)
+    scratch_git(target, "init", "-q")
+    exclude = git(root, "rev-parse", "--git-path", "info/exclude")
+    if exclude is not None and (root / exclude).is_file():
+        shutil.copy2(root / exclude, target / ".git/info/exclude")
+    scratch_git(target, "add", "--all", "--force")
+    return frozenset(outside)
+
+
+def scratch_git(target: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
+    """``git -C target args`` stdout in a scratch repository, whatever repository a hook exported.
+
+    An exit status outside ``ok`` raises, so a git that failed is never read as an answer.
+    """
+    environment = {k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES}
+    result = subprocess.run(
+        ["git", "-C", str(target), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+    if result.returncode not in ok:
+        raise subprocess.CalledProcessError(result.returncode, result.args, result.stderr)
+    return result.stdout
 
 
 def chained(*wants: Want) -> Want:

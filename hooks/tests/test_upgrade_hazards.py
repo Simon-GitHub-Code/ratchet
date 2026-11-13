@@ -71,9 +71,10 @@ def test_tiers_under_other_names_are_pinned_or_left_to_an_agent_never_claimed(
     rename_tiers(root)
     result = planned(root)
     upgrade.apply(root, result.changes)
-    after = heads((root / JUSTFILE).read_text())
+    justfile = conformance.read_justfile(root) or ""
     for tier in ("gate0", "gate1", "gate2", "all", "all-deep"):
-        assert after[tier][:1] == ("plugin-pin",), tier
+        assert justfile_text.runs(justfile, tier, PIN_SCRIPT), tier
+    assert heads(justfile)["gate1"][:1] == ("plugin-pin",)
     assert not [f for f in conformance.findings(root) if PIN_SCRIPT in f.problem]
 
 
@@ -146,8 +147,10 @@ def test_a_recipe_an_imported_file_defines_is_never_copied_again(tmp_path: Path)
     main, imported = (root / JUSTFILE).read_text(), (root / "method.just").read_text()
     assert "plugin-pin" not in [block.name for block in justfile_text.blocks(main.split("\n"))]
     assert imported.count("plugin-pin:") == 1
+    justfile = conformance.read_justfile(root) or ""
     for tier in ("tier0", "tier1", "tier2", "check", "check-deep"):
-        assert heads(main)[tier][:1] == ("plugin-pin",), tier
+        assert justfile_text.runs(justfile, tier, PIN_SCRIPT), tier
+    assert heads(main)["tier1"][:1] == ("plugin-pin",)
     assert not [f for f in conformance.findings(root) if PIN_SCRIPT in f.problem]
 
 
@@ -198,6 +201,7 @@ def test_without_just_the_planned_justfile_is_not_read(
 
 def test_a_file_git_ignores_is_never_written_over(tmp_path: Path) -> None:
     root = fixture("0.9.2", tmp_path)
+    shutil.rmtree(root / "docs/features")
     (root / ".gitignore").write_text("flags.toml\ndocs/features/\n")
     commit(root)
     (root / "flags.toml").write_text(PROJECT_FLAG)
@@ -380,7 +384,7 @@ def test_a_write_stopped_midway_leaves_nothing_git_sees_and_the_next_run_clears_
     monkeypatch.setattr(Path, "replace", real)
     [temporary] = temporaries
     assert temporary.parent == root / ".ratchet/upgrade"
-    left = temporary.parent / "left-by-a-killed-run"
+    left = temporary.parent / f"{upgrade.TEMPORARY}left-by-a-killed-run"
     left.write_bytes(b"half")
     assert repos.git(root, "status", "--porcelain", "--untracked-files=all") == ""
     upgrade.apply(root, planned(root).changes)
