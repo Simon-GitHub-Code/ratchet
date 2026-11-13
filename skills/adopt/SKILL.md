@@ -12,7 +12,7 @@ The method ships the questions, its own gates and three gates for any service, a
 
 ## What the owner is asked
 
-The owner is asked about the product and nothing else (ADR 0034), and only at step 3, so that every question comes in the first minutes and the rest of adoption runs while they are away. One at a time, each in the words written here, with your reading of the records as the recommended option:
+The owner is asked product questions only, as the method's rule on asking defines them (ADR 0034), and only at step 3, so that every question comes in the first minutes and the rest of adoption runs while they are away. One at a time, each in the words written here, with your reading of the records as the recommended option:
 
 1. **Ask** `adopt.first`: "What is the first thing you want to be able to do with it, from start to finish?" The options are the first usable part the records point to, as a few things a person can check, in the owner's words.
 2. **Ask** `adopt.later`: "Which of these can wait until that first part works?" The options are what the records name beyond that part; several may be chosen.
