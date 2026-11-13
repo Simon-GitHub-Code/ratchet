@@ -228,33 +228,28 @@ def test_a_local_ticket_without_heading_number_or_status(tmp_path: Path) -> None
     assert checks(run(done, TICKET)) == ["open", "label"]
 
 
+ASTRAY = [
+    "t.md",
+    "notes/idea.md",
+    ".scratch/f/ticket.md",
+    ".scratch/f/spec.md",
+    ".scratch/f/issues/sub/07.md",
+    ".scratch/f/issues/07.txt",
+    "docs/.scratch/f/issues/07.md",
+]
+
+
 @pytest.mark.parametrize(
-    "ref",
-    [
-        "t.md",
-        "notes/idea.md",
-        ".scratch/f/ticket.md",
-        ".scratch/f/spec.md",
-        ".scratch/f/issues/sub/07.md",
-        ".scratch/f/issues/../ticket.md",
-        ".scratch/f/issues/07.txt",
-        "docs/.scratch/f/issues/07.md",
-        ".scratch/f/issues/linked.md",
-    ],
+    "ref", [*ASTRAY, ".scratch/f/issues/../ticket.md", ".scratch/f/issues/linked.md"]
 )
 def test_a_local_ticket_is_only_a_file_the_guard_keeps(tmp_path: Path, ref: str) -> None:
     # Why: the guard asks the owner before an agent writes the agent-ready label only on
     # `.scratch/<feature>/issues/<name>.md`; a label anywhere else may be the agent's own.
     text = "# T\n\nStatus: ready-for-agent" + CONJECTURE
-    files = {path: text for path in (TICKET, "t.md", "notes/idea.md", ".scratch/f/ticket.md")}
-    files |= {
-        ".scratch/f/spec.md": text,
-        ".scratch/f/issues/sub/07.md": text,
-        ".scratch/f/issues/07.txt": text,
-        "docs/.scratch/f/issues/07.md": text,
-    }
-    root = repository(tmp_path, files)
+    root = repository(tmp_path, dict.fromkeys([TICKET, *ASTRAY], text))
     (root / ".scratch/f/issues/linked.md").symlink_to(root / "notes/idea.md")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "link")
     assert run(root, TICKET).ok
     report = run(root, ref)
     assert checks(report) == ["ticket"]

@@ -6,7 +6,8 @@ The input of ``/ratchet:feature`` is a tracker ticket (``mattpocock-skills:to-sp
 ticket file. The preflight is a pure check over that ticket and the checkout, red with the exact
 failure and the skill that produces the missing piece:
 
-- the ticket exists and is open;
+- the ticket exists and is open, and a local one is ``.scratch/<feature>/issues/<name>.md``, the
+  only file whose agent-ready label the guard keeps for the owner to set;
 - it carries a ``## Conjecture`` section that states something (the method's one addition to
   the ticket: the approach, the observation that would refute it, the alternatives and the
   criticism that kills each), on the ticket itself or on its parent spec, since ``to-tickets``
@@ -44,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import posixpath
 import re
 import subprocess
 import sys
@@ -54,6 +56,10 @@ from pathlib import Path
 import application_types
 import gatelib
 import hooks_installed
+
+# Why: a local ticket is the file the guard keeps the label of; both read its shape from one place.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+from ratchet_guards.tickets import TICKET_SUFFIX, TICKETS_DIRECTORY, TRACKER_DIRECTORY
 
 CONJECTURE = "## Conjecture"
 OPERABILITY = "## Operability"
@@ -217,6 +223,31 @@ def numbered_locally(ref: str, root: Path) -> list[str]:
         for path in root.glob(".scratch/*/issues/*.md")
         if (lead := re.match(r"\d+", path.name)) and int(lead.group()) == int(number)
     )
+
+
+def kept_by_the_guard(ref: str, root: Path) -> bool:
+    """Whether the local file ``ref`` is ``.scratch/<feature>/issues/<name>.md`` under ``root``.
+
+    The guard asks the owner before an agent sets the agent-ready label only on such a file, so
+    the label on any other file may be the agent's own. ``ref`` must have that shape both as
+    written, with ``..`` folded, and as the filesystem resolves it, so no link leads elsewhere.
+    """
+    readings = (
+        (Path(posixpath.normpath(root / ref)), root),
+        ((root / ref).resolve(), root.resolve()),
+    )
+    for path, base in readings:
+        if not path.is_relative_to(base):
+            return False
+        parts = path.relative_to(base).parts
+        if not (
+            len(parts) == 4  # noqa: PLR2004 # -- .scratch, the feature, issues, the ticket
+            and parts[0] == TRACKER_DIRECTORY
+            and parts[2] == TICKETS_DIRECTORY
+            and parts[3].endswith(TICKET_SUFFIX)
+        ):
+            return False
+    return True
 
 
 def fetch(ref: str, root: Path, gh: Runner) -> Ticket | None:
@@ -519,6 +550,13 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
     ticket = fetch(ref, root, gh)
     if ticket is None:
         report.fail("ticket", f"{ref}: no such ticket (a number on the tracker, or a file path)")
+    elif (root / ticket.ref).is_file() and not kept_by_the_guard(ticket.ref, root):
+        report.fail(
+            "ticket",
+            f"{ref}: a local ticket is a file at .scratch/<feature>/issues/<name>.md, the only"
+            " place the guard keeps the agent-ready label for the owner to set",
+            "/mattpocock-skills:to-tickets",
+        )
     else:
         check_ticket(report, ticket, report.label, root=root, gh=gh)
     check_checkout(report, root, base=base, branch=branch)
@@ -531,7 +569,8 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "ref",
-        help="the ticket: a number, #number, or a local file (a number may start its name)",
+        help="the ticket: a number, #number, or a local file .scratch/<feature>/issues/<name>.md"
+        " (a number may start its name)",
     )
     parser.add_argument("--root", default=".")
     parser.add_argument("--base", help="the branch features start from (the default branch)")
