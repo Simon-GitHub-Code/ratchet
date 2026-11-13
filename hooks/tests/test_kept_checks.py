@@ -137,6 +137,15 @@ def with_step(n: int, **step: object) -> dict[str, object]:
             {**IN_A_BROWSER, "steps": [{"fill": "Link to save"}]},
             "kept check K2 step 1 needs with as a non-empty text",
         ),
+        ({**SAVES, "expects": {}}, "kept check K1 names expects, which a kept check does not have"),
+        (
+            with_step(0, expct={"status": 303}),
+            "kept check K1 step 1 names expct, which an HTTP step does not have",
+        ),
+        (
+            {**IN_A_BROWSER, "steps": [{"see": "x", "wait": 9}]},
+            "kept check K2 step 1 names wait, which a browser step does not have",
+        ),
     ],
 )
 def test_a_check_that_does_not_read_says_why(raw: object, said: str) -> None:

@@ -237,6 +237,7 @@ def record(session: str, tree: str, ids: tuple[str, ...]) -> dict[str, object]:
     """The good record of ``session``, which served ``tree``; ``ids`` are what was ``tried``."""
     first, saved, after = ({"id": ident} for ident in ids)
     return {
+        "schema": 1,
         "session": session,
         "tree": tree,
         "criteria": [
@@ -279,6 +280,7 @@ def record(session: str, tree: str, ids: tuple[str, ...]) -> dict[str, object]:
                 "text": PROMISES[2],
                 "verdict": "not-observable",
                 "how": "This is about how the code is built.",
+                "why": "No use of the product shows where its settings are read.",
                 "judge": "code review",
             },
         ],

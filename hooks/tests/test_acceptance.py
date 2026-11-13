@@ -683,7 +683,7 @@ def test_a_check_that_holds_against_nothing_proves_nothing(
     tried: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     checks = tried.parent / "checks.json"
-    checks.write_text(json.dumps({"checks": [KEPT_ONLY_STATUS]}), encoding="utf-8")
+    checks.write_text(json.dumps({"schema": 1, "checks": [KEPT_ONLY_STATUS]}), encoding="utf-8")
     root = tried.parents[5]
     code, out = run(root, "replay", "--checks", str(checks), "--control", capsys=capsys)
     assert (code, out) == (
@@ -700,7 +700,7 @@ def test_replay_says_why_a_check_does_not_hold(
 ) -> None:
     lies = {**KEPT_ONLY_STATUS, "steps": [{"request": "GET /", "expect": {"status": 201}}]}
     checks = tried.parent / "checks.json"
-    checks.write_text(json.dumps({"checks": [lies]}), encoding="utf-8")
+    checks.write_text(json.dumps({"schema": 1, "checks": [lies]}), encoding="utf-8")
     code, out = run(tried.parents[5], "replay", "--checks", str(checks), capsys=capsys)
     assert (code, out) == (
         1,
@@ -716,22 +716,27 @@ def test_replay_with_nothing_to_replay_or_a_check_that_does_not_read(
 ) -> None:
     checks = tried.parent / "checks.json"
     root = tried.parents[5]
-    checks.write_text(json.dumps({"checks": []}), encoding="utf-8")
+    checks.write_text(json.dumps({"schema": 1, "checks": []}), encoding="utf-8")
     assert run(root, "replay", "--checks", str(checks), capsys=capsys) == (
         1,
         ["there are no kept checks to replay", "acceptance replay: red"],
     )
-    checks.write_text(json.dumps({"checks": [{"id": "K1"}]}), encoding="utf-8")
+    checks.write_text(json.dumps({"schema": 1, "checks": [{"id": "K1"}]}), encoding="utf-8")
     code, out = run(root, "replay", "--checks", str(checks), capsys=capsys)
     assert code == 2
     assert out[0].startswith("acceptance replay: kept check K1 needs criterion as a non-empty")
+    checks.write_text(json.dumps({"schema": 2, "checks": [KEPT_ONLY_STATUS]}), encoding="utf-8")
+    assert run(root, "replay", "--checks", str(checks), capsys=capsys) == (
+        2,
+        [f"acceptance replay: {checks} is not a checks file of schema 1, which this harness reads"],
+    )
 
 
 def test_replay_of_a_product_that_cannot_start(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     checks = tmp_path / "checks.json"
-    checks.write_text(json.dumps({"checks": [KEPT_ONLY_STATUS]}), encoding="utf-8")
+    checks.write_text(json.dumps({"schema": 1, "checks": [KEPT_ONLY_STATUS]}), encoding="utf-8")
     root = products.make(tmp_path / "none", boot="none")
     assert run(root, "replay", "--checks", str(checks), capsys=capsys) == (
         1,
@@ -763,6 +768,7 @@ def test_the_summary_is_the_same_bytes_every_run_and_carries_the_kept_checks(
     session_id = json.loads((tried / "session.json").read_text(encoding="utf-8"))["session"]
     assert (summary["session"], summary["requests"], summary["kept"]) == (session_id, 3, 1)
     kept = json.loads((out / acceptance.CHECKS).read_text(encoding="utf-8"))
+    assert tuple(kept) == acceptance.acceptance_record.CHECKS_FILE_FIELDS
     assert [check["id"] for check in kept["checks"]] == ["K1"]
     code, said = run(root, "replay", "--checks", str(out / acceptance.CHECKS), capsys=capsys)
     assert (code, said[0]) == (0, "K1 (C1) holds on a fresh boot")

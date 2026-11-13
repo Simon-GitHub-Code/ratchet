@@ -4,13 +4,16 @@ import copy
 import dataclasses
 import hashlib
 import json
+import re
 from collections.abc import Callable
 
 import pytest
 
 import acceptance_record as ar
+import kept_checks
 from tests import products
 from tests.products import PROMISES
+from tests.support import PLUGIN_ROOT
 
 SESSION = "20261113T000000000000Z-abcd1234"
 TREE = "a" * 40
@@ -241,7 +244,7 @@ REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
     ("a fail with no steps", NO_STEPS, {}, "criterion C3 fails with no steps to reproduce it"),
     (
         "an unsure that does not say why",
-        lambda r: criterion(r, 2).update(verdict="unsure"),
+        lambda r: criterion(r, 2).update(verdict="unsure", why=None),
         {},
         "criterion C3 is unsure and does not say why",
     ),
@@ -250,6 +253,21 @@ REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
         lambda r: criterion(r, 2).pop("judge"),
         {},
         "criterion C3 is not observable and does not say who can judge it",
+    ),
+    (
+        "a not-observable that does not say why",
+        lambda r: criterion(r, 2).pop("why"),
+        {},
+        "criterion C3 is not observable and does not say why",
+    ),
+    (
+        "a record that tried nothing",
+        lambda r: [
+            item.update(verdict="not-observable", why="It is code.", judge="code review")
+            for item in r["criteria"]
+        ],
+        {},
+        "every criterion is not-observable, so the record tried nothing",
     ),
     (
         "a pass that cites no request",
@@ -437,6 +455,37 @@ def test_a_service_needs_no_screenshot() -> None:
             "notChecked item 1 needs why as a non-empty text",
         ),
         ({**good(), "author": ""}, "the record needs author as a non-empty text"),
+        ({**good(), "schema": 2}, "the record needs schema as 1, the version this harness reads"),
+        (
+            {**good(), "schema": True},
+            "the record needs schema as 1, the version this harness reads",
+        ),
+        (
+            {k: v for k, v in good().items() if k != "schema"},
+            "the record needs schema as 1, the version this harness reads",
+        ),
+        ({**good(), "verdict": "pass"}, "the record names verdict, which a record does not have"),
+        (
+            {**good(), "criteria": [{**criterion(good(), 0), "verdcit": "pass", "seen": 1}]},
+            "criterion C1 names seen, verdcit, which a criterion does not have",
+        ),
+        (
+            {
+                **good(),
+                "criteria": [
+                    {**criterion(good(), 0), "requests": [{"request": "x", "statsu": 200}]}
+                ],
+            },
+            "criterion C1 request 1 names statsu, which a citation does not have",
+        ),
+        (
+            {**good(), "findings": [{**finding(good()), "severty": "minor"}]},
+            "finding F1 names severty, which a finding does not have",
+        ),
+        (
+            {**good(), "notChecked": [{"what": "x", "why": "y", "how": "z"}]},
+            "notChecked item 1 names how, which an item of notChecked does not have",
+        ),
     ],
 )
 def test_a_record_not_in_the_shape_is_refused_before_it_is_judged(
@@ -556,6 +605,8 @@ def test_the_summary_is_the_records_facts_and_the_replays_of_these_very_checks()
     control = {"checks": checks, "results": [{"outcome": "unmet"}]}
     data = ar.summary(record, session, (replay, control))
     assert data == ar.summary(record, session, (replay, control)), "the same bytes every run"
+    assert tuple(data) == ar.SUMMARY_FIELDS
+    assert data["notObservable"] == 1
     assert (data["replay"], data["control"]) == (
         {"held": 1, "unmet": 1, "notRun": 1, "of": 3},
         {"held": 0, "unmet": 1, "notRun": 0, "of": 1},
@@ -581,3 +632,31 @@ def test_the_summary_is_the_records_facts_and_the_replays_of_these_very_checks()
     record, _ = ar.parse_record(unsure)
     assert record is not None
     assert ar.summary(record, session, (None, None))["criteria"][2]["why"] == "Nobody said."
+
+
+def documented() -> dict[str, list[str]]:
+    """Each table of ``docs/acceptance.md`` by its heading: the fields its first column names."""
+    tables: dict[str, list[str]] = {}
+    heading = ""
+    for line in (PLUGIN_ROOT / "docs" / "acceptance.md").read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            heading = line[3:]
+        elif named := re.match(r"^\| `([^`]+)` \|", line):
+            tables.setdefault(heading, []).append(named[1])
+    return tables
+
+
+def test_the_reference_names_every_field_the_code_knows_and_no_other() -> None:
+    assert documented() == {
+        "The record": list(ar.RECORD_FIELDS),
+        "A criterion": list(ar.CRITERION_FIELDS),
+        "A citation": list(ar.CITATION_FIELDS),
+        "A finding": list(ar.FINDING_FIELDS),
+        "An item of notChecked": list(ar.NOT_CHECKED_FIELDS),
+        "A kept check": list(kept_checks.CHECK_FIELDS),
+        "An HTTP step": list(kept_checks.HTTP_STEP_FIELDS),
+        "An expect": list(kept_checks.EXPECTS),
+        "A browser step": list(kept_checks.BROWSER_STEP_FIELDS),
+        "The summary": list(ar.SUMMARY_FIELDS),
+        "The checks file": list(ar.CHECKS_FILE_FIELDS),
+    }
