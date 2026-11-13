@@ -1,12 +1,15 @@
 """``telemetry_sink``: an OTLP/HTTP receiver judged on what a real SDK export contains."""
 
+import contextlib
 import gzip
 import http.client
 import json
 import os
+import re
 import signal
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,6 +19,7 @@ import pytest
 import telemetry_sink
 from tests.servers import gone, pid_of
 
+INTERRUPTS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 FIXTURES = Path(__file__).parent / "fixtures/otlp"
 EMIT = """
 import json, os, sys, urllib.request
@@ -272,6 +276,34 @@ def test_a_signal_stops_the_command_and_exits_with_it(
     assert "interrupted by signal" in capsys.readouterr().out
     assert marker.exists()
     assert gone(pid_of(marker))
+
+
+def test_the_receiver_thread_leaves_every_interrupt_to_the_main_thread() -> None:
+    # Why: the kernel hands a signal sent to the process to any thread that does not block it,
+    # and Python runs the handler only on the main thread, which sleeps until the command exits:
+    # an interrupt the receiver took would let the command run to its end.
+    blocked: set[int] = set()
+
+    def watch_the_receiver() -> None:
+        while not (started := set(threading.enumerate()) - running):
+            time.sleep(0.01)
+        receiver = started.pop()
+        status = Path(f"/proc/self/task/{receiver.native_id}/status")
+        while receiver.is_alive() and blocked != set(INTERRUPTS):
+            with contextlib.suppress(OSError):
+                mask = int(
+                    re.findall(r"^SigBlk:\s*(\w+)$", status.read_text(), re.MULTILINE)[0], 16
+                )
+                blocked.update(s for s in INTERRUPTS if mask >> (s - 1) & 1)
+            time.sleep(0.01)
+
+    watcher = threading.Thread(target=watch_the_receiver, daemon=True)
+    running = {*threading.enumerate(), watcher}
+    watcher.start()
+    code = sink("--service", "api", "--wait", "0", "--", sys.executable, "-c", "pass")
+    watcher.join()
+    assert code == 1
+    assert blocked == set(INTERRUPTS)
 
 
 def test_the_exporter_environment_points_at_the_sink_and_keeps_what_the_project_set(
