@@ -30,6 +30,7 @@ from unittest import mock
 import budget
 import change_size
 import commits
+import conformance
 import coverage_groups
 import drain
 import feature_preflight
@@ -49,6 +50,7 @@ import settings_rules
 import snapshots
 import suppressions
 import telemetry_sink
+import triggers
 import with_service
 
 # Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
@@ -371,6 +373,41 @@ VERDICT = {"slug": "the-thing", "ticket": "01", "verdict": "approve", **DONE}
 VERDICT_RECORD = "docs/features/the-thing/verdict.json"
 
 
+LATER_ROW = "| survives failing dependencies | later: code:outbound-call | 1 | | `just faults` |\n"
+TRIGGERS_TABLE = (
+    "\n## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n"
+    "| outbound-call | `src/**/*.py` | `requests\\.get\\(` |\n"
+)
+OUTBOUND_CALL = "import requests\nrequests.get('http://x')\n"
+
+
+def triggers_gate(argv: list[str]) -> int:
+    """The triggers gate on a repository whose base already holds one outbound call.
+
+    The first one is free, so the scratch repository is first given the call, committed, with the
+    row still ``later:``; the change is judged against that commit.
+    """
+    root = Path(argv[2])
+    if not (root / "src/client.py").is_file():
+        write(root, "docs/process/binding.md", BINDING + LATER_ROW + TRIGGERS_TABLE)
+        write(root, "src/client.py", OUTBOUND_CALL)
+        commit(root, "feat(core): the first outbound call")
+    return triggers.main([*argv, "--base", "HEAD"])
+
+
+def second_outbound_call(root: Path) -> None:
+    write(root, "src/other.py", OUTBOUND_CALL)
+
+
+def incidents_gate(argv: list[str]) -> int:
+    """The incidents check of the conformance gate, alone."""
+    return conformance.main(["conformance", "--incidents", argv[2]])
+
+
+def incident_without_a_bite(root: Path) -> None:
+    write(root, "docs/incidents/2026-01-01-outage.md", "# The outage\n\nIt went down.\n")
+
+
 def merge_judge(argv: list[str]) -> int:
     """The merge judge on the scratch change as the pipeline leaves one: committed, then recorded.
 
@@ -494,6 +531,8 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("project-bite: a gate green on its fault", project_bite.main, lint_green_on_its_fault, []),
     ("project-bite: a gate green on nothing to run", project_bite.main, tests_green_on_nothing, []),
     ("project-bite: a bound gate with no bite", project_bite.main, bite_dropped, []),
+    ("triggers: a second instance of an owed kind", triggers_gate, second_outbound_call, []),
+    ("incidents: a record that names no bite", incidents_gate, incident_without_a_bite, []),
     ("merge-ready: a guard path changed", merge_judge, change_config, []),
     ("merge-ready: a flag on by default", merge_judge, flag_born_on, []),
     ("merge-ready: a commit after the review", merge_judge, commit_after_the_review, []),
