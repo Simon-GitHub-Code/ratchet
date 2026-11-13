@@ -99,18 +99,18 @@ path for a link before it writes there, and then writes by path. Setup code runs
 nothing here stops it writing the real tree itself.
 
 What is ignored is not copied, on purpose: a virtualenv or a build cache holds the absolute paths
-of the tree it was built in, and a gate run through one would judge the real tree. ``setup`` rebuilds them in the copy from the
-lockfile, as a CI job does. So a gate must build what it runs, the first run in a copy is a cold
-one, and whatever lives outside the tree (a port, a database, a tool reached by an absolute path)
-is shared with the real one. A submodule's files are not copied. Gates run at once, one copy per
-lane, never two in one copy, at most ``--jobs`` lanes: ``RATCHET_JOBS`` by default, the number
-that caps the gates of a tier, else the CPU count, and never more than four. The first copy is
-set up alone and the others once it stands, so a cache ``setup`` fills outside the tree (a
-package store, a compiler cache) is filled once. Put
-the build in ``setup`` as well: a gate's own build is then incremental, where a cold one would
-spend a service gate's boot timeout. What a command started and left running in its process
-group is ended when the command exits. A process that left the group, as ``setsid`` or a daemon
-does, is not ended, and runs on.
+of the tree it was built in, and a gate run through one would judge the real tree. ``setup``
+rebuilds them in the copy from the lockfile, as a CI job does. So a gate must build what it runs,
+the first run in a copy is a cold one, and whatever lives outside the tree (a port, a database, a
+tool reached by an absolute path) is shared with the real one. A submodule's files are not
+copied. Gates run at once, one copy per lane, never two in one copy, at most ``--jobs`` lanes:
+``RATCHET_JOBS`` by default, the number that caps the gates of a tier, else the CPU count, and
+never more than four. The first copy is set up alone and the others once it stands, so a cache
+``setup`` fills outside the tree (a package store, a compiler cache) is filled once. Put the build
+in ``setup`` as well: a gate's own build is then incremental, where a cold one would spend a
+service gate's boot timeout. What a command started and left running in its process group is
+ended when the command exits. A process that left the group, as ``setsid`` or a daemon does, is
+not ended, and runs on, and a copy it is still writing in when the proof ends is left behind.
 
 Usage: ``project_bite.py [--root DIR] [--changed] [--gate NAME]... [--jobs N]``. ``--changed`` is
 the pull-request form: it proves nothing unless the change touches a path that defines a gate
