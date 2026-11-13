@@ -41,6 +41,7 @@ NOT_ON_THE_LIST = [
     "DesignSync",
     "ReadMcpResourceTool",
     "EnterWorktree",
+    "Monitor",
     "ListAgents",
     "SendUserFile",
     "SendFeedback",
@@ -107,7 +108,6 @@ def test_a_command_that_reaches_a_forge_or_the_network_is_refused(command: str, 
     decision = policy.decide("Bash", {"command": command}, SCOPE)
     assert not decision.allowed, command
     assert why in decision.why
-    assert not policy.decide("Monitor", {"command": command}, SCOPE).allowed
 
 
 OUTSIDE = [
@@ -163,7 +163,7 @@ def test_ordinary_project_work_is_not_refused(command: str) -> None:
         ("Write", {"file_path": str(ROOT / "app" / "src" / "a.ts")}, True),
         ("Edit", {"file_path": "src/a.ts"}, True),
         ("Write", {"file_path": str(ROOT / "tmp" / "ratchet-queue-1" / "t" / "a.ts")}, True),
-        ("Write", {"file_path": "/tmp/ratchet-queue-1/t/a.ts"}, True),
+        ("Write", {"file_path": "/tmp/ratchet-queue-1/t/a.ts"}, False),
         ("Write", {"file_path": str(ROOT / "events.jsonl")}, False),
         ("Write", {"file_path": str(ROOT / "plugin" / "scripts" / "route.py")}, False),
         ("Write", {"file_path": "/home/someone/.claude/settings.json"}, False),
@@ -188,12 +188,25 @@ def test_file_tools_reach_the_run_and_write_only_the_owners_trees(
     assert policy.decide(tool, tool_input, SCOPE).allowed is allowed
 
 
-def test_a_monitor_watches_a_command_and_never_a_url() -> None:
-    assert policy.decide("Monitor", {"command": "tail -f log.txt"}, SCOPE).allowed
-    for url in ("wss://example.com/feed", "https://example.com/events"):
-        refused = policy.decide("Monitor", {"command": "", "url": url}, SCOPE)
-        assert not refused.allowed
-        assert "network" in refused.why
+def test_a_file_tool_is_judged_by_where_a_link_leads(tmp_path: Path) -> None:
+    """The file tools run outside the sandbox: a link in the project must not carry them out."""
+    root = tmp_path / "run"
+    (root / "app").mkdir(parents=True)
+    outside = tmp_path / "operator-secret"
+    outside.write_text("x")
+    (root / "app" / "link").symlink_to(outside)
+    (root / "app" / "inside").symlink_to(root / "app")
+    scope = Scope(
+        root=root, cwd=root / "app", home=root / "home", tmp=root / "tmp", writable=(root / "app",)
+    )
+    for tool in ("Read", "Write", "Edit"):
+        assert not policy.decide(tool, {"file_path": "link"}, scope).allowed
+    assert policy.decide("Write", {"file_path": "inside/a.py"}, scope).allowed
+
+
+def test_a_shell_line_names_the_runs_temp_as_tmp_and_a_file_tool_does_not() -> None:
+    assert policy.decide("Bash", {"command": "ls /tmp/ratchet-queue-1"}, SCOPE).allowed
+    assert not policy.decide("Read", {"file_path": "/tmp/ratchet-queue-1/a"}, SCOPE).allowed
 
 
 def test_a_message_goes_only_to_a_subagent_this_session_started() -> None:

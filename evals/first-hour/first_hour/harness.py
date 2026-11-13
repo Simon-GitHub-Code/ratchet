@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -587,9 +588,10 @@ def slug(path: Path) -> str:
 
 
 def tidy(run: Run, projects: Path) -> dict[str, object]:
-    """Remove the drain's leftover work trees; name what the run left in the operator's projects.
+    """Clean up after the run, and name what it left in the operator's projects.
 
-    The operator's ``~/.claude/projects`` is only listed, never deleted from.
+    The drain's leftover work trees and the run's runtime directory are removed; the operator's
+    ``~/.claude/projects`` is only listed, never deleted from.
     """
     listed = run.git("worktree", "list", "--porcelain") or ""
     trees = [
@@ -601,6 +603,7 @@ def tidy(run: Run, projects: Path) -> dict[str, object]:
             run.git("worktree", "remove", "--force", str(tree))
             removed.append(str(tree))
     run.git("worktree", "prune")
+    shutil.rmtree(run.layout.runtime, ignore_errors=True)
     mine = slug(run.layout.root)
     left = sorted(str(p) for p in projects.glob(f"{mine}*")) if projects.is_dir() else []
     return {"removed_work_trees": removed, "claude_projects": left}

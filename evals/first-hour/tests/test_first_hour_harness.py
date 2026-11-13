@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,12 @@ from first_hour.merges import Window
 
 TESTS = Path(__file__).resolve().parent
 BWRAP = fakes.bwrap_works()
+
+
+@pytest.fixture(autouse=True)
+def _own_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each test's runtime directory sits in its own temp, not in the machine's."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
 
 def make_run(tmp_path: Path, **budget: float) -> tuple[harness.Run, harness.Operator]:
@@ -280,7 +287,9 @@ def test_the_drains_leftover_work_trees_are_removed_and_claude_projects_named(
     projects = tmp_path / "projects"
     (projects / (harness.slug(run.layout.root) + "-app")).mkdir(parents=True)
     (projects / "-other").mkdir()
+    assert run.layout.runtime.is_dir()
     left = harness.tidy(run, projects)
+    assert not run.layout.runtime.exists()
     assert left["removed_work_trees"] == [str(queue)]
     assert not queue.exists()
     assert left["claude_projects"] == [str(projects / (harness.slug(run.layout.root) + "-app"))]

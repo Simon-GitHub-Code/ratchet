@@ -1,18 +1,26 @@
-"""The run's sandbox: every process of a run sees its own directory and the model, and no more.
+"""The run's sandbox: every command of a run sees its own directory and the network, no more.
 
-Each process the run starts (the product session, the owner model, a pasted command, the route,
-the app check) runs under ``bwrap`` with the whole file system read-only, every home directory and
-the per-user runtime directory hidden, ``/tmp`` replaced by the run's own, and a fresh process
-namespace that dies with the harness. Inside, ``HOME`` is the run's throwaway home: no forge
-login, no SSH key or agent, no git credential helper, no Claude Code settings, memory, MCP
-servers or connectors of the operator's. What is shared is the network (the model and the package
-registries need it) and the model's access token, which only the Claude Code process holds.
+Every shell command of a run (each Bash call and hook of the product session, through Claude
+Code's ``CLAUDE_CODE_SHELL_PREFIX``, and each pasted command, route call and app check of the
+harness) runs under ``bwrap``: the whole file system read-only, every home directory and the
+per-user runtime directory hidden, ``/tmp`` replaced by the run's own, a fresh process namespace
+that dies with its parent, and no model credential in its environment. Inside, ``HOME`` is the
+run's throwaway home: no forge login, no SSH key or agent, no git credential helper.
+
+The Claude Code processes themselves run outside ``bwrap``, the split Claude Code's own sandbox
+makes: they hold the model token, which a command must not see, and a sandbox cannot start another
+inside it here. They run with the same throwaway home and environment, so they load no settings,
+memory, MCP server or connector of the operator's; their file tools reach only what the policy
+(``policy.py``) allows. What is shared is the network: the model and the package registries need
+it.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,6 +32,13 @@ if TYPE_CHECKING:
 
 # Why: these live under the operator's home, which the sandbox hides; each is bound back read-only.
 TOOLCHAIN = ("claude", "uv", "uvx", "just")
+# Why: Claude Code holds the model token in its environment and passes its environment on.
+CREDENTIALS = (
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+)
 KEEP = ("LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "USER", "LOGNAME")
 SYSTEM_PATH = "/usr/local/bin:/usr/bin:/bin"
 INSTALLED_AT = "2026-01-01T00:00:00.000Z"
@@ -106,6 +121,22 @@ class Layout:
         return self.root / "logs"
 
     @property
+    def runtime(self) -> Path:
+        """``XDG_RUNTIME_DIR`` of the Claude Code processes: a short directory of the run's own.
+
+        Why: Claude Code puts its messaging socket there, and when the path is too long for a
+        socket it falls back to the ``/tmp/cc-socks-<uid>`` that the operator's sessions share.
+        A run directory is often too deep, so this one sits at the top of the temp location.
+        """
+        digest = hashlib.sha256(str(self.root).encode()).hexdigest()[:12]
+        return Path(tempfile.gettempdir()) / f"first-hour-{digest}"
+
+    @property
+    def shell(self) -> Path:
+        """The shell prefix: Claude Code starts every command through it, in the sandbox."""
+        return self.bin / "claude-shell"
+
+    @property
     def writable(self) -> tuple[Path, ...]:
         """What a session may write: the project, the home and the temp root."""
         return (self.app, self.home, self.tmp)
@@ -139,6 +170,7 @@ def environment(layout: Layout, inherited: Mapping[str, str]) -> dict[str, str]:
             "XDG_CACHE_HOME": str(layout.home / ".cache"),
             "XDG_DATA_HOME": str(layout.home / ".local" / "share"),
             "XDG_STATE_HOME": str(layout.home / ".local" / "state"),
+            "XDG_RUNTIME_DIR": str(layout.runtime),
             "RATCHET_PLUGIN": str(layout.pinned),
             "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
             "DISABLE_AUTOUPDATER": "1",
@@ -146,20 +178,21 @@ def environment(layout: Layout, inherited: Mapping[str, str]) -> dict[str, str]:
             "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
             "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
             "CLAUDE_CODE_DISABLE_WEB_FETCH": "1",
-            "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
-            **forge_env(layout),
+            **session_env(layout),
         }
     )
     return env
 
 
-def forge_env(layout: Layout) -> dict[str, str]:
-    """What keeps ``gh`` and ``git`` logged out; also the session's settings ``env``, which wins.
+def session_env(layout: Layout) -> dict[str, str]:
+    """What keeps commands in the sandbox and ``gh`` and ``git`` logged out.
 
-    Why both: Claude Code applies a settings ``env`` value over the one it inherits, so these
-    hold even if something upstream of the session sets them again.
+    It is also the session's ``--settings`` ``env``: Claude Code applies a settings value over the
+    one it inherits, and flag settings over the project's, so a project file the session writes
+    cannot take the shell prefix away.
     """
     return {
+        "CLAUDE_CODE_SHELL_PREFIX": str(layout.shell),
         "GH_CONFIG_DIR": str(layout.gh),
         "GH_TOKEN": "",
         "GITHUB_TOKEN": "",
@@ -207,11 +240,17 @@ def argv(
     return [*args, "--", *command]
 
 
-def launcher(layout: Layout, tools: Mapping[str, Path], *, writable: Sequence[Path]) -> str:
-    """A shell script that starts Claude Code in the sandbox with the arguments it is given."""
-    words = argv(layout, [str(tools["claude"])], tools=tools.values(), writable=writable)
+def shell_prefix(layout: Layout, tools: Mapping[str, Path]) -> str:
+    """The script Claude Code runs each command line through: it runs the line in the sandbox.
+
+    Claude Code calls it with the whole command line as its one argument, for Bash calls and
+    hooks alike. The credentials go before ``bwrap`` starts, so that no process in the sandbox,
+    ``bwrap``'s own included, was started with them.
+    """
+    unset = [w for name in CREDENTIALS for w in ("-u", name)]
+    words = ["env", *unset, *argv(layout, ["/bin/bash", "-c"], tools=tools.values())]
     quoted = " ".join(_quote(w) for w in words)
-    return f'#!/bin/sh\nexec {quoted} "$@"\n'
+    return f'#!/bin/sh\nexec {quoted} "$1"\n'
 
 
 def _quote(word: str) -> str:
@@ -296,7 +335,10 @@ def prepare(layout: Layout, tools: Mapping[str, Path], plugins: Sequence[Plugin]
     ):
         path.mkdir(parents=True, exist_ok=True)
     layout.appcheck.mkdir(exist_ok=True)
+    layout.runtime.mkdir(mode=0o700, exist_ok=True)
     (layout.home / ".gitconfig").write_text(GITCONFIG, encoding="utf-8")
+    layout.shell.write_text(shell_prefix(layout, tools), encoding="utf-8")
+    layout.shell.chmod(0o755)
     for name, path in tools.items():
         link = layout.bin / name
         if not link.is_symlink():
@@ -345,7 +387,7 @@ def _marketplace(layout: Layout, plugin: Plugin) -> dict[str, object]:
 def settings(layout: Layout) -> dict[str, object]:
     """The product session's own settings (``--settings``): they win over every file."""
     return {
-        "env": forge_env(layout),
+        "env": session_env(layout),
         "disableClaudeAiConnectors": True,
         "enableAllProjectMcpServers": False,
         "autoMemoryEnabled": False,

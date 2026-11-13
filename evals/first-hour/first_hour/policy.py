@@ -1,10 +1,14 @@
 """What a scripted session may do: a short list of tools, and a shell that reaches no forge.
 
-The sandbox (``sandbox.py``) is what makes a write outside the run, a read of the operator's files
-and a forge login impossible. This policy is the layer that says no first, so that each refusal
-is recorded and the session is told why. The driver puts every tool call through ``decide``
-twice: in a PreToolUse hook, which sees each call, and in ``can_use_tool``, which sees each
-prompt. A tool that is not in ``TOOLS`` is denied; nothing is approved by default.
+The driver puts every tool call through ``decide`` twice: in a PreToolUse hook, which sees each
+call, and in ``can_use_tool``, which sees each prompt. A tool that is not in ``TOOLS`` is denied;
+nothing is approved by default.
+
+For a shell command this is the layer that says no first, so that each refusal is recorded and
+the session is told why; the sandbox (``sandbox.py``) is what makes a write outside the run, a
+read of the operator's files and a forge login impossible when a command gets past it. The file
+tools run in the Claude Code process, outside the sandbox, so for them this is the only layer:
+their paths are judged as that process sees them, links followed.
 """
 
 from __future__ import annotations
@@ -48,7 +52,6 @@ TOOLS: Mapping[str, Tool] = {
     "Write": Tool(Kind.WRITE, ("file_path",)),
     "NotebookEdit": Tool(Kind.WRITE, ("notebook_path",)),
     "Bash": Tool(Kind.SHELL),
-    "Monitor": Tool(Kind.SHELL),
     "AskUserQuestion": Tool(Kind.QUESTION),
     "Skill": Tool(Kind.SESSION),
     "Agent": Tool(Kind.SESSION),
@@ -66,6 +69,7 @@ TOOLS: Mapping[str, Tool] = {
 # Why: named so the CLI refuses them before the model can call them; `decide` denies every tool
 # not in TOOLS whatever this list says.
 DENIED_TOOLS = (
+    "Monitor",
     "WebFetch",
     "WebSearch",
     "RemoteTrigger",
@@ -88,7 +92,6 @@ DENIED_TOOLS = (
     "ArtifactComments",
     "ArtifactData",
 )
-URL = re.compile(r"\b[a-z][\w+.-]*://", re.IGNORECASE)
 SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc", "/opt", "/proc/self")
 SINKS = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd", "/dev/zero")
 SECRET = re.compile(
@@ -141,7 +144,7 @@ FORBIDDEN = (
     (SECRET.pattern, "reads the session's model credential"),
 )
 _FORBIDDEN = tuple((re.compile(pattern), why) for pattern, why in FORBIDDEN)
-# Why: inside the sandbox these are the run's own temp directory.
+# Why: inside the sandbox these are the run's own temp directory; outside it they are not.
 TEMP = ("/tmp", "/var/tmp")
 PATHS = re.compile(
     r"(?:^|(?<=[\s=('\"<>`]))"
@@ -177,19 +180,23 @@ def _under(path: str, parent: str) -> bool:
     return path == parent or path.startswith(parent.rstrip("/") + "/")
 
 
-def _resolve(raw: str, scope: Scope) -> str:
-    """A path as the session's shell would see it, without following links."""
+def _resolve(raw: str, scope: Scope, *, sandboxed: bool) -> str:
+    """A path as the process that uses it sees it.
+
+    A sandboxed shell sees the run's temp at ``/tmp``; a file tool in the Claude Code process
+    sees the real ``/tmp``, and follows links, so its path is the link's target.
+    """
     text = raw.split("*", 1)[0] if "*" in raw else raw
     for name, value in (("${HOME}", scope.home), ("$HOME", scope.home), ("~", scope.home)):
         if text.startswith(name):
             text = str(value) + text[len(name) :]
     inside = _under(text, str(scope.root))
-    aliases = ("${TMPDIR}", "$TMPDIR") if inside else ("${TMPDIR}", "$TMPDIR", *TEMP)
+    aliases = ("${TMPDIR}", "$TMPDIR", *(TEMP if sandboxed and not inside else ()))
     for name in aliases:
         if text == name or text.startswith(name + "/"):
             text = str(scope.tmp) + text[len(name) :]
-    joined = os.path.join(str(scope.cwd), text)  # noqa: PTH118
-    return os.path.normpath(joined)
+    joined = os.path.normpath(os.path.join(str(scope.cwd), text))  # noqa: PTH118
+    return joined if sandboxed else os.path.realpath(joined)
 
 
 def _readable(path: str, scope: Scope) -> bool:
@@ -214,7 +221,7 @@ def shell(command: str, scope: Scope) -> Decision:
         if pattern.search(command):
             return Decision(allowed=False, why=why)
     for raw in PATHS.findall(command):
-        if not _readable(_resolve(raw, scope), scope):
+        if not _readable(_resolve(raw, scope, sandboxed=True), scope):
             return Decision(allowed=False, why=f"reaches outside the run directory ({raw})")
     return ALLOW
 
@@ -231,7 +238,7 @@ def decide(
     if known is None:
         return Decision(allowed=False, why=f"`{tool}` is not on the first-hour run's tool list")
     if known.kind is Kind.SHELL:
-        return _command(tool_input, scope)
+        return shell(str(tool_input.get("command", "")), scope)
     if known.kind is Kind.MESSAGE:
         to_ours = str(tool_input.get("to", "")) in agents
         elsewhere = "messages go only to a subagent this session started"
@@ -244,19 +251,11 @@ def decide(
     return ALLOW
 
 
-def _command(tool_input: Mapping[str, object], scope: Scope) -> Decision:
-    """A shell tool's call: its command line, and no URL to watch."""
-    # Why: Monitor can watch a URL as well as a command; only the command is a shell line.
-    if any(k != "command" and isinstance(v, str) and URL.search(v) for k, v in tool_input.items()):
-        return Decision(allowed=False, why="opens a network connection")
-    return shell(str(tool_input.get("command", "")), scope)
-
-
 def _refusal(raw: str, kind: Kind, scope: Scope) -> str | None:
     """Why a path a file tool names is refused, or ``None``."""
     if SECRET.search(raw):
         return "reads the session's model credential"
-    path = _resolve(raw, scope)
+    path = _resolve(raw, scope, sandboxed=False)
     if kind is Kind.WRITE and not _writable(path, scope):
         return f"writes outside the owner's trees ({raw})"
     if not _readable(path, scope):

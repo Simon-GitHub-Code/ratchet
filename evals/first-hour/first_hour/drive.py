@@ -1,12 +1,13 @@
 """The Agent SDK side of a first-hour run: the product session and the owner model.
 
 What a run does and measures is decided in ``harness.py`` and the modules beside it; this module
-turns those calls into Claude Code sessions and nothing more. Each session starts through a
-launcher that runs Claude Code in the run's sandbox, with no MCP server, no connector, no user
-settings but the run's own, the plugin under test and the three companions loaded from the run,
-and a tool list (``policy.TOOLS``) outside which nothing is approved. Every tool call passes
-``policy.decide`` in a PreToolUse hook that blocks when it fails, and every prompt passes it again
-in ``can_use_tool`` before the owner answers.
+turns those calls into Claude Code sessions and nothing more. Each session runs with the run's
+environment and throwaway home, with no MCP server, no connector, no user settings, the plugin
+under test and the three companions loaded from the run, and a tool list (``policy.TOOLS``)
+outside which nothing is approved. Every command the session runs goes through the sandbox's
+shell prefix (``sandbox.py``). Every tool call passes ``policy.decide`` in a PreToolUse hook that
+blocks when it fails, and every prompt passes it again in ``can_use_tool`` before the owner
+answers.
 
 It needs ``claude-agent-sdk``, which ``run.py`` declares; the unit suite does not install it, so
 coverage omits this file and the suite drives ``harness.py`` with fakes instead.
@@ -17,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import shutil
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -40,7 +42,6 @@ from first_hour import harness, owner, policy, sandbox
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
 SETTLE_S = 20.0
 IDLE_S = 30 * 60.0
@@ -55,14 +56,6 @@ AUTO = tuple(
 )
 
 
-def launcher(run: harness.Run, name: str, writable: tuple[Path, ...]) -> str:
-    """Write a launcher that starts Claude Code in the run's sandbox; its path."""
-    path = run.layout.bin / name
-    path.write_text(sandbox.launcher(run.layout, run.tools, writable=writable), encoding="utf-8")
-    path.chmod(0o755)
-    return str(path)
-
-
 class SdkOwner:
     """The scripted owner: a small model in character, with no tools, and the rule applied."""
 
@@ -70,8 +63,6 @@ class SdkOwner:
         """An owner for this run."""
         self.run = run
         self.token = token
-        layout = run.layout
-        self.cli = launcher(run, "claude-owner", (layout.owner, layout.home, layout.tmp))
         self.usd = 0.0
 
     async def _ask(self, prompt: str, schema: dict[str, object]) -> object:
@@ -86,7 +77,7 @@ class SdkOwner:
             max_turns=3,
             output_format={"type": "json_schema", "schema": schema},
             cwd=str(self.run.layout.owner),
-            cli_path=self.cli,
+            cli_path=str(self.run.tools["claude"]),
             env={"CLAUDE_CODE_OAUTH_TOKEN": self.token},
         )
         found: object = ""
@@ -164,7 +155,7 @@ class SdkSession:
             ClaudeAgentOptions(
                 cwd=app,
                 model=run.config.model,
-                cli_path=launcher(run, "claude-session", layout.writable),
+                cli_path=str(run.tools["claude"]),
                 setting_sources=["project", "local"],
                 settings=json.dumps(sandbox.settings(layout)),
                 plugins=[{"type": "local", "path": str(p)} for p in plugins],
@@ -404,6 +395,7 @@ async def probe(run: harness.Run, token: str) -> dict[str, object]:
         text = await session.turn(PROBE, run.deadline)
     finally:
         await session.close()
+        shutil.rmtree(run.layout.runtime, ignore_errors=True)
     records = [
         json.loads(line)
         for line in (run.layout.root / "transcript.jsonl").read_text("utf-8").splitlines()

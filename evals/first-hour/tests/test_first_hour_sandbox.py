@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -38,6 +39,12 @@ def _bwrap_works() -> bool:
     return done.returncode == 0
 
 
+@pytest.fixture(autouse=True)
+def _own_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each test's runtime directory sits in its own temp, not in the machine's."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+
 needs_bwrap = pytest.mark.skipif(not _bwrap_works(), reason="bwrap cannot make a sandbox here")
 
 
@@ -63,13 +70,21 @@ def test_the_environment_is_built_from_nothing_but_the_locale(layout: sandbox.La
     assert "/operator/bin" not in env["PATH"]
     assert env["LANG"] == "C.UTF-8"
     assert env["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
+    # Why: a longer socket path sends Claude Code's messaging socket to the shared /tmp/cc-socks,
+    # so the runtime directory sits at the top of the temp location under a short name.
+    assert env["XDG_RUNTIME_DIR"] == str(layout.runtime)
+    assert layout.runtime.parent == Path(tempfile.gettempdir())
+    assert len(f"/tmp/{layout.runtime.name}/cc-socks/4194304.sock") <= 103
+    assert layout.runtime.is_dir()
+    assert layout.runtime.stat().st_mode & 0o777 == 0o700
 
 
 def test_the_sessions_own_settings_keep_forges_logged_out_and_connectors_off(
     layout: sandbox.Layout,
 ) -> None:
     settings = sandbox.settings(layout)
-    assert settings["env"] == sandbox.forge_env(layout)
+    assert settings["env"] == sandbox.session_env(layout)
+    assert settings["env"]["CLAUDE_CODE_SHELL_PREFIX"] == str(layout.shell)
     assert settings["disableClaudeAiConnectors"] is True
     assert settings["permissions"] == {"deny": list(policy.DENIED_TOOLS)}
 
@@ -118,12 +133,14 @@ def test_only_the_named_plugins_are_read_from_the_operators_registry() -> None:
     assert sandbox.installed({"plugins": []}, {}, ("pstack",)) == []
 
 
-def test_the_launcher_starts_claude_inside_the_sandbox(layout: sandbox.Layout) -> None:
-    claude = Path("/opt/claude/claude")
-    script = sandbox.launcher(layout, {"claude": claude}, writable=layout.writable)
-    assert script.startswith("#!/bin/sh\nexec 'bwrap' ")
-    assert script.rstrip().endswith(f"'--' '{claude}' \"$@\"")
-    assert f"'--ro-bind' '{claude}' '{claude}'" in script
+def test_the_shell_prefix_runs_its_one_argument_inside_the_sandbox(
+    layout: sandbox.Layout,
+) -> None:
+    script = layout.shell.read_text()
+    assert script.startswith("#!/bin/sh\nexec 'env' '-u' 'CLAUDE_CODE_OAUTH_TOKEN' ")
+    assert " 'bwrap' '--ro-bind' '/' '/' " in script
+    assert script.rstrip().endswith("'--' '/bin/bash' '-c' \"$1\"")
+    assert layout.shell.stat().st_mode & 0o111
 
 
 def test_the_model_token_goes_alone_and_only_if_it_outlives_the_run() -> None:
@@ -148,10 +165,16 @@ def test_the_model_token_goes_alone_and_only_if_it_outlives_the_run() -> None:
 def inside(
     layout: sandbox.Layout, command: str, inherited: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
+    """``command`` as the session's Bash runs it.
+
+    A shell plays Claude Code: it holds the model token in its environment and hands the line to
+    the shell prefix.
+    """
+    env = sandbox.environment(layout, LEAKY if inherited is None else inherited)
     return subprocess.run(
-        sandbox.argv(layout, ["sh", "-c", command]),
+        ["sh", "-c", '"$0" "$1"; exit $?', str(layout.shell), command],
         cwd=layout.app,
-        env=sandbox.environment(layout, LEAKY if inherited is None else inherited),
+        env={**env, "CLAUDE_CODE_OAUTH_TOKEN": "secret-model-token"},
         capture_output=True,
         text=True,
         timeout=60,
@@ -289,6 +312,19 @@ def test_the_harnesss_own_files_and_other_repositories_are_read_only(
     log = subprocess.run(["git", "-C", str(repo), "log"], capture_output=True, check=False)
     assert log.returncode != 0
     assert inside(layout, "echo ok > here && echo ok > $HOME/x && echo ok > /tmp/x").returncode == 0
+
+
+@needs_bwrap
+@pytest.mark.parametrize(
+    "look",
+    [
+        'test -n "$CLAUDE_CODE_OAUTH_TOKEN"',
+        "cat /proc/[0-9]*/environ | tr '\\0' '\\n' | grep -q '^CLAUDE_CODE_OAUTH_TOKEN='",
+        "cat /proc/[0-9]*/cmdline | tr '\\0' '\\n' | grep -q 'secret-model-toke[n]'",
+    ],
+)
+def test_the_model_token_is_out_of_a_commands_reach(layout: sandbox.Layout, look: str) -> None:
+    assert inside(layout, look).returncode != 0
 
 
 @needs_bwrap
