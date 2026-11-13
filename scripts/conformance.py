@@ -19,6 +19,8 @@ from pathlib import Path
 
 import application_types
 import hooks_installed
+import justfile_text
+import markdown_text
 import plugin_pin
 import project_bite
 import settings_rules
@@ -141,7 +143,6 @@ PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
-PLUGIN_REF = re.compile(r'repository:\s*\S*ratchet\S*?[,\s]+ref:\s*"?([^",\s}]+)')
 COMMIT_HOOKS = Path(hooks_installed.COMMIT_HOOKS)
 RUNS_WHOLE_TIER0 = re.compile(r"^(?!\s*#).*\btier0\b(?!-)", re.MULTILINE)
 WHOLE_TIER0 = (
@@ -152,8 +153,6 @@ INSTALLS_COMMIT_MSG = re.compile(r"^default_install_hook_types:.*\bcommit-msg\b"
 COMMIT_MSG_STAGE = re.compile(r"^\s*stages:\s*\[\s*commit-msg\s*\]", re.MULTILINE)
 WHOLE_TIER0_ENTRY = re.compile(r"^\s*entry:.*\btier0\b", re.MULTILINE)
 REFUTATION_SECTION = "## Refutation criterion"
-EMPTY_BODIES = {"none", "n/a", "na", "tbd", "todo", "-", "?"}
-MIN_BODY = 20
 DISPUTE_STATUSES = {"open", "upheld", "rejected"}
 DISPUTE_SECTIONS = (
     "## Gate",
@@ -171,7 +170,6 @@ PR_SECTIONS = (
     "## Gates",
 )
 LOCKED_PATTERNS = {".claude/settings.json", ".claude/hooks/**", "guards/**"}
-TABLE_ROW = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|")
 # Why: a repository with no forge names a change template; adopt's own wording for it follows
 # the path with a clause, so the line is read up to the closing backtick.
 PR_TEMPLATE_LINE = re.compile(r"^- (?:Pull request|Change) template: `([^`]+)`", re.MULTILINE)
@@ -257,35 +255,8 @@ def read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
-def code_of(justfile: str) -> str:
-    """A justfile less its whole-line comments, where the template names what it explains."""
-    return "\n".join(line for line in justfile.splitlines() if not line.lstrip().startswith("#"))
-
-
-def definition(text: str, name: str) -> tuple[str, ...]:
-    """The recipe or variable ``name`` of a justfile: its comment, its head and its body."""
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        head = re.match(r"@?([A-Za-z_][\w-]*)", line)
-        if head is None or head.group(1) != name:
-            continue
-        start = index
-        while start > 0 and lines[start - 1].startswith("#"):
-            start -= 1
-        end = index + 1
-        while end < len(lines) and lines[end].startswith((" ", "\t")):
-            end += 1
-        return tuple(lines[start:end])
-    return ()
-
-
 def template_definition(name: str) -> tuple[str, ...]:
-    return definition(read(ADOPT_TEMPLATES / "justfile") or "", name)
-
-
-def defines_recipe(justfile: str, name: str) -> bool:
-    pattern = rf"^@?{re.escape(name)}(?:[ \t][^\n]*)?:(?!=)"
-    return re.search(pattern, justfile, re.MULTILINE) is not None
+    return justfile_text.definition(read(ADOPT_TEMPLATES / "justfile") or "", name)
 
 
 def check_agent_instructions(root: Path) -> Iterable[Finding]:
@@ -301,7 +272,13 @@ def check_agent_instructions(root: Path) -> Iterable[Finding]:
         yield Finding(
             name,
             f"has no '{ASKING}' section; copy it from the template AGENTS.md",
-            Agent(start=(ASKING, "", section(read(AGENTS_TEMPLATE) or "", ASKING).strip())),
+            Agent(
+                start=(
+                    ASKING,
+                    "",
+                    markdown_text.section(read(AGENTS_TEMPLATE) or "", ASKING).strip(),
+                )
+            ),
         )
 
 
@@ -365,50 +342,29 @@ def check_adr(number: int, path: Path, rel: Path) -> Iterable[Finding]:
         yield agent(f"{rel}: a superseded ADR names its successor: 'superseded-by: NNNN'")
     if REFUTATION_SECTION not in text:
         yield agent(f"{rel}: has no '{REFUTATION_SECTION}' section")
-    elif empty_body(text, REFUTATION_SECTION):
+    elif markdown_text.empty_body(text, REFUTATION_SECTION):
         yield agent(f"{rel}: '{REFUTATION_SECTION}' names no observation that would show it wrong")
     if number == 1 and "Ratchet method" not in text:
         yield agent(f"{rel}: ADR 0001 records adopting the Ratchet method")
 
 
-def section(text: str, heading: str) -> str:
-    start = text.find(heading)
-    if start < 0:
-        return ""
-    body = text[start + len(heading) :]
-    end = body.find("\n## ")
-    return body if end < 0 else body[:end]
-
-
-def empty_body(text: str, heading: str) -> bool:
-    """Whether the section under ``heading`` says nothing: absent, blank, placeholder or short."""
-    body = section(text, heading).strip()
-    return body.lower().rstrip(".") in EMPTY_BODIES or len(body) < MIN_BODY
-
-
-def table_cells(body: str) -> list[tuple[str, str]]:
-    """The first two cells of every row under the header; an empty second cell is kept."""
-    rows = []
-    for line in body.splitlines():
-        match = TABLE_ROW.match(line)
-        if match and not set(match.group(1)) <= set("-: "):
-            rows.append((match.group(1), match.group(2)))
-    return rows[1:]
-
-
 def template_rows() -> dict[str, tuple[str, str]]:
     """The template binding's Entry points rows by name: the row as written, and its command."""
-    body = section(read(ADOPT_TEMPLATES / "docs/process/binding.md") or "", "## Entry points")
+    body = markdown_text.section(
+        read(ADOPT_TEMPLATES / "docs/process/binding.md") or "", "## Entry points"
+    )
     return {
         match.group(1): (line, match.group(2))
         for line in body.splitlines()
-        if (match := TABLE_ROW.match(line))
+        if (match := markdown_text.TABLE_ROW.match(line))
     }
 
 
 def template_gate_row(question: str) -> str:
     """The template binding's Gates row for a question (a test holds that it has one)."""
-    body = section(read(ADOPT_TEMPLATES / "docs/process/binding.md") or "", "## Gates")
+    body = markdown_text.section(
+        read(ADOPT_TEMPLATES / "docs/process/binding.md") or "", "## Gates"
+    )
     prefix = f"| {question} |"
     return next(line for line in body.splitlines() if line.startswith(prefix))
 
@@ -416,12 +372,12 @@ def template_gate_row(question: str) -> str:
 def template_block(heading: str) -> tuple[str, ...]:
     """A section of the template binding, heading included, for the upgrade report to copy."""
     text = read(ADOPT_TEMPLATES / "docs/process/binding.md") or ""
-    return (heading, *section(text, heading).rstrip().splitlines())
+    return (heading, *markdown_text.section(text, heading).rstrip().splitlines())
 
 
 def check_entry_points(root: Path, text: str) -> Iterable[Finding]:
     """Every entry point has a row naming its command, and a ``just`` command has its recipe."""
-    commands = dict(table_cells(section(text, "## Entry points")))
+    commands = dict(markdown_text.table_cells(markdown_text.section(text, "## Entry points")))
     rows = template_rows()
     justfile = read(root / "justfile")
     for name in ENTRY_POINTS:
@@ -440,7 +396,7 @@ def check_entry_points(root: Path, text: str) -> Iterable[Finding]:
         recipe = RUNS_JUST.match(command.strip("`"))
         if justfile is None or INCLUDES.search(justfile) or recipe is None:
             continue
-        if not defines_recipe(justfile, recipe.group(1)):
+        if not justfile_text.defines_recipe(justfile, recipe.group(1)):
             yield Finding(
                 "justfile",
                 f"has no `{recipe.group(1)}` recipe, which the binding's entry point '{name}'"
@@ -455,7 +411,7 @@ def check_binding(root: Path) -> Iterable[Finding]:
         yield agent("docs/process/binding.md: missing")
         return
     yield from check_entry_points(root, text)
-    gates = section(text, "## Gates")
+    gates = markdown_text.section(text, "## Gates")
     if not gates:
         yield agent("docs/process/binding.md: has no '## Gates' section")
         return
@@ -463,7 +419,7 @@ def check_binding(root: Path) -> Iterable[Finding]:
     # accepted gap, and one that does not may say which type the repository is not.
     adrs = {number for number, _ in numbered_files(root / "docs/adr")}
     catalogue = application_types.load()
-    rows = table_cells(gates)
+    rows = markdown_text.table_cells(gates)
     # Why: a row the catalogue gained since the adoption is an upgrade item with its template row.
     dropped = {
         application_types.dropped(question): question
@@ -595,7 +551,7 @@ def later(tool: str) -> bool:
 
 def check_operability(root: Path) -> Iterable[Finding]:
     text = read(root / "docs/process/binding.md") or ""
-    asked = set(FIRST_CELL.findall(section(text, "## Gates")))
+    asked = set(FIRST_CELL.findall(markdown_text.section(text, "## Gates")))
     catalogued = application_types.load().questions
     for question in OPERABILITY_QUESTIONS:
         # Why: the types check asks every question the catalogue holds, once.
@@ -603,7 +559,7 @@ def check_operability(root: Path) -> Iterable[Finding]:
             yield agent(f"docs/process/binding.md: the Gates table has no '{question}' row")
     waiting = {row.question for row in project_bite.gate_rows(text) if later(row.tool)}
     for heading, questions in OPERABILITY_SECTIONS.items():
-        if text and not waiting >= set(questions) and empty_body(text, heading):
+        if text and not waiting >= set(questions) and markdown_text.empty_body(text, heading):
             yield agent(f"docs/process/binding.md: has no '{heading}' section, or it is empty")
     if not (root / FLAG_REGISTRY).is_file():
         yield agent(f"{FLAG_REGISTRY}: missing; an empty file declares no flags")
@@ -620,7 +576,7 @@ def check_speed(root: Path) -> Iterable[Finding]:
     if text and SPEED_SECTION not in text:
         yield agent(f"docs/process/binding.md: has no '{SPEED_SECTION}' section (ceilings, shards)")
     elif text:
-        yield from check_speed_parts(section(text, SPEED_SECTION))
+        yield from check_speed_parts(markdown_text.section(text, SPEED_SECTION))
     workflows = root / WORKFLOWS
     if not workflows.is_dir():
         return
@@ -767,7 +723,7 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
         return
     for name in (*TIER_WORKFLOWS, MERGE_WORKFLOW, WEEKLY_WORKFLOW):
         text = read(root / WORKFLOWS / name) or ""
-        refs = set(PLUGIN_REF.findall(text))
+        refs = plugin_pin.refs(text)
         if not refs and "RATCHET_PLUGIN" in text:
             yield agent(
                 f"{WORKFLOWS / name}: checks no plugin out by `repository:` then `ref:`, so "
@@ -832,13 +788,6 @@ def answered_gates(binding: str) -> set[str]:
     }
 
 
-def defines_variable(justfile: str, name: str) -> bool:
-    return (
-        re.search(rf"^(?:export[ \t]+)?{re.escape(name)}[ \t]*:=", justfile, re.MULTILINE)
-        is not None
-    )
-
-
 def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
     """A tier list the tier workflows read, which the justfile does not define.
 
@@ -849,7 +798,7 @@ def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
         if not (root / WORKFLOWS / workflow).is_file():
             continue
         for name, meaning in lists:
-            if not defines_variable(justfile, name):
+            if not justfile_text.defines_variable(justfile, name):
                 yield Finding(
                     "justfile",
                     f"has no `{name}` variable, which the template's `shape` job of `{workflow}`"
@@ -864,7 +813,7 @@ def check_runner(root: Path) -> Iterable[Finding]:
     if justfile is None:
         return
     yield from check_tier_lists(root, justfile)
-    code = code_of(justfile)
+    code = justfile_text.code_of(justfile)
     gates = answered_gates(read(root / "docs/process/binding.md") or "")
     if gates & OVER_THE_CHANGE and "changed.py" not in code:
         yield Finding(
@@ -875,7 +824,7 @@ def check_runner(root: Path) -> Iterable[Finding]:
             " compared with",
             Agent(start=template_definition("changed")),
         )
-    ratchet = "\n".join(definition(justfile, "ratchet"))
+    ratchet = "\n".join(justfile_text.definition(justfile, "ratchet"))
     if ratchet and "hooks-installed" not in ratchet and "hooks_installed.py" not in ratchet:
         yield Finding(
             "justfile",
@@ -1640,9 +1589,7 @@ def fill_placeholders(root: Path) -> None:
     """Stand in for adopt on a template copy: bind every group and row adopt would have bound."""
     path = root / "guards/manifest.toml"
     path.write_text(UNBOUND_GROUP.sub('paths = [\n    "bound/**",\n]', path.read_text()))
-    settings = root / settings_rules.SETTINGS
-    want = settings_rules.regenerated(settings_rules.read_manifest(root) or {})
-    settings.write_text(want(settings_rules.settings_text(root)), encoding="utf-8")
+    settings_rules.regenerate(root)
     binding = root / "docs/process/binding.md"
     binding.write_text(fill_binding(binding.read_text()))
     registry = root / project_bite.REGISTRY

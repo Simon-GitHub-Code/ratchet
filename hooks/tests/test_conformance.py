@@ -12,6 +12,8 @@ import pytest
 
 import application_types
 import conformance
+import justfile_text
+import markdown_text
 from tests import adopted
 from tests.repos import repository
 from tests.support import PLUGIN_ROOT
@@ -579,7 +581,7 @@ def test_a_tier_list_is_asked_wherever_a_tier_workflow_exists(repo: Path) -> Non
 
 
 def test_the_template_justfile_names_each_runner_item_in_code() -> None:
-    code = conformance.code_of(TEMPLATE_JUSTFILE)
+    code = justfile_text.code_of(TEMPLATE_JUSTFILE)
     for item in ("changed.py", "RATCHET_JOBS", "--alone", "--temporary"):
         assert item in code, item
 
@@ -588,7 +590,7 @@ def test_a_repository_whose_runner_is_not_just_is_not_read_for_recipes(repo: Pat
     replace(BINDING, "| tier0-tree | `just tier0-tree` |\n", "")(repo)
     remove(JUSTFILE)(repo)
     assert [line.split(":")[0] for line in red(repo)] == [BINDING]
-    assert conformance.definition(TEMPLATE_JUSTFILE, "no-such-recipe") == ()
+    assert justfile_text.definition(TEMPLATE_JUSTFILE, "no-such-recipe") == ()
 
 
 LATER = "| rolls back safely | later: life:deployed and code:stored-format |"
@@ -762,7 +764,9 @@ def test_nothing_hides_a_gates_row_behind_the_types_line(tmp_path: Path) -> None
 
     without = gates()
     text = (root / BINDING).read_text(encoding="utf-8")
-    held = {question for question, _ in conformance.table_cells(conformance.section(text, GATES))}
+    held = {
+        question for question, _ in markdown_text.table_cells(markdown_text.section(text, GATES))
+    }
     owed = application_types.load().questions - held
     assert owed, "an 0.8.2 adoption lacks rows the catalogue has since gained"
     for question in owed:

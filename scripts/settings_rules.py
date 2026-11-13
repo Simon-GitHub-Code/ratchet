@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING
 import plugin_pin
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    import gatelib
 
 MANIFEST = Path("guards/manifest.toml")
 SETTINGS = Path(".claude/settings.json")
@@ -219,7 +219,7 @@ def own_rules(settings: dict[str, object], manifest: dict[str, object]) -> list[
     ]
 
 
-def regenerated(manifest: dict[str, object]) -> Callable[[str | None], str]:
+def regenerated(manifest: dict[str, object]) -> gatelib.Want:
     """The want over ``settings.json`` text, which leaves text that is not a JSON object as it is.
 
     It holds the plugin's deny and ask lists, the project's own rules after them in the list they
@@ -242,6 +242,14 @@ def regenerated(manifest: dict[str, object]) -> Callable[[str | None], str]:
         return json.dumps(settings, indent=2) + "\n"
 
     return want
+
+
+def regenerate(root: Path) -> None:
+    """Write ``.claude/settings.json`` as ``regenerated`` makes it from the root's manifest."""
+    path = root / SETTINGS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    want = regenerated(read_manifest(root) or {})
+    path.write_text(want(settings_text(root)), encoding="utf-8")
 
 
 def write_problems(root: Path, plugin: Path) -> list[str]:
@@ -268,10 +276,7 @@ def main(argv: list[str]) -> int:
     root = Path(options.root).resolve()
     problems = write_problems(root, plugin_pin.PLUGIN) if options.write else drift(root)
     if options.write and not problems:
-        path = root / SETTINGS
-        path.parent.mkdir(parents=True, exist_ok=True)
-        want = regenerated(read_manifest(root) or {})
-        path.write_text(want(settings_text(root)), encoding="utf-8")
+        regenerate(root)
     for line in problems:
         print(line)
     if problems:

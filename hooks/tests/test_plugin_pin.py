@@ -51,10 +51,9 @@ def test_a_checkout_that_moved_on_within_a_version_is_red_and_says_both_ways_out
     assert f"the plugin at {used} is 1.2.3 at {moved}" in out
     assert f"docs/process/binding.md pins 1.2.3 at {pinned}, and which is newer" in out
     assert "set RATCHET_PLUGIN to a checkout of the pinned commit" in out
-    assert f"run `python3 {used / 'scripts/upgrade.py'}`" in out
-    assert f"change the pin line to `- Ratchet plugin: 1.2.3 at {moved}`" in out
-    assert "every workflow `ref`" in out
-    assert "the owner sees" in out
+    assert f"set the pin line to `- Ratchet plugin: 1.2.3 at {moved}` and run" in out
+    assert f"`python3 {used / 'scripts/upgrade.py'} --apply`" in out
+    assert "which moves every workflow `ref` and the permission rules" in out
     assert out.endswith("plugin-pin: red\n")
 
 

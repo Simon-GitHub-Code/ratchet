@@ -50,12 +50,8 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import gatelib
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 PLUGIN = Path(__file__).resolve().parents[1]
 MANIFEST = Path(".claude-plugin/plugin.json")
@@ -132,7 +128,7 @@ def refs(text: str) -> set[str]:
     return set(PLUGIN_REF.findall(text))
 
 
-def with_refs(commit: str) -> Callable[[str | None], str]:
+def with_refs(commit: str) -> gatelib.Want:
     """The want that sets every plugin-checkout ``ref:`` to ``commit`` and changes nothing else."""
 
     def set_ref(match: re.Match[str]) -> str:
@@ -142,7 +138,7 @@ def with_refs(commit: str) -> Callable[[str | None], str]:
     return lambda text: PLUGIN_REF.sub(set_ref, text or "")
 
 
-def with_pin(line: str) -> Callable[[str | None], str]:
+def with_pin(line: str) -> gatelib.Want:
     """The want that makes ``line`` the binding's pin line: replaced where it stands, else added.
 
     A binding without the line gets it after the first paragraph under ``## Runner``, where the
@@ -244,8 +240,7 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
     version, commit = version_of(plugin), commit_of(plugin)
     used = in_use(plugin)
     home = gatelib.BINDING
-    upgrade = f"python3 {plugin / 'scripts/upgrade.py'}"
-    apply = f"{upgrade} --apply"
+    apply = f"python3 {plugin / 'scripts/upgrade.py'} --apply"
     standing = relation(pin, plugin)
     if pin is None:
         absent = f"{home}: no `- Ratchet plugin: <version> at <commit>` line"
@@ -283,8 +278,8 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
         (
             f"the plugin at {plugin} is {used}; {home} pins {pinned}, and which is newer cannot be"
             " told. Either set RATCHET_PLUGIN to a checkout of the pinned commit, or, where the"
-            f" plugin in use is the newer, run `{upgrade}` and change the pin line to"
-            f" `{line_for(plugin)}` and every workflow `ref` with it, in one change the owner sees."
+            f" plugin in use is the newer, set the pin line to `{line_for(plugin)}` and run"
+            f" `{apply}`, which moves every workflow `ref` and the permission rules to it."
         ),
         True,
     )
