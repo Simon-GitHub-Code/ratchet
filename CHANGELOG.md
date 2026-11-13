@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.10.1
+
+Fixes for the eleven issues found while dogfooding 0.10.0 (#20 to #31).
+
+### The pipeline
+
+- The spec and critic roles, whose trees are meant to be red, run `tier0` and only the tests they wrote, not `check`. Implement, fix and review still run `check`, and a review whose own `check` is red forces `request_changes`. (#24)
+- A blocker or major finding whose kept test passes, because the code already holds, is resolved by that test: no fix round runs for it, and the review still reads it. (#25)
+- The critic keeps its tests in one flat directory, apart from the unit tests: the one the binding's new optional `## Critique tests` section names, else `tests/critique/`, as `<slug>.<layer>.critique.test.<ext>`. (#22)
+- The spec estimates the whole change, the critic's tests and the records included, against the change-size ceiling, and stops `blocked` with a proposed split when the ticket cannot fit. (#21)
+
+### Gates
+
+- `guard-diff` reads `pnpm-lock.yaml` (lockfile version 9), so a dependency the spec names and `pnpm add` writes is dependency-only. (#21)
+- The change-size gate no longer counts the lockfiles `guard-diff` reads, their copies under `quality/snapshots/`, or dispute records under `docs/disputes/`, and counts a moved file by the lines changed in it. (#21, #22)
+- `with_service.py` boots once more on a new port when the service exits before answering on a port it picked, and says so. An early exit prints the first and the last lines the service wrote, so its cause stays in view. (#29, #30)
+
+### Guard
+
+- A `cd` to a directory held in a variable set earlier on the same line (`S=/repo; cd $S && …`) is read as that directory. A relative write that could hit a guard path after a `cd` the guard cannot read is asked of the owner. A shell function that redefines `cd` makes the line unreadable. (#31, ADR 0024)
+
+### Skills and route
+
+- `/ratchet:adopt` no longer copies `.claude/settings.json` from the templates; `just settings` writes it last, once the manifest is filled, so its rules no longer lock the manifest the adoption must fill. (#20)
+- `drain.py` and the feature preflight resolve a local ticket by the number its file name starts with, and refuse a number two files share, naming both. (#26)
+- `/ratchet:feature` shortens a settling commit subject to 72 characters by dropping whole words from the end of the slug. (#27)
+- The route sends a local spec that states no conjecture or operability to `/ratchet:conjecture <spec>` before `to-tickets`, so its tickets inherit both and none is red at the preflight. (#28)
+
+### Upgrading a 0.10.0 adoption
+
+Update the plugin and its pin line. Nothing else is required. To place the critic's tests elsewhere than `tests/critique/`, add a `## Critique tests` section to `docs/process/binding.md` from the template, and make sure the test runner includes that directory.
+
 ## 0.10.0
 
 A change the gates can judge now merges without the owner, and the owner is asked only what shapes the product or cannot be taken back. Ratchet ships the questions the method asks of each application type and no tool for any stack, and an adopted repository proves that each gate it binds can go red. The ADR numbers below are the plugin's own, in `docs/adr/`.
