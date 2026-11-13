@@ -28,7 +28,7 @@ The feature pipeline runs on Claude Code's Workflow tool. The method, its gates 
 2. In the repository, empty or not, type `/ratchet:init`. It asks what the product is (and on an empty directory what it is built with), then writes `AGENTS.md` with `CLAUDE.md` linked to it, runs the pstack and impeccable setups, makes the first commit and, with your consent, the remote.
 3. Type `/mattpocock-skills:setup-matt-pocock-skills`. It records the issue tracker and its labels.
 4. Type `/ratchet:adopt`. It asks what kind of software this is and whether to accept the tools it proposes, then the design brief; it binds every gate against a walking skeleton, shows each gate fail on a planted fault, and opens the adoption pull request for you to merge. It installs the commit hooks itself; if your git configuration sets a `core.hooksPath` whose hooks do not run the repository's own, it names one command for you to run so that every commit runs tier 0.
-5. From then on `/ratchet:next` prints the command to type next: a spec and tickets with `/mattpocock-skills:to-spec` and `to-tickets`, `/ratchet:conjecture <ticket>`, the agent-ready label, then `/ratchet:feature` to build every ready ticket.
+5. From then on `/ratchet:next` prints the command to type next: a spec with `/mattpocock-skills:to-spec`, `/ratchet:conjecture <spec>` (its tickets inherit the conjecture and operability), `to-tickets`, `/ratchet:conjecture <ticket>` where a ticket needs its own, the agent-ready label, then `/ratchet:feature` to build every ready ticket.
 
 ## The eleven commitments
 
@@ -81,11 +81,11 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/pins.py` | 0 | is every action pinned by commit, every image by digest, every workflow least-privileged? |
 | `scripts/coverage_groups.py` | 1 | is each coverage group at its ratchet, and each absolute path at 100%? Fed by the suite's Cobertura or LCOV report |
 | `scripts/mutation_survivors.py` | 1 and 2 | is every surviving mutant registered, and no entry stale? Fed by any mutation tool: one JSON line per mutant, or the reports of mutmut and Stryker as they are |
-| `scripts/change_size.py` | 1 | is the change within its files and lines ceiling? |
+| `scripts/change_size.py` | 1 | is the change within its files and lines ceiling? (records, generated lockfiles and their snapshots are not counted; a moved file counts by its changed lines) |
 | `ratchet_guards.diff` | 1 | which guard paths changed? |
 | `scripts/settings_rules.py` | 1 | do the permission rules still mirror the manifest? |
 | `scripts/conformance.py` | 1 | does the repository still carry the method: its records, its binding, its application types, its Speed section, its CI shape? `--self-test` shows it bites |
-| `scripts/with_service.py` | 1 | does the deliverable start and answer? Boots a service by any command, waits until a URL answers, stops the whole process tree; with a command after `--` it holds the service up for that command |
+| `scripts/with_service.py` | 1 | does the deliverable start and answer? Boots a service by any command, waits until a URL answers, stops the whole process tree, retrying once on a new port when a service on a port it picked exits before it answers; with a command after `--` it holds the service up for that command |
 | `scripts/load_smoke.py` | 1 | does a running service stay correct under seconds of concurrent requests? Judged on errors only, never on latency, and red while it requests nothing but the readiness URL |
 | `scripts/telemetry_sink.py` | 2 | does the telemetry arrive? An OTLP/HTTP receiver that is green only when traces, metrics and logs arrived non-empty for the expected `service.name`; no collector to install |
 | `scripts/project_bite.py` | 1 and 2 | does every gate the repository bound go red on its fault, and on an empty collection? Plants each fault of `quality/bites.toml` in a scratch copy; with `--changed`, only when the change touches a gate |
@@ -110,7 +110,7 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 | `skills/init/` | `/ratchet:init`: the bare bones for any repository: `git init` where needed, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it, the pstack and impeccable one-time setups, the first commit and the remote; the mattpocock-skills setup is the owner's command after it, and a rerun of init creates the triage labels that setup recorded |
 | `skills/adopt/` | `/ratchet:adopt`: the steps and the stack-neutral templates that bind the method to a repository's runner, forge and stack |
 | `skills/feature/` | `/ratchet:feature <ticket>`: the feature preflight on an agent-ready ticket, the branch, then the pipeline. With no ticket: every agent-ready ticket at once, each in a work tree of its own, merged one at a time, one report |
-| `skills/conjecture/` | `/ratchet:conjecture <ticket>`: the method's two additions to a ticket, its conjecture and how it is operated, drafted from the conversation that produced it |
+| `skills/conjecture/` | `/ratchet:conjecture <ticket or spec>`: the method's two additions to a ticket (or to the spec it came from), its conjecture and how it is operated, drafted from the conversation that produced it |
 | `skills/next/` | `/ratchet:next`: the command the owner types next, decided from the checkout and the tracker |
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
 | `scripts/drain.py` | the queue behind `/ratchet:feature` with no ticket: the plan, the work trees it makes and removes, the rebase, the local merge and the report |

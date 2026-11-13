@@ -124,6 +124,10 @@ One row per question the method asks. The application types decide which rows ap
 
 <The paths held at 100% line and branch coverage with no exclusion: the gate tools always, plus whatever the owner declares pure.>
 
+## Critique tests
+
+<The one flat directory the pipeline's critic keeps its tests in, apart from the unit tests, with the file name pattern: `tests/critique/<slug>.<layer>.critique.test.<ext>`, one file per layer a feature touches. A critique file is organised by feature, not by module, and often reaches past one unit, so it never sits beside the code. The test runner's configuration must include this directory.>
+
 ## Limits
 
 <The ceilings the gates hold, per path group where they differ: size and complexity (cognitive and cyclomatic complexity, nesting depth, unit and file length); change size per pull request; performance (latency, allocation, bundle size); load (the arrival rate the `load` gate drives, the percentile latency and the error rate it must hold, the concurrency and seconds of the `load-smoke`). Hard limits: split the unit rather than raise one.>

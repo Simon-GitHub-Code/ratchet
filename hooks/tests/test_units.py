@@ -61,6 +61,10 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "default-ref": ("DENY", DEFAULT_REF_BECAUSE),
         "amend-pushed": ("DENY", "amends a commit that is already pushed"),
         "rewrite-history": ("DENY", "rewrites history"),
+        "unresolved-directory": (
+            "ASK",
+            "writes a relative path after a cd the guard cannot resolve; it may be a guard path",
+        ),
         "merge-pr": (
             "ASK",
             "merges a pull request; the merge job or the owner merges one",

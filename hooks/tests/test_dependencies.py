@@ -183,7 +183,7 @@ def test_package_json_additions_and_scripts() -> None:
         ("pyproject.toml", PYPROJECT, "broken [", "does not parse"),
         ("package.json", PACKAGE, "[1, 2]", "does not parse"),
         ("ruff.toml", "a = 1\n", "a = 2\n", "ruff.toml is not read"),
-        ("pnpm-lock.yaml", "a: 1\n", "a: 2\n", "pnpm-lock.yaml is not read"),
+        ("yarn.lock", "a: 1\n", "a: 2\n", "yarn.lock is not read"),
     ],
 )
 def test_manifest_changes_that_are_not_dependency_only_say_why(
@@ -374,14 +374,14 @@ def test_guard_diff_lists_and_counts_dependency_files_with_what_they_change(
             "pyproject.toml": PYPROJECT,
             "uv.lock": UV_BEFORE,
             "quality/snapshots/pyproject.toml": PYPROJECT,
-            "quality/snapshots/pnpm-lock.yaml": "a: 1\n",
+            "quality/snapshots/yarn.lock": "a: 1\n",
         },
     )
     branch(root, "feature/2-attrs")
     added = PYPROJECT.replace('"httpx>=0.27"', '"httpx>=0.27", "attrs>=24"')
     write(root, "pyproject.toml", added)
     write(root, "quality/snapshots/pyproject.toml", added.replace('["ALL"]', '["E"]'))
-    write(root, "quality/snapshots/pnpm-lock.yaml", "a: 2\n")
+    write(root, "quality/snapshots/yarn.lock", "a: 2\n")
     write(root, "uv.lock", UV_BEFORE + "\n" + _pkg("attrs", "24.2.0"))
     summary = tmp_path / "summary.md"
     argv = ["--root", str(root), "--base", "main", "--fail-if-present", "--summary", str(summary)]
@@ -389,10 +389,10 @@ def test_guard_diff_lists_and_counts_dependency_files_with_what_they_change(
     assert capsys.readouterr().out.splitlines() == [
         "tool-config\tpyproject.toml",
         "  dependencies added: attrs (project.dependencies) (none) -> attrs>=24",
-        "ratchets\tquality/snapshots/pnpm-lock.yaml",
-        "  not dependency-only: pnpm-lock.yaml is not read",
         "ratchets\tquality/snapshots/pyproject.toml",
         "  not dependency-only: it changes more than the dependency tables and the package version",
+        "ratchets\tquality/snapshots/yarn.lock",
+        "  not dependency-only: yarn.lock is not read",
         "tool-config\tuv.lock",
         "  lockfile: attrs (lockfile) (none) -> 24.2.0",
     ]
@@ -453,3 +453,132 @@ def test_dropping_the_highest_of_two_side_by_side_versions_is_a_rollback() -> No
     older = CARGO_LOCK.replace('"2.0.1"', '"1.0.109"').replace('"aa"', '"bb"').split("\n\n", 2)[2]
     both = CARGO_LOCK + "\n" + older
     assert "syn falls from 2.0.1 to 1.0.109" in _reason("Cargo.lock", both, older)
+
+
+PNPM_LOCK = """lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      lit:
+        specifier: ^3.1.0
+        version: 3.1.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.11.0(typescript@5.4.0)
+
+packages:
+
+  '@lit-labs/ssr-dom-shim@1.2.0':
+    resolution: {integrity: sha512-ssr}
+
+  '@types/node@20.11.0':
+    resolution: {integrity: sha512-node}
+
+  lit@3.1.0:
+    resolution: {integrity: sha512-lit}
+    engines: {node: '>=18'}
+    peerDependencies:
+      react: '*'
+
+snapshots:
+
+  '@lit-labs/ssr-dom-shim@1.2.0': {}
+
+  lit@3.1.0:
+    dependencies:
+      '@lit-labs/ssr-dom-shim': 1.2.0
+"""
+
+
+def test_pnpm_lock_reports_added_and_raised_versions() -> None:
+    after = PNPM_LOCK.replace(
+        "lit@3.1.0:\n    resolution: {integrity: sha512-lit}",
+        "lit@3.2.0:\n    resolution: {integrity: sha512-new}",
+    )
+    after = after.replace("version: 3.1.0", "version: 3.2.0")
+    after = after.replace(
+        "packages:\n", "packages:\n\n  idb@8.0.0:\n    resolution: {integrity: sha512-idb}\n", 1
+    )
+    assert _shown("pnpm-lock.yaml", PNPM_LOCK, after) == [
+        "idb (lockfile) (none) -> 8.0.0",
+        "lit (lockfile) 3.1.0 -> 3.2.0",
+    ]
+    assert _shown("pnpm-lock.yaml", PNPM_LOCK, PNPM_LOCK) == []
+
+
+@pytest.mark.parametrize(
+    ("after", "reason"),
+    [
+        (PNPM_LOCK.replace("sha512-lit", "sha512-evil"), "lit 3.1.0 changed in place"),
+        (
+            PNPM_LOCK.replace(
+                "lit@3.1.0:\n    resolution: {integrity: sha512-lit}",
+                "lit@3.1.0:\n    resolution: {tarball: https://x.example/lit.tgz}",
+            ),
+            "changed in place",
+        ),
+        (
+            PNPM_LOCK.replace("lit@3.1.0:\n    resolution", "lit@3.0.0:\n    resolution"),
+            "lit falls from 3.1.0 to 3.0.0",
+        ),
+        (
+            PNPM_LOCK.replace(
+                "\nsnapshots:",
+                "\n  evil@1.0.0:\n    resolution: {integrity: sha512-e, tarball: https://evil.example/e}\n"
+                "\nsnapshots:",
+            ),
+            "evil 1.0.0 comes from https://evil.example",
+        ),
+        (
+            PNPM_LOCK.replace(
+                "lit@3.1.0:\n    resolution: {integrity: sha512-lit}",
+                "lit@3.1.0:\n    resolution: {integrity: sha512-lit, tarball: file:../lit.tgz}",
+            ),
+            "changed in place",
+        ),
+        (
+            PNPM_LOCK.replace(
+                "lit@3.1.0:\n    resolution: {integrity: sha512-lit}",
+                "'lit@https://x/lit.tgz':\n    resolution: {integrity: sha512-lit}",
+            ),
+            "not a name and version",
+        ),
+        (
+            PNPM_LOCK.replace("version: 3.1.0", "version: github.com/x/lit/abc"),
+            "pinned to github.com/x/lit/abc",
+        ),
+        (PNPM_LOCK.replace("        version: 3.1.0\n", ""), "pinned to nothing"),
+        (PNPM_LOCK.replace("version: 3.1.0", "version: link:../lit"), "comes from"),
+        (PNPM_LOCK + "\noverrides:\n  lit: 2.0.0\n", "only a pnpm v9"),
+        (PNPM_LOCK.replace("'9.0'", "'6.0'"), "only a pnpm v9"),
+        (PNPM_LOCK.replace("settings:\n", "settings:\n\tx: 1\n"), "not in the shape"),
+        (PNPM_LOCK.replace("settings:\n", "settings:\n  a: 1\n  a: 2\n"), "key is given twice"),
+        ("just text", "not in the shape"),
+        ("- a\n", "not in the shape"),
+        ("[]", "not in the shape"),
+    ],
+)
+def test_a_pnpm_lockfile_that_swaps_or_cannot_be_read_is_not_dependency_only(
+    after: str, reason: str
+) -> None:
+    assert reason in _reason("pnpm-lock.yaml", PNPM_LOCK, after)
+
+
+def test_pnpm_lock_keeps_a_linked_workspace_package_and_a_registry_tarball() -> None:
+    linked = PNPM_LOCK.replace("version: 3.1.0", "version: link:../lit", 1)
+    assert _shown("pnpm-lock.yaml", linked, linked) == []
+    private = PNPM_LOCK.replace("sha512-lit}", "sha512-lit, tarball: https://npm.example/lit.tgz}")
+    assert _shown("pnpm-lock.yaml", private, private) == []
+    more = private.replace(
+        "\nsnapshots:",
+        "\n  idb@8.0.0:\n    resolution: {integrity: sha512-i, tarball: https://npm.example/idb.tgz}\n"
+        "\nsnapshots:",
+    )
+    assert _shown("pnpm-lock.yaml", private, more) == ["idb (lockfile) (none) -> 8.0.0"]

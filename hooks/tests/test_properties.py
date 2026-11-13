@@ -21,6 +21,15 @@ def _context_free(command: str) -> bool:
     return not any(word in command for word in ("cd ", "cd", "switch", "checkout", "symbolic-ref"))
 
 
+def _sets_a_variable(command: str) -> bool:
+    """Whether the command sets a variable for a later command of its own line.
+
+    A wrapper in front (``sudo S=/x``) hands the assignment to the wrapped program, not to the
+    shell, so the later command no longer meets it and the row is no longer the same command.
+    """
+    return any(word in command for word in ("S=", "T=", "export ", "declare "))
+
+
 FLAGGED = [(command, expected) for command, expected in DENIED + ASKED if _one_line(command)]
 HARMLESS = [command for command in ALLOWED if _one_line(command) and command]
 HARMLESS_CONTEXT_FREE = [command for command in HARMLESS if _context_free(command)]
@@ -57,7 +66,7 @@ def test_interleaving_harmless_commands_never_unblocks_a_flagged_one(
 
 
 @given(
-    flagged=st.sampled_from(FLAGGED),
+    flagged=st.sampled_from([row for row in FLAGGED if not _sets_a_variable(row[0])]),
     wrappers=st.lists(st.sampled_from(WRAPPERS), min_size=1, max_size=3),
 )
 def test_wrapping_never_unblocks_a_flagged_command(

@@ -493,6 +493,27 @@ def test_close_parks_a_ticket_with_the_results_reasons_and_stashes_its_draft(
     assert states(root)[BRANCH_C] == "buildable", "the ticket changed, so the hold is over"
 
 
+def test_a_number_names_the_one_local_ticket_it_starts(tmp_path: Path, capsys: Out) -> None:
+    # Why: issue 26. With no tracker `03`, `#3` and `3` all mean the file `03-...`.
+    root = project(tmp_path, **{".scratch/f/issues/30-other.md": ticket(3, "Other")})
+    for spelling in ("01", "#1", "1"):
+        assert run(root, "close", spelling, "--outcome", "parked") == 0
+    assert note(root, BRANCH_A)["outcome"] == "parked"
+    capsys.readouterr()
+
+
+def test_a_number_that_starts_two_local_tickets_is_refused_with_both_named(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **{".scratch/g/issues/01-twin.md": ticket(1, "Twin")})
+    assert run(root, "close", "1") == 2
+    out = capsys.readouterr().out
+    assert ALPHA in out
+    assert ".scratch/g/issues/01-twin.md" in out
+    assert run(root, "close", "9") == 2
+    assert "no such ticket" in capsys.readouterr().out
+
+
 def test_close_without_a_result_and_an_unknown_ticket(tmp_path: Path, capsys: Out) -> None:
     root = project(tmp_path)
     assert run(root, "close", "nope.md") == 2

@@ -394,13 +394,28 @@ def test_an_unfinished_init_is_run_again(tmp_path: Path) -> None:
 
 
 def test_a_local_spec_without_tickets_is_split_next(tmp_path: Path) -> None:
-    root = repository(tmp_path, {**ADOPTED, ".scratch/settle/spec.md": "# Settle\n"})
+    root = repository(tmp_path, {**ADOPTED, ".scratch/settle/spec.md": "# Settle" + CONJECTURE})
     step = route.decide(root, None)
     assert step.command == f"{route.TICKETS} .scratch/settle/spec.md"
     assert step.stage == "specify"
     write(root, ".scratch/settle/issues/01-parse.md", "# Parse\n\nStatus: resolved\n")
     commit(root, "docs: tickets")
     assert route.decide(root, None).command == route.SPEC, "a spec whose tickets exist is split"
+
+
+def test_a_spec_without_a_conjecture_is_stated_before_it_is_split(tmp_path: Path) -> None:
+    # Why: issue 28. to-tickets writes no Conjecture or Operability; the preflight accepts both
+    # on the parent, so the spec states them once and every child inherits them.
+    spec = ".scratch/settle/spec.md"
+    root = repository(tmp_path, {**ADOPTED, spec: "# Settle\n"})
+    step = route.decide(root, None)
+    assert step.command == f"{route.CONJECTURE} {spec}"
+    assert step.then == f"{route.TICKETS} {spec}, then {route.FEATURE} <ticket>"
+    assert step.stage == "specify"
+    assert "inherit" in step.why
+    write(root, spec, "# Settle" + CONJECTURE)
+    commit(root, "docs: the conjecture")
+    assert route.decide(root, None).command == f"{route.TICKETS} {spec}"
 
 
 def test_plugin_lines_older_than_the_template_send_the_owner_to_init(tmp_path: Path) -> None:

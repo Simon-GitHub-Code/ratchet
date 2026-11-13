@@ -385,3 +385,105 @@ def test_a_change_with_no_room_under_the_ceiling_stops_before_the_next_stage() -
     unbound = {**SPECIFIED, "changeSize": {"lines": 9, "ceiling": 0}}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=unbound, **answers)
     assert ran["result"]["verdict"] == "approve"
+
+
+def test_a_finding_whose_kept_test_passes_starts_no_fix_round() -> None:
+    # Why: a major finding the critic's passing test showed the code holds still started a fix
+    # round, and the fix agent had nothing to change.
+    held = {
+        "severity": "major",
+        "title": "rejects a past expiry",
+        "testFails": False,
+        "heldByKeptTest": True,
+    }
+    tests = ["tests/critique/expiry.core.critique.test.py"]
+    kept = {**CRITIQUED, "findings": [held], "testsAdded": tests}
+    answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert ran["labels"] == ["preflight", "spec", "implement", "critique", "review"]
+    result = ran["result"]
+    assert (result["verdict"], result["unresolvedBlockingFindings"]) == ("approve", [])
+    assert result["criticFindings"] == [held], "the review still reads it"
+
+    open_major = {**held, "heldByKeptTest": False}
+    answers |= {"critique": {**kept, "findings": [open_major]}, "fix-1": IMPLEMENTED}
+    answers |= {"critique-1": CRITIQUED}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert "fix-1" in ran["labels"], "no kept test, still owed"
+
+    failing = {**held, "testFails": True}
+    answers |= {"critique": {**kept, "findings": [failing]}}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert "fix-1" in ran["labels"], "a failing kept test is owed whatever the flag says"
+
+
+def test_a_held_finding_is_not_offered_to_the_fix_agent_as_a_minor() -> None:
+    held = {"severity": "major", "title": "held", "testFails": False, "heldByKeptTest": True}
+    open_major = {"severity": "major", "title": "open", "testFails": False, "heldByKeptTest": False}
+    kept = {**CRITIQUED, "findings": [held, open_major]}
+    answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
+    answers |= {"fix-1": IMPLEMENTED, "critique-1": CRITIQUED}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert '"title": "open"' in ran["prompts"]["fix-1"]
+    assert '"title": "held"' not in ran["prompts"]["fix-1"]
+
+
+def test_roles_with_a_red_tree_run_tier_zero_and_their_own_tests_only() -> None:
+    # Why: one `check` took 70 to 95 seconds and every role ran it several times, the spec and
+    # the critic on a tree that is red on purpose.
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    prompts = ran["prompts"]
+    for role in ("spec", "critique"):
+        assert "do not run `check`" in prompts[role], role
+        assert "run the `tier0`" in prompts[role], role
+    for role in ("implement", "review"):
+        assert "run `check` from the repository root" in prompts[role], role
+        assert "do not run `check`" not in prompts[role], role
+    assert "Run `tier0` and your new tests" in prompts["spec"]
+
+
+def test_the_review_must_see_check_green_on_the_final_tree() -> None:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED}
+    red = {**REVIEW, "checkPasses": False}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, review=red, **answers)
+    assert ran["result"]["verdict"] == "request_changes"
+    reason = "the review's run of check on the final tree was not green"
+    assert reason in ran["result"]["verdictForcedBy"]
+
+
+def test_the_critic_is_pointed_at_the_binding_s_critique_directory() -> None:
+    # Why: "next to the spec's tests" put critique files in the source tree, one per feature
+    # per layer, beside modules they are not unit tests of.
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    prompt = ran["prompts"]["critique"]
+    assert "Critique tests section names" in prompt
+    assert "<slug>.<layer>.critique.test.<ext>" in prompt
+    assert "next to the spec's tests" not in prompt
+
+
+def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> None:
+    # Why: the spec, the critic's tests and the dispute records were 1,300 lines before any
+    # implementation, and the run ended over the ceiling after nine agents.
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    split = [{"title": "first", "criteria": ["a"]}, {"title": "second", "criteria": ["b"]}]
+    fits = {"implementationLines": 400, "criticLines": 300, "recordLines": 50, "proposedSplit": []}
+    sized = {**SPECIFIED, "changeSize": {"lines": 700, "ceiling": 1500}}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec={**sized, "changeEstimate": fits}, **answers)
+    assert ran["result"]["verdict"] == "approve", "1,450 of 1,500 fits"
+
+    over = {**fits, "implementationLines": 451, "proposedSplit": split}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec={**sized, "changeEstimate": over}, **answers)
+    assert ran["labels"] == ["preflight", "spec"]
+    result = ran["result"]
+    assert (result["verdict"], result["tooLarge"]["proposedSplit"]) == ("blocked", split)
+    assert "estimates 1501 lines" in result["verdictForcedBy"][0]
+
+    bare = {k: v for k, v in over.items() if k != "proposedSplit"}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec={**sized, "changeEstimate": bare}, **answers)
+    assert ran["result"]["tooLarge"]["proposedSplit"] == []
+
+    unmeasured = {**SPECIFIED, "changeEstimate": over}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=unmeasured, **answers)
+    assert ran["result"]["verdict"] == "approve", "no change-size gate, no estimate to hold"

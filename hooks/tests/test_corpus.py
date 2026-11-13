@@ -7,6 +7,7 @@ Each row is a command run in ``/repo`` on branch ``feat/work`` with an unpushed 
 
 import pytest
 
+from ratchet_guards.manifest import EMPTY
 from tests.support import FakeRepo, make_guard, rules
 
 W = "guard-path-write"
@@ -194,6 +195,7 @@ DENIED: list[tuple[str, list[str]]] = [
     ("X=1 cd /tmp && rm -rf .github/workflows", [W]),
     ("/bin/cd /tmp && rm -rf .github/workflows", [W]),
     ("cd() { :; }; cd /tmp && rm -rf .github/workflows", [W]),
+    ("sudo cd() { :; }; cd /tmp && rm -rf .github/workflows", [W]),
     ("cd () { :; }; cd /tmp && rm -rf .github/workflows", [W]),
     ("function cd { :; }; cd /tmp && rm -rf .github/workflows", [W]),
     ("alias cd=true; cd /tmp && rm -rf .github/workflows", [W]),
@@ -802,6 +804,23 @@ DENIED: list[tuple[str, list[str]]] = [
     ("sed -i s/a/b/ .git/packed-refs", [W]),
     ("tee .git/HEAD < x", [W]),
     ("cd .git && echo x > HEAD", [W]),
+    ("S=/repo/.git; cd $S && echo x > HEAD", [W]),
+    ('S=/repo/.git && cd "$S" && echo x > HEAD', [W]),
+    ("S=/repo/.git; cd ${S} && echo x > HEAD", [W]),
+    ("export S=/repo/.git; cd $S && echo x > HEAD", [W]),
+    ("declare -x S=/repo/.git; cd $S && echo x > HEAD", [W]),
+    ("S=/repo; cd $S/.git && echo x > HEAD", [W]),
+    ("S=/repo/.git\ncd $S\necho x > HEAD", [W]),
+    ("S=/tmp; S=/repo/.git; cd $S && echo x > HEAD", [W]),
+    ("cd /tmp/x; S=/repo/.git; cd $S && echo x > HEAD", [W]),
+    ("S=/repo/.git; (cd $S && echo x > HEAD)", [W]),
+    ("S=/tmp; true || S=/repo/.git; cd $S && echo x > HEAD", [W]),
+    ("S=/repo/.git; true || S=/tmp; cd $S && echo x > HEAD", [W]),
+    ("if x; then S=/repo/.git; cd $S && echo x > HEAD; fi", [W]),
+    ("S=/tmp; if x; then S=/repo/.git; fi; cd $S && echo x > HEAD", [W]),
+    ("S=/tmp; echo | S=/repo/.git; cd $S && echo x > HEAD", [W]),
+    ("S=/tmp T=/repo/.git; cd $T && echo x > HEAD", [W]),
+    ("S=/repo; T=.git; cd $S/$T && echo x > HEAD", [W]),
     ("chmod 000 .git/refs/heads/main", [W]),
     ("ln -sf x .git/refs/heads/main", [W]),
     ("truncate -s 0 .git/packed-refs", [W]),
@@ -833,7 +852,58 @@ ASKED: list[tuple[str, list[str]]] = [
     ("bash -c 'gh issue edit 4 --add-label agent:ready'", ["agent-ready-label"]),
 ]
 
+# A directory the guard cannot resolve, then a relative write that is a guard path in an adopted
+# repository: asked, since which repository it is cannot be told. The session's own manifest here
+# guards nothing, as when the session works in another repository (ADR 0024).
+UNRESOLVED = "unresolved-directory"
+LOST = "sed -i s/a/b/ .github/workflows/ci.yml"
+ASKED_ELSEWHERE: list[str] = [
+    f"cd $S && {LOST}",
+    f'cd "$S" && {LOST}',
+    f"cd ${{S}} && {LOST}",
+    f"cd $(git rev-parse --show-toplevel) && {LOST}",
+    f"cd $S; {LOST}",
+    f"cd $S/sub && {LOST}",
+    f"cd $S && cd sub && {LOST}",
+    f"cd $S && cd .. && {LOST}",
+    "cd $S && rm ../.github/workflows/ci.yml",
+    "cd $S && rm -rf .github",
+    "cd $S && rm -rf .",
+    "cd $S && cp x .github/workflows/ci.yml",
+    "cd $S && echo x | tee .github/workflows/ci.yml",
+    f"S=/a; unset S; cd $S && {LOST}",
+    f"S=/a; read S; cd $S && {LOST}",
+    f"S=/a; for S in /b; do cd $S; {LOST}; done",
+    f"S=/a; (S=/b); cd $S && {LOST}",
+    f"echo | S=/a; cd $S && {LOST}",
+    f"S=/a & cd $S && {LOST}",
+    f"true || S=/a; cd $S && {LOST}",
+    f"S=$(pwd); cd $S && {LOST}",
+    f"S=; cd $S && {LOST}",
+    f'S="/a b"; cd $S && {LOST}',
+    f"S=/a; S+=/b; cd $S && {LOST}",
+    f"S=/a; export S; cd $S && {LOST}",
+    f"S=/a; cd() {{ :; }}; cd $S && {LOST}",
+    f"cd /tmp && cd $S && {LOST}",
+]
+NOT_ASKED_ELSEWHERE: list[str] = [
+    "cd $S && ls",
+    "cd $S && sed -i s/a/b/ src/app.py",
+    "cd $S && echo x > /tmp/out",
+    "cd $S && echo x > ~/out",
+    "cd $S && rm -rf ../build",
+    "cd $S && make > out.log",
+    "cd $S && cd /tmp/y && " + LOST,
+    "cd /tmp/x && cd $S && cd /tmp/y && " + LOST,
+    "S=/a; cd $S && sed -i s/a/b/ src/app.py",
+    f"S=/a; if x; then S=/b; fi; cd $S && {LOST}",
+]
+
 ALLOWED: list[str] = [
+    "S=/tmp/x; cd $S && make; echo x > out.txt",
+    "S=/tmp/x; cd ${S} && sed -i s/a/b/ src/app.py",
+    "S=/tmp; cd $S/y && rm -rf build",
+    "S=/tmp; (S=/repo/.git); cd $S && ls",
     "claude plugin eval init --bare stance-probe",
     "git commit --no-edit -m x",
     "git commit -m x --no-ver",
@@ -1510,3 +1580,13 @@ def test_amending_a_pushed_head_is_denied() -> None:
 @pytest.mark.parametrize("pushed", [False, None])
 def test_amending_an_unpushed_or_unknown_head_is_allowed(pushed: bool | None) -> None:  # noqa: FBT001 # -- a parametrized test argument
     assert rules("git commit --amend -m x", make_guard(FakeRepo(pushed=pushed))) == []
+
+
+@pytest.mark.parametrize("command", ASKED_ELSEWHERE)
+def test_a_write_after_a_directory_the_guard_cannot_resolve_is_asked(command: str) -> None:
+    assert rules(command, make_guard(manifest=EMPTY)) == [UNRESOLVED]
+
+
+@pytest.mark.parametrize("command", NOT_ASKED_ELSEWHERE)
+def test_a_write_that_is_no_guard_path_after_such_a_directory_is_not_asked(command: str) -> None:
+    assert rules(command, make_guard(manifest=EMPTY)) == []

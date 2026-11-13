@@ -271,13 +271,107 @@ def _lock(locked: Locked, name: str, *, version: str, artifact: Artifact) -> Non
     versions[version] = artifact
 
 
-_SIDE_BY_SIDE = frozenset({"Cargo.lock", "package-lock.json"})
+_PNPM_KEY = re.compile(r"""^(?:'((?:[^']|'')*)'|"([^"]*)"|([^'"\s][^:]*?))\s*:(?:\s+(\S.*))?$""")
+# Why: overrides and patches change what installs without naming a dependency, so a lockfile
+# that has them is refused rather than read as if they were not there.
+_PNPM_SECTIONS = frozenset(
+    {"lockfileVersion", "settings", "importers", "packages", "snapshots", "time", "catalogs"}
+)
+_PNPM_PACKAGE = re.compile(r"^(@?[^@\s]+)@(\d[^@()\s]*)$")
+_PNPM_PINNED = re.compile(r"^\d[^@()\s]*(?:\(.*\))?$")
+_PNPM_FIELD = re.compile(r"(\w+):\s*('[^']*'|[^,}]+)")
+
+
+def _pnpm_tree(text: str) -> Data:
+    """The indented ``key: value`` tree of a pnpm lockfile, flow values left as text.
+
+    The standard library has no YAML parser and pnpm writes one narrow shape, so this reads
+    that shape only. Anything else (a tab, a multi-line scalar, a key given twice) is refused.
+    """
+    root: Data = {}
+    stack: list[tuple[int, Data]] = [(-1, root)]
+    for line in text.splitlines():
+        body = line.strip()
+        if not body or body.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        match = _PNPM_KEY.match(body)
+        if match is None or line[:indent].strip(" "):
+            msg = "it is not in the shape pnpm writes"
+            raise NotDependencyOnlyError(msg)
+        key = match.group(1) or match.group(2) or match.group(3)
+        while stack[-1][0] >= indent:
+            stack.pop()
+        parent = stack[-1][1]
+        if key in parent:
+            msg = "a key is given twice"
+            raise NotDependencyOnlyError(msg)
+        if match.group(4) is None:
+            child: Data = {}
+            parent[key] = child
+            stack.append((indent, child))
+        else:
+            parent[key] = match.group(4)
+    return root
+
+
+def _pnpm_load(text: str) -> object:
+    tree = _pnpm_tree(text)
+    version = str(tree.get("lockfileVersion", "")).strip("'\"")
+    if not version.startswith("9.") or not tree.keys() <= _PNPM_SECTIONS:
+        msg = "only a pnpm v9 lockfile without overrides or patches is read"
+        raise NotDependencyOnlyError(msg)
+    return tree
+
+
+def _pnpm_artifact(entry: Data) -> Artifact:
+    """A ``packages`` entry's ``resolution``: a registry tarball with an integrity, or direct."""
+    resolution = entry.get("resolution")
+    fields = dict(_PNPM_FIELD.findall(resolution)) if isinstance(resolution, str) else {}
+    integrity = fields.get("integrity", "").strip("'")
+    tarball = fields.get("tarball", "").strip("'")
+    if not integrity or not fields.keys() <= {"integrity", "tarball"}:
+        return Artifact("direct", str(resolution), "")
+    if not tarball:
+        return Artifact("registry", "https://registry.npmjs.org", integrity)
+    origin = re.match(r"https://[^/]+", tarball)
+    if origin is None:
+        return Artifact("direct", tarball, "")
+    return Artifact("registry", origin.group(0), integrity)
+
+
+def _pnpm_lock(data: Data) -> Locked:
+    locked: Locked = {}
+    for key, entry in _table(data, "packages").items():
+        match = _PNPM_PACKAGE.match(key)
+        if match is None or not isinstance(entry, dict):
+            msg = f"{key} is not a name and version pnpm locks from a registry"
+            raise NotDependencyOnlyError(msg)
+        _lock(locked, match.group(1), version=match.group(2), artifact=_pnpm_artifact(entry))
+    for path, importer in _table(data, "importers").items():
+        for group in importer.values() if isinstance(importer, dict) else []:
+            for name, spec in group.items() if isinstance(group, dict) else []:
+                pinned = spec.get("version", "") if isinstance(spec, dict) else ""
+                if pinned.startswith("link:"):
+                    _lock(locked, name, version=pinned, artifact=Artifact("local", path, ""))
+                elif not _PNPM_PINNED.match(pinned):
+                    msg = f"{name} is pinned to {pinned or 'nothing'} in {path}, not a version"
+                    raise NotDependencyOnlyError(msg)
+    return locked
+
+
+_SIDE_BY_SIDE = frozenset({"Cargo.lock", "package-lock.json", "pnpm-lock.yaml"})
 _LOCKS: dict[str, tuple[Callable[[str], object], Callable[[Data], Locked]]] = {
     "uv.lock": (tomllib.loads, _toml_lock(_uv)),
     "Cargo.lock": (tomllib.loads, _toml_lock(_cargo_lock)),
     "poetry.lock": (tomllib.loads, _toml_lock(_poetry)),
     "package-lock.json": (_load_json, _npm_lock),
+    "pnpm-lock.yaml": (_pnpm_load, _pnpm_lock),
 }
+
+
+# The lockfiles this module reads; a gate that skips generated lockfiles skips these.
+LOCKED = frozenset(_LOCKS)
 
 
 def file_name(path: str) -> str:

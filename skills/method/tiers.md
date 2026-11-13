@@ -67,7 +67,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Does anything shipped carry a known advisory? | a dependency audit |
 | Does the code repeat itself past the ceiling? | a clone detector |
 | Does the deliverable build? | the build |
-| Does the deliverable start and answer? | for a service, the method's `scripts/with_service.py`: boot it by any command, wait until a URL answers, stop the whole process tree; another type runs its own deliverable once |
+| Does the deliverable start and answer? | for a service, the method's `scripts/with_service.py`: boot it by any command, wait until a URL answers, stop the whole process tree, and boot once more on a new port when a service on a port it picked exits before it answers; another type runs its own deliverable once |
 | Does every entry point emit the telemetry the binding names? | tests against an in-memory OpenTelemetry exporter: each route, job and command yields a span with the attributes the binding requires, a failure is recorded on its span, a log line carries the trace id; a fitness test fails an entry point registered outside the instrumented seam; the signal names are snapshotted beside the tests, so the telemetry surface changes on purpose |
 | Does the code hold with each changed flag off and on? | the suite once per state of every flag the change adds or touches, through the override the flag seam honours; off is the merge base's behaviour |
 | Does the deliverable stay correct under concurrent requests? | the method's `scripts/load_smoke.py` inside `with_service.py`: seconds of concurrent requests against the booted deliverable, zero errors and a floor on requests answered; red while it requests nothing but the readiness URL, which a skeleton with no other route answers with `--health-only`; latency is printed, not judged, since a pull-request runner is no benchmark host |
@@ -80,7 +80,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Does the shipped artefact or base image carry a known vulnerability? | an image or artefact scanner, over the built image when the deliverable is one |
 | How much of the code is typed, and did it fall? | type coverage, ratcheted, for gradually typed languages |
 | How much of the public surface is documented, and did it fall? | documentation coverage, ratcheted |
-| Is the change within the size budget? | files and lines against the merge base, a ceiling the binding holds |
+| Is the change within the size budget? | files and lines against the merge base, a ceiling the binding holds; the method's own records, generated lockfiles and their snapshots are not counted, and a moved file counts by its changed lines |
 | Did a guard path change? | the method's guard diff, against the manifest at base and head |
 | Do the permission rules still mirror the manifest? | the method's settings check: one `Edit` rule per manifest pattern, the fixed command rules, nothing else in `deny` or `ask` |
 | Does the repository still carry the method? | the method's conformance gate |

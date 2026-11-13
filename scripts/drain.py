@@ -723,7 +723,18 @@ def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
     """The actions on one ticket's work tree: update it, land it, close it."""
     ticket = preflight.fetch(options.ref or "", drain.root, drain.tracker)
     if ticket is None:
-        print(f"drain: {options.ref}: no such ticket (a number on the tracker, or a file path)")
+        candidates = preflight.numbered_locally(options.ref or "", drain.root)
+        if candidates:
+            print(
+                f"drain: {options.ref}: more than one local ticket starts with it: "
+                + ", ".join(candidates)
+                + "; give the path"
+            )
+            return 2
+        print(
+            f"drain: {options.ref}: no such ticket "
+            "(a number on the tracker or starting a local file's name, or a file path)"
+        )
         return 2
     if options.action == "update":
         return update(drain, ticket)
@@ -751,7 +762,11 @@ WHOLE: dict[str, Callable[[Drain, argparse.Namespace], int]] = {
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=[*WHOLE, "update", "land", "close"])
-    parser.add_argument("ref", nargs="?", help="the ticket: a number, #number, or a local file")
+    parser.add_argument(
+        "ref",
+        nargs="?",
+        help="the ticket: a number, #number, or a local file (a number may start its name)",
+    )
     parser.add_argument("--root", default=".")
     parser.add_argument("--concurrency", type=int, default=CONCURRENCY)
     parser.add_argument("--offline", action="store_true", help="read no tracker")

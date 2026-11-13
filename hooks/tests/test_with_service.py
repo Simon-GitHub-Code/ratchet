@@ -44,6 +44,12 @@ def run(*args: str, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
     return code, capsys.readouterr().out
 
 
+def run_both(*args: str, capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
+    code = with_service.main(["with_service.py", *args])
+    seen = capsys.readouterr()
+    return code, seen.out, seen.err
+
+
 def test_smoke_boots_probes_and_stops_the_whole_process_tree(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -110,7 +116,29 @@ def test_a_service_that_exits_before_it_answers_is_red(
     code, out = run("--boot", boot, "--ready", READY, capsys=capsys)
     assert code == 1
     assert "the service exited with code 4 before http://127.0.0.1:" in out
-    assert "boot output (tail):\n  boom" in out
+    assert "boot output:\n  boom" in out
+
+
+def test_an_early_exit_shows_what_the_service_wrote_on_stdout_and_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    boot = "echo to-stdout; echo to-stderr >&2; exit 2 # {port}"
+    code, out, _ = run_both("--boot", boot, "--ready", READY, capsys=capsys)
+    assert code == 1
+    assert "the service exited with code 2 before" in out
+    assert "boot output:\n  to-stdout\n  to-stderr\n" in out
+
+
+def test_an_early_exit_with_long_output_keeps_the_first_lines_the_cause_is_usually_in(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    boot = "echo cause; for i in $(seq 100); do echo line-$i; done; exit 2 # {port}"
+    code, out, _ = run_both("--boot", boot, "--ready", READY, capsys=capsys)
+    assert code == 1
+    assert "boot output:\n  cause\n" in out
+    assert "... 41 lines left out ...\n" in out, "101 lines, 30 of them first and 30 last"
+    assert "  line-100\n" in out
+    assert "line-50\n" not in out
 
 
 def test_an_early_exit_says_what_ran_where_and_for_how_long_even_when_it_printed_nothing(
@@ -128,6 +156,67 @@ def test_an_early_exit_says_what_ran_where_and_for_how_long_even_when_it_printed
     assert said.group(2) != "{port}", "the command is printed as it ran, the port filled in"
     assert said.group(3) == str(Path.cwd())
     assert "boot output: none, the boot command printed nothing\n" in out
+
+
+def boots_of(counter: Path) -> int:
+    return len(counter.read_text(encoding="utf-8").splitlines())
+
+
+def test_a_lost_port_race_is_retried_once_on_a_new_port_and_says_so(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ports = tmp_path / "ports"
+    # Why: the first boot stands for a service that lost the race for its port.
+    boot = (
+        f'echo "$PORT" >> {ports}; [ "$(wc -l < {ports})" -gt 1 ] && exec {SERVING};'
+        " echo first-boot-output; exit 2"
+    )
+    code, out, err = run_both("--boot", boot, "--ready", READY, capsys=capsys)
+    assert (code, out) == (0, "with_service: green\n")
+    assert "booting once more on a new port" in err
+    assert "the service exited with code 2 before" in err
+    assert "boot output:\n  first-boot-output" in err
+    first, second = ports.read_text(encoding="utf-8").split()
+    assert first != second, "the retry is on a fresh port"
+
+
+def test_a_service_that_always_fails_is_retried_once_then_red_with_both_outputs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    boots = tmp_path / "boots"
+    boots.touch()
+    boot = f'echo "boot-$(wc -l < {boots})" ; echo x >> {boots}; exit 3 # {{port}}'
+    code, out, err = run_both("--boot", boot, "--ready", READY, capsys=capsys)
+    assert code == 1
+    assert boots_of(boots) == 2, "one retry and no more"
+    assert "boot output:\n  boot-0" in err
+    assert "boot output:\n  boot-1" in out
+    assert out.endswith("with_service: red\n")
+
+
+def test_a_port_the_caller_fixed_is_never_retried(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    boots = tmp_path / "boots"
+    ready = f"http://127.0.0.1:{gatelib.free_port()}/"
+    code, out, err = run_both(
+        *("--boot", f"echo x >> {boots}; exit 2", "--ready", ready), capsys=capsys
+    )
+    assert code == 1
+    assert boots_of(boots) == 1
+    assert "booting once more" not in err
+    assert "the service exited with code 2 before" in out
+
+
+def test_a_service_that_never_answers_is_not_retried(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    boots = tmp_path / "boots"
+    boot = f"echo x >> {boots}; sleep 60"
+    code, _, err = run_both(*("--boot", boot, "--ready", READY, "--timeout", "0.6"), capsys=capsys)
+    assert code == 1
+    assert boots_of(boots) == 1, "a slow service is not a lost race"
+    assert err == ""
 
 
 def test_something_already_answering_on_the_port_is_red_and_nothing_boots(
