@@ -441,6 +441,20 @@ def test_an_upgrade_that_does_not_move_the_pin_records_nothing(
     assert "1 thing stops a merge until fixed." in out
 
 
+def test_an_entry_dropped_on_the_base_is_not_written_back_without_a_pin_move(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    held = owed.read(repo).entries
+    kept = held[1:]
+    git(repo, "checkout", "-q", "main")
+    (repo / LEDGER).write_text(owed.render(kept), encoding="utf-8")
+    commit(repo, "chore(method): drop an owed entry by hand")
+    branch(repo, "again")
+    assert upgrade.main(["upgrade.py", "--root", str(repo), "--apply"]) == 1
+    assert owed.read(repo).entries == kept, "red on the base too, yet only a pin move may owe it"
+    assert "Red until fixed (no owed entry excuses these" in capsys.readouterr().out
+
+
 def test_the_template_manifest_sends_a_ledger_change_to_the_owner() -> None:
     text = (PLUGIN_ROOT / "skills/adopt/templates/guards/manifest.toml").read_text()
     manifest = upgrade.parse(text)
