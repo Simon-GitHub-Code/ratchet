@@ -906,6 +906,11 @@ def adds_a_submodule(root: Path) -> None:
     git(root, "commit", "-q", "-m", "feat(core): a submodule")
 
 
+def links_to_a_tracked_file(root: Path) -> None:
+    (root / "alias.txt").symlink_to("src/code.txt")
+    commit(root, "feat(core): a tracked link to a tracked file")
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -942,8 +947,19 @@ def adds_a_submodule(root: Path) -> None:
         (
             'write = { path = "sub/x.txt", content = "planted\\n" }',
             adds_a_submodule,
-            "sub/x.txt is inside the submodule sub",
+            "sub/x.txt is inside sub, a repository of its own",
         ),
+        (
+            'write = { path = "src/.gitattributes", content = "* text eol=crlf\\n" }',
+            None,
+            "src/.gitattributes would be a new .gitattributes",
+        ),
+        (
+            'patch = "quality/bites/new-attributes.patch"',
+            None,
+            ".gitattributes would be a new .gitattributes",
+        ),
+        ('remove = ["alias.txt"]', links_to_a_tracked_file, "alias.txt is reached through a"),
         ('patch = "quality/bites/new-secret.patch"', None, "x.secret is ignored by git"),
         ('patch = "quality/bites/edit-secret.patch"', None, "env.secret: does not exist in index"),
         (
@@ -967,6 +983,9 @@ def test_a_fault_is_planted_only_in_a_file_git_sees_and_never_through_a_link(
         "rename-secret": "diff --git a/env.secret b/x.txt\nsimilarity index 50%\n"
         "rename from env.secret\nrename to x.txt\n--- a/env.secret\n+++ b/x.txt\n"
         "@@ -1 +1 @@\n-clean\n+planted\n",
+        # Why: restoring the copy writes src/code.txt back by the attributes it then finds.
+        "new-attributes": "--- /dev/null\n+++ b/.gitattributes\n@@ -0,0 +1 @@\n+* text eol=crlf\n"
+        "--- a/src/code.txt\n+++ b/src/code.txt\n@@ -1 +1 @@\n-clean\n+planted\n",
     }
     for name, text in patches.items():
         write(tmp_path / "repo", f"quality/bites/{name}.patch", text)
@@ -1111,3 +1130,135 @@ def test_a_cache_or_faults_that_cancel_get_the_verdict_the_gate_earns(
     out = capsys.readouterr().out
     for verdict in verdicts:
         assert f"bite: lint: {verdict}" in out
+
+
+def tracks_an_ignored_file(root: Path) -> None:
+    write(root, "kept.secret", "clean\n")
+    git(root, "add", "--force", "kept.secret")
+    commit(root, "chore(core): a file the index tracks and an ignore rule matches")
+
+
+def skips_a_present_file(root: Path) -> None:
+    write(root, "src/skipped.txt", "clean\n")
+    commit(root, "feat(core): a file the index will skip")
+    git(root, "update-index", "--skip-worktree", "src/skipped.txt")
+
+
+def skips_an_absent_file(root: Path) -> None:
+    skips_a_present_file(root)
+    (root / "src/skipped.txt").unlink()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (
+            'setup = ["mkdir -p reports"]\n',
+            'test -d reports || { echo "L001 no reports/"; exit 1; }',
+            None,
+            "RED BEFORE THE FAULT",
+        ),
+        (
+            "",
+            'grep -q ran kept.secret && { echo "L001 stale"; exit 1; }; echo ran > kept.secret',
+            tracks_an_ignored_file,
+            "DOES NOT BITE",
+        ),
+    ],
+    ids=["an empty directory setup made", "a tracked file an ignore rule matches"],
+)
+def test_the_first_green_run_judges_the_copy_as_every_later_run_does(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    case: tuple[str, str, Callable[[Path], None] | None, str],
+) -> None:
+    # Why: the first green run judged the copy as setup left it, and every later run the copy as
+    # restoring leaves it. Where the two differed, a fault the gate never reads bit.
+    setup, gate, prepare, verdict = case
+    root = project(
+        tmp_path / "repo", {"lint": f"{gate}\nexit 0"}, setup + bite("lint", "blind", BLIND)
+    )
+    if prepare is not None:
+        prepare(root)
+    assert prove(root) == 1
+    assert f"bite: lint: blind: {verdict}\n" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (
+            'replace = { path = "kept.secret", old = "clean", new = "planted" }',
+            "grep -l planted kept.secret && { echo L001; exit 1; }",
+            tracks_an_ignored_file,
+            "bites",
+        ),
+        (
+            'remove = ["kept.secret"]',
+            'test -f kept.secret || { echo "L001 gone"; exit 1; }',
+            tracks_an_ignored_file,
+            "bites",
+        ),
+        (
+            PLANT,
+            'grep -rl planted src && { echo "*" >> .git/info/exclude; echo L001; exit 1; }',
+            None,
+            "bites",
+        ),
+        (
+            'replace = { path = "src/skipped.txt", old = "clean", new = "planted" }',
+            LINT,
+            skips_a_present_file,
+            "bites",
+        ),
+        (
+            'write = { path = "src/skipped.txt", content = "planted\\n" }',
+            LINT,
+            skips_an_absent_file,
+            "THE FAULT WAS NOT PLANTED",
+        ),
+    ],
+    ids=[
+        "a replace in a tracked file an ignore rule matches",
+        "a remove of it",
+        "a gate that writes the exclude file",
+        "a file the index skips",
+        "a file the index skips and the tree lacks",
+    ],
+)
+def test_what_a_fault_or_its_run_changed_is_put_back_before_the_next_bite(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    case: tuple[str, str, Callable[[Path], None] | None, str],
+) -> None:
+    fault, gate, prepare, verdict = case
+    registry = bite("lint", "first", fault) + bite("lint", "blind", BLIND)
+    root = project(tmp_path / "repo", {"lint": f"{gate}\nexit 0"}, registry)
+    if prepare is not None:
+        prepare(root)
+    assert prove(root) == 1
+    out = capsys.readouterr().out
+    assert f"bite: lint: first: {verdict}\n" in out
+    assert "bite: lint: blind: DOES NOT BITE\n" in out
+
+
+def test_a_fault_inside_a_repository_setup_made_is_not_planted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: restoring the copy cleans no file inside another repository, so the fault stayed.
+    nest = (
+        "git init -q vendor/x && echo a > vendor/x/a && git -C vendor/x add a\n"
+        "git -C vendor/x -c user.name=a -c user.email=a@example.invalid commit -qm a\n"
+    )
+    write(tmp_path / "repo", "nest.sh", nest)
+    gate = "grep -rl planted vendor && { echo L001; exit 1; }; exit 0"
+    fault = 'write = { path = "vendor/x/planted.txt", content = "planted\\n" }'
+    registry = (
+        'setup = ["sh nest.sh"]\n' + bite("lint", "first", fault) + bite("lint", "blind", BLIND)
+    )
+    root = project(tmp_path / "repo", {"lint": gate}, registry)
+    assert prove(root) == 1
+    out = capsys.readouterr().out
+    assert "bite: lint: first: THE FAULT WAS NOT PLANTED\n" in out
+    assert "vendor/x/planted.txt is inside vendor/x, a repository of its own" in out
+    assert "bite: lint: blind: DOES NOT BITE\n" in out
