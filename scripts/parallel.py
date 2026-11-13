@@ -162,7 +162,7 @@ class Finished:
                 how = f"red (exit {self.exit_code})"
             case Standing.LATER:
                 how = f"not run yet ({self.output.strip()})"
-            case Standing.NONE:
+            case _:
                 how = f"not applicable ({self.output.strip()})"
         return f"parallel: {self.name}: {how} in {self.seconds:.1f}s"
 
