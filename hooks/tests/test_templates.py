@@ -266,6 +266,15 @@ def test_ci_reports_a_ceiling_on_a_pull_request_and_holds_each_job_to_its_tier()
     assert deep.count("budget.py") == 2
 
 
+def test_the_plugins_own_ci_reports_a_ceiling_on_a_pull_request_as_the_template_does() -> None:
+    own = (PLUGIN_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    over = "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n"
+    assert over in WORKFLOWS["ci.yml"]
+    assert over in own
+    assert own.count('budget.py "${{ matrix.gate }}" --over "$OVER" --report') == 1
+    assert own.count("budget.py") == 1
+
+
 def test_the_weekly_workflow_is_scheduled_and_may_only_read_and_write_issues() -> None:
     assert "on:\n  schedule:\n" in WEEKLY
     assert "\npermissions:\n  contents: read\n" in WEEKLY

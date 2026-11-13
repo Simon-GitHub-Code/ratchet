@@ -23,8 +23,8 @@ library = "code other code imports; nothing to boot"
 #   always           the floor: no setup, seconds to run, asked from the first commit
 #   code:<kind>      asked once the first instance of a kind of code exists; the binding's
 #                    `## Triggers` table says what marks an instance in this stack. The change that
-#                    brings the first file of the kind is free; a later one that adds another while a row
-#                    is still owed is red.
+#                    brings the kind is free, however many files it touches; a later one that adds
+#                    another while a row is still owed is red.
 #   life:<event>     asked once the owner declares the event on the binding's `- Life events:`
 #                    line; the route proposes it when it sees one of its signs.
 
