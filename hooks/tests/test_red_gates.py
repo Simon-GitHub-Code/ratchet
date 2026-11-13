@@ -23,19 +23,23 @@ class Tier:
         (root / "speak.py").write_text(SPEAK, encoding="utf-8")
 
     def add(self, name: str, code: int, *lines: str) -> "Tier":
-        """A gate called ``name``, whose command line holds none of what it prints."""
+        """A gate called ``name``, whose command line holds none of what it prints.
+
+        Its last word is ``name``, the entry point a row of a binding at the root may name.
+        """
         (self.root / name).write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
-        self.gates.append(
-            shlex.join(
-                [sys.executable, str(self.root / "speak.py"), str(self.root / name), str(code)]
-            )
-        )
+        speak = [sys.executable, str(self.root / "speak.py"), str(self.root / name)]
+        self.gates.append(shlex.join([*speak, str(code), name]))
         return self
+
+    def options(self) -> list[str]:
+        """One gate at a time, run at the root, where a binding may say which gates wait."""
+        return ["--jobs", "1", "--root", str(self.root)]
 
     def log(self) -> str:
         """The log of the run, as the weekly workflow's ``tee`` keeps it."""
         done = subprocess.run(  # noqa: S603 # -- a fixed argv; the runner is the plugin's own
-            [sys.executable, str(PARALLEL), "--jobs", "1", "--", *self.gates],
+            [sys.executable, str(PARALLEL), *self.options(), "--", *self.gates],
             capture_output=True,
             text=True,
             check=False,
@@ -92,6 +96,13 @@ def test_a_red_gate_that_printed_nothing_is_still_named(tmp_path: Path) -> None:
 def test_a_gate_that_judged_nothing_is_not_red_and_leaves_the_red_ones_whole(
     tmp_path: Path,
 ) -> None:
+    (tmp_path / "docs/process").mkdir(parents=True)
+    (tmp_path / "docs/process/binding.md").write_text(
+        "# Binding\n\n## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
+        "|---|---|---|---|---|\n"
+        "| a question | later: code:source | 1 | | `just waits` |\n",
+        encoding="utf-8",
+    )
     log = (
         Tier(tmp_path)
         .add("first", 3, "the first red gate")
@@ -99,7 +110,7 @@ def test_a_gate_that_judged_nothing_is_not_red_and_leaves_the_red_ones_whole(
         .add("second", 4, "the second red gate")
         .log()
     )
-    assert "judged nothing (later: code:source)" in log
+    assert "not run yet (later: code:source)" in log
     report = red_gates.report(log)
     assert report is not None
     assert report.count("==>") == 2
