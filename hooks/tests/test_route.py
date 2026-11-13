@@ -495,7 +495,10 @@ def test_a_plugin_newer_than_the_pin_is_offered_as_the_upgrade(tmp_path: Path, c
     out = capsys.readouterr().out.splitlines()
     assert out[3].startswith("also: the Ratchet plugin in use is ")
     assert ", newer than the 0.0.1 the binding pins: run `python3 " in out[3]
-    assert out[3].endswith("/scripts/upgrade.py`, then change the binding's pin line")
+    assert out[3].endswith(
+        "/scripts/upgrade.py --apply`, which moves the pin, the workflow refs and the permission"
+        " rules together"
+    )
     write(root, "docs/process/binding.md", BINDING)
     assert route.main(["route", "--root", str(root), "--offline"]) == 0
     assert len(capsys.readouterr().out.splitlines()) == 3
