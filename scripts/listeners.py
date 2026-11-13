@@ -30,6 +30,7 @@ import errno
 import functools
 import itertools
 import os
+import select
 import socket
 import struct
 import sys
@@ -273,14 +274,19 @@ def grab(group: int) -> list[Listener] | str:
 
 
 def queued(listener: socket.socket) -> list[tuple[socket.socket, int]]:
-    """Every connection waiting on ``listener``, accepted, with its client's port."""
+    """Every connection waiting on ``listener``, accepted, with its client's port.
+
+    The listener keeps the flags the service gave it: they belong to the open file the gate's
+    copy shares with the service. So it is polled, and accepted from only while a connection
+    waits, which nothing else can take first: no process but the gate holds the listener.
+    """
+    waiting = select.poll()
+    waiting.register(listener, select.POLLIN)
     taken: list[tuple[socket.socket, int]] = []
-    while True:
-        try:
-            connection, client = listener.accept()
-        except BlockingIOError:
-            return taken
+    while waiting.poll(0):
+        connection, client = listener.accept()
         taken.append((connection, int(client[1])))
+    return taken
 
 
 def take(held: list[Listener], marker: Path, ended: threading.Event) -> None:
@@ -308,7 +314,6 @@ def take(held: list[Listener], marker: Path, ended: threading.Event) -> None:
                     continue
                 elif listens(listener.copy):
                     waiting.remove(listener)
-                    listener.copy.settimeout(0)  # Why: no one else can accept from it now.
                     free.append(listener)
                 else:
                     waiting.remove(listener)
