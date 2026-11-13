@@ -36,13 +36,25 @@ answers" probe. It is judged on errors only, as everywhere, and sends the same f
 overlapping requests, so point it at a route that is safe to repeat.
 
 ``--until-stopped`` is for ``with_service.py --graceful``, which stops the service partway
-through the run and exports ``RATCHET_STOPPING``, a path that exists from the signal on. The line
-is drawn by when a request started. One that started before the signal is in flight and must
-complete: a reset, a timeout, a 5xx or a wrong status is an error as always. One that started
-after it meets a service that has closed its listener, so a refused or reset connection is
-expected, not counted, and ends that worker; a timeout or an error status after the signal is still
-red. Without the flag a refused connection is always an error. The flag is red without
-``RATCHET_STOPPING``, since it could not tell the two apart.
+through the run. The smoke creates the path ``RATCHET_SENDING`` once its workers start, and the
+signal comes ``--signal-after`` seconds later; ``RATCHET_STOPPING`` is a file that exists from
+the signal on. Every request is judged as always, with two exceptions once the signal is sent,
+each of which ends that worker. A refused connect meets a service that no longer listens, so it
+is expected, not counted. A connection reset or closed with no answer is not counted when the
+gate took it: the service never accepted it, it was waiting on the listener when the service
+stopped listening or arrived after, and the file named it before the client saw the reset. Any
+other reset is a request the service accepted and dropped, and is red, and so is a timeout or an
+error status.
+
+That holds on each port where the gate holds the service's listener. On a port where it does
+not, it cannot tell the two apart, and the file says why. A reset there is judged as the smoke
+judged it before the gate held listeners: not counted when its request started after the
+signal, counted when it started before. Before it judges, the smoke asks the gate to look at the
+listeners once more and waits up to ``--timeout`` for the answer, since a listener shut down
+resets connections before the gate can say so; with no answer, every port is judged the older
+way. The smoke names each port judged the older way, and why, green or red. Without the flag a
+refused connection is always an error. The flag is red without the two paths, since it could
+neither say it is sending nor tell a reset the gate made from one the service made.
 
 It ends within ``--seconds`` plus ``--timeout``: ten seconds at the defaults, even when the
 service hangs. Each request opens a new connection, which is what a burst of clients does.
@@ -66,7 +78,7 @@ import re
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -94,6 +106,11 @@ class Target:
     def accepts(self, status: int) -> bool:
         """Whether ``status`` is the one wanted, or any success when none was named."""
         return status == self.status if self.status else status < FAILED
+
+    def port(self) -> int:
+        """The port the request goes to."""
+        parts = urlsplit(self.url)
+        return parts.port or (443 if parts.scheme == "https" else 80)
 
 
 def target(text: str) -> Target:
@@ -142,7 +159,35 @@ def targets_of(parser: argparse.ArgumentParser, options: argparse.Namespace) -> 
 
 
 class Closed(Exception):  # noqa: N818 # -- not a fault: the service stopped taking requests
-    """A request that started after the stop signal met a closed listener."""
+    """A request after the stop signal whose connect was refused: nothing listened any more."""
+
+
+@dataclass(frozen=True)
+class Cut:
+    """A connection that failed after the stop signal, judged once the run is over.
+
+    ``port`` is the service's. ``named`` is whether the gate had named the connection, as one it
+    took and reset, by the time the client saw it fail: the gate names it before the reset, so a
+    name written later is not the gate's reset. ``late`` is whether the request started after
+    the signal, and ``lost`` whether the connection was reset, aborted or broken: what the
+    start-time rule needs where the gate holds no listener.
+    """
+
+    label: str
+    error: str
+    port: int
+    named: bool
+    late: bool
+    lost: bool
+
+
+class Cutoff(Exception):  # noqa: N818 # -- carries a failure to judge, not a fault yet
+    """A request after the stop signal that failed otherwise than by a refused connect."""
+
+    def __init__(self, cut: Cut) -> None:
+        """Carry ``cut`` to the worker, which stops and keeps it for judging."""
+        super().__init__(cut)
+        self.cut = cut
 
 
 def attempt(
@@ -150,51 +195,117 @@ def attempt(
 ) -> tuple[float | None, str | None]:
     """One request: its latency in seconds when an answer came, and what was wrong if anything.
 
-    With ``stopping`` set, a connection error on a request that began after that path appeared
-    raises ``Closed`` instead of being counted. So does a refused connect whenever the path exists
-    by the time it fails: no connection was made, so nothing was in flight, and the signal may
-    have landed between the request's start and its failure.
+    With ``stopping`` set and existing when a request fails, the signal has been sent: a refused
+    connect raises ``Closed``, and any other failure raises ``Cutoff``, judged later against the
+    connections the gate took. A timeout always counts, and so does a failure before a connect
+    was even tried.
     """
-    after_signal = stopping is not None and stopping.exists()
+    clients: list[gatelib.Connection] = []
+    late = stopping is not None and stopping.exists()
     started = time.perf_counter()
     try:
-        status = gatelib.http_status(goal.method, goal.url, body=goal.body, timeout=timeout)
+        status = gatelib.http_status(
+            goal.method,
+            goal.url,
+            body=goal.body,
+            timeout=timeout,
+            connecting=clients.append,
+        )
     except TimeoutError:
         return None, f"{goal.label()}: timed out after {timeout:g}s"
     except (OSError, http.client.HTTPException) as error:
-        raced = (
-            isinstance(error, ConnectionRefusedError) and stopping is not None and stopping.exists()
-        )
-        if (after_signal and isinstance(error, ConnectionError)) or raced:
+        if stopping is None or not stopping.exists() or not clients:
+            return None, f"{goal.label()}: {type(error).__name__}"
+        if isinstance(error, ConnectionRefusedError):
             raise Closed from error
-        return None, f"{goal.label()}: {type(error).__name__}"
+        named = clients[-1] in gatelib.read_stopping(stopping).taken
+        lost = isinstance(error, ConnectionError)
+        cut = Cut(goal.label(), type(error).__name__, clients[-1].port, named, late, lost)
+        raise Cutoff(cut) from error
     wrong = None if goal.accepts(status) else f"{goal.label()}: HTTP {status}"
     return time.perf_counter() - started, wrong
 
 
+@dataclass
+class Worked:
+    """What the workers saw: every latency, every error, and the cut connections to judge."""
+
+    latencies: list[float] = field(default_factory=list)
+    errors: collections.Counter[str] = field(default_factory=collections.Counter)
+    cuts: list[Cut] = field(default_factory=list)
+
+
 def work(
     targets: list[Target], first: int, deadline: float, *, timeout: float, stopping: Path | None
-) -> tuple[list[float], collections.Counter[str]]:
-    """One worker's latencies and errors: at least one request, then until the deadline.
+) -> Worked:
+    """One worker's run: at least one request, then until the deadline.
 
-    It starts at URL ``first`` and takes them in turn, and stops early on ``Closed``.
+    It starts at URL ``first`` and takes them in turn, and stops early at its first request after
+    the stop signal that fails to connect or is cut.
     """
-    latencies: list[float] = []
-    errors: collections.Counter[str] = collections.Counter()
+    worked = Worked()
     turn = first
     while True:
         try:
             latency, wrong = attempt(targets[turn % len(targets)], timeout, stopping)
         except Closed:
             break
+        except Cutoff as cutoff:
+            worked.cuts.append(cutoff.cut)
+            break
         if latency is not None:
-            latencies.append(latency)
+            worked.latencies.append(latency)
         if wrong:
-            errors[wrong] += 1
+            worked.errors[wrong] += 1
         turn += 1
         if time.monotonic() >= deadline:
             break
-    return latencies, errors
+    return worked
+
+
+def counts(cut: Cut, told: gatelib.Stopping) -> bool:
+    """Whether ``cut`` is a request the service accepted and dropped, as far as can be told.
+
+    Where the gate held the listener, a connection it took was never accepted by the service,
+    and any other was. Elsewhere, the start-time rule the smoke used before the gate held
+    listeners: a lost connection is not counted when its request started after the signal.
+    """
+    if told.inexact(cut.port):
+        return not (cut.late and cut.lost)
+    return not cut.named
+
+
+def judge(
+    cuts: list[Cut], told: gatelib.Stopping, ports: list[int]
+) -> tuple[collections.Counter[str], list[str]]:
+    """The cut connections that count as errors, and what to say of the stop.
+
+    ``ports`` are those the smoke requested. Each judged the older way is named, with why,
+    whatever the verdict.
+    """
+    errors = collections.Counter(f"{cut.label}: {cut.error}" for cut in cuts if counts(cut, told))
+    notes = []
+    taken = sum(cut.named and not told.inexact(cut.port) for cut in cuts)
+    if taken:
+        notes.append(
+            f"load-smoke: {taken} connection(s) reset after the stop signal are not counted, "
+            "since the service never accepted them. The gate held the service's listener and, "
+            "once no process of the service held it, took each connection waiting there and "
+            "reset it. Each was waiting when the service stopped listening, or arrived after."
+        )
+    older: dict[str, list[str]] = {}
+    for port in sorted(set(ports)):
+        if why := told.inexact(port):
+            older.setdefault(why, []).append(str(port))
+    for why, named in older.items():
+        which = f"port {named[0]} is" if len(named) == 1 else f"ports {', '.join(named)} are"
+        notes.append(
+            f"load-smoke: {which} judged the older, less exact way, because {why}. A reset after "
+            "the stop signal then counts as a dropped request only when its request started "
+            "before the signal. So a service that stops correctly can be red here, and one that "
+            "drops a request sent just after the signal can be green."
+        )
+    return errors, notes
 
 
 def percentile(sorted_values: list[float], fraction: float) -> float:
@@ -208,10 +319,10 @@ def hammer(
     *,
     timeout: float,
     stopping: Path | None = None,
-) -> tuple[list[float], collections.Counter[str]]:
-    """Run ``concurrency`` workers for ``seconds``; every latency and every error counted."""
+) -> Worked:
+    """Run ``concurrency`` workers for ``seconds``; everything they saw, together."""
     deadline = time.monotonic() + seconds
-    results: list[tuple[list[float], collections.Counter[str]]] = []
+    results: list[Worked] = []
     threads = [
         threading.Thread(
             target=lambda n=n: results.append(
@@ -225,11 +336,13 @@ def hammer(
         thread.start()
     for thread in threads:
         thread.join()
-    latencies = sorted(latency for part, _ in results for latency in part)
-    errors: collections.Counter[str] = collections.Counter()
-    for _, part_errors in results:
-        errors.update(part_errors)
-    return latencies, errors
+    together = Worked()
+    for part in results:
+        together.latencies += part.latencies
+        together.errors.update(part.errors)
+        together.cuts += part.cuts
+    together.latencies.sort()
+    return together
 
 
 def main(argv: list[str]) -> int:
@@ -245,21 +358,30 @@ def main(argv: list[str]) -> int:
     options = parser.parse_args(argv[1:])
     if options.concurrency < 1 or options.seconds <= 0 or options.timeout <= 0:
         parser.error("--concurrency, --seconds and --timeout must be positive")
-    stopping = os.environ.get(gatelib.STOPPING_ENV)
-    if options.until_stopped and not stopping:
+    stopping, sending = (
+        os.environ.get(name) for name in (gatelib.STOPPING_ENV, gatelib.SENDING_ENV)
+    )
+    if options.until_stopped and not (stopping and sending):
         parser.error(
-            f"--until-stopped needs {gatelib.STOPPING_ENV}, set by with_service.py --graceful"
+            f"--until-stopped needs {gatelib.STOPPING_ENV} and {gatelib.SENDING_ENV}, set by "
+            "with_service.py --graceful"
         )
     targets = targets_of(parser, options)
     if isinstance(targets, str):
         return gatelib.report("load-smoke", [targets])
-    latencies, errors = hammer(
-        targets,
-        options.concurrency,
-        options.seconds,
-        timeout=options.timeout,
-        stopping=Path(stopping) if options.until_stopped and stopping else None,
+    if options.until_stopped and sending:
+        Path(sending).touch()  # Why: the workers start now, and the signal waits for them.
+    marker = Path(stopping) if options.until_stopped and stopping else None
+    worked = hammer(
+        targets, options.concurrency, options.seconds, timeout=options.timeout, stopping=marker
     )
+    latencies, errors = worked.latencies, worked.errors
+    if marker and marker.exists():
+        told = gatelib.ask(marker, options.timeout)
+        cut, notes = judge(worked.cuts, told, [goal.port() for goal in targets])
+        errors.update(cut)
+        for note in notes:
+            print(note)
     if latencies:
         p50, p95, p99, worst = (percentile(latencies, f) * 1000 for f in (0.5, 0.95, 0.99, 1.0))
         print(
