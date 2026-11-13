@@ -13,13 +13,23 @@ A safeguard arrives with the first thing it guards, and the first one is free (A
 - Adoption no longer builds a walking skeleton. It binds the floor and marks every other row with its trigger.
 - `skills/method/tiers.md` replaces "Operable from the first commit" with a Triggers section: every question with its tier and its trigger, grouped, and why each group waits for its trigger. Commitment 11 is now "Operable by the time it matters".
 
+### The route, `/ratchet:safeguard` and adoption
+
+- `/ratchet:safeguard` binds every row `triggers.py --json` says is owed. It proposes a current tool per row and asks one question for all of them, writes each recipe in place of its `later:` body, shows each gate bite with `just bite-one`, records the tools in a new ADR, and opens one change, `chore(method): safeguard <what>`. `/ratchet:safeguard <event>` declares the life event first.
+- The route names `/ratchet:safeguard` and what is owed after anything that stops work outright and before the records and the tickets. The `why:` line ends with the step it would otherwise name, so the owner can carry on: the first instance is free.
+- A sign of an undeclared life event (a `signs` glob of the catalogue) is an `also:` line naming the sign and the event's meaning. `route.py --decline <event>` records the signs seen in `.ratchet/events.tsv`; the line comes back only for a new sign.
+- `triggers.py --count` prints what each Triggers row finds, so a pattern is proved on the tree before the gate trusts it.
+- Adoption writes the Triggers table, binds the floor and the rows already owed, and writes every other row `later: <trigger>` with a recipe that echoes it. Dialog 1 asks the life events, `none` by default.
+- The drain counts four agents a ticket before `depended-on` (`6N - 2`) and nine after (`11N - 2`). A run red on the `triggers` gate is parked with a reason that names `/ratchet:safeguard`, and held only while that kind is owed.
+- The template's `graceful-stop` runs `load_smoke.py --until-stopped` inside `with_service.py --graceful`, and `prod-probe` runs `load_smoke.py --ready` against the live deployment. `rollback`'s comment names its trigger, `life:deployed`.
+
 ### Seven reliability questions
 
 - `rolls back safely` (`life:deployed`, tier 1): the merge base's build runs on the data the head's migrations leave.
 - `survives failing dependencies` (`code:outbound-call`, tier 1): every outbound call has a timeout, and a test meets the dependency erroring, slow and gone.
 - `refuses bad configuration` (`code:config-read`, tier 1): `with_service.py --refuses NAME` boots with the setting missing and expects a non-zero exit that names it.
 - `shuts down gracefully` (`code:listener`, tier 1): `with_service.py --graceful SECONDS` signals it mid-request and expects the request finished and the process gone in time.
-- `incidents tighten a gate` (`always`, tier 1): each record under `docs/incidents/` has a `Bite:` line naming a bite of `quality/bites.toml` that reproduces it. `records.md` gains the incident record, blameless, which the route proposes when the owner reports an incident.
+- `incidents tighten a gate` (`always`, tier 1): each record under `docs/incidents/` has a `Bite:` line naming a bite of `quality/bites.toml` that reproduces it. `records.md` gains the incident record, blameless, which the agent proposes when the owner reports an incident.
 - `backup restores` (`life:irreplaceable-data`, weekly): the latest backup restores into scratch and the deliverable boots on it.
 - `production answers` (`life:deployed`, weekly and after a deploy): the load smoke against the live URL.
 
