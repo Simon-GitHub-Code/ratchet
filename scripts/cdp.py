@@ -4,7 +4,8 @@ The browser is any Chromium or Chrome. It is started headless with ``--remote-de
 so commands go in on its file descriptor 3 and answers come out on 4, each a JSON text ended by
 a NUL byte; no WebSocket and no library is needed. Every host name but ``127.0.0.1`` fails to
 resolve, so a page under test reaches nothing outside this machine. The browser runs in a
-session of its own and is stopped with its whole process group, whatever happened.
+session of its own and is stopped with its whole process group, whatever happened, and its
+``TMPDIR`` is a directory of its own under ``/tmp`` that is removed with it.
 
 ``RATCHET_BROWSER`` names the executable; without it the first of the usual names on ``PATH``
 is used. Nothing here knows where a browser is installed on any one machine.
@@ -20,6 +21,7 @@ import os
 import queue
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -54,6 +56,10 @@ ANSWER = 30.0
 # Why: a pipe end the shell maps to 3 or 4 must not itself be 3 or 4, or one redirection would
 # close the other's file.
 HIGH_FD = 10
+# Why not the inherited TMPDIR: Chromium makes its sockets under it, a socket's path holds at
+# most 107 bytes, and an agent's sandbox can set a TMPDIR long enough that the browser dies
+# before its first answer. The browser gets a directory of its own here, removed after.
+SHORT_TMP = "/tmp"  # noqa: S108 # -- a fresh directory of mkdtemp's, not a fixed file
 STDERR_TAIL = 5
 
 
@@ -222,8 +228,11 @@ class Page:
         return value
 
 
-def launch(browser: str, profile: Path) -> tuple[subprocess.Popen[bytes], Pipe]:
-    """Start the browser on a debugging pipe, in a session of its own, writing to ``profile``."""
+def launch(browser: str, profile: Path, scratch: str) -> tuple[subprocess.Popen[bytes], Pipe]:
+    """Start the browser on a debugging pipe, in a session of its own, writing to ``profile``.
+
+    ``scratch`` is its ``TMPDIR``.
+    """
     to_browser, commands = os.pipe()
     answers, from_browser = os.pipe()
     ends = [fcntl.fcntl(end, fcntl.F_DUPFD_CLOEXEC, HIGH_FD) for end in (to_browser, from_browser)]
@@ -240,6 +249,7 @@ def launch(browser: str, profile: Path) -> tuple[subprocess.Popen[bytes], Pipe]:
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,
                 start_new_session=True,
+                env={**os.environ, "TMPDIR": scratch},
             )
     except OSError as error:
         for end in (*ends, commands, answers):
@@ -260,10 +270,15 @@ def stderr_tail(profile: Path) -> str:
 
 @contextlib.contextmanager
 def page(browser: str, profile: Path, *, width: int, height: int) -> Iterator[Page]:
-    """A blank tab of a fresh headless browser; the browser is stopped when the block ends."""
+    """A blank tab of a fresh headless browser; the browser is stopped when the block ends.
+
+    Its temporary directory goes with it.
+    """
     with contextlib.ExitStack() as stack:
         with gatelib.signals_held():
-            process, pipe = launch(browser, profile)
+            scratch = tempfile.mkdtemp(prefix="ratchet-browser-", dir=SHORT_TMP)
+            stack.callback(shutil.rmtree, scratch, ignore_errors=True)
+            process, pipe = launch(browser, profile, scratch)
             stack.callback(pipe.close)
             stack.callback(gatelib.stop_group, process)
         try:
