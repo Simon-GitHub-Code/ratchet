@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 import plugin_pin
@@ -306,6 +306,7 @@ SETTINGS_FILES = st.fixed_dictionaries(
 
 
 @given(SETTINGS_FILES)
+@example({"$schema": "", "permissions": {"deny": ["Bash(gh pr merge:*)"]}})
 def test_regenerated_is_idempotent_and_keeps_every_key_and_own_rule(
     settings: dict[str, object],
 ) -> None:
@@ -325,6 +326,38 @@ def test_regenerated_is_idempotent_and_keeps_every_key_and_own_rule(
         own = [rule for rule in settings_rules.listed(settings, key) if rule not in GENERATED]
         assert out["permissions"][key] == [*ours, *own]
     assert settings_rules.listed(out, "deny") == out["permissions"]["deny"]
+
+
+MERGE = "Bash(gh pr merge:*)"
+FORCE = "Bash(git push -f:*)"
+
+
+@pytest.mark.parametrize(
+    ("held", "where"),
+    [
+        ({"deny": [MERGE]}, {MERGE: (1, 0)}),
+        ({"ask": [FORCE]}, {FORCE: (1, 0)}),
+        ({"deny": [MERGE], "ask": [MERGE]}, {MERGE: (1, 0)}),
+        ({"deny": [MERGE, MERGE]}, {MERGE: (1, 0)}),
+        ({"deny": ["Bash(gh pr merge :*)"]}, {"Bash(gh pr merge :*)": (1, 0), MERGE: (0, 1)}),
+    ],
+    ids=[
+        "an ask rule the owner denies",
+        "a deny rule the owner asks for",
+        "one rule in both lists",
+        "one rule the owner denies twice",
+        "a rule that differs only in spacing",
+    ],
+)
+def test_a_held_rule_ends_once_in_one_list_never_looser_and_a_second_run_changes_nothing(
+    held: dict[str, list[str]], where: dict[str, tuple[int, int]]
+) -> None:
+    want = settings_rules.regenerated(PARSED)
+    once = want(json.dumps({"permissions": held}))
+    out = json.loads(once)["permissions"]
+    assert {rule: (out["deny"].count(rule), out["ask"].count(rule)) for rule in where} == where
+    assert set(held.get("deny", [])) <= set(out["deny"])
+    assert want(once) == once
 
 
 def plugin(root: Path, version: str = "1.2.3") -> tuple[Path, str]:
