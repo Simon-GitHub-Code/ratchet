@@ -5,35 +5,24 @@ reads it and judges it against facts the tester did not write: the ticket's chec
 the proxy kept of every request, the seal over that log, the screenshots on disk and the files
 the product's code is made of. Every function here is pure; ``acceptance.py`` reads the files.
 
-The record::
-
-    {"session": "<id>", "head": "<commit>",
-     "criteria": [{"id": "C1", "text": "<a checklist line of the ticket, verbatim>",
-                   "verdict": "pass" | "fail" | "unsure" | "not-observable",
-                   "how": "<what was done, in plain words>",
-                   "requests": [{"request": "<logged id>", "method": "GET", "path": "/",
-                                 "status": 200, "contains": ["<text the answer showed>"]}],
-                   "screenshots": ["<path under the tester's directory>"],
-                   "steps": ["<to reproduce a fail>"], "why": "<for unsure>",
-                   "judge": "<who can judge a not-observable line>",
-                   "unkept": "<why a pass has no kept check>"}],
-     "findings": [{"id": "F1", "severity": "blocker" | "major" | "minor" | "note",
-                   "scope": "this" | "later: <ticket>", "title": "...", "steps": ["..."],
-                   "expected": "...", "actual": "...", "requests": [...], "screenshots": [...]}],
-     "kept": [<kept checks, see kept_checks.py>],
-     "notChecked": [{"what": "...", "why": "..."}], "tryIt": ["..."]}
+``docs/acceptance.md`` is the reference for the record and the summary: every field, its type,
+and when it is required. A record of another ``schema`` is refused, and so is a field the
+reference does not list, so a misspelt field cannot quietly weaken a record.
 
 A record is accepted only when every rule below holds; each one broken is a sentence. It is for
-this session and this commit. Every checklist line of the ticket has exactly one criterion, with
-its text. A ``pass`` cites a request this session logged, as the method, path and status the log
-holds, and every text it says the answer showed is in the stored answer; for a ``web-ui`` it also
-cites a screenshot. A ``pass`` cites no request that broke, and no text its request sent itself,
-as a page that repeats its query does: that shows the request, not the product. Text sent in an
-earlier request and shown by a later one passes, since saving something and then seeing it is
-how most of a product is tried. A ``pass`` is kept by a check or says why it cannot be. A
-``fail`` and every finding carry steps to reproduce; a blocker or major finding cites what it
-saw. Verdicts and severities come from their closed sets. No text names a file of the
-product's code, since the tester judges by use and never by reading. The log matches its seal.
+this session and the tree it served. Every checklist line of the ticket has exactly one
+criterion, with its text, and at least one criterion is not ``not-observable``: a record that
+calls every line unobservable tried nothing. A ``not-observable`` line says why and who can
+judge it instead. A ``pass`` cites a request this session logged, as the method, path and status
+the log holds, and every text it says the answer showed is in the stored answer; for a
+``web-ui`` it also cites a screenshot. A ``pass`` cites no request that broke, and no text its
+request sent itself, as a page that repeats its query does: that shows the request, not the
+product. Text sent in an earlier request and shown by a later one passes, since saving
+something and then seeing it is how most of a product is tried. A ``pass`` is kept by a check
+or says why it cannot be. A ``fail`` and every finding carry steps to reproduce; a blocker or
+major finding cites what it saw. Verdicts and severities come from their closed sets. No text
+names a file of the product's code, since the tester judges by use and never by reading. The
+log matches its seal.
 """
 
 from __future__ import annotations
@@ -52,6 +41,65 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 SCHEMA = 1
+# The fields of each object, in the order docs/acceptance.md lists them.
+RECORD_FIELDS = (
+    "schema",
+    "session",
+    "tree",
+    "author",
+    "criteria",
+    "findings",
+    "kept",
+    "notChecked",
+    "tryIt",
+)
+CRITERION_FIELDS = (
+    "id",
+    "text",
+    "verdict",
+    "how",
+    "requests",
+    "screenshots",
+    "steps",
+    "why",
+    "judge",
+    "unkept",
+)
+CITATION_FIELDS = ("request", "method", "path", "status", "contains")
+FINDING_FIELDS = (
+    "id",
+    "severity",
+    "scope",
+    "title",
+    "steps",
+    "expected",
+    "actual",
+    "requests",
+    "screenshots",
+)
+NOT_CHECKED_FIELDS = ("what", "why")
+SUMMARY_FIELDS = (
+    "schema",
+    "slug",
+    "tree",
+    "session",
+    "started",
+    "ended",
+    "requests",
+    "log",
+    "blocking",
+    "questions",
+    "notObservable",
+    "criteria",
+    "findings",
+    "kept",
+    "unkept",
+    "replay",
+    "control",
+    "notChecked",
+    "tryIt",
+)
+CHECKS_FILE_FIELDS = ("schema", "slug", "checks")
 VERDICTS = ("pass", "fail", "unsure", "not-observable")
 SEVERITIES = ("blocker", "major", "minor", "note")
 HARMFUL = ("blocker", "major")
@@ -288,6 +336,7 @@ def citations(shape: Shape) -> tuple[Citation, ...]:
     found = []
     for n, item in enumerate(raw, 1):
         cited = Shape(item, f"{shape.where} request {n}", shape.problems)
+        cited.known(CITATION_FIELDS, "which a citation does not have")
         status = cited.raw.get("status")
         if not isinstance(status, int) or isinstance(status, bool):
             cited.say("needs status as the number the log holds")
@@ -306,6 +355,7 @@ def citations(shape: Shape) -> tuple[Citation, ...]:
 def criterion(shape: Shape) -> Criterion:
     ident = shape.text("id")
     shape.where = f"criterion {ident}" if ident else shape.where
+    shape.known(CRITERION_FIELDS, "which a criterion does not have")
     return Criterion(
         ident,
         shape.text("text"),
@@ -323,6 +373,7 @@ def criterion(shape: Shape) -> Criterion:
 def finding(shape: Shape) -> Finding:
     ident = shape.text("id")
     shape.where = f"finding {ident}" if ident else shape.where
+    shape.known(FINDING_FIELDS, "which a finding does not have")
     return Finding(
         ident,
         shape.text("severity"),
@@ -348,6 +399,10 @@ def parse_record(raw: object) -> tuple[Record | None, list[str]]:
     """The record, or ``None`` and a sentence for each field that is not as the shape says."""
     problems: list[str] = []
     shape = Shape(raw, "the record", problems)
+    schema = shape.raw.get("schema")
+    if type(schema) is not int or schema != SCHEMA:
+        shape.say(f"needs schema as {SCHEMA}, the version this harness reads")
+    shape.known(RECORD_FIELDS, "which a record does not have")
     session, tree = shape.text("session"), shape.text("tree")
     author = shape.text("author", required=False) or TESTER
     criteria = tuple(criterion(item) for item in objects(shape, "criteria"))
@@ -361,9 +416,10 @@ def parse_record(raw: object) -> tuple[Record | None, list[str]]:
         check, wrong = kept_checks.parse(item, f"kept item {n}")
         problems.extend(wrong)
         kept.extend([check] if check else [])
-    not_checked = tuple(
-        (item.text("what"), item.text("why")) for item in objects(shape, "notChecked")
-    )
+    not_checked = []
+    for item in objects(shape, "notChecked"):
+        item.known(NOT_CHECKED_FIELDS, "which an item of notChecked does not have")
+        not_checked.append((item.text("what"), item.text("why")))
     record = Record(
         session,
         tree,
@@ -372,7 +428,7 @@ def parse_record(raw: object) -> tuple[Record | None, list[str]]:
         findings,
         tuple(kept),
         tuple(kept_raw),
-        not_checked,
+        tuple(not_checked),
         shape.texts("tryIt"),
     )
     return (None if problems else record), problems
@@ -469,6 +525,8 @@ def criterion_problems(item: Criterion, facts: Facts, kept: set[str]) -> list[st
         problems.append(f"{where} fails with no steps to reproduce it")
     if item.verdict == "unsure" and not item.why:
         problems.append(f"{where} is unsure and does not say why")
+    if item.verdict == "not-observable" and not item.why:
+        problems.append(f"{where} is not observable and does not say why")
     if item.verdict == "not-observable" and not item.judge:
         problems.append(f"{where} is not observable and does not say who can judge it")
     return problems
@@ -513,6 +571,8 @@ def promise_problems(record: Record, facts: Facts) -> list[str]:
         for text in facts.promises
         if text not in given
     ]
+    if record.criteria and all(item.verdict == "not-observable" for item in record.criteria):
+        problems.append("every criterion is not-observable, so the record tried nothing")
     problems += [
         f"criterion {item.id} is not a line of the ticket: {item.text!r}"
         for item in record.criteria
@@ -613,6 +673,7 @@ def cannot_start(session: str, tree: str, *, ticket: list[str], said: str) -> di
         "actual": said,
     }
     return {
+        "schema": SCHEMA,
         "session": session,
         "tree": tree,
         "author": HARNESS,
@@ -693,6 +754,7 @@ def summary(record: Record, session: Session, replays: tuple[object, object]) ->
         "log": session.seal.sha256 if session.seal else None,
         "blocking": blocking,
         "questions": questions,
+        "notObservable": sum(item.verdict == "not-observable" for item in record.criteria),
         "criteria": [
             {"id": item.id, "text": item.text, "verdict": item.verdict, "how": item.how}
             | ({"why": item.why} if item.why else {})

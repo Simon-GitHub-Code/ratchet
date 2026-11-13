@@ -830,7 +830,12 @@ def replay(root: Path, slug: str | None, checks_file: Path | None, *, control: b
     directory = latest(root, slug) if slug else None
     source = (read_json(directory / RECORD) or {}).get("kept") if directory else None
     if checks_file is not None:
-        source = (read_json(checks_file) or {}).get("checks")
+        data = read_json(checks_file) or {}
+        if data.get("schema") != acceptance_record.SCHEMA:
+            read = f"schema {acceptance_record.SCHEMA}, which this harness reads"
+            message = f"{checks_file} is not a checks file of {read}"
+            raise Usage(message)
+        source = data.get("checks")
     written, checks = kept(source)
     boot = NULL if control else read_binding(root).boot
     if boot is None:

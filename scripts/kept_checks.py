@@ -16,7 +16,8 @@ show that criterion holding against ``BASE_URL``, the address of a freshly boote
       {"click": "Save"}, {"see": "https://example.com/{unique}"},
       {"true": "document.documentElement.scrollWidth <= innerWidth"}]}
 
-An HTTP step sends one request, ``METHOD /path`` (a path, never a host), with optional
+``docs/acceptance.md`` lists every field of a check and its steps, and a field it does not list
+is refused. An HTTP step sends one request, ``METHOD /path`` (a path, never a host), with optional
 ``headers`` and either ``form`` (sent URL-encoded) or ``body`` (sent as it is). It follows no
 redirect. It holds when each ``expect`` holds: ``status``; ``headers``, exact values with names
 in any case; ``contains``, texts the body shows in this order; ``lacks``, texts it never shows;
@@ -58,7 +59,11 @@ WAIT = 5.0
 POLL = 0.1
 SETTLE = 0.3
 TIMEOUT = 30.0
+# The fields of each object, in the order docs/acceptance.md lists them.
+CHECK_FIELDS = ("id", "criterion", "via", "width", "steps")
+HTTP_STEP_FIELDS = ("request", "headers", "form", "body", "expect")
 EXPECTS = ("status", "headers", "contains", "lacks", "count")
+BROWSER_STEP_FIELDS = ("open", "fill", "with", "click", "see", "lacks", "true")
 ACTIONS = ("open", "fill", "click", "see", "lacks", "true")
 VIA = ("http", "browser")
 STATUSES = range(100, 600)
@@ -164,6 +169,12 @@ class Shape:
         """Add a sentence about this object."""
         self.problems.append(f"{self.where} {problem}")
 
+    def known(self, fields: tuple[str, ...], which: str) -> None:
+        """Say which fields are not among ``fields``; ``which`` ends the sentence."""
+        unknown = sorted(set(self.raw) - set(fields))
+        if unknown:
+            self.say(f"names {', '.join(unknown)}, {which}")
+
     def text(self, key: str, *, required: bool = True) -> str:
         """The field as a non-empty text, or ``""``."""
         value = self.raw.get(key)
@@ -209,9 +220,7 @@ def parse_expect(shape: Shape) -> Expect:
     if not all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for _, n in counts):
         expect.say("needs count with a whole number for each text")
         counts = ()
-    unknown = sorted(set(expect.raw) - set(EXPECTS))
-    if unknown:
-        expect.say(f"names {', '.join(unknown)}, which a check cannot expect")
+    expect.known(EXPECTS, "which a check cannot expect")
     return Expect(
         status=status if isinstance(status, int) else None,
         headers=expect.text_table("headers"),
@@ -222,6 +231,7 @@ def parse_expect(shape: Shape) -> Expect:
 
 
 def parse_request(shape: Shape) -> Request:
+    shape.known(HTTP_STEP_FIELDS, "which an HTTP step does not have")
     method, _, path = shape.text("request").partition(" ")
     if not method.isalpha() or not path.startswith("/"):
         shape.say("needs request as METHOD /path, a path on BASE_URL and never a host")
@@ -235,6 +245,7 @@ def parse_request(shape: Shape) -> Request:
 
 
 def parse_action(shape: Shape) -> Action:
+    shape.known(BROWSER_STEP_FIELDS, "which a browser step does not have")
     kinds = [kind for kind in ACTIONS if kind in shape.raw]
     if len(kinds) != 1:
         shape.say(f"needs exactly one of {', '.join(ACTIONS)}")
@@ -253,6 +264,7 @@ def parse(raw: object, where: str = "a kept check") -> tuple[Check | None, list[
     shape = Shape(raw, where, problems)
     ident = shape.text("id")
     shape.where = f"kept check {ident}" if ident else where
+    shape.known(CHECK_FIELDS, "which a kept check does not have")
     criterion, via = shape.text("criterion"), shape.raw.get("via")
     width = shape.raw.get("width", WIDTH)
     if via not in VIA:

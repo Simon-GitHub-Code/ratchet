@@ -620,6 +620,7 @@ def test_the_summary_is_the_records_facts_and_the_replays_of_these_very_checks()
         "text": PROMISES[2],
         "verdict": "not-observable",
         "how": "This is about how the code is built.",
+        "why": "No use of the product shows where its settings are read.",
         "judge": "code review",
     }
     stale = {"checks": "another digest", "results": [{"holds": True}]}

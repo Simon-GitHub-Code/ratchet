@@ -92,7 +92,7 @@ def test_an_interrupted_replay_stops_its_boot_and_removes_its_scratch(
     checks = tmp_path / "checks.json"
     kept = {"id": "K1", "criterion": "C1", "via": "http", "steps": [{"request": "GET /"}]}
     kept["steps"][0]["expect"] = {"status": 200}  # type: ignore[index]
-    checks.write_text(json.dumps({"checks": [kept]}), encoding="utf-8")
+    checks.write_text(json.dumps({"schema": 1, "checks": [kept]}), encoding="utf-8")
     replay = started(root, tmp_path, "replay", "--checks", str(checks))
     products.wait_for(tmp_path / "booting")
     replay.send_signal(signum)
