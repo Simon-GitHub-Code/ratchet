@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # The conjecture of a ticket
 
-`/ratchet:conjecture <ticket>`: the ticket is a number on the tracker (`4` or `#4`) or the path of a local ticket file. The feature preflight refuses a ticket without a stated conjecture, and in an adopted repository without the `## Operability` lines its application types are asked, on the ticket or on the spec its `Parent:` line names. This skill writes both, once, from what the owner already decided.
+`/ratchet:conjecture <ticket>`: the ticket is a number on the tracker (`4` or `#4`) or the path of a local ticket file. The argument may also be a spec (a tracker issue or a local `spec.md`) that `to-tickets` has not split yet: the route sends a spec that states no conjecture or operability here first, because `to-tickets` writes neither, and the tickets it then makes inherit both from the spec. The feature preflight refuses a ticket without a stated conjecture, and in an adopted repository without the `## Operability` lines its application types are asked, on the ticket or on the spec its `Parent:` line names. This skill writes both, once, from what the owner already decided.
 
 ## Steps
 

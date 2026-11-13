@@ -232,14 +232,28 @@ def triage_step(root: Path) -> Step | None:
 
 
 def unsplit_spec(root: Path) -> Step | None:
-    """A local spec with no tickets beside it: ``to-tickets`` splits it before a new spec."""
+    """A local spec with no tickets beside it: ``to-tickets`` splits it before a new spec.
+
+    A spec that states no conjecture or operability goes to ``/ratchet:conjecture`` first.
+    """
     for spec in sorted(root.glob(LOCAL_SPECS)):
         if not any((spec.parent / "issues").glob("*.md")):
             ref = spec.relative_to(root).as_posix()
+            text = spec.read_text(encoding="utf-8", errors="replace")
+            lacking = unstated(preflight.local_ticket(ref, text), root, lambda _args: None)
+            if lacking:
+                # Why: to-tickets writes no Conjecture or Operability, and the preflight accepts
+                # both on the parent, so stating them on the spec first serves every child.
+                return Step(
+                    f"{CONJECTURE} {ref}",
+                    f"{ref} has no tickets yet, and the spec {lacking}; its tickets inherit both",
+                    f"{TICKETS} {ref}, then {FEATURE} <ticket>",
+                    "specify",
+                )
             return Step(
                 f"{TICKETS} {ref}",
                 f"{ref} has no tickets yet",
-                f"{CONJECTURE} <ticket>, then {FEATURE} <ticket>",
+                f"{FEATURE} <ticket>",
                 "specify",
             )
     return None
