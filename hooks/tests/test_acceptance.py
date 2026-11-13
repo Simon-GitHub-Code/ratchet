@@ -641,14 +641,42 @@ def test_replay_runs_each_kept_check_on_a_fresh_boot_and_against_nothing(
     )
     assert out[1] == "acceptance replay --control: green"
     replayed = json.loads((tried / "replay.json").read_text(encoding="utf-8"))
-    assert replayed["results"] == [{"id": "K1", "criterion": "C1", "holds": True, "reason": None}]
-    assert json.loads((tried / "control.json").read_text("utf-8"))["results"][0]["holds"] is False
+    held = {"id": "K1", "criterion": "C1", "outcome": "held", "reason": None}
+    assert replayed["results"] == [held]
+    control = json.loads((tried / "control.json").read_text("utf-8"))["results"][0]
+    assert control["outcome"] == "unmet"
     assert run(root, "summary", "--slug", SLUG, capsys=capsys)[0] == 0
     summary = json.loads((root / "docs/features" / SLUG / "acceptance.json").read_text("utf-8"))
     assert (summary["replay"], summary["control"]) == (
-        {"passed": 1, "of": 1},
-        {"failed": 1, "of": 1},
+        {"held": 1, "unmet": 0, "notRun": 0, "of": 1},
+        {"held": 0, "unmet": 1, "notRun": 0, "of": 1},
     )
+
+
+def test_a_check_that_could_not_run_is_red_and_never_counted_as_failing_the_control(
+    tried: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RATCHET_BROWSER", str(tried / "no-such-browser"))
+    record = json.loads((tried / acceptance.RECORD).read_text(encoding="utf-8"))
+    looks = {"id": "K2", "criterion": "C1", "via": "browser", "steps": [{"open": "/"}]}
+    looks["steps"].append({"see": "https://example.com/"})
+    record["kept"] = [looks]
+    write_record(tried, record)
+    root = tried.parents[5]
+    for flag, against in (
+        ("--control", "against a server that does nothing"),
+        ("", "on a fresh boot"),
+    ):
+        code, out = run(root, "replay", "--slug", SLUG, *filter(None, [flag]), capsys=capsys)
+        assert code == 1
+        assert out[0].startswith(f"K2 (C1) was not run {against}: the browser failed: ")
+    for name in ("replay.json", "control.json"):
+        results = json.loads((tried / name).read_text(encoding="utf-8"))["results"]
+        assert [result["outcome"] for result in results] == ["not-run"]
+    assert run(root, "summary", "--slug", SLUG, capsys=capsys)[0] == 0
+    summary = json.loads((root / "docs/features" / SLUG / "acceptance.json").read_text("utf-8"))
+    nothing_ran = {"held": 0, "unmet": 0, "notRun": 1, "of": 1}
+    assert (summary["replay"], summary["control"]) == (nothing_ran, nothing_ran)
 
 
 def test_a_check_that_holds_against_nothing_proves_nothing(
@@ -716,7 +744,7 @@ def test_replay_of_a_product_that_cannot_start(
     root = products.make(tmp_path / "failing", boot=failing)
     code, out = run(root, "replay", "--checks", str(checks), capsys=capsys)
     assert code == 1
-    assert out[0].startswith("K9 (C1) does not hold on a fresh boot: the product did not start:")
+    assert out[0].startswith("K9 (C1) was not run on a fresh boot: the product did not start:")
 
 
 def test_the_summary_is_the_same_bytes_every_run_and_carries_the_kept_checks(

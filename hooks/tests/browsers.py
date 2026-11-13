@@ -7,7 +7,7 @@ each way a browser can fail is a real process on a real pipe:
 * every script is ``false`` the first time it is asked and ``true`` after, so a step waits once;
   one that says ``never`` is never ``true``;
 * a script that says ``throw`` throws, ``quietly`` throws with no exception object,
-  ``novalue`` has no value;
+  ``novalue`` has no value, ``late`` throws the first time and is ``true`` after;
 * a click (the script starting ``(text =>``) that is ``true`` navigates the tab, ``Elsewhere``
   navigates another frame, ``Stall`` never finishes loading;
 * opening an address that says ``unreachable`` fails, ``stuck`` never loads, ``crash`` closes
@@ -38,6 +38,9 @@ def send(message):
     os.write(4, json.dumps(message).encode() + b"\0")
 
 def evaluate(ident, expression):
+    if "late" in expression and expression not in asked:
+        asked.add(expression)
+        return {"exceptionDetails": {"exception": {"description": "TypeError: not there yet"}}}
     if "throw" in expression:
         return {"exceptionDetails": {"exception": {"description": "Error: boom"}}}
     if "quietly" in expression:

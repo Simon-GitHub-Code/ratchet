@@ -551,11 +551,15 @@ def test_the_summary_is_the_records_facts_and_the_replays_of_these_very_checks()
     assert seal is not None
     session = ar.Session("save-link", "2026-11-13T00:00:00Z", seal)
     checks = ar.digest(list(record.kept_raw))
-    replay = {"checks": checks, "results": [{"holds": True}, {"holds": False}, "x"]}
-    control = {"checks": checks, "results": [{"holds": False}]}
+    ran = [{"outcome": "held"}, {"outcome": "unmet"}, {"outcome": "not-run"}, "x"]
+    replay = {"checks": checks, "results": ran}
+    control = {"checks": checks, "results": [{"outcome": "unmet"}]}
     data = ar.summary(record, session, (replay, control))
     assert data == ar.summary(record, session, (replay, control)), "the same bytes every run"
-    assert (data["replay"], data["control"]) == ({"passed": 1, "of": 2}, {"failed": 1, "of": 1})
+    assert (data["replay"], data["control"]) == (
+        {"held": 1, "unmet": 1, "notRun": 1, "of": 3},
+        {"held": 0, "unmet": 1, "notRun": 0, "of": 1},
+    )
     assert (data["requests"], data["log"], data["ended"]) == (3, "f" * 64, seal.ended)
     assert data["unkept"] == [
         {"criterion": "C2", "why": criterion(good(), 1)["unkept"]},
@@ -569,7 +573,8 @@ def test_the_summary_is_the_records_facts_and_the_replays_of_these_very_checks()
     }
     stale = {"checks": "another digest", "results": [{"holds": True}]}
     later = ar.summary(record, dataclasses.replace(session, seal=None), (stale, {"checks": checks}))
-    assert (later["replay"], later["control"]) == (None, {"failed": 0, "of": 0})
+    none_ran = {"held": 0, "unmet": 0, "notRun": 0, "of": 0}
+    assert (later["replay"], later["control"]) == (None, none_ran)
     assert (later["requests"], later["log"], later["ended"]) == (0, None, None)
     unsure = good()
     criterion(unsure, 2).update(verdict="unsure", why="Nobody said.")

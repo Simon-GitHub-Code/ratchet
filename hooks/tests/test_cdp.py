@@ -37,11 +37,11 @@ def test_a_page_opens_runs_scripts_and_waits_for_the_navigation_a_click_starts(
     ("expression", "said"),
     [("throw", "the page threw: Error: boom"), ("quietly", "the page threw: Uncaught")],
 )
-def test_a_script_that_throws_is_a_browser_error(
+def test_a_script_that_throws_is_the_pages_error_not_the_browsers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, expression: str, said: str
 ) -> None:
     browsers.fake(tmp_path, monkeypatch)
-    with tab(tmp_path) as page, pytest.raises(cdp.BrowserError, match=re.escape(said)):  # type: ignore[attr-defined]
+    with tab(tmp_path) as page, pytest.raises(cdp.PageError, match=re.escape(said)):  # type: ignore[attr-defined]
         page.evaluate(expression)
 
 

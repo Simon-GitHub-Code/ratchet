@@ -48,6 +48,19 @@ IN_A_BROWSER = {
 }
 
 
+HELD = kept_checks.HELD
+
+
+def unmet(reason: str) -> kept_checks.Result:
+    """The product ran the check and did not show what it asks."""
+    return kept_checks.Result(kept_checks.Outcome.UNMET, reason)
+
+
+def not_run(reason: str) -> kept_checks.Result:
+    """Nothing could try the check: no answer, no browser, a browser that broke."""
+    return kept_checks.Result(kept_checks.Outcome.NOT_RUN, reason)
+
+
 def parsed(raw: object) -> kept_checks.Check:
     check, problems = kept_checks.parse(raw)
     assert check is not None, problems
@@ -172,30 +185,33 @@ def test_what_a_response_must_show(expect: kept_checks.Expect, said: str | None)
 def test_an_http_check_holds_on_the_product_with_a_new_value_each_run(tmp_path: Path) -> None:
     check = parsed(SAVES)
     with products.serving(tmp_path) as url:
-        assert kept_checks.run(check, url, tmp_path) is None
-        assert kept_checks.run(check, url, tmp_path) is None, "{unique} is new on every run"
+        assert kept_checks.run(check, url, tmp_path) == HELD
+        assert kept_checks.run(check, url, tmp_path) == HELD, "{unique} is new on every run"
         stale = with_step(1, expect={"count": {"https://example.com/{unique}": 4}})
-        reason = kept_checks.run(parsed(stale), url, tmp_path)
-        assert reason is not None
-        assert reason.startswith("step 2, GET /, shows 'https://example.com/")
-        assert reason.endswith("' 2 times, expected 4")
+        ran = kept_checks.run(parsed(stale), url, tmp_path)
+        assert ran.outcome is kept_checks.Outcome.UNMET
+        assert (ran.reason or "").startswith("step 2, GET /, shows 'https://example.com/")
+        assert (ran.reason or "").endswith("' 2 times, expected 4")
         sent = {**SAVES, "steps": [{"request": "PUT /x", "body": "{unique}", "expect": {}}]}
         sent["steps"][0]["expect"] = {"contains": ["PUT {unique}"]}  # type: ignore[index]
-        assert kept_checks.run(parsed(sent), url, tmp_path) is None
+        assert kept_checks.run(parsed(sent), url, tmp_path) == HELD
     nothing = f"http://127.0.0.1:{gatelib.free_port()}"
-    reason = kept_checks.run(check, nothing, tmp_path)
-    assert reason is not None
-    assert reason.startswith("step 1, POST /items, got no answer: [Errno 111]")
+    ran = kept_checks.run(check, nothing, tmp_path)
+    assert ran.outcome is kept_checks.Outcome.NOT_RUN, "no answer is not the product's verdict"
+    assert (ran.reason or "").startswith("step 1, POST /items, got no answer: [Errno 111]")
 
 
 def test_a_browser_check_waits_for_each_step_and_says_which_did_not_hold(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     browsers.fake(tmp_path, monkeypatch)
-    monkeypatch.setattr(kept_checks, "WAIT", 1.0)
-    assert kept_checks.run(parsed(IN_A_BROWSER), "http://127.0.0.1:9", tmp_path) is None
+    site = "http://127.0.0.1:9"
+    assert kept_checks.run(parsed(IN_A_BROWSER), site, tmp_path) == HELD
+    late = {**IN_A_BROWSER, "steps": [{"open": "/"}, {"true": "late"}]}
+    assert kept_checks.run(parsed(late), site, tmp_path) == HELD, "a throw is waited out"
+    monkeypatch.setattr(kept_checks, "WAIT", 0.2)
     never = {**IN_A_BROWSER, "steps": [{"open": "/"}, {"see": "never"}]}
-    assert kept_checks.run(parsed(never), "http://127.0.0.1:9", tmp_path) == (
+    assert kept_checks.run(parsed(never), site, tmp_path) == unmet(
         'step 2, see, does not show "never"'
     )
     for kind, said in (
@@ -203,15 +219,16 @@ def test_a_browser_check_waits_for_each_step_and_says_which_did_not_hold(
         ("click", 'found nothing to click that says "never"'),
         ("lacks", 'shows "never"'),
         ("true", "found `never` not true"),
+        ("true", "found `throw` not true; the page threw: Error: boom"),
     ):
-        step = {kind: "never", "with": "x"} if kind == "fill" else {kind: "never"}
+        target = "throw" if "throw" in said else "never"
+        step = {kind: target, "with": "x"} if kind == "fill" else {kind: target}
         failing = {**IN_A_BROWSER, "steps": [step]}
-        assert kept_checks.run(parsed(failing), "http://127.0.0.1:9", tmp_path) == (
-            f"step 1, {kind}, {said}"
-        )
+        assert kept_checks.run(parsed(failing), site, tmp_path) == unmet(f"step 1, {kind}, {said}")
     crashes = {**IN_A_BROWSER, "steps": [{"open": "/crash"}, {"see": "x"}]}
-    reason = kept_checks.run(parsed(crashes), "http://127.0.0.1:9", tmp_path)
-    assert reason == "the browser failed: the browser closed while it was asked Page.loadEventFired"
+    assert kept_checks.run(parsed(crashes), site, tmp_path) == not_run(
+        "the browser failed: the browser closed while it was asked Page.loadEventFired"
+    )
     assert products.processes_naming(str(tmp_path)) == []
 
 
@@ -220,8 +237,13 @@ def test_a_browser_check_with_no_browser_says_how_to_name_one(
 ) -> None:
     monkeypatch.delenv("RATCHET_BROWSER", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))
-    reason = kept_checks.run(parsed(IN_A_BROWSER), "http://127.0.0.1:9", tmp_path)
-    assert reason == "needs a browser: set RATCHET_BROWSER to a Chromium or Chrome executable"
+    assert kept_checks.run(parsed(IN_A_BROWSER), "http://127.0.0.1:9", tmp_path) == not_run(
+        "needs a browser: set RATCHET_BROWSER to a Chromium or Chrome executable"
+    )
+    monkeypatch.setenv("RATCHET_BROWSER", str(tmp_path / "no-such-browser"))
+    ran = kept_checks.run(parsed(IN_A_BROWSER), "http://127.0.0.1:9", tmp_path)
+    assert ran.outcome is kept_checks.Outcome.NOT_RUN
+    assert "could not be started" in (ran.reason or "")
 
 
 @pytest.mark.skipif(browsers.real() is None, reason="no Chromium or Chrome on this machine")
@@ -232,15 +254,15 @@ def test_a_browser_check_holds_in_a_real_browser_and_fails_when_the_page_does_no
     for profile in ("one", "two", "three"):
         (tmp_path / profile).mkdir()
     with products.serving(tmp_path) as url:
-        assert kept_checks.run(parsed(IN_A_BROWSER), url, tmp_path / "one") is None
+        assert kept_checks.run(parsed(IN_A_BROWSER), url, tmp_path / "one") == HELD
         wrong = {**IN_A_BROWSER, "steps": [*IN_A_BROWSER["steps"][:3], {"see": "Saved!"}]}  # type: ignore[misc]
-        monkeypatch.setattr(kept_checks, "WAIT", 1.0)
-        assert kept_checks.run(parsed(wrong), url, tmp_path / "two") == (
+        monkeypatch.setattr(kept_checks, "WAIT", 0.2)
+        assert kept_checks.run(parsed(wrong), url, tmp_path / "two") == unmet(
             'step 4, see, does not show "Saved!"'
         )
         reach = "fetch('https://example.com/').then(() => true, () => false)"
         outside = {**IN_A_BROWSER, "steps": [{"open": "/"}, {"true": reach}]}
-        assert kept_checks.run(parsed(outside), url, tmp_path / "three") == (
+        assert kept_checks.run(parsed(outside), url, tmp_path / "three") == unmet(
             f"step 2, true, found `{reach}` not true"
         ), "nothing outside this machine is reachable from the page"
     assert products.processes_naming(str(tmp_path)) == []
