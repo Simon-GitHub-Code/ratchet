@@ -1,5 +1,6 @@
 """The acceptance harness end to end: real boots, a real proxy, real records and real signals."""
 
+import contextlib
 import datetime as dt
 import fcntl
 import hashlib
@@ -176,6 +177,23 @@ def test_a_session_whose_work_tree_was_removed_is_stale(
     code, out = down(product, capsys)
     assert code == 1
     assert out[0] == f"session {directory.name} is stale: {acceptance.acceptance_record.STALE}"
+
+
+def test_a_session_whose_directory_was_removed_stops_all_it_started(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, (url, _) = up(product, capsys)
+    started = [int(line.split()[0]) for line in products.processes_naming(str(product))]
+    supervisor = pid_of(session(product) / "live.lock")
+    assert supervisor in started
+    shutil.rmtree(product)
+    try:
+        for pid in started:
+            assert gone(pid, wait=30), "a session nothing can end any more ran on"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(supervisor, signal.SIGTERM)
+    assert not gatelib.listening(url)
 
 
 def test_a_work_tree_that_changed_while_the_session_ran_makes_it_stale(
