@@ -247,6 +247,48 @@ def test_init_and_adopt_take_the_owners_preferences_before_any_default() -> None
         assert 'as "you asked for"' in text, name
 
 
+def flat(page: str) -> str:
+    return " ".join((SKILLS / page).read_text(encoding="utf-8").split())
+
+
+PREFERENCE_RULE = "## A preference typed after a command"
+PREFERENCE_LINK = "(../method/records.md#a-preference-typed-after-a-command)"
+
+
+def test_a_typed_preference_chooses_among_allowed_options_and_never_loosens_a_safeguard() -> None:
+    # Why: a preference "wins over the defaults", and nothing said a preference could not turn a
+    # floor row to none or deny a life event; in the verifier's run only the agent's own judgment
+    # refused. The rule is written once, and every skill that takes a preference points at it.
+    records = flat("method/records.md")
+    assert PREFERENCE_RULE in records
+    rule = records.split(PREFERENCE_RULE, 1)[1].split(" ## ", 1)[0]
+    for part in (
+        "A preference chooses among the options a row allows",
+        (
+            "never turns a floor row to `none`, lowers a threshold, skips a safeguard, or declares"
+            " or denies a life event"
+        ),
+        "answered in plain words with the route that exists",
+        "listed under **Assumed** as not applied",
+    ):
+        assert part in rule, part
+    takers = sorted(
+        page.parent.name
+        for page in SKILLS.glob("*/SKILL.md")
+        if "is a preference" in page.read_text(encoding="utf-8")
+    )
+    assert takers == ["adopt", "init"]
+    for name in takers:
+        text = flat(f"{name}/SKILL.md")
+        assert PREFERENCE_LINK in text, name
+        assert "never loosens a safeguard" in text, name
+    adr_page = next((SKILLS.parent / "docs/adr").glob("0034-*.md"))
+    adr = " ".join(adr_page.read_text(encoding="utf-8").split())
+    decision = adr.split("7. **Preferences come first, in words.**", 1)[1].split(" 8. ", 1)[0]
+    assert "chooses among the options a row allows" in decision
+    assert "declares or denies a life event" in decision
+
+
 def test_an_overturned_assumption_has_a_route_and_a_stated_cost() -> None:
     # Why: an overturn rerun told the owner to edit the binding by hand to declare a life event.
     records = " ".join((SKILLS / "method/records.md").read_text(encoding="utf-8").split())
