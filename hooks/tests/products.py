@@ -19,7 +19,8 @@ from tests import repos
 # Why each route: `/` and `/items` are the product a tester tries; `/flag` shows the flag the
 # justfile's `flags_on` turns on; the rest are the shapes of answer the proxy must pass through
 # unchanged (a large body, one with no length, no content, one that breaks off, the request's
-# own headers echoed) and a route that holds a request open. `BOOTING` names a file the app
+# own headers echoed), a route that holds a request open and one that answers half a second
+# late. `BOOTING` names a file the app
 # writes its process id to as it starts, and `DELAY` holds it that long before it listens.
 APP = r"""
 import html, json, os, time, urllib.parse
@@ -47,6 +48,8 @@ class App(BaseHTTPRequestHandler):
         if self.path == "/slow":
             open(os.environ["SLOW"], "w").write("hit")
             time.sleep(30)
+        if self.path == "/later":
+            time.sleep(0.5)
         if self.path == "/big":
             return self.send(200, b"x" * (2 * 1024 * 1024), "text/plain")
         if self.path == "/stream":

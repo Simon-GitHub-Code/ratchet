@@ -104,6 +104,21 @@ def test_each_answer_reaches_the_tester_unchanged_and_each_request_is_logged(
     assert b"There is nothing left to read." in answer
 
 
+def test_a_line_is_written_when_its_answer_is_sent_and_the_id_says_which_came_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "session"
+    with products.serving(tmp_path) as upstream, proxied(tmp_path, upstream, monkeypatch) as url:
+        late = threading.Thread(target=products.request, args=(url,), kwargs={"path": "/later"})
+        late.start()
+        products.wait_for(directory / "probes" / "abcd1234-1.request")
+        assert products.request(url)[0] == 200
+        late.join()
+    written = (directory / "requests.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["id"] for line in written] == ["abcd1234-2", "abcd1234-1"]
+    assert [entry["path"] for entry in products.log(directory)] == ["/later", "/"]
+
+
 def test_the_host_reaches_the_product_and_headers_about_one_connection_do_not(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
