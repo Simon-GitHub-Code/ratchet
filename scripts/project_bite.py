@@ -147,9 +147,12 @@ class Row:
 
     @property
     def bound(self) -> bool:
-        """Whether the repository chose any part of what answers it: not ``none``, not shipped."""
-        answered = bool(self.tool) and not application_types.NONE.match(self.tool)
-        return answered and not SHIPPED.fullmatch(self.tool)
+        """Whether the repository chose what answers it: not ``none``, ``later:`` or shipped."""
+        # Why: ADR 0028. A `later:` row answers nothing yet, so it needs no bite until it is bound.
+        waiting = application_types.NONE.match(self.tool) or application_types.LATER.match(
+            self.tool
+        )
+        return bool(self.tool) and not waiting and not SHIPPED.fullmatch(self.tool)
 
 
 def gate_rows(binding: str) -> list[Row]:
