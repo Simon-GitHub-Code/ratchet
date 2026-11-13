@@ -105,7 +105,7 @@ import tempfile
 import threading
 import time
 import tomllib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -141,6 +141,8 @@ BITING = "RATCHET_BITING"
 SNAPSHOT = ".git/bite-index"
 TAIL = 15
 MAX_LANES = 4
+# Seconds the main thread waits on the lanes at a time: the most a signal waits for its handler.
+WAKE = 0.1
 # Why: a Tool cell that is the plugin's script and nothing else is a gate `bite.py` proves.
 SHIPPED = re.compile(r"`ratchet` plugin `[^`]+`(?: and `[^`]+`)*")
 
@@ -804,6 +806,10 @@ def run_lanes(
             futures = [
                 pool.submit(lane, path, None if n else first) for n, path in enumerate(paths)
             ]
+            # Why: the kernel may hand a signal to a lane's thread, and its handler runs only when
+            # this thread runs Python, which a wait with no end would put off until the gate ends.
+            while wait(futures, timeout=WAKE).not_done:
+                pass
             return [outcome for future in futures for outcome in future.result()]
         except BaseException:
             shell.stop()
