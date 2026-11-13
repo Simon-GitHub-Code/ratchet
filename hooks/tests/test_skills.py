@@ -503,6 +503,19 @@ def test_every_cost_line_the_owner_reads_says_what_is_redone() -> None:
     assert "nothing yet binds the gates again for another stack" in route
 
 
+def test_the_cost_check_names_the_stack_and_the_tool_route_names_what_is_redone() -> None:
+    # Why: the verifier deleted the sentence that says a stack changed after adoption has no step
+    # yet, and the tool route's "Nothing built is redone", and every test stayed green. An agent
+    # checks a cost line against these before the owner reads it.
+    records = flat("method/records.md")
+    assumed = records.split("Assume, and list under **Assumed**", 1)[1]
+    assumed = assumed.split(" The pipeline's", 1)[0]
+    assert "a stack changed after adoption, which no step yet supports" in assumed
+    route = records.split("## Overturning an assumption", 1)[1].split(" ## ", 1)[0]
+    tool = route.split("- *A tool*:", 1)[1].split(" - *", 1)[0]
+    assert tool.endswith("Its merge is the owner's. Nothing built is redone.")
+
+
 def test_adopt_hands_over_its_assumptions_without_question_keys() -> None:
     # Why: the rerun's hand-over printed `adopt.types` and its siblings to the owner.
     step_13 = ADOPT.split("13. **Hand over.**", 1)[1]
