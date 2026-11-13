@@ -56,6 +56,7 @@ RESET = struct.pack("ii", 1, 0)  # SO_LINGER on with a zero timeout: close sends
 GONE = (errno.ESRCH, errno.EBADF)  # the process or the descriptor ended since it was listed
 LISTENING = "0A"  # the state of a listening socket in /proc/net/tcp
 ZOMBIE = (b"Z", b"X")  # the states of a process that has exited
+EXITING = 0x4  # PF_EXITING: the flag of a process that is exiting
 NOT_LINUX = "the gate can copy a service's listener only on Linux 5.6 or later"
 OLD_KERNEL = (
     "this Linux kernel cannot copy another process's socket, which needs Linux 5.6 or later"
@@ -74,11 +75,12 @@ NONE_FOUND = (
 )
 
 
-def parse(stat: bytes) -> tuple[str, bytes, int, int]:
-    """The name, state, parent and process group a process's ``stat`` gives."""
+def parse(stat: bytes) -> tuple[str, bytes, int, int, int]:
+    """The name, state, parent, process group and flags a process's ``stat`` gives."""
     head, _, rest = stat.rpartition(b")")
-    state, parent, group = rest.split()[:3]
-    return head.partition(b"(")[2].decode(errors="replace"), state, int(parent), int(group)
+    fields = rest.split()
+    name = head.partition(b"(")[2].decode(errors="replace")
+    return name, fields[0], int(fields[1]), int(fields[2]), int(fields[6])
 
 
 def read(path: str) -> bytes:
@@ -101,20 +103,22 @@ def table() -> dict[int, tuple[int, int]]:
         if not name.isdigit() or int(name) == os.getpid():
             continue
         with contextlib.suppress(OSError):  # Why: it may exit while the gate looks.
-            _, state, parent, group = parse(read(f"{PROC}/{name}/stat"))
+            _, state, parent, group, _ = parse(read(f"{PROC}/{name}/stat"))
             if state not in ZOMBIE:
                 found[int(name)] = (parent, group)
     return found
 
 
 def hiding(pid: int) -> str | None:
-    """The name of process ``pid`` while it is alive, so its unreadable files are hidden.
+    """The name of process ``pid`` while it lives on, so its unreadable files are hidden.
 
-    ``None`` once it has exited: a process that exits while the gate looks is not hiding.
+    ``None`` once it is exiting: the kernel refuses to list the files of a process from when it
+    lets go of its memory on the way out, and a process that exits while the gate looks is not
+    hiding. It can accept nothing more.
     """
     with contextlib.suppress(OSError):
-        name, state, _, _ = parse(read(f"{PROC}/{pid}/stat"))
-        if state not in ZOMBIE:
+        name, state, _, _, flags = parse(read(f"{PROC}/{pid}/stat"))
+        if state not in ZOMBIE and not flags & EXITING:
             return name
     return None
 
