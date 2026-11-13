@@ -545,7 +545,7 @@ def test_a_repository_whose_runner_is_not_just_is_not_read_for_recipes(repo: Pat
     assert conformance.definition(TEMPLATE_JUSTFILE, "no-such-recipe") == ()
 
 
-LATER = "| rolls back safely | later: life:deployed |"
+LATER = "| rolls back safely | later: life:deployed and code:stored-format |"
 GATE = "docs/process/binding.md"
 
 
@@ -578,7 +578,8 @@ def test_a_later_row_with_the_wrong_trigger_names_the_right_one(repo: Path) -> N
     assert red(repo) == [
         (
             f"{GATE}: gate 'rolls back safely' says `later: code:stored-format`, but its trigger"
-            " is `life:deployed`: write `later: life:deployed`"
+            " is `life:deployed and code:stored-format`:"
+            " write `later: life:deployed and code:stored-format`"
         )
     ]
 

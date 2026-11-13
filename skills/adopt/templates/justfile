@@ -323,10 +323,10 @@ bite:
 # Reliability gates (ADR 0028). Each is bound once its trigger has fired; until then its body is
 # `@echo "later: <trigger>"` and it exits 0.
 
-# Trigger life:deployed. The merge base's build run against the data the head's migrations leave:
+# Trigger life:deployed and code:stored-format. The merge base's build run against the data the head's migrations leave:
 # it must still read it.
 rollback:
-    @echo "bind: build the merge base ({base}) and run it against the data head's migrations leave; or later: life:deployed"; exit 1
+    @echo "bind: build the merge base ({base}) and run it against the data head's migrations leave; or later: life:deployed and code:stored-format"; exit 1
 
 # Trigger code:outbound-call. Every outbound call has a timeout, and a test meets the dependency
 # erroring, slow and gone.

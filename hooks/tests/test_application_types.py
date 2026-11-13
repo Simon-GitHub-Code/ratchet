@@ -186,7 +186,7 @@ def test_the_shipped_catalogue_gives_every_question_a_trigger_it_can_fire() -> N
     assert set(SHIPPED.triggers) == {question["name"] for question in data["question"]}
     assert {SHIPPED.trigger_problem(trigger) for trigger in SHIPPED.triggers.values()} == {None}
     assert SHIPPED.trigger_of("format") == "always"
-    assert SHIPPED.trigger_of("rolls back safely") == "life:deployed"
+    assert SHIPPED.trigger_of("rolls back safely") == "life:deployed and code:stored-format"
     assert SHIPPED.trigger_of("production answers") == "life:deployed"
     assert SHIPPED.trigger_of("incidents tighten a gate") == "always"
     assert {"deployed", "irreplaceable-data", "depended-on"} == set(SHIPPED.events)
@@ -200,14 +200,56 @@ def test_a_trigger_the_catalogue_cannot_fire_is_named() -> None:
     assert SHIPPED.trigger_problem("life:deployed") is None
     for wrong in ("code:nothing", "life:famous", "sometimes", "code:", "deployed"):
         assert SHIPPED.trigger_problem(wrong) == (
-            f"'{wrong}' is not `always`, `code:<kind>` or `life:<event>` of this catalogue"
+            f"'{wrong}' is not `always`, `code:<kind>` or `life:<event>` of this catalogue,"
+            " or such parts joined by ` and `"
         )
+
+
+def test_a_compound_trigger_is_valid_when_every_part_is_and_never_holds_always() -> None:
+    assert SHIPPED.trigger_problem("life:deployed and code:stored-format") is None
+    assert application_types.parts("life:deployed and code:listener") == [
+        "life:deployed",
+        "code:listener",
+    ]
+    assert application_types.code_kinds("life:deployed and code:listener") == ["listener"]
+    assert application_types.code_kinds("life:deployed") == []
+    for wrong in (
+        "always and code:listener",
+        "life:deployed and always",
+        "life:deployed and code:nothing",
+        "life:famous and code:listener",
+    ):
+        assert SHIPPED.trigger_problem(wrong) is not None
 
 
 def test_the_kinds_a_repository_must_find_are_those_its_types_are_asked_about() -> None:
     assert TRIGGERED.kinds_asked({"service"}) == {"listener", "outbound-call"}
     assert TRIGGERED.kinds_asked({"cli"}) == {"outbound-call"}
     assert TRIGGERED.kinds_asked(set()) == set()
+
+
+def test_every_code_part_of_a_compound_trigger_is_a_kind_to_find() -> None:
+    both = Catalogue(
+        types={"service": "answers requests", "library": "is imported"},
+        narrowed={"keep": frozenset({"service"})},
+        collections=frozenset(),
+        triggers={"keep": "life:deployed and code:stored-format", "two": "code:a and code:b"},
+        kinds={"stored-format": "a file", "a": "a", "b": "b"},
+        events={"deployed": application_types.Event("reachable", ())},
+    )
+    assert both.kinds_asked({"service"}) == {"stored-format", "a", "b"}
+    assert both.kinds_asked({"library"}) == {"a", "b"}
+
+
+def test_a_compound_later_cell_must_equal_the_whole_compound() -> None:
+    assert (
+        SHIPPED.later_problem("rolls back safely", "life:deployed and code:stored-format") is None
+    )
+    assert SHIPPED.later_problem("rolls back safely", "life:deployed") == (
+        "gate 'rolls back safely' says `later: life:deployed`, but its trigger is"
+        " `life:deployed and code:stored-format`:"
+        " write `later: life:deployed and code:stored-format`"
+    )
 
 
 def test_a_later_row_must_name_the_trigger_of_its_question_and_only_when_asked() -> None:

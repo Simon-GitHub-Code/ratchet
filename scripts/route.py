@@ -567,7 +567,7 @@ def safeguard_step(root: Path, instead: Step) -> Step | None:
     said = []
     for trigger, rows in arrived.items():
         questions_owed = ", ".join(row.question for row in rows)
-        if trigger.startswith(application_types.CODE):
+        if application_types.code_kinds(trigger):
             count = rows[0].count
             said.append(
                 f"`{rows[0].name}` has arrived ({count} instance{'s' * (count != 1)})"
@@ -575,7 +575,7 @@ def safeguard_step(root: Path, instead: Step) -> Step | None:
             )
         else:
             said.append(f"the declared life event `{rows[0].name}` owes {questions_owed}")
-    code = any(row.trigger.startswith(application_types.CODE) for row in owing)
+    code = any(application_types.code_kinds(row.trigger) for row in owing)
     cost = (
         "the first instance is free, a second waits for this"
         if code

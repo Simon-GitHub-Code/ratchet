@@ -255,7 +255,7 @@ trigger = "code:flag"
 [[question]]
 name = "rolls back safely"
 applies-to = ["service", "app", "cli", "job"]
-trigger = "life:deployed"
+trigger = "life:deployed and code:stored-format"
 
 [[question]]
 name = "survives failing dependencies"

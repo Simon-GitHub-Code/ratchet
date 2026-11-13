@@ -580,3 +580,19 @@ def test_a_declared_event_and_an_unadopted_tree_propose_nothing(
     assert route.event_proposals(loose) == []
     write(root, ".ratchet/events.tsv", "date\tevent\tsign\tanswer\nshort row\n")
     assert route.declined_signs(root) == set()
+
+
+def test_a_compound_owed_row_is_said_by_its_code_kind(tmp_path: Path) -> None:
+    # Why: ADR 0028. `rolls back safely` fires on a deployed project with a stored format; it is
+    # described by the kind that arrived, not as a declared event.
+    binding = BINDING + OWES.format(events="deployed").replace(
+        "later: code:outbound-call", "later: life:deployed and code:outbound-call"
+    )
+    root = repository(tmp_path, {**ADOPTED, "docs/process/binding.md": binding})
+    write(root, "src/a.py", "import requests\nrequests.get('http://x')\n")
+    commit(root, "feat: the first outbound call")
+    step = route.decide(root, None)
+    assert step.why.startswith(
+        "`outbound-call` has arrived (1 instance) and owes survives failing dependencies"
+    )
+    assert "the first instance is free" in step.why

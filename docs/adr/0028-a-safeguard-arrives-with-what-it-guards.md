@@ -33,7 +33,7 @@ Guard paths, disputes and the ratchet hold from the first commit. They protect t
 
 | Question | Trigger | Applies to | Tier |
 | --- | --- | --- | --- |
-| rolls back safely | `life:deployed` | service, app, cli, job | 1: the merge base's build runs against the data the head's migrations leave |
+| rolls back safely | `life:deployed and code:stored-format` | service, app, cli, job | 1: the merge base's build runs against the data the head's migrations leave |
 | survives failing dependencies | `code:outbound-call` | service, web-ui, app, job | 1: every outbound call has a timeout, and a test meets the dependency erroring, slow and gone |
 | refuses bad configuration | `code:config-read` | service, app, cli, job | 1: with a required setting missing, it exits non-zero before it is ready and names the setting |
 | shuts down gracefully | `code:listener` | service, job | 1: signalled while serving, it finishes the work in flight and exits within the limit |

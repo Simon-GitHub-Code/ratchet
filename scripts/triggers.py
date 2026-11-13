@@ -20,6 +20,10 @@ has the kind. A literal ``|`` in a pattern is written ``\|``.
 
 ``life:<event>``: the binding's ``- Life events:`` line names the events its owner declared.
 
+A trigger may join parts with `` and `` (``life:deployed and code:stored-format``): it fires when
+every part has. Such a row belongs to its code kind: a second instance of that kind while the row
+is owed is red, and the event alone never is.
+
 A row is **owed** when its trigger has fired and it is still ``later:``. The first instance of a
 kind is free: the change that brings it prints a note and nothing more. A later change that adds
 another instance while a row it owes is still ``later:`` is red, and says to run
@@ -80,7 +84,8 @@ class Kind:
 class Owed:
     """A Gates row whose trigger has fired and is still ``later:``.
 
-    ``name`` is the kind of code or the life event, ``count`` its instances (0 for an event).
+    ``name`` is the kind of code or the life event (the code part of a compound), ``count`` its
+    instances (0 for an event).
     """
 
     question: str
@@ -189,15 +194,25 @@ def owed_rows(
         trigger = later_trigger(row.tool)
         if trigger is None:
             continue
-        if trigger.startswith(application_types.CODE):
-            kind = trigger.removeprefix(application_types.CODE)
-            if found.get(kind):
-                owing.append(Owed(row.question, trigger, kind, len(found[kind])))
-        elif trigger.startswith(application_types.LIFE) and trigger[5:] in events:
-            owing.append(
-                Owed(row.question, trigger, trigger.removeprefix(application_types.LIFE), 0)
-            )
+        if not all(fired(part, found, events) for part in application_types.parts(trigger)):
+            continue
+        kinds = application_types.code_kinds(trigger)
+        if kinds:
+            owing.append(Owed(row.question, trigger, kinds[0], len(found[kinds[0]])))
+        else:
+            name = trigger.removeprefix(application_types.LIFE)
+            owing.append(Owed(row.question, trigger, name, 0))
     return owing
+
+
+def fired(part: str, found: Mapping[str, Collection[str]], events: Collection[str]) -> bool:
+    """Whether one part of a trigger has fired: the kind has an instance, the event is declared."""
+    if part.startswith(application_types.CODE):
+        return bool(found.get(part.removeprefix(application_types.CODE)))
+    return (
+        part.startswith(application_types.LIFE)
+        and part.removeprefix(application_types.LIFE) in events
+    )
 
 
 def owed(root: Path) -> list[Owed]:
@@ -241,7 +256,7 @@ def judge(root: Path, base: str) -> tuple[list[str], list[str]]:
     problems: list[str] = []
     notes: list[str] = []
     for kind in kinds:
-        rows = [row for row in owing if row.trigger == application_types.CODE + kind]
+        rows = [row for row in owing if application_types.code_kinds(row.trigger)[:1] == [kind]]
         before_count, now = len(at_base[kind]), len(at_head[kind])
         if not rows or now <= before_count:
             continue
@@ -259,7 +274,7 @@ def judge(root: Path, base: str) -> tuple[list[str], list[str]]:
             f" {names(rows)}. Run /ratchet:safeguard to bind them before adding more (ADR 0028)"
         )
     for event in sorted(
-        {row.name for row in owing if row.trigger.startswith(application_types.LIFE)}
+        {row.name for row in owing if not application_types.code_kinds(row.trigger)}
     ):
         rows = [row for row in owing if row.trigger == application_types.LIFE + event]
         notes.append(

@@ -16,10 +16,10 @@ Tool cell is red.
 A question may also require named proofs (``Catalogue.proofs``): faults specific to what it asks,
 each described under ``[proofs]``. ``project_bite.py`` holds a bound row to them.
 
-Every question also carries a trigger (ADR 0028): ``always``, ``code:<kind>`` or ``life:<event>``.
-Until it fires, a row's Tool cell may say ``later: <trigger>``, naming exactly the question's
-trigger, and judges nothing. ``Catalogue.kinds`` and ``Catalogue.events`` describe what a trigger
-can name.
+Every question also carries a trigger (ADR 0028): ``always``, ``code:<kind>`` or ``life:<event>``,
+or parts of the last two joined by `` and ``, which fires when every part has. Until it fires, a
+row's Tool cell may say ``later: <trigger>``, naming exactly the question's trigger, and judges
+nothing. ``Catalogue.kinds`` and ``Catalogue.events`` describe what a trigger can name.
 
 Usage: ``application_types.py`` prints the types. ``application_types.py TYPE...`` prints every
 question the catalogue narrows with ``applies`` or the ``none: not a <type>`` cell to write, so
@@ -49,8 +49,21 @@ LATER = re.compile(r"^`?later:(.*?)`?$")
 ALWAYS = "always"
 CODE = "code:"
 LIFE = "life:"
+# Why: a question some projects never meet even once deployed (a static site stores nothing) waits
+# for the event and the kind of code together, so a trigger may join parts with this.
+JOIN = " and "
 ADR = re.compile(r"\bADR[ -]?(\d{4})\b")
 MIN_REASON = 10
+
+
+def parts(trigger: str) -> list[str]:
+    """The parts of a trigger: one, or those a compound joins with `` and ``."""
+    return [part.strip() for part in trigger.split(JOIN)]
+
+
+def code_kinds(trigger: str) -> list[str]:
+    """The kinds of code a trigger's ``code:`` parts name, in order."""
+    return [part.removeprefix(CODE) for part in parts(trigger) if part.startswith(CODE)]
 
 
 @dataclass(frozen=True)
@@ -93,18 +106,26 @@ class Catalogue:
         """Why a trigger is not one the catalogue can fire, or ``None`` when it is."""
         if trigger == ALWAYS:
             return None
-        if trigger.startswith(CODE) and trigger.removeprefix(CODE) in self.kinds:
+        if all(self.part_fires_here(part) for part in parts(trigger)):
             return None
-        if trigger.startswith(LIFE) and trigger.removeprefix(LIFE) in self.events:
-            return None
-        return f"'{trigger}' is not `always`, `code:<kind>` or `life:<event>` of this catalogue"
+        return (
+            f"'{trigger}' is not `always`, `code:<kind>` or `life:<event>` of this catalogue,"
+            " or such parts joined by ` and `"
+        )
+
+    def part_fires_here(self, part: str) -> bool:
+        """Whether a part of a trigger names a kind or an event of this catalogue."""
+        return (part.startswith(CODE) and part.removeprefix(CODE) in self.kinds) or (
+            part.startswith(LIFE) and part.removeprefix(LIFE) in self.events
+        )
 
     def kinds_asked(self, types: AbstractSet[str]) -> frozenset[str]:
         """The kinds of code a repository of these types must say how to find (ADR 0028)."""
         return frozenset(
-            self.trigger_of(question).removeprefix(CODE)
+            kind
             for question in self.questions
-            if self.trigger_of(question).startswith(CODE) and self.asked_of(question) & types
+            if self.asked_of(question) & types
+            for kind in code_kinds(self.trigger_of(question))
         )
 
     def asked_of(self, question: str) -> frozenset[str]:

@@ -985,7 +985,7 @@ def mutations() -> list[Mutation]:
 def trigger_mutations() -> list[Mutation]:
     """The `later:` cells, the Life events line, the Triggers table and the incident records."""
     binding = "docs/process/binding.md"
-    later = "| rolls back safely | later: life:deployed |"
+    later = "| rolls back safely | later: life:deployed and code:stored-format |"
 
     def incident(text: str) -> Callable[[Path], None]:
         def mutate(root: Path) -> None:
@@ -1450,7 +1450,10 @@ def fill_binding(text: str) -> str:
     text = TYPES_PLACEHOLDER.sub("- Application types: cli", text)
     text = text.replace("| contract drift | |", "| contract drift | none: not a service |")
     # Why: ADR 0028. One row waits on its trigger and so needs no bite; the rest are bound.
-    text = text.replace("| rolls back safely | |", "| rolls back safely | later: life:deployed |")
+    text = text.replace(
+        "| rolls back safely | |",
+        "| rolls back safely | later: life:deployed and code:stored-format |",
+    )
     text = TRIGGERS_PLACEHOLDER.sub(triggers_rows, text)
     text = EMPTY_TOOL_CELL.sub(r"\1 a tool |", text)
     return SPEED_PLACEHOLDER.sub(r"\1stated for this stack", text)

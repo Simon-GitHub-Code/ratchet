@@ -291,3 +291,54 @@ def test_base_names_the_commit_the_change_is_judged_against(tmp_path: Path) -> N
     commit(root, "feat(core): another call")
     assert run(root, "--base", "main") == 1
     assert run(root, "--base", "HEAD") == 0
+
+
+LATER_ROLLBACK = (
+    "| rolls back safely | later: life:deployed and code:stored-format | 1 | | `just rollback` |"
+)
+STORED = TABLE.replace(
+    "| stored-format | none: nothing is stored | |", "| stored-format | `data/*.db` | |"
+)
+
+
+def test_a_compound_row_is_owed_only_once_every_part_has_fired(tmp_path: Path) -> None:
+    files = {"data/a.db": "x"}
+    deployed = project(tmp_path / "a", files, LATER_ROLLBACK, events="deployed", table=STORED)
+    assert triggers.owed(deployed) == [
+        triggers.Owed(
+            "rolls back safely", "life:deployed and code:stored-format", "stored-format", 1
+        )
+    ]
+    young = project(tmp_path / "b", files, LATER_ROLLBACK, table=STORED)
+    assert triggers.owed(young) == []
+    static = project(tmp_path / "c", None, LATER_ROLLBACK, events="deployed", table=STORED)
+    assert triggers.owed(static) == []
+
+
+def test_a_second_stored_format_while_a_compound_row_is_owed_is_red(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, {"data/a.db": "x"}, LATER_ROLLBACK, events="deployed", table=STORED)
+    write(root, "data/b.db", "y")
+    assert run(root) == 1
+    out = capsys.readouterr().out
+    assert "triggers: 'stored-format' gained 1 instance(s) (data/b.db)" in out
+    assert "rolls back safely" in out
+
+
+def test_a_compound_row_is_noted_by_its_kind_and_never_red_for_its_event(
+    tmp_path: Path, capsys: Out
+) -> None:
+    first = project(tmp_path / "a", None, LATER_ROLLBACK, events="deployed", table=STORED)
+    write(first, "data/a.db", "x")
+    assert run(first) == 0
+    out = capsys.readouterr().out
+    assert "note: 'stored-format' has arrived (data/a.db) and owes rolls back safely" in out
+    assert "life event" not in out
+    held = project(tmp_path / "b", {"data/a.db": "x"}, LATER_ROLLBACK, table=STORED)
+    text = (held / "docs/process/binding.md").read_text(encoding="utf-8")
+    write(
+        held, "docs/process/binding.md", text.replace("Life events: none", "Life events: deployed")
+    )
+    assert run(held) == 0
+    assert "life event" not in capsys.readouterr().out
