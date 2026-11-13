@@ -272,7 +272,9 @@ def table_problems(table: str) -> list[str]:
             continue
         said, became = cells[0], re.match(r"\*\*([a-z ]+)\*\*", cells[1])
         kind = became.group(1) if became else ""
-        if said.startswith("(left open)"):
+        if not said.startswith(('"', "(not asked)", "(left open)")):
+            problems.append(f"{said}: *You said* quotes the owner or says `(not asked)`")
+        elif said.startswith("(left open)"):
             problems.append(f"{said}: a fork left open is asked, never written as {kind}")
         elif said.startswith("(not asked)") and kind not in ("assumed", "added"):
             problems.append(f"{said}: nothing the owner said can be {kind}")
@@ -302,6 +304,57 @@ def test_the_conjecture_table_never_slips_a_product_choice_in_as_added() -> None
     assert "A `(left open)` row is never marked **added** or **assumed**" in text
     assert "the table you write holds none" in text
     assert "An addition that changes what the user sees, keeps or can do is not **added**" in text
+
+
+GIVES_YOU = re.compile(r"\bthe test gives (?:to )?you\b")
+ANSWERED = re.compile(r"\banswer(?:ed)?\b.*\*You said\*|\*You said\*.*\banswer(?:ed)?\b")
+
+
+def fork_rule_problems(step: str) -> list[str]:
+    """Each way a conjecture step's own rule sentences let a fork past the owner.
+
+    The step must say how a fork the test gives the agent is written and how an answered fork's
+    row is written, and say it the right way: ``(not asked)`` and **assumed**, and the answer
+    quoted and **built**.
+    """
+    problems: list[str] = []
+    rules = re.split(r"(?<=[.?!])\s+", step)
+    yours = [rule for rule in rules if GIVES_YOU.search(rule)]
+    answered = [rule for rule in rules if ANSWERED.search(rule)]
+    if not yours:
+        problems.append("no sentence says how a fork the test gives you is written")
+    if not answered:
+        problems.append("no sentence says how an answered fork's row is written")
+    problems += [
+        f"a fork the test gives you is `(not asked)` and **assumed**: {rule}"
+        for rule in yours
+        if "`(not asked)`" not in rule or "**assumed**" not in rule or "(left open)" in rule
+    ]
+    problems += [
+        f"an answered fork quotes the answer and is **built**: {rule}"
+        for rule in answered
+        if "**built**" not in rule or re.search(r"\*\*(?:added|assumed)\*\*", rule)
+    ]
+    return problems
+
+
+def test_the_conjecture_steps_say_how_each_fork_is_written() -> None:
+    # Why: the verifier wrote that a fork the test gives the agent is `(left open)` and **added**,
+    # and that an answered fork's row is **added**, and every test stayed green: only the example
+    # table was held to the rule, not the sentences that state it.
+    page = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
+    text = re.sub(r"^```.*?^```", "", page, flags=re.MULTILINE | re.DOTALL)
+    conjecture = " ".join(text.split())
+    step_2 = conjecture.split("2. **Draft from the record", 1)[1].split(" 3. **", 1)[0]
+    step_3 = conjecture.split("3. **One conjecture", 1)[1].split(" 4. **", 1)[0]
+    assert fork_rule_problems(step_2) == []
+    assert fork_rule_problems(step_3) == []
+    assert "A `(left open)` row is never marked **added** or **assumed**" in step_2
+    assert "The third row was a fork" in step_2
+    planted = step_3.replace("is written `(not asked)` and **assumed**", "is written `(left open)`")
+    assert len(fork_rule_problems(planted)) == 1
+    planted = step_3.replace("with the answer quoted under *You said*, marked **built**", "")
+    assert fork_rule_problems(planted) == ["no sentence says how an answered fork's row is written"]
 
 
 def test_adopt_asks_a_repository_with_code_whether_others_reach_it() -> None:
