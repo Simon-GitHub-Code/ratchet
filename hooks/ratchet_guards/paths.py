@@ -2,12 +2,14 @@
 
 A path is seen three ways, and the first that hits wins: as an absolute path, against the
 plugin group's own patterns; relative to the home directory, against the ``~/`` patterns;
-and relative to the nearest enclosing checkout (the closest ancestor holding ``.git``),
-against that checkout's own repository patterns, only if it has a manifest committed on its
-default branch. The checkout is the path's, never the session's: an agent rooted in another
-directory is judged by the manifest of the checkout it edits. So a git worktree nested under
-``.claude/worktrees/`` is judged as its own checkout, not as part of ``.claude/**``. Symlinks
-and ``..`` are resolved before matching.
+and relative to the checkout holding it, against that checkout's own repository patterns, only
+if it has a manifest committed on its default branch. The checkout is the path's, never the
+session's: an agent rooted in another directory is judged by the manifest of the checkout it
+edits. In the session's project the checkout is one git records for it: the project's own work
+tree, a worktree under ``.claude/worktrees/`` (judged as its own checkout, not as part of
+``.claude/**``), or a submodule its default branch records. A ``.git`` made anywhere else in
+the project moves nothing. Outside the project it is the closest ancestor holding ``.git``.
+Symlinks and ``..`` are resolved before matching.
 """
 
 import posixpath
@@ -36,14 +38,14 @@ class Filesystem(Protocol):
         ...
 
     def guarded_checkout(self, path: Path) -> "Checkout | None":
-        """The nearest checkout holding ``path`` with the manifest committed on its default branch.
+        """The checkout holding ``path`` with the manifest committed on its default branch.
 
         ``None`` when ``path`` is in no checkout, or its checkout has no committed manifest.
         """
         ...
 
     def checkout(self, path: Path) -> Path | None:
-        """The nearest checkout holding ``path`` (an ancestor with ``.git``), manifest or not."""
+        """The checkout holding ``path``, manifest or not (see the module docstring)."""
         ...
 
     def read_text(self, path: Path) -> str | None:
@@ -199,9 +201,9 @@ class Locator:
     def acting(self, path: Path) -> Acting | None:
         """``path`` if it acts before the merge, in a checkout whose default branch has a manifest.
 
-        Read from the root of the nearest checkout, so an agent worktree under ``.claude/`` is
-        judged as a checkout of its own. Before the adoption merges nothing is asked: it writes
-        the workflows and the instructions the manifest will guard.
+        Read from the root of the checkout holding it, so an agent worktree under
+        ``.claude/worktrees/`` is judged as a checkout of its own. Before the adoption merges
+        nothing is asked: it writes the workflows and the instructions the manifest will guard.
         """
         canonical = self.filesystem.canonical(path)
         checkout = self.filesystem.guarded_checkout(canonical)

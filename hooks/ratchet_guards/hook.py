@@ -37,10 +37,13 @@ One forge write is allowed by a record: ``gh label create <name>`` in a checkout
 is adopted, so the list is the owner's.
 
 The guard paths come from ``guards/manifest.toml`` as committed on the default branch of the
-nearest checkout holding the path being judged (an ancestor with ``.git``), read from git
-(``ratchet_guards.committed``) once per checkout. The session's working directory does not
-choose the manifest: an edit from a subagent, a monorepo parent or a sibling checkout is
-judged by the manifest of the checkout it lands in. An uncommitted manifest, or one committed
+checkout holding the path being judged, read from git (``ratchet_guards.committed``) once per
+checkout. In the session's project (``$CLAUDE_PROJECT_DIR``) that checkout is one git records:
+the project's own work tree, a worktree under ``.claude/worktrees/`` or a recorded submodule, so
+a ``.git`` an agent makes moves nothing; elsewhere it is the nearest ancestor holding ``.git``.
+The session's working directory does not choose the manifest: an edit from a subagent, a
+monorepo parent or a sibling checkout is judged by the manifest of the checkout it lands in.
+An uncommitted manifest, or one committed
 only on a branch, guards nothing yet: that is the adoption in progress, and only the command
 rules apply until it merges. The plugin's own files are locked either way: ``PLUGIN_ROOT`` (two
 parents above this package) and ``~/.claude/plugins/**``, together with
@@ -139,6 +142,16 @@ class Call:
 class LocalFilesystem:
     """The real filesystem."""
 
+    def __init__(self, project: Path | None = None) -> None:
+        """A filesystem whose checkouts are judged from ``project``'s, when one is named.
+
+        The project's checkouts are the work trees git lists for it, read once, on first use.
+        """
+        self._project = project
+        self._trees: list[Path] | None = None
+        self._submodules: dict[Path, bool] = {}
+        self._manifests: dict[Path, Manifest | None] = {}
+
     @property
     def home(self) -> Path:
         """The user's home directory."""
@@ -147,10 +160,6 @@ class LocalFilesystem:
     def canonical(self, path: Path) -> Path:
         """``path`` with symlinks and ``..`` resolved."""
         return Path(os.path.realpath(path))
-
-    def __init__(self) -> None:
-        """An empty cache of committed manifests, by checkout root."""
-        self._manifests: dict[Path, Manifest | None] = {}
 
     def committed(self, root: Path) -> Manifest | None:
         """The manifest committed on the default branch of the checkout at ``root``.
@@ -164,14 +173,68 @@ class LocalFilesystem:
         return self._manifests[root]
 
     def guarded_checkout(self, path: Path) -> Checkout | None:
-        """The nearest ancestor holding ``.git`` with its committed manifest, if it has one."""
+        """The checkout holding ``path`` with its committed manifest, if it has one."""
         root = self.checkout(path)
         manifest = None if root is None else self.committed(root)
         return None if root is None or manifest is None else Checkout(root, manifest)
 
     def checkout(self, path: Path) -> Path | None:
-        """The nearest ancestor holding ``.git``."""
-        return next((c for c in (path, *path.parents) if (c / ".git").exists()), None)
+        """The checkout holding ``path``.
+
+        In the project it is the deepest of the project's work trees that holds ``path``, or a
+        submodule of it: a ``.git`` an agent made in between is no checkout. Outside it, the
+        nearest ancestor holding ``.git``.
+        """
+        tree = next((tree for tree in self._worktrees() if path.is_relative_to(tree)), None)
+        if tree is None:
+            return next((c for c in (path, *path.parents) if (c / ".git").exists()), None)
+        return self._within(tree, path)
+
+    def _worktrees(self) -> list[Path]:
+        """The project's work trees, deepest first.
+
+        Why: a work tree inside another is a checkout of its own only under that one's
+        ``.claude/worktrees/``, where Claude Code puts its agents' worktrees. One added at
+        ``.claude/skills/x`` would otherwise make a skill written there a file at its root.
+        """
+        if self._trees is None:
+            project = self._project
+            listed = "" if project is None else _output(project, "worktree", "list", "--porcelain")
+            trees = [
+                self.canonical(Path(line.removeprefix("worktree ")))
+                for line in (listed or "").splitlines()
+                if line.startswith("worktree ")
+            ]
+            admitted = [
+                tree
+                for tree in trees
+                if all(
+                    tree.is_relative_to(other / ".claude/worktrees")
+                    for other in trees
+                    if other != tree and tree.is_relative_to(other)
+                )
+            ]
+            self._trees = sorted(admitted, key=lambda tree: len(tree.parts), reverse=True)
+        return self._trees
+
+    def _within(self, root: Path, path: Path) -> Path:
+        """``root``, or the submodule its default branch records that holds ``path``."""
+        below = (c for c in (path, *path.parents) if c != root and c.is_relative_to(root))
+        held = next((c for c in below if (c / ".git").exists() and self._recorded(root, c)), None)
+        return root if held is None else self._within(held, path)
+
+    def _recorded(self, root: Path, directory: Path) -> bool:
+        """Whether the default branch of ``root`` records ``directory`` as a submodule.
+
+        Why: the default branch is the owner's. A gitlink in the index or on a branch is one
+        ``git add`` of a directory holding ``git init`` away.
+        """
+        if directory not in self._submodules:
+            ref = default_branch(root)
+            relative = directory.relative_to(root).as_posix()
+            entry = _git(root, "ls-tree", ref, "--", relative) if ref else None
+            self._submodules[directory] = bool(entry) and str(entry).startswith(_GITLINK)
+        return self._submodules[directory]
 
     def read_text(self, path: Path) -> str | None:
         """The file's text, or ``None`` when it is missing or unreadable."""
@@ -234,6 +297,8 @@ def _git(cwd: Path, *args: str) -> str | None:
 
 
 _HEADS = "refs/heads/"
+# What `git ls-tree` prints first for a submodule.
+_GITLINK = "160000 commit "
 _TRACKING = f"refs/remotes/{REMOTE}/"
 # `git symbolic-ref -q` exits 1, silently, when HEAD names a commit rather than a branch.
 _NOT_SYMBOLIC = 1
@@ -492,7 +557,9 @@ def repository_root(path: Path) -> Path:
 
 def read_manifest(root: Path, filesystem: LocalFilesystem | None = None) -> Manifest:
     """The manifest committed on the default branch of the checkout holding ``root``."""
-    manifest = (filesystem or LocalFilesystem()).committed(repository_root(root))
+    filesystem = filesystem or LocalFilesystem()
+    checkout = filesystem.checkout(filesystem.canonical(root))
+    manifest = filesystem.committed(checkout or root)
     return EMPTY if manifest is None else manifest
 
 
@@ -507,22 +574,29 @@ def standard_manifest(plugin_root: Path) -> Manifest:
         return EMPTY
 
 
-def local_guard(root: Path, plugin_root: Path = PLUGIN_ROOT) -> Guard:
+def local_guard(root: Path, plugin_root: Path = PLUGIN_ROOT, project: Path | None = None) -> Guard:
     """The guard over the real filesystem and git.
 
-    ``root`` is the session's working directory. Its checkout's manifest answers the home and
-    absolute patterns; a path in the repository is judged by the manifest of the checkout
-    holding that path, ``root``'s or not.
+    ``root`` is the session's working directory and ``project`` the directory the harness
+    started the session in, ``root`` when it names none. Its checkout's manifest answers the home
+    and absolute patterns; a path in the repository is judged by the manifest of the checkout
+    holding that path, ``root``'s or not, and a path in the project from the project's checkout.
     """
-    filesystem = LocalFilesystem()
+    filesystem = LocalFilesystem(project or root)
     manifest = with_plugin_group(read_manifest(root, filesystem), plugin_root)
     standard = standard_manifest(plugin_root)
     return Guard(Locator(manifest, filesystem, standard), GitRepoState())
 
 
-def main(root: Path, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> int:
+def main(
+    root: Path,
+    stdin: TextIO = sys.stdin,
+    stdout: TextIO = sys.stdout,
+    *,
+    project: Path | None = None,
+) -> int:
     """Read the payload, write the decision, exit 0 (a decision is carried in the JSON)."""
-    answer = run(stdin.read(), lambda: local_guard(root))
+    answer = run(stdin.read(), lambda: local_guard(root, project=project))
     if answer:
         stdout.write(answer + "\n")
     return 0

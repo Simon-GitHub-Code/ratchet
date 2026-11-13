@@ -2,7 +2,8 @@
 """Claude Code PreToolUse hook of the Ratchet plugin: delegates to ``ratchet_guards.hook``.
 
 Standard library only and run on the system ``python3`` (3.11 or later). The repository
-root is the hook input's ``cwd``, else ``$CLAUDE_PROJECT_DIR``, else the working directory.
+root is the hook input's ``cwd``, else ``$CLAUDE_PROJECT_DIR``, else the working directory. A
+path in the project ``$CLAUDE_PROJECT_DIR`` names is judged from the project's checkout.
 If the guard cannot even be loaded, the answer is ``ask``, so a broken guard stops at a
 human instead of letting the tool call through. Antigravity's input (it carries ``toolCall``)
 gets that answer in Antigravity's form, ``force_ask``.
@@ -67,7 +68,8 @@ def main() -> int:
         problem = f"{type(error).__name__}: {error}"
         sys.stdout.write(fallback(problem, antigravity=antigravity) + "\n")
         return 0
-    return guard(root, io.StringIO(text))
+    project = os.environ.get("CLAUDE_PROJECT_DIR")
+    return guard(root, io.StringIO(text), project=Path(project) if project else None)
 
 
 if __name__ == "__main__":
