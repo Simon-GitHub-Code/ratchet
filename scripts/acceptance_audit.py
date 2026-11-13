@@ -59,7 +59,7 @@ class Product:
     def inside(self, path: Path) -> bool:
         """Whether ``path`` is strictly under the product and outside every tester directory.
 
-        A session is ``<store>/<slug>/<head>/<session>/``; its ``tester/`` is the tester's, and
+        A session is ``<store>/<slug>/<tree>/<session>/``; its ``tester/`` is the tester's, and
         the log, the probes and the seal beside it are the harness's.
         """
         if self.store in path.parents:

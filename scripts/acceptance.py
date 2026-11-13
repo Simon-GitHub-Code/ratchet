@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The acceptance harness: boot the head, stand between a tester and it, hold the record to the log.
+"""The acceptance harness: boot the work tree, put a logging proxy before it, hold a record to it.
 
 A tester who sees only the ticket and an address tries the product the way its owner would and
 writes a record. This script starts the product, logs every request the tester makes, and then
@@ -11,18 +11,19 @@ Usage::
 
     acceptance.py up      --slug S --ticket TICKET.md [--root R]
     acceptance.py down    --slug S [--root R]
-    acceptance.py check   --slug S [--root R]
+    acceptance.py check   --slug S [--root R] [--commit C] [--seal D]
     acceptance.py replay  --slug S [--root R] [--control]
     acceptance.py replay  --checks FILE [--root R] [--control]
     acceptance.py summary --slug S [--root R]
     acceptance.py audit   --transcript FILE [--root R]
 
-``up`` boots the work tree at ``R`` the way the project's justfile says (``boot``, ``ready``,
-``boot_timeout``, and ``flags_on`` so every flag due for removal is on) through
-``with_service.py``, on a port the kernel picks, puts ``acceptance_proxy.py`` in front of it,
-and prints two lines: the one address the tester gets, and the directory the tester writes its
-record (``record.json``) and screenshots in. It returns while the product keeps running. Run
-again while that session lives, it prints the same two lines, waiting first when it still boots.
+``up`` boots the work tree at ``R`` as it is, committed or not, the way the project's justfile
+says (``boot``, ``ready``, ``boot_timeout``, and ``flags_on`` so every flag due for removal is
+on) through ``with_service.py``, on a port the kernel picks, puts ``acceptance_proxy.py`` in
+front of it, and prints two lines: the one address the tester gets, and the directory the tester
+writes its record (``record.json``) and screenshots in. It returns while the product keeps
+running. Run again while that session lives, it prints the same two lines, waiting first when it
+still boots.
 A session of the same work tree that serves a tree the work tree no longer holds is stopped
 first and sealed stale, so one work tree serves one tree at a time. When the product cannot start
 (``boot`` is ``"none"`` or a placeholder, ``ready`` is ``"none"``, the boot exits or never
@@ -31,19 +32,22 @@ answers) it writes the record itself, a blocker in plain words with every line o
 ticket with no checklist, no justfile, not a git work tree.
 
 ``down`` stops every session of the slug and waits until nothing it started runs and nothing
-listens on the addresses it used; run again, it finds nothing and exits 0. ``check`` prints what
-is wrong with the latest record of the slug at ``HEAD``, one sentence each, and exits 1 when
-anything is. ``replay`` runs the record's kept checks, or a committed checks file, each against a
-fresh boot; with ``--control`` against a product that does nothing, where each must fail.
+listens on the addresses it used, then prints the digest of each seal it blesses; run again, it
+finds nothing and exits 0. ``check`` prints what is wrong with the latest record of the slug for
+the tree the work tree holds now, or with ``--commit C`` the tree of ``C``, one sentence each,
+and exits 1 when anything is; with ``--seal D`` the seal must also be the one ``down`` printed.
+``replay`` runs the record's kept checks, or a committed checks file, each against a fresh boot;
+with ``--control`` against a product that does nothing, where each must fail.
 ``summary`` writes ``docs/features/<slug>/acceptance.json`` and ``acceptance-checks.json`` from
 an accepted record and its session, the same bytes on every run. ``audit`` says whether a
 tester's transcript named a file under the product (``acceptance_audit.py``).
 
-Evidence lives in ``<git common dir>/ratchet/acceptance/<slug>/<head>/<session>/``, never in the
-work tree and never committed, and a session that ended more than 14 days ago is removed by the
-next ``up``::
+Evidence lives in ``<git common dir>/ratchet/acceptance/<slug>/<tree>/<session>/``, never in the
+work tree and never committed. ``<tree>`` is the tree a commit of the whole work tree would have,
+so the same evidence holds once the orchestrator commits what was served. A session that ended
+more than 14 days ago is removed by the next ``up``::
 
-    session.json      the harness: what was booted, for which commit and work tree
+    session.json      the harness: what was booted, for which tree and work tree
     ticket.md         the ticket as ``up`` was given it
     boot.log          what the boot and ``with_service.py`` printed
     live.lock         held while the session runs; it holds the supervisor's process id
