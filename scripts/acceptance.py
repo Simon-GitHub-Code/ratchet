@@ -765,8 +765,10 @@ def check(root: Path, slug: str, *, kept: str | None, commit: str | None) -> int
     return gatelib.report("acceptance check", problems + judged(root, directory)[1])
 
 
-def replay_one(check: kept_checks.Check, boot: Boot, *, root: Path, scratch: Path) -> str | None:
-    """Why ``check`` does not hold on a fresh boot of its own, or ``None`` when it does."""
+def replay_one(
+    check: kept_checks.Check, boot: Boot, *, root: Path, scratch: Path
+) -> kept_checks.Result:
+    """How ``check`` ran on a fresh boot of its own; not run when the product did not start."""
     place = scratch / check.id
     place.mkdir()
     (place / "session.json").write_text(
@@ -779,7 +781,8 @@ def replay_one(check: kept_checks.Check, boot: Boot, *, root: Path, scratch: Pat
                 process = start(boot.argv(place), root, log)
             url = wait_serving(lambda: process.poll() is None, place, 2 * boot.timeout + DOWN_WAIT)
             if url is None:
-                return f"the product did not start: {what_it_did(place / 'boot.log')}"
+                said = f"the product did not start: {what_it_did(place / 'boot.log')}"
+                return kept_checks.Result(kept_checks.Outcome.NOT_RUN, said)
             return kept_checks.run(check, url, place)
         finally:
             stop(process)
@@ -799,20 +802,27 @@ def kept(listed: object) -> tuple[list[object], list[kept_checks.Check]]:
 
 
 def verdicts(
-    checks: list[kept_checks.Check], reasons: list[str | None], *, control: bool
+    checks: list[kept_checks.Check], results: list[kept_checks.Result], *, control: bool
 ) -> tuple[list[str], list[str]]:
-    """What held as it should, and what did not, one sentence each."""
+    """What held as it should, and what did not, one sentence each.
+
+    A check that was not run is red either way: it showed nothing of the product.
+    """
     good, bad = [], []
-    for item, reason in zip(checks, reasons, strict=True):
-        named = f"{item.id} ({item.criterion})"
-        if control and reason is None:
-            bad.append(f"{named} holds against a server that does nothing, so it proves nothing")
+    against = "against a server that does nothing" if control else "on a fresh boot"
+    for item, result in zip(checks, results, strict=True):
+        named, reason = f"{item.id} ({item.criterion})", result.reason
+        held = result.outcome is kept_checks.Outcome.HELD
+        if result.outcome is kept_checks.Outcome.NOT_RUN:
+            bad.append(f"{named} was not run {against}: {reason}")
+        elif control and held:
+            bad.append(f"{named} holds {against}, so it proves nothing")
         elif control:
-            good.append(f"{named} fails against a server that does nothing: {reason}")
-        elif reason is None:
-            good.append(f"{named} holds on a fresh boot")
+            good.append(f"{named} fails {against}: {reason}")
+        elif held:
+            good.append(f"{named} holds {against}")
         else:
-            bad.append(f"{named} does not hold on a fresh boot: {reason}")
+            bad.append(f"{named} does not hold {against}: {reason}")
     return good, bad or ([] if checks else ["there are no kept checks to replay"])
 
 
@@ -826,16 +836,21 @@ def replay(root: Path, slug: str | None, checks_file: Path | None, *, control: b
     if boot is None:
         return gatelib.report("acceptance replay", [read_binding(root).why])
     with tempfile.TemporaryDirectory(prefix="ratchet-replay-") as scratch:
-        reasons = [replay_one(item, boot, root=root, scratch=Path(scratch)) for item in checks]
+        ran = [replay_one(item, boot, root=root, scratch=Path(scratch)) for item in checks]
     if directory is not None:
         results = [
-            {"id": item.id, "criterion": item.criterion, "holds": reason is None, "reason": reason}
-            for item, reason in zip(checks, reasons, strict=True)
+            {
+                "id": item.id,
+                "criterion": item.criterion,
+                "outcome": result.outcome.value,
+                "reason": result.reason,
+            }
+            for item, result in zip(checks, ran, strict=True)
         ]
         out = {"checks": acceptance_record.digest(written), "results": results}
         name = "control.json" if control else "replay.json"
         (directory / name).write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
-    good, bad = verdicts(checks, reasons, control=control)
+    good, bad = verdicts(checks, ran, control=control)
     for line in good:
         print(line)
     return gatelib.report("acceptance replay" + (" --control" if control else ""), bad)

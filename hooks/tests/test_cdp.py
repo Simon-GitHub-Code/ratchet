@@ -85,6 +85,7 @@ def test_a_click_whose_page_never_loads_is_a_browser_error(
             "the browser closed while it was asked Target.createTarget; the stand-in browser gives",
         ),
         ("mute", 375, "the browser did not answer Target.createTarget in time; it printed nothing"),
+        ("deaf", 375, "the browser closed while it was asked Page.enable"),
     ],
 )
 def test_a_browser_that_fails_says_how(

@@ -13,7 +13,8 @@ each way a browser can fail is a real process on a real pipe:
 * opening an address that says ``unreachable`` fails, ``stuck`` never loads, ``crash`` closes
   the browser;
 * a window 999 pixels wide is refused;
-* ``FAKE_BROWSER=die`` exits at once and ``mute`` never answers.
+* ``FAKE_BROWSER=die`` exits at once, ``mute`` never answers, and ``deaf`` stops reading
+  once it has a tab, before it answers that.
 """
 
 import os
@@ -89,7 +90,12 @@ while chunk := os.read(3, 65536):
             continue
         results = {"Target.createTarget": {"targetId": "T1"}}
         results["Target.attachToTarget"] = {"sessionId": "S1"}
+        deaf = MODE == "deaf" and method == "Target.attachToTarget"
+        if deaf:
+            os.close(3)
         send({"id": ident, **({"result": results[method]} if method in results else {})})
+        if deaf:
+            time.sleep(60)
 """
 
 

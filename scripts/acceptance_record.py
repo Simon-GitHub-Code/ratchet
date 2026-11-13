@@ -629,18 +629,28 @@ def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
-def tally(results: object, checks: str, *, control: bool) -> dict[str, int] | None:
-    """A replay's counts when it ran these very checks; ``None`` when it did not run them."""
+TALLIED = (
+    ("held", kept_checks.Outcome.HELD),
+    ("unmet", kept_checks.Outcome.UNMET),
+    ("notRun", kept_checks.Outcome.NOT_RUN),
+)
+
+
+def tally(results: object, checks: str) -> dict[str, int] | None:
+    """A replay's outcomes when it ran these very checks; ``None`` when it did not run them.
+
+    A replay wants every check held and a control every check unmet; one not run is neither.
+    """
     if not isinstance(results, dict) or results.get("checks") != checks:
         return None
     ran = results.get("results")
-    held = (
-        [item.get("holds") is True for item in ran if isinstance(item, dict)]
+    outcomes = (
+        [item.get("outcome") for item in ran if isinstance(item, dict)]
         if isinstance(ran, list)
         else []
     )
-    key = "failed" if control else "passed"
-    return {key: held.count(not control), "of": len(held)}
+    counts = {key: outcomes.count(outcome.value) for key, outcome in TALLIED}
+    return counts | {"of": len(outcomes)}
 
 
 @dataclass(frozen=True)
@@ -707,8 +717,8 @@ def summary(record: Record, session: Session, replays: tuple[object, object]) ->
             for item in record.criteria
             if item.verdict == "pass" and item.id not in kept_ids
         ],
-        "replay": tally(replays[0], checks, control=False),
-        "control": tally(replays[1], checks, control=True),
+        "replay": tally(replays[0], checks),
+        "control": tally(replays[1], checks),
         "notChecked": [{"what": what, "why": why} for what, why in record.not_checked],
         "tryIt": list(record.try_it),
     }

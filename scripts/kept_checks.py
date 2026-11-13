@@ -25,8 +25,14 @@ field with that label ``with`` a value; ``click`` the button or link with that t
 text on the page; ``lacks`` a text; ``true``, a script expression that must be ``true``. A
 browser step waits up to five seconds for what it needs. ``{BASE_URL}`` and ``{unique}`` are
 replaced in every text: the address, and a value new to each run, so that no check depends on
-what an earlier run left in the product's store. A check holds when every step does; the first
-step that does not is the reason it fails.
+what an earlier run left in the product's store.
+
+A run ends one of three ways. The check is ``held`` when every step holds. It is ``unmet`` when
+the product answered and did not show what a step asks, the first such step being the reason;
+a script the page throws counts as not showing it, once the step's five seconds are up. It is
+``not-run`` when nothing could try it: a request that got no answer, no browser, or a browser
+that would not start, crashed or stopped answering. A check that was not run says nothing about
+the product either way, so it is never counted as holding or as failing.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlsplit
 
@@ -122,6 +129,25 @@ class BrowserCheck:
 
 
 Check = HttpCheck | BrowserCheck
+
+
+class Outcome(Enum):
+    """How a run of a check ended; see the module's docstring."""
+
+    HELD = "held"
+    UNMET = "unmet"
+    NOT_RUN = "not-run"
+
+
+@dataclass(frozen=True)
+class Result:
+    """A run's outcome, and why, unless it held."""
+
+    outcome: Outcome
+    reason: str | None = None
+
+
+HELD = Result(Outcome.HELD)
 
 
 class Shape:
@@ -321,17 +347,17 @@ def send(step: Request, target: Target) -> tuple[int, http.client.HTTPMessage, b
         connection.close()
 
 
-def run_http(check: HttpCheck, target: Target) -> str | None:
+def run_http(check: HttpCheck, target: Target) -> Result:
     for n, step in enumerate(check.steps, 1):
         said = f"step {n}, {step.method} {target.fill(step.path)},"
         try:
             answer = send(step, target)
         except (OSError, http.client.HTTPException) as error:
-            return f"{said} got no answer: {error}"
+            return Result(Outcome.NOT_RUN, f"{said} got no answer: {error}")
         problem = unmet(target.expect(step.expect), answer)
         if problem:
-            return f"{said} {problem}"
-    return None
+            return Result(Outcome.UNMET, f"{said} {problem}")
+    return HELD
 
 
 NORMAL = "const norm = s => (s || '').replace(/\\s+/g, ' ').trim();"
@@ -377,30 +403,36 @@ def perform(page: cdp.Page, action: Action, target: Target) -> str | None:
     expression, failing = probe(action, target)
     deadline = time.monotonic() + WAIT
     settle = SETTLE if action.kind == "click" else 0.0
-    while page.act(expression, settle) is not True:
+    while True:
+        try:
+            if page.act(expression, settle) is True:
+                return None
+            thrown = ""
+        except cdp.PageError as error:
+            thrown = f"; {error}"
         if time.monotonic() >= deadline:
-            return failing
+            return failing + thrown
         time.sleep(POLL)
-    return None
 
 
-def run_browser(check: BrowserCheck, target: Target, profile: Path) -> str | None:
+def run_browser(check: BrowserCheck, target: Target, profile: Path) -> Result:
     browser = cdp.executable()
     if browser is None:
-        return f"needs a browser: set {cdp.ENV} to a Chromium or Chrome executable"
+        said = f"needs a browser: set {cdp.ENV} to a Chromium or Chrome executable"
+        return Result(Outcome.NOT_RUN, said)
     try:
         with cdp.page(browser, profile, width=check.width, height=HEIGHT) as page:
             for n, action in enumerate(check.steps, 1):
                 problem = perform(page, action, target)
                 if problem:
-                    return f"step {n}, {action.kind}, {problem}"
+                    return Result(Outcome.UNMET, f"step {n}, {action.kind}, {problem}")
     except cdp.BrowserError as error:
-        return f"the browser failed: {error}"
-    return None
+        return Result(Outcome.NOT_RUN, f"the browser failed: {error}")
+    return HELD
 
 
-def run(check: Check, base: str, scratch: Path) -> str | None:
-    """Why ``check`` does not hold against the product at ``base``, or ``None`` when it does.
+def run(check: Check, base: str, scratch: Path) -> Result:
+    """How ``check`` ran against the product at ``base``.
 
     ``scratch`` is an empty directory the browser may use; the caller removes it.
     """

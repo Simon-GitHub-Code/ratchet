@@ -61,6 +61,10 @@ class BrowserError(Exception):
     """The browser could not be started, stopped answering, or a command it ran failed."""
 
 
+class PageError(BrowserError):
+    """A script threw in the page: the page's doing, not the browser's."""
+
+
 def executable() -> str | None:
     """The browser to drive: ``RATCHET_BROWSER``, else the first usual name on ``PATH``."""
     named = os.environ.get(ENV)
@@ -90,9 +94,13 @@ class Pipe:
         self.reader.start()
 
     def close(self) -> None:
-        """Once the browser is gone: let the reader see the end, then close both ends."""
+        """Once the browser is gone: let the reader see the end, then close both ends.
+
+        A command the browser never read is dropped: closing would otherwise try to send it.
+        """
         self.reader.join(timeout=ANSWER)
-        self.commands.close()
+        with contextlib.suppress(BrokenPipeError):
+            self.commands.close()
         self.answers.close()
 
     def read(self) -> None:
@@ -127,8 +135,12 @@ class Pipe:
         message: dict[str, object] = {"id": self.sent, "method": method, "params": params}
         if session:
             message["sessionId"] = session
-        self.commands.write(json.dumps(message).encode() + b"\0")
-        self.commands.flush()
+        try:
+            self.commands.write(json.dumps(message).encode() + b"\0")
+            self.commands.flush()
+        except BrokenPipeError:
+            said = f"the browser closed while it was asked {method}"
+            raise BrowserError(said) from None
         deadline = time.monotonic() + ANSWER
         while True:
             answer = self.next(deadline, method)
@@ -184,7 +196,7 @@ class Page:
             raise BrowserError(said)
 
     def evaluate(self, expression: str) -> object:
-        """The value of ``expression`` in the page; a thrown error is a ``BrowserError``."""
+        """The value of ``expression`` in the page; a thrown error is a ``PageError``."""
         result = self.call(
             "Runtime.evaluate",
             {"expression": expression, "returnByValue": True, "awaitPromise": True},
@@ -194,7 +206,7 @@ class Page:
             detail = thrown.get("exception")
             text = detail.get("description") if isinstance(detail, dict) else thrown.get("text")
             said = f"the page threw: {text}"
-            raise BrowserError(said)
+            raise PageError(said)
         value = result.get("result")
         return value.get("value") if isinstance(value, dict) else None
 
