@@ -1,6 +1,7 @@
 """``listeners``: the gate holds a stopping service's listeners and takes what it never accepted."""
 
 import errno
+import fcntl
 import os
 import signal
 import socket
@@ -245,6 +246,27 @@ def test_a_connection_the_service_never_accepted_is_written_down_before_it_is_re
         "the client found its connection in the marker once it saw the reset"
     )
     assert held[0].copy.fileno() == -1, "the copy is let go of when the command ends"
+
+
+def test_the_gate_leaves_the_listener_as_blocking_as_the_service_made_it(tmp_path: Path) -> None:
+    # Why: the gate's copy shares the service's open file, flags and all. A copy made
+    # non-blocking makes every holder's accept non-blocking, and a worker the gate cannot see,
+    # blocked in accept, then fails with BlockingIOError. The witness is such another holder.
+    marker = tmp_path / "stopping"
+    with service() as running:
+        held = listeners.grab(running.process.pid)
+        assert isinstance(held, list)
+        witness = listeners.copy_of(held[0].holders[0])
+        waiting = socket.create_connection(("127.0.0.1", running.port))
+        waiting.settimeout(10)
+        with taking(held, marker):
+            assert running.tell("close") == "done"
+            with pytest.raises(ConnectionResetError):
+                waiting.recv(1)
+            flags = fcntl.fcntl(witness.fileno(), fcntl.F_GETFL)
+        waiting.close()
+        witness.close()
+    assert not flags & os.O_NONBLOCK, "the gate took the connection without touching the flags"
 
 
 def test_a_listener_shut_down_rather_than_closed_is_said_to_be_unread(tmp_path: Path) -> None:
