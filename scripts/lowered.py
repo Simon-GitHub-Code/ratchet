@@ -11,6 +11,11 @@ under ``docs/adr/`` names it exactly, on a line of its own:
 agent may add that ADR (ADR 0014), but ``quality/thresholds.toml`` is a guard path, so the
 loosening itself is the owner's edit.
 
+The owed ledger, ``quality/owed.toml``, is a ratchet too (ADR 0037): against the merge base an
+entry may go, and none may be added or changed unless the same change moves the binding's plugin
+pin to a newer version and the new entry carries that version. Otherwise a change could silence a
+new red finding by writing an entry for it.
+
 Usage: ``lowered.py [--root DIR] [--base REF] [--file PATH]``. The base is ``gatelib.base_commit``:
 the merge base of HEAD with the default branch, or ``HEAD~1`` on the default branch itself. A
 base without the file passes: that is the first adoption.
@@ -26,6 +31,7 @@ import tomllib
 from pathlib import Path
 
 import gatelib
+import owed
 
 CEILINGS = "ceilings."
 ADRS = "docs/adr"
@@ -126,15 +132,15 @@ def main(argv: list[str]) -> int:
     if base is None:
         print(f"ratchet-lowered: no base commit yet; {options.file} accepted as is")
         return 0
+    problems = owed_grown(root, base)
     previous = gatelib.show(root, base, options.file)
     if previous is None:
         print(f"ratchet-lowered: {options.file} is new at {base[:12]}; accepted as is")
-        return 0
+        return gatelib.report("ratchet-lowered", problems, base) if problems else 0
     found = _loosenings(
         flatten(tomllib.loads(previous)), flatten(tomllib.loads(current_path.read_text()))
     )
     named = relaxations(root)
-    problems = []
     for key, old, new, message in found:
         adr = named.get((key, show(old), _named(new)))
         if adr is None:
@@ -142,6 +148,16 @@ def main(argv: list[str]) -> int:
         else:
             print(f"{message}, relaxed by {adr}")
     return gatelib.report("ratchet-lowered", problems, base)
+
+
+def owed_grown(root: Path, base: str) -> list[str]:
+    """What the owed ledger at head adds against ``base`` that no move of the pin allows."""
+    binding = str(gatelib.BINDING)
+    return owed.grown(
+        owed.parse(gatelib.show(root, base, str(owed.LEDGER))),
+        owed.read(root),
+        binding=(gatelib.show(root, base, binding), gatelib.read_text(root / binding)),
+    )
 
 
 if __name__ == "__main__":

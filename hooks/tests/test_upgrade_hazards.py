@@ -228,13 +228,13 @@ def test_a_rule_the_owner_made_stricter_stays_stricter_and_is_named(
     root = fixture("0.9.2", tmp_path)
     deny_instead(root, STRICTER)
     commit(root)
-    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 1
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
     out = capsys.readouterr().out
     permissions = json.loads((root / SETTINGS).read_text())["permissions"]
     for rule in STRICTER:
         assert rule in permissions["deny"]
         assert rule not in permissions["ask"]
-        assert f"`{rule}`" in out.split("For an agent:")[0]
+        assert f"`{rule}`" in out.split("Owed, ")[0]
     assert "keeping in deny what you made stricter:" in out
     assert not [d for d in settings_rules.drifts(root) if any(r in d.line for r in STRICTER)]
 
@@ -450,7 +450,7 @@ def test_a_file_ignored_by_any_rule_git_reads_is_never_written_over(tmp_path: Pa
     before = files(root)
     result = upgrade.plan(root, PLUGIN_ROOT)
     assert isinstance(result, upgrade.Refused)
-    assert "git ignores flags.toml and quality/bites.toml" in result.reason
+    assert "git ignores flags.toml, quality/bites.toml and quality/owed.toml" in result.reason
     assert files(root) == before
     assert (quality / "bites.toml").read_text() == "# the project's own bites\n"
 

@@ -15,8 +15,9 @@ import shutil
 import sys
 import tempfile
 import tomllib
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 import application_types
@@ -24,6 +25,7 @@ import gatelib
 import hooks_installed
 import justfile_text
 import markdown_text
+import owed
 import plugin_pin
 import project_bite
 import settings_rules
@@ -96,6 +98,18 @@ DOOR_MEANINGS = {
     "rewrite": "a file the default branch holds that is never rewritten, such as a golden fixture",
     "removal": "a path whose loss breaks a consumer, such as a contract or a public snapshot",
 }
+# Why: ADR 0037. What holds while the owner has not answered, in his words: the upgrade asks him
+# nothing, so each default is the one that loosens no gate.
+UNSTATED_STAGE = (
+    "Whether this project is live, relied on by other people, or holds data that cannot be"
+    " replaced is not written down yet. Until it is, every merge stays as careful as it would be"
+    " for a live project."
+)
+NO_DOOR = (
+    "Nothing in this project is marked as impossible to take back once it ships, such as a"
+    " database change, saved data an older version wrote, or something other programs rely on."
+    " Merges already treat nothing that way here, and that stays so until you name one."
+)
 SHARD_MATRIX = "matrix.shard"
 HELD_TO_TIER = "holds a gate's job to its tier's ceiling"
 CEILING_SHAPE = (
@@ -216,9 +230,15 @@ class Agent:
 
 @dataclass(frozen=True)
 class Owner:
-    """A call only the owner makes: the question, what the repository shows of it, what follows."""
+    """A call only the owner makes, and what holds until they make it.
+
+    ``assumed`` is the default the upgrade leaves in place, in plain words for the owner: one
+    that loosens no gate and removes nothing of theirs, so the upgrade asks nothing (ADR 0037).
+    ``ask`` is the question that settles it, with what the repository shows and what follows.
+    """
 
     ask: str
+    assumed: str
     evidence: tuple[str, ...] = ()
     then: tuple[str, ...] = ()
 
@@ -237,11 +257,18 @@ Fix = Auto | Edit | Agent | Owner
 
 @dataclass(frozen=True)
 class Finding:
-    """One thing the repository lacks: the file, what is wrong, and who fixes it."""
+    """One thing the repository lacks: the file, what is wrong, and who fixes it.
+
+    ``rule`` names the check that raised it, which ``raised`` sets. ``identity`` is what stays the
+    same while the finding stands, where the problem says more: a line number, or advice that
+    changes as other findings are fixed. An owed entry matches ``key`` (ADR 0037).
+    """
 
     path: str
     problem: str
     fix: Fix
+    rule: str = ""
+    identity: str = ""
 
     def __post_init__(self) -> None:
         """Refuse an edit under ``guards/``: the manifest says who may edit those paths."""
@@ -252,6 +279,10 @@ class Finding:
     def __str__(self) -> str:
         """The one line the conformance gate prints."""
         return f"{self.path}: {self.problem}"
+
+    def key(self) -> owed.Key:
+        """What an owed entry must hold to excuse this finding: its check, file and identity."""
+        return (self.rule, self.path, self.identity or self.problem)
 
 
 Check = Callable[[Path], Iterable[Finding]]
@@ -269,11 +300,16 @@ def agent(line: str, start: tuple[str, ...] = (), then: tuple[str, ...] = ()) ->
 
 
 def owner(
-    line: str, ask: str, *, evidence: tuple[str, ...] = (), then: tuple[str, ...] = ()
+    line: str,
+    ask: str,
+    *,
+    assumed: str,
+    evidence: tuple[str, ...] = (),
+    then: tuple[str, ...] = (),
 ) -> Finding:
-    """A finding only the owner settles, from a check's one line and the question it asks."""
+    """A finding only the owner settles, from a check's one line, its question and its default."""
     path, _, problem = line.partition(": ")
-    return Finding(path, problem, Owner(ask, evidence, then))
+    return Finding(path, problem, Owner(ask, assumed, evidence, then))
 
 
 @contextlib.contextmanager
@@ -324,9 +360,7 @@ def tried(tree: Path, check: Check, finding: Finding) -> Finding:
         cleared = changed and all(
             (again.path, again.problem) != (finding.path, finding.problem) for again in check(tree)
         )
-    return Finding(
-        finding.path, finding.problem, Auto(fix.does, fix.want) if cleared else fix.otherwise
-    )
+    return replace(finding, fix=Auto(fix.does, fix.want) if cleared else fix.otherwise)
 
 
 def read(path: Path) -> str | None:
@@ -551,6 +585,7 @@ def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
             "justfile",
             f"{problem}; it cannot be copied as it stands: {'; '.join(reasons)}",
             Agent(start=start),
+            identity=problem,
         )
     want = justfile_text.with_recipe(text, recipe)
     edit = Edit(f"copy the template's `{recipe}` recipe", want, Agent(start=start))
@@ -661,20 +696,24 @@ def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> F
         f" {project_bite.REGISTRY}"
     )
     start = (template_gate_row(question),)
-    if trigger == application_types.ALWAYS:
-        fill = "add the template's row and bind it: the question is asked from the first commit"
-        return Finding(BINDING_PATH, f"{failure}; {fill}", Agent(start, (bite,)))
-    said = [fired.part(part) for part in application_types.parts(trigger)]
+    always = trigger == application_types.ALWAYS
+    said = [] if always else [fired.part(part) for part in application_types.parts(trigger)]
     shown = tuple(why for _, why in said)
-    if {state for state, _ in said} == {True}:
+    if always:
+        fill = "add the template's row and bind it: the question is asked from the first commit"
+        fix = Agent(start, (bite,))
+    elif {state for state, _ in said} == {True}:
         fill = f"add the template's row and bind it: its trigger `{trigger}` has fired here"
-        return Finding(BINDING_PATH, f"{failure}; {fill}", Agent(start, (*shown, bite)))
-    fill = (
-        f"add the template's row, bound, or `later: {trigger}` only while that trigger has not"
-        " fired"
-    )
-    waits = f"; a row that says `later: {trigger}` needs none while that trigger has not fired"
-    return Finding(BINDING_PATH, f"{failure}; {fill}", Agent(start, (*shown, bite + waits)))
+        fix = Agent(start, (*shown, bite))
+    else:
+        fill = (
+            f"add the template's row, bound, or `later: {trigger}` only while that trigger has"
+            " not fired"
+        )
+        waits = f"; a row that says `later: {trigger}` needs none while that trigger has not fired"
+        fix = Agent(start, (*shown, bite + waits))
+    # Why: what to write changes as the trigger fires; the row owed does not (ADR 0037).
+    return Finding(BINDING_PATH, f"{failure}; {fill}", fix, identity=failure)
 
 
 def triggers_follow(catalogue: application_types.Catalogue) -> tuple[str, ...]:
@@ -686,8 +725,12 @@ def triggers_follow(catalogue: application_types.Catalogue) -> tuple[str, ...]:
     )
 
 
-def life_events_question(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
-    """What to ask the owner of the missing Life events line: the events, the signs, the rows."""
+def life_events_question(root: Path) -> Owner:
+    """What to ask the owner of the missing Life events line: the events, the signs, the rows.
+
+    Why: a missing line fails closed where it switches protection off (the merge judge reads it
+    as every event, ADR 0028), so leaving it unwritten loosens nothing and is the default.
+    """
     catalogue = application_types.load()
     events = catalogue.events
     named = "; ".join(f"`{name}`, when {event.meaning}" for name, event in events.items())
@@ -705,7 +748,7 @@ def life_events_question(root: Path) -> tuple[str, tuple[str, ...], tuple[str, .
         for name in events
         if (owed := catalogue.owed_by(name))
     )
-    return ask, evidence, then
+    return Owner(ask, UNSTATED_STAGE, evidence, then)
 
 
 def declared_events(root: Path, text: str) -> Iterable[Finding]:
@@ -718,7 +761,7 @@ def declared_events(root: Path, text: str) -> Iterable[Finding]:
             " event counts as declared; `none` turns off the owner's review of one-way doors and"
             " unflagged surface and the critic, so a project that is live writes its events"
             " instead (ADR 0028)",
-            Owner(*life_events_question(root)),
+            life_events_question(root),
         )
         return
     known = application_types.load().events
@@ -881,6 +924,7 @@ def check_doors(root: Path) -> Iterable[Finding]:
                 " the one-way doors from it",
                 f"Does this repository have a door of kind '{kind}', {meaning}? Add a"
                 f" [[door]] with on = '{kind}' and its paths, or `none = \"<the reason>\"`.",
+                assumed=NO_DOOR,
             )
     for door in doors:
         name = door.get("name", "<unnamed>")
@@ -894,6 +938,7 @@ def check_doors(root: Path) -> Iterable[Finding]:
                 ' repository has none with `none = "<reason>"`',
                 f"Which paths shut the door '{name}' ({door.get('reason', 'no reason given')})?"
                 ' List them, or say why the repository has none with `none = "<the reason>"`.',
+                assumed=NO_DOOR,
             )
 
 
@@ -974,10 +1019,15 @@ def check_toolchain(root: Path) -> Iterable[Finding]:
             path.read_text(encoding="utf-8").splitlines()
         ).items():
             if following in unbound:
-                yield agent(
-                    f"{path.relative_to(root)}: line {number} still says '{TOOLCHAIN_MARKER}' and"
-                    " the next line is the template's, so no step sets up the project's toolchain;"
-                    " add the steps that install it, pinned by commit SHA"
+                unset = (
+                    f"still says '{TOOLCHAIN_MARKER}' and the next line is the template's, so no"
+                    " step sets up the project's toolchain"
+                )
+                yield Finding(
+                    str(path.relative_to(root)),
+                    f"line {number} {unset}; add the steps that install it, pinned by commit SHA",
+                    Agent(),
+                    identity=unset,
                 )
 
 
@@ -1211,6 +1261,7 @@ def settings_finding(
             " every regeneration keeps it and this check stays red while it is there. Remove it"
             f" from {settings_rules.SETTINGS}, or add the path it guards to a group of"
             f" {settings_rules.MANIFEST} so that the plugin generates it.",
+            assumed=f"The rule `{rule}` in Claude's settings is one you added, so it stays.",
         )
     if found.fault is settings_rules.Fault.MANIFEST:
         return agent(found.line)
@@ -1366,13 +1417,54 @@ CHECKS: tuple[Check, ...] = (
 )
 
 
+def rule_of(check: Check) -> str:
+    """The name an owed entry gives the check that raised a finding."""
+    return check.__name__.removeprefix("check_")
+
+
 def raised(root: Path) -> list[tuple[Check, Finding]]:
-    """Every failure of every check, in the order of ``CHECKS``, with the check that raised it."""
-    found = [(check, failure) for check in CHECKS for failure in check(root)]
+    """Every failure of every check, in the order of ``CHECKS``, with the check that raised it.
+
+    The owed ledger's own failures come last: an entry whose finding is gone, and a ledger that
+    does not read.
+    """
+    found = [
+        (check, replace(failure, rule=rule_of(check)))
+        for check in CHECKS
+        for failure in check(root)
+    ]
     if any(isinstance(failure.fix, Auto) for _, failure in found):
         message = "a check offers an Edit: only the trial makes a finding auto"
         raise TypeError(message)
-    return found
+    return found + ledger_raised(root, [failure.key() for _, failure in found])
+
+
+def ledger_raised(root: Path, keys: list[owed.Key]) -> list[tuple[Check, Finding]]:
+    """The owed ledger's failures, each with a check that raises it again on an edited tree.
+
+    Why: an entry that excuses nothing would excuse the same finding if it came back, so it goes,
+    and the upgrade drops it. No check reads the ledger, so dropping an entry changes no other
+    finding, and the check that judges the drop compares the edited ledger with ``keys``.
+    """
+
+    def check_owed(tree: Path) -> Iterator[Finding]:
+        ledger = owed.read(tree)
+        for problem in ledger.problems:
+            yield Finding(str(owed.LEDGER), problem, Agent(), rule=owed.OWN)
+        _, stale = owed.excused(keys, ledger.entries)
+        found = Counter(keys)
+        for key, extra in sorted(stale.items()):
+            rule, path, problem = key
+            entries = "an entry" if extra == 1 else f"{extra} entries"
+            yield Finding(
+                str(owed.LEDGER),
+                f"{entries} owe '{problem}' for {path} ({rule}), which is no longer found;"
+                " an entry goes once its finding is fixed",
+                Edit("drop the entry whose finding is fixed", owed.kept(key, found[key]), Agent()),
+                rule=owed.OWN,
+            )
+
+    return [(check_owed, failure) for failure in check_owed(root)]
 
 
 def findings(root: Path, *, owned: bool = False) -> list[Finding]:
@@ -1396,14 +1488,24 @@ def failures(root: Path) -> list[str]:
     return [str(finding) for _, finding in raised(root)]
 
 
+def owed_split(root: Path, found: list[Finding]) -> tuple[list[Finding], list[Finding]]:
+    """The findings that are red, and those an entry of the owed ledger excuses (ADR 0037)."""
+    excused, _ = owed.excused([finding.key() for finding in found], owed.read(root).entries)
+    red = [finding for finding, hit in zip(found, excused, strict=True) if not hit]
+    return red, [finding for finding, hit in zip(found, excused, strict=True) if hit]
+
+
 def run(root: Path) -> int:
-    found = findings(root)
-    for finding in found:
+    red, owing = owed_split(root, findings(root))
+    for finding in red:
         print(finding)
-    autos = sum(isinstance(finding.fix, Auto) for finding in found)
+    for finding in owing:
+        print(f"owed: {finding}")
+    autos = sum(isinstance(finding.fix, Auto) for finding in [*red, *owing])
     fixer = f"; `upgrade.py --apply` makes {autos} of them" if autos else ""
-    print(f"conformance: {'red' if found else 'green'} ({len(found)} failures{fixer})")
-    return 1 if found else 0
+    since = f"; {len(owing)} owed since an upgrade, listed in {owed.LEDGER}" if owing else ""
+    print(f"conformance: {'red' if red else 'green'} ({len(red)} failures{since}{fixer})")
+    return 1 if red else 0
 
 
 Mutation = tuple[str, Callable[[Path], None]]
@@ -1424,6 +1526,7 @@ def mutations() -> list[Mutation]:
         *record_mutations(),
         *trigger_mutations(),
         *upgrade_mutations(),
+        *owed_mutations(),
     ]
 
 
@@ -1792,6 +1895,16 @@ def pin_mutations() -> list[Mutation]:
             rewrite("justfile", "plugin_pin.py", "pin.py"),
         ),
     ]
+
+
+def owed_mutations() -> list[Mutation]:
+    """An owed entry no finding matches: it would excuse that finding if it came back."""
+
+    def stale(root: Path) -> None:
+        entry = owed.Entry("justfile", "runner", "a finding no check raises", "0.0.0")
+        (root / owed.LEDGER).write_text(owed.render([entry]), encoding="utf-8")
+
+    return [("owed ledger with an entry no finding matches", stale)]
 
 
 def record_mutations() -> list[Mutation]:

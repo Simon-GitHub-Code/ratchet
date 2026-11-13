@@ -205,7 +205,7 @@ def test_an_edit_that_changes_nothing_or_clears_nothing_is_left_to_its_otherwise
         assert (tmp_path / "notes.md").read_text() == "a\n"
         return fix
 
-    agent, owner = conformance.Agent(), conformance.Owner("which?")
+    agent, owner = conformance.Agent(), conformance.Owner("which?", "none yet")
     assert trial(lambda text: text or "", agent) is agent
     assert trial(lambda text: f"{text}more\n", agent) is agent
     assert trial(lambda text: text or "", owner) is owner
