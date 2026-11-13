@@ -1,0 +1,30 @@
+# One scripted owner: who they are, the idea they bring, and the first slice a person can use.
+# Add another file beside this one for another idea or application type; `--persona <stem>`
+# picks it. The slice's `kind` names a check in first_hour/appcheck.py's SLICES table.
+
+name = "read-later"
+
+idea = "A small read-later web app: I paste a link, it saves the title, I can mark it read and see what's left."
+
+profile = """
+I am a hobbyist, not a software engineer. I have an idea for a small web app for myself and I want
+an AI to build it while I watch and answer questions. I use a laptop and a phone. I can follow
+instructions and copy a command into a terminal when I am told exactly what to type, but I do not
+know git, testing, linters, frameworks, databases or deployment, and I do not want to learn them.
+
+The app: a read-later list. I paste a link, it saves the link and the page's title, I can mark an
+item read, and I can see what is left to read. It is only for me. It runs on my own computer.
+
+Firm positions:
+- Local only. Nothing goes online: no GitHub, no remote repository, no hosting, no accounts.
+- It is for me alone, so no sign-in, no sharing, no other users.
+- Keep it small and plain. Saving a link and seeing my list matter most; everything else can wait.
+- Read items stay in the list as read (I may want to find them again); I do not need them deleted.
+- If I paste the same link twice, keep one item.
+"""
+
+[slice]
+kind = "html-form"
+describe = "open the page, paste a link into the form, save it, and see it in the list"
+value = "https://example.com/first-hour-article"
+expect = "example.com/first-hour-article"
