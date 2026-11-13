@@ -244,26 +244,43 @@ def test_a_gate_the_binding_leaves_for_later_or_none_is_counted_apart_from_those
 @pytest.mark.parametrize(
     "case",
     [
-        ("later: code:other", "green"),
-        ("later: code:source\nlater: code:source", "green"),
-        ("none: not a service", "green"),
-        ("  later: code:source  ", "not run yet"),
+        ("`later: code:source`", "later: code:other", "not run yet"),
+        ("ruff", "later: code:source", "not run yet"),
+        (None, "later: code:source", "not run yet"),
+        ("`later: code:source`", "  later: code:source  ", "not run yet"),
+        ("`later: code:source`", "later: code:source\nlater: code:source", "green"),
+        ("none: not a service", "none: not a service", "not applicable"),
+        (None, "none: not a service", "not applicable"),
+        ("ruff", "none: 0 problems found", "green"),
+    ],
+    ids=[
+        "a later line its row does not name",
+        "a later line from a row bound to a tool",
+        "a later line from no row",
+        "a later line with spaces around",
+        "two later lines",
+        "a none line from a none row",
+        "a none line from no row",
+        "a none line from a tool",
     ],
 )
-def test_only_the_words_the_binding_gives_a_later_row_count_as_not_run_yet(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], case: tuple[str, str]
+def test_one_later_line_has_not_run_whatever_the_row_and_a_none_line_ran_only_from_a_tool(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], case: tuple[str | None, str, str]
 ) -> None:
-    output, says = case
-    root = binding(tmp_path, {"waits": "`later: code:source`"})
+    # Why: a gate counted ran because its later: line and its row disagreed, and a run of such
+    # gates said `parallel: green (2 ran)` with nothing judged.
+    tool, output, says = case
+    root = binding(tmp_path, {"waits": tool} if tool else {"other": "ruff"})
     entry = named("import sys; print(sys.argv[1])", output, name="waits")
     assert run("--root", str(root), "--", entry) == 0
     assert f"parallel: {entry}: {says}" in capsys.readouterr().out
 
 
-def test_a_run_where_no_check_ran_says_so_and_is_not_red(
+def test_a_run_where_no_check_ran_says_so_is_not_red_and_never_says_green(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = binding(tmp_path, {"one": "later: code:source", "two": "none: not a service"})
+    # Why: a recipe left as its `later:` stub after its row was bound judges nothing either.
+    root = binding(tmp_path, {"one": "ruff", "two": "none: not a service"})
     one = named(SAY, "later: code:source", "", name="one")
     two = named(SAY, "none: not a service", "", name="two")
     assert run("--root", str(root), "--", one, two) == 0
@@ -273,6 +290,7 @@ def test_a_run_where_no_check_ran_says_so_and_is_not_red(
         " 1 not applicable, as its line says; slowest: "
     ) in out
     assert out.endswith("\nparallel: no check ran (1 not run yet, 1 not applicable)\n")
+    assert "green" not in out.splitlines()[-1]
 
 
 def test_the_last_line_counts_what_ran_and_what_waits(
