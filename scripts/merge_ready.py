@@ -72,6 +72,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -81,6 +82,8 @@ import feature_preflight as preflight
 import flags as registry
 import gatelib
 import lowered
+import owed
+import plugin_pin
 
 # Why: the manifest and the two classifiers the judge shares with the hook live under hooks/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -105,6 +108,8 @@ OWNER = "merge: owner"
 MARKER = "<!-- ratchet:merge -->"
 SCHEMA = 1
 THRESHOLDS = gatelib.THRESHOLDS.as_posix()
+LEDGER = owed.LEDGER.as_posix()
+BINDING = gatelib.BINDING.as_posix()
 SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 RECORD = re.compile(rf"^docs/features/({SLUG})/verdict\.json$")
 DISPUTES = "docs/disputes"
@@ -366,6 +371,24 @@ def more_than_tightened(before: str | None, after: str | None) -> str | None:
     return "; ".join(lowered.loosened(lowered.flatten(old), lowered.flatten(new))) or None
 
 
+def more_than_shrunk(change: Change) -> str | None:
+    """Why a change to the owed ledger is more than a shrink, or ``None`` when that is all it is.
+
+    Why: ADR 0037. An entry that goes lets the check it excused run again, so dropping entries
+    loosens nothing. An entry that is added or reworded excuses a finding, and the plugin pin
+    moving is what allows that, so each of those stays the owner's.
+    """
+    after = owed.parse(change.after(LEDGER))
+    if after.problems:
+        return "the ledger does not read: " + "; ".join(after.problems)
+    added = Counter(after.entries) - Counter(owed.parse(change.before(LEDGER)).entries)
+    if added:
+        return "adds or changes " + ", ".join(sorted(f"'{e.problem}' ({e.path})" for e in added))
+    if plugin_pin.pinned(change.before(BINDING)) != plugin_pin.pinned(change.after(BINDING)):
+        return "the plugin pin moves with it"
+    return None
+
+
 def addition(change: Change, path: str) -> str | None:
     """Why the change of a record is more than an addition (ADR 0014), or ``None``."""
     before = records.before(lambda args: git(change.root, *args), change.fork, path)
@@ -379,6 +402,8 @@ def guard_note(change: Change, path: str, group: Group) -> str | None:
         return addition(change, path)
     if path == THRESHOLDS:
         return more_than_tightened(change.before(path), change.after(path))
+    if path == LEDGER:
+        return more_than_shrunk(change)
     if dependencies.recognised(path):
         try:
             found = dependencies.changes(path, change.before(path), change.after(path))

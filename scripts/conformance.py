@@ -15,8 +15,9 @@ import shutil
 import sys
 import tempfile
 import tomllib
-from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 import application_types
@@ -24,6 +25,7 @@ import gatelib
 import hooks_installed
 import justfile_text
 import markdown_text
+import owed
 import plugin_pin
 import project_bite
 import settings_rules
@@ -96,8 +98,41 @@ DOOR_MEANINGS = {
     "rewrite": "a file the default branch holds that is never rewritten, such as a golden fixture",
     "removal": "a path whose loss breaks a consumer, such as a contract or a public snapshot",
 }
+# Why: ADR 0037. What holds while the owner has not answered, in his words: the upgrade asks him
+# nothing, so each default is the one that loosens no gate.
+UNSTATED_STAGE = (
+    "Whether this project is live, relied on by other people, or holds data that cannot be"
+    " replaced is not written down yet. Until it is, Ratchet decides which changes may merge"
+    " without you as carefully as it would for a live project."
+)
+NO_DOOR = (
+    "No part of this project is marked as impossible to take back once it ships, such as a"
+    " database change, data saved in an older format, or something other programs rely on."
+    " Until one is, an agent can merge a change to such a part without you. To mark one, ask an"
+    " agent which files hold it: it adds them to guards/manifest.toml on a branch, and you decide"
+    " at that merge."
+)
+WEEKLY_CHECKS = "the weekly checks"
 SHARD_MATRIX = "matrix.shard"
+# Why: a budget call as the templates before ADR 0025 wrote it; the upgrade adds the flags to it.
+OLD_TIER0_BUDGET = (
+    'python3 "$RATCHET_PLUGIN/scripts/budget.py" tier0 --report .ratchet/timing.jsonl -- just tier0'
+)
+OLD_GATE_BUDGET = (
+    'python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --report'
+    ' .ratchet/timing.jsonl -- just "${{ matrix.gate }}"'
+)
+PLUGIN_ENV = "  RATCHET_PLUGIN: "
+TOP_KEY = re.compile(r"^ {0,2}\S")
+MATRIX_GATE = re.compile(r"^\s+gate:(?:\s|$)")
+GATE_NAME = re.compile(r"[\w-]+")
 HELD_TO_TIER = "holds a gate's job to its tier's ceiling"
+TRIGGERS_PLACEHOLDER_ROW = (
+    "| <kind> | <globs of the tracked files that hold one, or `none: <reason>`>"
+    " | <optional regex> |"
+)
+# Why: adopt's step 4: `flag` is `flags.toml` with the pattern of a flag's table in every stack.
+MECHANICAL_TRIGGERS = {"flag": "| flag | `flags.toml` | `^\\[\\[flag\\]\\]` |"}
 CEILING_SHAPE = (
     ("ci.yml", "--over", "says that a ceiling reports on a pull request and blocks elsewhere"),
     ("ci.yml", "--tier", HELD_TO_TIER),
@@ -131,6 +166,8 @@ INCIDENTS = Path("docs/incidents")
 INCIDENT_BITE = re.compile(r"^[-*\s]*bite:\s*`?(.+?)`?\s*$", re.IGNORECASE | re.MULTILINE)
 BINDING_PATH = str(gatelib.BINDING)
 ENTRY_POINTS_SECTION = "## Entry points"
+TESTS_SECTION = "## Tests"
+CHANGE_CEILING = "[ceilings.change]"
 FLAG_REGISTRY = Path("flags.toml")
 FIRST_CELL = re.compile(r"^\|\s*([^|]+?)\s*\|", re.MULTILINE)
 WORKFLOWS = Path(".github/workflows")
@@ -148,6 +185,13 @@ PIN_SCRIPT = "plugin_pin.py"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
+RULE_VERBS = {
+    "Bash": ("runs", "run"),
+    "Read": ("reads", "read"),
+    "Edit": ("changes", "change"),
+    "Write": ("writes", "write"),
+}
+WORKFLOW_JOB = re.compile(r"^  ([A-Za-z_][\w-]*):[ \t]*(?:#.*)?$")
 COMMIT_HOOKS = Path(hooks_installed.COMMIT_HOOKS)
 RUNS_WHOLE_TIER0 = re.compile(r"^(?!\s*#).*\btier0\b(?!-)", re.MULTILINE)
 WHOLE_TIER0 = (
@@ -219,9 +263,15 @@ class Agent:
 
 @dataclass(frozen=True)
 class Owner:
-    """A call only the owner makes: the question, what the repository shows of it, what follows."""
+    """A call only the owner makes, and what holds until they make it.
+
+    ``assumed`` is the default the upgrade leaves in place, in plain words for the owner: one
+    that loosens no gate and removes nothing of theirs, so the upgrade asks nothing (ADR 0037).
+    ``ask`` is the question that settles it, with what the repository shows and what follows.
+    """
 
     ask: str
+    assumed: str
     evidence: tuple[str, ...] = ()
     then: tuple[str, ...] = ()
 
@@ -240,11 +290,20 @@ Fix = Auto | Edit | Agent | Owner
 
 @dataclass(frozen=True)
 class Finding:
-    """One thing the repository lacks: the file, what is wrong, and who fixes it."""
+    """One thing the repository lacks: the file, what is wrong, and who fixes it.
+
+    ``rule`` names the check that raised it, which ``raised`` sets. ``identity`` is what stays the
+    same while the finding stands, where the problem says more: a line number, or advice that
+    changes as other findings are fixed. An owed entry matches ``key`` (ADR 0037). ``stops`` names
+    the check that does not run while the finding stands, as the owner reads it.
+    """
 
     path: str
     problem: str
     fix: Fix
+    rule: str = ""
+    identity: str = ""
+    stops: str = ""
 
     def __post_init__(self) -> None:
         """Refuse an edit under ``guards/``: the manifest says who may edit those paths."""
@@ -255,6 +314,10 @@ class Finding:
     def __str__(self) -> str:
         """The one line the conformance gate prints."""
         return f"{self.path}: {self.problem}"
+
+    def key(self) -> owed.Key:
+        """What an owed entry must hold to excuse this finding: its check, file and identity."""
+        return (self.rule, self.path, self.identity or self.problem)
 
 
 Check = Callable[[Path], Iterable[Finding]]
@@ -272,11 +335,16 @@ def agent(line: str, start: tuple[str, ...] = (), then: tuple[str, ...] = ()) ->
 
 
 def owner(
-    line: str, ask: str, *, evidence: tuple[str, ...] = (), then: tuple[str, ...] = ()
+    line: str,
+    ask: str,
+    *,
+    assumed: str,
+    evidence: tuple[str, ...] = (),
+    then: tuple[str, ...] = (),
 ) -> Finding:
-    """A finding only the owner settles, from a check's one line and the question it asks."""
+    """A finding only the owner settles, from a check's one line, its question and its default."""
     path, _, problem = line.partition(": ")
-    return Finding(path, problem, Owner(ask, evidence, then))
+    return Finding(path, problem, Owner(ask, assumed, evidence, then))
 
 
 @contextlib.contextmanager
@@ -327,9 +395,7 @@ def tried(tree: Path, check: Check, finding: Finding) -> Finding:
         cleared = changed and all(
             (again.path, again.problem) != (finding.path, finding.problem) for again in check(tree)
         )
-    return Finding(
-        finding.path, finding.problem, Auto(fix.does, fix.want) if cleared else fix.otherwise
-    )
+    return replace(finding, fix=Auto(fix.does, fix.want) if cleared else fix.otherwise)
 
 
 def read(path: Path) -> str | None:
@@ -516,11 +582,6 @@ def template_gate_row(question: str) -> str:
     return next(line for line in body.splitlines() if line.startswith(prefix))
 
 
-def template_block(heading: str) -> tuple[str, ...]:
-    """A section of the template binding, heading included, for the upgrade report to copy."""
-    return (heading, *markdown_text.section(template_binding(), heading).rstrip().splitlines())
-
-
 def entry_points(text: str) -> dict[str, str]:
     """The Entry points table of a binding: each entry point and its command."""
     return dict(markdown_text.table_cells(markdown_text.section(text, ENTRY_POINTS_SECTION)))
@@ -554,6 +615,8 @@ def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
             "justfile",
             f"{problem}; it cannot be copied as it stands: {'; '.join(reasons)}",
             Agent(start=start),
+            identity=problem,
+            stops=WEEKLY_CHECKS if recipe == "weekly" else "",
         )
     want = justfile_text.with_recipe(text, recipe)
     edit = Edit(f"copy the template's `{recipe}` recipe", want, Agent(start=start))
@@ -591,6 +654,16 @@ def check_binding(root: Path) -> Iterable[Finding]:
         yield agent(f"{BINDING_PATH}: missing")
         return
     yield from check_entry_points(root, text)
+    if not markdown_text.has_section(text, TESTS_SECTION):
+        # Why: ADR 0032. The roles that write tests read the test runner and the directories from
+        # this section; the upgrade adds the template's, which an agent then fills in.
+        problem = (
+            f"{BINDING_PATH}: has no '{TESTS_SECTION}' section, where the test runner and the"
+            " directories tests live in are named"
+        )
+        yield missing_section(
+            BINDING_PATH, problem, TESTS_SECTION, template_text=template_binding()
+        )
     gates = markdown_text.section(text, "## Gates")
     if not gates:
         yield agent(f"{BINDING_PATH}: has no '## Gates' section")
@@ -663,21 +736,58 @@ def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> F
         f"binding '{question}' to a tool needs a [[bite]] for gate '{gate}' in"
         f" {project_bite.REGISTRY}"
     )
-    start = (template_gate_row(question),)
-    if trigger == application_types.ALWAYS:
-        fill = "add the template's row and bind it: the question is asked from the first commit"
-        return Finding(BINDING_PATH, f"{failure}; {fill}", Agent(start, (bite,)))
-    said = [fired.part(part) for part in application_types.parts(trigger)]
+    row = template_gate_row(question)
+    start = (row,)
+    always = trigger == application_types.ALWAYS
+    said = [] if always else [fired.part(part) for part in application_types.parts(trigger)]
     shown = tuple(why for _, why in said)
-    if {state for state, _ in said} == {True}:
+    edit = None
+    if always:
+        fill = "add the template's row and bind it: the question is asked from the first commit"
+        fix = Agent(start, (bite,))
+        if shipped(row):
+            edit = (f"add the '{question}' row, bound to the plugin's own gate", row)
+    elif {state for state, _ in said} == {True}:
         fill = f"add the template's row and bind it: its trigger `{trigger}` has fired here"
-        return Finding(BINDING_PATH, f"{failure}; {fill}", Agent(start, (*shown, bite)))
-    fill = (
-        f"add the template's row, bound, or `later: {trigger}` only while that trigger has not"
-        " fired"
-    )
-    waits = f"; a row that says `later: {trigger}` needs none while that trigger has not fired"
-    return Finding(BINDING_PATH, f"{failure}; {fill}", Agent(start, (*shown, bite + waits)))
+        fix = Agent(start, (*shown, bite))
+    else:
+        fill = (
+            f"add the template's row, bound, or `later: {trigger}` only while that trigger has"
+            " not fired"
+        )
+        waits = f"; a row that says `later: {trigger}` needs none while that trigger has not fired"
+        fix = Agent(start, (*shown, bite + waits))
+        # Why: `later:` is written only for a trigger known not to have fired. One whose kind
+        # the Triggers table cannot count might have, and `later:` would defer what is owed.
+        if None not in {state for state, _ in said}:
+            edit = (
+                f"add the '{question}' row as `later: {trigger}`",
+                with_tool(row, f"later: {trigger}"),
+            )
+    # Why: what to write changes as the trigger fires; the row owed does not (ADR 0037).
+    problem = f"{failure}; {fill}"
+    if edit is None:
+        return Finding(BINDING_PATH, problem, fix, identity=failure, stops=question)
+    does, written = edit
+    want = markdown_text.with_row("## Gates", written, template_questions())
+    return Finding(BINDING_PATH, problem, Edit(does, want, fix), identity=failure, stops=question)
+
+
+def shipped(row: str) -> bool:
+    """Whether a Gates row's Tool cell is the plugin's own script, which needs no bite."""
+    return project_bite.SHIPPED.fullmatch(row.split("|")[2].strip()) is not None
+
+
+def with_tool(row: str, tool: str) -> str:
+    """A Gates row with its Tool cell replaced."""
+    cells = row.split("|")
+    cells[2] = f" {tool} "
+    return "|".join(cells)
+
+
+def template_questions() -> tuple[str, ...]:
+    """The questions of the template binding's Gates table, in its order."""
+    return tuple(row.question for row in project_bite.gate_rows(template_binding()))
 
 
 def triggers_follow(catalogue: application_types.Catalogue) -> tuple[str, ...]:
@@ -689,8 +799,12 @@ def triggers_follow(catalogue: application_types.Catalogue) -> tuple[str, ...]:
     )
 
 
-def life_events_question(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
-    """What to ask the owner of the missing Life events line: the events, the signs, the rows."""
+def life_events_question(root: Path) -> Owner:
+    """What to ask the owner of the missing Life events line: the events, the signs, the rows.
+
+    Why: a missing line fails closed where it switches protection off (the merge judge reads it
+    as every event, ADR 0028), so leaving it unwritten loosens nothing and is the default.
+    """
     catalogue = application_types.load()
     events = catalogue.events
     named = "; ".join(f"`{name}`, when {event.meaning}" for name, event in events.items())
@@ -708,7 +822,26 @@ def life_events_question(root: Path) -> tuple[str, tuple[str, ...], tuple[str, .
         for name in events
         if (owed := catalogue.owed_by(name))
     )
-    return ask, evidence, then
+    return Owner(ask, unstated_stage(read(root / BINDING_PATH) or ""), evidence, then)
+
+
+def unstated_stage(binding: str) -> str:
+    """What holds while the Life events line is missing, with the checks that wait for it.
+
+    Why: the merge judge reads a missing line as every event, and a `later:` row waiting on an
+    event reads it as none; the owner hears both.
+    """
+    waiting = [
+        row.question
+        for row in project_bite.gate_rows(binding)
+        if later(row.tool) and application_types.LIFE in row.tool
+    ]
+    if not waiting:
+        return UNSTATED_STAGE
+    return (
+        f"{UNSTATED_STAGE} The checks such a project needs do not run until you say it is one:"
+        f" {', '.join(waiting)}."
+    )
 
 
 def declared_events(root: Path, text: str) -> Iterable[Finding]:
@@ -721,7 +854,7 @@ def declared_events(root: Path, text: str) -> Iterable[Finding]:
             " event counts as declared; `none` turns off the owner's review of one-way doors and"
             " unflagged surface and the critic, so a project that is live writes its events"
             " instead (ADR 0028)",
-            Owner(*life_events_question(root)),
+            life_events_question(root),
         )
         return
     known = application_types.load().events
@@ -745,12 +878,20 @@ def check_triggers(root: Path) -> Iterable[Finding]:
     yield from declared_events(root, text)
     catalogue = application_types.load()
     if not markdown_text.has_section(text, triggers.SECTION.strip()):
-        yield Finding(
-            BINDING_PATH,
+        problem = (
             "has no '## Triggers' section; add the template's, one row per kind of code a question"
-            " asked of these types names (ADR 0028)",
-            Agent(start=template_block("## Triggers")),
+            " asked of these types names (ADR 0028)"
         )
+        # Why: ADR 0037. The section, with the rows every stack writes alike, lets the triggers
+        # gate count those kinds from the next change; a kind found by this stack's own paths is
+        # an agent's row, which conformance asks for once the types are named. The table goes in
+        # padded: every Markdown formatter pads one this narrow, so a project that checks its
+        # format would be red on it otherwise.
+        rows = "\n".join(MECHANICAL_TRIGGERS.values())
+        made = markdown_text.padded(
+            template_binding().replace(TRIGGERS_PLACEHOLDER_ROW, rows), triggers.SECTION.strip()
+        )
+        yield missing_section(BINDING_PATH, problem, "## Triggers", template_text=made)
         return
     kinds, problems = triggers.parse(text)
     for problem in problems:
@@ -781,7 +922,14 @@ def check_operability(root: Path) -> Iterable[Finding]:
     types_check_asks = application_types.load().questions
     for question in OPERABILITY_QUESTIONS:
         if text and question not in asked and question not in types_check_asks:
-            yield agent(f"{BINDING_PATH}: the Gates table has no '{question}' row")
+            problem = f"the Gates table has no '{question}' row"
+            row = template_gate_row(question)
+            fix: Edit | Agent = Agent()
+            if shipped(row):
+                want = markdown_text.with_row("## Gates", row, template_questions())
+                does = f"add the '{question}' row, bound to the plugin's own gate"
+                fix = Edit(does, want, Agent(start=(row,)))
+            yield Finding(BINDING_PATH, problem, fix, stops=question)
     waiting = {row.question for row in project_bite.gate_rows(text) if later(row.tool)}
     for heading, questions in OPERABILITY_SECTIONS.items():
         if text and not waiting >= set(questions) and markdown_text.empty_body(text, heading):
@@ -813,7 +961,12 @@ def check_speed(root: Path) -> Iterable[Finding]:
                 yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
         for name, marker, meaning in CEILING_SHAPE:
             if path.name == name and marker not in content:
-                yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
+                problem = f"nothing {meaning} ('{marker}' absent)"
+                does = (
+                    "pass the template's budget flags to each budget call an older template wrote"
+                )
+                edit = Edit(does, budget_flags(name), Agent())
+                yield Finding(str(path.relative_to(root)), problem, edit)
         if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
             yield agent(
                 f"{path.relative_to(root)}: no long gate runs over the binding's shard count "
@@ -821,15 +974,65 @@ def check_speed(root: Path) -> Iterable[Finding]:
             )
 
 
+def budget_flags(workflow: str) -> gatelib.Want:
+    """The want of a tier workflow whose budget calls carry the current template's flags.
+
+    A call as an older template wrote it gains ``--tier``, and in ``ci.yml`` ``--over`` and the
+    variable it reads. Why: ADR 0025. A line the project wrote itself is left as it is, so the
+    check stays red on it.
+    """
+    tier = "tier2" if workflow == "deep.yml" else "tier1"
+    over = ' --over "$OVER"' if workflow == "ci.yml" else ""
+    flags = {OLD_TIER0_BUDGET: over, OLD_GATE_BUDGET: f" --tier {tier}{over}"}
+    template = template_file(f".github/workflows/{workflow}").splitlines()
+    variable = [line for line in template if line.startswith("  OVER:")]
+    said = (
+        template[template.index(variable[0]) - 1 : template.index(variable[0]) + 1]
+        if variable
+        else []
+    )
+
+    def want(current: str | None) -> str:
+        lines = (current or "").split("\n")
+        for index, line in enumerate(lines):
+            indent, _, run = line.partition("- run: ")
+            if not indent.strip() and run in flags and flags[run]:
+                lines[index] = (
+                    f"{indent}- run: {run.replace(' --report ', f'{flags[run]} --report ', 1)}"
+                )
+        if over and said and not any(line.startswith("  OVER:") for line in lines):
+            at = next((i for i, line in enumerate(lines) if line.startswith(PLUGIN_ENV)), None)
+            if at is not None:
+                lines[at + 1 : at + 1] = said
+        return "\n".join(lines)
+
+    return want
+
+
+def with_shards(text: str | None) -> str:
+    """The binding with ``- Shards: 1``, the template's day-one count, ending its Speed list."""
+    lines = (text or "").split("\n")
+    if SPEED_SECTION not in lines or any(line.startswith("- Shards:") for line in lines):
+        return text or ""
+    start = lines.index(SPEED_SECTION)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    listed = [i for i in range(start + 1, end) if lines[i].startswith("- ")]
+    at = listed[-1] + 1 if listed else start + 1
+    lines[at:at] = ["- Shards: 1"] if listed else ["", "- Shards: 1"]
+    return "\n".join(lines)
+
+
 def check_speed_parts(body: str) -> Iterable[Finding]:
     stated = dict(SPEED_PART.findall(body))
     for part in SPEED_PARTS:
         value = stated.get(part, "")
         if part == "Shards" and not SHARD_COUNT.fullmatch(value):
-            yield agent(
-                f"{BINDING_PATH}: the Speed section needs '- Shards: N', a whole "
-                "number alone on its line, 1 on day one; CI reads it"
+            problem = (
+                "the Speed section needs '- Shards: N', a whole number alone on its line, 1 on day"
+                " one; CI reads it"
             )
+            edit = Edit("state the template's day-one shard count, 1", with_shards, Agent())
+            yield Finding(BINDING_PATH, problem, edit)
         elif not value or value.startswith("<"):
             yield agent(f"{BINDING_PATH}: the Speed section does not say how '{part}' is met")
 
@@ -888,6 +1091,7 @@ def check_doors(root: Path) -> Iterable[Finding]:
                 " the one-way doors from it",
                 f"Does this repository have a door of kind '{kind}', {meaning}? Add a"
                 f" [[door]] with on = '{kind}' and its paths, or `none = \"<the reason>\"`.",
+                assumed=NO_DOOR,
             )
     for door in doors:
         name = door.get("name", "<unnamed>")
@@ -901,6 +1105,7 @@ def check_doors(root: Path) -> Iterable[Finding]:
                 ' repository has none with `none = "<reason>"`',
                 f"Which paths shut the door '{name}' ({door.get('reason', 'no reason given')})?"
                 ' List them, or say why the repository has none with `none = "<the reason>"`.',
+                assumed=NO_DOOR,
             )
 
 
@@ -977,15 +1182,32 @@ def check_toolchain(root: Path) -> Iterable[Finding]:
         if template is None:
             continue
         unbound = set(after_marker(template.splitlines()).values())
-        for number, following in after_marker(
-            path.read_text(encoding="utf-8").splitlines()
-        ).items():
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for number, following in after_marker(lines).items():
             if following in unbound:
-                yield agent(
-                    f"{path.relative_to(root)}: line {number} still says '{TOOLCHAIN_MARKER}' and"
-                    " the next line is the template's, so no step sets up the project's toolchain;"
-                    " add the steps that install it, pinned by commit SHA"
+                # Why: the line moves when one is added above it, the job does not, so an owed
+                # entry names the job and excuses no placeholder in another (ADR 0037).
+                unset = (
+                    f"in job `{job_of(lines, number)}` still says '{TOOLCHAIN_MARKER}' and the"
+                    " next line is the template's, so no step sets up the project's toolchain"
                 )
+                yield Finding(
+                    str(path.relative_to(root)),
+                    f"line {number} {unset}; add the steps that install it, pinned by commit SHA",
+                    Agent(),
+                    identity=unset,
+                    stops=WEEKLY_CHECKS if path.name == WEEKLY_WORKFLOW else "",
+                )
+
+
+def job_of(lines: list[str], number: int) -> str:
+    """The id of the workflow job that holds line ``number`` (counted from 1), or ``?``."""
+    for line in reversed(lines[: number - 1]):
+        if line.startswith("jobs:"):
+            break
+        if match := WORKFLOW_JOB.match(line):
+            return match.group(1)
+    return "?"
 
 
 def after_marker(lines: list[str]) -> dict[int, str]:
@@ -1069,18 +1291,173 @@ def answered_gates(binding: str) -> set[str]:
 
 
 def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
-    """A tier list the tier workflows read, which the justfile does not define."""
+    """A tier list the tier workflows read, which the justfile does not define.
+
+    Why: ADR 0037. A tier whose recipe only names its gates gives its list as it stands, and a
+    list of the gates to shard starts empty, as the template's day one does; the upgrade writes
+    both. A tier that runs its gates some other way is an agent's to list.
+    """
+    tiers = tier_recipes(read(root / BINDING_PATH) or "", justfile)
     for workflow, lists in TIER_LISTS.items():
         if not (root / WORKFLOWS / workflow).is_file():
             continue
         for name, meaning in lists:
-            if not justfile_text.defines_variable(justfile, name):
-                yield Finding(
-                    "justfile",
-                    f"has no `{name}` variable, which the template's `shape` job of `{workflow}`"
-                    f" reads with `just --evaluate {name}`; add the template's, naming {meaning}",
-                    Agent(start=template_definition(name)),
-                )
+            if justfile_text.defines_variable(justfile, name):
+                continue
+            problem = (
+                f"has no `{name}` variable, which the template's `shape` job of `{workflow}`"
+                f" reads with `just --evaluate {name}`; add the template's, naming {meaning}"
+            )
+            fix = Agent(start=template_definition(name))
+            tier = name.split("_")[0]
+            if name.endswith("_sharded"):
+                does = f"add `{name}`, naming no gate to shard"
+                edit = Edit(does, justfile_text.with_variable(name, lambda _: '""'), fix)
+                yield Finding("justfile", problem, edit)
+            elif (recipe := tiers.get(tier)) and justfile_text.dependencies(justfile, recipe):
+                does = f"add `{name}`, listing the gates the `{recipe}` recipe runs"
+                edit = Edit(does, justfile_text.with_variable(name, gates_of(recipe)), fix)
+                yield Finding("justfile", problem, edit)
+            else:
+                yield Finding("justfile", problem, fix)
+
+
+def gates_of(recipe: str) -> Callable[[str], str]:
+    """The value of a tier list: the gates a recipe with no body depends on, quoted."""
+
+    def value(justfile: str) -> str:
+        listed = justfile_text.dependencies(justfile, recipe) or ()
+        return '"' + " ".join(name for name in listed if name != PIN_RECIPE) + '"'
+
+    return value
+
+
+def unrun_gates(binding: str, justfile: str) -> Iterable[Finding]:
+    """A gate the plugin ships, bound at tier 0 or 1, that its tier's recipe never reaches.
+
+    Why: ADR 0037. A row the upgrade binds names a gate; with no recipe, or no tier that runs it,
+    conformance would be green on a safeguard that is off. A tier whose recipe only names its
+    gates gets the gate, and the template's recipe when the justfile lacks it.
+    """
+    tiers = tier_recipes(binding, justfile)
+    template = template_file("justfile")
+    for row in project_bite.gate_rows(binding):
+        tier = f"tier{row.tier}"
+        if not project_bite.SHIPPED.fullmatch(row.tool) or tier not in ("tier0", "tier1"):
+            continue
+        recipe = tiers.get(tier)
+        if recipe is None or justfile_text.undefined(justfile, recipe):
+            continue
+        if row.gate in justfile_text.reaches(justfile, recipe):
+            continue
+        tree = tiers.get("tier0-tree")
+        target = (
+            tree if tier == "tier0" and tree in justfile_text.reaches(justfile, recipe) else recipe
+        )
+        problem = (
+            f"no tier runs `{row.gate}`, which the binding binds to '{row.question}' at tier"
+            f" {row.tier}, so that gate never runs; run it in `{target}`"
+        )
+        defined = justfile_text.defines_recipe(justfile, row.gate)
+        reasons = () if defined else justfile_text.unmet(template, justfile, row.gate)
+        fix = Agent(start=template_definition(row.gate), then=reasons)
+        if reasons or justfile_text.dependencies(justfile, target) is None:
+            yield Finding("justfile", problem, fix, stops=row.question)
+            continue
+        copied = [] if defined else [justfile_text.with_recipe(template, row.gate)]
+        wants = [*copied, justfile_text.with_dependency(target, row.gate)]
+        if target == recipe:
+            # Why: a tier list the upgrade wrote from this tier in an earlier pass lists it too.
+            wants.append(justfile_text.with_listed(f"{tier}_gates", row.gate))
+        want = gatelib.chained(*wants)
+        does = f"run `{row.gate}` in `{target}`" + (
+            "" if defined else ", from the template's recipe"
+        )
+        yield Finding("justfile", problem, Edit(does, want, fix), stops=row.question)
+
+
+@dataclass(frozen=True)
+class Matrix:
+    """A job's gates as its workflow lists them: the lines that hold the list, and the gates."""
+
+    start: int
+    end: int
+    gates: tuple[str, ...]
+
+
+def static_matrix(lines: list[str], job: str) -> Matrix | None:
+    """The gates a job's ``gate:`` matrix lists by name, on one line or one per line.
+
+    ``None`` when the job has no such list, such as one that reads its gates from the justfile.
+    """
+    if f"  {job}:" not in lines:
+        return None
+    start = lines.index(f"  {job}:")
+    end = next((i for i in range(start + 1, len(lines)) if TOP_KEY.match(lines[i])), len(lines))
+    at = next((i for i in range(start, end) if MATRIX_GATE.match(lines[i])), None)
+    if at is None:
+        return None
+    rest = lines[at].partition("gate:")[2].strip()
+    if rest.startswith("[") and rest.endswith("]"):
+        items = [item.strip() for item in rest[1:-1].split(",") if item.strip()]
+        return Matrix(at, at, tuple(items)) if all(map(GATE_NAME.fullmatch, items)) else None
+    if rest or at + 1 >= end or lines[at + 1].strip() != "[":
+        return None
+    close = next((i for i in range(at + 2, end) if lines[i].strip() == "]"), None)
+    if close is None:
+        return None
+    items = [line.strip().removesuffix(",") for line in lines[at + 2 : close]]
+    return Matrix(at + 1, close, tuple(items)) if all(map(GATE_NAME.fullmatch, items)) else None
+
+
+def with_matrix_gate(job: str, gate: str) -> gatelib.Want:
+    """The want of a workflow whose job's listed matrix also names ``gate``, laid out as it is."""
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        lines = text.split("\n")
+        matrix = static_matrix(lines, job)
+        if matrix is None or gate in matrix.gates:
+            return text
+        if matrix.start == matrix.end:
+            line = lines[matrix.start]
+            close = line.rindex("]")
+            joined = ", " if matrix.gates else ""
+            lines[matrix.start] = f"{line[:close].rstrip()}{joined}{gate}{line[close:]}"
+            return "\n".join(lines)
+        last = lines[matrix.end - 1]
+        indent = last[: len(last) - len(last.lstrip())] + ("" if matrix.gates else "  ")
+        if matrix.gates and not last.rstrip().endswith(","):
+            lines[matrix.end - 1] = last.rstrip() + ","
+        lines.insert(matrix.end, f"{indent}{gate},")
+        return "\n".join(lines)
+
+    return want
+
+
+def ci_unrun(root: Path, binding: str) -> Iterable[Finding]:
+    """A gate the plugin ships, bound at tier 1, that the CI tier 1 job's listed matrix lacks.
+
+    Why: ADR 0037. A workflow an older template wrote names its tier 1 gates in the job; a gate the
+    tier's recipe runs and the list lacks runs on the laptop and never in CI.
+    """
+    path = WORKFLOWS / "ci.yml"
+    lines = (read(root / path) or "").split("\n")
+    matrix = static_matrix(lines, "tier1")
+    if matrix is None:
+        return
+    for row in project_bite.gate_rows(binding):
+        if row.tier != "1" or not project_bite.SHIPPED.fullmatch(row.tool):
+            continue
+        if row.gate in matrix.gates:
+            continue
+        problem = (
+            f"the tier1 job lists the gates it runs and not `{row.gate}`, which the binding binds"
+            f" to '{row.question}' at tier 1, so CI never runs that gate; add it to the list"
+        )
+        does = f"add `{row.gate}` to the gates the tier1 job lists"
+        edit = Edit(does, with_matrix_gate("tier1", row.gate), Agent())
+        yield Finding(str(path), problem, edit, stops=row.question)
 
 
 def asks_hooks(ratchet: str) -> bool:
@@ -1112,6 +1489,8 @@ def check_runner(root: Path) -> Iterable[Finding]:
     justfile = read_justfile(root)
     if justfile is None:
         return
+    yield from unrun_gates(read(root / BINDING_PATH) or "", justfile)
+    yield from ci_unrun(root, read(root / BINDING_PATH) or "")
     yield from check_tier_lists(root, justfile)
     code = justfile_text.code_of(justfile)
     gates = answered_gates(read(root / BINDING_PATH) or "")
@@ -1199,10 +1578,12 @@ def check_commit_hooks(root: Path) -> Iterable[Finding]:
         yield from check_other_hooks(name, text, install)
     justfile = read_justfile(root)
     if justfile is not None and hooks_installed.PROBE_ENV not in justfile:
+        # Why: an owed entry holds this text, so it names no path of the plugin's checkout.
         yield agent(
             f"justfile: the `pre-commit` and `commit-msg` recipes do not answer "
             f"{hooks_installed.PROBE_ENV}, so `hooks_installed.py` cannot tell whether a commit "
-            f"would run tier 0; copy them from {hooks_installed.TEMPLATE}"
+            "would run tier 0; copy them from the template justfile",
+            start=template_definition("pre-commit") + template_definition("commit-msg"),
         )
 
 
@@ -1211,13 +1592,19 @@ def settings_finding(
 ) -> Finding:
     """One line of settings drift: the plugin regenerates its rules, the project's are asked."""
     if found.fault is settings_rules.Fault.OWN:
-        rule = found.line.split("'")[1]
+        head, _, tail = found.line.rpartition("' in ")
+        said = plain_rule(head.split("'", 1)[1], tail.split(" ", 1)[0])
         return owner(
             found.line,
-            f"Is `{rule}` a rule you chose to keep? No version of the plugin writes it, so every"
-            " regeneration keeps it and this check stays red while it is there. Remove it from"
-            f" {settings_rules.SETTINGS}, or keep it in your own"
-            " `.claude/settings.local.json`, which no gate reads.",
+            f"Should Claude keep this rule: {said}? No version of Ratchet writes it, so the"
+            " settings check stays red while it is there. Remove it from"
+            f" {settings_rules.SETTINGS}, or keep it in your own `.claude/settings.local.json`,"
+            " which no gate reads.",
+            assumed=(
+                "Claude's settings for this project hold a permission rule that no version of"
+                f" Ratchet writes: {said}. It stays as it is, and the settings check stays red on"
+                " it until you say whether to keep it."
+            ),
         )
     if found.fault is settings_rules.Fault.MANIFEST:
         return agent(found.line)
@@ -1230,6 +1617,17 @@ def settings_finding(
     broken = (f"{path} is not a JSON object, so it is left as it is",) if settings is None else ()
     edit = Edit(does, settings_rules.regenerated(manifest), Agent(then=broken))
     return Finding(path, problem, edit)
+
+
+def plain_rule(rule: str, kind: str) -> str:
+    """A permission rule in words: ``Bash(tool:*)`` in ``ask`` is "Claude asks ... runs `tool`"."""
+    tool, _, argument = rule.partition("(")
+    argument = argument.removesuffix(")").removesuffix(":*").removesuffix(" *")
+    asks, denies = RULE_VERBS.get(tool, ("uses", "use")) if argument else ("uses", "use")
+    what = f"`{argument}`" if tool in RULE_VERBS and argument else f"`{rule}`"
+    if kind == "deny":
+        return f"Claude may never {denies} {what}"
+    return f"Claude asks you before it {asks} {what}"
 
 
 def check_settings(root: Path) -> Iterable[Finding]:
@@ -1253,8 +1651,41 @@ def check_quality(root: Path) -> Iterable[Finding]:
             continue
         if name == "mutation-register":
             yield from check_register(data)
+        elif not has_change_ceiling(data):
+            problem = (
+                "quality/thresholds.toml: no live `[ceilings.change]`, so no pull request is held"
+                " to a size"
+            )
+            edit = Edit(
+                "write the method's first change-size ceiling", with_change_ceiling, Agent()
+            )
+            yield Finding("quality/thresholds.toml", problem, edit)
     if not (root / "quality/snapshots").is_dir():
         yield agent("quality/snapshots: missing")
+
+
+def has_change_ceiling(data: dict[str, object]) -> bool:
+    ceilings = data.get("ceilings")
+    return isinstance(ceilings, dict) and isinstance(ceilings.get("change"), dict)
+
+
+def with_change_ceiling(text: str | None) -> str:
+    """The thresholds with the template's ``[ceilings.change]`` live: its comment made a table.
+
+    Why: ADR 0032. A change-size ceiling has nothing to measure at first, so its value is the
+    method's own, the template's; the file that kept it as a comment gets it as a table.
+    """
+    text = text or ""
+    table = tomllib.loads(template_file("quality/thresholds.toml"))["ceilings"]["change"]
+    live = f"{CHANGE_CEILING}\n" + "".join(f"{key} = {value}\n" for key, value in table.items())
+    commented = "".join(f"# {line}\n" for line in live.splitlines())
+    above = f"{text.rstrip()}\n\n" if text.strip() else ""
+    made = text.replace(commented, live, 1) if commented in text else above + live
+    try:
+        tomllib.loads(made)
+    except tomllib.TOMLDecodeError:
+        return text
+    return made
 
 
 def check_register(data: dict[str, object]) -> Iterable[Finding]:
@@ -1373,13 +1804,62 @@ CHECKS: tuple[Check, ...] = (
 )
 
 
+def rule_of(check: Check) -> str:
+    """The name an owed entry gives the check that raised a finding."""
+    return check.__name__.removeprefix("check_")
+
+
 def raised(root: Path) -> list[tuple[Check, Finding]]:
-    """Every failure of every check, in the order of ``CHECKS``, with the check that raised it."""
-    found = [(check, failure) for check in CHECKS for failure in check(root)]
+    """Every failure of every check, in the order of ``CHECKS``, with the check that raised it.
+
+    The owed ledger's own failures come last: an entry whose finding is gone, and a ledger that
+    does not read.
+    """
+    found = [
+        (check, replace(failure, rule=rule_of(check)))
+        for check in CHECKS
+        for failure in check(root)
+    ]
     if any(isinstance(failure.fix, Auto) for _, failure in found):
         message = "a check offers an Edit: only the trial makes a finding auto"
         raise TypeError(message)
-    return found
+    return found + ledger_raised(root, [failure.key() for _, failure in found])
+
+
+def ledger_raised(root: Path, keys: list[owed.Key]) -> list[tuple[Check, Finding]]:
+    """The owed ledger's failures, each with a check that raises it again on an edited tree.
+
+    Why: an entry that excuses nothing would excuse the same finding if it came back, so it goes,
+    and the upgrade drops it. No check reads the ledger, so dropping an entry changes no other
+    finding, and the check that judges the drop compares the edited ledger with ``keys``.
+    """
+
+    def check_owed(tree: Path) -> Iterator[Finding]:
+        ledger = owed.read(tree)
+        for problem in ledger.problems:
+            yield Finding(str(owed.LEDGER), problem, Agent(), rule=owed.OWN)
+        _, stale = owed.excused(keys, ledger.entries)
+        if not stale:
+            return
+        count = stale.total()
+        named = [
+            f"'{problem}' for {path} ({rule})" + ("" if extra == 1 else f", {extra} entries")
+            for (rule, path, problem), extra in sorted(stale.items())
+        ]
+        if count == 1:
+            problem = f"an entry owes {named[0]}, which is no longer found"
+            does = "drop the entry whose finding is fixed"
+        else:
+            problem = f"{count} entries owe what is no longer found: {'; '.join(named)}"
+            does = f"drop the {count} entries whose findings are fixed"
+        yield Finding(
+            str(owed.LEDGER),
+            f"{problem}; an entry goes once its finding is fixed",
+            Edit(does, owed.kept(Counter(keys)), Agent()),
+            rule=owed.OWN,
+        )
+
+    return [(check_owed, failure) for failure in check_owed(root)]
 
 
 def findings(root: Path, *, owned: bool = False) -> list[Finding]:
@@ -1403,14 +1883,45 @@ def failures(root: Path) -> list[str]:
     return [str(finding) for _, finding in raised(root)]
 
 
+def owed_split(root: Path, found: list[Finding]) -> tuple[list[Finding], list[Finding]]:
+    """The findings that are red, and those an entry of the owed ledger excuses (ADR 0037)."""
+    excused, _ = owed.excused([finding.key() for finding in found], owed.read(root).entries)
+    red = [finding for finding, hit in zip(found, excused, strict=True) if not hit]
+    return red, [finding for finding, hit in zip(found, excused, strict=True) if hit]
+
+
+def not_running(root: Path, found: Sequence[Finding]) -> list[str]:
+    """The checks the binding asks for that do not run yet, as the owner reads them, once each.
+
+    Why: ADR 0037. An owed finding stops no merge, so the owner hears what stays off until it is
+    fixed: a Gates row that is missing, a gate that no tier or CI job runs, the weekly run, and a
+    `later:` row whose kind the Triggers table cannot count, which never starts by itself.
+    """
+    binding = read(root / BINDING_PATH) or ""
+    kinds, _ = triggers.parse(binding)
+    stuck = [
+        row.question
+        for row in project_bite.gate_rows(binding)
+        if (waits := application_types.LATER.match(row.tool))
+        and set(application_types.code_kinds(waits.group(1).strip())) - set(kinds)
+    ]
+    return list(dict.fromkeys([*(finding.stops for finding in found if finding.stops), *stuck]))
+
+
 def run(root: Path) -> int:
     found = findings(root)
-    for finding in found:
+    red, owing = owed_split(root, found)
+    for finding in red:
         print(finding)
-    autos = sum(isinstance(finding.fix, Auto) for finding in found)
+    for finding in owing:
+        print(f"owed: {finding}")
+    autos = sum(isinstance(finding.fix, Auto) for finding in [*red, *owing])
     fixer = f"; `upgrade.py --apply` makes {autos} of them" if autos else ""
-    print(f"conformance: {'red' if found else 'green'} ({len(found)} failures{fixer})")
-    return 1 if found else 0
+    since = f"; {len(owing)} owed since an upgrade, listed in {owed.LEDGER}" if owing else ""
+    off = not_running(root, found)
+    waiting = f"; not running until fixed: {', '.join(off)}" if off else ""
+    print(f"conformance: {'red' if red else 'green'} ({len(red)} failures{since}{waiting}{fixer})")
+    return 1 if red else 0
 
 
 Mutation = tuple[str, Callable[[Path], None]]
@@ -1431,6 +1942,7 @@ def mutations() -> list[Mutation]:
         *record_mutations(),
         *trigger_mutations(),
         *upgrade_mutations(),
+        *owed_mutations(),
     ]
 
 
@@ -1489,6 +2001,11 @@ def upgrade_mutations() -> list[Mutation]:
     """What an adoption made by an earlier plugin lacks, each a red line of its own."""
     return [
         ("AGENTS.md without the Asking the owner section", rewrite("AGENTS.md", ASKING, "## Ask")),
+        ("binding without a Tests section", rewrite(BINDING_PATH, TESTS_SECTION, "## Trials")),
+        (
+            "thresholds without a live change-size ceiling",
+            rewrite("quality/thresholds.toml", CHANGE_CEILING, f"# {CHANGE_CEILING}"),
+        ),
         (
             "binding without the tier0-tree row",
             rewrite(BINDING_PATH, "| tier0-tree | `just tier0-tree` |\n", ""),
@@ -1506,6 +2023,10 @@ def upgrade_mutations() -> list[Mutation]:
             rewrite(BINDING_PATH, "| triggers | `just triggers` |\n", ""),
         ),
         ("justfile without a recipe the binding names", rewrite("justfile", "bite-one gate:", "")),
+        (
+            "justfile whose tier 1 never runs a gate the binding binds",
+            rewrite("justfile", " conformance triggers incidents ", " conformance triggers "),
+        ),
         (
             "justfile with no gate run through changed.py",
             rewrite("justfile", "/scripts/changed.py", "/scripts/base.py"),
@@ -1799,6 +2320,16 @@ def pin_mutations() -> list[Mutation]:
             rewrite("justfile", "plugin_pin.py", "pin.py"),
         ),
     ]
+
+
+def owed_mutations() -> list[Mutation]:
+    """An owed entry no finding matches: it would excuse that finding if it came back."""
+
+    def stale(root: Path) -> None:
+        entry = owed.Entry("justfile", "runner", "a finding no check raises", "0.0.0")
+        (root / owed.LEDGER).write_text(owed.render([entry]), encoding="utf-8")
+
+    return [("owed ledger with an entry no finding matches", stale)]
 
 
 def record_mutations() -> list[Mutation]:

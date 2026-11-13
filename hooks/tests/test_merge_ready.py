@@ -308,6 +308,95 @@ def test_a_threshold_change_that_is_more_than_a_ratchet_is_the_owners(
     assert judged(root) == [f"guard: quality/thresholds.toml (ratchets): {why}"]
 
 
+PIN_OLD = "- Ratchet plugin: 0.11.0 at " + "a" * 40 + "\n"
+PIN_NEW = "- Ratchet plugin: 0.12.0 at " + "b" * 40 + "\n"
+LEDGER = "quality/owed.toml"
+OWED = (
+    '[[owed]]\nrule = "bites"\npath = "quality/bites.toml"\nproblem = "gate lint has no bite"\n'
+    'since = "0.11.0"\n\n'
+    '[[owed]]\nrule = "speed"\npath = "justfile"\nproblem = "no recipe speed"\nsince = "0.11.0"\n'
+)
+ONE_OWED = OWED.split("\n\n")[1]
+OWED_BASE = BASE | {LEDGER: OWED, BINDING: f"# Binding\n\n- Application types: service\n{PIN_OLD}"}
+
+
+@pytest.fixture
+def owing(tmp_path: Path) -> Path:
+    repository(tmp_path, dict(OWED_BASE))
+    branch(tmp_path, "feature/4-thing")
+    return tmp_path
+
+
+@pytest.mark.parametrize("after", [ONE_OWED, "", None])
+def test_a_ledger_change_that_only_drops_entries_is_the_agents(
+    owing: Path, after: str | None
+) -> None:
+    change(owing, {LEDGER: after, "src/a.py": "x = 2\n"})
+    assert judged(owing) == []
+
+
+def test_a_ledger_that_stays_as_it_was_is_the_agents(owing: Path) -> None:
+    reordered = "\n\n".join(reversed(OWED.split("\n\n"))) + "\n"
+    change(owing, {LEDGER: reordered})
+    assert judged(owing) == []
+
+
+@pytest.mark.parametrize(
+    ("after", "why"),
+    [
+        (
+            OWED + ONE_OWED.replace("no recipe speed", "no recipe doors"),
+            "adds or changes 'no recipe doors' (justfile)",
+        ),
+        (OWED + ONE_OWED, "adds or changes 'no recipe speed' (justfile)"),
+        (
+            OWED.replace("no bite", "no bite planted"),
+            "adds or changes 'gate lint has no bite planted' (quality/bites.toml)",
+        ),
+        (
+            OWED.replace('since = "0.11.0"', 'since = "0.10.0"', 1),
+            "adds or changes 'gate lint has no bite' (quality/bites.toml)",
+        ),
+        ("[[owed]]\nrule = 1\n", "the ledger does not read: entry 1 needs exactly"),
+        ("[owed\n", "the ledger does not read: does not parse"),
+    ],
+)
+def test_a_ledger_change_that_adds_or_rewords_an_entry_is_the_owners(
+    owing: Path, after: str, why: str
+) -> None:
+    change(owing, {LEDGER: after})
+    (reason,) = judged(owing)
+    assert reason.startswith(f"guard: {LEDGER} (ratchets): {why}")
+
+
+def test_a_ledger_that_a_base_without_one_gains_is_the_owners(tmp_path: Path) -> None:
+    repository(tmp_path, {k: v for k, v in OWED_BASE.items() if k != LEDGER})
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {LEDGER: OWED})
+    assert len(judged(tmp_path)) == 1
+
+
+def test_a_drop_beside_a_pin_move_is_the_owners(owing: Path) -> None:
+    moved = f"# Binding\n\n- Application types: service\n{PIN_NEW}"
+    change(owing, {LEDGER: ONE_OWED, BINDING: moved})
+    reasons = judged(owing)
+    assert f"guard: {LEDGER} (ratchets): the plugin pin moves with it" in reasons
+    assert f"guard: {BINDING} (gate-commands)" in reasons
+
+
+def test_a_drop_beside_another_guard_change_leaves_only_the_other_to_the_owner(
+    owing: Path,
+) -> None:
+    change(owing, {LEDGER: ONE_OWED, "justfile": "check:\n    false\n"})
+    assert judged(owing) == ["guard: justfile (gate-commands)"]
+
+
+def test_a_drop_whose_pin_text_only_moved_around_is_the_agents(owing: Path) -> None:
+    same = f"# Binding\n\n{PIN_OLD}- Application types: service\n"
+    change(owing, {LEDGER: ONE_OWED, BINDING: same})
+    assert judged(owing) == [f"guard: {BINDING} (gate-commands)"]
+
+
 def test_a_dependency_is_the_owners_whoever_named_it(root: Path) -> None:
     added = PYPROJECT.replace('"attrs>=23"', '"attrs>=23", "pytest-skip-all>=1"')
     change(

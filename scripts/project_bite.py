@@ -129,6 +129,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import os
 import queue
 import re
@@ -237,15 +238,20 @@ class Row:
 
 def gate_rows(binding: str) -> list[Row]:
     """The rows of the ``## Gates`` table; a row short of its five cells is left out."""
+    return list(_gate_rows(binding))
+
+
+@functools.lru_cache(maxsize=256)
+def _gate_rows(binding: str) -> tuple[Row, ...]:
     _, _, body = binding.partition("\n## Gates\n")
     lines = [line for line in body.split("\n## ")[0].splitlines() if line.startswith("|")]
     table = [[cell.strip() for cell in line.strip().strip("|").split("|")] for line in lines]
     rows = [cells for cells in table if not set("".join(cells)) <= set("-: ")]
-    return [
+    return tuple(
         Row(cells[0], cells[1], cells[2], cells[4].partition("`")[2].partition("`")[0])
         for cells in rows[1:]
         if len(cells) > 4  # noqa: PLR2004 # -- Question, Tool, Tier, Threshold source, Entry point
-    ]
+    )
 
 
 def run_git(

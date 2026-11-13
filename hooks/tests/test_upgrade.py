@@ -63,6 +63,16 @@ def lines(found: Sequence[conformance.Finding]) -> list[str]:
     return sorted(str(f) for f in found)
 
 
+def verdict(report: str) -> str:
+    """The report's line for an agent: the counts."""
+    return next(line for line in reversed(report.splitlines()) if line.startswith("upgrade: "))
+
+
+def plain(report: str) -> str:
+    """The report's block for the owner."""
+    return report[report.index("In plain words:") :].rstrip("\n")
+
+
 @pytest.mark.parametrize("name", FIXTURES)
 def test_an_upgrade_leaves_no_auto_finding_and_the_residual_is_what_the_plan_said(
     name: str, tmp_path: Path
@@ -88,17 +98,19 @@ def test_a_dry_run_writes_nothing_and_leaves_what_the_apply_leaves(
     assert upgrade.main(["upgrade.py", "--root", str(root)]) == 1
     dry = capsys.readouterr().out
     assert files(root) == before
-    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 1
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0, "all of it is owed"
     done = capsys.readouterr().out
     assert files(root) != before
 
     def residual(report: str) -> list[str]:
-        return [block for block in report.split("\n\n") if block.startswith(("For ", "upgrade: w"))]
+        kept = ("Red ", "Owed, ", "upgrade: w")
+        return [block for block in report.split("\n\n") if block.startswith(kept)]
 
     assert dry.count("Would write") == 1
     assert done.count("Wrote ") == 1
     assert residual(dry)[:-1] == residual(done)[:-1]
     assert residual(dry)[-1].replace("would write", "wrote") == residual(done)[-1]
+    assert plain(dry).replace("would move", "moves").replace("would make", "made") == plain(done)
 
 
 @pytest.mark.parametrize("name", FIXTURES)
@@ -157,9 +169,11 @@ def test_what_the_project_wrote_survives_the_upgrade(name: str, tmp_path: Path) 
     assert PROJECT_BITE in after["justfile"]
     assert PROJECT_RECIPE in after["justfile"]
     assert ENTRY in after[BINDING]
-    assert markdown_text.section(after[BINDING], "## Gates") == markdown_text.section(
-        before[BINDING], "## Gates"
-    )
+    kept, now = (markdown_text.table(text[BINDING], "## Gates") for text in (before, after))
+    assert kept is not None
+    assert now is not None
+    rows = iter(now.rows)
+    assert all(row in rows for row in kept.rows), "every row the project wrote, in its order"
     assert DENY in after[".claude/settings.json"]
     assert [f for f in result.owner if DENY in str(f)]
     for sections in ("AGENTS.md", ".github/pull_request_template.md"):
@@ -453,16 +467,48 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     first = out.splitlines()[0]
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
-    assert "Would write 11 files (run with --apply):" in out
+    assert "Would write 13 files (run with --apply):" in out
+    assert "  quality/owed.toml\n    - write down 65 things owed since " in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
-    assert "For an agent:\n  justfile: a guard path (group `gate-commands`)" in out
-    assert "For you:\n  docs/process/binding.md\n    ? Which of these has already happened" in out
+    assert "Owed, none of them red, for an agent to work through (quality/owed.toml):" in out
+    assert "\n  justfile: a guard path (group `gate-commands`)" in out
+    assert "?" not in plain(out), "the upgrade asks the owner nothing"
+    assert "    - has no '- Life events:' line;" in out
+    assert f"        assumed: {conformance.UNSTATED_STAGE}" in out
+    assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert out.splitlines()[-1].startswith("upgrade: would write 30 edits in 11 files. 79 items")
-    assert "and 4 questions for you. The change touches guard paths" in out.splitlines()[-1]
+    assert verdict(out).startswith("upgrade: would write 57 edits in 13 files. 65 items are owed")
+    assert "and 0 red; 4 of them hold an assumption" in verdict(out)
+    assert "The change touches guard paths" in verdict(out)
+    assert plain(out) == "\n".join(
+        [
+            "In plain words:",
+            (
+                "This project would move from Ratchet 0.8.2 to"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 57 changes in 13"
+                " files. The project owes 65 things since the upgrade. None of them turns a check"
+                " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
+                " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
+                " make all the fixes in one change on a branch, and you decide at that one merge."
+            ),
+            (
+                "Checks that do not run until then: the weekly checks, configuration hardening,"
+                " load smoke, refuses bad configuration, rolls back safely, shuts down gracefully,"
+                " survives failing dependencies, telemetry emitted."
+            ),
+            "Assumed until you say otherwise:",
+            (
+                f"- {conformance.UNSTATED_STAGE} The checks such a project needs do not run until"
+                " you say it is one: active security scan, load, telemetry arrives, backup"
+                " restores, production answers."
+            ),
+            f"- {conformance.NO_DOOR}",
+            "Your one step is the merge.",
+        ]
+    )
 
 
 def test_a_repository_that_conforms_is_told_so_and_exits_0_once_the_pin_has_moved(
@@ -475,12 +521,18 @@ def test_a_repository_that_conforms_is_told_so_and_exits_0_once_the_pin_has_move
     assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
     out = capsys.readouterr().out
     assert "Wrote 5 files:" in out
-    assert "upgrade: wrote 5 edits in 5 files. 0 items are for an agent and 0 questions" in out
+    assert "upgrade: wrote 5 edits in 5 files. 0 items are owed and 0 red" in out
+    assert not (root / "quality/owed.toml").exists(), "a project that owes nothing has no ledger"
     assert upgrade.main(["upgrade.py", "--root", str(root)]) == 0
     out = capsys.readouterr().out
     assert "Would write" not in out
-    assert out.splitlines()[-1] == (
-        "upgrade: nothing to write. 0 items are for an agent and 0 questions for you."
+    assert verdict(out) == (
+        "upgrade: nothing to write. 0 items are owed and 0 red; 0 of them hold an assumption"
+        " until the owner says otherwise."
+    )
+    assert plain(out) == (
+        "In plain words:\nThis project is on Ratchet"
+        f" {plugin_pin.version_of(PLUGIN_ROOT)}, and the upgrade has nothing to change."
     )
 
 
@@ -496,8 +548,9 @@ def test_a_change_to_no_guard_path_does_not_send_the_owner_to_the_merge_judge(
     repos.git(root, "add", "-A")
     capsys.readouterr()
     assert upgrade.main(["upgrade.py", "--root", str(root)]) == 1
-    assert capsys.readouterr().out.splitlines()[-1] == (
-        "upgrade: would write 1 edits in 1 files. 0 items are for an agent and 0 questions for you."
+    assert verdict(capsys.readouterr().out) == (
+        "upgrade: would write 1 edits in 1 files. 0 items are owed and 0 red; 0 of them hold an"
+        " assumption until the owner says otherwise."
     )
 
 
@@ -539,7 +592,7 @@ def test_who_edits_a_file_follows_the_manifest(tmp_path: Path) -> None:
         "the owner edits it by hand: its guard group `harness` denies agents"
     )
     assert upgrade.editor(repo, "docs/adr") == (
-        "a record (group `records`): an addition passes, a change asks the owner"
+        "a record (group `records`): an addition passes, a change goes to the owner"
     )
     assert upgrade.editor(repo, "docs/features") == "not a guard path: an agent edits it"
     assert upgrade.editor(repo, "AGENTS.md (or CLAUDE.md)").startswith("a guard path")
@@ -556,9 +609,10 @@ def test_each_kind_of_fix_prints_what_it_asks_or_starts_from() -> None:
         "        then: bind it",
     ]
     assert upgrade.describe(
-        conformance.Owner("is it live?", ("a Dockerfile",), ("owes a row",))
+        conformance.Owner("is it live?", "it is not yet", ("a Dockerfile",), ("owes a row",))
     ) == [
-        "    ? is it live?",
+        "        assumed: it is not yet",
+        "        settled by the owner's answer to: is it live?",
         "        seen: a Dockerfile",
         "        then: owes a row",
     ]

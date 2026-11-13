@@ -28,6 +28,7 @@ adoption starts from the rows these types leave out. Exits 2 on a type the catal
 
 from __future__ import annotations
 
+import functools
 import re
 import sys
 import tomllib
@@ -221,7 +222,12 @@ def dropped(question: str) -> str:
 
 
 def load(path: Path = CATALOGUE) -> Catalogue:
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    return parsed(path.read_text(encoding="utf-8"))
+
+
+@functools.lru_cache(maxsize=8)
+def parsed(text: str) -> Catalogue:
+    data = tomllib.loads(text)
     questions = data["question"]
     return Catalogue(
         types=dict(data["types"]),

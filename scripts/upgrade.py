@@ -5,14 +5,17 @@
 conformance gate calls ``auto``: the pin line, the workflow refs, the permission rules, the
 workflows, files and recipes the template supplies whole, the rows and sections the template
 adds. Each edit keeps every line it did not write, and none loosens a gate. What needs judgement
-is listed for an agent, and what only the owner can say is a question for the owner.
+is listed for an agent. What only the owner can say keeps a stated default that loosens nothing,
+so the upgrade asks him nothing. When the change moves the pin, every finding it leaves is
+written down in ``quality/owed.toml`` as owed: counted, and not red (ADR 0037).
 
 It writes guard paths: the binding, the workflows, `.claude/settings.json`. The merge judge, not the
 guard, is the trust boundary: a change that touches a guard path is `merge: owner`, so the upgrade
 reaches the default branch only once the owner merges it (ADR 0029).
 
 Usage: ``upgrade.py [--root DIR] [--apply]``. Without ``--apply`` it writes nothing. Exit status:
-0 when nothing is left to write or to do, 1 when edits are unwritten or items remain, 2 when it
+0 when nothing is left to write and nothing left is red (owed items may remain), 1 when edits are
+unwritten or an item left is red, 2 when it
 refuses (the plugin is older than the pin, its order against the pin cannot be told, it has no
 commit to pin, the root is not an adopted git repository, a file it would write leads out of
 the repository or is one git ignores, or ``just`` cannot read the justfile it would write), 3 when
@@ -30,12 +33,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
 import conformance
 import gatelib
+import owed
 import plugin_pin
 from conformance import Agent, Auto, Finding, Owner
 
@@ -50,8 +55,8 @@ PASSES = 6
 SHORT = 12
 EDITORS = {
     EditRule.DENY: "the owner edits it by hand: its guard group `{}` denies agents",
-    EditRule.ASK: "a guard path (group `{}`): an agent's edit asks the owner",
-    EditRule.APPEND: "a record (group `{}`): an addition passes, a change asks the owner",
+    EditRule.ASK: "a guard path (group `{}`): an agent edits it on a branch, the owner merges",
+    EditRule.APPEND: "a record (group `{}`): an addition passes, a change goes to the owner",
 }
 NOT_GUARDED = "not a guard path: an agent edits it"
 REFUSED, STUCK = 2, 3
@@ -70,21 +75,28 @@ class Change:
 
 @dataclass(frozen=True)
 class AgentFinding(Finding):
-    """A finding left for an agent."""
+    """A finding left for an agent; ``owed`` when an entry of the owed ledger excuses it."""
 
     fix: Agent
+    owed: bool = False
 
 
 @dataclass(frozen=True)
 class OwnerFinding(Finding):
-    """A finding left for the owner."""
+    """A finding left for the owner, under its stated default; ``owed`` as for an agent's."""
 
     fix: Owner
+    owed: bool = False
 
 
 @dataclass(frozen=True)
 class Plan:
-    """What an upgrade writes and what it leaves, for one repository and one plugin."""
+    """What an upgrade writes and what it leaves, for one repository and one plugin.
+
+    ``was`` and ``now`` are the two versions as the owner reads them. ``waiting`` names the checks
+    that do not run until what is left is fixed, and ``approved`` counts the items left in guard
+    paths, whose changes go to the owner at the merge.
+    """
 
     old: str
     new: str
@@ -92,6 +104,10 @@ class Plan:
     done: dict[str, list[str]]
     agent: list[AgentFinding]
     owner: list[OwnerFinding]
+    was: str
+    now: str
+    waiting: tuple[str, ...] = ()
+    approved: int = 0
 
     @property
     def edits(self) -> int:
@@ -102,6 +118,21 @@ class Plan:
     def left(self) -> int:
         """How many items remain for an agent and for the owner."""
         return len(self.agent) + len(self.owner)
+
+    @property
+    def items(self) -> list[AgentFinding | OwnerFinding]:
+        """Every item left, the agent's first."""
+        return [*self.agent, *self.owner]
+
+    @property
+    def red(self) -> list[AgentFinding | OwnerFinding]:
+        """The items no owed entry excuses: each stops a merge."""
+        return [finding for finding in self.items if not finding.owed]
+
+    @property
+    def owing(self) -> int:
+        """How many items the project owes: counted, and none of them red."""
+        return self.left - len(self.red)
 
 
 @dataclass(frozen=True)
@@ -245,6 +276,16 @@ def converge(sandbox: Path, done: dict[str, list[str]]) -> Converged:
         touched |= changed
 
 
+def pinned_to(plugin: Path) -> Finding:
+    """The edit that moves the binding's pin to ``plugin``, which every plan makes first."""
+    line = plugin_pin.line_for(plugin)
+    return Finding(
+        str(gatelib.BINDING),
+        "the pin moves to the plugin in use",
+        Auto(f"pinned: {line}", plugin_pin.with_pin(line)),
+    )
+
+
 def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     """What upgrading ``root`` to ``plugin`` writes, and what it leaves for others."""
     reason = refusal(root, plugin)
@@ -254,15 +295,13 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     changes: dict[str, Change] = {}
     with tempfile.TemporaryDirectory(prefix="ratchet-upgrade-") as scratch:
         sandbox = Path(scratch) / "tree"
-        line = plugin_pin.line_for(plugin)
-        pin = Finding(
-            str(gatelib.BINDING),
-            "the pin moves to the plugin in use",
-            Auto(f"pinned: {line}", plugin_pin.with_pin(line)),
-        )
         try:
             foreign = conformance.copied(root, sandbox)
-            touched = pass_over(sandbox, [pin], done)
+            touched = pass_over(sandbox, [pinned_to(plugin)], done)
+            first = converge(sandbox, done)
+            touched |= first.touched | pass_over(
+                sandbox, owing(root, sandbox, first.left, plugin=plugin), done
+            )
             converged = converge(sandbox, done)
         except StuckError as error:
             return Stuck(error.autos)
@@ -280,22 +319,91 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
         )
         if reason is not None:
             return Refused(reason)
+        red, _ = conformance.owed_split(sandbox, converged.left)
+        waiting = tuple(conformance.not_running(sandbox, converged.left))
+        reds = {id(finding) for finding in red}
+        approved = sum(
+            editor(sandbox, f.path) != NOT_GUARDED for f in converged.left if id(f) not in reds
+        )
     return Plan(
         old=standing(root, plugin),
         new=plugin_pin.in_use(plugin),
         changes=changes,
         done={name: did for name, did in done.items() if name in changes},
         agent=[
-            AgentFinding(f.path, f.problem, f.fix)
+            AgentFinding(f.path, f.problem, f.fix, f.rule, f.identity, f.stops, id(f) not in reds)
             for f in converged.left
             if isinstance(f.fix, Agent)
         ],
         owner=[
-            OwnerFinding(f.path, f.problem, f.fix)
+            OwnerFinding(f.path, f.problem, f.fix, f.rule, f.identity, f.stops, id(f) not in reds)
             for f in converged.left
             if isinstance(f.fix, Owner)
         ],
+        was=version_now(root, plugin),
+        now=plugin_pin.version_of(plugin) or "an unknown version",
+        waiting=waiting,
+        approved=approved,
     )
+
+
+def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> list[Finding]:
+    """The edit that writes down what the upgrade leaves, when the change moves the pin.
+
+    Why: ADR 0037. A release never turns an adopted repository red: what it newly asks is owed.
+    An entry is written for a finding no entry excuses yet, and only as many times as the same
+    plan, run on the merge base, leaves it red there: what the change itself brought stays red.
+    The ledger grows only in the change that moves the pin to a newer version, against the base
+    the ratchet-lowered gate compares with, so the gate and this agree on every run.
+    """
+    base = gatelib.base_commit(root)
+    before = gatelib.show(root, base, str(gatelib.BINDING)) if base else None
+    after = gatelib.read_text(sandbox / gatelib.BINDING)
+    pin = owed.moved(before, after, floor=plugin_pin.version_of(plugin))
+    if pin is None:
+        return []
+    red, _ = conformance.owed_split(sandbox, left)
+    allowed = red_at_base(root, base, plugin)
+    added = []
+    for finding in red:
+        key = finding.key()
+        if allowed[key] > 0 and not owed.never(key):
+            allowed[key] -= 1
+            added.append(owed.Entry(key[1], key[0], key[2], pin.version))
+    if not added:
+        return []
+    count = len(added)
+    does = f"write down {count} {'thing' if count == 1 else 'things'} owed since {pin.version}"
+    return [Finding(str(owed.LEDGER), "", Auto(does, owed.recorded(added)))]
+
+
+def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]:
+    """The keys the plan for ``plugin`` leaves red on what git holds at ``base``, by count.
+
+    Why: ADR 0037. What the upgrade may write down is what the release asks of the project as it
+    stood before the change, findings of the files the upgrade copies included; a violation the
+    change brought is not there, so it stays red.
+    """
+    if base is None:
+        return Counter()
+    with tempfile.TemporaryDirectory(prefix="ratchet-base-") as scratch:
+        tree = Path(scratch) / "tree"
+        gatelib.export(root, base, tree)
+        pass_over(tree, [pinned_to(plugin)], {})
+        left = converge(tree, {}).left
+        red, _ = conformance.owed_split(tree, left)
+    return Counter(key for key in (finding.key() for finding in red) if not owed.never(key))
+
+
+def version_now(root: Path, plugin: Path) -> str:
+    """The plugin version the repository runs now, as the owner's summary names it."""
+    pin = plugin_pin.pinned(gatelib.read_text(root / gatelib.BINDING))
+    if pin is not None:
+        return pin.version
+    versions = sorted(
+        {version_at(plugin, commit).strip() for commit in plugin_pin.ci_commits(root)}
+    )
+    return " and ".join(version for version in versions if version) or "an unpinned version"
 
 
 def joined(names: list[str]) -> str:
@@ -421,18 +529,21 @@ def by_file(found: list[Kept]) -> dict[str, list[Kept]]:
 
 
 def describe(fix: Agent | Owner) -> list[str]:
-    """The lines under a finding that say what to start from, or what is asked and seen."""
+    """The lines under a finding: what to start from, or what holds and what would settle it."""
     if isinstance(fix, Owner):
-        asked = [f"{HEAD}? {fix.ask}"]
-        asked += [f"{BODY}seen: {line}" for line in fix.evidence]
-        return asked + [f"{BODY}then: {line}" for line in fix.then]
+        lines = [
+            f"{BODY}assumed: {fix.assumed}",
+            f"{BODY}settled by the owner's answer to: {fix.ask}",
+        ]
+        lines += [f"{BODY}seen: {line}" for line in fix.evidence]
+        return lines + [f"{BODY}then: {line}" for line in fix.then]
     lines = [f"{BODY}{line}" if line else "" for line in fix.start]
     return lines + [f"{BODY}then: {line}" for line in fix.then]
 
 
-def agent_block(root: Path, found: list[AgentFinding]) -> str:
-    """The items an agent answers, by file, each file with who may edit it."""
-    lines = ["For an agent:"]
+def items_block(root: Path, title: str, found: list[AgentFinding | OwnerFinding]) -> str:
+    """Items left, by file, each file with who may edit it."""
+    lines = [title]
     for path, items in by_file(found).items():
         lines.append(f"  {path}: {editor(root, path)}")
         for item in items:
@@ -440,18 +551,8 @@ def agent_block(root: Path, found: list[AgentFinding]) -> str:
     return "\n".join(lines)
 
 
-def owner_block(found: list[OwnerFinding]) -> str:
-    """The questions only the owner answers, by file."""
-    lines = ["For you:"]
-    for path, items in by_file(found).items():
-        lines.append(f"  {path}")
-        for item in items:
-            lines += describe(item.fix)
-    return "\n".join(lines)
-
-
 def render(root: Path, result: Plan, *, applied: bool) -> str:
-    """The report: the header, what was written (or would be), then what is left."""
+    """The report: the header, what was written (or would be), what is left, the owner's words."""
     blocks = [f"upgrade: {root} from {result.old} to {result.new}."]
     if result.changes:
         verb = "Wrote" if applied else "Would write"
@@ -461,26 +562,89 @@ def render(root: Path, result: Plan, *, applied: bool) -> str:
             lines.append(f"  {name}")
             lines += [f"    - {did}" for did in result.done.get(name, [])]
         blocks.append("\n".join(lines))
-    if result.agent:
-        blocks.append(agent_block(root, result.agent))
-    if result.owner:
-        blocks.append(owner_block(result.owner))
-    blocks.append(summary(root, result, applied=applied))
+    if result.red:
+        title = (
+            "Red until fixed (no owed entry excuses these, and only a change that moves the pin"
+            " adds one):"
+        )
+        blocks.append(items_block(root, title, result.red))
+    owing = [finding for finding in result.items if finding.owed]
+    if owing:
+        title = f"Owed, none of them red, for an agent to work through ({owed.LEDGER}):"
+        blocks.append(items_block(root, title, owing))
+    blocks += [summary(root, result, applied=applied), plain(result, applied=applied)]
     return "\n\n".join(blocks) + "\n"
 
 
 def summary(root: Path, result: Plan, *, applied: bool) -> str:
-    """The last line: the counts, and what to do about the guard paths it touched."""
-    left = f"{len(result.agent)} items are for an agent and {len(result.owner)} questions for you."
+    """The agent's line: the counts, and what to do about the guard paths it touched."""
+    left = (
+        f"{result.owing} items are owed and {len(result.red)} red; {len(result.owner)} of them"
+        " hold an assumption until the owner says otherwise."
+    )
     if not result.changes:
         return f"upgrade: nothing to write. {left}"
     verb = "wrote" if applied else "would write"
     text = f"upgrade: {verb} {result.edits} edits in {len(result.changes)} files. {left}"
     if any(editor(root, name) != NOT_GUARDED for name in result.changes):
         text += (
-            " The change touches guard paths, so the merge judge leaves it to you: commit it"
-            " with the agent's edits as one change, and run `upgrade.py --apply` again after"
-            " them; it writes what an answer made decidable."
+            " The change touches guard paths, so the merge judge leaves the merge to the owner:"
+            " commit it as one change. An owed item needs no edit before it merges."
+        )
+    return text
+
+
+def plain(result: Plan, *, applied: bool) -> str:
+    """What the owner reads: the versions, the counts, the assumptions, and his one step.
+
+    Why: ADR 0037. The owner is asked one thing, the merge, so every call the upgrade left open
+    is stated with the default that holds, in words without the method's vocabulary.
+    """
+    moves = "moves" if applied else "would move"
+    made = "made" if applied else "would make"
+    if not result.changes:
+        text = f"This project is on Ratchet {result.now}, and the upgrade has nothing to change."
+    else:
+        changes = "change" if result.edits == 1 else "changes"
+        files = "file" if len(result.changes) == 1 else "files"
+        text = (
+            f"This project {moves} from Ratchet {result.was} to {result.now}. The upgrade {made}"
+            f" {result.edits} {changes} in {len(result.changes)} {files}."
+        )
+    if result.owing:
+        text += " " + owing_words(result.owing, approved=result.approved)
+    if result.red:
+        count = len(result.red)
+        text += f" {count} {'thing stops' if count == 1 else 'things stop'} a merge until fixed."
+    lines = ["In plain words:", text]
+    if result.waiting:
+        lines.append(f"Checks that do not run until then: {', '.join(result.waiting)}.")
+    assumed = list(dict.fromkeys(finding.fix.assumed for finding in result.owner))
+    if assumed:
+        lines += ["Assumed until you say otherwise:", *(f"- {line}" for line in assumed)]
+    if result.changes:
+        lines.append("Your one step is the merge.")
+    return "\n".join(lines)
+
+
+def owing_words(count: int, *, approved: int) -> str:
+    """What the owner reads of the items the upgrade leaves: what they stop, and who fixes them.
+
+    Why: ADR 0037. Nothing works through the list by itself. An agent makes a fix in a guard path
+    on a branch with no prompt (ADR 0033), and one change carries as many fixes as it likes, so
+    the owner decides once at that merge, not once per item.
+    """
+    things = "thing" if count == 1 else "things"
+    text = (
+        f"The project owes {count} {things} since the upgrade. None of them turns a check red or"
+        " stops a merge, and between upgrades the list only gets shorter. Nothing fixes them by"
+        " itself: ask an agent to."
+    )
+    if approved:
+        files = "Each is in a guard path" if approved >= count else f"{approved} are in guard paths"
+        text += (
+            f" {files}: an agent can make all the fixes in one change on a branch, and you decide"
+            " at that one merge."
         )
     return text
 
@@ -505,7 +669,7 @@ def main(argv: list[str]) -> int:
     if options.apply:
         apply(root, result.changes)
     print(render(root, result, applied=options.apply), end="")
-    return 1 if result.left or (result.changes and not options.apply) else 0
+    return 1 if result.red or (result.changes and not options.apply) else 0
 
 
 if __name__ == "__main__":
