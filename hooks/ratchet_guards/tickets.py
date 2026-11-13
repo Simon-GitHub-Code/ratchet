@@ -13,10 +13,10 @@ read as ``gh`` reads it: a call whose text names the label and which writes a ti
 not hold the status gives it, and asks. So does one that writes a directory tickets live in
 (``.scratch``, a feature's directory or its ``issues``), which may bring tickets with it. A path
 is read the way the shell and the filesystem may read it: in any case, through ``..`` and links,
-and with a glob in any part standing for whatever it could match. One call that writes every
-ticket of a spec is one ask, which names each of them. Out of reach, as for every shell rule
-(ADR 0024): a script run by path, a file copied into place, a label put together when the
-command runs.
+and with a glob, a brace expansion, a variable or a substitution in any part standing for
+whatever it could spell. One call that writes every ticket of a spec is one ask, which names
+each of them. Out of reach, as for every shell rule (ADR 0024): a script run by path, a file
+copied into place, a label put together when the command runs.
 
 The ask is a courtesy on the honest path, not the control. A command can still give a ticket
 the label without one: copy a file that holds it into place (``cp notes/ready.md
@@ -31,12 +31,14 @@ from pathlib import Path
 
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gh import ready_label
+from ratchet_guards.shell import PLACEHOLDER
 from ratchet_guards.verdict import Verdict
 
 TRACKER_DIRECTORY = ".scratch"
 TICKETS_DIRECTORY = "issues"
 TICKET_SUFFIX = ".md"
-_GLOB = re.compile(r"[*?[]")
+# Why: a glob, a brace expansion, a variable or a substitution may spell any name there.
+_GLOB = re.compile(rf"[*?[{{$`]|{re.escape(PLACEHOLDER)}")
 RULE = "agent-ready-label"
 STATUS_LINE = re.compile(
     r"^\*{0,2}status:?\*{0,2}:?\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE
@@ -49,7 +51,7 @@ def _readings(path: Path, guard: Guard) -> tuple[Path, ...]:
 
 
 def _part(part: str, name: str) -> bool:
-    """Whether a path part may name ``name``: in any case, or as a glob that could match it."""
+    """Whether a path part may name ``name``: in any case, or as a pattern or expansion."""
     return part.casefold() == name or _GLOB.search(part) is not None
 
 
