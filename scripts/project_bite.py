@@ -760,10 +760,13 @@ class Copy:
 
         A bite stands only while every later run of its command with no fault planted is green:
         the green run of each later bite with the same ``args``, and one closing run after the
-        last bite, for each set of ``args`` a bite that bit gave the gate.
+        last bite, for each set of ``args`` a bite that bit gave the gate. Once the proof is
+        stopped, nothing more runs and no verdict is given.
         """
         outcomes: list[Outcome] = []
         for bite in bites:
+            if self.shell.stopped:
+                return
             # Why: a green run taken before an earlier fault says nothing of what that fault left
             # behind (a cache, a mark in an ignored file), so each fault gets its own green run.
             code, green = self.unfaulted(row, bite.args, outcomes)
@@ -782,7 +785,8 @@ class Copy:
         # Why: a gate red from its second run on, by state it keeps, is red on every fault.
         for args in dict.fromkeys(o.bite.args for o in outcomes if o.verdict is Verdict.BITES):
             self.unfaulted(row, args, outcomes)
-        yield from outcomes
+        if not self.shell.stopped:
+            yield from outcomes
 
     def unfaulted(
         self, row: Row, args: tuple[str, ...], outcomes: list[Outcome]
