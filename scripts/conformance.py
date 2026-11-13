@@ -869,9 +869,13 @@ def check_triggers(root: Path) -> Iterable[Finding]:
         )
         # Why: ADR 0037. The section, with the rows every stack writes alike, lets the triggers
         # gate count those kinds from the next change; a kind found by this stack's own paths is
-        # an agent's row, which conformance asks for once the types are named.
+        # an agent's row, which conformance asks for once the types are named. The table goes in
+        # padded: every Markdown formatter pads one this narrow, so a project that checks its
+        # format would be red on it otherwise.
         rows = "\n".join(MECHANICAL_TRIGGERS.values())
-        made = template_binding().replace(TRIGGERS_PLACEHOLDER_ROW, rows)
+        made = markdown_text.padded(
+            template_binding().replace(TRIGGERS_PLACEHOLDER_ROW, rows), triggers.SECTION.strip()
+        )
         yield missing_section(BINDING_PATH, problem, "## Triggers", template_text=made)
         return
     kinds, problems = triggers.parse(text)

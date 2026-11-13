@@ -165,6 +165,16 @@ def table(text: str, heading: str) -> Table | None:
     return Table(split[0], aligns, tuple(split[2:]), first, last, tuple(block))
 
 
+def padded(text: str, heading: str) -> str:
+    """The text with the first table under ``heading`` padded, as a formatter writes it."""
+    found = table(text, heading)
+    if found is None:
+        return text
+    lines = text.split("\n")
+    lines[found.first : found.last] = found.render(found.rows)
+    return "\n".join(lines)
+
+
 class _Neighbour(NamedTuple):
     """The key a new key goes beside: its position among the keys, and whether it goes after."""
 

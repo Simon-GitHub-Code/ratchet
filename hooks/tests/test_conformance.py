@@ -701,11 +701,11 @@ def test_the_triggers_table_is_written_from_the_template_s_text(repo: Path) -> N
     assert found.problem.startswith("has no '## Triggers' section; add the template's")
     assert isinstance(found.fix, conformance.Auto)
     assert found.fix.does == "add the template's '## Triggers' section"
-    written = markdown_text.section(
-        found.fix.want((repo / BINDING).read_text(encoding="utf-8")), "## Triggers"
-    )
-    assert "| Kind | Paths | Pattern |" in written
-    assert "| <kind> |" not in written
+    after = found.fix.want((repo / BINDING).read_text(encoding="utf-8"))
+    table = markdown_text.table(after, "## Triggers")
+    assert table is not None
+    assert table.header == ("Kind", "Paths", "Pattern")
+    assert "| <kind> |" not in markdown_text.section(after, "## Triggers")
 
 
 def test_the_triggers_table_needs_a_row_per_kind_a_question_of_the_types_names(

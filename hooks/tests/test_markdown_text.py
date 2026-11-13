@@ -149,6 +149,25 @@ def test_a_padded_table_stays_padded_and_a_written_one_gets_the_template_line(
         assert once == text
 
 
+@given(entry_points())
+def test_padding_a_table_keeps_its_cells_and_pads_it_once(case: tuple[str, bool]) -> None:
+    text, _ = case
+    once = markdown_text.padded(text, ENTRY)
+    before, after = markdown_text.table(text, ENTRY), markdown_text.table(once, ENTRY)
+    assert before is not None
+    assert after is not None
+    assert after.padded
+    assert (after.header, after.rows) == (before.header, before.rows)
+    assert markdown_text.padded(once, ENTRY) == once
+    if before.padded:
+        assert once == text
+
+
+def test_padding_leaves_a_text_with_no_table_under_the_heading_alone() -> None:
+    text = f"{ENTRY}\n\nNo table here.\n"
+    assert markdown_text.padded(text, ENTRY) == text
+
+
 @given(
     st.lists(st.sampled_from(ORDER), unique=True).map(lambda keys: sorted(keys, key=ORDER.index)),
     st.lists(st.sampled_from(PROJECT_ROWS), unique=True),

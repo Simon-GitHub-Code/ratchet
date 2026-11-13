@@ -120,6 +120,9 @@ def test_a_missing_triggers_section_is_written_with_the_row_every_stack_writes_a
     assert problems == []
     assert set(kinds) == {"flag"}
     assert FLAG_ROW in text(repo, BINDING)
+    written = markdown_text.table(text(repo, BINDING), "## Triggers")
+    assert written is not None
+    assert written.padded, "a Markdown formatter pads a table this narrow"
     assert left
     assert all("the Triggers table has no row for kind" in f.problem for f in left), left
     assert all(isinstance(f.fix, conformance.Agent) for f in left)
