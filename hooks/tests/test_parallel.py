@@ -92,7 +92,7 @@ def test_all_green_prints_each_gate_whole_then_one_line_with_its_seconds(
     code = run("--", gate(SAY, "out-a", "err-a"), gate(SAY, "out-b", "err-b"))
     out = capsys.readouterr().out
     assert code == 0
-    assert out.endswith("parallel: green\n")
+    assert out.endswith("parallel: green (2 ran)\n")
     for tag in "ab":
         assert f"out-{tag}\nerr-{tag}\n" in out
     assert out.count(": green in ") == 2
@@ -186,31 +186,120 @@ def test_the_closing_lines_name_the_slowest_gate(capsys: pytest.CaptureFixture[s
     ]
     assert parallel.closing(scheduler, 10.0) == []
     assert capsys.readouterr().out == (
-        "parallel: 2 of 2 gates finished in 10.0s (9.7s of gate time): 2 judged and green;"
+        "parallel: 2 checks in 10.0s (9.7s of check time): 2 ran and passed;"
         " slowest: slow gate 9.5s\n"
     )
 
 
-def test_a_gate_that_says_later_or_none_is_counted_apart_from_the_judged_ones(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    later, none, green, red = (
-        gate(SAY, "later: code:source", ""),
-        gate(SAY, "none: not a service", ""),
-        gate(SAY, "later: code:source", "and then judged something"),
-        gate("print('later: code:source'); raise SystemExit(2)"),
+def binding(root: Path, rows: dict[str, str]) -> Path:
+    """A binding at ``root`` whose Gates table gives each entry point its Tool cell."""
+    table = "".join(
+        f"| {name} question | {tool} | 1 | | `just {name}` |\n" for name, tool in rows.items()
     )
-    assert run("--", later, none, green, red) == 1
+    text = (
+        "# Binding\n\n## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
+        f"|---|---|---|---|---|\n{table}\n## Speed\n"
+    )
+    (root / "docs/process").mkdir(parents=True)
+    (root / "docs/process/binding.md").write_text(text, encoding="utf-8")
+    return root
+
+
+def named(code: str, *args: object, name: str) -> str:
+    """A gate entry whose last word, the name of its entry point, is ``name``."""
+    return gate(code, *args, name)
+
+
+def test_a_gate_the_binding_leaves_for_later_or_none_is_counted_apart_from_those_that_ran(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = binding(
+        tmp_path,
+        {
+            "waits": "later: code:source",
+            "skipped": "none: not a service",
+            "bound": "later: code:source",
+            "real": "a tool",
+        },
+    )
+    later = named(SAY, "later: code:source", "", name="waits")
+    none = named(SAY, "none: not a service", "", name="skipped")
+    ran = named(SAY, "later: code:source", "and then judged something", name="bound")
+    real = named(SAY, "none: 0 problems found", "", name="real")
+    red = named("print('later: code:source'); raise SystemExit(2)", name="waits-red")
+    assert run("--root", str(root), "--", later, none, ran, real, red) == 1
     out = capsys.readouterr().out
-    assert f"parallel: {later}: judged nothing (later: code:source) in " in out
-    assert f"parallel: {none}: judged nothing (none: not a service) in " in out
-    assert f"parallel: {green}: green in " in out
+    assert f"parallel: {later}: not run yet (later: code:source) in " in out
+    assert f"parallel: {none}: not applicable (none: not a service) in " in out
+    assert f"parallel: {ran}: green in " in out
+    assert f"parallel: {real}: green in " in out
     assert f"parallel: {red}: red (exit 2) in " in out
     assert (
-        "(gate time): 1 judged and green, 1 red, 1 not asked yet (later: each one's line names"
-        " what it waits for), 1 not applicable (none); slowest: "
-    ) in re.sub(r"\(\d+\.\ds of gate time\)", "(gate time)", out)
+        "(check time): 2 ran and passed, 1 failed; 1 not run yet, each waiting for what its line"
+        " names; 1 not applicable, as its line says; slowest: "
+    ) in re.sub(r"\(\d+\.\ds of check time\)", "(check time)", out)
     assert out.endswith(f"{red}: red (exit 2)\nparallel: red\n")
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("`later: code:source`", "later: code:other", "not run yet"),
+        ("ruff", "later: code:source", "not run yet"),
+        (None, "later: code:source", "not run yet"),
+        ("`later: code:source`", "  later: code:source  ", "not run yet"),
+        ("`later: code:source`", "later: code:source\nlater: code:source", "green"),
+        ("none: not a service", "none: not a service", "not applicable"),
+        (None, "none: not a service", "not applicable"),
+        ("ruff", "none: 0 problems found", "green"),
+    ],
+    ids=[
+        "a later line its row does not name",
+        "a later line from a row bound to a tool",
+        "a later line from no row",
+        "a later line with spaces around",
+        "two later lines",
+        "a none line from a none row",
+        "a none line from no row",
+        "a none line from a tool",
+    ],
+)
+def test_one_later_line_has_not_run_whatever_the_row_and_a_none_line_ran_only_from_a_tool(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], case: tuple[str | None, str, str]
+) -> None:
+    # Why: a gate counted ran because its later: line and its row disagreed, and a run of such
+    # gates said `parallel: green (2 ran)` with nothing judged.
+    tool, output, says = case
+    root = binding(tmp_path, {"waits": tool} if tool else {"other": "ruff"})
+    entry = named("import sys; print(sys.argv[1])", output, name="waits")
+    assert run("--root", str(root), "--", entry) == 0
+    assert f"parallel: {entry}: {says}" in capsys.readouterr().out
+
+
+def test_a_run_where_no_check_ran_says_so_is_not_red_and_never_says_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: a recipe left as its `later:` stub after its row was bound judges nothing either.
+    root = binding(tmp_path, {"one": "ruff", "two": "none: not a service"})
+    one = named(SAY, "later: code:source", "", name="one")
+    two = named(SAY, "none: not a service", "", name="two")
+    assert run("--root", str(root), "--", one, two) == 0
+    out = capsys.readouterr().out
+    assert (
+        ": 0 ran and passed; 1 not run yet, each waiting for what its line names;"
+        " 1 not applicable, as its line says; slowest: "
+    ) in out
+    assert out.endswith("\nparallel: no check ran (1 not run yet, 1 not applicable)\n")
+    assert "green" not in out.splitlines()[-1]
+
+
+def test_the_last_line_counts_what_ran_and_what_waits(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = binding(tmp_path, {"one": "later: code:source"})
+    one = named(SAY, "later: code:source", "", name="one")
+    assert run("--root", str(root), "--", one, gate(EXIT, 0), gate(SAY, "ok", "")) == 0
+    assert capsys.readouterr().out.endswith("\nparallel: green (2 ran, 1 not run yet)\n")
 
 
 def test_fail_fast_stops_the_running_and_names_what_never_started(
