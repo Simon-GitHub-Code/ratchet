@@ -22,6 +22,11 @@ Usage::
 * ``{port}`` in ``--boot``, ``--ready``, an ``--env`` value or the command is replaced by a free
   port the kernel picked, and ``PORT`` is exported with it, so parallel CI jobs on one host do
   not collide on a fixed port. The boot output is shown only when the run is red.
+* The kernel's pick is only free until the service binds it, and another gate can take it in
+  between. So when a service on a port picked that way exits before it answers, the gate says so
+  on stderr with that first boot's output and boots once more on a new port. A second failure is
+  red as before, and a service that always fails ends red after the one retry. A port the caller
+  fixed in the command is never changed, so it is not retried.
 * ``RATCHET_READY`` is exported with the ready URL, port filled in, so the command can tell the
   readiness route from the rest: ``load_smoke.py`` is red while it requests nothing else.
 * Something already answering on the ready URL's port before the boot is red, since the probe
@@ -174,25 +179,41 @@ def main(argv: list[str]) -> int:
     split = rest.index("--") if "--" in rest else len(rest)
     options = parser.parse_args(rest[:split])
     command = rest[split + 1 :]
-    env = dict(os.environ)
-    texts = [options.boot, options.ready, *command, *(value for _, value in options.env)]
-    if any(PORT_TOKEN in text for text in texts):
-        env["PORT"] = str(gatelib.free_port())
-
-    def expand(text: str) -> str:
-        return text.replace(PORT_TOKEN, env.get("PORT", PORT_TOKEN))
-
-    options.boot, options.ready = expand(options.boot), expand(options.ready)
-    env[gatelib.READY_ENV] = options.ready
-    env.update({key: expand(value) for key, value in options.env})
-    command = [expand(word) for word in command]
     if urlsplit(options.ready).scheme not in ("http", "https"):
         parser.error(f"--ready {options.ready!r} is not an http or https URL")
-    if gatelib.listening(options.ready):
-        problem = f"{options.ready} already answers before the boot: free the port or use {{port}}"
-        return gatelib.report("with_service", [problem])
-    with gatelib.interrupts_raise():
-        code, problems, _ = serve(options, command, env)
+    pairs = options.env
+    texts = [options.boot, options.ready, *command, *(value for _, value in pairs)]
+    picked = any(PORT_TOKEN in text for text in texts)
+
+    def attempt() -> tuple[int, list[str], bool]:
+        """One boot on a port picked now; the exit code, the problems, whether it exited."""
+        env = dict(os.environ)
+        if picked:
+            env["PORT"] = str(gatelib.free_port())
+
+        def expand(text: str) -> str:
+            return text.replace(PORT_TOKEN, env.get("PORT", PORT_TOKEN))
+
+        ran = argparse.Namespace(**{**vars(options), "boot": expand(options.boot)})
+        ran.ready = expand(options.ready)
+        env[gatelib.READY_ENV] = ran.ready
+        env.update({key: expand(value) for key, value in pairs})
+        if gatelib.listening(ran.ready):
+            problem = f"{ran.ready} already answers before the boot: free the port or use {{port}}"
+            return 1, [problem], False
+        with gatelib.interrupts_raise():
+            return serve(ran, [expand(word) for word in command], env)
+
+    code, problems, exited = attempt()
+    if exited and picked:
+        # Why: the kernel's pick is free only until the service binds it, and another gate may
+        # have taken it first. A service that always fails still ends red, after this one retry.
+        print(
+            "with_service: exited before answering; booting once more on a new port",
+            file=sys.stderr,
+        )
+        print("\n".join(problems), file=sys.stderr)
+        code, problems, _ = attempt()
     gatelib.report("with_service", problems)
     return code
 

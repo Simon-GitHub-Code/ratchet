@@ -85,7 +85,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `ratchet_guards.diff` | 1 | which guard paths changed? |
 | `scripts/settings_rules.py` | 1 | do the permission rules still mirror the manifest? |
 | `scripts/conformance.py` | 1 | does the repository still carry the method: its records, its binding, its application types, its Speed section, its CI shape? `--self-test` shows it bites |
-| `scripts/with_service.py` | 1 | does the deliverable start and answer? Boots a service by any command, waits until a URL answers, stops the whole process tree; with a command after `--` it holds the service up for that command |
+| `scripts/with_service.py` | 1 | does the deliverable start and answer? Boots a service by any command, waits until a URL answers, stops the whole process tree, retrying once on a new port when a service on a port it picked exits before it answers; with a command after `--` it holds the service up for that command |
 | `scripts/load_smoke.py` | 1 | does a running service stay correct under seconds of concurrent requests? Judged on errors only, never on latency, and red while it requests nothing but the readiness URL |
 | `scripts/telemetry_sink.py` | 2 | does the telemetry arrive? An OTLP/HTTP receiver that is green only when traces, metrics and logs arrived non-empty for the expected `service.name`; no collector to install |
 | `scripts/project_bite.py` | 1 and 2 | does every gate the repository bound go red on its fault, and on an empty collection? Plants each fault of `quality/bites.toml` in a scratch copy; with `--changed`, only when the change touches a gate |
