@@ -391,6 +391,41 @@ def test_a_ticket_whose_feature_run_blocked_waits_for_the_default_branch_to_move
     assert route.decide(root, None).command == f"{route.FEATURE} {ticket}", "main moved on"
 
 
+HELD = ".scratch/f/issues/02-b.md"
+HELD_TEXT = "# 02: B\n\nStatus: ready-for-agent" + CONJECTURE
+
+
+@pytest.mark.parametrize(
+    ("path", "text", "released"),
+    [
+        (".scratch/g/spec.md", "# G\n", False),
+        (".scratch/g/issues/01-a.md", "# 01: A\n\nStatus: needs-triage\n", False),
+        ("GLOSSARY.md", ADOPTED["GLOSSARY.md"] + "\n**Order**: what a customer places.\n", False),
+        (HELD, HELD_TEXT + "\n## Answers\n\nQ: a? A: b.\n", True),
+        (".scratch/f/spec.md", "# F\n\nThe owner's answer.\n", True),
+        ("docs/adr/0002-x.md", "# X\n", True),
+    ],
+    ids=["a spec", "a ticket", "a term", "the answers", "its spec", "a decision"],
+)
+def test_records_an_agent_lands_do_not_release_a_blocked_run(
+    tmp_path: Path, path: str, text: str, *, released: bool
+) -> None:
+    # Why: records alone reach the default branch without the owner (ADR 0031), so the default
+    # branch moving no longer means the owner answered; only a move that could answer does.
+    files = {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: HELD_TEXT}
+    root = repository(tmp_path, files)
+    git(root, "switch", "-q", "-c", "feature/2-b")
+    write(root, "docs/features/b/spec.md", "draft\n")
+    git(root, "stash", "push", "-q", "-u", "-m", "feature/2-b: blocked run")
+    git(root, "switch", "-q", "main")
+    write(root, path, text)
+    commit(root, "docs(records): land what the owner's conversation wrote")
+    step = route.decide(root, None)
+    assert (step.stage, step.command) == (
+        ("build", f"{route.FEATURE} {HELD}") if released else ("blocked-run", step.command)
+    )
+
+
 def test_only_a_blocked_run_holds_a_ticket(tmp_path: Path) -> None:
     files = {**ADOPTED, ".scratch/f/issues/02-b.md": "# 02: B\n\nStatus: ready-for-agent\n"}
     root = repository(tmp_path, files)

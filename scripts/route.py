@@ -343,19 +343,34 @@ def blocked_runs(root: Path, default_branch: str) -> dict[str, str]:
     """Branches whose last feature run blocked and whose block still stands, with its stash.
 
     The feature skill stashes a blocked run as ``<branch>: blocked run``. The block stands while
-    the default branch has not moved past the run: the owner answers the ticket or lands the
-    guard edits there, so a newer default branch is the cue to build again.
+    the default branch has not moved past the run, or has gained only records the merge judge
+    lets an agent land alone: the owner answers the ticket or lands the guard edits there, so a
+    newer default branch that holds what the owner merged is the cue to build again.
     """
     listing = gatelib.git(root, "stash", "list", "--format=%gd%x09%gs") or ""
     found: dict[str, str] = {}
     for line in listing.splitlines():
         ref, _, subject = line.partition("\t")
         run = subject.split(": ", 1)[-1]
-        if run.endswith(BLOCKED_RUN) and (
-            gatelib.git(root, "merge-base", "--is-ancestor", default_branch, ref) is not None
-        ):
+        if run.endswith(BLOCKED_RUN) and not answered(root, default_branch, ref):
             found.setdefault(run.removesuffix(BLOCKED_RUN), run)
     return found
+
+
+def answered(root: Path, default_branch: str, stash: str) -> bool:
+    """Whether the default branch gained, since the blocked run, a change the owner merged.
+
+    Why: records alone land without the owner (ADR 0031), so a move made of them answers
+    nothing; the answers on the held ticket, its spec or an ADR are the owner's to merge.
+    """
+    if gatelib.git(root, "merge-base", "--is-ancestor", default_branch, stash) is not None:
+        return False
+    fork = gatelib.git(root, "merge-base", default_branch, stash) or default_branch
+    listed = gatelib.git(root, "diff", "--name-only", "-z", fork, default_branch) or ""
+    paths = [path for path in listed.split("\0") if path]
+    return bool(
+        merge_ready.not_records(root, fork, paths) or merge_ready.judge(root, fork, default_branch)
+    )
 
 
 def stalled(ticket: preflight.Ticket, runs: dict[str, str]) -> str | None:
