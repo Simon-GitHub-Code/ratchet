@@ -44,6 +44,8 @@ The A/B comparison is two runs, one per checkout, and a diff of their `metrics.j
 
 **Stops.** The first merged change after which the app starts and its slice works; the wall-clock budget; the cost budget (product session plus owner model); the same instruction twice on an unchanged checkout, or three times in all.
 
+The owner follows the route and the `next:` lines of what they paste, not commands a turn gives only in prose. When a skill ends by listing `git merge` lines for the owner and the route still names that skill, the run stops on the repeat: that is the route and the session disagreeing, and the baseline below stops there.
+
 **The app check.** After every merge, and once at the end, the default branch is checked out into a work tree of its own (the project's `node_modules` or `.venv` linked in) and started the way the repository tells a person to: a run command in a README code block first, then a `start`, `dev`, `serve`, `run` or `app` recipe in the justfile, then a `start`, `dev` or `serve` script in `package.json`. The app gets a free port through `PORT`; one that ignores it is found by the URL it prints. The check requests `/`, fills the first text field of the page's form with a link, sends it and looks for the link on the page. "No way to start it" is a finding, not a crash.
 
 **The plugin under test.** The run clones the checkout's HEAD into `plugin/` before it starts, and everything runs from that clone: the session's plugin, the route, and the adopted project's gates, which find it through `RATCHET_PLUGIN` (without it they run from the installed marketplace copy, whatever checkout the run was given). A commit landing on the checkout mid-run changes nothing, which the first baseline needed: a merge to main landed eight minutes into it. Uncommitted changes in the checkout are not under test; the run says so and `meta.plugin.dirty` records it.
@@ -59,14 +61,14 @@ Two settings bend the numbers, and a reader comparing runs should know them. Bas
 | `minutes.to_first_merge`, `minutes.to_first_usable_merge` | minutes from the start to the first merge on the default branch, and to the first after which the slice works |
 | `app` | the last app check: the start command and where the repository says it, whether it started, served `/` and passed the slice, and the finding |
 | `questions` | by class, by channel, recommended offered and taken (dialog and `also:` questions only: a prose question has no marked option), and every question with its answer |
-| `prompts` | prompts the owner answered: `guard` (the Ratchet guard's ask), `permission` (Claude Code's own), and how many the owner declined |
+| `prompts` | prompts the owner answered: `guard` (the Ratchet guard's ask, or the `ask` rule adopt writes for a guard path, which Claude Code reports with no reason), `permission` (Claude Code's own), and how many the owner declined |
 | `guard_denials` | tool calls the guard denied the agent outright |
 | `pastes` | every shell command the owner had to paste, with its exit code |
 | `asks` | work the route named in words that the owner asked the assistant to do |
 | `merges`, `hand_merges` | each merge with who made it (`hand`, `entry-point` or `agent`) and the owner-facing text at that moment, verbatim |
 | `red_gates` | each gate red in a command the owner ran, and whether it was red again on the driver's rerun |
 | `session_red_gates` | gates the agent saw red inside the session, by name |
-| `gates` | of the widest gate run, the gates that judged and the ones that printed `later:` with their trigger |
+| `gates` | of the widest gate run, the gates that judged, the ones that printed `later:` with their trigger, and the ones that do not apply (`none`) |
 | `agents` | agents spawned (Agent tool and workflow agents) and workflow runs |
 | `cost_usd` | the product session's cost as the CLI reports it, and the owner model's |
 | `steps` | each step's command, action, start minute, minutes and cost |
@@ -76,6 +78,42 @@ Two settings bend the numbers, and a reader comparing runs should know them. Bas
 
 The measurement reducer (over a recorded run and over the dogfood run's logs), the stop conditions, the route-to-move table, the owner's classification plumbing, the gate parser, the safety check and the app check (against a small server that does or does not save the link) run in `just check`, under the repository's 100% line and branch coverage, `ruff` and `mypy --strict`. The other evals keep their scripts outside those gates; this one is inside them because a wrong reducer would move every comparison. `first_hour/drive.py` is the one exception: it needs the Agent SDK and a signed-in `claude`, so coverage omits it and mypy skips it, and nothing in it decides a number. No tier runs a full run: it costs real money and up to two hours.
 
+## Baseline
+
+Ratchet `main` at `a47b55a` (0.11.0), Claude Code 2.1.323, SDK 0.2.181, product model `claude-opus-5-5`, owner model haiku, persona `read-later`, harness `235911f`. Run on 2026-11-13 at a load average near 60 on a shared box.
+
+| Measure | Value |
+| --- | --- |
+| Stopped | repeat at 100.9 min (`/ratchet:safeguard` again: its branches wait for a hand merge) |
+| Minutes to first merged change | 36.6 (the adoption branch, by hand) |
+| Minutes to first usable merged change | n/a |
+| App | no way to start it: no README, and no `dev` or `start` script or recipe |
+| Questions (product / default-able) | 24 (11 / 13) |
+| Recommended option offered / taken | 16 / 15 |
+| Guard approval prompts / other permission prompts | 17 / 30 |
+| Guard denials the agent met | 2 |
+| Shell commands the owner pasted | 3 |
+| Things the owner asked the assistant to do | 1 |
+| Merges | 2: the adoption by hand, ticket 01 by the drain |
+| Red gates (red again on rerun) | bite-all (no) |
+| Gates judged / waiting / not applicable | 26 / 32 / 7 |
+| Cost | $30.14 product session, $0.07 owner |
+
+The run's driver parsed the widest gate run with a parser that predated the runner's `judged nothing (later: ...)` line; that one event was parsed again from its saved log (`logs/04-just-merge-chore-adopt-ratchet-paste-3.txt`), and the event log as recorded is kept beside it.
+
 ## Noise and signal
 
-One run is one sample. From the runs so far (the dogfood run, a one-step smoke run, and the baseline below), this is what moves between runs without a change to the plugin, and what does not.
+One run is one sample. Three runs reached the adoption merge: two stopped early (one by an owner who refused the drain's work trees, one because main moved under it) and the baseline. Their first 37 minutes, with the dogfood run of the same day:
+
+| | Load | `/ratchet:adopt` | Cost to there | First merge | Questions to there |
+| --- | --- | --- | --- | --- | --- |
+| first attempt (`b254a2c`) | 9 to 19 | 18.4 min | $8.0 | 23.4 min, by hand | 20 |
+| second attempt (`b254a2c`) | 37 to 73 | 30.6 min | $9.2 | 36.9 min, by hand (38.3 as recorded: that harness timed a merge at its step's end) | 17 |
+| baseline (`a47b55a`) | 59 to 63 | 31.3 min | $11.2 | 36.6 min, by hand | 17 |
+| dogfood run, by hand | | | | 23.4 min, by hand | |
+
+What moves: wall-clock minutes follow the machine's load more than the plugin (adoption took 18 minutes on a quiet box and 31 on a busy one), so compare minutes only between runs at a similar `meta.load_avg`. Cost per step varies by about a third. Question counts move by a handful, and the owner model answers the same question differently: init's defaults (which include a GitHub remote) were refused in one run and accepted in the baseline, where the harness's refusal of `gh repo create` kept the project local anyway. Prompt counts depend on how far the run got: the drain alone asked 17 times for writes into its own work trees. `bite-all`'s drain smoke went red on clean state under load and green on the rerun in two of three runs; the rerun column says which reds to believe.
+
+What held: every run hand-merged the adoption after `just merge` answered `merge: owner`; every app check found no way to start the app; the first owner paste was always the same three commands; the gates that judge versus wait are fixed by the plugin commit and the project's kinds, not by the run. Those are the measures to compare across one run each. Minutes, cost and question counts need two or three runs a side before a difference of less than about a third means anything.
+
+`integrity.unchanged` was false in the baseline: Claude Code's own marketplace auto-update rewrote the plugin registry at 07:35 (impeccable 4.8.2 to 4.9.0) while no command of the run touched it. The session had loaded its plugins at the start, so the run was not affected, but the check cannot tell who changed the registry; a reader should look at which entries changed before blaming the run.

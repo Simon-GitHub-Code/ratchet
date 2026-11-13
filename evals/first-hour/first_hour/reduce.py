@@ -256,15 +256,30 @@ def _gate_coverage(gates: list[Event]) -> dict[str, object]:
     """Of the widest gate run the driver saw, the gates that judged and the ones that waited."""
     runs = [g for g in gates if g.get("attempt") == 1 and isinstance(g.get("gates"), list)]
     if not runs:
-        return {"ran": [], "later": {}, "command": None}
+        return {"ran": [], "later": {}, "none": [], "command": None}
     widest = max(runs, key=lambda g: len(_listed(g)))
     listed = _listed(widest)
     return {
         "command": widest.get("command"),
         "minute": _minute(widest),
-        "ran": sorted(str(g["name"]) for g in listed if g.get("status") != "later"),
+        "ran": sorted(str(g["name"]) for g in listed if g.get("status") in ("green", "red")),
         "later": {str(g["name"]): g.get("trigger") for g in listed if g.get("status") == "later"},
+        "none": sorted(str(g["name"]) for g in listed if g.get("status") == "none"),
     }
+
+
+def _origin(prompt: Event) -> str:
+    """Who asked: the Ratchet guard (its hook, or the ask rules adopt writes), or Claude Code.
+
+    Why: an Edit or Write inside the project is on the session's allow-list, so the only thing
+    that asks for one is the project's own ``ask`` rule for a guard path, which Claude Code
+    reports with no reason at all.
+    """
+    origin = str(prompt.get("origin"))
+    write = prompt.get("tool") in ("Edit", "Write", "NotebookEdit")
+    if origin == "permission" and write and not prompt.get("reason"):
+        return "guard"
+    return origin
 
 
 def _app(apps: list[Event]) -> dict[str, object]:
@@ -299,7 +314,7 @@ def reduce(events: Iterable[Event]) -> dict[str, object]:
         }
         for m in fold.merges
     ]
-    prompts = Counter(str(p.get("origin")) for p in fold.prompts)
+    prompts = Counter(_origin(p) for p in fold.prompts)
     return {
         "meta": {**fold.meta, "models_seen": fold.models},
         "stop": {**fold.stop, "minute": round(fold.last_s / 60, 1)},
@@ -405,8 +420,8 @@ def table(metrics: dict[str, object]) -> str:
         ("Hand merges", f"{at('hand_merges')} of {_count(_at(metrics, 'merges'))}"),
         ("Red gates (red again on rerun)", reds or "none"),
         (
-            "Gates judged / waiting (`later:`)",
-            f"{_count(_at(metrics, 'gates.ran'))} / {_count(_at(metrics, 'gates.later'))}",
+            "Gates judged / waiting (`later:`) / not applicable",
+            " / ".join(str(_count(_at(metrics, f"gates.{k}"))) for k in ("ran", "later", "none")),
         ),
         ("Agents spawned", f"{at('agents.spawned')} ({at('agents.workflows')} workflow runs)"),
         (

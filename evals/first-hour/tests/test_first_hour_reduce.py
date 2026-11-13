@@ -176,6 +176,15 @@ def recorded() -> list[dict[str, object]]:
         ),
         {"s": 176, "step": "03-feature", "kind": "prompt", "origin": "guard", "decision": "allow"},
         {
+            "s": 176.5,
+            "step": "03-feature",
+            "kind": "prompt",
+            "origin": "permission",
+            "tool": "Write",
+            "reason": "",
+            "decision": "allow",
+        },
+        {
             "s": 177,
             "step": "03-feature",
             "kind": "prompt",
@@ -239,7 +248,7 @@ def test_a_recorded_run_reduces_to_its_measurements() -> None:
     assert (q["total"], q["product"], q["default_able"]) == (2, 1, 1)
     assert (q["recommended_offered"], q["took_recommended"]) == (1, 1)
     assert q["by_channel"] == {"dialog": 2}
-    assert m["prompts"] == {"total": 2, "guard": 1, "permission": 1, "unknown": 0, "denied": 1}
+    assert m["prompts"] == {"total": 3, "guard": 2, "permission": 1, "unknown": 0, "denied": 1}
     assert m["guard_denials"] == 1
     assert m["harness_refusals"] == [{"minute": 3.0, "why": "pushes", "command": "git push"}]
     assert m["pastes"]["count"] == 3
@@ -279,7 +288,7 @@ def test_a_red_gate_with_no_rerun_says_so_and_a_run_with_nothing_reduces_to_empt
     assert reduce.reduce(run)["red_gates"][0]["red_on_rerun"] is None
     empty = reduce.reduce([])
     assert empty["minutes"]["to_first_merge"] is None
-    assert empty["gates"] == {"ran": [], "later": {}, "command": None}
+    assert empty["gates"] == {"ran": [], "later": {}, "none": [], "command": None}
     assert empty["app"] == {"checked": False}
     table = reduce.table(empty)
     assert "| App | not checked |" in table
@@ -294,7 +303,7 @@ def test_the_table_names_the_measures_a_person_reads_first() -> None:
     assert "| Questions (product / default-able) | 2 (1 / 1) |" in table
     assert "| Hand merges | 1 of 2 |" in table
     assert "| Red gates (red again on rerun) | bite-all (False) |" in table
-    assert "| Gates judged / waiting (`later:`) | 2 / 1 |" in table
+    assert "| Gates judged / waiting (`later:`) / not applicable | 2 / 1 / 0 |" in table
     assert "| Cost, product session (owner model) | $6.0 ($0.25) |" in table
 
 

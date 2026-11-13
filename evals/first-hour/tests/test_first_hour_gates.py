@@ -29,6 +29,21 @@ def test_each_gate_reads_as_green_red_or_waiting_for_its_trigger() -> None:
     assert gates.red(RUN) == ["bite-all"]
 
 
+NEWER = """\
+parallel: imports: judged nothing (later: code:layer) in 0.1s
+parallel: load: judged nothing (none: not a service or a job) in 0.1s
+parallel: lint: green in 2.0s
+"""
+
+
+def test_a_newer_runner_says_judged_nothing_and_why() -> None:
+    assert gates.parse(NEWER) == [
+        Gate("imports", Status.LATER, "code:layer"),
+        Gate("load", Status.NONE, "not a service or a job"),
+        Gate("lint", Status.GREEN),
+    ]
+
+
 def test_output_with_no_runner_lines_has_no_gates() -> None:
     assert gates.parse("later: code:layer\nmerge: owner\n") == []
 
