@@ -7,12 +7,16 @@ Usage::
     acceptance_proxy.py --null            # booted by with_service.py: a product that does nothing
 
 Run as the command inside ``with_service.py``, it forwards every request on a loopback port of
-its own to the booted product, at the origin of ``RATCHET_READY``, and back, changing nothing:
-the ``Host`` header, the method, the path, the body and the answer pass as they are, less the
-headers that describe one connection. Each request gets an id, ``<session suffix>-<n>``, and one
-line in ``requests.jsonl``. ``n`` counts the requests in the order they arrived, and a line is
-written once its answer has gone out, so a slow request's line can follow one with a later id:
-a reader that wants the order of use sorts by ``n``. The request and the answer are stored as
+its own to the booted product, at the origin of ``RATCHET_READY``, and back, changing nearly
+nothing: the ``Host`` header, the method, the path, the body and the answer pass as they are,
+less the headers that describe one connection. One header is changed: the product is asked for
+``Accept-Encoding: identity``, so the answer is stored in a form ``check`` can read. A product
+that compresses an answer it was asked not to is stored compressed, and text in it is not seen.
+
+Each request gets an id, ``<session suffix>-<n>``, and one line in ``requests.jsonl``. ``n``
+counts the requests in the order they arrived, and a line is written once its answer has gone
+out, so a slow request's line can follow one with a later id: a reader that wants the order of
+use sorts by ``n``. The request and the answer are stored as
 they were sent under ``probes/<id>.request`` and ``probes/<id>.response``, each cut at 1 MB.
 The tester receives only the address; it never writes the log, so a request it cites is one it
 made through here.
@@ -75,6 +79,9 @@ HOP = frozenset(
         "content-length",
     }
 )
+# Why: `check` looks for text in the stored answer, which a compressed answer hides. The product
+# is asked for it uncompressed, which any client must accept (RFC 9110 section 12.5.3).
+ENCODING = "accept-encoding"
 # Why module-level: the handler is installed before anything else runs, and a stop asked for then
 # must still be honoured once the server is up.
 STOP = threading.Event()
@@ -206,7 +213,8 @@ class Forward(http.server.BaseHTTPRequestHandler):
         log = self.server.log
         at, started = now(), time.monotonic()
         body = self.body()
-        sent = [(k, v) for k, v in self.headers.items() if k.lower() not in HOP]
+        sent = [(k, v) for k, v in self.headers.items() if k.lower() not in HOP | {ENCODING}]
+        sent.append(("Accept-Encoding", "identity"))
         if body or "Content-Length" in self.headers or "Transfer-Encoding" in self.headers:
             sent.append(("Content-Length", str(len(body))))
         start = f"{self.command} {self.path} HTTP/1.1"
