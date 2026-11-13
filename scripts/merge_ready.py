@@ -114,6 +114,11 @@ SURFACE_EVENTS = frozenset({"deployed"})
 FLAGS_QUESTION = "changed flags off and on"
 DOCS = "docs/"
 HARNESS = Group("harness", "The manifest says what a guard path is.", (MANIFEST_PATH,))
+# Why: Claude Code loads a CLAUDE.md beside any file it reads, and the other harnesses read
+# theirs the same way, so an agent obeys these at any depth; the manifest names the top only.
+INSTRUCTION_FILES = frozenset({"agents.md", "claude.md", "claude.local.md", "gemini.md"})
+INSTRUCTION_DIRECTORY = ".claude"
+INSTRUCTS = "(instructions): an agent reads it as instructions, wherever it sits"
 TRACKER_DIRECTORY = ".scratch"
 TRACKER = f"{TRACKER_DIRECTORY}/**/*.md"
 TICKETS = f"{TRACKER_DIRECTORY}/**/issues/*.md"
@@ -350,12 +355,27 @@ def guard_note(change: Change, path: str, group: Group) -> str | None:
     return ""
 
 
+def instructs(path: str) -> bool:
+    """Whether an agent reads ``path`` as instructions: by its name, or a ``.claude/`` above it.
+
+    Letter case is set aside: a file system that ignores it opens ``claude.md`` as ``CLAUDE.md``.
+    """
+    *folders, name = path.casefold().split("/")
+    return name in INSTRUCTION_FILES or INSTRUCTION_DIRECTORY in folders
+
+
 def guard_reasons(change: Change, manifest: Manifest) -> list[Reason]:
-    """One reason per changed guard path the judge does not let through."""
+    """One reason per changed guard path the judge does not let through.
+
+    An instruction file is a guard path wherever it sits, whatever the manifest says.
+    """
     lower = folded(manifest)
     reasons = []
     for path in change.paths:
         group = manifest.group_of(path) or (HARNESS if path == MANIFEST_PATH else None)
+        if group is None and instructs(path):
+            reasons.append(Reason("guard", f"{path} {INSTRUCTS}"))
+            continue
         if group is None:
             other = lower.group_of(path.casefold())
             if other is not None:
@@ -387,6 +407,7 @@ def file_reasons(change: Change, manifest: Manifest) -> list[Reason]:
     for path, sides in modes(change).items():
         judged = (
             path == MANIFEST_PATH
+            or instructs(path)
             or RECORD.match(path)
             or manifest.group_of(path)
             or manifest.doors_of(path)
@@ -807,6 +828,8 @@ RECORDS = (
 
 def record_kind(manifest: Manifest, path: str) -> RecordKind | None:
     """The kind of record ``path`` is by ``manifest``, or ``None`` when it is none."""
+    if instructs(path):
+        return None
     return next((kind for kind in RECORDS if kind.claims(manifest, path)), None)
 
 

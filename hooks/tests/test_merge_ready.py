@@ -1121,7 +1121,14 @@ def test_records_alone_are_asked_no_verdict_record(
             {CHANGES: "## Summary\n", "lint.toml": "strict = false\n"},
             ["guard: lint.toml (tool-config)", PLAIN_RECORD],
         ),
-        ({".claude/skills/x/SKILL.md": "# X\n"}, [PLAIN_RECORD]),
+        (
+            {".claude/skills/x/SKILL.md": "# X\n"},
+            [
+                "guard: .claude/skills/x/SKILL.md (instructions): an agent reads it as"
+                " instructions, wherever it sits",
+                PLAIN_RECORD,
+            ],
+        ),
         (
             {"docs/process/notes.md": "# Notes\n"},
             ["guard: docs/process/notes.md (gate-commands)", PLAIN_RECORD],
