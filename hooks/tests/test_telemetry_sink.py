@@ -1,6 +1,5 @@
 """``telemetry_sink``: an OTLP/HTTP receiver judged on what a real SDK export contains."""
 
-import contextlib
 import gzip
 import http.client
 import json
@@ -278,30 +277,29 @@ def test_a_signal_stops_the_command_and_exits_with_it(
     assert gone(pid_of(marker))
 
 
-def test_the_receiver_thread_leaves_every_interrupt_to_the_main_thread() -> None:
+def test_the_receiver_thread_leaves_every_interrupt_to_the_main_thread(tmp_path: Path) -> None:
     # Why: the kernel hands a signal sent to the process to any thread that does not block it,
     # and Python runs the handler only on the main thread, which sleeps until the command exits:
     # an interrupt the receiver took would let the command run to its end.
     blocked: set[int] = set()
+    seen = tmp_path / "seen"
 
     def watch_the_receiver() -> None:
+        deadline = time.monotonic() + 10
         while not (started := set(threading.enumerate()) - running):
             time.sleep(0.01)
-        receiver = started.pop()
-        status = Path(f"/proc/self/task/{receiver.native_id}/status")
-        while receiver.is_alive() and blocked != set(INTERRUPTS):
-            with contextlib.suppress(OSError):
-                mask = int(
-                    re.findall(r"^SigBlk:\s*(\w+)$", status.read_text(), re.MULTILINE)[0], 16
-                )
-                blocked.update(s for s in INTERRUPTS if mask >> (s - 1) & 1)
+        status = Path(f"/proc/self/task/{started.pop().native_id}/status")
+        while blocked != set(INTERRUPTS) and time.monotonic() < deadline:
+            mask = int(re.findall(r"^SigBlk:\s*(\w+)$", status.read_text(), re.MULTILINE)[0], 16)
+            blocked.update(s for s in INTERRUPTS if mask >> (s - 1) & 1)
             time.sleep(0.01)
+        seen.touch()
 
     watcher = threading.Thread(target=watch_the_receiver, daemon=True)
     running = {*threading.enumerate(), watcher}
     watcher.start()
-    code = sink("--service", "api", "--wait", "0", "--", sys.executable, "-c", "pass")
-    watcher.join()
+    wait = "import os, sys, time\nwhile not os.path.exists(sys.argv[1]): time.sleep(0.01)"
+    code = sink("--service", "api", "--wait", "0", "--", sys.executable, "-c", wait, str(seen))
     assert code == 1
     assert blocked == set(INTERRUPTS)
 
