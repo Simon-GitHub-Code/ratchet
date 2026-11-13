@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""The snapshots gate: every gate tool's effective config is recorded, and the record matches.
+"""The snapshots gate: every config the manifest lists is recorded, and the record matches.
 
-The files in the manifest's ``tool-config`` group are the configs of every gate tool. ``--write``
-copies each into ``quality/snapshots/`` (the path's slashes become ``__``), which is a ratchet
-path, so a config change shows up as a guard-path change with a diff a reviewer can read.
+The files in the manifest's ``tool-config`` group are the gate tools' configs it knows of; a
+config the group does not list is neither copied nor checked, so loosening it shows nowhere.
+``--write`` copies each into ``quality/snapshots/`` (the path's slashes become ``__``), which is a
+ratchet path, so a config change shows up as a guard-path change with a diff a reviewer can read.
 ``--check`` regenerates the set and fails on any snapshot that differs, is missing or is stale.
 
 Usage: ``snapshots.py [--root DIR] [--group NAME] (--write | --check)``.

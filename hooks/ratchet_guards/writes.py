@@ -1,8 +1,9 @@
 """Shell commands that write, move or delete files, and the paths each one touches.
 
-The guarded channel for changing a guard path is the Edit tool, which asks the owner; the
-shell route is denied outright. An interpreter writing files itself is judged by its program
-text, not by the paths on its command line (``ratchet_guards.interpreters``): ``python3 -c``,
+A shell change to a guard path is judged as an Edit of it is: refused for a locked path, and for
+any other where the commit lands on the default branch (ADR 0033). An interpreter writing files
+itself is judged by its program text, not by the paths on its command line
+(``ratchet_guards.interpreters``): ``python3 -c``,
 ``python3 - <<'EOF'``, ``node -e``, ``perl -e``, ``ruby -e``, ``deno eval`` and ``bun -e`` are
 denied when the program names a guard path in a string literal and holds a write call.
 ``perl -i`` and ``ruby -i`` rewrite the files named on the command line, so they are writers

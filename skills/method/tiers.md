@@ -54,7 +54,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Did the count of TODO, FIXME, HACK and XXX markers rise? | counted at the merge base and at head, never stored |
 | Does prose use the glossary too? | a prose linter carrying the _Avoid_ lists over docs and comments, judging the uses a change adds against the merge base |
 | Do commit subjects follow the convention? | the method's commits gate: `type(scope): summary`, at most 72 characters, not counting the ` (#12)` a squash merge appends |
-| Has any gate been loosened? | the method's own gates: snapshots match the effective configuration, no threshold lowered, no suppression kind rose, no focus marker |
+| Has any gate been loosened? | the method's own gates: snapshots match each tool config the guard manifest lists, no threshold lowered, no suppression kind rose, no focus marker |
 
 ## Tier 1: the behaviour of the code
 
@@ -253,6 +253,6 @@ A bite names its `gate` (the last word of the row's entry point), the fault in a
 
 `scripts/project_bite.py` makes a scratch copy of the work tree as git sees it, runs the registry's `setup` there, and for each bite runs the gate (green), plants the fault, and runs it again. `bites` is the one green verdict. `DOES NOT BITE` is a gate that cannot fail on what it is for. `RED BEFORE THE FAULT` is a gate that is red on a fresh checkout, usually because it leans on what another recipe left behind. `RED FOR ANOTHER REASON` is a gate red without the words the bite expects, or a bite whose words the gate prints as often when it is green. `THE FAULT WAS NOT PLANTED` is a fault that could not be written, applied or removed in the copy. Each is fixed in the recipe or the fault, never by loosening `expect` until it matches. The real work tree is never written, and nothing git ignores is copied, so a gate is judged as a CI job would run it.
 
-The whole proof is `bite-all`, in tier 2. On a pull request `bite` asks whether the change touches a path that defines a gate, and proves the tier 0 and tier 1 gates only then. The conformance gate is red on a bound gate with no bite, on a collection gate with no `remove` bite and on a bound gate with no bite for a proof its question requires, so a gate cannot be added unproven. The registry and its patches sit under `quality/`, a guard path: dropping a bite asks the owner.
+The whole proof is `bite-all`, in tier 2. On a pull request `bite` asks whether the change touches a path that defines a gate, and proves the tier 0 and tier 1 gates only then. The conformance gate is red on a bound gate with no bite, on a collection gate with no `remove` bite and on a bound gate with no bite for a proof its question requires, so a gate cannot be added unproven. The registry and its patches sit under `quality/`, a guard path: a change that drops a bite is the owner's to merge.
 
 One fault shows that a gate is alive and wired to the thing it judges. It does not show that the tool's rule set is complete. A gate nobody can plant a fault for is not a gate: its row is bound `none`, with the reason and an ADR.

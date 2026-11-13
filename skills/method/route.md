@@ -23,7 +23,7 @@ Each stage names what the owner types, what exists afterwards, and what the meth
 | 6 Conjecture | `/ratchet:conjecture <ticket>` | `## Conjecture` on the ticket, or on the spec its tickets name as parent: the approach, its refuter, the alternatives and the criticism that killed each | the feature preflight refuses a ticket without one |
 | 7 Build | `/ratchet:feature <ticket>` when the owner steps away, or `/ratchet:feature` alone for every agent-ready ticket at once; `/pstack:poteto-mode <ticket, goal, done check>` when they stay | code, tests, commits on `feature/<n>-<slug>`; after a drain, the changes the judge passed merged and one report | the preflight before any agent; `check` on every commit; the guards hold whoever is building |
 | 8 Criticise and open | `/pstack:interrogate`, `/pstack:blast-radius`, `/pstack:no-comments`, as the change warrants; agents run `impeccable audit`, `critique` and `polish` on a surface, and `code-review`, themselves | findings with the runs that prove them; the pull request with every template section, `check` green | every finding is a criticism the pull request answers; the merge judge decides who merges |
-| 9 Keep | `/mattpocock-skills:retro`, `/pstack:correct`, `/pstack:reflect`; an agent runs `impeccable document` itself, and its write of `DESIGN.md`, a guard path, asks the owner | new lints and tests, skill edits, `DESIGN.md` current | a check that `correct` writes is a gate: `/ratchet:adopt` again binds it; `ratchet` raises the thresholds |
+| 9 Keep | `/mattpocock-skills:retro`, `/pstack:correct`, `/pstack:reflect`; an agent runs `impeccable document` itself on a branch, and the owner merges `DESIGN.md`, a guard path | new lints and tests, skill edits, `DESIGN.md` current | a check that `correct` writes is a gate: `/ratchet:adopt` again binds it; `ratchet` raises the thresholds |
 
 Debugging enters at stage 7: `diagnosing-bugs`, which an agent may call, or `/pstack:poteto-mode` with its bug-fix playbook.
 
@@ -41,7 +41,7 @@ The route cannot see an incident. When the owner reports one (something broke fo
 
 After its three lines the route prints an `also:` line for each question the owner has answered with the recommended option three times running (`scripts/questions.py`, ADR 0022). It proposes a standing answer and changes nothing.
 
-An `AGENTS.md` that still holds the purpose placeholder sends the owner back to `/ratchet:init`, which a dismissed dialog leaves unfinished. A local spec with no tickets beside it is split with `to-tickets` before another spec is written. Two more states the route reads from the local tracker. A ticket whose `feature/<n>-*` branch is merged but which is still open is marked resolved before anything is built again. Open tickets of which none is agent-ready name the first unblocked one for the owner to agree, before a new spec is written.
+An `AGENTS.md` that still holds the purpose placeholder sends the owner back to `/ratchet:init`, which an init stopped before its questions were answered leaves unfinished. A local spec with no tickets beside it is split with `to-tickets` before another spec is written. Two more states the route reads from the local tracker. A ticket whose `feature/<n>-*` branch is merged but which is still open is marked resolved before anything is built again. Open tickets of which none is agent-ready name the first unblocked one for the owner to agree, before a new spec is written.
 
 ## Where poteto-mode meets the guard
 

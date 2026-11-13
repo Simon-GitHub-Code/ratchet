@@ -1301,7 +1301,7 @@ function specStop(spec) {
     branch: BRANCH,
     checkOutput: spec.checkOutput,
     requiredByOrchestrator: [
-      'Put each open question to the owner through the question tool, one at a time, its recommended option first; each answer goes on the ticket under `## Answers`, where the next spec agent reads it',
+      'Put every open question to the owner in one message, each with your recommended answer first and why, so the owner can accept them all at once: through the question tool, all in one call where it takes them; each answer goes on the ticket under `## Answers`, where the next spec agent reads it',
       'Give the owner each guard edit to land on the default branch (by hand, or with an agent at the keyboard where the guard can ask); an owner-away run cannot',
       'When the owner has answered every open question and there is no guard edit, build the ticket again from the preflight in the same turn; with guard edits, the route names the rerun once they land. Do not open a PR from a blocked run',
     ],

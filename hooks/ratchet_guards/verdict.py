@@ -1,13 +1,40 @@
 """Verdicts: what the guard decides about one tool call, and why.
 
-Every rule has an id, a decision and a sentence. A tool call collects the verdicts of every
-rule that fired and the strictest wins: deny over ask over allow. No verdict at all means the
-guard has no opinion, and Claude Code's own permission rules decide.
+Every rule has an id, a decision, a sentence and a way out: what the agent does next without the
+owner. A tool call collects the verdicts of every rule that fired and the strictest wins: deny
+over ask. No verdict at all means the guard has no opinion, and the harness's own permission rules
+decide.
+
+A guard path is no rule of its own. A change to one on a branch gets no verdict: it reaches the
+default branch only through a merge, and the merge judge reads it there (ADR 0033). What would take
+effect before any merge is refused: a guard path changed where its commit lands on the default
+branch, and the paths the owner changes by hand.
 """
 
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
+
+from ratchet_guards.early import Kind
+
+DISPUTE = (
+    "Do not work around it. If you believe the gate is wrong, stop, write a gate dispute "
+    "(docs/disputes/NNNN-<slug>.md) and report it to whoever started you."
+)
+ON_A_BRANCH = (
+    "Make the change on a branch (`git switch -c <name>`) and commit it there: the merge judge "
+    "reads it and sends it to the owner when it must."
+)
+# Why: the owner answers a file that acts before the merge at the prompt, in plain words.
+ALLOW = "Allow it?"
+NAME_THE_DIRECTORY = (
+    "Give the file a path the guard can follow, an absolute one or one after a `cd` to a literal "
+    "directory, and it is judged where it lands."
+)
+SWITCH_ALONE = (
+    "Run the branch switch in a tool call of its own and make the change in the next one: the "
+    "guard reads the branch then."
+)
 
 
 class Decision(IntEnum):
@@ -19,21 +46,19 @@ class Decision(IntEnum):
 
 @dataclass(frozen=True, slots=True)
 class Rule:
-    """One guard rule: what it decides and the sentence that explains it.
-
-    ``choice`` tells the owner what an ask leaves to them and what each answer does, where the
-    general sentence would not.
-    """
+    """One guard rule: what it decides, the sentence that explains it, and the way out."""
 
     decision: Decision
     because: str
-    choice: str = ""
+    way_out: str = DISPUTE
 
 
 RULES: dict[str, Rule] = {
-    "guard-path-edit": Rule(
-        Decision.ASK,
-        "edits a guard path; only the owner approves a gate change",
+    "guard-path-default": Rule(
+        Decision.DENY,
+        "changes a guard path where the commit lands on the default branch, which no merge judge "
+        "reads",
+        ON_A_BRANCH,
     ),
     "guard-path-locked": Rule(
         Decision.DENY,
@@ -41,13 +66,24 @@ RULES: dict[str, Rule] = {
     ),
     "guard-path-write": Rule(
         Decision.DENY,
-        "writes, moves or deletes a guard path from the shell",
+        "writes, moves or deletes, from the shell, a guard path that only the owner changes",
+    ),
+    "guard-path-unseen-switch": Rule(
+        Decision.DENY,
+        "changes a guard path after a command that may switch branches in a way the guard cannot "
+        "read, so the change may land on the default branch",
+        SWITCH_ALONE,
     ),
     "no-verify": Rule(Decision.DENY, "skips the git hooks"),
     "skip-hooks": Rule(Decision.DENY, "skips or uninstalls the pre-commit hooks"),
     "hooks-path": Rule(Decision.DENY, "redirects git hooks or overrides git config"),
     "force-push": Rule(Decision.DENY, "force-pushes, which rewrites published history"),
-    "push-main": Rule(Decision.DENY, "pushes to main; changes reach main through a reviewed PR"),
+    "push-main": Rule(
+        Decision.DENY,
+        "pushes to the default branch directly, where the method lands a change only through a "
+        "merged pull request",
+        "Push a branch and open a pull request instead.",
+    ),
     "reset-main": Rule(Decision.DENY, "moves main back or sideways with a reset"),
     "default-ref": Rule(
         Decision.DENY,
@@ -57,11 +93,17 @@ RULES: dict[str, Rule] = {
     "rewrite-history": Rule(Decision.DENY, "rewrites history"),
     "merge-pr": Rule(
         Decision.ASK,
-        "merges a pull request; the merge job or the owner merges one",
+        "merges a pull request",
+        "The merge job merges a pull request by itself once its checks pass and nothing in it "
+        "needs you. Once they pass, it comments on the pull request with each reason it waits for "
+        "you, one a line, and `just merge-ready --head <branch>` prints the same reasons here.",
     ),
     "merge-default": Rule(
         Decision.ASK,
-        "merges into the default branch; the `merge` entry point or the owner does",
+        "merges another branch into the default branch",
+        "The `merge` command merges a branch by itself when the checks pass and nothing in it "
+        "needs you; `just merge-ready --head <branch>` prints each reason this one would wait "
+        "for you, one a line.",
     ),
     "branch-protection": Rule(Decision.DENY, "reads or changes branch protection or rulesets"),
     "repo-settings": Rule(
@@ -70,7 +112,8 @@ RULES: dict[str, Rule] = {
     "labels": Rule(Decision.DENY, "manages labels"),
     "agent-ready-label": Rule(
         Decision.ASK,
-        "applies the agent-ready label, the owner's agreement that a ticket is ready to build",
+        "This marks a ticket ready for agents to build without you, which is yours to decide",
+        ALLOW,
     ),
     "workflow-runs": Rule(Decision.DENY, "deletes or cancels workflow runs"),
     "nested-settings": Rule(
@@ -80,25 +123,38 @@ RULES: dict[str, Rule] = {
     "plugin-removal": Rule(
         Decision.DENY, "disables or removes a harness plugin, package or marketplace"
     ),
-    "unreadable": Rule(Decision.ASK, "could not be checked by the guard"),
-    "unresolved-directory": Rule(
+    "workflow-write": Rule(Decision.ASK, Kind.WORKFLOW.value, ALLOW),
+    "instructions-write": Rule(Decision.ASK, Kind.INSTRUCTIONS.value, ALLOW),
+    "unreadable": Rule(
         Decision.ASK,
-        "changes a file or folder after moving to a folder the guard cannot work out",
-        "In a project Ratchet guards, that file or folder is one only you change, and the guard "
-        "cannot tell which project the folder is. Approve only if you expect the agent to change "
-        "it. If you approve, the whole command runs as written, wherever the folder is. If you "
-        "deny, none of it runs, and the agent can run it again with the folder written out, "
-        "which the guard can check.",
+        "The guard could not check this tool call",
+        "Allow it only if you know what it does.",
+    ),
+    "unresolved-directory": Rule(
+        Decision.DENY,
+        "writes a relative path after a cd the guard cannot follow; it may be a guard path that "
+        "only the owner changes, or one on the default branch",
+        NAME_THE_DIRECTORY,
     ),
 }
 
 
+ACTING_RULES = {Kind.WORKFLOW: "workflow-write", Kind.INSTRUCTIONS: "instructions-write"}
+# Why: the owner answers these at the prompt, so each says in plain words what is at stake, the
+# matched detail in brackets, and nothing about how the guard works.
+OWNER_ASKS = frozenset({*ACTING_RULES.values(), "agent-ready-label", "unreadable"})
+
+
 @dataclass(frozen=True, slots=True)
 class Verdict:
-    """A rule that fired on a tool call, with the detail that made it fire."""
+    """A rule that fired on a tool call, with the detail that made it fire.
+
+    ``source`` is the sentence that says where a guard path's group comes from, when it has one.
+    """
 
     rule: str
     detail: str
+    source: str = ""
 
     @property
     def decision(self) -> Decision:
@@ -111,9 +167,9 @@ class Verdict:
         return RULES[self.rule].because
 
     @property
-    def choice(self) -> str:
-        """What an ask on this rule leaves to the owner, or ``""`` for the general sentence."""
-        return RULES[self.rule].choice
+    def way_out(self) -> str:
+        """What the agent, or the owner at a prompt, does next."""
+        return RULES[self.rule].way_out
 
 
 def strictest(verdicts: Iterable[Verdict]) -> Verdict | None:

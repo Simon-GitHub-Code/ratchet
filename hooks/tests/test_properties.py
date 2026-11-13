@@ -7,10 +7,11 @@ from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from ratchet_guards import bash
-from ratchet_guards.context import Context
-from ratchet_guards.verdict import Decision, strictest
-from tests.support import MANIFEST, ROOT, make_guard, rules
-from tests.test_corpus import ALLOWED, ASKED, DENIED
+from ratchet_guards.context import Context, Guard
+from ratchet_guards.early import kind_of
+from ratchet_guards.verdict import ACTING_RULES, Decision, strictest
+from tests.support import MANIFEST, ROOT, FakeRepo, make_guard, rules
+from tests.test_corpus import ALLOWED, ASKED, DENIED, P, U
 
 
 def _one_line(command: str) -> bool:
@@ -51,7 +52,20 @@ def _prefixes(wrap: Callable[[str], str]) -> bool:
     return wrap("a; b").endswith(" a; b")
 
 
-FLAGGED = [(command, expected) for command, expected in DENIED + ASKED if _one_line(command)]
+FLAGGED = [
+    (command, expected)
+    for command, expected in DENIED + ASKED
+    if _one_line(command) and P not in expected
+]
+ON_MAIN = make_guard(FakeRepo(branch="main"))
+# Why: a write the merge judges is refused only where it lands on main, so it is judged there.
+JUDGED: list[tuple[str, list[str], Guard | None]] = [
+    (command, expected, None) for command, expected in FLAGGED
+] + [
+    (command, [rule for rule in expected if rule != U], ON_MAIN)
+    for command, expected in DENIED + ASKED
+    if _one_line(command) and P in expected
+]
 HARMLESS = [command for command in ALLOWED if _one_line(command) and command]
 HARMLESS_CONTEXT_FREE = [command for command in HARMLESS if _context_free(command)]
 SEPARATORS = st.sampled_from([";", " ; ", " && ", " || ", " | ", "\n", " & ", " |& "])
@@ -73,31 +87,35 @@ WRAPPERS: list[Callable[[str], str]] = [
 
 
 @given(
-    flagged=st.sampled_from(FLAGGED),
+    flagged=st.sampled_from(JUDGED),
     before=st.lists(st.sampled_from(HARMLESS_CONTEXT_FREE), max_size=4),
     after=st.lists(st.sampled_from(HARMLESS), max_size=4),
     separator=SEPARATORS,
 )
 def test_interleaving_harmless_commands_never_unblocks_a_flagged_one(
-    *, flagged: tuple[str, list[str]], before: list[str], after: list[str], separator: str
+    *,
+    flagged: tuple[str, list[str], Guard | None],
+    before: list[str],
+    after: list[str],
+    separator: str,
 ) -> None:
-    command, expected = flagged
+    command, expected, guard = flagged
     line = separator.join([*before, command, *after])
-    assert set(expected) <= set(rules(line))
+    assert set(expected) <= set(rules(line, guard))
 
 
 @given(
-    flagged=st.sampled_from([row for row in FLAGGED if not _sets_a_variable(row[0])]),
+    flagged=st.sampled_from([row for row in JUDGED if not _sets_a_variable(row[0])]),
     wrappers=st.lists(st.sampled_from(WRAPPERS), min_size=1, max_size=3),
 )
 def test_wrapping_never_unblocks_a_flagged_command(
-    flagged: tuple[str, list[str]], wrappers: list[Callable[[str], str]]
+    flagged: tuple[str, list[str], Guard | None], wrappers: list[Callable[[str], str]]
 ) -> None:
-    command, expected = flagged
+    command, expected, guard = flagged
     assume(not (_changes_the_shell(command) and any(_prefixes(wrap) for wrap in wrappers)))
     for wrap in wrappers:
         command = wrap(command)
-    assert set(expected) <= set(rules(command))
+    assert set(expected) <= set(rules(command, guard))
 
 
 @given(commands=st.lists(st.sampled_from(HARMLESS_CONTEXT_FREE), max_size=6), separator=SEPARATORS)
@@ -115,13 +133,15 @@ def test_rules_only_accumulate(left: str, right: str, separator: str) -> None:
     assert set(rules(left)) | set(rules(right)) <= combined
 
 
-@given(flagged=st.sampled_from(FLAGGED))
-def test_the_strictest_verdict_matches_the_rules(flagged: tuple[str, list[str]]) -> None:
-    command, expected = flagged
-    verdict = strictest(bash.check(command, Context(ROOT), make_guard()))
+@given(flagged=st.sampled_from(JUDGED))
+def test_the_strictest_verdict_matches_the_rules(
+    flagged: tuple[str, list[str], Guard | None],
+) -> None:
+    command, expected, guard = flagged
+    verdict = strictest(bash.check(command, Context(ROOT), guard or make_guard()))
     assert verdict is not None
-    asks = (["merge-pr"], ["agent-ready-label"], ["unreadable"])
-    want = Decision.ASK if expected in asks else Decision.DENY
+    asks = {"merge-pr", "merge-default", "agent-ready-label", "unreadable", *ACTING_RULES.values()}
+    want = Decision.ASK if set(expected) <= asks else Decision.DENY
     assert verdict.decision is want
 
 
@@ -155,11 +175,16 @@ WRITES: list[Callable[[str], str]] = [
 
 
 @given(path=guarded_paths(), write=st.sampled_from(WRITES))
-def test_every_shell_write_to_a_guard_path_is_denied(
+def test_every_shell_write_to_a_guard_path_is_refused_where_it_takes_effect(
     path: str, write: Callable[[str], str]
 ) -> None:
-    assert MANIFEST.group_of(path) is not None
-    assert rules(write(path)) == ["guard-path-write"]
+    group = MANIFEST.group_of(path)
+    assert group is not None
+    locked = ["guard-path-write"] if group.locked else []
+    kind = kind_of(path)
+    asked = [ACTING_RULES[kind]] if kind is not None else []
+    assert rules(write(path)) == sorted(locked + asked)
+    assert rules(write(path), ON_MAIN) == sorted((locked or ["guard-path-default"]) + asked)
 
 
 @given(name=_SEGMENT, write=st.sampled_from(WRITES))
@@ -252,7 +277,7 @@ def test_a_subshell_cd_stays_in_force_on_a_line_the_guard_does_not_model(
         move = move.replace("(cd .github/workflows", f"(cd .github/workflows; {construct.strip()}")
     parts = {"before": [construct, move], "inside": [move], "after": [move, construct]}[place]
     line = _line([*harmless, *parts], later) + "echo x > ci.yml"
-    assert {"guard-path-write", "unreadable"} & set(rules(line))
+    assert {"workflow-write", "unreadable"} & set(rules(line))
 
 
 @given(

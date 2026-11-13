@@ -86,8 +86,8 @@ AUTO = [
         f"{SETTINGS}: 'Bash(git push --force:*)' in ask",
     ),
     (
-        replace(SETTINGS, '      "Edit(/GLOSSARY-MAP.md)",\n', ""),
-        f"{SETTINGS}: 'Edit(/GLOSSARY-MAP.md)' is missing",
+        replace(SETTINGS, '      "Edit(/.claude/hooks/**)",\n', ""),
+        f"{SETTINGS}: 'Edit(/.claude/hooks/**)' is missing",
     ),
 ]
 
@@ -174,11 +174,10 @@ def test_settings_that_are_not_a_json_object_are_left_to_an_agent(repo: Path) ->
     assert first.fix.then == (f"{SETTINGS} is not a JSON object, so it is left as it is",)
 
 
-def test_a_manifest_that_uses_exclude_is_left_to_an_agent(repo: Path) -> None:
+def test_a_manifest_that_uses_exclude_leaves_the_fixed_settings_as_they_are(repo: Path) -> None:
+    # Why: the permission rules no longer mirror the manifest, so nothing in it can stop them.
     replace(MANIFEST, "[[group]]\n", '[[group]]\nexclude = ["x"]\n')(repo)
-    found = [f for f in conformance.findings(repo) if "uses exclude" in str(f)]
-    assert found
-    assert all(isinstance(f.fix, conformance.Agent) for f in found)
+    assert not [f for f in conformance.findings(repo) if f.path == SETTINGS or "exclude" in str(f)]
 
 
 def test_nothing_under_guards_is_ever_an_auto_finding() -> None:

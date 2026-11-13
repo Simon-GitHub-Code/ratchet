@@ -6,9 +6,10 @@ stay within one segment and ``**`` spans any number of segments. Its ``Scope`` i
 its first characters: ``~/`` is matched relative to the user's home directory, ``/`` against
 the absolute path (only the implicit plugin group uses these; the file may not), and
 anything else relative to the repository. A group's optional ``edit`` is ``"ask"`` (the
-default), ``"deny"``, for paths Claude Code's bypass mode would otherwise let through, or
-``"append"``, for records an agent may add to and only the owner changes: an edit that
-``ratchet_guards.records`` finds additive passes, and every other one asks (ADR 0014). Its
+default: a change on a branch goes to the merge judge, and one that lands on the default branch
+is denied, ADR 0033), ``"deny"``, for paths that act before any merge, or ``"append"``, for
+records an agent may add to and only the owner changes: an edit that ``ratchet_guards.records``
+finds additive passes even on the default branch (ADR 0014). Its
 optional ``exclude`` lists patterns its ``paths`` do not cover, such as agent worktrees under
 ``.claude/worktrees/``, which are checkouts of their own. A group whose ``paths`` list is
 empty matches nothing: the adopt template ships such groups behind ``# bind:`` comments until
@@ -22,23 +23,38 @@ owner. A door's ``on`` says what shuts it: ``"change"`` (the default) is any cha
 path, ``"rewrite"`` a change to or deletion of a file the default branch holds, and ``"removal"``
 a deletion, or a change that does more than add to the file.
 
-The manifest is optional. When the file is absent the hook judges with ``EMPTY``, so no
-repository path is a guard path and only the command rules apply (gate bypasses, force
-pushes, pushes to main, history rewrites, GitHub protection, label and settings changes,
-nested Claude Code sessions and plugin removal). Whether or not a manifest exists,
+The manifest is optional. When the default branch never held the file the hook judges with
+``EMPTY``, so no repository path is a guard path and only the command rules apply (gate
+bypasses, force pushes, pushes to main, history rewrites, GitHub protection, label and settings
+changes, nested Claude Code sessions and plugin removal). When it held the file and lost it,
+every group of the last manifest it held is locked (``gone``). In an adopted checkout the file
+itself is locked on every branch (``MANIFEST_LOCK``), but for an Edit or Write that only adds
+patterns or whole groups and doors (``grown``). Whether or not a manifest exists,
 ``with_plugin_group`` prepends the locked ``plugin`` group: the plugin's own directory, the
 installed plugins under ``~/.claude/plugins/`` and the user settings that enable them.
 """
 
 import tomllib
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path, PurePosixPath
 
 from ratchet_guards.globs import matches
 
 MANIFEST_PATH = "guards/manifest.toml"
+COMMITTED = "Guard paths come from guards/manifest.toml as committed on the default branch."
+MANIFEST_GROUP = "manifest-file"
+MANIFEST_REASON = (
+    "The guards are read from this file as the default branch holds it, so an agent only adds to "
+    "it: a path after the others in a group's or door's paths, or whole [[group]] or [[door]] "
+    "tables after the ones there, with an Edit or Write on a branch. Any other change, a deletion "
+    "or a rename is the owner's, by hand."
+)
+GONE = (
+    f"{MANIFEST_PATH} is gone from the default branch, which held it, so every guard path it named "
+    "is locked until the owner puts it back."
+)
 HOME_PREFIX = "~/"
 ABSOLUTE_PREFIX = "/"
 PLUGIN_GROUP = "plugin"
@@ -127,13 +143,19 @@ class EditRule(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Group:
-    """Guard paths that share a reason, and the answer an edit of one gets."""
+    """Guard paths that share a reason, and the answer an edit of one gets.
+
+    ``source`` says where the group comes from, after every verdict on its paths: the manifest
+    the owner committed (``COMMITTED``), the one the default branch lost (``GONE``), or nothing
+    for a group the guard holds by itself.
+    """
 
     name: str
     reason: str
     patterns: tuple[str, ...]
     edit: EditRule = EditRule.ASK
     excluded: tuple[str, ...] = ()
+    source: str = COMMITTED
 
     @property
     def locked(self) -> bool:
@@ -190,12 +212,16 @@ class Manifest:
         return None
 
     def group_below(self, directory: str, *, scope: Scope = Scope.REPOSITORY) -> Group | None:
-        """The group guarding something at or below ``directory`` (``"."`` is the top)."""
+        """The group guarding something at or below ``directory`` (``"."`` is the top).
+
+        A locked group wins over the rest: removing the directory removes every path in it, and
+        on a branch only a locked one is refused (ADR 0033).
+        """
         prefix = "" if directory == "." else directory.rstrip("/") + "/"
-        for group, pattern in self._patterns(scope):
-            if pattern.startswith(prefix):
-                return group
-        return self.group_of(directory, scope=scope)
+        below = [group for group, pattern in self._patterns(scope) if pattern.startswith(prefix)]
+        holding = self.group_of(directory, scope=scope)
+        first = below[0] if below else holding
+        return next((group for group in (*below, holding) if group and group.locked), first)
 
     def patterns(self) -> list[str]:
         """Every pattern as written, in file order."""
@@ -211,15 +237,77 @@ class Manifest:
 EMPTY = Manifest(())
 
 
-GIT_STATE = Manifest((Group(GIT_STATE_GROUP, GIT_STATE_REASON, GIT_STATE_PATTERNS, EditRule.DENY),))
+GIT_STATE = Manifest(
+    (Group(GIT_STATE_GROUP, GIT_STATE_REASON, GIT_STATE_PATTERNS, EditRule.DENY, source=""),)
+)
+# Why: the guards are read from this file, so it is locked in every adopted checkout, on every
+# branch: a branch that deletes or shrinks it would merge a repository the hook reads as never
+# adopted. The hook lets an Edit or Write through that only appends (`grown`).
+MANIFEST_LOCK = Group(MANIFEST_GROUP, MANIFEST_REASON, (MANIFEST_PATH,), EditRule.DENY, source="")
 
 
 def plugin_group(plugin_root: Path) -> Group:
     """The locked group over the plugin at ``plugin_root`` (absolute) and the user's plugins."""
     root = plugin_root.as_posix()
-    return Group(
-        PLUGIN_GROUP, PLUGIN_REASON, (root, f"{root}/**", *PLUGIN_HOME_PATTERNS), EditRule.DENY
+    patterns = (root, f"{root}/**", *PLUGIN_HOME_PATTERNS)
+    return Group(PLUGIN_GROUP, PLUGIN_REASON, patterns, EditRule.DENY, source="")
+
+
+def with_manifest_lock(manifest: Manifest) -> Manifest:
+    """``manifest`` with ``MANIFEST_LOCK`` first, unless a group of its own locks the file."""
+    own = manifest.group_of(MANIFEST_PATH)
+    if own is not None and own.locked:
+        return manifest
+    return Manifest((MANIFEST_LOCK, *manifest.groups), manifest.doors)
+
+
+def gone(manifest: Manifest) -> Manifest:
+    """``manifest``, the last the default branch held before it lost the file, locked throughout."""
+    groups = (replace(group, edit=EditRule.DENY, source=GONE) for group in manifest.groups)
+    return Manifest(tuple(groups), manifest.doors)
+
+
+def grown(before: Manifest, text: str) -> str | None:
+    """Why ``text`` does more than add to ``before``, or ``None``.
+
+    An addition is a pattern after the others in a group's or a door's paths, or a whole group or
+    door after the ones there. Why: the first group that matches a path wins, so a pattern added
+    to a group may take paths from a group below it. One that matches a pattern of a group below,
+    or is matched by one, is not an addition; a group appended after every group takes only paths
+    no group named, and every door is read.
+    """
+    try:
+        after = parse(text)
+    except ManifestError as error:
+        return f"the manifest it leaves does not parse ({error})"
+    if not _extended(before.groups, after.groups):
+        return "it changes, removes or reorders a [[group]] the default branch holds"
+    if not _extended(before.doors, after.doors):
+        return "it changes, removes or reorders a [[door]] the default branch holds"
+    for index, (old, new) in enumerate(zip(before.groups, after.groups, strict=False)):
+        for pattern in new.patterns[len(old.patterns) :]:
+            below = (group for group in after.groups[index + 1 :] if _overlaps(pattern, group))
+            taken = next(below, None)
+            if taken is not None:
+                return (
+                    f"its pattern {pattern!r} in [[group]] {new.name!r} also matches paths of "
+                    f"{taken.name!r}, a group below it"
+                )
+    return None
+
+
+def _extended(before: Sequence[Group | Door], after: Sequence[Group | Door]) -> bool:
+    """Whether ``after`` holds each of ``before`` in order, each with any new patterns last."""
+    kept = after[: len(before)]
+    return len(kept) == len(before) and all(
+        replace(new, patterns=new.patterns[: len(old.patterns)]) == old
+        for old, new in zip(before, kept, strict=True)
     )
+
+
+def _overlaps(pattern: str, group: Group) -> bool:
+    """Whether ``pattern`` matches one of ``group``'s patterns as written, or one matches it."""
+    return any(matches(other, pattern) or matches(pattern, other) for other in group.patterns)
 
 
 def with_plugin_group(manifest: Manifest, plugin_root: Path) -> Manifest:

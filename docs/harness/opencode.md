@@ -15,7 +15,7 @@ The adapter writes `~/.config/opencode/plugins/ratchet-guard.ts` with the checko
 
 ## The guard
 
-`adapters/opencode/ratchet-guard.ts` is an OpenCode plugin. Its `tool.execute.before` handler maps `bash`, `edit` and `write` to `Bash`, `Edit` and `Write`, runs `hooks/guard.py` with the Claude-shaped JSON and the project directory, and throws on `deny`. OpenCode has no way for a plugin to hand a call to the owner, so `ask` also throws, with the reason and "run it yourself". A guard that cannot run throws too: fail closed, as in Claude Code.
+`adapters/opencode/ratchet-guard.ts` is an OpenCode plugin. Its `tool.execute.before` handler maps `bash`, `edit` and `write` to `Bash`, `Edit` and `Write`, runs `hooks/guard.py` with the Claude-shaped JSON and the project directory, and throws on `deny`. OpenCode has no way for a plugin to hand a call to the owner, so `ask` also throws, with the reason and "run it yourself". The guard asks on a merge, the agent-ready label and a write of a CI workflow or an agent-instruction file (`CLAUDE.md`, `AGENTS.md`, anything under `.claude/`, at any depth), each the owner's to give, so in OpenCode the owner makes those himself; a guard path change on a branch gets no verdict (ADR 0033), so an agent here makes it as in any other harness. A guard that cannot run throws too: fail closed, as in Claude Code.
 
 ## Names
 
