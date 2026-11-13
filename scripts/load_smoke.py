@@ -151,7 +151,9 @@ def attempt(
     """One request: its latency in seconds when an answer came, and what was wrong if anything.
 
     With ``stopping`` set, a connection error on a request that began after that path appeared
-    raises ``Closed`` instead of being counted.
+    raises ``Closed`` instead of being counted. So does a refused connect whenever the path exists
+    by the time it fails: no connection was made, so nothing was in flight, and the signal may
+    have landed between the request's start and its failure.
     """
     after_signal = stopping is not None and stopping.exists()
     started = time.perf_counter()
@@ -160,7 +162,10 @@ def attempt(
     except TimeoutError:
         return None, f"{goal.label()}: timed out after {timeout:g}s"
     except (OSError, http.client.HTTPException) as error:
-        if after_signal and isinstance(error, ConnectionError):
+        raced = (
+            isinstance(error, ConnectionRefusedError) and stopping is not None and stopping.exists()
+        )
+        if (after_signal and isinstance(error, ConnectionError)) or raced:
             raise Closed from error
         return None, f"{goal.label()}: {type(error).__name__}"
     wrong = None if goal.accepts(status) else f"{goal.label()}: HTTP {status}"

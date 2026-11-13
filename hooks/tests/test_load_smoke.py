@@ -273,6 +273,33 @@ def test_a_refusal_after_the_signal_is_expected_and_before_it_is_an_error(
     assert after == (0, "load-smoke: green\n")
 
 
+def test_a_refusal_raced_against_the_signal_is_closed_but_a_reset_is_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "stopping"
+    goal = load_smoke.Target("GET", "http://127.0.0.1:1/", None, None)
+
+    def fail_as(error: OSError) -> None:
+        def http_status(*_: object, **__: object) -> int:
+            marker.touch()  # the signal lands while the request is in flight
+            raise error
+
+        monkeypatch.setattr(gatelib, "http_status", http_status)
+
+    # Why: a refused connect never reached the service, so nothing was in flight to be dropped;
+    # whatever the signal's timing against the request's start, it is the listener having closed.
+    fail_as(ConnectionRefusedError())
+    with pytest.raises(load_smoke.Closed):
+        load_smoke.attempt(goal, 1, marker)
+    # A reset may have cut a request the service owed an answer, so the start-time rule keeps it.
+    marker.unlink()
+    fail_as(ConnectionResetError())
+    assert load_smoke.attempt(goal, 1, marker) == (
+        None,
+        "GET http://127.0.0.1:1/: ConnectionResetError",
+    )
+
+
 def test_an_error_status_or_a_timeout_after_the_signal_is_still_red(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
