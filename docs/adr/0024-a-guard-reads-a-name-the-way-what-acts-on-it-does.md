@@ -70,3 +70,7 @@ The loop over every green pull request ran on the forge. Two green pull requests
 The clean case merged itself, deleted its branch and dispatched `deep`. The `unflagged` reason sent a pull request that added to a surface snapshot with no flag to the owner. A pull request that removed guard paths went to the owner with each path listed.
 
 Not observed: read-only default workflow permissions, a merge the token is refused, and a red tier 2 on the default branch's tip.
+
+The fixes that followed that run were run on the same sandbox on 2026-11-13, pinned at the 0.10.0 merge commit. A pull request opened against another branch got one `merge: owner` comment with `target` and `unnamed`. Retargeted to the default branch, it had the same comment edited to `retargeted`. Of two pull requests from one branch, the one against the default branch got `twin`, naming the other, and the other got `target`. A pull request against another branch gets `unnamed` beside `target`, which says the same thing twice. The weekly run, red on two gates, opened its issue with the output of those two gates and no other.
+
+The conformance finding for a missing tier list was not run on the forge, since the sandbox's `ci` does not run conformance. In a clone of the sandbox with `tier1_sharded` removed, conformance named the variable, the `ci.yml` job that reads it and what to add. On the forge the `shape` job of that pull request failed with the runner's own error, and a pull request whose `ci` is red gets no comment from the merge job.
