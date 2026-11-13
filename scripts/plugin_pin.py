@@ -21,9 +21,10 @@ from unless ``--plugin`` names another.
   commit to compare. It is green when its version is the pinned one, and the line it prints
   says only the version was compared.
 * A plugin whose version is newer than the pin is green, and says so on every run: this run
-  judges by its gates and CI by the pinned one's, ``scripts/upgrade.py`` names what the newer
-  version needs, and the line to change is printed. The newer version's conformance gate, in
-  tier 1, is red while the repository lacks something it needs (ADR 0027).
+  judges by its gates and CI by the pinned one's, and ``python3 <plugin>/scripts/upgrade.py
+  --apply`` moves the pin, every workflow ``ref`` and the permission rules to it in one change.
+  The newer version's conformance gate, in tier 1, is red while the repository lacks something
+  it needs (ADR 0027).
 * A plugin older than the pin is red: a local tier would run older gates than CI. So is one
   whose order against the pin cannot be told: the same version at another commit, or a version
   that is not dotted numbers. The red names both ways out: run the gates from a checkout of the
@@ -51,6 +52,13 @@ import gatelib
 PLUGIN = Path(__file__).resolve().parents[1]
 MANIFEST = Path(".claude-plugin/plugin.json")
 PIN = re.compile(r"^- Ratchet plugin: (\S+) at ([0-9a-f]{40})$", re.MULTILINE)
+# Why: a line that only starts like the pin, such as a note on where the plugin comes from, is
+# the project's own; only a line of the pin's shape, real or placeholder, is the pin.
+PIN_LINE = re.compile(r"^- Ratchet plugin: \S+ at \S+[ \t]*(?=\r?$)", re.MULTILINE)
+PLUGIN_REF = re.compile(r'repository:\s*\S*ratchet\S*?[,\s]+ref:\s*"?([^",\s}]+)')
+COMMIT = re.compile(r"[0-9a-f]{40}")
+RUNNER = "## Runner"
+WORKFLOWS = Path(".github/workflows")
 UNREADABLE = "a commit git cannot read"
 DOTTED = re.compile(r"\d+(?:\.\d+)*")
 
@@ -113,6 +121,93 @@ def line_for(plugin: Path) -> str:
     return f"- Ratchet plugin: {version} at {commit}"
 
 
+def refs(text: str) -> set[str]:
+    """The values of the plugin-checkout ``ref:`` in a workflow, placeholders included."""
+    return set(PLUGIN_REF.findall(text))
+
+
+def with_refs(commit: str) -> gatelib.Want:
+    """The want that sets every plugin-checkout ``ref:`` to ``commit`` and changes nothing else."""
+
+    def set_ref(match: re.Match[str]) -> str:
+        whole, start = match.group(0), match.start()
+        return whole[: match.start(1) - start] + commit + whole[match.end(1) - start :]
+
+    return lambda text: PLUGIN_REF.sub(set_ref, text or "")
+
+
+def with_pin(line: str) -> gatelib.Want:
+    """The want that makes ``line`` the binding's pin line: replaced where it stands, else added."""
+
+    def pin(text: str | None) -> str:
+        text = text or ""
+        if PIN_LINE.search(text):
+            return PIN_LINE.sub(lambda _: line, text)
+        lines = text.split("\n")
+        heading = next((i for i, held in enumerate(lines) if held.rstrip() == RUNNER), None)
+        if heading is None:
+            kept = text if text.endswith("\n") or not text else text + "\n"
+            gap = "\n" if kept else ""
+            return f"{kept}{gap}{RUNNER}\n\n{line}\n"
+        end = heading + 1
+        while end < len(lines) and not lines[end].strip():
+            end += 1
+        while end < len(lines) and lines[end].strip() and not lines[end].startswith("## "):
+            end += 1
+        return "\n".join([*lines[:end], "", line, *lines[end:]])
+
+    return pin
+
+
+def ci_commits(root: Path) -> set[str]:
+    """The commits CI checks the plugin out at: the pin's and each full ``ref`` of a workflow."""
+    commits = {pin.commit} if (pin := pinned(gatelib.read_text(root / gatelib.BINDING))) else set()
+    for workflow in sorted((root / WORKFLOWS).glob("*.yml")):
+        commits.update(
+            ref for ref in refs(gatelib.read_text(workflow) or "") if COMMIT.fullmatch(ref)
+        )
+    return commits
+
+
+def write_refusal(root: Path, plugin: Path) -> str | None:
+    """Why ``plugin`` must not write a file CI reads, or ``None`` when it may."""
+    commits = ci_commits(root)
+    if not commits:
+        return None
+    used = commit_of(plugin)
+    pin = pinned(gatelib.read_text(root / gatelib.BINDING))
+    if commits == {used} or (
+        len(commits) == 1 and used is None and pin and version_of(plugin) == pin.version
+    ):
+        return None
+    if len(commits) > 1:
+        named = ", ".join(sorted(commit[:12] for commit in commits))
+        return (
+            f"the pin and the workflows name {len(commits)} plugin commits ({named}), so an"
+            " upgrade is half done and a file written now would suit one of them only. Finish it"
+            f" with `{upgrade_command(plugin)}`, or point RATCHET_PLUGIN at a checkout of the"
+            " commit CI should run"
+        )
+    (commit,) = commits
+    return (
+        f"CI runs the plugin at {commit[:12]} and this one is {in_use(plugin)}, so a file it"
+        " writes may be one CI rejects. Run it from a checkout of that commit, by pointing"
+        " RATCHET_PLUGIN at it, or move the pin, the workflow refs and this file together with"
+        f" `{upgrade_command(plugin)}`"
+    )
+
+
+def upgrade_command(plugin: Path) -> str:
+    """The command that moves a repository to ``plugin``: the pin, the workflow refs, the rules."""
+    return f"python3 {plugin / 'scripts/upgrade.py'} --apply"
+
+
+def in_use(plugin: Path) -> str:
+    """``plugin`` as a line names it: its version, and its commit when it has one."""
+    version, commit = version_of(plugin), commit_of(plugin)
+    return (version or "an unknown version") + (f" at {commit}" if commit else "")
+
+
 def newer(used: str | None, pinned: str) -> bool | None:
     """Whether version ``used`` is newer than ``pinned``; ``None`` when that cannot be told."""
     if used is None or not DOTTED.fullmatch(used) or not DOTTED.fullmatch(pinned):
@@ -137,9 +232,9 @@ def relation(pin: Pin | None, plugin: Path) -> Relation:
 def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
     """The line to print about ``plugin`` against ``pin``, and whether it is a problem."""
     version, commit = version_of(plugin), commit_of(plugin)
-    used = (version or "an unknown version") + (f" at {commit}" if commit else "")
+    used = in_use(plugin)
     home = gatelib.BINDING
-    upgrade = f"python3 {plugin / 'scripts/upgrade.py'}"
+    apply = upgrade_command(plugin)
     standing = relation(pin, plugin)
     if pin is None:
         absent = f"{home}: no `- Ratchet plugin: <version> at <commit>` line"
@@ -157,8 +252,9 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
             (
                 f"plugin-pin: the plugin at {plugin} is {used}, newer than the {pin.version} that"
                 f" {home} pins: this run judges by {version}'s gates and CI by {pin.version}'s. Run"
-                f" `{upgrade}`; once it names nothing missing, the upgrade is one line in {home},"
-                f" `{line_for(plugin)}`, with every workflow `ref` at that commit"
+                f" `{apply}`: it moves the pin in {home} to `{line_for(plugin)}`, every workflow"
+                " `ref` and the permission rules together, and lists what it leaves to an agent"
+                " or to you"
             ),
             False,
         )
@@ -176,8 +272,8 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
         (
             f"the plugin at {plugin} is {used}; {home} pins {pinned}, and which is newer cannot be"
             " told. Either set RATCHET_PLUGIN to a checkout of the pinned commit, or, where the"
-            f" plugin in use is the newer, run `{upgrade}` and change the pin line to"
-            f" `{line_for(plugin)}` and every workflow `ref` with it, in one change the owner sees."
+            f" plugin in use is the newer, set the pin line to `{line_for(plugin)}` and run"
+            f" `{apply}`, which moves every workflow `ref` and the permission rules to it."
         ),
         True,
     )

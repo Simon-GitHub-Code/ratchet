@@ -13,12 +13,19 @@ and ``gh pr merge`` as an ask. ``gh label create`` is not denied, because the ho
 recorded label through and a settings deny would refuse that one too (ADR 0006).
 
 A group's ``exclude`` has no permission-rule equivalent, so a manifest that uses it is reported:
-list the paths the group should cover instead. The ``deny`` and ``ask`` lists are owned by this
-tool in full; a project's own rules go in ``allow``.
+list the paths the group should cover instead. The rules the plugin generates are the whole of
+what it writes: a rule no version of it generates is the project's own, and ``regenerated`` keeps
+it where it stood, so ``--check`` still reports it and no write removes it. A rule the plugin
+writes in ``ask``, or for a group it writes no rule for, that the project holds in ``deny`` is
+stricter than the plugin's: it stays in ``deny``, and neither list reports it. No regeneration
+takes a rule out of ``deny``. A rule the plugin generated in ``ask`` under an earlier mapping,
+such as the ``ask`` an append group once had, is regenerated.
 
 Usage: ``settings_rules.py [--root DIR] [--check | --write]``. ``--check`` (the default) prints
-one line per rule missing from or foreign to the lists and exits 1 on any. ``--write`` replaces
-the two lists and keeps every other key; it refuses while the manifest cannot be mirrored.
+one line per rule missing from or foreign to the lists and exits 1 on any. ``--write`` regenerates
+the two lists and keeps every other key and every rule of the project's own. It refuses while the
+manifest cannot be mirrored, while ``settings.json`` is not a JSON object, and while the plugin in
+use is not the one CI runs (``plugin_pin.write_refusal``).
 """
 
 from __future__ import annotations
@@ -27,7 +34,14 @@ import argparse
 import json
 import sys
 import tomllib
+from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple
+
+import plugin_pin
+
+if TYPE_CHECKING:
+    import gatelib
 
 MANIFEST = Path("guards/manifest.toml")
 SETTINGS = Path(".claude/settings.json")
@@ -133,15 +147,24 @@ def read_manifest(root: Path) -> dict[str, object] | None:
         return None
 
 
-def read_settings(root: Path) -> dict[str, object]:
-    path = root / SETTINGS
-    if not path.is_file():
+def parse_settings(text: str | None) -> dict[str, object] | None:
+    """The settings file's JSON object; a new one for no file, ``None`` for text that is not one."""
+    if text is None:
         return {"$schema": SCHEMA}
     try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
+        loaded = json.loads(text)
     except json.JSONDecodeError:
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def settings_text(root: Path) -> str | None:
+    path = root / SETTINGS
+    return path.read_text(encoding="utf-8") if path.is_file() else None
+
+
+def read_settings(root: Path) -> dict[str, object]:
+    return parse_settings(settings_text(root)) or {}
 
 
 def listed(settings: dict[str, object], key: str) -> list[str]:
@@ -152,43 +175,138 @@ def listed(settings: dict[str, object], key: str) -> list[str]:
     return [v for v in values if isinstance(v, str)] if isinstance(values, list) else []
 
 
-def drift(root: Path) -> list[str]:
-    """One line per manifest fault, missing rule or foreign rule; empty when settings mirror."""
+class Fault(Enum):
+    """What kind of drift a line reports, which says who may settle it."""
+
+    MANIFEST = "manifest"
+    MISSING = "missing"
+    MISPLACED = "misplaced"
+    OWN = "own"
+
+
+class Drift(NamedTuple):
+    """One line ``--check`` prints, and the kind of fault it is."""
+
+    line: str
+    fault: Fault
+
+
+def drifts(root: Path) -> list[Drift]:
+    """Each manifest fault, missing rule and foreign rule, with its kind; empty when they mirror."""
     manifest = read_manifest(root)
     if manifest is None:
-        return [f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"]
+        line = f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"
+        return [Drift(line, Fault.MANIFEST)]
+    return drifts_of(manifest, read_settings(root))
+
+
+def stricter(settings: dict[str, object], manifest: dict[str, object]) -> list[str]:
+    """The rules the project denies that the plugin writes in ``ask`` or not at all: kept.
+
+    Why: ``deny`` is as strict as a rule gets. A rule the plugin could write that the project
+    holds there is the owner's choice, and taking it out of ``deny`` would loosen it.
+    """
+    (deny, _), _ = rules(manifest)
+    return [
+        rule
+        for rule in listed(settings, "deny")
+        if rule not in deny and plugin_writes(rule, manifest)
+    ]
+
+
+def drifts_of(manifest: dict[str, object], settings: dict[str, object]) -> list[Drift]:
+    """The drift of ``settings`` from what ``manifest`` asks for."""
     (deny, ask), problems = rules(manifest)
-    settings = read_settings(root)
-    for key, expected in (("deny", deny), ("ask", ask)):
+    kept = stricter(settings, manifest)
+    found = [Drift(problem, Fault.MANIFEST) for problem in problems]
+    for key, expected in (("deny", [*deny, *kept]), ("ask", ask)):
         actual = listed(settings, key)
-        problems.extend(
-            f"{SETTINGS}: '{r}' is missing from {key}" for r in expected if r not in actual
+        found.extend(
+            Drift(f"{SETTINGS}: '{r}' is missing from {key}", Fault.MISSING)
+            for r in expected
+            if r not in actual and r not in kept
         )
-        problems.extend(
-            f"{SETTINGS}: '{r}' in {key} mirrors no manifest pattern"
+        found.extend(
+            Drift(
+                f"{SETTINGS}: '{r}' in {key} mirrors no manifest pattern",
+                Fault.MISPLACED if plugin_writes(r, manifest) else Fault.OWN,
+            )
             for r in actual
             if r not in expected
         )
-    return problems
+    return found
 
 
-def write(root: Path) -> list[str]:
-    """Replace the deny and ask lists from the manifest; the faults that stopped it, if any."""
+def drift(root: Path) -> list[str]:
+    """One line per manifest fault, missing rule or foreign rule; empty when settings mirror."""
+    return [found.line for found in drifts(root)]
+
+
+def plugin_writes(rule: str, manifest: dict[str, object]) -> bool:
+    """Whether some version of the plugin writes ``rule`` for this manifest, in either list."""
+    groups = manifest.get("group")
+    patterns = {
+        edit_rule(pattern)
+        for group in (groups if isinstance(groups, list) else [])
+        if isinstance(group, dict) and isinstance(group.get("paths"), list)
+        for pattern in group["paths"]
+        if isinstance(pattern, str)
+    }
+    return rule in patterns or rule in COMMAND_DENIES or rule in COMMAND_ASKS
+
+
+def own_rules(settings: dict[str, object], manifest: dict[str, object]) -> list[tuple[str, str]]:
+    """The project's own rules, as (list, rule) in order: those no version of the plugin writes."""
+    return [
+        (key, rule)
+        for key in ("deny", "ask")
+        for rule in listed(settings, key)
+        if not plugin_writes(rule, manifest)
+    ]
+
+
+def regenerated(manifest: dict[str, object]) -> gatelib.Want:
+    """The want over ``settings.json`` text, which leaves text that is not a JSON object alone."""
+    (deny, ask), _ = rules(manifest)
+
+    def want(text: str | None) -> str:
+        settings = parse_settings(text)
+        if settings is None:
+            return text or ""
+        permissions = settings.get("permissions")
+        held = permissions if isinstance(permissions, dict) else {}
+        own = own_rules(settings, manifest)
+        kept = stricter(settings, manifest)
+        ours = {"deny": [*deny, *kept], "ask": [rule for rule in ask if rule not in kept]}
+        lists = {
+            key: [*rules_, *(rule for k, rule in own if k == key)] for key, rules_ in ours.items()
+        }
+        settings["permissions"] = {**held, **lists}
+        return json.dumps(settings, indent=2) + "\n"
+
+    return want
+
+
+def regenerate(root: Path) -> None:
+    """Write ``.claude/settings.json`` as ``regenerated`` makes it from the root's manifest."""
+    path = root / SETTINGS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    want = regenerated(read_manifest(root) or {})
+    path.write_text(want(settings_text(root)), encoding="utf-8")
+
+
+def write_problems(root: Path, plugin: Path) -> list[str]:
+    """What stops ``--write`` from regenerating the file under ``plugin``; empty when nothing."""
     manifest = read_manifest(root)
     if manifest is None:
         return [f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"]
-    (deny, ask), problems = rules(manifest)
-    if problems:
-        return problems
-    settings = read_settings(root)
-    permissions = settings.get("permissions")
-    if not isinstance(permissions, dict):
-        permissions = {}
-    settings["permissions"] = {**permissions, "deny": deny, "ask": ask}
-    path = root / SETTINGS
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    return []
+    _, problems = rules(manifest)
+    refusal = plugin_pin.write_refusal(root, plugin)
+    if refusal:
+        problems.append(f"{SETTINGS}: not written, {refusal}")
+    if parse_settings(settings_text(root)) is None:
+        problems.append(f"{SETTINGS}: not a JSON object, so it is left as it is; fix or delete it")
+    return problems
 
 
 def main(argv: list[str]) -> int:
@@ -199,7 +317,9 @@ def main(argv: list[str]) -> int:
     mode.add_argument("--write", action="store_true")
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
-    problems = write(root) if options.write else drift(root)
+    problems = write_problems(root, plugin_pin.PLUGIN) if options.write else drift(root)
+    if options.write and not problems:
+        regenerate(root)
     for line in problems:
         print(line)
     if problems:

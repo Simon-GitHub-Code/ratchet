@@ -168,7 +168,7 @@ def scratch(root: Path) -> None:
     write(root, "tests/test_a.py", "def test_f():\n    assert True\n")
     write(root, str(project_bite.REGISTRY), LINT_BITE + TESTS_BITE)
     install_hooks(root)
-    settings_rules.write(root)
+    settings_rules.regenerate(root)
     snapshots.write(root, snapshots.GROUP)
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "feat(core): the clean state")
