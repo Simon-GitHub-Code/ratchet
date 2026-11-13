@@ -3,8 +3,9 @@
 A default branch that held ``guards/manifest.toml`` and no longer does locks every guard path its
 last manifest named; only one that never held one is not adopted yet, and the adoption writes with
 no prompt. On every branch the manifest itself is locked against a deletion, a rename and any
-change but one: an Edit or Write that appends whole groups or doors after the ones the default
-branch holds.
+change but an addition by Edit or Write: a path at the end of a group's or a door's paths, or a
+whole group or door after the ones the default branch holds. A path added to a group that also
+matches a pattern of a group below it would take paths from that group, and is no addition.
 """
 
 import io
@@ -135,13 +136,25 @@ def test_a_patch_cannot_delete_or_change_the_manifest_on_a_branch(adopted: Path)
         ("", "does not parse"),
         (TEMPLATE.replace('    "justfile",\n', ""), "changes, removes or reorders a [[group]]"),
         (
-            TEMPLATE.replace(
-                "    # bind: the fitness test directories\n", '    "tests/fitness/**",\n'
-            ),
+            TEMPLATE.replace('    "justfile",\n', '    "x/**",\n    "justfile",\n', 1),
+            "changes, removes or reorders a [[group]]",
+        ),
+        (
+            TEMPLATE.replace('    "quality/**",\n', '    "quality/**",\n]\nexclude = [\n    "x",\n'),
             "changes, removes or reorders a [[group]]",
         ),
         (TEMPLATE.replace('on = "rewrite"\n', ""), "changes, removes or reorders a [[door]]"),
         (EXTRA_GROUP + TEMPLATE, "changes, removes or reorders a [[group]]"),
+        (
+            TEMPLATE.replace(
+                "    # bind: the config files of every gate tool\n", '    ".claude/settings.json",\n'
+            ),
+            "'.claude/settings.json' in [[group]] 'tool-config' also matches paths of 'harness'",
+        ),
+        (
+            TEMPLATE.replace("    # bind: the config files of every gate tool\n", '    ".c*/**",\n'),
+            "'.c*/**' in [[group]] 'tool-config' also matches paths of 'harness'",
+        ),
     ],
 )
 def test_a_write_that_does_more_than_add_to_the_manifest_is_denied_on_a_branch(
@@ -182,6 +195,29 @@ def test_a_write_or_edit_that_appends_whole_groups_or_doors_passes_on_a_branch(
     )
     assert edit == {}
     assert write(adopted, "guards/notes.md") == {}
+
+
+@pytest.mark.parametrize(
+    ("bind", "pattern"),
+    [
+        ("    # bind: the config files of every gate tool\n", '"eslint.config.js"'),
+        ("    # bind: the fitness test directories\n", '"tests/fitness/**"'),
+        ("    # bind: migrations, schema definitions, infrastructure code\n", '"db/migrations/**"'),
+    ],
+)
+def test_an_edit_that_adds_a_path_to_a_group_or_door_passes_on_a_branch(
+    adopted: Path, bind: str, pattern: str
+) -> None:
+    # Why: /ratchet:safeguard adds a new tool's config to the tool-config group, and a binding
+    # fills the template's `# bind:` lines; neither takes a path from a group below.
+    edit = answer(
+        adopted,
+        "Edit",
+        file_path=str(adopted / MANIFEST),
+        old_string=bind,
+        new_string=f"    {pattern},\n",
+    )
+    assert edit == {}
 
 
 def test_an_addition_to_the_manifest_on_the_default_branch_is_made_on_a_branch(
