@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Iterator
     from types import FrameType
 
 FALLBACK_BRANCHES = ("main", "master")
@@ -33,8 +33,7 @@ BINDING = Path("docs/process/binding.md")
 # Why: `with_service.py` exports the URL it waited on, so a command run inside it can tell the
 # readiness route from the routes a user requests.
 READY_ENV = "RATCHET_READY"
-# Why: a path that exists only once ``with_service.py --graceful`` is about to send the stop
-# signal; it holds the ``time.monotonic()`` before which every connection was accepted.
+# Why: a path that exists only once ``with_service.py --graceful`` has sent the stop signal.
 STOPPING_ENV = "RATCHET_STOPPING"
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
@@ -444,18 +443,10 @@ def run_command(command: list[str], env: dict[str, str]) -> tuple[int, list[str]
     return code, ([] if code == 0 else [f"the command exited with code {code}"])
 
 
-def http_status(
-    method: str,
-    url: str,
-    *,
-    body: bytes | None = None,
-    timeout: float = 5.0,
-    connected: Callable[[], None] | None = None,
-) -> int:
+def http_status(method: str, url: str, *, body: bytes | None = None, timeout: float = 5.0) -> int:
     """The status of one request, redirects not followed; raises ``OSError`` or ``HTTPException``.
 
-    ``http`` and ``https`` only. A body is sent as JSON. ``connected`` is called once the
-    connection is made, before the request is sent.
+    ``http`` and ``https`` only. A body is sent as JSON.
     """
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -466,9 +457,6 @@ def http_status(
     target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
     headers = {"Content-Type": "application/json"} if body is not None else {}
     try:
-        connection.connect()
-        if connected:
-            connected()
         connection.request(method, target, body=body, headers=headers)
         response = connection.getresponse()
         response.read()

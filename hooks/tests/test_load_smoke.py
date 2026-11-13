@@ -1,11 +1,8 @@
 """``load_smoke``: concurrent requests judged on errors only, against an in-test server."""
 
 import argparse
-import http.client
 import http.server
-import socket
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -33,13 +30,6 @@ def handle(handler: http.server.BaseHTTPRequestHandler) -> None:
 
 
 RELEASE = threading.Event()
-
-
-def signal_now(marker: Path) -> None:
-    """The marker as ``with_service.py`` writes it: the line drawn at this moment."""
-    marker.write_text(repr(time.monotonic()), encoding="ascii")
-
-
 HEALTH_ONLY = "load-smoke: health only: readiness is the one route requested (--health-only)"
 
 
@@ -276,103 +266,45 @@ def test_a_refusal_after_the_signal_is_expected_and_before_it_is_an_error(
     monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
     args = ["--until-stopped", "--url", closed_port(), "--min-requests", "0", "--seconds", "0.3"]
     before = smoke(*args, capsys=capsys)
-    signal_now(marker)
+    marker.touch()
     after = smoke(*args, capsys=capsys)
     assert before[0] == 1
     assert "ConnectionRefusedError" in before[1]
     assert after == (0, "load-smoke: green\n")
 
 
-def test_a_refusal_raced_against_the_signal_is_closed(
+def test_a_refusal_raced_against_the_signal_is_closed_but_a_reset_is_not(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     marker = tmp_path / "stopping"
     goal = load_smoke.Target("GET", "http://127.0.0.1:1/", None, None)
 
-    def http_status(*_: object, **__: object) -> int:
-        signal_now(marker)  # the signal lands while the request is in flight
-        raise ConnectionRefusedError
+    def fail_as(error: OSError) -> None:
+        def http_status(*_: object, **__: object) -> int:
+            marker.touch()  # the signal lands while the request is in flight
+            raise error
 
-    monkeypatch.setattr(gatelib, "http_status", http_status)
+        monkeypatch.setattr(gatelib, "http_status", http_status)
+
     # Why: a refused connect never reached the service, so nothing was in flight to be dropped;
     # whatever the signal's timing against the request's start, it is the listener having closed.
+    fail_as(ConnectionRefusedError())
     with pytest.raises(load_smoke.Closed):
         load_smoke.attempt(goal, 1, marker)
-
-
-def reset_on_the_signal(
-    marker: Path, monkeypatch: pytest.MonkeyPatch, *, connected_first: bool
-) -> tuple[float | None, str | None]:
-    """A request whose listener closes on the signal, which lands before or after it connects."""
-    with socket.create_server(("127.0.0.1", 0)) as listener:
-        goal = load_smoke.Target(
-            "GET", f"http://127.0.0.1:{listener.getsockname()[1]}/", None, None
-        )
-        connect, read = http.client.HTTPConnection.connect, http.client.HTTPConnection.getresponse
-
-        def signal_then_connect(connection: http.client.HTTPConnection) -> None:
-            if not connected_first:
-                signal_now(marker)
-            connect(connection)
-
-        def close_then_read(connection: http.client.HTTPConnection) -> http.client.HTTPResponse:
-            if connected_first:
-                signal_now(marker)
-            listener.close()
-            return read(connection)
-
-        monkeypatch.setattr(http.client.HTTPConnection, "connect", signal_then_connect)
-        monkeypatch.setattr(http.client.HTTPConnection, "getresponse", close_then_read)
-        return load_smoke.attempt(goal, 1, marker)
-
-
-def test_a_request_connected_after_the_signal_meets_a_closed_listener(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Why: the request began before the signal, but its connection was made after it, so it
-    # queued on a listener that was closing; the start line is the connection, not the attempt.
-    with pytest.raises(load_smoke.Closed):
-        reset_on_the_signal(tmp_path / "stopping", monkeypatch, connected_first=False)
-
-
-def test_a_request_connected_before_the_signal_is_owed_an_answer_even_when_reset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Why: with_service.py draws the line where the service had accepted every queued connection,
-    # so a reset of one made before the line is a request the service took and cut off.
-    result = reset_on_the_signal(tmp_path / "stopping", monkeypatch, connected_first=True)
-    assert result[0] is None
-    assert result[1] is not None
-    assert result[1].endswith(": ConnectionResetError")
-
-
-def test_a_request_the_service_read_and_dropped_after_the_signal_is_an_error(
-    tmp_path: Path,
-) -> None:
-    marker = tmp_path / "stopping"
-    with socket.create_server(("127.0.0.1", 0)) as listener:
-        url = f"http://127.0.0.1:{listener.getsockname()[1]}/"
-
-        def read_then_drop() -> None:
-            connection, _ = listener.accept()
-            with connection:
-                request = b""
-                while b"\r\n\r\n" not in request:
-                    request += connection.recv(4096)
-                signal_now(marker)
-
-        service = threading.Thread(target=read_then_drop)
-        service.start()
-        result = load_smoke.attempt(load_smoke.Target("GET", url, None, None), 5, marker)
-        service.join()
-    assert result == (None, f"GET {url}: RemoteDisconnected")
+    # A reset may have cut a request the service owed an answer, so the start-time rule keeps it.
+    marker.unlink()
+    fail_as(ConnectionResetError())
+    assert load_smoke.attempt(goal, 1, marker) == (
+        None,
+        "GET http://127.0.0.1:1/: ConnectionResetError",
+    )
 
 
 def test_an_error_status_or_a_timeout_after_the_signal_is_still_red(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     marker = tmp_path / "stopping"
-    signal_now(marker)
+    marker.touch()
     monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
     with servers.server(handle) as url:
         code, out = smoke("--until-stopped", "--url", f"{url}/boom", *SHORT, capsys=capsys)

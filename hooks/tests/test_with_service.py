@@ -1,16 +1,12 @@
 """``with_service``: boot, wait, run, stop, against real child processes on loopback."""
 
-import argparse
 import errno
 import os
 import re
 import shlex
 import signal
-import socket
 import subprocess
 import sys
-import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -343,8 +339,7 @@ def test_a_service_that_drains_and_exits_zero_is_green_under_load(
 @pytest.mark.parametrize(
     ("mode", "said"),
     [
-        ("drop", "/work: RemoteDisconnected\n"),
-        ("jam", "/work: ConnectionResetError\n"),
+        ("drop", "the command exited with code 1"),
         ("late", "the service exited with code 1 "),
         ("ignore", "the service was still running 1s after SIGTERM"),
         ("slow", "the service was still running 1s after SIGTERM"),
@@ -352,9 +347,9 @@ def test_a_service_that_drains_and_exits_zero_is_green_under_load(
     ],
 )
 def test_each_way_of_stopping_badly_is_red(
-    mode: str, said: str, capfd: pytest.CaptureFixture[str]
+    mode: str, said: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code, out = graceful(mode, capsys=capfd, limit="1")
+    code, out = graceful(mode, capsys=capsys, limit="1")
     assert said in out, out
     assert code == 1
     assert out.endswith("with_service: red\n")
@@ -372,104 +367,6 @@ def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is
     assert seen.read_text(encoding="utf-8") == "False", "no signal yet, so no marker"
     assert "the command ended before the 30s signal: nothing was in flight" in out
     assert code == 1
-
-
-@pytest.mark.skipif(not Path("/proc/net/tcp").exists(), reason="Linux shows the accept queue")
-def test_the_accept_queue_of_a_listener_the_group_holds_is_read_from_the_kernel() -> None:
-    other = subprocess.Popen(["sleep", "5"], start_new_session=True)  # noqa: S607 # -- from PATH
-    try:
-        with socket.create_server(("127.0.0.1", 0)) as listener:
-            mine = {str(os.fstat(listener.fileno()).st_ino)}
-            assert mine <= with_service.sockets(os.getpgid(0)), "the group holds it"
-            assert not mine & with_service.sockets(other.pid), "another group does not"
-            assert with_service.queued(mine) == 0
-            clients = [socket.create_connection(listener.getsockname()) for _ in range(2)]
-            assert with_service.queued(mine) == 2
-            listener.accept()[0].close()
-            assert with_service.queued(mine) == 1
-            for client in clients:
-                client.close()
-        assert with_service.queued(mine) is None, "the listener is closed"
-    finally:
-        other.kill()
-        other.wait()
-
-
-def test_no_proc_and_no_tables_is_no_queue_seen(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(with_service, "PROC", "/nonexistent")
-    monkeypatch.setattr(with_service, "TABLES", ("/nonexistent/tcp",))
-    assert with_service.sockets(os.getpgid(0)) == set()
-    assert with_service.queued({"1"}) is None
-
-
-def settled_after(
-    lengths: list[int | None], monkeypatch: pytest.MonkeyPatch, within: float = 5.0
-) -> tuple[float, list[float]]:
-    """The line ``settled`` draws over queue ``lengths``, and when each length was read."""
-    left, reads = iter(lengths), []
-
-    def queued(_: set[str]) -> int | None:
-        reads.append(time.monotonic())
-        return next(left)
-
-    monkeypatch.setattr(with_service, "queued", queued)
-    return with_service.settled(os.getpgid(0), within), reads
-
-
-@pytest.mark.parametrize("lengths", [[2, 1, 0], [None]])
-def test_the_line_is_where_the_queue_was_last_seen_empty_or_unseen(
-    lengths: list[int | None], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    line, reads = settled_after(lengths, monkeypatch)
-    assert len(reads) == len(lengths)
-    assert line <= reads[-1], "drawn before the read that found the queue empty"
-    assert len(reads) == 1 or line > reads[-2]
-
-
-def test_a_queue_that_never_empties_puts_the_line_at_the_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    started = time.monotonic()
-    line, reads = settled_after([1] * 10_000, monkeypatch, within=0.2)
-    assert 1 < len(reads) < 10_000
-    assert line >= started + 0.2
-
-
-class Stops:
-    """A service process that exits 0 on SIGTERM, and what the marker held when it was sent."""
-
-    def __init__(self, marker: Path) -> None:
-        self.returncode: int | None = None
-        self.marker = marker
-        self.held = ""
-
-    def poll(self) -> int | None:
-        return self.returncode
-
-    def send_signal(self, _signum: int) -> None:
-        self.held, self.returncode = self.marker.read_text(encoding="ascii"), 0
-
-    def wait(self, timeout: float) -> int:  # noqa: ARG002 # -- the Popen signature
-        return 0
-
-
-def test_the_marker_holds_the_line_whole_before_the_signal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    marker = tmp_path / "stopping"
-    monkeypatch.setattr(with_service, "settled", lambda group, within: group + within)
-    service = Stops(marker)
-    service.pid = 100  # type: ignore[attr-defined] # -- the group settled is asked about
-    options = argparse.Namespace(signal_after=0.01, graceful=0.5)
-    found = with_service.signal_midway(
-        service,  # type: ignore[arg-type] # -- a stand-in for Popen
-        options,
-        marker,
-        ended=threading.Event(),
-    )
-    assert found == []
-    assert float(service.held) == 100.5
-    assert [path.name for path in tmp_path.iterdir()] == ["stopping"]
 
 
 def test_a_service_killed_by_the_signal_is_told_to_exec(

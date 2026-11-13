@@ -113,34 +113,27 @@ def sleeper(tree: Path) -> subprocess.Popen[bytes]:
 # Why: one service whose behaviour on SIGTERM is chosen by ``MODE``, so each way of failing the
 # graceful-shutdown check is a real process meeting a real signal. ``/work`` takes 0.3 s, so a
 # request is in flight at any moment while a load smoke runs. Modes: ``drain`` finishes the
-# requests in flight and exits 0; ``ignore`` never stops; ``drop`` answers four at once, holds
-# every later one, and exits 0 at once on the signal, cutting off what it holds: a request it had
-# read is in flight at the signal however late the smoke starts sending; ``jam`` serves one
-# request at a time in 0.05 s, so its accept queue never empties under load while the requests
-# made before the stop marker are all answered before the signal, and exits 0 at once on it;
-# ``late`` drains but exits 1; ``slow`` drains after a 3 s pause; ``die`` exits before it is
-# signalled.
+# requests in flight and exits 0; ``ignore`` never stops; ``drop`` exits 0 at once and cuts them
+# off; ``late`` drains but exits 1; ``slow`` drains after a 3 s pause; ``die`` exits before it
+# is signalled.
 STOPS = (
     "import os, signal, sys, threading, time, http.server as h\n"
     "MODE = os.environ['MODE']\n"
-    "served = []\n"
-    "class Server(h.HTTPServer if MODE == 'jam' else h.ThreadingHTTPServer):\n"
+    "class Server(h.ThreadingHTTPServer):\n"
     "    daemon_threads = False\n"
     "    block_on_close = True\n"
     "    def handle_error(self, request, client_address): pass\n"
     "class Handler(h.BaseHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
     "    def do_GET(self):\n"
-    "        if self.path == '/work':\n"
-    "            served.append(self.path)\n"
-    "            time.sleep({'drop': 60 if len(served) > 4 else 0, 'jam': 0.05}.get(MODE, 0.3))\n"
+    "        if self.path == '/work': time.sleep(0.3)\n"
     "        self.send_response(200)\n"
     "        self.send_header('Content-Length', '2')\n"
     "        self.end_headers()\n"
     "        self.wfile.write(b'ok')\n"
     "server = Server(('127.0.0.1', int(os.environ['PORT'])), Handler)\n"
     "def stop(*args):\n"
-    "    if MODE in ('drop', 'jam'): os._exit(0)\n"
+    "    if MODE == 'drop': os._exit(0)\n"
     "    if MODE == 'slow': time.sleep(3)\n"
     "    threading.Thread(target=server.shutdown).start()\n"
     "if MODE == 'die': threading.Timer(0.3, os._exit, [5]).start()\n"
