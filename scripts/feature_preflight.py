@@ -230,8 +230,11 @@ def kept_by_the_guard(ref: str, root: Path) -> bool:
 
     The guard asks the owner before an agent sets the agent-ready label only on such a file, so
     the label on any other file may be the agent's own. ``ref`` must have that shape both as
-    written, with ``..`` folded, and as the filesystem resolves it, so no link leads elsewhere.
+    written, with ``..`` folded, and as the filesystem resolves it, so no link leads elsewhere,
+    and no hard link may give it a second name the label could be written through.
     """
+    if (root / ref).stat().st_nlink > 1:
+        return False
     readings = (
         (Path(posixpath.normpath(root / ref)), root),
         ((root / ref).resolve(), root.resolve()),
@@ -553,8 +556,9 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
     elif (root / ticket.ref).is_file() and not kept_by_the_guard(ticket.ref, root):
         report.fail(
             "ticket",
-            f"{ref}: a local ticket is a file at .scratch/<feature>/issues/<name>.md, the only"
-            " place the guard keeps the agent-ready label for the owner to set",
+            f"{ref}: a local ticket is a file at .scratch/<feature>/issues/<name>.md with no"
+            " second name (a hard link), the only file whose agent-ready label the guard keeps"
+            " for the owner to set",
             "/mattpocock-skills:to-tickets",
         )
     else:

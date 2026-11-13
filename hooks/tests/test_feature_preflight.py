@@ -256,6 +256,13 @@ def test_a_local_ticket_is_only_a_file_the_guard_keeps(tmp_path: Path, ref: str)
     assert ".scratch/<feature>/issues/<name>.md" in report.failures[0].detail
 
 
+def test_a_ticket_outside_the_checkout_is_refused(tmp_path: Path) -> None:
+    root = repository(tmp_path / "repo")
+    write(tmp_path, "elsewhere.md", "# T\n\nStatus: ready-for-agent" + CONJECTURE)
+    for ref in ("../elsewhere.md", str(tmp_path / "elsewhere.md")):
+        assert checks(run(root, ref)) == ["ticket"]
+
+
 def test_a_ticket_with_a_second_name_is_refused(tmp_path: Path) -> None:
     # Why: a hard link lets the agent write the label through a name the guard does not keep.
     root = repository(tmp_path, {TICKET: "# T\n\nStatus: ready-for-agent" + CONJECTURE})
@@ -264,7 +271,7 @@ def test_a_ticket_with_a_second_name_is_refused(tmp_path: Path) -> None:
     git(root, "commit", "-q", "-m", "link")
     report = run(root, TICKET)
     assert checks(report) == ["ticket"]
-    assert "a second name" in report.failures[0].detail
+    assert "no second name" in report.failures[0].detail
 
 
 def test_the_record_is_read_defensively(tmp_path: Path) -> None:
