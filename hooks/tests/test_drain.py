@@ -111,6 +111,9 @@ def approval(slug: str) -> dict[str, object]:
     }
 
 
+LIFE_DEPENDED_ON = "\n- Life events: depended-on\n"
+
+
 def note(root: Path, branch: str) -> dict[str, object]:
     return drain.read_note(root, branch)
 
@@ -128,11 +131,16 @@ def test_the_plan_orders_tickets_by_their_blockers_and_starts_the_buildable(tmp_
     ]
     assert drafted.start == (ALPHA, GAMMA)
     assert (drafted.base, drafted.forge, drafted.blocked) == ("main", False, ())
-    assert drafted.agents_at_most == 3 * 11 - 2
+    assert drafted.agents_at_most == 3 * 6 - 2, "four per pipeline before depended-on, plus two"
     home = Path(tempfile.gettempdir()).resolve() / f"ratchet-queue-{os.getuid()}"
     assert Path(drafted.tickets[0].worktree).parent.parent == home
     assert Path(drafted.tickets[0].worktree).name == "feature-1-alpha"
     assert root not in Path(drafted.tickets[0].worktree).parents
+
+
+def test_a_depended_on_project_counts_the_critic_and_its_fix_loop(tmp_path: Path) -> None:
+    root = project(tmp_path, **{"docs/process/binding.md": binding(MERGE) + LIFE_DEPENDED_ON})
+    assert drain.plan(offline(root)).agents_at_most == 3 * 11 - 2
 
 
 def test_main_prints_the_plan_as_json(tmp_path: Path, capsys: Out) -> None:
@@ -843,3 +851,49 @@ def test_a_removed_work_tree_takes_what_ran_from_it_along(tmp_path: Path, capsys
     finally:
         service.kill()
         service.wait()
+
+
+OWED_BINDING = (
+    "\n- Life events: none\n\n## Gates\n\n"
+    "| Question | Tool | Tier | Threshold source | Entry point |\n| --- | --- | --- | --- | --- |\n"
+    "| survives failing dependencies | later: code:outbound-call | 1 | | `just faults` |\n\n"
+    "## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n"
+    "| outbound-call | `src/**/*.py` | `requests\\.get\\(` |\n"
+)
+OWED_RED = (
+    "triggers: 'outbound-call' gained 1 instance(s) (src/b.py:1) while the base already held 1"
+    " and these rows are still `later:`: survives failing dependencies. Run /ratchet:safeguard"
+)
+
+
+def test_a_ticket_red_on_an_owed_safeguard_is_held_until_the_safeguard_is_bound(
+    tmp_path: Path, capsys: Out
+) -> None:
+    # Why: ADR 0028. A second outbound call while its safeguard is owed is red, and no rewrite of
+    # the ticket fixes that; binding the safeguard on the default branch does.
+    files = {
+        "docs/process/binding.md": binding(MERGE) + OWED_BINDING,
+        "src/b.py": "requests.get(1)\n",
+    }
+    root = project(tmp_path, **files)
+    run(root, "open", GAMMA)
+    result = tmp_path / "result.json"
+    output = f"{OWED_RED}\n{OWED_RED}\ncheck: red"
+    result.write_text(json.dumps({"verdict": "request_changes", "checkOutput": output}))
+    assert run(root, "close", GAMMA, "--outcome", "parked", "--result", str(result)) == 0
+    assert note(root, BRANCH_C)["reasons"] == [
+        (
+            "safeguard owed: `outbound-call` gained an instance while a row it fires is still"
+            " `later:`; run /ratchet:safeguard on the default branch, and the drain builds this"
+            " ticket again"
+        )
+    ]
+    assert note(root, BRANCH_C)["owes"] == ["outbound-call"]
+    assert states(root)[BRANCH_C] == "held"
+    capsys.readouterr()
+    assert run(root, "report") == 0
+    assert "run /ratchet:safeguard on the default branch" in capsys.readouterr().out
+    bound = OWED_BINDING.replace("later: code:outbound-call", "a timeout lint")
+    write(root, "docs/process/binding.md", binding(MERGE) + bound)
+    commit(root, "chore(method): safeguard outbound calls")
+    assert states(root)[BRANCH_C] == "buildable", "nothing is owed, so the hold is over"
