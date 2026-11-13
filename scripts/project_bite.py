@@ -46,7 +46,11 @@ exists, the one place ``old`` stands becomes ``new``; a list of them for several
 every file a glob matches). A ``replace`` keeps applying while the lines around ``old`` change,
 where a patch's context lines break on the first unrelated edit beside them. A fault that no
 longer applies (a patch that does not apply, ``old`` standing nowhere or in two places) is
-``THE FAULT WAS NOT PLANTED``, which is red. ``args`` are appended to the gate's command, and
+``THE FAULT WAS NOT PLANTED``, which is red. So is a fault aimed at anything but a file git sees
+in the copy, reached through no symbolic link and in no submodule (an ignored file, ``.git``, a
+new ``.gitignore``): restoring the copy puts back only what git sees, and a fault elsewhere would
+stay planted for the next bite. A file a fault changes is written anew, so another name for the
+same data (a hard link) keeps what it held. ``args`` are appended to the gate's command, and
 ``commit = true`` commits the fault in the copy first, for a gate that reads history or the
 index.
 
@@ -93,6 +97,7 @@ import queue
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -214,15 +219,7 @@ class Write:
 
     def plant(self, copy: Path) -> None:
         """Write the file, as a change git sees."""
-        if run_git(copy, "check-ignore", "-q", "--", self.path).returncode == 0:
-            message = f"{self.path} is ignored by git, and a copy holds only what git sees"
-            raise Unprovable(message)
-        target = copy / self.path
-        if not within(copy, target):
-            message = f"{self.path} leaves the copy through a symbolic link"
-            raise Unprovable(message)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.content, encoding="utf-8")
+        put(owned(copy, self.path), self.content.encode())
         git_in(copy, "add", "--intent-to-add", "--", self.path)
 
 
@@ -234,6 +231,15 @@ class Patch:
 
     def plant(self, copy: Path) -> None:
         """Apply the diff; a new file in it is a change git sees."""
+        # Why: `git apply` writes any file of the work tree, ignored ones too. With `--index` it
+        # finds every file the diff reads in the copy as it stood, which holds only what git sees.
+        check = copy / ".git/bite-check-index"
+        shutil.copyfile(copy / SNAPSHOT, check)
+        git_in(copy, "update-index", "-q", "--refresh", index=check)
+        git_in(copy, "apply", "--check", "--index", self.path, index=check)
+        for written in git_in(copy, "apply", "--numstat", "-z", self.path).split("\0"):
+            if written:
+                owned(copy, written.split("\t", 2)[-1])
         git_in(copy, "apply", "--intent-to-add", "--whitespace=nowarn", self.path)
 
 
@@ -279,17 +285,9 @@ class Replace:
     def plant(self, copy: Path) -> None:
         """Replace each text; ``Unprovable`` when one stands nowhere or in more than one place."""
         for swap in self.swaps:
-            target = copy / swap.path
-            if not within(copy, target):
-                message = f"{swap.path} leaves the copy through a symbolic link"
-                raise Unprovable(message)
-            # Why: restoring the copy puts back only what git sees, so a fault in an ignored file,
-            # reached directly or through a link, would stay planted for the next bite.
-            resolved = target.resolve().relative_to(copy.resolve()).as_posix()
-            if resolved not in visible(copy):
-                message = (
-                    f"{swap.path} is not a file git sees, and restoring the copy undoes only those"
-                )
+            target = owned(copy, swap.path)
+            if not target.is_file():
+                message = f"{swap.path} is not a file in the copy, and 'replace' changes a file"
                 raise Unprovable(message)
             content, old = target.read_bytes(), swap.old.encode()
             first = content.find(old)
@@ -305,10 +303,57 @@ class Replace:
                     f" lengthen 'old' until it names one: {swap.old!r}"
                 )
                 raise Unprovable(message)
-            target.write_bytes(content[:first] + swap.new.encode() + content[first + len(old) :])
+            put(target, content[:first] + swap.new.encode() + content[first + len(old) :])
 
 
 Fault = Write | Patch | Remove | Replace
+
+
+def owned(copy: Path, path: str) -> Path:
+    """``path`` in the copy, when a fault may change it: a file git sees, reached through no link.
+
+    Restoring the copy puts back only what git sees, so a fault anywhere else would stay planted
+    for the runs after it. ``Unprovable`` says why ``path`` is not such a file.
+    """
+    parts = PurePosixPath(path).parts
+    if not inside(path) or ".git" in (part.casefold() for part in parts):
+        message = f"{path} is not a path in the work tree git sees"
+        raise Unprovable(message)
+    target = copy.joinpath(*parts)
+    if any(copy.joinpath(*parts[:depth]).is_symlink() for depth in range(1, len(parts) + 1)):
+        message = f"{path} is reached through a symbolic link; a fault changes the copy's own file"
+        raise Unprovable(message)
+    parents = ["/".join(parts[:depth]) for depth in range(1, len(parts))]
+    staged = git_in(copy, "ls-files", "-z", "--stage", "--", *parents) if parents else ""
+    gitlinks = [line.partition("\t")[2] for line in staged.split("\0") if line.startswith("160000")]
+    for name in set(gitlinks).intersection(parents):
+        message = f"{path} is inside the submodule {name}, whose files a copy does not hold"
+        raise Unprovable(message)
+    if parts[-1] == ".gitignore" and not target.exists():
+        message = f"{path} would be a new .gitignore, and restoring the copy cleans by those rules"
+        raise Unprovable(message)
+    ignored = run_git(copy, "check-ignore", "-q", "--", path)
+    if ignored.returncode == 0:
+        message = f"{path} is ignored by git, and restoring the copy puts back only what git sees"
+        raise Unprovable(message)
+    if ignored.returncode != 1:
+        message = f"{path} is not a file git sees: {ignored.stderr.strip()}"
+        raise Unprovable(message)
+    return target
+
+
+def put(target: Path, content: bytes) -> None:
+    """``content`` as a new file at ``target``, with the mode the file had.
+
+    A file written in place would change every other name for it too (a hard link a setup made),
+    and restoring the copy gives back only the name git sees.
+    """
+    mode = target.stat().st_mode if target.exists() else None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.unlink(missing_ok=True)
+    target.write_bytes(content)
+    if mode is not None:
+        target.chmod(stat.S_IMODE(mode))
 
 
 @dataclass(frozen=True)
