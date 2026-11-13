@@ -980,6 +980,22 @@ def test_a_file_a_gate_hid_from_git_is_gone_before_the_next_run(
     assert capsys.readouterr().out.count(": bites\n") == 2
 
 
+def test_a_copy_that_cannot_be_put_back_as_it_stood_makes_the_run_red(
+    tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: a later fault would be judged in a copy that holds what an earlier run left.
+    gate = f"mkdir -p locked; echo planted > locked/f; chmod 555 locked\n{LINT}"
+    root = project(tmp_path / "repo", {"lint": gate}, bite("lint", "first"))
+    try:
+        assert prove(root) == 1
+    finally:
+        for locked in scratch.rglob("locked"):
+            locked.chmod(0o755)
+    out = capsys.readouterr().out
+    assert "warning: failed to remove locked/f" in out
+    assert "bites" not in out
+
+
 # A gate that caches its verdict in an ignored directory, by a checksum of what it reads.
 CACHING = (
     'h=$(cat src/* | cksum | cut -d" " -f1); mkdir -p ignored\n'
