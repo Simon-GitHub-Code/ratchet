@@ -111,6 +111,55 @@ def test_a_speed_section_that_lists_nothing_gains_the_shard_count_below_its_text
     assert conformance.with_shards(after) == after
 
 
+THRESHOLDS = "quality/thresholds.toml"
+LIVE_CEILING = "[ceilings.change]\nfiles = 40\nlines = 1500\n"
+COMMENTED_CEILING = "# [ceilings.change]\n# files = 40\n# lines = 1500\n"
+
+
+def test_a_binding_without_a_tests_section_gains_the_templates_beside_its_neighbours(
+    repo: Path,
+) -> None:
+    replace(BINDING, "\n## Tests\n", "\n## Trials\n")(repo)
+    assert any("has no '## Tests' section" in f.problem for f in conformance.findings(repo))
+    assert settle(repo) == []
+    after = text(repo, BINDING)
+    assert markdown_text.has_section(after, "## Tests")
+    assert after.index("## Absolute paths") < after.index("## Tests") < after.index("## Trials")
+
+
+def test_a_binding_that_has_a_tests_section_is_not_asked_for_one(repo: Path) -> None:
+    assert not any("## Tests" in f.problem for f in conformance.findings(repo))
+
+
+def test_a_change_ceiling_that_is_only_a_comment_becomes_the_method_s_live_one(repo: Path) -> None:
+    replace(THRESHOLDS, LIVE_CEILING, COMMENTED_CEILING)(repo)
+    [found] = [f for f in conformance.findings(repo) if "ceilings.change" in f.problem]
+    assert isinstance(found.fix, conformance.Auto)
+    assert settle(repo) == []
+    assert LIVE_CEILING in text(repo, THRESHOLDS)
+    assert COMMENTED_CEILING not in text(repo, THRESHOLDS)
+
+
+def test_a_thresholds_file_with_no_change_ceiling_gains_the_method_s_below_its_text(
+    repo: Path,
+) -> None:
+    replace(THRESHOLDS, LIVE_CEILING, "")(repo)
+    before = text(repo, THRESHOLDS).rstrip()
+    assert settle(repo) == []
+    assert text(repo, THRESHOLDS) == f"{before}\n\n{LIVE_CEILING}"
+
+
+def test_a_change_ceiling_the_project_set_is_left_as_it_is(repo: Path) -> None:
+    replace(THRESHOLDS, LIVE_CEILING, "[ceilings.change]\nfiles = 10\nlines = 300\n")(repo)
+    assert not any("ceilings.change" in f.problem for f in conformance.findings(repo))
+
+
+def test_a_thresholds_file_the_ceiling_cannot_be_added_to_is_not_rewritten() -> None:
+    assert conformance.with_change_ceiling(None) == LIVE_CEILING
+    taken = "ceilings = 3\n"
+    assert conformance.with_change_ceiling(taken) == taken
+
+
 def test_a_missing_triggers_section_is_written_with_the_row_every_stack_writes_alike(
     repo: Path,
 ) -> None:
@@ -477,11 +526,16 @@ def test_a_marker_above_every_job_belongs_to_no_job() -> None:
     assert conformance.job_of(["name: x", "  # bind: toolchain setup"], 2) == "?"
 
 
-def test_the_owner_hears_how_many_fixes_need_his_merge() -> None:
-    assert "approve" not in upgrade.owing_words(3, approved=0)
-    assert " 2 of them are in files whose changes you approve," in upgrade.owing_words(
-        3, approved=2
-    )
+def test_the_owner_is_told_an_agent_adds_a_door_on_a_branch_and_he_decides_at_the_merge() -> None:
+    assert "agents may not" not in conformance.NO_DOOR
+    assert "on a branch, and you decide at that merge" in conformance.NO_DOOR
+
+
+def test_the_owner_hears_how_many_fixes_wait_for_his_merge_and_that_one_change_carries_them() -> None:
+    assert "guard path" not in upgrade.owing_words(3, approved=0)
+    said = upgrade.owing_words(3, approved=2)
+    assert " 2 are in guard paths: an agent can make all the fixes in one change" in said
+    assert "you decide at that one merge" in said
     assert "The project owes 1 thing since" in upgrade.owing_words(1, approved=1)
 
 

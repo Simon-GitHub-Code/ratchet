@@ -109,8 +109,8 @@ NO_DOOR = (
     "No part of this project is marked as impossible to take back once it ships, such as a"
     " database change, data saved in an older format, or something other programs rely on."
     " Until one is, an agent can merge a change to such a part without you. To mark one, ask an"
-    " agent which files hold it, then add them to guards/manifest.toml yourself: agents may not"
-    " edit that file."
+    " agent which files hold it: it adds them to guards/manifest.toml on a branch, and you decide"
+    " at that merge."
 )
 WEEKLY_CHECKS = "the weekly checks"
 SHARD_MATRIX = "matrix.shard"
@@ -166,6 +166,8 @@ INCIDENTS = Path("docs/incidents")
 INCIDENT_BITE = re.compile(r"^[-*\s]*bite:\s*`?(.+?)`?\s*$", re.IGNORECASE | re.MULTILINE)
 BINDING_PATH = str(gatelib.BINDING)
 ENTRY_POINTS_SECTION = "## Entry points"
+TESTS_SECTION = "## Tests"
+CHANGE_CEILING = "[ceilings.change]"
 FLAG_REGISTRY = Path("flags.toml")
 FIRST_CELL = re.compile(r"^\|\s*([^|]+?)\s*\|", re.MULTILINE)
 WORKFLOWS = Path(".github/workflows")
@@ -652,6 +654,16 @@ def check_binding(root: Path) -> Iterable[Finding]:
         yield agent(f"{BINDING_PATH}: missing")
         return
     yield from check_entry_points(root, text)
+    if not markdown_text.has_section(text, TESTS_SECTION):
+        # Why: ADR 0032. The roles that write tests read the test runner and the directories from
+        # this section; the upgrade adds the template's, which an agent then fills in.
+        problem = (
+            f"{BINDING_PATH}: has no '{TESTS_SECTION}' section, where the test runner and the"
+            " directories tests live in are named"
+        )
+        yield missing_section(
+            BINDING_PATH, problem, TESTS_SECTION, template_text=template_binding()
+        )
     gates = markdown_text.section(text, "## Gates")
     if not gates:
         yield agent(f"{BINDING_PATH}: has no '## Gates' section")
@@ -1639,8 +1651,41 @@ def check_quality(root: Path) -> Iterable[Finding]:
             continue
         if name == "mutation-register":
             yield from check_register(data)
+        elif not has_change_ceiling(data):
+            problem = (
+                "quality/thresholds.toml: no live `[ceilings.change]`, so no pull request is held"
+                " to a size"
+            )
+            edit = Edit(
+                "write the method's first change-size ceiling", with_change_ceiling, Agent()
+            )
+            yield Finding("quality/thresholds.toml", problem, edit)
     if not (root / "quality/snapshots").is_dir():
         yield agent("quality/snapshots: missing")
+
+
+def has_change_ceiling(data: dict[str, object]) -> bool:
+    ceilings = data.get("ceilings")
+    return isinstance(ceilings, dict) and isinstance(ceilings.get("change"), dict)
+
+
+def with_change_ceiling(text: str | None) -> str:
+    """The thresholds with the template's ``[ceilings.change]`` live: its comment made a table.
+
+    Why: ADR 0032. A change-size ceiling has nothing to measure at first, so its value is the
+    method's own, the template's; the file that kept it as a comment gets it as a table.
+    """
+    text = text or ""
+    table = tomllib.loads(template_file("quality/thresholds.toml"))["ceilings"]["change"]
+    live = f"{CHANGE_CEILING}\n" + "".join(f"{key} = {value}\n" for key, value in table.items())
+    commented = "".join(f"# {line}\n" for line in live.splitlines())
+    above = f"{text.rstrip()}\n\n" if text.strip() else ""
+    made = text.replace(commented, live, 1) if commented in text else above + live
+    try:
+        tomllib.loads(made)
+    except tomllib.TOMLDecodeError:
+        return text
+    return made
 
 
 def check_register(data: dict[str, object]) -> Iterable[Finding]:
@@ -1956,6 +2001,11 @@ def upgrade_mutations() -> list[Mutation]:
     """What an adoption made by an earlier plugin lacks, each a red line of its own."""
     return [
         ("AGENTS.md without the Asking the owner section", rewrite("AGENTS.md", ASKING, "## Ask")),
+        ("binding without a Tests section", rewrite(BINDING_PATH, TESTS_SECTION, "## Trials")),
+        (
+            "thresholds without a live change-size ceiling",
+            rewrite("quality/thresholds.toml", CHANGE_CEILING, f"# {CHANGE_CEILING}"),
+        ),
         (
             "binding without the tier0-tree row",
             rewrite(BINDING_PATH, "| tier0-tree | `just tier0-tree` |\n", ""),

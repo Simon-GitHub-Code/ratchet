@@ -55,8 +55,8 @@ PASSES = 6
 SHORT = 12
 EDITORS = {
     EditRule.DENY: "the owner edits it by hand: its guard group `{}` denies agents",
-    EditRule.ASK: "a guard path (group `{}`): an agent's edit asks the owner",
-    EditRule.APPEND: "a record (group `{}`): an addition passes, a change asks the owner",
+    EditRule.ASK: "a guard path (group `{}`): an agent edits it on a branch, the owner merges",
+    EditRule.APPEND: "a record (group `{}`): an addition passes, a change goes to the owner",
 }
 NOT_GUARDED = "not a guard path: an agent edits it"
 REFUSED, STUCK = 2, 3
@@ -94,8 +94,8 @@ class Plan:
     """What an upgrade writes and what it leaves, for one repository and one plugin.
 
     ``was`` and ``now`` are the two versions as the owner reads them. ``waiting`` names the checks
-    that do not run until what is left is fixed, and ``approved`` counts the items left in files
-    whose changes the owner approves.
+    that do not run until what is left is fixed, and ``approved`` counts the items left in guard
+    paths, whose changes go to the owner at the merge.
     """
 
     old: str
@@ -630,8 +630,9 @@ def plain(result: Plan, *, applied: bool) -> str:
 def owing_words(count: int, *, approved: int) -> str:
     """What the owner reads of the items the upgrade leaves: what they stop, and who fixes them.
 
-    Why: ADR 0037. Nothing works through the list by itself, and a fix in a file whose changes
-    the owner approves reaches the project only through a merge he makes.
+    Why: ADR 0037. Nothing works through the list by itself. An agent makes a fix in a guard path
+    on a branch with no prompt (ADR 0033), and one change carries as many fixes as it likes, so
+    the owner decides once at that merge, not once per item.
     """
     things = "thing" if count == 1 else "things"
     text = (
@@ -640,10 +641,10 @@ def owing_words(count: int, *, approved: int) -> str:
         " itself: ask an agent to."
     )
     if approved:
-        files = "Each is in a file" if approved >= count else f"{approved} of them are in files"
+        files = "Each is in a guard path" if approved >= count else f"{approved} are in guard paths"
         text += (
-            f" {files} whose changes you approve, so those fixes reach the project through merges"
-            " you make; one change can carry several."
+            f" {files}: an agent can make all the fixes in one change on a branch, and you decide"
+            " at that one merge."
         )
     return text
 

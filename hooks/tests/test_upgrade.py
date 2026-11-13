@@ -467,7 +467,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     first = out.splitlines()[0]
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
-    assert "Would write 12 files (run with --apply):" in out
+    assert "Would write 13 files (run with --apply):" in out
     assert "  quality/owed.toml\n    - write down 65 things owed since " in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
@@ -480,7 +480,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 55 edits in 12 files. 65 items are owed")
+    assert verdict(out).startswith("upgrade: would write 57 edits in 13 files. 65 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -488,12 +488,11 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 55 changes in 12"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 57 changes in 13"
                 " files. The project owes 65 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
-                " fixes them by itself: ask an agent to. Each is in a file whose changes you"
-                " approve, so those fixes reach the project through merges you make; one change"
-                " can carry several."
+                " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
+                " make all the fixes in one change on a branch, and you decide at that one merge."
             ),
             (
                 "Checks that do not run until then: the weekly checks, configuration hardening,"
@@ -593,7 +592,7 @@ def test_who_edits_a_file_follows_the_manifest(tmp_path: Path) -> None:
         "the owner edits it by hand: its guard group `harness` denies agents"
     )
     assert upgrade.editor(repo, "docs/adr") == (
-        "a record (group `records`): an addition passes, a change asks the owner"
+        "a record (group `records`): an addition passes, a change goes to the owner"
     )
     assert upgrade.editor(repo, "docs/features") == "not a guard path: an agent edits it"
     assert upgrade.editor(repo, "AGENTS.md (or CLAUDE.md)").startswith("a guard path")
