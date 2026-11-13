@@ -440,6 +440,21 @@ def test_a_stopped_run_git_cannot_leave_says_what_to_type(
     assert record_branches(root) == []
 
 
+def test_a_records_branch_a_run_stopped_in_check_left_is_deleted_once_merged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: a run killed while `check` ran is back on main with its branch unmerged, and the
+    # route names `merge <branch>` for it; that merge deletes it as `--records` would.
+    root = on_main(tmp_path, {SPEC: "# Thing\n"})
+    stopped_on_its_branch(root, committed=True)
+    git(root, "switch", "-q", "main")
+    capsys.readouterr()
+    assert run(root, STOPPED) == 0
+    assert f"merge: agent\nmerged: `{STOPPED}` into `main`" in capsys.readouterr().out
+    assert git(root, "show", f"main:{SPEC}") == "# Thing"
+    assert record_branches(root) == []
+
+
 def test_a_stopped_run_whose_branch_was_edited_since_is_left_as_it_is(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
