@@ -186,7 +186,7 @@ def test_the_shipped_catalogue_gives_every_question_a_trigger_it_can_fire() -> N
     assert set(SHIPPED.triggers) == {question["name"] for question in data["question"]}
     assert {SHIPPED.trigger_problem(trigger) for trigger in SHIPPED.triggers.values()} == {None}
     assert SHIPPED.trigger_of("format") == "always"
-    assert SHIPPED.trigger_of("rolls back safely") == "code:stored-format"
+    assert SHIPPED.trigger_of("rolls back safely") == "life:deployed"
     assert SHIPPED.trigger_of("production answers") == "life:deployed"
     assert SHIPPED.trigger_of("incidents tighten a gate") == "always"
     assert {"deployed", "irreplaceable-data", "depended-on"} == set(SHIPPED.events)
