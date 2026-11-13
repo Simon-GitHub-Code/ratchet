@@ -798,7 +798,7 @@ def test_a_workflow_with_the_toolchain_placeholder_in_front_of_the_template_s_st
     replace(WEEKLY, conformance.TOOLCHAIN_STEP, conformance.TOOLCHAIN_PLACEHOLDER)(repo)
     [found] = conformance.findings(repo)
     assert found.path == WEEKLY
-    assert found.problem.startswith("line 39 still says '# bind: toolchain setup' and the next")
+    assert found.problem.startswith("line 39 in job `weekly` still says '# bind: toolchain setup'")
     assert isinstance(found.fix, conformance.Agent)
 
 

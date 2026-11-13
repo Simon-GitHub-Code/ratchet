@@ -162,6 +162,7 @@ PIN_SCRIPT = "plugin_pin.py"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
+WORKFLOW_JOB = re.compile(r"^  ([A-Za-z_][\w-]*):[ \t]*(?:#.*)?$")
 COMMIT_HOOKS = Path(hooks_installed.COMMIT_HOOKS)
 RUNS_WHOLE_TIER0 = re.compile(r"^(?!\s*#).*\btier0\b(?!-)", re.MULTILINE)
 WHOLE_TIER0 = (
@@ -1015,13 +1016,14 @@ def check_toolchain(root: Path) -> Iterable[Finding]:
         if template is None:
             continue
         unbound = set(after_marker(template.splitlines()).values())
-        for number, following in after_marker(
-            path.read_text(encoding="utf-8").splitlines()
-        ).items():
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for number, following in after_marker(lines).items():
             if following in unbound:
+                # Why: the line moves when one is added above it, the job does not, so an owed
+                # entry names the job and excuses no placeholder in another (ADR 0037).
                 unset = (
-                    f"still says '{TOOLCHAIN_MARKER}' and the next line is the template's, so no"
-                    " step sets up the project's toolchain"
+                    f"in job `{job_of(lines, number)}` still says '{TOOLCHAIN_MARKER}' and the"
+                    " next line is the template's, so no step sets up the project's toolchain"
                 )
                 yield Finding(
                     str(path.relative_to(root)),
@@ -1029,6 +1031,16 @@ def check_toolchain(root: Path) -> Iterable[Finding]:
                     Agent(),
                     identity=unset,
                 )
+
+
+def job_of(lines: list[str], number: int) -> str:
+    """The id of the workflow job that holds line ``number`` (counted from 1), or ``?``."""
+    for line in reversed(lines[: number - 1]):
+        if line.startswith("jobs:"):
+            break
+        if match := WORKFLOW_JOB.match(line):
+            return match.group(1)
+    return "?"
 
 
 def after_marker(lines: list[str]) -> dict[int, str]:
