@@ -643,6 +643,18 @@ PNPM_IN_PROJECT = PNPM_12_LOCK.replace(
     "\n  lit@3.1.0:\n",
     "\n  pnpm@13.0.0:\n    resolution: {integrity: sha512-p13}\n\n  lit@3.1.0:\n",
 )
+# Why: the boot document runs the one pnpm its pin names, so an older one locked beside the newest
+# and pinned is a rollback, though the newest stays.
+PNPM_BOOT_BESIDE = _boot(
+    PNPM_12_LOCK,
+    "        specifier: 12.18.0\n        version: 12.18.0\n",
+    "        specifier: 12.17.0\n        version: 12.17.0\n",
+).replace(
+    "\nsnapshots:\n\n  pnpm@12.18.0: {}\n",
+    "\n  pnpm@12.17.0:\n    resolution: {integrity: sha512-p17}\n"
+    "\nsnapshots:\n\n  pnpm@12.17.0: {}\n\n  pnpm@12.18.0: {}\n",
+    1,
+)
 
 
 @pytest.mark.parametrize(
@@ -650,6 +662,7 @@ PNPM_IN_PROJECT = PNPM_12_LOCK.replace(
     [
         (PNPM_12_LOCK, _boot(PNPM_12_LOCK, "12.18.0", "12.17.0"), "pnpm falls from 12.18.0"),
         (PNPM_IN_PROJECT, _boot(PNPM_IN_PROJECT, "12.18.0", "12.17.0"), "pnpm falls"),
+        (PNPM_12_LOCK, PNPM_BOOT_BESIDE, "pnpm falls from 12.18.0 to 12.17.0"),
         (PNPM_12_LOCK, _boot(PNPM_12_LOCK, "sha512-pnpm", "sha512-evil"), "changed in place"),
         (
             PNPM_12_LOCK,
