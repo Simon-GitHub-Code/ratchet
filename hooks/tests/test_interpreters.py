@@ -454,6 +454,24 @@ def test_the_literals_of_a_program_are_the_candidates() -> None:
     assert interpreters.named_paths("# don't\np = 'DESIGN.md'") == ["DESIGN.md"]
 
 
+def test_only_a_literal_that_reads_as_a_command_gives_its_words_for_the_owner() -> None:
+    assert interpreters.written_names("p = 'AGENTS.md'") == ["AGENTS.md"]
+    assert interpreters.written_names("os.system('cp t.md AGENTS.md')") == [
+        "cp t.md AGENTS.md",
+        "cp",
+        "t.md",
+        "AGENTS.md",
+    ]
+    assert interpreters.written_names("""open(F, ">>DESIGN.md")""") == [">>DESIGN.md", "DESIGN.md"]
+    assert interpreters.written_names("""row = ("layer", "`AGENTS.md`")""") == [
+        "layer",
+        "`AGENTS.md`",
+    ]
+    assert interpreters.written_names("s = 'see .claude/skills/<area>/** first'") == [
+        "see .claude/skills/<area>/** first"
+    ]
+
+
 def test_a_separator_word_of_a_command_string_is_not_a_path() -> None:
     assert interpreters.named_paths("s = 'a / b'") == ["a / b", "a", "b"]
     assert interpreters.named_paths("s = 'a // b /'") == ["a // b /", "a", "b"]

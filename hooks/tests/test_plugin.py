@@ -20,7 +20,16 @@ from ratchet_guards.manifest import (
     with_plugin_group,
 )
 from ratchet_guards.verdict import RULES, Decision, Verdict
-from tests.support import HOME, MANIFEST, MANIFEST_TEXT, PLUGIN, PLUGIN_ROOT, make_guard, rules
+from tests.support import (
+    HOME,
+    MANIFEST,
+    MANIFEST_TEXT,
+    PLUGIN,
+    PLUGIN_ROOT,
+    FakeRepo,
+    make_guard,
+    rules,
+)
 
 W = "guard-path-write"
 P = "guard-path-default"
@@ -175,6 +184,23 @@ def test_the_manifest_is_read_from_the_nearest_checkout(tmp_path: Path) -> None:
     verdict = hook.decide(edit(root / "justfile", root / "app"), guard)
     assert verdict is not None
     assert verdict.rule == P
+
+
+def test_a_group_the_guard_holds_by_itself_says_nothing_of_the_manifest() -> None:
+    root = Path("/repo")
+    for case in (
+        edit(HOME / ".claude/settings.json", root),
+        bash("echo x > ~/.claude/settings.json", root),
+        bash("echo x > .git/HEAD", root),
+    ):
+        verdict = hook.decide(case, make_guard())
+        assert verdict is not None
+        assert verdict.decision is Decision.DENY
+        assert verdict.source == ""
+        assert COMMITTED not in hook.reason(verdict)
+    on_main = hook.decide(bash("echo x > justfile", root), make_guard(FakeRepo(branch="main")))
+    assert on_main is not None
+    assert COMMITTED in hook.reason(on_main)
 
 
 def test_the_plugin_group_is_prepended_and_locked() -> None:

@@ -174,9 +174,13 @@ def test_reasons_and_output_shape() -> None:
     )
     unreadable = hook.reason(Verdict("unreadable", "the hook input is not a JSON object"))
     assert unreadable == (
-        "Ratchet guard: this tool call could not be checked by the guard: the hook input is not "
-        "a JSON object. Approve only if you, the owner, intend this. An agent that thinks a gate "
-        "is wrong writes a gate dispute (docs/disputes/NNNN-<slug>.md) instead."
+        "Ratchet: The guard could not check this tool call (the hook input is not a JSON "
+        "object). Allow it only if you know what it does."
+    )
+    label = hook.reason(Verdict("agent-ready-label", "0001-x.md gets the status `agent:ready`"))
+    assert label == (
+        "Ratchet: This marks a ticket ready for agents to build without you, which is yours to "
+        "decide (0001-x.md gets the status `agent:ready`). Allow it?"
     )
     assert hook.respond(None) == ""
 

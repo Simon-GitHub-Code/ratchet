@@ -7,7 +7,7 @@ import pytest
 from ratchet_guards import hook
 from ratchet_guards.context import Guard
 from ratchet_guards.early import Kind, is_instruction, kind_of
-from tests.support import ROOT, FakeFilesystem, FakeRepo, make_guard
+from tests.support import ROOT, STANDARD, FakeFilesystem, FakeRepo, make_guard
 
 WORKFLOW = "This changes what GitHub runs with this repository's secrets, before any merge"
 INSTRUCTIONS = "This changes the instructions agents follow in this project, starting now"
@@ -66,9 +66,8 @@ def test_an_instruction_file_is_one_at_any_depth(name: str, depth: str) -> None:
         "src/claude/notes.md",
         "docs/agents/triage-labels.md",
         "CLAUDE.md/inside.txt",
-        ".claude",
         ".github/dependabot.yml",
-        ".github/workflows",
+        ".github/workflows/sub/ci.yml",
         "src/.github/workflows/ci.yml",
         ".claude/worktrees",
         ".claude/worktrees/stale/src/app.py",
@@ -105,9 +104,48 @@ def test_a_path_through_dot_dot_is_judged_where_it_lands() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        'rows = [("layer", "`AGENTS.md`")]',
+        's = "# bind: the project-local verification skill, e.g. .claude/skills/<area>/**"',
+        's = "Read src/CLAUDE.md first"',
+    ],
+)
+def test_prose_in_a_program_that_writes_another_file_asks_nothing(line: str) -> None:
+    # Why: the template's guard groups, as the replayed sessions had them.
+    program = f"python3 - <<'EOF'\n{line}\nopen('out.txt', 'w').write(s)\nEOF"
+    assert asked(bash(program), make_guard(manifest=STANDARD)) == {}
+
+
 def test_a_glob_in_a_program_that_writes_is_no_instruction_file_it_names() -> None:
     program = "python3 -c \"import glob; glob.glob('src/*/CLAUDE.md'); open('out.txt', 'w')\""
     assert asked(bash(program), make_guard()) == {}
+
+
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [
+        (".claude", Kind.INSTRUCTIONS),
+        ("sub/.Claude", Kind.INSTRUCTIONS),
+        (".github/workflows", Kind.WORKFLOW),
+    ],
+)
+def test_a_directory_that_acts_is_one_itself(path: str, kind: Kind) -> None:
+    assert kind_of(path) is kind
+
+
+@pytest.mark.parametrize(
+    ("command", "sentence", "path"),
+    [
+        ("mkdir -p sub && mv notes sub/.claude", INSTRUCTIONS, "sub/.claude"),
+        ("mv drafts .github/workflows", WORKFLOW, ".github/workflows"),
+    ],
+)
+def test_a_directory_moved_into_place_is_named_as_the_call_names_it(
+    command: str, sentence: str, path: str
+) -> None:
+    assert asked(bash(command), make_guard()) == question(sentence, path)
 
 
 @pytest.mark.parametrize("path", [".github/workflows/ci.yml", ".GitHub/Workflows/deep.yaml"])

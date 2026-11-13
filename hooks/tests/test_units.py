@@ -65,11 +65,24 @@ def test_the_rule_catalogue_is_pinned() -> None:
             "DENY",
             "writes, moves or deletes, from the shell, a guard path that only the owner changes",
         ),
+        "guard-path-unseen-switch": (
+            "DENY",
+            (
+                "changes a guard path after a command that may switch branches in a way the guard "
+                "cannot read, so the change may land on the default branch"
+            ),
+        ),
         "no-verify": ("DENY", "skips the git hooks"),
         "skip-hooks": ("DENY", "skips or uninstalls the pre-commit hooks"),
         "hooks-path": ("DENY", "redirects git hooks or overrides git config"),
         "force-push": ("DENY", "force-pushes, which rewrites published history"),
-        "push-main": ("DENY", "pushes to main; changes reach main through a reviewed PR"),
+        "push-main": (
+            "DENY",
+            (
+                "pushes to the default branch directly, where the method lands a change only "
+                "through a merged pull request"
+            ),
+        ),
         "reset-main": ("DENY", "moves main back or sideways with a reset"),
         "default-ref": ("DENY", DEFAULT_REF_BECAUSE),
         "amend-pushed": ("DENY", "amends a commit that is already pushed"),
@@ -88,7 +101,7 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "labels": ("DENY", "manages labels"),
         "agent-ready-label": (
             "ASK",
-            "applies the agent-ready label, the owner's agreement that a ticket is ready to build",
+            "This marks a ticket ready for agents to build without you, which is yours to decide",
         ),
         "workflow-runs": ("DENY", "deletes or cancels workflow runs"),
         "nested-settings": (
@@ -107,22 +120,25 @@ def test_the_rule_catalogue_is_pinned() -> None:
             "ASK",
             "This changes the instructions agents follow in this project, starting now",
         ),
-        "unreadable": ("ASK", "could not be checked by the guard"),
+        "unreadable": ("ASK", "The guard could not check this tool call"),
     }
 
 
-def test_only_six_rules_point_somewhere_other_than_a_dispute() -> None:
+def test_only_a_rule_with_a_way_out_of_its_own_points_somewhere_other_than_a_dispute() -> None:
     elsewhere = {rule for rule, spec in RULES.items() if spec.way_out != DISPUTE}
-    acting = {"workflow-write", "instructions-write"}
+    allow = {"workflow-write", "instructions-write", "agent-ready-label"}
     assert elsewhere == {
         "guard-path-default",
+        "guard-path-unseen-switch",
         "unresolved-directory",
+        "push-main",
         "merge-pr",
         "merge-default",
-        *acting,
+        "unreadable",
+        *allow,
     }
-    assert len({RULES[rule].way_out for rule in elsewhere - acting}) == len(elsewhere - acting)
-    assert {RULES[rule].way_out for rule in acting} == {"Allow it?"}
+    assert len({RULES[rule].way_out for rule in elsewhere - allow}) == len(elsewhere - allow)
+    assert {RULES[rule].way_out for rule in allow} == {"Allow it?"}
     assert "git switch -c" in RULES["guard-path-default"].way_out
 
 
@@ -899,12 +915,23 @@ def test_a_switch_on_the_same_line_moves_a_shell_write_between_branch_and_main(
         "git switch $(cat branch.txt)",
         "git switch `cat branch.txt`",
         "git switch -C $B",
+        "for b in main; do git switch $b; done",
+    ],
+)
+def test_a_switch_to_a_branch_the_guard_cannot_name_may_leave_a_shell_write_on_main(
+    switch: str,
+) -> None:
+    assert rules(f"{switch} && echo x > justfile") == ["guard-path-default"]
+
+
+@pytest.mark.parametrize(
+    "switch",
+    [
         "bash -c 'git switch main'",
         "eval git switch main",
         "bash -c 'git symbolic-ref HEAD refs/heads/main'",
         "eval git bisect reset main",
         "echo main | xargs git switch",
-        "for b in main; do git switch $b; done",
         "find . -maxdepth 0 -exec git checkout main ';'",
         "out=$(git switch main)",
         "echo $(sh -c 'git checkout main')",
@@ -913,7 +940,15 @@ def test_a_switch_on_the_same_line_moves_a_shell_write_between_branch_and_main(
     ],
 )
 def test_a_switch_the_guard_cannot_read_may_leave_a_shell_write_on_main(switch: str) -> None:
-    assert rules(f"{switch} && echo x > justfile") == ["guard-path-default"]
+    assert rules(f"{switch} && echo x > justfile") == ["guard-path-unseen-switch"]
+
+
+def test_a_write_after_an_unseen_switch_names_the_switch_alone_as_the_way_out() -> None:
+    [verdict] = verdicts("bash -c 'git switch main' && echo x > justfile")
+    assert verdict.rule == "guard-path-unseen-switch"
+    assert RULES[verdict.rule].way_out.startswith("Run the branch switch in a tool call of its own")
+    on_main = verdicts("bash -c 'git status' && echo x > justfile", ON_MAIN)
+    assert [verdict.rule for verdict in on_main] == ["guard-path-default"]
 
 
 @pytest.mark.parametrize(
