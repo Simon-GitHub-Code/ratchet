@@ -316,10 +316,20 @@ STOPPING = (
 
 
 def graceful(
-    mode: str, *extra: str, capsys: pytest.CaptureFixture[str], limit: str = "2"
+    mode: str,
+    *extra: str,
+    capsys: pytest.CaptureFixture[str],
+    limit: str = "2",
+    starts_after: str = "0",
 ) -> tuple[int, str]:
-    """The load smoke run inside a service of ``mode`` that is signalled 0.5 s in."""
-    command = [sys.executable, str(LOAD), "--url", "http://127.0.0.1:{port}/work", *BUSY]
+    """The load smoke run inside a service of ``mode`` that is signalled 0.5 s in.
+
+    The smoke starts ``starts_after`` seconds after the command does, as on a loaded runner.
+    """
+    command = [
+        *("sh", "-c", f'sleep {starts_after} && exec "$@"', "late", sys.executable, str(LOAD)),
+        *("--url", "http://127.0.0.1:{port}/work", *BUSY),
+    ]
     return run(
         *("--boot", f"MODE={mode} exec {python(STOPS)}", "--ready", READY),
         *("--graceful", limit, "--signal-after", "0.5", *extra),
@@ -332,6 +342,17 @@ def test_a_service_that_drains_and_exits_zero_is_green_under_load(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     code, out = graceful("drain", capsys=capsys)
+    assert out.endswith("with_service: green\n"), out
+    assert code == 0
+
+
+def test_a_smoke_slow_to_start_still_has_requests_in_flight_at_the_signal(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Why: on a loaded runner the smoke can take longer to start than --signal-after. A signal
+    # timed from the command's start then stops the service before one request is sent, and the
+    # smoke is red under its request floor although the service drained correctly.
+    code, out = graceful("drain", capsys=capsys, starts_after="1")
     assert out.endswith("with_service: green\n"), out
     assert code == 0
 
