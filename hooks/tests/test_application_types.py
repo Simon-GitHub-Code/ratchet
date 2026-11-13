@@ -49,7 +49,7 @@ def test_the_catalogue_file_lists_each_question_once() -> None:
     data = tomllib.loads(application_types.CATALOGUE.read_text(encoding="utf-8"))
     names = [question["name"] for question in data["question"]]
     assert len(names) == len(set(names))
-    keys = {"name", "applies-to", "collection", "proofs"}
+    keys = {"name", "applies-to", "collection", "proofs", "trigger"}
     assert all(set(question) <= keys for question in data["question"])
 
 
@@ -158,3 +158,84 @@ def test_life_events_are_read_from_the_binding_and_default_to_none() -> None:
         "deployed",
         "depended-on",
     }
+
+
+TRIGGERED = Catalogue(
+    types={"service": "answers requests", "cli": "a command", "library": "is imported"},
+    narrowed={"listen": frozenset({"service"})},
+    collections=frozenset(),
+    triggers={
+        "listen": "code:listener",
+        "restore": "life:irreplaceable-data",
+        "format": "always",
+        "dial": "code:outbound-call",
+    },
+    kinds={"listener": "a server", "outbound-call": "a call out"},
+    events={"irreplaceable-data": application_types.Event("users' records", ("migrations/**",))},
+)
+
+
+def later(question: str, tool: str, types: str = "service") -> list[str]:
+    binding = f"# Binding\n\n- Application types: {types}\n"
+    rows = [(name, tool if name == question else "a tool") for name in TRIGGERED.questions]
+    return list(TRIGGERED.failures(binding, rows, ADRS))
+
+
+def test_the_shipped_catalogue_gives_every_question_a_trigger_it_can_fire() -> None:
+    data = tomllib.loads(application_types.CATALOGUE.read_text(encoding="utf-8"))
+    assert set(SHIPPED.triggers) == {question["name"] for question in data["question"]}
+    assert {SHIPPED.trigger_problem(trigger) for trigger in SHIPPED.triggers.values()} == {None}
+    assert SHIPPED.trigger_of("format") == "always"
+    assert SHIPPED.trigger_of("rolls back safely") == "code:stored-format"
+    assert SHIPPED.trigger_of("production answers") == "life:deployed"
+    assert SHIPPED.trigger_of("incidents tighten a gate") == "always"
+    assert {"deployed", "irreplaceable-data", "depended-on"} == set(SHIPPED.events)
+    assert "outbound-call" in SHIPPED.kinds
+    assert "migrations/**" in SHIPPED.events["irreplaceable-data"].signs
+
+
+def test_a_trigger_the_catalogue_cannot_fire_is_named() -> None:
+    assert SHIPPED.trigger_problem("always") is None
+    assert SHIPPED.trigger_problem("code:listener") is None
+    assert SHIPPED.trigger_problem("life:deployed") is None
+    for wrong in ("code:nothing", "life:famous", "sometimes", "code:", "deployed"):
+        assert SHIPPED.trigger_problem(wrong) == (
+            f"'{wrong}' is not `always`, `code:<kind>` or `life:<event>` of this catalogue"
+        )
+
+
+def test_the_kinds_a_repository_must_find_are_those_its_types_are_asked_about() -> None:
+    assert TRIGGERED.kinds_asked({"service"}) == {"listener", "outbound-call"}
+    assert TRIGGERED.kinds_asked({"cli"}) == {"outbound-call"}
+    assert TRIGGERED.kinds_asked(set()) == set()
+
+
+def test_a_later_row_must_name_the_trigger_of_its_question_and_only_when_asked() -> None:
+    assert later("listen", "later: code:listener") == []
+    assert later("listen", "`later: code:listener`") == []
+    assert later("restore", "later: life:irreplaceable-data", "cli") == []
+    assert later("listen", "later: code:outbound-call") == [
+        (
+            "gate 'listen' says `later: code:outbound-call`, but its trigger is `code:listener`:"
+            " write `later: code:listener`"
+        )
+    ]
+    assert later("listen", "later: code:listener because") == [
+        (
+            "gate 'listen' says `later: code:listener because`, but its trigger is `code:listener`:"
+            " write `later: code:listener`"
+        )
+    ]
+    assert later("format", "later: code:listener") == [
+        "gate 'format' says `later: code:listener`, but it is asked from the first commit: bind it"
+    ]
+    # A bound row for a type that is not asked is already accepted, so a waiting one is too.
+    assert later("listen", "later: code:listener", "cli") == []
+
+
+def test_a_catalogue_without_triggers_asks_every_question_always() -> None:
+    plain = Catalogue({"cli": "a command"}, {}, frozenset({"tests"}))
+    assert plain.trigger_of("tests") == "always"
+    assert plain.questions == {"tests"}
+    assert plain.kinds_asked({"cli"}) == set()
+    assert application_types.dropped("tests").startswith("the Gates table has no 'tests' row")

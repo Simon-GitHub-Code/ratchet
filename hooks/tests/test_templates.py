@@ -274,10 +274,14 @@ def test_the_weekly_workflow_is_scheduled_and_may_only_read_and_write_issues() -
     assert "        shell: bash\n        run: just weekly 2>&1 | tee weekly.txt\n" in WEEKLY
 
 
-def test_the_weekly_entry_point_runs_the_four_gates_one_after_another() -> None:
+def test_the_weekly_entry_point_runs_its_gates_one_after_another() -> None:
     needs_just()
     gates = gate_list("weekly_gates")
-    assert gates == ["audit-all", "licenses", "drift", "load-soak"]
+    # Why: ADR 0028. The two drills are weekly gates: each is `later:` until its life event.
+    assert gates == [
+        *("audit-all", "licenses", "drift", "load-soak"),
+        *("restore-drill", "prod-probe"),
+    ]
     said = dry_run("weekly")
     assert 'python3 "/plugin/scripts/plugin_pin.py"' in said
     assert said.endswith(f"--serial {' '.join(gates)} -- {' '.join(gates)}")

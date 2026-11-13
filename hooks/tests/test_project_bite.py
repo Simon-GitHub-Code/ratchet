@@ -510,6 +510,7 @@ ROWS = (
     + row("shipped", tool="`ratchet` plugin `scripts/bite.py` and `scripts/project_bite.py`")
     + row("pins", tool="uv and `ratchet` plugin `scripts/pins.py`")
     + row("unbound", tool="")
+    + row("waiting", tool="later: code:listener")
     + "| no entry | a tool | 2 | | |\n"
 )
 
@@ -523,6 +524,7 @@ def test_the_gates_table_is_read_row_by_row_and_a_tool_the_repository_chose_is_b
         ("shipped", False),
         ("pins", True),
         ("unbound", False),
+        ("waiting", False),
         ("", True),
     ]
     assert rows[0] == project_bite.Row("lint", "a tool", "0", "sh gate lint")

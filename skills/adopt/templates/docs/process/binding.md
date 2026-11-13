@@ -51,12 +51,18 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | budget | `just budget tier1` |
 | reports | `just reports` |
 | bite-one | `just bite-one` |
+| triggers | `just triggers` |
 
 ## Gates
 
 - Application types: <one or more of `service`, `web-ui`, `app`, `cli`, `job`, `library`>
+- Life events: none
 
 One row per question the method asks. The application types decide which rows apply (`skills/method/application-types.toml` in the `ratchet` plugin); they never decide the tool. A row that applies names the tool for this stack, or `none` with the reason and the ADR that accepts the gap: green, and a standing criticism of the binding. A row that does not apply says `none: not a <type>`, naming a type the question is asked of, and needs no ADR. A row is never dropped, and an empty Tool cell is an unfinished binding: the conformance gate is red on both.
+
+Every question also has a trigger in the same file (ADR 0028): `always`, `code:<kind>` or `life:<event>`. Until the trigger has fired, the Tool cell says `later: <trigger>`, copied from the catalogue exactly (`later: code:outbound-call`, `later: life:deployed`), and the row judges nothing, needs no bite and has a recipe that prints the same words and exits 0. Adoption writes `later:` for every row whose trigger has not fired in this repository, and binds only the rest. The first instance of a kind of code is free: the `triggers` gate notes it and the route makes binding the owed rows the next step (`/ratchet:safeguard`); another instance added while a row is still `later:` is red. A row that is bound stays bound: nothing here unbinds a gate.
+
+`Life events` lists the events the owner has declared, from `deployed`, `irreplaceable-data` and `depended-on` (`none` until then). A declared event owes its rows in the same way and is never red. The route proposes an event when it sees a sign of it; only the owner declares one.
 
 | Question | Tool | Tier | Threshold source | Entry point |
 | --- | --- | --- | --- | --- |
@@ -89,9 +95,13 @@ One row per question the method asks. The application types decide which rows ap
 | telemetry emitted | | 1 | the Telemetry section below | `just telemetry` |
 | changed flags off and on | | 1 | `flags.toml` against the merge base | `just flag-states` |
 | load smoke | `ratchet` plugin `scripts/load_smoke.py` inside `with_service.py` | 1 | zero errors; the Limits section below | `just load-smoke` |
+| survives failing dependencies | | 1 | every outbound call has a timeout | `just dependency-faults` |
+| refuses bad configuration | | 1 | | `just config-refusal` |
+| shuts down gracefully | | 1 | the seconds it may take to exit | `just graceful-stop` |
 | every changed gate still bites | `ratchet` plugin `scripts/project_bite.py --changed` | 1 | `quality/bites.toml` | `just bite` |
 | public surface changed on purpose | | 1 | `quality/snapshots/` | `just api-check` |
 | old data still loads | | 1 | | `just data-compat` |
+| rolls back safely | | 1 | | `just rollback` |
 | documentation examples run | | 1 | | `just doctests` |
 | static security analysis | | 1 | | `just sast` |
 | configuration hardening | | 1 | | `just iac` |
@@ -102,6 +112,8 @@ One row per question the method asks. The application types decide which rows ap
 | guard paths changed | `ratchet` plugin `ratchet_guards.diff` | 1 | `guards/manifest.toml` | `just guard-diff` |
 | permission rules mirror the manifest | `ratchet` plugin `scripts/settings_rules.py` | 1 | `guards/manifest.toml` | `just settings-check` |
 | method conformance | `ratchet` plugin `scripts/conformance.py` | 1 | | `just conformance` |
+| incidents tighten a gate | `ratchet` plugin `scripts/conformance.py` | 1 | `docs/incidents/` against `quality/bites.toml` | `just incidents` |
+| safeguards bound before more instances | `ratchet` plugin `scripts/triggers.py` | 1 | the Triggers section below, as the merge base holds it | `just triggers` |
 | full mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 2 | `quality/mutation-register.toml` | `just mutation` |
 | deep interface conformance | | 2 | | `just api-deep` |
 | symbolic checking | | 2 | | `just symbolic` |
@@ -119,6 +131,16 @@ One row per question the method asks. The application types decide which rows ap
 | accessibility | | 2 | | `just a11y` |
 | formal verification | | 2 | the project-local verification skill | `just formal` |
 | every gate bites | `ratchet` plugin `scripts/bite.py` and `scripts/project_bite.py` | 2 | `quality/bites.toml` | `just bite-all` |
+| backup restores | | weekly | | `just restore-drill` |
+| production answers | | weekly | | `just prod-probe` |
+
+## Triggers
+
+Where each `code:<kind>` trigger of the Gates table finds its instances in this stack (ADR 0028). One row per kind that a question asked of this repository's application types names; `skills/method/application-types.toml` in the `ratchet` plugin lists the kinds and what each means. `Paths` are comma-separated globs over tracked files. Without a `Pattern` each matching file is one instance; with one, each matching line is, and a literal `|` in it is written `\|`. A repository that never has the kind writes `none: <reason>`. The `triggers` gate counts instances at the merge base and at head, reads this table as the merge base holds it, and holds the rule that the first instance is free and a second, added while a row it owes is still `later:`, is red.
+
+| Kind | Paths | Pattern |
+| --- | --- | --- |
+| <kind> | <globs of the tracked files that hold one, or `none: <reason>`> | <optional regex> |
 
 ## Absolute paths
 
@@ -153,7 +175,7 @@ How this repository stays fast, from the first commit (the Speed section of `ski
 
 ## Weekly and advisory
 
-`just audit-all`, `just licenses`, `just drift` and `just load-soak` run weekly as `just weekly`, from the `weekly` workflow or, with no forge, from the machine's scheduler, and block nothing; a red run opens or updates one issue, and a finding gets its own pull request. `just reports` prints hotspots, coupling, cohesion and complexity. They inform and never gate.
+`just audit-all`, `just licenses`, `just drift`, `just load-soak`, `just restore-drill` and `just prod-probe` run weekly as `just weekly`, from the `weekly` workflow or, with no forge, from the machine's scheduler, and block nothing; a red run opens or updates one issue, and a finding gets its own pull request. `just reports` prints hotspots, coupling, cohesion and complexity. They inform and never gate.
 
 ## Tool versions
 

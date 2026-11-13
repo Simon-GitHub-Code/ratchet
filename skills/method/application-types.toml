@@ -284,3 +284,7 @@ trigger = "life:irreplaceable-data"
 name = "production answers"
 applies-to = ["service", "web-ui"]
 trigger = "life:deployed"
+
+# The shipped gate that holds the first-one-free rule itself (scripts/triggers.py).
+[[question]]
+name = "safeguards bound before more instances"
