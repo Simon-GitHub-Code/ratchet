@@ -38,6 +38,23 @@ def test_adopt_binds_the_floor_and_what_has_arrived_and_builds_no_skeleton() -> 
     assert "the recommended answer is `none` for a new project" in ADOPT
 
 
+def test_adopt_provisions_what_the_first_slice_needs_and_rehearses_it() -> None:
+    # Why: ADR 0032. A dogfood's first unattended feature blocked on guarded-file edits adoption
+    # could have made: no test runner, a config left to "the change that brings" something, a
+    # `boot` of `none`, no change-size ceiling. Adoption makes them and proves the slice runs.
+    assert "**The tests are provisioned, not asked.**" in ADOPT
+    assert "**Rehearse the first slice.**" in ADOPT
+    assert "**A key a declared type needs is never removed to quiet a gate.**" in ADOPT
+    assert 'no rule leaves a config to "the change that brings" something' in ADOPT
+    assert "`just start` and the address it prints" in ADOPT
+    assert "python3 -m ratchet_guards.diff --root . --base HEAD" in ADOPT
+    assert 'Set the four to "none"' not in ADOPT
+    assert "Slice one is the one step 11's design brief names. When the brief names none" in ADOPT
+    assert "Rehearse at most twice" in ADOPT
+    assert "for a `cli`, `job` or `app` the run step 9's table gives its `smoke`" in ADOPT
+    assert "rehearse again" not in ADOPT, "the rehearsal is bounded"
+
+
 def test_adopt_leaves_the_permission_rules_to_step_8() -> None:
     # Why: issue 20. Claude Code applies .claude/settings.json the moment it exists, so a copy at
     # step 2 locked guards/** before step 8 filled the manifest. The file is written last.
