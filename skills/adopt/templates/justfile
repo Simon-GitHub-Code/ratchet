@@ -19,15 +19,18 @@ ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", home_directory() / ".clau
 # type that boots, before its code exists. `boot` stays in the foreground (a server until stopped,
 # one run of a job, a command line tool with the words after it, an app headless) and builds what
 # it runs: in CI each gate is a job of its own, with nothing another recipe built. `{port}` becomes
-# a free port, exported as PORT, so parallel runs never collide. `ready` is the URL that answers
-# below 400 once it is up, or "none" for a `cli`, `job` or `app`, whose gates run `boot` to its
-# exit; `boot_timeout` is the seconds it may take. `service` is the `service.name` its telemetry
-# carries. A `library` boots nothing and sets all three to "none".
+# a free port, exported as PORT, so parallel runs never collide: `boot` takes `{port}` or `$PORT`,
+# `ready` takes `{port}`. `booted` passes both quoted, so the recipe's shell expands nothing in
+# them. `ready` is the URL that answers below 400 once it is up; `boot_timeout` is the seconds it
+# may take. `service` is the `service.name` its telemetry carries. A `cli`, `job` or `app` answers
+# no URL and sets `ready` to "none", which `booted` cannot wait for: its `smoke` runs `boot` itself,
+# to its exit, and is green on exit 0 with the expected output. A `library` boots nothing and sets
+# all three to "none".
 boot := "bind: the command that builds and starts the deliverable in the foreground, such as ./server --port {port}"
 ready := "bind: the URL that answers once it is up, such as http://127.0.0.1:{port}/health"
 boot_timeout := "30"
 service := "bind: the service.name every signal carries"
-booted := 'python3 "' + ratchet_plugin + '/scripts/with_service.py" --boot "' + boot + '" --ready "' + ready + '" --timeout ' + boot_timeout
+booted := 'python3 "' + ratchet_plugin + '/scripts/with_service.py" --boot ' + quote(boot) + ' --ready ' + quote(ready) + ' --timeout ' + boot_timeout
 
 # A gate that requests the deliverable's routes from outside (`load-smoke`, `api-deep`, `dast`,
 # `pentest`, `load`) boots it through `probed`: with every flag due for removal turned on. New
@@ -310,7 +313,8 @@ duplication:
 build:
     @echo "bind: build the deliverable"; exit 1
 
-# Shipped: boot the deliverable, wait until `ready` answers, stop the whole process tree.
+# Shipped: boot the deliverable, wait until `ready` answers, stop the whole process tree. With
+# `ready` "none", the body runs `boot` to its exit instead, as the comment on `boot` says.
 smoke:
     {{booted}}
 

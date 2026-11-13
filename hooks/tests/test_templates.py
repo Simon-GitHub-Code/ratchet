@@ -228,7 +228,9 @@ def test_a_gate_that_requests_routes_boots_with_the_flags_due_for_removal_on() -
 
 
 def test_the_three_service_gates_arrive_bound_to_the_shipped_scripts() -> None:
-    assert '/scripts/with_service.py" --boot "\' + boot + \'" --ready "\' + ready' in JUSTFILE
+    assert (
+        "/scripts/with_service.py\" --boot ' + quote(boot) + ' --ready ' + quote(ready)" in JUSTFILE
+    )
     assert recipe("smoke").strip() == "{{booted}}"
     assert recipe("load-smoke").startswith("    {{probed}} -- python3 ")
     assert 'scripts/load_smoke.py" --url "bind: METHOD URL' in recipe("load-smoke")
@@ -315,6 +317,44 @@ def test_start_gives_the_port_to_the_whole_boot_line_as_the_gates_do(tmp_path: P
     needs_just()
     boot = {"boot": "true && sh -c 'echo port is $PORT'", "ready": "none", "port": "3000"}
     assert "port is 3000" in run_template(tmp_path, boot, "start")
+
+
+SERVE = f"{sys.executable} -m http.server --bind 127.0.0.1"
+
+
+@pytest.mark.parametrize(
+    ("boot", "port"),
+    [
+        (f"exec {SERVE} {{port}}", None),
+        (f"exec {SERVE} $PORT", None),
+        (f"exec {SERVE} $PORT", "1"),
+        (f'exec "{sys.executable}" -m http.server --bind 127.0.0.1 "$PORT"', None),
+    ],
+    ids=["the placeholder", "PORT", "PORT set to another port", "a double quote"],
+)
+def test_smoke_boots_a_deliverable_on_the_port_the_gate_picked(
+    tmp_path: Path, boot: str, port: str | None
+) -> None:
+    # Why: PR 43's verifier. `booted` once wrapped `boot` in double quotes, so the recipe's shell
+    # expanded `$PORT` before with_service.py chose it (unbound, or another port) and a `"` in
+    # `boot` split the argument.
+    just = shutil.which("just")
+    if just is None:
+        pytest.skip("just is not installed")
+    env = {k: v for k, v in os.environ.items() if k != "PORT"} | {
+        "RATCHET_PLUGIN": str(PLUGIN_ROOT)
+    }
+    sets = ["--set", "boot", boot, "--set", "ready", "http://127.0.0.1:{port}/"]
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
+        [just, "--justfile", str(TEMPLATES / "justfile"), *sets, "smoke"],
+        cwd=tmp_path,
+        env=env | ({"PORT": port} if port else {}),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "with_service: green" in done.stdout + done.stderr
 
 
 @pytest.mark.parametrize(
