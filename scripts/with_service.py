@@ -52,9 +52,14 @@ point. A command that ends before the signal is red, since nothing was in flight
 process is the boot command's own process, so boot with ``exec`` (``exec ./server``) or the shell
 takes the signal and the server never sees it; an exit by signal is red and says so. Before the
 signal the gate exports ``RATCHET_STOPPING``, a path that exists only from the signal on, which
-``load_smoke.py --until-stopped`` reads to tell a refused or reset connection after the signal
-(expected, the listener closed) from one before it (a fault). A service that ignores the signal is
-red, and is stopped with its whole group at the end as before.
+``load_smoke.py --until-stopped`` reads to tell a connection made after the signal (a refusal
+or a reset is expected, the listener closed) from one made before it (a fault). Between creating
+that path and signalling, the gate waits, for up to SECONDS, until the service has accepted every
+connection queued on its listener: closing a listener resets what is still queued, so a
+connection made just before the path appeared would otherwise be cut off by the kernel and not
+by the service. Linux shows the queue; elsewhere, or for a listener in another network namespace
+such as a container's, the gate signals at once. A service that ignores the signal is red, and
+is stopped with its whole group at the end as before.
 
 ``--refuses NAME`` (repeatable) is the "refuses bad configuration" check, with no command. For each
 NAME the service boots with the environment variable NAME removed, an ``--env`` of that name too.
@@ -88,6 +93,10 @@ from urllib.parse import urlsplit
 import gatelib
 
 POLL = 0.1
+QUEUE_POLL = 0.005
+# Why: Linux lists each listening socket here with its accept queue length as ``rx_queue``.
+TABLES = ("/proc/net/tcp", "/proc/net/tcp6")
+LISTEN = "0A"
 TAIL = 30
 # An exited service shows its first lines as well: the cause is usually the first thing it
 # said, and a long start-up can push it out of the tail.
@@ -160,6 +169,21 @@ def start(
     )
 
 
+def queued(port: int) -> int | None:
+    """Connections waiting for the listener on ``port`` to accept them; ``None`` if none is seen.
+
+    ``None`` off Linux, and for a listener in another network namespace, such as a container's.
+    """
+    found = None
+    for table in TABLES:
+        with contextlib.suppress(OSError):
+            for row in Path(table).read_text(encoding="ascii").splitlines()[1:]:
+                fields = row.split()
+                if fields[3] == LISTEN and int(fields[1].rpartition(":")[2], 16) == port:
+                    found = (found or 0) + int(fields[4].partition(":")[2], 16)
+    return found
+
+
 def signal_midway(
     process: subprocess.Popen[bytes],
     options: argparse.Namespace,
@@ -179,6 +203,13 @@ def signal_midway(
     if process.poll() is not None:
         return [f"the service exited with code {process.returncode} before it was signalled"]
     marker.touch()  # Why: before the signal, so a refusal that follows it is known to be expected.
+    # Why: a listener that closes resets the connections still queued on it, which the service
+    # never accepted; one made before the marker must have been accepted before the signal.
+    parts = urlsplit(options.ready)
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    deadline = time.monotonic() + options.graceful
+    while (queued(port) or 0) > 0 and time.monotonic() < deadline:
+        time.sleep(QUEUE_POLL)
     signalled = time.monotonic()
     process.send_signal(signal.SIGTERM)
     try:

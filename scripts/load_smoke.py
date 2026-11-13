@@ -36,17 +36,14 @@ answers" probe. It is judged on errors only, as everywhere, and sends the same f
 overlapping requests, so point it at a route that is safe to repeat.
 
 ``--until-stopped`` is for ``with_service.py --graceful``, which stops the service partway
-through the run and exports ``RATCHET_STOPPING``, a path that exists from the signal on. A
-request that started before the signal is in flight and must complete: a connection the service
-closed with no answer, a timeout, a 5xx or a wrong status is an error as always. Once the signal
-has come, a refused or reset connection is expected, not counted, and ends that worker, whenever
-its request started. Closing a listener resets the connections still queued on it, which the
-service never read, and a client cannot tell when its connection joined that queue. A service
-that read a request and dropped it closes the connection cleanly instead, and that is still an
-error. A request that started after the signal meets a closed listener, so none of its
-connection errors count; a timeout or an error status after the signal is still red. Without the
-flag a refused connection is always an error. The flag is red without ``RATCHET_STOPPING``, since
-it could not tell the two apart.
+through the run and exports ``RATCHET_STOPPING``, a path that exists from the signal on. The line
+is drawn by when a request's connection was made. ``with_service.py`` signals only once the
+service has accepted every connection queued on its listener, so one made before the path
+appeared is in flight and must complete: a reset, a timeout, a 5xx or a wrong status is an error
+as always. One made after it may meet a listener that is closing, so a refused or reset
+connection is expected, not counted, and ends that worker; a timeout or an error status after
+the signal is still red. Without the flag a refused connection is always an error. The flag is
+red without ``RATCHET_STOPPING``, since it could not tell the two apart.
 
 It ends within ``--seconds`` plus ``--timeout``: ten seconds at the defaults, even when the
 service hangs. Each request opens a new connection, which is what a burst of clients does.
@@ -146,19 +143,7 @@ def targets_of(parser: argparse.ArgumentParser, options: argparse.Namespace) -> 
 
 
 class Closed(Exception):  # noqa: N818 # -- not a fault: the service stopped taking requests
-    """A request the stopping service never took: begun after the signal, or never read."""
-
-
-def unread(error: BaseException) -> bool:
-    """Whether the service never read a failed request: it was refused, or reset with no answer.
-
-    A listener that closes resets every connection still queued on it, so a reset is what a
-    request the service never accepted meets. A service that read a request and closed without
-    answering closes cleanly, which ``http.client`` raises as ``RemoteDisconnected``: dropped.
-    """
-    reset = isinstance(error, ConnectionResetError)
-    refused = isinstance(error, ConnectionRefusedError)
-    return refused or (reset and not isinstance(error, http.client.RemoteDisconnected))
+    """A request whose connection was made after the stop signal met a closed listener."""
 
 
 def attempt(
@@ -166,20 +151,26 @@ def attempt(
 ) -> tuple[float | None, str | None]:
     """One request: its latency in seconds when an answer came, and what was wrong if anything.
 
-    With ``stopping`` set, a connection error on a request that began after that path appeared
-    raises ``Closed`` instead of being counted. So does an ``unread`` request whenever the path
-    exists by the time it fails: the service never had it, and the client cannot tell when its
-    connection reached the queue the listener dropped.
+    With ``stopping`` set, a connection error raises ``Closed`` instead of being counted when
+    that path existed once the connection was made, or when the failure came with no connection
+    made and the path exists: a refused connect after the signal. The line is the connection and
+    not the start of the attempt, since a client can stall between the two.
     """
-    after_signal = stopping is not None and stopping.exists()
+    signalled: list[bool] = []
+
+    def connected() -> None:
+        signalled.append(stopping is not None and stopping.exists())
+
     started = time.perf_counter()
     try:
-        status = gatelib.http_status(goal.method, goal.url, body=goal.body, timeout=timeout)
+        status = gatelib.http_status(
+            goal.method, goal.url, body=goal.body, timeout=timeout, connected=connected
+        )
     except TimeoutError:
         return None, f"{goal.label()}: timed out after {timeout:g}s"
     except (OSError, http.client.HTTPException) as error:
-        raced = unread(error) and stopping is not None and stopping.exists()
-        if (after_signal and isinstance(error, ConnectionError)) or raced:
+        after_signal = signalled[0] if signalled else stopping is not None and stopping.exists()
+        if after_signal and isinstance(error, ConnectionError):
             raise Closed from error
         return None, f"{goal.label()}: {type(error).__name__}"
     wrong = None if goal.accepts(status) else f"{goal.label()}: HTTP {status}"
