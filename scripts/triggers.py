@@ -32,9 +32,11 @@ The Triggers table, the Gates rows and the life events that judge are read at th
 head, the work tree's tracked files. On the adoption (the base holds no binding) nothing is judged.
 
 Other scripts import ``owed(root)`` and ``instances(root, ref)``. ``--json`` prints ``owed`` for
-the route as a list of ``{"question", "trigger", "name", "count"}`` objects.
+the route as a list of ``{"question", "trigger", "name", "count"}`` objects. ``--count`` prints
+each kind of the work tree's table with its instances and the table's problems, so whoever writes
+a row sees at once what it finds; it judges nothing.
 
-Usage: ``triggers.py [--root DIR] [--base REF] [--json]``. Exits 1 when red.
+Usage: ``triggers.py [--root DIR] [--base REF] [--json | --count]``. Exits 1 when red.
 """
 
 from __future__ import annotations
@@ -267,13 +269,29 @@ def judge(root: Path, base: str) -> tuple[list[str], list[str]]:
     return problems, notes
 
 
+def count(root: Path) -> None:
+    """Print each kind of the work tree's Triggers table with what it finds, and its problems."""
+    kinds, problems = parse(binding_at(root, None))
+    for problem in problems:
+        print(f"triggers: {problem}")
+    for name, found in instances(root, None, kinds).items():
+        if kinds[name].never:
+            print(f"{name}: none: {kinds[name].never}")
+        else:
+            print(f"{name}: {len(found)}" + (f" ({listing(found)})" if found else ""))
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="triggers.py")
     parser.add_argument("--root", type=Path, default=Path())
     parser.add_argument("--base")
     parser.add_argument("--json", action="store_true", help="print the rows head owes, as JSON")
+    parser.add_argument("--count", action="store_true", help="print each kind's instances")
     options = parser.parse_args(argv[1:])
     root = options.root.resolve()
+    if options.count:
+        count(root)
+        return 0
     if options.json:
         print(json.dumps([asdict(row) for row in owed(root)]))
         return 0

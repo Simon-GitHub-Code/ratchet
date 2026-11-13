@@ -147,6 +147,26 @@ def test_json_prints_the_owed_rows_for_the_route(tmp_path: Path, capsys: Out) ->
     assert json.loads(capsys.readouterr().out) == []
 
 
+def test_count_prints_what_each_row_finds(tmp_path: Path, capsys: Out) -> None:
+    # Why: whoever writes a Triggers row proves its pattern on the tree before the gate trusts it.
+    root = project(tmp_path, {"src/a.py": CALL * 2, "src/server.py": "serve()\n"})
+    assert run(root, "--count") == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "outbound-call: 2 (src/a.py:2, src/a.py:4)",
+        "listener: 1 (src/server.py)",
+        "stored-format: none: nothing is stored",
+    ]
+    write(root, "docs/process/binding.md", binding(table=TABLE + "| listener | | |\n"))
+    (root / "src/server.py").unlink()
+    assert run(root, "--count") == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "triggers: the Triggers table names 'listener' twice",
+        "outbound-call: 2 (src/a.py:2, src/a.py:4)",
+        "listener: 0",
+        "stored-format: none: nothing is stored",
+    ]
+
+
 def test_the_first_instance_is_free_and_noted(tmp_path: Path, capsys: Out) -> None:
     root = project(tmp_path, None, LATER_CALL)
     write(root, "src/a.py", CALL)
