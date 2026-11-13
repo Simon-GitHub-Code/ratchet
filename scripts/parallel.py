@@ -28,15 +28,16 @@ Usage::
   is attached: no colour, no cursor movement, flushed gate by gate, so a CI log reads as a
   terminal does. A gate's output is captured, so a tool that colours only for a terminal prints
   plain text; give the recipe the tool's own force-colour switch to colour the replay.
-* A gate the binding at ``--root`` leaves waiting judged nothing when it exits 0 and its whole
-  output is the one line the template gives its recipe: ``later: <trigger>``, the words of its
-  Tool cell, for a question not asked yet (ADR 0028), or ``none: <reason>`` for one that does
-  not apply. The gate is matched to its Gates row by its last word, the entry point's name. Its
-  status line says ``not run yet`` or ``not applicable`` in place of green, and the closing
-  lines count the checks that ran and passed apart from these, so a run of mostly ``later:``
-  gates never reads as all green: the last line is ``parallel: green (26 ran, 39 not run yet)``,
-  or ``parallel: no check ran (...)`` when none did. Such a gate is not red: the exit code is
-  unchanged. Any other gate's output, ``none: ...`` included, is a check that ran.
+* A gate that exits 0 and whose whole output is one ``later: <trigger>`` line judged nothing:
+  it is the body the template gives a question not asked yet (ADR 0028), and it is not run yet
+  whatever its row says. One whose whole output is one ``none: <reason>`` line, the body of a
+  question that does not apply, is not applicable, unless the binding at ``--root`` binds the
+  gate to a tool: a tool that prints ``none: ...`` ran. The gate is matched to its Gates row by
+  its last word, the entry point's name. Its status line says ``not run yet`` or ``not
+  applicable`` in place of green, and the closing lines count the checks that ran and passed
+  apart from these, so a run of mostly ``later:`` gates never reads as all green: the last line
+  is ``parallel: green (26 ran, 39 not run yet)``, or ``parallel: no check ran (...)`` when
+  none did. Such a gate is not red: the exit code is unchanged.
 * The exit code is 0 when every gate is green and 1 otherwise, and the closing lines name EVERY
   red gate, so one run shows all of them. 128 plus the signal after an interrupt; 2 for a
   usage error. ``--fail-fast`` stops at the first red instead, for an inner loop: it stops the
@@ -95,6 +96,9 @@ import project_bite
 POLL = 0.05
 # The job a gate that is measured alone runs in; the units count from 0.
 ALONE = -1
+# Why: the template gives a question not asked yet the recipe `@echo "later: <trigger>"`, and one
+# that does not apply `@echo "none: <reason>"`, so that one line is all such a gate says.
+WAITING = re.compile(r"(?P<standing>later|none): \S.*")
 
 
 class Standing(Enum):
@@ -106,37 +110,31 @@ class Standing(Enum):
     NONE = "not applicable, as its line says"
 
 
-def waiting(root: Path) -> dict[str, re.Pattern[str]]:
-    """What each gate the binding leaves waiting prints, by the name of its entry point.
+def tools(root: Path) -> frozenset[str]:
+    """The entry points the binding at ``root`` binds to a tool: a row neither ``none`` nor later.
 
-    Why: the template gives a ``later: <trigger>`` row the body ``@echo "later: <trigger>"``,
-    the words of its Tool cell, and a row bound ``none`` the body ``@echo "none: <reason>"``.
-    A gate counts as having judged nothing only when its row says so and it printed that line,
-    so a tool whose own output happens to read ``none: ...`` still counts as having run.
+    Why: a tool whose whole output reads ``none: ...`` judged something, so a ``none:`` line is a
+    gate that judged nothing only where the binding gives the gate no tool.
     """
     rows = project_bite.gate_rows(gatelib.read_text(root / gatelib.BINDING) or "")
-    lines = {}
-    for row in rows:
-        later = application_types.LATER.match(row.tool)
-        if later:
-            lines[row.gate] = re.compile(re.escape(f"later: {later[1].strip()}"))
-        elif application_types.NONE.match(row.tool):
-            lines[row.gate] = re.compile(r"none: \S.*")
-    return lines
+    waits = (application_types.NONE, application_types.LATER)
+    return frozenset(
+        row.gate for row in rows if row.tool and not any(w.match(row.tool) for w in waits)
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class Finished:
     """One gate that ran to its end: what it printed, how it ended and how long it took.
 
-    ``waits`` is the line a gate the binding leaves waiting prints in place of judging.
+    ``tool`` says the binding binds the gate to a tool.
     """
 
     name: str
     seconds: float
     exit_code: int
     output: str
-    waits: re.Pattern[str] | None = None
+    tool: bool = False
 
     @property
     def green(self) -> bool:
@@ -148,10 +146,10 @@ class Finished:
         """Red, ran and passed, or green having judged nothing: ``later:`` or ``none:``."""
         if not self.green:
             return Standing.RED
-        said = self.output.strip()
-        if self.waits is None or not self.waits.fullmatch(said):
+        waiting = WAITING.fullmatch(self.output.strip())
+        if waiting is None or (waiting["standing"] == "none" and self.tool):
             return Standing.GREEN
-        return Standing.LATER if said.startswith("later:") else Standing.NONE
+        return Standing[waiting["standing"].upper()]
 
     def line(self) -> str:
         """The one status line the gate gets."""
@@ -175,7 +173,7 @@ class Live:
     process: subprocess.Popen[bytes]
     log: IO[bytes]
     started: float
-    waits: re.Pattern[str] | None
+    tool: bool
 
 
 def say(text: str) -> None:
@@ -231,7 +229,7 @@ class Scheduler:
         self.jobs: int = options.jobs
         self.fail_fast: bool = options.fail_fast
         self.report_to: Path | None = options.report
-        self.waits = waiting(self.root)
+        self.tools = tools(self.root)
         self.live: dict[int, Live] = {}
         self.finished: list[Finished] = []
         self.stopped: list[str] = []
@@ -300,7 +298,7 @@ class Scheduler:
         except OSError as error:
             log.close()
             return Finished(name, 0.0, 127, f"cannot run {command[0]}: {error}\n")
-        return Live(name, process, log, time.monotonic(), self.waits.get(shlex.split(name)[-1]))
+        return Live(name, process, log, time.monotonic(), shlex.split(name)[-1] in self.tools)
 
     def settle_exited(self) -> None:
         """Settle every running gate whose process has exited."""
@@ -345,7 +343,7 @@ def collect(gate: Live, code: int) -> Finished:
     gate.log.close()
     if left:
         output += f"parallel: {gate.name}: {gatelib.LEFT_RUNNING}\n"
-    return Finished(gate.name, seconds, 128 - code if code < 0 else code, output, gate.waits)
+    return Finished(gate.name, seconds, 128 - code if code < 0 else code, output, gate.tool)
 
 
 def closing(scheduler: Scheduler, wall: float) -> list[str]:
