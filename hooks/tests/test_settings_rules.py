@@ -322,9 +322,20 @@ def test_regenerated_is_idempotent_and_keeps_every_key_and_own_rule(
     assert {key: value for key, value in settings.items() if key != "permissions"} == {
         key: value for key, value in out.items() if key != "permissions"
     }
-    for key, ours in (("deny", deny), ("ask", ask)):
-        own = [rule for rule in settings_rules.listed(settings, key) if rule not in GENERATED]
+    held_deny = settings_rules.listed(settings, "deny")
+    stricter = [
+        rule
+        for rule in dict.fromkeys(held_deny)
+        if rule not in deny and settings_rules.plugin_writes(rule, PARSED)
+    ]
+    for key, ours in (("deny", [*deny, *stricter]), ("ask", [r for r in ask if r not in stricter])):
+        own = [
+            rule
+            for rule in settings_rules.listed(settings, key)
+            if not settings_rules.plugin_writes(rule, PARSED)
+        ]
         assert out["permissions"][key] == [*ours, *own]
+    assert set(held_deny) <= set(out["permissions"]["deny"])
     assert settings_rules.listed(out, "deny") == out["permissions"]["deny"]
 
 
