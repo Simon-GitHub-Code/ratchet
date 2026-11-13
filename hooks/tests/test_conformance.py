@@ -10,7 +10,9 @@ from pathlib import Path
 
 import pytest
 
+import application_types
 import conformance
+from tests.repos import repository
 from tests.support import PLUGIN_ROOT
 
 SKILLS = PLUGIN_ROOT / "skills"
@@ -364,6 +366,37 @@ def test_a_one_way_door_needs_a_reason(repo: Path) -> None:
     assert f"guards/manifest.toml: {expected}" in red(repo)
 
 
+def test_a_missing_kind_of_door_and_a_door_with_no_paths_are_the_owner_s_to_settle(
+    repo: Path,
+) -> None:
+    replace(MANIFEST, 'on = "removal"\n', 'on = "rewrite"\n')(repo)
+    [missing] = conformance.findings(repo)
+    assert missing.problem.startswith("no [[door]] with on = 'removal'")
+    assert isinstance(missing.fix, conformance.Owner)
+    assert missing.fix.ask.startswith("Does this repository have a door of kind 'removal'")
+    write(MANIFEST, (pristine() / MANIFEST).read_text(encoding="utf-8"))(repo)
+    bound = 'on = "removal"\npaths = [\n    "bound/**",\n]'
+    replace(MANIFEST, bound, 'on = "removal"\npaths = []')(repo)
+    [unbound] = conformance.findings(repo)
+    assert unbound.problem.startswith("door 'contracts' has no paths yet")
+    assert isinstance(unbound.fix, conformance.Owner)
+    assert unbound.fix.ask.startswith("Which paths shut the door 'contracts' (Contract artefacts")
+
+
+def test_the_life_events_question_shows_the_signs_the_tree_holds(tmp_path: Path) -> None:
+    files = {
+        str(path.relative_to(pristine())): path.read_text(encoding="utf-8")
+        for path in pristine().rglob("*")
+        if path.is_file() and ".git" not in path.parts
+    }
+    files[BINDING] = files[BINDING].replace("- Life events: none\n", "")
+    files["fly.toml"] = "app = 'a'\n"
+    root = repository(tmp_path / "repo", files)
+    [event] = [f for f in conformance.findings(root) if "Life events" in f.problem]
+    assert isinstance(event.fix, conformance.Owner)
+    assert event.fix.evidence == ("`fly.toml` matches `fly.toml`, a sign of `deployed`",)
+
+
 def test_a_self_test_mutation_refuses_a_template_it_no_longer_fits(repo: Path) -> None:
     with pytest.raises(SystemExit, match="has no 'absent text' to mutate"):
         conformance.rewrite(MANIFEST, "absent text", "anything")(repo)
@@ -630,7 +663,14 @@ def test_the_life_events_line_is_asked_for_and_names_only_known_events(repo: Pat
     [found] = conformance.findings(repo)
     assert found.path == BINDING
     assert found.problem.startswith("has no '- Life events:' line; add it beside")
-    assert start(found) == ("- Life events: none",)
+    assert isinstance(found.fix, conformance.Owner)
+    assert found.fix.ask.startswith("Which of these has already happened to this project:")
+    assert (
+        "`deployed`, when it runs somewhere people other than the owner can reach" in found.fix.ask
+    )
+    assert found.fix.evidence == ("no file in the tree is a sign of a life event",)
+    owed = application_types.load().owed_by("irreplaceable-data")
+    assert f"`irreplaceable-data` owes the Gates rows {', '.join(owed)}" in found.fix.then
     assert (
         "`none` turns off the owner's review of one-way doors and unflagged surface"
         in found.problem

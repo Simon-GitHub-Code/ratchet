@@ -152,7 +152,9 @@ def test_an_adoption_before_the_triggers_is_told_what_to_add(
     code, out = report(repo, plugin, capsys)
     assert code == 1
     assert "has no '- Life events:' line; add it beside '- Application types:'" in out
-    assert "      - Life events: none" in out
+    assert "      ? Which of these has already happened to this project:" in out
+    assert "        seen: no file in the tree is a sign of a life event" in out
+    assert "        then: `deployed` owes the Gates rows " in out
     assert "has no '## Triggers' section; add the template's" in out
     assert "      | Kind | Paths | Pattern |" in out
 

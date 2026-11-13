@@ -87,6 +87,11 @@ WEEKLY_SHAPE = (
     ("issues: write", "may open the issue a finding gets"),
 )
 DOOR_KINDS = ("change", "rewrite", "removal")
+DOOR_MEANINGS = {
+    "change": "a path whose every change is final, such as a migration or infrastructure code",
+    "rewrite": "a file the default branch holds that is never rewritten, such as a golden fixture",
+    "removal": "a path whose loss breaks a consumer, such as a contract or a public snapshot",
+}
 SHARD_MATRIX = "matrix.shard"
 HELD_TO_TIER = "holds a gate's job to its tier's ceiling"
 CEILING_SHAPE = (
@@ -235,6 +240,14 @@ def agent(line: str, start: tuple[str, ...] = (), then: tuple[str, ...] = ()) ->
     """A finding an agent fixes, from a check's one line: every line starts with its path."""
     path, _, problem = line.partition(": ")
     return Finding(path, problem, Agent(start, then))
+
+
+def owner(
+    line: str, ask: str, *, evidence: tuple[str, ...] = (), then: tuple[str, ...] = ()
+) -> Finding:
+    """A finding only the owner settles, from a check's one line and the question it asks."""
+    path, _, problem = line.partition(": ")
+    return Finding(path, problem, Owner(ask, evidence, then))
 
 
 def read(path: Path) -> str | None:
@@ -465,7 +478,29 @@ def check_binding(root: Path) -> Iterable[Finding]:
         )
 
 
-def declared_events(text: str) -> Iterable[Finding]:
+def life_events_question(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    """What to ask the owner of the missing Life events line: the events, the signs, the rows."""
+    catalogue = application_types.load()
+    events = catalogue.events
+    named = "; ".join(f"`{name}`, when {event.meaning}" for name, event in events.items())
+    ask = (
+        f"Which of these has already happened to this project: {named}? Write them on the"
+        " '- Life events:' line, or `none` for a project that is still young."
+    )
+    evidence = tuple(
+        f"`{path}` matches `{sign}`, a sign of `{name}`"
+        for name, signs in application_types.signs_seen(root).items()
+        for sign, path in signs.items()
+    ) or ("no file in the tree is a sign of a life event",)
+    then = tuple(
+        f"`{name}` owes the Gates rows {', '.join(owed)}"
+        for name in events
+        if (owed := catalogue.owed_by(name))
+    )
+    return ask, evidence, then
+
+
+def declared_events(root: Path, text: str) -> Iterable[Finding]:
     """The ``- Life events:`` line (ADR 0028): present, and naming only events the catalogue has."""
     match = application_types.EVENTS.search(text)
     if match is None:
@@ -475,7 +510,7 @@ def declared_events(text: str) -> Iterable[Finding]:
             " event counts as declared; `none` turns off the owner's review of one-way doors and"
             " unflagged surface and the critic, so a project that is live writes its events"
             " instead (ADR 0028)",
-            Agent(start=("- Life events: none",)),
+            Owner(*life_events_question(root)),
         )
         return
     known = application_types.load().events
@@ -496,7 +531,7 @@ def check_triggers(root: Path) -> Iterable[Finding]:
     text = read(root / TRIGGERS_PATH)
     if text is None:
         return
-    yield from declared_events(text)
+    yield from declared_events(root, text)
     catalogue = application_types.load()
     if triggers.SECTION.strip() not in text:
         yield Finding(
@@ -634,9 +669,11 @@ def check_doors(root: Path) -> Iterable[Finding]:
     kinds = {door.get("on", "change") for door in doors}
     for kind in DOOR_KINDS:
         if kind not in kinds:
-            yield agent(
+            yield owner(
                 f"guards/manifest.toml: no [[door]] with on = '{kind}'; the merge judge reads"
-                " the one-way doors from it"
+                " the one-way doors from it",
+                f"Does this repository have a door of kind '{kind}', {DOOR_MEANINGS[kind]}? Add a"
+                f" [[door]] with on = '{kind}' and its paths, or `none = \"<the reason>\"`.",
             )
     for door in doors:
         name = door.get("name", "<unnamed>")
@@ -645,9 +682,11 @@ def check_doors(root: Path) -> Iterable[Finding]:
                 f"guards/manifest.toml: door '{name}' needs a reason of {MIN_REASON}+ characters"
             )
         if not door.get("paths") and len(str(door.get("none", ""))) < MIN_REASON:
-            yield agent(
+            yield owner(
                 f"guards/manifest.toml: door '{name}' has no paths yet; bind it, or say why the"
-                ' repository has none with `none = "<reason>"`'
+                ' repository has none with `none = "<reason>"`',
+                f"Which paths shut the door '{name}' ({door.get('reason', 'no reason given')})?"
+                ' List them, or say why the repository has none with `none = "<the reason>"`.',
             )
 
 

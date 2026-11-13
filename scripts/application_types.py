@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import gatelib
+
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
     from collections.abc import Set as AbstractSet
@@ -117,6 +119,17 @@ class Catalogue:
         """Whether a part of a trigger names a kind or an event of this catalogue."""
         return (part.startswith(CODE) and part.removeprefix(CODE) in self.kinds) or (
             part.startswith(LIFE) and part.removeprefix(LIFE) in self.events
+        )
+
+    def owed_by(self, event: str) -> tuple[str, ...]:
+        """The questions whose trigger names ``event``, in the catalogue's order (ADR 0028).
+
+        A question that joins the event to a kind of code is in the list: it waits for the kind too.
+        """
+        return tuple(
+            question
+            for question, trigger in self.triggers.items()
+            if f"{LIFE}{event}" in parts(trigger)
         )
 
     def kinds_asked(self, types: AbstractSet[str]) -> frozenset[str]:
@@ -240,6 +253,24 @@ def life_events(binding: str) -> frozenset[str]:
         return frozenset()
     named = (name.strip(" `") for name in match.group(1).split(","))
     return frozenset(name for name in named if name and name != "none")
+
+
+def signs_seen(root: Path) -> dict[str, dict[str, str]]:
+    """Per undeclared life event, each sign glob the tree matches and the first path it matched."""
+    binding = gatelib.read_text(root / gatelib.BINDING)
+    if binding is None:
+        return {}
+    declared = life_events(binding)
+    paths = gatelib.tracked_paths(root)
+    seen: dict[str, dict[str, str]] = {}
+    for name, event in load().events.items():
+        if name in declared:
+            continue
+        for sign in event.signs:
+            match = next((path for path in paths if gatelib.matches(path, [sign])), None)
+            if match is not None:
+                seen.setdefault(name, {})[sign] = match
+    return seen
 
 
 def declared_or_all(binding: str) -> frozenset[str]:

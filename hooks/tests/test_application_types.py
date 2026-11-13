@@ -8,6 +8,7 @@ import pytest
 
 import application_types
 from application_types import Catalogue
+from tests.repos import repository
 
 Out = pytest.CaptureFixture[str]
 SKILLS = Path(__file__).resolve().parents[2] / "skills"
@@ -158,6 +159,30 @@ def test_life_events_are_read_from_the_binding_and_default_to_none() -> None:
         "deployed",
         "depended-on",
     }
+
+
+def test_an_event_owes_the_questions_whose_trigger_names_it() -> None:
+    owed = SHIPPED.owed_by("deployed")
+    assert "rolls back safely" in owed, "a trigger joined to a kind of code still names the event"
+    assert all("life:deployed" in SHIPPED.triggers[question] for question in owed)
+    assert SHIPPED.owed_by("famous") == ()
+
+
+def test_the_signs_of_an_undeclared_event_are_the_first_paths_the_tree_matches(
+    tmp_path: Path,
+) -> None:
+    binding = "- Application types: cli\n- Life events: depended-on\n"
+    files = {
+        "docs/process/binding.md": binding,
+        "fly.toml": "x",
+        "deploy/up.sh": "x",
+        "SECURITY.md": "x",
+    }
+    root = repository(tmp_path / "repo", files)
+    assert application_types.signs_seen(root) == {
+        "deployed": {"fly.toml": "fly.toml", "deploy/**": "deploy/up.sh"}
+    }
+    assert application_types.signs_seen(tmp_path) == {}
 
 
 def test_a_missing_events_line_declares_every_event_to_a_judge() -> None:
