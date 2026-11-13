@@ -717,9 +717,7 @@ class Outcome:
         return "\n".join([head, *(f"  {line}" for line in self.detail.splitlines())])
 
     def unproven(self, red: str) -> Outcome:
-        """This outcome, when a later run with no fault planted printed ``red`` and exited red."""
-        if self.verdict is not Verdict.BITES:
-            return self
+        """This bite, not proven: a later run with no fault planted printed ``red`` and was red."""
         why = (
             "the gate did not return to green once the fault was gone, so its red may come from"
             " what its own runs leave and not from the fault"
@@ -815,7 +813,10 @@ class Copy:
         """A run with no fault planted; red, it leaves no bite before it with ``args`` standing."""
         code, output = self.run([*shlex.split(row.command), *args])
         if code != 0:
-            outcomes[:] = [o.unproven(output) if o.bite.args == args else o for o in outcomes]
+            outcomes[:] = [
+                o.unproven(output) if o.verdict is Verdict.BITES and o.bite.args == args else o
+                for o in outcomes
+            ]
         return code, output
 
 
