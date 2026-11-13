@@ -115,7 +115,13 @@ class _Lexer:
         self._end_word()
 
     def _step(self, char: str) -> None:
-        if self.text.startswith("$'", self.at):
+        if self.text.startswith("$$", self.at):
+            # Why: `$$` is the shell's process id, so a quote after it opens no `$'...'` word.
+            self.word.append("$$")
+            self.at += 2
+        elif self.text.startswith("${", self.at):
+            self._parameter()
+        elif self.text.startswith("$'", self.at):
             self._ansi()
         elif char in "'\"\\`" or self.text.startswith("$(", self.at):
             self._quoted(char)
@@ -169,6 +175,25 @@ class _Lexer:
         end = min(end + 1, len(self.text))
         self.word.append(self.text[self.at : end])
         self.at = end
+
+    def _parameter(self) -> None:
+        """A ``${...}`` expansion read to its closing brace, so a ``)`` or blank in it ends nothing.
+
+        A substitution inside it is still lifted out, so the command it runs is checked.
+        """
+        self.word.append("${")
+        self.at += 2
+        while self.at < len(self.text) and self.text[self.at] != "}":
+            char = self.text[self.at]
+            if self.text.startswith(("$$", "${", "$'"), self.at):
+                self._step(char)
+            elif char in "'\"\\`" or self.text.startswith("$(", self.at):
+                self._quoted(char)
+            else:
+                self.word.append(char)
+                self.at += 1
+        self.word.append("}")
+        self.at += 1
 
     def _double(self) -> None:
         self.word.append('"')
