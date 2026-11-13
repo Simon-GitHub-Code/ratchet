@@ -370,6 +370,10 @@ _LOCKS: dict[str, tuple[Callable[[str], object], Callable[[Data], Locked]]] = {
 }
 
 
+# The lockfiles this module reads; a gate that skips generated lockfiles skips these.
+LOCKED = frozenset(_LOCKS)
+
+
 def file_name(path: str) -> str:
     """The name a path's file has in the tree; a snapshot is named after the file it copies."""
     return PurePosixPath(path).name.rsplit(SNAPSHOT_SEPARATOR, 1)[-1]

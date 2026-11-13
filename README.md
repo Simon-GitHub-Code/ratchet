@@ -81,7 +81,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/pins.py` | 0 | is every action pinned by commit, every image by digest, every workflow least-privileged? |
 | `scripts/coverage_groups.py` | 1 | is each coverage group at its ratchet, and each absolute path at 100%? Fed by the suite's Cobertura or LCOV report |
 | `scripts/mutation_survivors.py` | 1 and 2 | is every surviving mutant registered, and no entry stale? Fed by any mutation tool: one JSON line per mutant, or the reports of mutmut and Stryker as they are |
-| `scripts/change_size.py` | 1 | is the change within its files and lines ceiling? |
+| `scripts/change_size.py` | 1 | is the change within its files and lines ceiling? (records, generated lockfiles and their snapshots are not counted; a moved file counts by its changed lines) |
 | `ratchet_guards.diff` | 1 | which guard paths changed? |
 | `scripts/settings_rules.py` | 1 | do the permission rules still mirror the manifest? |
 | `scripts/conformance.py` | 1 | does the repository still carry the method: its records, its binding, its application types, its Speed section, its CI shape? `--self-test` shows it bites |

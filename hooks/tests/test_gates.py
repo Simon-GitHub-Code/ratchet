@@ -416,7 +416,37 @@ def test_change_size_does_not_count_the_methods_own_records(tmp_path: Path) -> N
     write(root, "docs/features/f/verdict.json", "{}\n")
     write(root, ".scratch/changes/feature-1-a.md", "# a\n")
     write(root, "docs/features/f/helper.py", "x = 1\n")
+    write(root, "docs/disputes/0001-slug.md", "# Dispute\n\nwhy\n")
     assert change_size.measure(root, "main") == (2, 2), "the code and a file that is no record"
+
+
+def test_change_size_does_not_count_generated_lockfiles_or_their_snapshots(tmp_path: Path) -> None:
+    # Why: a package manager writes the lockfile and `just snapshots` copies it, so a two-package
+    # change measured twice a lockfile nobody reads; `pins` still fails a lockfile that drifts.
+    root = repository(tmp_path, {"a.txt": "1\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    for name in ("pnpm-lock.yaml", "quality/snapshots/pnpm-lock.yaml", "web/uv.lock"):
+        write(root, name, "a\nb\n")
+    write(root, "quality/snapshots/web__package-lock.json", "{}\n")
+    write(root, "yarn.lock", "a\n")
+    assert change_size.measure(root, "main") == (1, 1), "yarn.lock is a lockfile nobody reads here"
+
+
+def test_change_size_counts_a_moved_file_by_its_changed_lines(tmp_path: Path) -> None:
+    # Why: moving six test files with twenty changed lines measured 2,101 lines as deleted plus
+    # added, over a 1,500 ceiling the move did not come near.
+    body = "".join(f"line {n}\n" for n in range(100))
+    root = repository(tmp_path, {"old/a.py": body, "docs/features/f/spec.md": "x\n"})
+    commit(root, "feat(core): second")
+    branch(root)
+    (root / "new").mkdir()
+    (root / "old/a.py").rename(root / "new/a.py")
+    write(root, "new/a.py", body.replace("line 1\n", "changed\n"))
+    (root / "docs/features/f/spec.md").rename(root / "docs/features/f/plan.md")
+    (root / "docs/features/f/plan.md").rename(root / "plan.md")
+    commit(root, "refactor(core): move a")
+    assert change_size.measure(root, "main") == (2, 2), "the edit in the move, and the record out"
 
 
 def test_change_size_measures_against_the_ceiling(tmp_path: Path, capsys: Out) -> None:

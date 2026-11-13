@@ -80,7 +80,7 @@ Every comparison against history uses the merge base with the default branch (`H
 | Does the shipped artefact or base image carry a known vulnerability? | an image or artefact scanner, over the built image when the deliverable is one |
 | How much of the code is typed, and did it fall? | type coverage, ratcheted, for gradually typed languages |
 | How much of the public surface is documented, and did it fall? | documentation coverage, ratcheted |
-| Is the change within the size budget? | files and lines against the merge base, a ceiling the binding holds |
+| Is the change within the size budget? | files and lines against the merge base, a ceiling the binding holds; the method's own records, generated lockfiles and their snapshots are not counted, and a moved file counts by its changed lines |
 | Did a guard path change? | the method's guard diff, against the manifest at base and head |
 | Do the permission rules still mirror the manifest? | the method's settings check: one `Edit` rule per manifest pattern, the fixed command rules, nothing else in `deny` or `ask` |
 | Does the repository still carry the method? | the method's conformance gate |
