@@ -19,11 +19,11 @@ from tests import repos
 # Why each route: `/` and `/items` are the product a tester tries; `/flag` shows the flag the
 # justfile's `flags_on` turns on; the rest are the shapes of answer the proxy must pass through
 # unchanged (a large body, one with no length, no content, one that breaks off, the request's
-# own headers echoed), a route that holds a request open and one that answers half a second
-# late. `BOOTING` names a file the app
+# own headers echoed, one compressed when the request accepts gzip), a route that holds a
+# request open and one that answers half a second late. `BOOTING` names a file the app
 # writes its process id to as it starts, and `DELAY` holds it that long before it listens.
 APP = r"""
-import html, json, os, time, urllib.parse
+import gzip, html, json, os, time, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 if os.environ.get("BOOTING"):
     open(os.environ["BOOTING"] + ".partial", "w").write(str(os.getpid()))
@@ -73,6 +73,16 @@ class App(BaseHTTPRequestHandler):
         if self.path == "/echo":
             body = json.dumps(dict(self.headers.items())).encode()
             return self.send(200, body, "application/json")
+        if self.path == "/gzip":
+            body = b"compressed when asked"
+            packed = "gzip" in self.headers.get("Accept-Encoding", "")
+            self.send_response(200)
+            if packed:
+                body = gzip.compress(body)
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         rows = "".join(
             f'<li><a href="{html.escape(i)}" target="_blank">{html.escape(i)}</a></li>'
             for i in reversed(ITEMS)

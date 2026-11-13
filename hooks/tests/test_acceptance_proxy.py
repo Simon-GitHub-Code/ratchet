@@ -130,6 +130,18 @@ def test_the_host_reaches_the_product_and_headers_about_one_connection_do_not(
     assert "Proxy-Authorization" not in seen
 
 
+def test_the_product_is_asked_for_an_answer_the_log_can_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "session"
+    with products.serving(tmp_path) as upstream, proxied(tmp_path, upstream, monkeypatch) as url:
+        answer = exchange(url, "GET", "/gzip", headers={"Accept-Encoding": "gzip, br"})
+    assert answer.body == b"compressed when asked", "a client may always get it uncompressed"
+    (entry,) = products.log(directory)
+    stored = (directory / "probes" / f"{entry['id']}.response").read_bytes()
+    assert stored.endswith(b"\r\n\r\ncompressed when asked"), "check reads the text it shows"
+
+
 def test_an_answer_that_breaks_off_is_logged_as_broken(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
