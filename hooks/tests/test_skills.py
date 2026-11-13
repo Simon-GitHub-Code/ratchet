@@ -100,6 +100,19 @@ def test_the_conjecture_skill_writes_the_block_the_preflight_asks() -> None:
         assert f"`- {name}:` {says}" in conjecture, name
 
 
+def test_the_conjecture_says_what_each_thing_the_owner_said_became() -> None:
+    # Why: ADR 0034. The owner cannot read code, so the conjecture is where he sees that
+    # nothing he said was dropped and nothing was invented; adoption keeps his words for it.
+    conjecture = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
+    assert "*What you asked for*" in conjecture
+    for became in ("**built**", "**assumed**", "**left out**", "**added**"):
+        assert became in conjecture, became
+    assert "`## In the owner's words` in `docs/design-brief.md`" in conjecture
+    brief = (SKILLS / "adopt/templates/docs/design-brief.md").read_text(encoding="utf-8")
+    assert "## In the owner's words" in brief
+    assert "under `## In the owner's words` each question the owner answered here" in ADOPT
+
+
 def test_init_asks_about_the_product_one_question_at_a_time() -> None:
     # Why: ADR 0034. The owner is asked four product questions, and a fifth only before a
     # remote would be made; the registry test holds their words, this holds their order.

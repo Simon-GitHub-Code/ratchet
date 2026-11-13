@@ -1,6 +1,6 @@
 ---
 name: conjecture
-description: Draft the method's `## Conjecture` section for one ticket (the approach, what would refute it, the alternatives and the criticism that killed each) from the conversation that produced the ticket, and write it to the ticket with the `## Operability` block the preflight asks. Asks the owner only where the record leaves two different products open.
+description: Draft the method's `## Conjecture` section for one ticket (the approach, what would refute it, the alternatives and the criticism that killed each, and what each thing the owner said became) from the conversation that produced the ticket, and write it to the ticket with the `## Operability` block the preflight asks. Asks the owner only where the record leaves two different products open.
 disable-model-invocation: true
 ---
 
@@ -12,11 +12,12 @@ disable-model-invocation: true
 
 1. **Read the ticket.** `gh issue view <n> --json number,title,body,comments` in one Bash call, or read the file. Read its parent spec too: the one a `Parent:` line or a `## Parent` section names, or, for a local ticket under `<feature>/issues/`, the `<feature>/spec.md` beside that directory, which the preflight reads as its parent. Stop and say so when the ticket, or its parent, already states both: nothing to write.
 
-2. **Draft from the record, not from imagination.** The conversation that produced the ticket (`grill-with-docs`, `to-spec`, `to-tickets`) already chose an approach and killed the alternatives; the ADRs and the glossary hold the rest. Draft four parts, each a sentence or two:
+2. **Draft from the record, not from imagination.** The conversation that produced the ticket (`grill-with-docs`, `to-spec`, `to-tickets`) already chose an approach and killed the alternatives; the ADRs and the glossary hold the rest. Draft five parts, the first four a sentence or two each:
    - *Approach*: the one way this ticket will be built, stated so it can be shown wrong.
    - *Refuter*: the observation that would show the approach wrong (a failing scenario, a measurement, a user who cannot do the job).
    - *Alternatives*: each alternative that was considered, and the criticism that killed it.
    - *Scope of the claim*: what this conjecture does not cover, when the ticket's Out of scope does not already say it.
+   - *What you asked for*: a table with one row per thing the owner said that this ticket or spec touches, so the owner sees that nothing was dropped and nothing invented. Take each one from where the record keeps the owner's words: `## In the owner's words` in `docs/design-brief.md`, the spec's problem and user stories, the ticket's `## Answers`, `PRODUCT.md`, the purpose in `AGENTS.md`. The columns are *You said* (their words, quoted, short), *Became* and *Where*. *Became* is one of **built** (the behaviour a person will see, in their words), **assumed** (the answer taken where they left it open, and what they can say to change it) or **left out** (why: waits for a later ticket, out of the first part, or not planned, with the reason). *Where* names the acceptance criterion, ticket or record that holds it. Then one row per behaviour in the approach that nothing the owner said asked for, marked **added** with its reason; there should be few.
 
    Then the `## Operability` block: one line per concern the binding's application types are asked (the preflight of step 5 names any it still wants), each from the ticket and the binding's Feature flags, Telemetry and Limits sections, or `none` and why.
    - `- Flag:` the flag the behaviour ships behind.
@@ -30,8 +31,8 @@ disable-model-invocation: true
 
    - **Ask** `conjecture.fork`: "<the one choice between two different products that nothing written down settles, asked as someone using it would put it>" The approach the record leans to comes first with `(recommended)` and the reason.
 
-   A choice between two ways to build the same product is yours: take the one the record supports and name the other under Alternatives.
+   A choice between two ways to build the same product is yours: take the one the record supports, name the other under Alternatives, and give it a row marked **assumed** in *What you asked for*.
 
 4. **Write it.** Append `## Conjecture` and `## Operability` with the agreed text to the ticket body: `gh issue edit <n> --body-file <file>` with the full body in one Bash call (no label flag; the agent-ready label is the owner's act and the guard asks on it), or, on a local tracker, edit the file and commit it alone (`git commit -m "docs(tracker): the conjecture of <ticket>" -- <file>`), since the preflight refuses a dirty tree and the ticket file is a record, not work in progress. When the ticket's tickets share one spec, write them on the spec and say that its tickets inherit them.
 
-5. **Hand over.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" <ticket> --root .` in one Bash call and report its verdict. Red on the label: say that the ticket needs the agent-ready label and that applying it is the owner's keystroke. Green: the last line is the next command, `/ratchet:feature <ticket>` (or `/pstack:poteto-mode <ticket>` when the owner stays).
+5. **Hand over.** Print the conjecture with *What you asked for* whole: it is where the owner sees what each thing they said became, and its **assumed** rows are the reply's **Assumed** block. Then run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" <ticket> --root .` in one Bash call and report its verdict. Red on the label: say that the ticket needs the agent-ready label and that applying it is the owner's keystroke. Green: the last line is the next command, `/ratchet:feature <ticket>` (or `/pstack:poteto-mode <ticket>` when the owner stays).

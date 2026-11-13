@@ -51,6 +51,11 @@ A feature starts as the ticket the owner's `/mattpocock-skills:to-spec`, `to-tic
 ## Conjecture
 The one approach expected to work, stated so it can be shown wrong: what would refute it. The alternatives considered and the criticism that kills each.
 
+| You said | Became | Where |
+| --- | --- | --- |
+| "one list I can come back to in the evening" | built: saved links show newest first | criterion 2 |
+| "maybe a cheap host later" | left out: runs on your computer for now | design brief, out-list |
+
 ## Operability
 - Flag: the flag the behaviour ships behind
 - Signal: the span, metric or log that shows it working
@@ -73,7 +78,7 @@ The spec role reads each line as decided. A changed ticket is also what releases
 
 ## Questions, assumptions and standing answers
 
-A skill asks the owner only a product question: what the thing should do, for whom, what matters, or a direction with real consequences that no experiment settles (ADR 0034). [questions.toml](questions.toml) lists each one a Ratchet skill asks, its key and its words, and each question a default now answers instead; a test holds the skills to it. Every other choice is an assumption: the agent takes the default, acts, and ends its reply with an **Assumed** block, one plain line each, what it chose, why, and what the owner can say to change it.
+A skill asks the owner only a product question: what the thing should do, for whom, what matters, or a direction with real consequences that no experiment settles (ADR 0034). [questions.toml](questions.toml) lists each one a Ratchet skill asks, its key and its words, and each question a default now answers instead; a test holds the skills to it. Every other choice is an assumption: the agent takes the default, acts, and ends its reply with an **Assumed** block, one plain line each, what it chose, why, and what the owner can say to change it. A conjecture carries the same account for each thing the owner said, in its *You said* table.
 
 The pipeline's open questions are product questions of two sorts (ADR 0022): `direction`, where the options are different products, and `irreversible`, where a wrong guess cannot be taken back. The feature skill logs each answer as one line of `.ratchet/questions.tsv`, written by `scripts/questions.py record`: the date, the skill, the question's key, its kind and whether the recommended option was taken. The file is one clone's and no commit carries it. A question about one ticket carries its slug (`feature.<slug>.1`).
 
