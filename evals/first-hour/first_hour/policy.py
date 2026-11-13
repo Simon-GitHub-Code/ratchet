@@ -15,13 +15,15 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+from first_hour import shellpaths
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping
-    from pathlib import Path
 
 
 class Kind(StrEnum):
@@ -65,6 +67,9 @@ TOOLS: Mapping[str, Tool] = {
     "TaskStop": Tool(Kind.SESSION),
     "ToolSearch": Tool(Kind.SESSION),
     "SendMessage": Tool(Kind.MESSAGE),
+    # Why: a workflow agent or subagent given a `schema` returns its result through this tool.
+    # Without it the `/ratchet:feature` pipeline cannot finish its first step.
+    "StructuredOutput": Tool(Kind.SESSION),
 }
 # Why: named so the CLI refuses them before the model can call them; `decide` denies every tool
 # not in TOOLS whatever this list says.
@@ -146,11 +151,6 @@ FORBIDDEN = (
 _FORBIDDEN = tuple((re.compile(pattern), why) for pattern, why in FORBIDDEN)
 # Why: inside the sandbox these are the run's own temp directory; outside it they are not.
 TEMP = ("/tmp", "/var/tmp")
-PATHS = re.compile(
-    r"(?:^|(?<=[\s=('\"<>`]))"
-    r"(~[^\s'\";|&<>()`]*|\$\{?(?:HOME|TMPDIR)\}?[^\s'\";|&<>()`]*|/[^\s'\";|&<>()`]*"
-    r"|\.\.(?:/[^\s'\";|&<>()`]*)?)"
-)
 
 
 @dataclass(frozen=True)
@@ -213,16 +213,23 @@ def shell(command: str, scope: Scope) -> Decision:
     """Whether a shell command line may run; it is judged as a whole, chained or not.
 
     A path outside the run directory and the system's read-only trees is refused whatever the
-    command does with it. A write into a system tree, or into a read-only part of the run, is
-    left to the sandbox, which mounts them read-only: telling a write from a read in a shell
-    string is the arms race this layer does not run.
+    command does with it. What counts as a path is ``shellpaths.words``: a word that starts like
+    one, not the text a ``sed`` script, a message or a heredoc body holds.
+
+    A write into a system tree, or into a read-only part of the run, is left to the sandbox,
+    which mounts them read-only: telling a write from a read in a shell string is the arms race
+    this layer does not run.
     """
     for pattern, why in _FORBIDDEN:
         if pattern.search(command):
             return Decision(allowed=False, why=why)
-    for raw in PATHS.findall(command):
-        if not _readable(_resolve(raw, scope, sandboxed=True), scope):
-            return Decision(allowed=False, why=f"reaches outside the run directory ({raw})")
+    here = scope
+    for word in shellpaths.words(command):
+        path = _resolve(word.raw, here, sandboxed=True)
+        if not _readable(path, scope):
+            return Decision(allowed=False, why=f"reaches outside the run directory ({word.raw})")
+        if word.cd:
+            here = replace(scope, cwd=Path(path))
     return ALLOW
 
 
