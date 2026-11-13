@@ -357,7 +357,7 @@ def owing(root: Path, sandbox: Path, left: list[Finding], *, plugin: Path) -> li
     added = []
     for finding in red:
         key = finding.key()
-        if allowed[key] > 0 and finding.rule not in owed.NEVER:
+        if allowed[key] > 0 and not owed.never(key):
             allowed[key] -= 1
             added.append(owed.Entry(key[1], key[0], key[2], pin.version))
     if not added:
@@ -382,7 +382,7 @@ def red_at_base(root: Path, base: str | None, plugin: Path) -> Counter[owed.Key]
         pass_over(tree, [pinned_to(plugin)], {})
         left = converge(tree, {}).left
         red, _ = conformance.owed_split(tree, left)
-    return Counter(finding.key() for finding in red if finding.rule not in owed.NEVER)
+    return Counter(key for key in (finding.key() for finding in red) if not owed.never(key))
 
 
 def version_now(root: Path, plugin: Path) -> str:

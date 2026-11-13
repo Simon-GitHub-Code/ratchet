@@ -162,6 +162,12 @@ PIN_SCRIPT = "plugin_pin.py"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
+RULE_VERBS = {
+    "Bash": ("runs", "run"),
+    "Read": ("reads", "read"),
+    "Edit": ("changes", "change"),
+    "Write": ("writes", "write"),
+}
 WORKFLOW_JOB = re.compile(r"^  ([A-Za-z_][\w-]*):[ \t]*(?:#.*)?$")
 COMMIT_HOOKS = Path(hooks_installed.COMMIT_HOOKS)
 RUNS_WHOLE_TIER0 = re.compile(r"^(?!\s*#).*\btier0\b(?!-)", re.MULTILINE)
@@ -1268,14 +1274,19 @@ def settings_finding(
 ) -> Finding:
     """One line of settings drift: the plugin regenerates its rules, the project's are asked."""
     if found.fault is settings_rules.Fault.OWN:
-        rule = found.line.split("'")[1]
+        head, _, tail = found.line.rpartition("' in ")
+        said = plain_rule(head.split("'", 1)[1], tail.split(" ", 1)[0])
         return owner(
             found.line,
-            f"Is `{rule}` a rule you chose to keep? No version of the plugin generates it, so"
-            " every regeneration keeps it and this check stays red while it is there. Remove it"
-            f" from {settings_rules.SETTINGS}, or add the path it guards to a group of"
-            f" {settings_rules.MANIFEST} so that the plugin generates it.",
-            assumed=f"The rule `{rule}` in Claude's settings is one you added, so it stays.",
+            f"Should Claude keep this rule: {said}? No version of Ratchet writes it, so the"
+            " settings check stays red while it is there. Keep it by adding what it protects to a"
+            f" group of {settings_rules.MANIFEST}, so that Ratchet writes it, or remove it from"
+            f" {settings_rules.SETTINGS}.",
+            assumed=(
+                "Claude's settings for this project hold a permission rule that no version of"
+                f" Ratchet writes: {said}. It stays as it is, and the settings check stays red on"
+                " it until you say whether to keep it."
+            ),
         )
     if found.fault is settings_rules.Fault.MANIFEST:
         return agent(found.line)
@@ -1288,6 +1299,17 @@ def settings_finding(
     broken = (f"{path} is not a JSON object, so it is left as it is",) if settings is None else ()
     edit = Edit(does, settings_rules.regenerated(manifest), Agent(then=broken))
     return Finding(path, problem, edit)
+
+
+def plain_rule(rule: str, kind: str) -> str:
+    """A permission rule in words: ``Bash(tool:*)`` in ``ask`` is "Claude asks ... runs `tool`"."""
+    tool, _, argument = rule.partition("(")
+    argument = argument.removesuffix(")").removesuffix(":*").removesuffix(" *")
+    asks, denies = RULE_VERBS.get(tool, ("uses", "use")) if argument else ("uses", "use")
+    what = f"`{argument}`" if tool in RULE_VERBS and argument else f"`{rule}`"
+    if kind == "deny":
+        return f"Claude may never {denies} {what}"
+    return f"Claude asks you before it {asks} {what}"
 
 
 def check_settings(root: Path) -> Iterable[Finding]:

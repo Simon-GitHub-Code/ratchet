@@ -44,10 +44,19 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 LEDGER = Path("quality/owed.toml")
-# Why: the ledger's own findings (an entry no finding matches, a ledger that does not parse) are
-# never owed, or an entry could excuse the stale entry it sits beside.
 OWN = "owed"
-NEVER = frozenset({OWN})
+# Why: a finding that another tier 0 or tier 1 gate also judges red is never owed: conformance
+# would print it as owed while that gate stays red on the same thing. Each pair is a check here, or
+# one file of it, and the gate that judges the same condition. The ledger's own findings are never
+# owed either, or an entry could excuse the stale entry it sits beside.
+NEVER: dict[tuple[str, str | None], str] = {
+    (OWN, None): "ratchet-lowered reads the ledger and is red on one that does not parse",
+    ("settings", None): "settings-check is red on the same drift of the permission rules",
+    ("incidents", None): "the incidents gate runs this one check alone",
+    ("glossary", "GLOSSARY.md (or GLOSSARY-MAP.md)"): "prose is red without GLOSSARY.md",
+    ("quality", "quality/thresholds.toml"): "ratchet-lowered reads the file and is red without it",
+    ("quality", "quality/mutation-register.toml"): "the mutation gates read the register",
+}
 TABLE = "owed"
 FIELDS = ("rule", "path", "problem", "since")
 HEADER = """\
@@ -132,15 +141,21 @@ def render(entries: Sequence[Entry]) -> str:
 def excused(keys: Sequence[Key], entries: Sequence[Entry]) -> tuple[list[bool], Counter[Key]]:
     """Which findings, by key in order, an entry excuses, and the entries left over, by key.
 
-    Each entry excuses one finding. A finding of a check in ``NEVER`` is never excused.
+    Each entry excuses one finding. A finding ``never`` names is never excused.
     """
     left = Counter(entry.key for entry in entries)
     owed = []
     for key in keys:
-        hit = key[0] not in NEVER and left[key] > 0
+        hit = not never(key) and left[key] > 0
         left[key] -= hit
         owed.append(hit)
     return owed, +left
+
+
+def never(key: Key) -> bool:
+    """Whether a finding with ``key`` is one another gate judges, so no entry may excuse it."""
+    rule, path, _ = key
+    return (rule, None) in NEVER or (rule, path) in NEVER
 
 
 def kept(found: Counter[Key]) -> gatelib.Want:

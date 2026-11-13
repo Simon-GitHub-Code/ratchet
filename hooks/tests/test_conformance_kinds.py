@@ -164,7 +164,7 @@ def test_a_rule_no_version_generates_is_a_question_for_the_owner(repo: Path) -> 
     assert kind(repo, f"{SETTINGS}: 'Bash(gh label create:*)' in deny") == "Owner"
     [found] = [f for f in conformance.findings(repo) if "gh label create" in str(f)]
     assert isinstance(found.fix, conformance.Owner)
-    assert "Is `Bash(gh label create:*)` a rule you chose to keep?" in found.fix.ask
+    assert "Should Claude keep this rule: Claude may never run `gh label create`?" in found.fix.ask
 
 
 def test_settings_that_are_not_a_json_object_are_left_to_an_agent(repo: Path) -> None:
