@@ -103,9 +103,19 @@ def test_init_passes_the_owners_answers_to_the_setups() -> None:
 def test_every_ratchet_skill_ends_with_the_route() -> None:
     # Why: the owner's next command is the method's promise at every stage (ADR 0009); a
     # hand-over that forgets it leaves the owner guessing which plugin's keystroke comes next.
-    for name in ("init", "adopt", "feature"):
+    for name in ("init", "adopt", "feature", "safeguard"):
         text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
         assert 'scripts/route.py" --root .' in text, name
+
+
+def test_the_safeguard_skill_asks_one_question_and_commits_as_the_gate_accepts() -> None:
+    # Why: ADR 0028 and the owner's principle: binding what is owed must not become a dialog.
+    safeguard = (SKILLS / "safeguard/SKILL.md").read_text(encoding="utf-8")
+    assert "One question, through the question tool, for every row at once" in safeguard
+    assert "--key safeguard.tools --kind tooling" in safeguard
+    assert "`just bite-one <gate>`" in safeguard
+    assert commits.SUBJECT.match("chore(method): safeguard outbound calls")
+    assert "`chore(method): safeguard <what>`" in safeguard
 
 
 def test_no_method_page_tells_an_agent_to_load_a_user_invoked_skill() -> None:
