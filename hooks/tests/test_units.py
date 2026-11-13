@@ -209,35 +209,35 @@ def test_a_subshell_is_marked_where_it_opens_and_closes() -> None:
     assert parse_shell("(a) | b").commands[0].piped
     assert _subshells("( ) ; a") == [("a", 0, 0, "\n")]
     assert _subshells("(a) > f; b") == [("a", 1, 1, ";"), ("", 0, 0, ";"), ("b", 0, 0, "\n")]
-    assert _subshells("(a) esac") == [("a", 1, 1, ")"), ("esac", 0, 0, "\n")]
 
 
-def test_a_parenthesis_after_a_word_or_in_a_case_is_no_subshell() -> None:
+def test_a_parenthesis_after_a_word_is_no_subshell() -> None:
     assert _subshells("x=(1 2); a <(b)") == [
         ("x=", 0, 0, "("),
         ("1 2", 0, 0, ")"),
         ("a", 0, 0, "("),
         ("b", 0, 0, ")"),
     ]
-    assert _subshells("case x in (y) a;; z) (b);; esac") == [
-        ("case x in", 0, 0, "("),
-        ("y", 0, 0, ")"),
-        ("a", 0, 0, ";;"),
-        ("z", 0, 0, ")"),
-        ("b", 1, 1, ";;"),
-        ("esac", 0, 0, "\n"),
-    ]
-    assert _subshells("(case x in y) a;; esac)") == [
-        ("case x in y", 1, 0, ")"),
-        ("a", 0, 0, ";;"),
-        ("esac", 0, 1, "\n"),
-    ]
 
 
-def test_an_unsure_case_keeps_the_subshell_open() -> None:
-    quoted = "(case x in y) 'esac';; z) a;; esac)"
-    assert [closes for _, _, closes, _ in _subshells(quoted)] == [0, 0, 0, 0, 1]
-    assert _subshells("(echo case; a)") == [("echo case", 1, 0, ";"), ("a", 0, 0, ")")]
+@pytest.mark.parametrize(
+    "line",
+    [
+        "case x in (y) a;; z) (b);; esac",
+        "(case x in y) a;; esac)",
+        "(echo case; a)",
+        "case y in x) ;; (case|*) cd q;; z|esac) ;; esac; a",
+        "(cd q; cat <<E\\ F\nE\n)\nE F\na)",
+        "(cd q; (( x = 1 << y ))\n)\ny\na)",
+    ],
+)
+def test_a_line_with_a_case_or_a_heredoc_reads_no_subshell(line: str) -> None:
+    assert all(opens == closes == 0 for _, opens, closes, _ in _subshells(line))
+
+
+def test_an_ansi_c_quote_keeps_its_escaped_quote() -> None:
+    assert words_of("echo $'\\') '\\'; b") == ["echo", "$'\\') '\\'", "b"]
+    assert parse_shell("(echo $'\\') '\\')").commands[0].closes == 1
 
 
 def test_unquote_falls_back_to_dropping_quotes() -> None:
