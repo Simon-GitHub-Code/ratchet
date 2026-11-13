@@ -20,22 +20,30 @@
 //
 // The critic and the fix loop run only for a project people depend on (ADR 0028): the preflight's
 // `critic` field, true when the binding declares the `depended-on` life event. Before that a
-// ticket is built by spec, implement and review, and the merge rule is unchanged.
+// ticket is built by spec, the ticket check, implement and review, and the merge rule is unchanged.
 
 export const meta = {
   name: 'pipeline',
-  description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> implement -> adversarial critique -> fix loop (only when the project is depended-on) -> independent review',
-  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight? } after its own preflight is green; not by hand. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, assumptions? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
+  description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> ticket check (one amend of the spec when it finds a gap) -> implement -> adversarial critique -> fix loop (only when the project is depended-on) -> independent review',
+  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, assumptions?, settled? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
   phases: [
     { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
     { title: 'Spec', detail: 'ticket -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the ticket leaves open questions' },
+    { title: 'Ticket check', detail: 'one agent reads only the ticket and spec.md: each promise covered, dropped, bent or assumed, each input case decided or not; a gap goes back to the spec role once; a promise the amend still leaves out is built as the ticket says it, and an input case still undecided with the safe answer, each listed with what the run decided; no question to the owner comes from the check' },
     { title: 'Implement', detail: 'make the new tests pass test-first with tdd; check green' },
     { title: 'Critique', detail: 'only when the preflight says critic: true (the binding declares depended-on): one adversary with the rule of evidence: properties, edge cases, mutation, fuzz, fitness sabotage as binding.md names them' },
     { title: 'Fix', detail: 'only with the Critique: fresh implementer per blocker/major round (max 2), re-critique after each' },
     { title: 'Reconcile', detail: 'rejudge only: the rebase onto the moved default branch finished and check green again' },
-    { title: 'Review', detail: 'independent code-review of the diff on the spec, standards and guard axes; the script forces the verdict from the evidence' },
+    { title: 'Review', detail: 'independent code-review of the diff on the spec, standards, guard, ticket and input axes; the script forces the verdict from the evidence' },
   ],
 }
+
+// The most agents one run spawns. scripts/drain.py reads this line to state what a drain costs, so
+// it stays one JSON object on one line; a test runs the script with every agent at its worst and
+// counts them. young: preflight, spec, the ticket check with its one amend and second read,
+// implement and review. dependedOn: those, the critic and MAX_FIX_ITERATIONS rounds of fix and
+// re-critique. rejudge: the reconcile agent and the second review.
+const AGENTS_AT_MOST = {"young": 7, "dependedOn": 12, "rejudge": 2}
 
 // ---------------------------------------------------------------------------
 // Arguments. Everything that could vary between runs comes in via args so the
@@ -60,6 +68,12 @@ const MAX_FIX_ITERATIONS = 2
 // A branch brought up to date behind another merge is judged again, not built again (ADR 0023):
 // the skill passes what the first run returned, and only Reconcile and Review run.
 const REJUDGE = ARGS.rejudge && typeof ARGS.rejudge === 'object' ? ARGS.rejudge : null
+// The readings the first run's ticket check settled (its result's `settled`): the second review is
+// held to them as the first was, so a case the run assumed is not read as open again.
+const SETTLED = REJUDGE && REJUDGE.settled && typeof REJUDGE.settled === 'object' ? REJUDGE.settled : null
+// What the last run's review found the build lost of the ticket (its result's ticketFindings), so a
+// run after a refusal starts from them instead of writing the same spec again.
+const TICKET_FINDINGS = Array.isArray(ARGS.ticketFindings) ? ARGS.ticketFindings.filter(Boolean) : []
 // The branch is the preflight's to derive (feature/<number>-<slug>) unless the skill passed it.
 let BRANCH = typeof ARGS.branch === 'string' && ARGS.branch ? ARGS.branch : ''
 let SLUG = ''
@@ -197,7 +211,7 @@ const ROOM_DENOMINATOR = 3
 // Why: the later stages' lines are known in advance. On one ticket the spec and its tests were
 // about 830 lines, the critic's tests about 350 and the dispute records about 140, before any
 // implementation. The spec stage adds up the whole change and splits the ticket now, instead of
-// nine agents later.
+// after every later agent has run.
 const ESTIMATE_FIELD = {
   changeEstimate: {
     type: 'object',
@@ -435,10 +449,106 @@ const CRITIQUE_SCHEMA = {
   ],
 }
 
+// Why: the spec is what the implementer builds and what the review judges the build against, so a
+// spec that drops or bends a promise of the ticket passed every check after it. Two roles read the
+// ticket against what came of it, the ticket check before Implement and the review after, and both
+// return these two axes. The schema makes each answer both and gives each reading the evidence that
+// shows it; it cannot make an answer complete, since a list that leaves a promise out fits it as
+// well as an empty `acceptedInputs` does.
+const SAID = { type: 'string', pattern: '\\S' }
+function promiseReading(reading, description, evidence) {
+  return {
+    type: 'object',
+    description,
+    properties: {
+      promise: { ...SAID, description: 'The promise in the ticket\'s own words' },
+      reading: { type: 'string', enum: [reading] },
+      ...evidence,
+    },
+    required: ['promise', 'reading', ...Object.keys(evidence)],
+    additionalProperties: false,
+  }
+}
+const SPEC_LINE = { specLine: { ...SAID, description: 'The spec.md line this reading rests on, quoted, or the section a dropped promise is missing from' } }
+const TICKET_PROMISES_FIELD = {
+  type: 'array',
+  minItems: 1,
+  description: 'Every promise the ticket makes about what the product does or does not do, one entry each, with its reading',
+  items: {
+    anyOf: [
+      promiseReading('covered', 'spec.md criteria carry it as the ticket says it', {
+        criteria: { type: 'array', minItems: 1, items: SAID, description: 'What in spec.md carries it: criterion numbers, or for how the change is built or tested the section entry that states it' },
+      }),
+      promiseReading('dropped', 'no criterion carries it', SPEC_LINE),
+      promiseReading('bent', 'a criterion carries less than the ticket asks, makes it optional or contradicts it', {
+        ...SPEC_LINE,
+        change: { ...SAID, description: 'What the spec says instead of what the ticket asks' },
+      }),
+      promiseReading('assumed', 'the ticket leaves part of it open and the spec decided that part for the owner', {
+        ...SPEC_LINE,
+        ownerSees: { ...SAID, description: 'What the owner would see in the product because of the assumption' },
+      }),
+    ],
+  },
+}
+// Each case of an input: how the owner reads it after the input's plain name, the safe answer the
+// run builds when no criterion decides it, and what would show that answer wrong. The empty one is
+// the narrowest: a message or a rule for an empty value is a product the ticket did not ask for,
+// and another ticket of the feature may promise it.
+const INPUT_CASES = {
+  empty: {
+    owner: 'left empty',
+    safe: 'nothing is saved and nothing breaks',
+    refuter: 'an empty value is something a user means to send, such as clearing a note',
+  },
+  oversized: {
+    owner: 'far longer than anyone would type',
+    safe: 'the app refuses it with a message, saves nothing and keeps what the user typed',
+    refuter: 'a user needs to send a value that long',
+  },
+  hostile: {
+    owner: 'made to cause harm, such as hidden code',
+    safe: 'the app keeps it as plain text that does nothing: shown as text, never run, followed or used as a path',
+    refuter: 'a user needs the value to run or be followed as sent',
+  },
+}
+// How a settled reading marks a case the run decided because no criterion did.
+const RUN_ASSUMED = 'Assumed by the run, as no criterion decides it: '
+// How a settled reading marks a promise the plan still left out, which the run keeps as the ticket
+// says it.
+const RUN_KEPT = 'Kept from the ticket by the run, as no criterion carries it: '
+const DECIDED_BY = { type: ['string', 'null'], pattern: '\\S', description: 'The spec.md criterion that says what happens, by its number and words; null when none does' }
+const ACCEPTED_INPUTS_FIELD = {
+  type: 'array',
+  description: 'Each thing the change makes the product accept from outside, with the criterion that decides each case of it; empty only when it accepts nothing',
+  items: {
+    type: 'object',
+    properties: {
+      input: { ...SAID, description: 'The input as a user meets it: a form field, a request body, a file, an argument' },
+      plainName: {
+        type: 'string',
+        pattern: '^[^`]*[^\\s`][^`]*$',
+        description: 'What a person who cannot read code calls it, in everyday words with no code terms: "the link you paste"',
+      },
+      ...Object.fromEntries(Object.keys(INPUT_CASES).map(c => [c, DECIDED_BY])),
+    },
+    required: ['input', 'plainName', ...Object.keys(INPUT_CASES)],
+    additionalProperties: false,
+  },
+}
+
+const TICKET_CHECK_SCHEMA = {
+  type: 'object',
+  properties: { ticketPromises: TICKET_PROMISES_FIELD, acceptedInputs: ACCEPTED_INPUTS_FIELD },
+  required: ['ticketPromises', 'acceptedInputs'],
+}
+
 const REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     verdict: { type: 'string', enum: ['approve', 'request_changes'] },
+    ticketPromises: TICKET_PROMISES_FIELD,
+    acceptedInputs: ACCEPTED_INPUTS_FIELD,
     issues: {
       type: 'array',
       items: {
@@ -475,7 +585,7 @@ const REVIEW_SCHEMA = {
     checkPasses: { type: 'boolean', description: 'true only if `check` exited 0 when you ran it' },
     ...checkOutputField(),
   },
-  required: ['verdict', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'recordNotes', 'disputeCoverage', 'checkPasses', 'checkOutput'],
+  required: ['verdict', 'ticketPromises', 'acceptedInputs', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'recordNotes', 'disputeCoverage', 'checkPasses', 'checkOutput'],
 }
 
 // ---------------------------------------------------------------------------
@@ -511,10 +621,72 @@ const PREFLIGHT_SCHEMA = {
   required: ['ok', 'number', 'title', 'slug', 'branch', 'label', 'failures', 'output'],
 }
 
+// Every role that reads the ticket reads it as the owner agreed it: a local ticket file as the base
+// branch holds it, since an agent of this run could have changed the copy in the working tree.
 function ticketHint() {
-  return /^#?\d+$/.test(REF)
-    ? `issue ${REF.replace('#', '')} on the tracker (\`gh issue view ${REF.replace('#', '')} --json number,title,body,labels,comments\`)`
-    : `the file \`${REF}\` under ${ROOT_HINT}`
+  if (/^#?\d+$/.test(REF)) {
+    const number = REF.replace('#', '')
+    return `issue ${number} on the tracker (\`gh issue view ${number} --json number,title,body,labels,comments\`)`
+  }
+  if (!BASE) return `the file \`${REF}\` under ${ROOT_HINT}`
+  return `the file \`${REF}\` as \`${BASE}\` holds it (\`git show ${BASE}:${REF}\`, run from ${ROOT_HINT}), not the copy in the working tree, which an agent of this run may have changed`
+}
+
+// How the ticket check and the review read the ticket. One text, so the two roles mean the same by
+// each reading.
+const PROMISE_READINGS = `List in \`ticketPromises\` every promise the ticket makes about what the product does or
+   does not do: each checklist item and acceptance criterion, and each promise in its other
+   sections ("it has no client JavaScript", "the list survives a restart"), in the ticket's words,
+   one entry each, with the reading that fits:
+   - \`covered\`: spec.md carries it as the ticket says it; name what carries it in \`criteria\`. A
+     promise about what the product does is carried by a criterion, or by criteria it follows from,
+     never by the Problem section alone. A promise about how the change is built or tested is
+     carried by the criterion, Placement, Seams under test or Test plan entry that states it.
+   - \`dropped\`: no criterion carries it; \`specLine\` quotes the line that drops it (an Out of
+     scope entry, a sentence no criterion checks) or names the section it is missing from.
+   - \`bent\`: a criterion carries less than the ticket asks, makes it optional, or contradicts it;
+     \`specLine\` quotes the criterion and \`change\` says what differs.
+   - \`assumed\`: the ticket leaves part of it open and the spec decided that part for the owner,
+     under Assumptions or without saying so; \`specLine\` quotes where, and \`ownerSees\` says what
+     the owner would see in the product because of it. Read each entry under the spec's
+     Assumptions this way: one that decides part of a promise makes the promise \`assumed\`, and
+     one that contradicts the ticket makes it \`bent\`.
+   What the ticket puts out of scope or leaves to a later ticket is no promise of this one, and an
+   answer under \`## Answers\` decides what it answers. A sentence about how the method treats the
+   work (what a gate charges, which kind of code arrives first, what the route names next) is no
+   promise either: it describes the work, not the product.`
+
+const INPUT_READINGS = `List in \`acceptedInputs\` each thing the change makes the running product accept from its
+   users or from other systems (a form field, a request body, a query parameter, an uploaded file,
+   a command-line argument). A setting the operator gives it at start is not one. A header the
+   change itself adds or checks to guard the product (an \`Origin\` check that refuses cross-site
+   posts) is not one either: no user sends it as content. Give each a \`plainName\`: what a person
+   who cannot read code calls it, in a few everyday words and no code terms ("the link you paste",
+   not "the \`link\` field of \`POST /items\`"); the owner reads it. For each, quote
+   the spec.md criterion that says what happens to an \`empty\` value, an \`oversized\` one and a
+   \`hostile\` one, or null where no criterion says. A hostile value is decided only when criteria
+   cover each kind that applies to the input: markup where it is shown, a value that runs where it
+   is followed, a path that leaves its directory. A criterion that leaves the case to a later
+   ticket decides it only if it says what happens until then, and an assumption decides no case.`
+
+function ticketCheckPrompt(spec) {
+  return `You are the TICKET CHECK for feature \`${spec.slug}\` of this repository. The spec role has
+just written spec.md from the ticket, and nothing has been built. The implementer builds spec.md and
+the review judges the build against it, so a promise of the ticket that spec.md drops or bends now
+would be built to the letter. What you find goes back to the spec role, which amends spec.md once;
+a promise still left out after that is built as the ticket says it, and a case still undecided
+with the safe answer.
+
+Read these two and nothing else (no code, no tests, no other record), and edit nothing:
+- The ticket: ${ticketHint()}, with its comments and its \`## Answers\` section: what the owner asked
+  for and agreed.
+- The spec: \`${spec.specPath}\` under ${ROOT_HINT}.
+
+1. ${PROMISE_READINGS}
+2. ${INPUT_READINGS}
+
+Read what the ticket says, not what you would have built. Your final output is consumed by a
+script, not a human: return only the structured object.`
 }
 
 function preflightPrompt() {
@@ -537,14 +709,30 @@ it, return ok: false with one failure { check: "script", detail: <what happened>
 "install the ratchet plugin; the skill passes the script path as args.preflight" }.`
 }
 
-function specPrompt() {
+// Why: an input case or a promise is the spec role's to decide, never the owner's to confirm, and
+// the script asks him nothing; the one that is his reaches him as the role's own question. The spec
+// role and its amend read the same words.
+const SAFE_ANSWER = 'the safe answer, the narrowest that keeps the app safe (an empty value: nothing ' +
+  'is saved and nothing breaks; an oversized one: the app refuses it with a message and keeps what ' +
+  'the user typed; a hostile one: kept as plain text that does nothing)'
+const INPUT_CHOICE = 'An input case where the safe answer takes something from the user (refusing an ' +
+  'empty value when an empty one clears a note, or a limit that loses what they typed) is a real ' +
+  'product choice: raise it as a `direction` open question under the fork test below, since the ' +
+  'script asks the owner nothing about inputs.'
+const PROMISE_RAISED = 'A promise of the ticket you believe cannot or should not be built as it says ' +
+  'is an open question under the fork test below, never one you leave out: the run builds a ' +
+  'promise the plan leaves out as the ticket says it, and asks the owner nothing.'
+
+// The spec role writes spec.md, and amends it once when the ticket check finds `gaps`: the
+// promises it read as dropped or bent and the input cases no criterion decides.
+function specPrompt(gaps = []) {
   return `${PREAMBLE}
 You are the SPEC agent for one feature of this repository.
 ${commonRules(false, true)}
 Load the \`mattpocock-skills:tdd\` skill: it says what a good test is and how the seams under
 test are chosen. The spec names those seams; the owner has agreed the approach through the
 ticket's \`## Conjecture\` section and the agent-ready label.
-
+${lastRunNote()}${amendNote(gaps)}
 Inputs you may read:
 - The ticket: ${ticketHint()}. Its sections are mattpocock-skills' (Parent, What to build,
   Acceptance criteria, Blocked by, or the spec's Problem Statement, Solution, User Stories,
@@ -560,7 +748,14 @@ Inputs you may read:
 Your tasks, in order:
 1. The slug is \`${SLUG}\`. Write \`docs/features/${SLUG}/spec.md\` containing:
    - Problem (one paragraph, from the ticket)
-   - Acceptance criteria: numbered, each in Given / When / Then form, each testable
+   - Acceptance criteria: numbered, each in Given / When / Then form, each testable. Every
+     promise the ticket makes about what the product does has a criterion, a sentence in its
+     Problem or What to build included. For each thing users or other systems send the running
+     product (a form field, a request body, a file), criteria say what happens to an empty, an
+     oversized and a hostile value. Decide each such case the ticket leaves open with
+     ${SAFE_ANSWER}, and list it under Assumptions. ${INPUT_CHOICE} ${PROMISE_RAISED} A ticket
+     check reads the ticket against spec.md before anything is built and sends back what it
+     misses.
    - Glossary terms used (exact GLOSSARY.md names) and each term you added to the glossary
    - Placement: for each piece of the feature, which declared path or layer it lives in (using
      the names AGENTS.md and binding.md define, or the module when none are declared) and why
@@ -666,7 +861,65 @@ Return the structured result only; the implementer will see spec.md and the test
 nothing of your reasoning about the ticket.`
 }
 
-function implementPrompt(spec) {
+function lastRunNote() {
+  if (!TICKET_FINDINGS.length) return ''
+  return `
+An earlier run built this ticket, and its review refused the change because the build lost these
+promises of the ticket or left these cases of an input undecided:
+${JSON.stringify(TICKET_FINDINGS, null, 2)}
+Give each a criterion, and a failing test the build cannot pass without keeping it.
+`
+}
+
+function amendNote(gaps) {
+  if (!gaps.length) return ''
+  return `
+This is an AMEND. You wrote spec.md and its tests a moment ago; they are on the working tree, and
+nothing has been built. A ticket check that read only the ticket and spec.md found these gaps: a
+promise it read as \`dropped\` or \`bent\` is one spec.md does not carry as the ticket says it, and
+an \`{ input, plainName, case }\` entry is a case of an input no criterion decides.
+${JSON.stringify(gaps, null, 2)}
+Close each gap with the smallest change that makes the plan do what this ticket says, or that
+makes an accepted input safe. Change nothing the gaps do not touch: leave every other criterion's
+wording exactly as it is, not split, joined or reworded.
+- A promise: a Given / When / Then criterion that carries it as the ticket says it. ${PROMISE_RAISED}
+- An input case: decide it yourself with ${SAFE_ANSWER}: the criterion that says so, and an
+  assumption with what would refute it. Never ask the owner to confirm it. For an empty value
+  the safe answer is nothing saved and nothing broken, with no message or rule of its own: a
+  message or a rule is a product another ticket may promise. ${INPUT_CHOICE}
+Each change comes with a failing test whose failure you quote as in task 3. Never bring forward
+what another ticket of this feature promises (its rule, its check, its message): when the smallest
+safe answer overlaps another ticket, take the narrower answer this ticket needs and name that
+ticket in the assumption, even if the check then reads a promise as bent again. Where you read the
+ticket otherwise (the sentence is no promise of the product, or a criterion already carries it),
+leave spec.md as it is. The check then reads spec.md once more. A promise it still finds dropped
+is built as the ticket says it, a case it still finds undecided with the safe answer, and the
+owner sees both among what the run decided; a promise it still reads as bent is shown to him as
+an assumption. Return the whole result for the spec as it now stands.
+`
+}
+
+// What the run decided after the amend: `kept` are the promises spec.md still leaves out, in the
+// ticket's words, built as the ticket says them; `assumed` are the cases of an input it still
+// leaves undecided, built with the safe answer. The owner may overrule either.
+function implementPrompt(spec, kept, assumed) {
+  const promises = kept.length
+    ? `
+spec.md leaves out these promises of the ticket, and the run keeps them as the ticket says them.
+Build each, with a test that fails without it; a promise about how the change is built (a step or
+a tool to run) is done as it says, and \`notes\` says how. The review judges the build against these
+words, and the pull request lists them for the owner to overrule.
+${JSON.stringify(kept, null, 2)}
+`
+    : ''
+  const cases = assumed.length
+    ? `
+spec.md leaves these cases of an input undecided, and the run took the safe answer for each.
+Build each as its \`assumed\` says, with a test that fails without it: the review judges the build
+against these words, and the pull request lists them for the owner to overrule.
+${JSON.stringify(assumed, null, 2)}
+`
+    : ''
   return `${PREAMBLE}
 You are the IMPLEMENT agent for feature \`${spec.slug}\` of this repository.
 ${commonRules()}
@@ -676,7 +929,7 @@ Inputs you may read:
 - Layers the spec expects you to touch: ${JSON.stringify(spec.layersTouched)}
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/, and the existing code those
   tests exercise
-You are deliberately given neither the ticket nor the spec author's reasoning. If
+${promises}${cases}You are deliberately given neither the ticket nor the spec author's reasoning. If
 spec.md is ambiguous, pick the reading that is most consistent with the glossary and the ADRs
 and record the choice in \`notes\`.
 
@@ -865,7 +1118,20 @@ finding with no test kept, or with a test that proves nothing yet, leaves both f
 owed a fix if it is a blocker or major.`
 }
 
-function reviewPrompt(spec, again) {
+// `settled` is what the ticket check left spec.md on before the build: the run's own for the first
+// review, and the first run's, passed back by the skill, for a second review; null when none came.
+function reviewPrompt(spec, again, settled) {
+  const readings = settled
+    ? `Before the build a ticket check read the ticket against spec.md, and spec.md was
+   settled on these readings:
+${JSON.stringify(settled, null, 2)}
+   They are decided: do not argue them again. Your part is the change: whether, as built, it still
+   keeps each promise and decides each input case as spec.md now states, or, for a case whose
+   reading starts "${RUN_ASSUMED.trim()}", as that reading states. A promise whose reading starts
+   "${RUN_KEPT.trim()}" is one the run kept from the ticket: the reading carries it, not spec.md,
+   and it is dropped only when the tests and the code do not do what the ticket says. Start from
+   that list and add any promise it missed. `
+    : ''
   const second = again
     ? `
 This is a second review. The feature was built and approved; then another change merged into
@@ -880,6 +1146,8 @@ top; \`git diff ${BASE}\` shows both, and nothing of the other change.
 You are the independent REVIEWER for feature \`${spec.slug}\` of this repository.
 ${commonRules()}${second}
 Inputs you may read, and nothing else:
+- The ticket: ${ticketHint()}, with its comments and its \`## Answers\` section: what the owner
+  asked for and agreed. Read it; never edit it or comment on it.
 - The spec: \`${spec.specPath}\`
 - The diff: the change is on branch \`${BRANCH}\`, uncommitted unless this is a second review.
   Enumerate it with
@@ -888,7 +1156,7 @@ Inputs you may read, and nothing else:
 - AGENTS.md, GLOSSARY.md, docs/adr/, docs/process/binding.md, docs/disputes/, DESIGN.md
 - Any generated contract artefacts that binding.md names
 ${outsideInputs(CRITIC)} are outside your inputs:
-judge the code against the spec and the standards only.
+judge the spec against the ticket, and the code against the spec and the standards.
 
 Load the \`mattpocock-skills:code-review\` skill and apply its two axes in-process, as both of
 its sub-agents (the pipeline fixes the agent count): the spec source is spec.md; the standards
@@ -934,14 +1202,25 @@ C. Guard paths: run \`guard-diff\` and list every guard path it prints in \`guar
    reads shape, not meaning, so read each addition against the records: a new term that
    restates a concept the glossary already names, or a new ADR that contradicts an existing one,
    is a major issue on the standards axis.
+D. The ticket. Only the spec role and the ticket check read it before you, so a change that loses
+   what the owner asked for can pass every other axis. ${readings}${PROMISE_READINGS}
+   Read them against spec.md as it now stands and the change: a promise is \`dropped\` when what
+   carried it is gone from spec.md, or the tests and the code do not do it.
+E. Inputs. ${INPUT_READINGS} A case is null when the change does not decide it as spec.md states,
+   or as the settled reading states where the run assumed it.
+The script files every \`dropped\` promise and every null case as a major issue: the change lost
+something the ticket promised. It lists every \`bent\` and \`assumed\` promise with the spec's
+assumptions for the owner to overrule, and neither holds the merge. Do not repeat them in
+\`issues\`.
 
 ${SEVERITY}
 
-Verdict: \`approve\` only if there are no blocker or major issues on any axis, every changed
-guard path is covered by a dispute record, is a dependency the spec decided or is a record the
-change only adds to, and \`check\` exits 0; otherwise
-\`request_changes\`. The script re-derives the verdict from your \`issues\`, \`guardChanges\`,
-\`dependencyNotes\`, \`recordNotes\` and \`disputeCoverage\`, so make them complete.`
+Verdict: \`approve\` only if there are no blocker or major issues on any axis, no promise is
+dropped, no input case is null, every changed guard path is covered by a dispute
+record, is a dependency the spec decided or is a record the change only adds to, and \`check\`
+exits 0; otherwise \`request_changes\`. The script re-derives the verdict from your \`issues\`,
+\`ticketPromises\`, \`acceptedInputs\`, \`guardChanges\`, \`dependencyNotes\`, \`recordNotes\` and
+\`disputeCoverage\`, so make them complete.`
 }
 
 // ---------------------------------------------------------------------------
@@ -1001,6 +1280,34 @@ function tooLarge(stop, spec, extra) {
   }
 }
 
+// What stops the run on what the spec role returned, or null: a change too large to build, an open
+// question, which is the owner's to answer and not the implementer's to guess, or a guard path the
+// criteria need changed, which is the owner's to edit. The owner answers or lands the edits, and
+// the run repeats.
+function specStop(spec) {
+  const size = noRoom('the spec', spec.changeSize, CRITIC) || cannotFit(spec.changeSize, spec.changeEstimate, CRITIC)
+  if (size) return tooLarge(size, spec, { checkOutput: spec.checkOutput })
+  const guardEdits = spec.guardEdits ?? []
+  if (spec.openQuestions.length === 0 && guardEdits.length === 0) return null
+  log(`Blocked before Implement: ${spec.openQuestions.length} open question(s), ${guardEdits.length} guard edit(s)`)
+  return {
+    slug: SLUG,
+    ref: REF,
+    verdict: 'blocked',
+    openQuestions: spec.openQuestions,
+    guardEdits,
+    specPath: spec.specPath,
+    testFiles: spec.testFiles,
+    branch: BRANCH,
+    checkOutput: spec.checkOutput,
+    requiredByOrchestrator: [
+      'Put each open question to the owner through the question tool, one at a time, its recommended option first; each answer goes on the ticket under `## Answers`, where the next spec agent reads it',
+      'Give the owner each guard edit to land on the default branch (by hand, or with an agent at the keyboard where the guard can ask); an owner-away run cannot',
+      'When the owner has answered every open question and there is no guard edit, build the ticket again from the preflight in the same turn; with guard edits, the route names the rerun once they land. Do not open a PR from a blocked run',
+    ],
+  }
+}
+
 // The critic's share of the spec's size estimate, and of the reviewer's inputs it is not given
 // (ADR 0028): when the critic does not run, neither refers to findings that do not exist.
 function criticEstimate(critic) {
@@ -1008,7 +1315,7 @@ function criticEstimate(critic) {
 }
 
 function outsideInputs(critic) {
-  return critic ? "The implementer's notes, the critic's findings and the ticket" : "The implementer's notes and the ticket"
+  return critic ? "The implementer's notes and the critic's findings" : "The implementer's notes"
 }
 
 // Whether the critic ran and came back with nothing and no attempt: silence is not a refutation.
@@ -1099,6 +1406,106 @@ function verdictRecord({ slug, ticket, verdict, forcedBy, findings, openQuestion
   }
 }
 
+// What a reading of the ticket leaves open, by the role that read it. Before the build a dropped or
+// bent promise and an undecided input case go back to the spec role once (gaps). After that amend
+// the run decides, and asks the owner nothing: a promise still dropped is kept as the ticket says
+// it, and a case still undecided takes the safe answer (settle, keptFromTicket, assumedCases). A
+// promise still read as bent is a reading the check and the spec role do not share (withSurfaced).
+// The owner sees all three as assumptions. After the build a dropped promise and an undecided case
+// are the change losing what the spec had, and the review refuses it (ticketIssues); a bent one is
+// an assumption.
+function dropped(readings) {
+  return (readings.ticketPromises || []).filter(p => p.reading === 'dropped')
+}
+
+function undecided(readings) {
+  return (readings.acceptedInputs || []).flatMap(input =>
+    Object.keys(INPUT_CASES).filter(c => input[c] === null)
+      .map(c => ({ input: input.input, plainName: input.plainName, case: c })))
+}
+
+// An input as the owner reads it: its plain name, lower case where it starts a clause mid-sentence.
+function ownerName({ plainName }) {
+  const name = String(plainName).trim().replace(/[.;:,]+$/, '')
+  return /^[A-Z][a-z ]/.test(name) ? name[0].toLowerCase() + name.slice(1) : name
+}
+
+function gaps(readings) {
+  const bent = (readings.ticketPromises || []).filter(p => p.reading === 'bent')
+  return [...dropped(readings), ...bent, ...undecided(readings)]
+}
+
+// The readings the build is held to: a promise the amend left out reads as kept from the ticket, in
+// its words, and a case it left undecided as the safe answer the run built, so the review judges
+// the build against that text instead of finding the promise dropped or the case open.
+function settle(readings) {
+  const ticketPromises = (readings.ticketPromises || []).map(p => p.reading === 'dropped'
+    ? { promise: p.promise, reading: 'covered', criteria: [`${RUN_KEPT}${p.promise}`] }
+    : p)
+  const acceptedInputs = (readings.acceptedInputs || []).map(input => ({
+    ...input,
+    ...Object.fromEntries(Object.keys(INPUT_CASES).filter(c => input[c] === null)
+      .map(c => [c, `${RUN_ASSUMED}${INPUT_CASES[c].safe}`])),
+  }))
+  return { ticketPromises, acceptedInputs }
+}
+
+// What the run decided after the amend, as the pull request lists it for the owner to overrule: the
+// promises it kept from the ticket, then the input cases it assumed.
+function keptFromTicket(readings) {
+  return dropped(readings).map(p => ({
+    question: p.promise,
+    assumed: 'the plan left this out, so it was built as your ticket says',
+    refuter: 'Wrong if you no longer want what your ticket says here',
+  }))
+}
+
+function assumedCases(readings) {
+  return undecided(readings).map(entry => ({
+    question: `What the app does when ${ownerName(entry)} is ${INPUT_CASES[entry.case].owner}`,
+    assumed: INPUT_CASES[entry.case].safe,
+    refuter: `Wrong if ${INPUT_CASES[entry.case].refuter}`,
+  }))
+}
+
+// A major issue for each promise of the ticket the change drops and each input case it leaves
+// undecided. They take the path of any other issue, so the verdict record lists them as unresolved
+// and the merge judge refuses; the result returns them as ticketFindings for the next run.
+function ticketIssues(review) {
+  const promises = dropped(review).map(p => ({
+    axis: 'ticket',
+    severity: 'major',
+    title: `the change drops the ticket's promise "${p.promise}"`,
+    location: p.specLine,
+    evidence: 'nothing in spec.md, the tests or the code carries it',
+  }))
+  const cases = undecided(review).map(entry => ({
+    axis: 'input',
+    severity: 'major',
+    title: `the change does not say what the app does when ${ownerName(entry)} is ${INPUT_CASES[entry.case].owner}`,
+    location: entry.input,
+    evidence: `the change decides no ${entry.case} value`,
+  }))
+  return [...promises, ...cases]
+}
+
+function reviewIssues(review) {
+  return [...(review.issues || []), ...ticketIssues(review)]
+}
+
+// The assumptions the owner may overrule: the ones given, and once each, every promise a reading
+// leaves to the owner: one the spec decided part of (assumed), and one two readers read otherwise
+// (bent).
+function withSurfaced(assumptions, readings) {
+  const all = [...(assumptions || [])]
+  for (const p of readings.ticketPromises || []) {
+    if (p.reading !== 'assumed' && p.reading !== 'bent') continue
+    if (all.some(a => a && a.question === p.promise)) continue
+    all.push({ question: p.promise, assumed: p.specLine, refuter: p.reading === 'bent' ? p.change : p.ownerSees })
+  }
+  return all
+}
+
 // The judge reads an open question as a text; the spec role returns it with its options.
 function questionText(question) {
   return String(question && typeof question === 'object' ? question.question || '' : question)
@@ -1112,7 +1519,7 @@ function rejudged({ review, reconcile, dependencies }) {
   for (const p of specDecidedDependencies(dependencies, review.dependencyNotes)) covered.add(p)
   for (const p of additiveRecords(review.recordNotes)) covered.add(p)
   const undisputed = (review.guardChanges || []).filter(p => p && !covered.has(p))
-  const issues = blocking(review.issues)
+  const issues = blocking(reviewIssues(review))
   const forced = []
   if (undisputed.length) forced.push(`guard paths changed without a dispute record, a spec-named dependency or an additions note covering them: ${undisputed.join(', ')}`)
   if (issues.length) forced.push(`${issues.length} blocker/major review issue(s)`)
@@ -1149,8 +1556,9 @@ if (REJUDGE) {
     log(`Reconcile: ${conflicts.length} conflicted path(s), check=${reconcile.checkPasses}`)
   }
   phase('Review')
-  const review = must(await agent(reviewPrompt(spec, true), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
+  const review = must(await agent(reviewPrompt(spec, true, SETTLED), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
   const judged = rejudged({ review, reconcile, dependencies: REJUDGE.dependencies })
+  const assumptions = withSurfaced(REJUDGE.assumptions, review)
   log(`Review again: ${review.verdict}` + (judged.forced.length ? `; forced to request_changes: ${judged.forced.join('; ')}` : ''))
   return {
     slug: SLUG,
@@ -1161,15 +1569,17 @@ if (REJUDGE) {
     filesChanged: reconcile ? reconcile.filesChanged : [],
     reconcileNotes: reconcile ? reconcile.notes : '',
     disputes: reconcile ? reconcile.disputes || [] : [],
-    reviewIssues: review.issues,
+    reviewIssues: reviewIssues(review),
     reviewVerdict: review.verdict,
+    ticketPromises: review.ticketPromises,
+    acceptedInputs: review.acceptedInputs,
     adrSuggested: review.adrSuggested,
     guardChanges: review.guardChanges,
     undisputedGuardChanges: judged.undisputed,
     dependencyNotes: review.dependencyNotes ?? [],
     recordNotes: review.recordNotes ?? [],
     specPath: spec.specPath,
-    assumptions: REJUDGE.assumptions ?? [],
+    assumptions,
     checkPasses: review.checkPasses === true,
     checkOutput: review.checkOutput,
     branch: BRANCH,
@@ -1180,7 +1590,7 @@ if (REJUDGE) {
       forcedBy: judged.forced,
       findings: judged.issues,
       openQuestions: [],
-      assumptions: REJUDGE.assumptions,
+      assumptions,
     }),
     requiredByOrchestrator: [
       'verdict is "approve": anything else leaves the branch to the owner, with verdictForcedBy as the reasons',
@@ -1224,43 +1634,47 @@ log(`Preflight green: ticket ${preflight.number || REF} "${preflight.title}" on 
 // ---------------------------------------------------------------------------
 phase('Spec')
 log(`Spec: ${REF} on branch ${BRANCH}`)
-const spec = must(await agent(specPrompt(), { label: 'spec', phase: 'Spec', schema: SPEC_SCHEMA }), 'spec')
-log(`Spec ${spec.slug}: ${spec.testFiles.length} test file(s), layers ${spec.layersTouched.join(', ')}` +
-  (spec.failingForRightReason ? '' : ' -- WARNING: tests not failing for the right reason') +
-  (spec.openQuestions.length ? `, ${spec.openQuestions.length} open question(s)` : ''))
+const written = must(await agent(specPrompt(), { label: 'spec', phase: 'Spec', schema: SPEC_SCHEMA }), 'spec')
+log(`Spec ${written.slug}: ${written.testFiles.length} test file(s), layers ${written.layersTouched.join(', ')}` +
+  (written.failingForRightReason ? '' : ' -- WARNING: tests not failing for the right reason') +
+  (written.openQuestions.length ? `, ${written.openQuestions.length} open question(s)` : ''))
+const writtenStop = specStop(written)
+if (writtenStop) return writtenStop
 
-const specStop = noRoom('the spec', spec.changeSize, CRITIC) || cannotFit(spec.changeSize, spec.changeEstimate, CRITIC)
-if (specStop) return tooLarge(specStop, spec, { checkOutput: spec.checkOutput })
-
-// An open question is the owner's to answer, not the implementer's to guess, and a guard path
-// other than a record the spec only added to is the owner's to edit. Stop here; the owner answers or lands the edits, and the run repeats.
-const guardEdits = spec.guardEdits ?? []
-if (spec.openQuestions.length > 0 || guardEdits.length > 0) {
-  log(`Blocked before Implement: ${spec.openQuestions.length} open question(s), ${guardEdits.length} guard edit(s)`)
-  return {
-    slug: SLUG,
-    ref: REF,
-    verdict: 'blocked',
-    openQuestions: spec.openQuestions,
-    guardEdits,
-    specPath: spec.specPath,
-    testFiles: spec.testFiles,
-    branch: BRANCH,
-    checkOutput: spec.checkOutput,
-    requiredByOrchestrator: [
-      'Put each open question to the owner through the question tool, one at a time, its recommended option first; each answer goes on the ticket under `## Answers`, where the next spec agent reads it',
-      'Give the owner each guard edit to land on the default branch (by hand, or with an agent at the keyboard where the guard can ask); an owner-away run cannot',
-      'When the owner has answered every open question and there is no guard edit, build the ticket again from the preflight in the same turn; with guard edits, the route names the rerun once they land. Do not open a PR from a blocked run',
-    ],
-  }
-}
+// ---------------------------------------------------------------------------
+// Phase 1a: Ticket check. One agent reads the ticket and spec.md, and nothing else. A gap goes back
+// to the spec role once, while no code exists to waste, and the check reads the amended spec.
+// ---------------------------------------------------------------------------
+phase('Ticket check')
+const firstCheck = must(
+  await agent(ticketCheckPrompt(written), { label: 'ticket-check', phase: 'Ticket check', schema: TICKET_CHECK_SCHEMA }),
+  'ticket check',
+)
+const found = gaps(firstCheck)
+if (found.length) log(`Ticket check: ${found.length} gap(s); the spec role amends spec.md once`)
+const spec = found.length
+  ? must(await agent(specPrompt(found), { label: 'spec-amend', phase: 'Ticket check', schema: SPEC_SCHEMA }), 'spec amend')
+  : written
+const amendStop = found.length ? specStop(spec) : null
+if (amendStop) return amendStop
+const check = found.length
+  ? must(
+    await agent(ticketCheckPrompt(spec), { label: 'ticket-recheck', phase: 'Ticket check', schema: TICKET_CHECK_SCHEMA }),
+    'ticket recheck',
+  )
+  : firstCheck
+const settled = settle(check)
+const kept = keptFromTicket(check)
+const assumedByRun = assumedCases(check)
+if (kept.length) log(`Ticket check: ${kept.length} promise(s) still left out of the plan, built as the ticket says`)
+if (assumedByRun.length) log(`Ticket check: ${assumedByRun.length} input case(s) still undecided, built with the safe answer`)
 
 // ---------------------------------------------------------------------------
 // Phase 2: Implement
 // ---------------------------------------------------------------------------
 phase('Implement')
 const impl = must(
-  await agent(implementPrompt(spec), { label: 'implement', phase: 'Implement', schema: IMPLEMENT_SCHEMA }),
+  await agent(implementPrompt(spec, kept.map(k => k.question), assumedByRun), { label: 'implement', phase: 'Implement', schema: IMPLEMENT_SCHEMA }),
   'implement',
 )
 let filesChanged = union(spec.testFiles, impl.filesChanged)
@@ -1328,13 +1742,14 @@ else if (CRITIC && iterations === 0) log('No blocking findings; fix loop skipped
 // Phase 5: Review (independent)
 // ---------------------------------------------------------------------------
 phase('Review')
-const review = must(await agent(reviewPrompt(spec), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
+const review = must(await agent(reviewPrompt(spec, false, settled), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
 // Why: the drain reads the owed kind from this output (scripts/drain.py OWED_RED). The reviewer
 // reports its own run of check, which may not repeat the line the implementer was stopped on.
 const builderOutput = lastCheckOutput
 lastCheckOutput = review.checkOutput
 if (OWED_RED.test(builderOutput || '') && !OWED_RED.test(lastCheckOutput || '')) lastCheckOutput = `${builderOutput}\n${lastCheckOutput}`
-log(`Review: ${review.verdict}, ${review.issues.length} issue(s)` + (review.adrSuggested ? `, ADR suggested: ${review.adrSuggested}` : ''))
+const issues = reviewIssues(review)
+log(`Review: ${review.verdict}, ${issues.length} issue(s)` + (review.adrSuggested ? `, ADR suggested: ${review.adrSuggested}` : ''))
 
 // The verdict is derived from the evidence the agents returned, never taken on the reviewer's
 // word alone. Pure over the agents' own reports, so it resumes deterministically.
@@ -1345,7 +1760,8 @@ for (const p of decidedDependencies) covered.add(p)
 const addedRecords = additiveRecords(review.recordNotes)
 for (const p of addedRecords) covered.add(p)
 const undisputedGuardChanges = guardChanges.filter(p => !covered.has(p))
-const blockingReviewIssues = blocking(review.issues)
+const blockingReviewIssues = blocking(issues)
+const assumptions = withSurfaced(withSurfaced([...(spec.assumptions || []), ...kept, ...assumedByRun], check), review)
 
 const forcedReasons = []
 if (undisputedGuardChanges.length) forcedReasons.push(`guard paths changed without a dispute record, a spec-named dependency or an additions note covering them: ${undisputedGuardChanges.join(', ')}`)
@@ -1375,8 +1791,12 @@ return {
   criticFindings: critique.findings,
   criticFindingsByRound: allCriticFindings,
   unresolvedBlockingFindings: unresolved,
-  reviewIssues: review.issues,
+  reviewIssues: issues,
+  ticketFindings: ticketIssues(review),
+  settled,
   reviewVerdict: review.verdict,
+  ticketPromises: review.ticketPromises,
+  acceptedInputs: review.acceptedInputs,
   adrSuggested: review.adrSuggested,
   disputes,
   guardChanges,
@@ -1390,7 +1810,7 @@ return {
   specPath: spec.specPath,
   testFiles: spec.testFiles,
   openQuestions: spec.openQuestions,
-  assumptions: spec.assumptions ?? [],
+  assumptions,
   fitnessSabotageConfirmed: critique.fitnessSabotageConfirmed,
   fitnessSabotageSummary: critique.fitnessSabotageSummary,
   specFailures: spec.failures,
@@ -1405,7 +1825,7 @@ return {
     forcedBy: forcedReasons,
     findings: [...unresolved, ...blockingReviewIssues],
     openQuestions: spec.openQuestions,
-    assumptions: spec.assumptions,
+    assumptions,
   }),
   requiredByOrchestrator: [
     'verdict is "approve" (the script forces request_changes when its evidence says otherwise)',
