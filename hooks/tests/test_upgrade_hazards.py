@@ -11,6 +11,7 @@ import conformance
 import gatelib
 import justfile_text
 import markdown_text
+import plugin_pin
 import settings_rules
 import upgrade
 from tests import repos
@@ -358,7 +359,8 @@ def test_a_file_read_through_a_link_out_of_the_repository_is_judged_as_it_reads(
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
     out = gatelib.copy_seen(root, sandbox)
-    assert out == {"GLOSSARY.md", "shared-docs", "dangling.md"}
+    away = "leads outside the repository"
+    assert out == {"GLOSSARY.md": away, "shared-docs": away, "dangling.md": away}
     assert (sandbox / "GLOSSARY.md").read_text() == "# Glossary\n"
     assert not (sandbox / "GLOSSARY.md").is_symlink()
     assert (sandbox / "shared-docs/brief.md").read_text() == "brief\n"
@@ -390,3 +392,151 @@ def test_a_write_stopped_midway_leaves_nothing_git_sees_and_the_next_run_clears_
     upgrade.apply(root, planned(root).changes)
     assert not left.exists()
     assert [path.name for path in temporary.parent.iterdir()] == [upgrade.LOCK]
+
+
+ASKING = "## Asking the owner"
+LATIN = "\n- Owner: Ren\xe9 M\xfcller\n".encode("latin-1")
+
+
+def test_a_file_that_is_not_utf8_is_never_rewritten_and_its_item_is_an_agent_s(
+    tmp_path: Path,
+) -> None:
+    root = fixture("0.9.2", tmp_path)
+    agents = root / "AGENTS.md"
+    agents.write_bytes(agents.read_bytes() + LATIN)
+    commit(root)
+    before = agents.read_bytes()
+    result = planned(root)
+    assert "AGENTS.md" not in result.changes
+    assert any(f.path == "AGENTS.md" and ASKING in f.problem for f in result.agent)
+    upgrade.apply(root, result.changes)
+    assert agents.read_bytes() == before
+
+
+def test_a_binding_that_is_not_utf8_is_refused_with_its_name(tmp_path: Path) -> None:
+    root = fixture("0.9.2", tmp_path)
+    binding = root / BINDING
+    binding.write_bytes(binding.read_bytes() + LATIN)
+    commit(root)
+    before = files(root)
+    result = upgrade.plan(root, PLUGIN_ROOT)
+    assert isinstance(result, upgrade.Refused)
+    assert result.reason.startswith(f"{BINDING} is not UTF-8 text")
+    assert files(root) == before
+
+
+def test_a_file_a_check_reads_that_is_not_utf8_is_a_refusal_not_a_crash(tmp_path: Path) -> None:
+    root = fixture("0.9.2", tmp_path)
+    (root / JUSTFILE).write_bytes((root / JUSTFILE).read_bytes() + b"# caf\xe9\n")
+    commit(root)
+    result = upgrade.plan(root, PLUGIN_ROOT)
+    assert isinstance(result, upgrade.Refused)
+    assert "is not UTF-8 text" in result.reason
+
+
+def ignored_by_local_config(root: Path) -> None:
+    (root / ".git/local-excludes").write_text("flags.toml\n")
+    repos.git(root, "config", "core.excludesFile", str(root / ".git/local-excludes"))
+    (root / "flags.toml").write_text(PROJECT_FLAG)
+
+
+def test_a_file_ignored_by_any_rule_git_reads_is_never_written_over(tmp_path: Path) -> None:
+    root = fixture("0.9.2", tmp_path)
+    ignored_by_local_config(root)
+    quality = root / "quality"
+    (quality / ".gitignore").write_text("*\n")
+    (quality / "bites.toml").write_text("# the project's own bites\n")
+    before = files(root)
+    result = upgrade.plan(root, PLUGIN_ROOT)
+    assert isinstance(result, upgrade.Refused)
+    assert "git ignores flags.toml and quality/bites.toml" in result.reason
+    assert files(root) == before
+    assert (quality / "bites.toml").read_text() == "# the project's own bites\n"
+
+
+def test_a_recipe_an_ignored_optional_import_defines_is_never_copied(tmp_path: Path) -> None:
+    root = fixture("0.9.2", tmp_path)
+    just = (root / JUSTFILE).read_text()
+    (root / JUSTFILE).write_text(
+        just.replace("\ndefault:", "\nimport? 'local.just'\n\ndefault:", 1)
+    )
+    (root / ".gitignore").write_text("local.just\n")
+    commit(root)
+    (root / "local.just").write_text("merge branch:\n    echo signs off {{branch}} first\n")
+    upgrade.apply(root, planned(root).changes)
+    main = [block.name for block in justfile_text.blocks((root / JUSTFILE).read_text().split("\n"))]
+    assert "merge" not in main
+    assert "hooks-install" in main
+
+
+def test_a_line_that_only_starts_like_the_pin_is_never_replaced(tmp_path: Path) -> None:
+    root = fixture("0.9.2", tmp_path)
+    note = "- Ratchet plugin: the marketplace clone; CI checks out the `ref` in each workflow"
+    binding = root / BINDING
+    binding.write_text(binding.read_text() + f"\n## Tool versions\n\n{note}\n")
+    commit(root)
+    upgrade.apply(root, planned(root).changes)
+    text = binding.read_text()
+    assert note in text
+    assert plugin_pin.pinned(text) is not None
+
+
+def test_a_file_in_a_submodule_is_read_and_never_written(tmp_path: Path) -> None:
+    root = fixture("0.9.2", tmp_path)
+    docs = repos.repository(tmp_path / "docs-repo")
+    shutil.copytree(root / "docs", docs, dirs_exist_ok=True)
+    repos.commit(docs, "docs: the project's records")
+    repos.git(root, "rm", "-q", "-r", "docs")
+    shutil.rmtree(root / "docs", ignore_errors=True)
+    repos.git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(docs), "docs")
+    commit(root)
+    before = (root / BINDING).read_text()
+    result = upgrade.plan(root, PLUGIN_ROOT)
+    assert isinstance(result, upgrade.Refused)
+    assert result.reason == (
+        f"{BINDING} is in the submodule docs, so the upgrade does not write it"
+    )
+    assert (root / BINDING).read_text() == before
+
+
+def test_a_link_into_guards_is_never_written_through(tmp_path: Path) -> None:
+    root = fixture("0.9.2", tmp_path)
+    (root / "AGENTS.md").rename(root / "guards/AGENTS.md")
+    (root / "AGENTS.md").symlink_to("guards/AGENTS.md")
+    commit(root)
+    before = (root / "guards/AGENTS.md").read_bytes()
+    result = planned(root)
+    assert not [name for name in result.changes if name.startswith("guards/")]
+    assert any(f.path == "AGENTS.md" and ASKING in f.problem for f in result.agent)
+    upgrade.apply(root, result.changes)
+    assert (root / "guards/AGENTS.md").read_bytes() == before
+
+
+def test_a_binding_kept_under_guards_is_refused(tmp_path: Path) -> None:
+    root = fixture("0.9.2", tmp_path)
+    (root / BINDING).rename(root / "guards/binding.md")
+    (root / BINDING).symlink_to("../../guards/binding.md")
+    commit(root)
+    result = upgrade.plan(root, PLUGIN_ROOT)
+    assert isinstance(result, upgrade.Refused)
+    assert result.reason == "guards/binding.md is under guards/, which the upgrade never writes"
+
+
+APPEND_GROUP = (
+    '[[group]]\nname = "records"\nreason = "an agent adds one"\nedit = "append"\n'
+    'paths = ["docs/records/**"]\n\n'
+)
+
+
+def test_a_deny_the_owner_holds_over_an_append_group_stays(tmp_path: Path) -> None:
+    root = fixture("0.9.2", tmp_path)
+    manifest = root / "guards/manifest.toml"
+    manifest.write_text(manifest.read_text() + "\n" + APPEND_GROUP)
+    path = root / SETTINGS
+    data = json.loads(path.read_text())
+    data["permissions"]["deny"].append("Edit(/docs/records/**)")
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    commit(root)
+    upgrade.apply(root, planned(root).changes)
+    assert "Edit(/docs/records/**)" in json.loads(path.read_text())["permissions"]["deny"]
+    assert not [d for d in settings_rules.drifts(root) if "docs/records" in d.line]
