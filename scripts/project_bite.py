@@ -54,10 +54,11 @@ same data (a hard link) keeps what it held. ``args`` are appended to the gate's 
 ``commit = true`` commits the fault in the copy first, for a gate that reads history or the
 index.
 
-For each gate the script runs the gate in the copy and requires green, then per bite plants the
-fault, runs the gate, and requires red with ``expect`` in its output more often than in the green
-one (a recipe's own text is echoed on every run). After each run the copy is put back as it stood:
-every file git sees, the index and ``HEAD``. One line per bite: ``bites``, ``DOES NOT BITE``
+For each bite the script runs the gate in the copy and requires green, then plants the fault, runs
+the gate again, and requires red with ``expect`` in its output more often than in that green run
+(a recipe's own text is echoed on every run). No green run serves two bites: what an earlier
+fault's run left behind would be judged as this fault. After each run the copy is put back as it
+stood: every file git sees, the index and ``HEAD``. One line per bite: ``bites``, ``DOES NOT BITE``
 (green with the fault), ``RED BEFORE THE FAULT``, ``RED FOR ANOTHER REASON`` (red, and ``expect``
 no more often than when green) or ``THE FAULT WAS NOT PLANTED``. The run is red on anything but
 ``bites``, on a registry that does not parse, on a tool-bound gate with no bite, and on one
@@ -710,13 +711,12 @@ class Copy:
         return result
 
     def prove(self, row: Row, bites: Sequence[Bite]) -> Iterator[Outcome]:
-        """Each bite of one gate: green without the fault, then red on it."""
-        greens: dict[tuple[str, ...], tuple[int, str]] = {}
+        """Each bite of one gate: green without the fault, then red on it, run after run."""
         for bite in bites:
             command = [*shlex.split(row.command), *bite.args]
-            if bite.args not in greens:
-                greens[bite.args] = self.run(command)
-            code, green = greens[bite.args]
+            # Why: a green run taken before an earlier fault says nothing of what that fault left
+            # behind (a cache, a mark in an ignored file), so each fault gets a green run of its own
+            code, green = self.run(command)
             if code != 0:
                 yield Outcome(bite, Verdict.RED_BEFORE, tail(green))
                 continue
