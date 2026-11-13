@@ -44,6 +44,8 @@ For that role, the next unit must add one command to this harness: one that perf
 - Text that an earlier request sent and a later answer shows is accepted, because saving something and then seeing it is how most of a product is tried. A product that repeats input in another form, escaped for JSON for instance, is not seen as an echo.
 - `check` does not judge whether a cited request bears on the line it passes. A `pass` that cites only `GET /favicon.ico` with status 200 is accepted. The tester's judgment is tested by the owner's use, under the refutation criterion below.
 - A product that compresses an answer it was asked to send plain is stored compressed, and text in that answer is not seen. A `pass` that cites such text is refused, never accepted.
+- A screenshot is a file the tester wrote. `check` holds that it is a PNG in the tester's directory, not what it shows.
+- A product that writes a file git does not ignore into its own work tree changes the tree while it runs, so each of its sessions ends stale and is refused.
 - Files git ignores are not part of the tree. A product that serves an ignored build output, such as `dist/`, is known by the sources it was built from, and a build that differs from those sources is not seen.
 
 Decided 2026-11-13.
