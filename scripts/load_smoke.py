@@ -36,14 +36,14 @@ answers" probe. It is judged on errors only, as everywhere, and sends the same f
 overlapping requests, so point it at a route that is safe to repeat.
 
 ``--until-stopped`` is for ``with_service.py --graceful``, which stops the service partway
-through the run and exports ``RATCHET_STOPPING``, a path that exists from the signal on. The line
-is drawn by when a request's connection was made. ``with_service.py`` signals only once the
-service has accepted every connection queued on its listener, so one made before the path
-appeared is in flight and must complete: a reset, a timeout, a 5xx or a wrong status is an error
-as always. One made after it may meet a listener that is closing, so a refused or reset
-connection is expected, not counted, and ends that worker; a timeout or an error status after
-the signal is still red. Without the flag a refused connection is always an error. The flag is
-red without ``RATCHET_STOPPING``, since it could not tell the two apart.
+through the run and exports ``RATCHET_STOPPING``, a path that exists from just before the signal
+on and holds a ``time.monotonic()``: the line. The service had accepted every connection made
+before the line, so a request whose connection was made before it is in flight and must
+complete: a reset, a timeout, a 5xx or a wrong status is an error as always. One made after it
+may meet a listener that is closing, so a refused or reset connection is expected, not counted,
+and ends that worker; a timeout or an error status after the signal is still red. Without the
+flag a refused connection is always an error. The flag is red without ``RATCHET_STOPPING``,
+since it could not tell the two apart.
 
 It ends within ``--seconds`` plus ``--timeout``: ten seconds at the defaults, even when the
 service hangs. Each request opens a new connection, which is what a burst of clients does.
@@ -143,7 +143,19 @@ def targets_of(parser: argparse.ArgumentParser, options: argparse.Namespace) -> 
 
 
 class Closed(Exception):  # noqa: N818 # -- not a fault: the service stopped taking requests
-    """A request whose connection was made after the stop signal met a closed listener."""
+    """A request whose connection was made after the stop line met a closed listener."""
+
+
+def signal_line(stopping: Path | None) -> float | None:
+    """The ``time.monotonic()`` after which a connection may meet a closed listener, if signalled.
+
+    ``with_service.py`` writes it whole before the signal; the clock is the host's, shared by
+    every process on it.
+    """
+    try:
+        return float(stopping.read_text(encoding="ascii")) if stopping else None
+    except FileNotFoundError:
+        return None
 
 
 def attempt(
@@ -151,25 +163,26 @@ def attempt(
 ) -> tuple[float | None, str | None]:
     """One request: its latency in seconds when an answer came, and what was wrong if anything.
 
-    With ``stopping`` set, a connection error raises ``Closed`` instead of being counted when
-    that path existed once the connection was made, or when the failure came with no connection
-    made and the path exists: a refused connect after the signal. The line is the connection and
-    not the start of the attempt, since a client can stall between the two.
+    With ``stopping`` set, a connection error raises ``Closed`` instead of being counted once
+    that path exists, when the connection was made at or after the time it holds, or never made:
+    a refused connect after the signal. The line is the connection and not the start of the
+    attempt, since a client can stall between the two.
     """
-    signalled: list[bool] = []
-
-    def connected() -> None:
-        signalled.append(stopping is not None and stopping.exists())
-
+    connected_at: list[float] = []
     started = time.perf_counter()
     try:
         status = gatelib.http_status(
-            goal.method, goal.url, body=goal.body, timeout=timeout, connected=connected
+            goal.method,
+            goal.url,
+            body=goal.body,
+            timeout=timeout,
+            connected=lambda: connected_at.append(time.monotonic()),
         )
     except TimeoutError:
         return None, f"{goal.label()}: timed out after {timeout:g}s"
     except (OSError, http.client.HTTPException) as error:
-        after_signal = signalled[0] if signalled else stopping is not None and stopping.exists()
+        line = signal_line(stopping)
+        after_signal = line is not None and (not connected_at or connected_at[0] >= line)
         if after_signal and isinstance(error, ConnectionError):
             raise Closed from error
         return None, f"{goal.label()}: {type(error).__name__}"
