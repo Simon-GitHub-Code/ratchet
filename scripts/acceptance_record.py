@@ -187,9 +187,11 @@ class Seal:
 
     ``ticket`` and ``session_file`` are the digests of the session's ``ticket.md`` and
     ``session.json`` as they were when the proxy started, before the tester had an address.
+    ``unlogged`` counts the answers that reached the tester with no line in the log.
     """
 
     requests: int
+    unlogged: int
     sha256: str
     stopped: str
     ended: str
@@ -207,6 +209,7 @@ def parse_seal(raw: object) -> Seal | None:
     try:
         return Seal(
             int(raw["requests"]),
+            int(raw["unlogged"]),
             str(raw["sha256"]),
             str(raw["stopped"]),
             str(raw["ended"]),

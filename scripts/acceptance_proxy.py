@@ -24,10 +24,12 @@ made through here.
 The proxy is the log's only writer, and it keeps a running SHA-256 of every byte it wrote. On
 SIGTERM, SIGINT or SIGHUP, when the process that started it is gone, or when nothing holds the
 session's ``live.lock`` any more because the supervisor that held it died, it stops listening and
-writes ``seal.json``: how many lines it wrote and their digest. Started after the supervisor
-died, it serves nothing and exits 1, and ``with_service.py`` then stops the product. A log that
-does not match its seal was changed, cut short or added to after the proxy wrote it, and a log
-with no seal is from a session that never ended. Nothing in the log is written after the seal.
+writes ``seal.json``: how many lines it wrote, their digest, and how many answers reached the
+tester with no line (still going out at the seal, or a line the disk refused). Started after the
+supervisor died, it serves nothing and exits 1, and ``with_service.py`` then stops the product.
+A log that does not match its seal was changed, cut short or added to after the proxy wrote it,
+and a log with no seal is from a session that never ended. Nothing in the log is written after
+the seal, and no answer begins after it.
 
 ``SESSION_DIR/proxy.json`` appears once the proxy listens: its address, the product's, and its
 process id. ``--null`` is the control a kept check must fail against: every ``GET`` and ``HEAD``
@@ -101,17 +103,23 @@ def write_json(path: Path, data: dict[str, object]) -> None:
 
 
 class Log:
-    """``requests.jsonl`` and the probes; the seal says what was written, so nothing else can be."""
+    """``requests.jsonl`` and the probes; the seal says what was written, so nothing else can be.
+
+    It also counts each answer that reached the tester with no line: one whose line the disk
+    refused, one still going out when the log was sealed, and the proxy's own refusal of a
+    request it could not read. Once the log is sealed, no answer begins.
+    """
 
     def __init__(self, directory: Path, prefix: str) -> None:
         """Open the log of ``directory``; each id starts with ``prefix``."""
         self.directory, self.prefix = directory, prefix
         (directory / "probes").mkdir(parents=True, exist_ok=True)
-        self.file = (directory / "requests.jsonl").open("ab")
+        # Why unbuffered: a line the disk refuses must fail its own write, not a later one's.
+        self.file = (directory / "requests.jsonl").open("ab", buffering=0)
         self.lock = threading.Lock()
         self.idle = threading.Condition(self.lock)
         self.digest = hashlib.sha256()
-        self.issued = self.written = self.open = 0
+        self.issued = self.written = self.open = self.answering = self.unlogged = 0
         self.sealed = False
 
     def issue(self) -> str:
@@ -127,18 +135,33 @@ class Log:
         (self.directory / "probes" / name).write_bytes(kept)
         return hashlib.sha256(kept).hexdigest(), len(data) > CAP
 
-    def finish(self, entry: dict[str, object] | None) -> None:
-        """Close an open request: its line, unless it broke first or the log is sealed."""
+    def answer(self) -> bool:
+        """Whether an answer may begin to go out: not once the log is sealed."""
+        with self.lock:
+            self.answering += not self.sealed
+            return not self.sealed
+
+    def finish(self, entry: dict[str, object] | None, *, answered: bool) -> None:
+        """Close an open request: its line, unless it broke first or the log is sealed.
+
+        ``answered`` when its answer began to go out; with no line, it is counted as unlogged.
+        """
         line = json.dumps(entry).encode() + b"\n" if entry else b""
         with self.lock:
             self.open -= 1
+            self.answering -= answered
             self.idle.notify_all()
-            if self.sealed or not line:
+            if self.sealed:
                 return
-            self.file.write(line)
-            self.file.flush()
-            self.digest.update(line)
-            self.written += 1
+            try:
+                done = self.file.write(line) if line else 0
+            except OSError:
+                done = 0
+            if line and done == len(line):
+                self.digest.update(line)
+                self.written += 1
+            else:
+                self.unlogged += answered
 
     def seal(self, facts: dict[str, object]) -> None:
         """Wait up to ``SETTLE`` for the open requests, then write nothing more and say what was.
@@ -151,6 +174,7 @@ class Log:
             self.sealed = True
             self.file.close()
             seal = facts | {"requests": self.written, "sha256": self.digest.hexdigest()}
+            seal |= {"unlogged": self.unlogged + self.answering}
             write_json(self.directory / "seal.json", seal | {"ended": now()})
 
 
@@ -171,11 +195,16 @@ class Proxy(http.server.ThreadingHTTPServer):
         """A client that went away mid-answer is not the proxy's failure."""
 
 
+class Sealed(Exception):  # noqa: N818 # -- a state the request ran into, not a fault
+    """The log was sealed before this answer began."""
+
+
 class Forward(http.server.BaseHTTPRequestHandler):
     """Every method: forward to the product, answer the client, log the exchange."""
 
     protocol_version = "HTTP/1.1"
     server: Proxy
+    answered = False
 
     def __getattr__(self, name: str) -> Callable[[], None]:
         """``do_<METHOD>`` for any method, so nothing is answered by the proxy itself."""
@@ -202,11 +231,21 @@ class Forward(http.server.BaseHTTPRequestHandler):
         """Relay one request and log it."""
         log = self.server.log
         ident = log.issue()
-        entry = None
+        entry, self.answered = None, False
         try:
             entry = self.exchange(ident)
         finally:
-            log.finish(entry)
+            log.finish(entry, answered=self.answered)
+
+    def send_response_only(self, code: int, message: str | None = None) -> None:
+        """Begin an answer, unless the log is sealed: then it could not be logged, so it is dropped.
+
+        ``Sealed`` ends the request; the server closes the connection.
+        """
+        self.answered = self.server.log.answer()
+        if not self.answered:
+            raise Sealed
+        super().send_response_only(code, message)
 
     def exchange(self, ident: str) -> dict[str, object]:
         """Relay one request; its line for the log."""

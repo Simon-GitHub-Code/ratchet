@@ -869,6 +869,8 @@ def test_down_while_a_request_is_in_flight_stops_everything_and_seals(
             response.read()
         except (OSError, http.client.HTTPException) as error:
             failed.append(error)
+        finally:
+            connection.close()
 
     waiting = [threading.Thread(target=hang, args=(path,)) for path in ("/slow", "/drip")]
     for thread in waiting:

@@ -185,7 +185,7 @@ def test_the_seal_says_what_was_written_and_nothing_is_written_after_it(
     log = acceptance_proxy.Log(tmp_path / "again", "x")
     log.issue()
     log.seal({"session": "again"})
-    log.finish({"id": "x-1"})
+    log.finish({"id": "x-1"}, answered=False)
     assert (tmp_path / "again" / "requests.jsonl").read_bytes() == b"", "it waited, then sealed"
 
 
@@ -199,10 +199,13 @@ def test_an_answer_that_had_begun_when_the_log_was_sealed_is_counted_and_no_othe
     def drip(url: str) -> None:
         host, port = url.split("//")[1].rstrip("/").split(":")
         connection = http.client.HTTPConnection(host, int(port), timeout=30)
-        connection.request("GET", "/drip")
-        response = connection.getresponse()
-        begun.set()
-        got["drip"] = response.read()
+        try:
+            connection.request("GET", "/drip")
+            response = connection.getresponse()
+            begun.set()
+            got["drip"] = response.read()
+        finally:
+            connection.close()
 
     def held(url: str) -> None:
         try:
@@ -307,6 +310,19 @@ def test_a_chunked_body_with_a_trailer_reaches_the_product_whole(
             )
             answer = b"".join(iter(lambda: raw.recv(65536), b""))
     assert answer.endswith(b"\r\n\r\nPOST hello")
+
+
+def test_a_request_the_proxy_cannot_read_is_refused_by_it_and_counted_unlogged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with products.serving(tmp_path) as upstream, proxied(tmp_path, upstream, monkeypatch) as url:
+        host, port = url.split("//")[1].rstrip("/").split(":")
+        with socket.create_connection((host, int(port)), timeout=30) as raw:
+            raw.sendall(b"GET / HTTP/9\r\n\r\n")
+            answer = b"".join(iter(lambda: raw.recv(65536), b""))
+    assert answer.startswith(b"HTTP/1.1 400 ")
+    seal = json.loads((tmp_path / "session" / "seal.json").read_text(encoding="utf-8"))
+    assert (seal["requests"], seal["unlogged"]) == (0, 1)
 
 
 def test_a_client_that_hangs_up_mid_request_does_not_stop_the_proxy(

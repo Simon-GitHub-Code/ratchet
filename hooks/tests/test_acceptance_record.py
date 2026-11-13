@@ -515,6 +515,7 @@ def test_the_log_reads_each_line_and_names_each_that_is_not_a_request() -> None:
 TICKET, SESSION_FILE = b"- [ ] One thing.\n", b'{"session": "s"}\n'
 SEALED = {
     "requests": 2,
+    "unlogged": 0,
     "sha256": sha(b'{"a": 1}\n{"b": 2}\n'),
     "stopped": "2026-11-13T00:00:01.000Z",
     "ended": "2026-11-13T00:00:01.100Z",

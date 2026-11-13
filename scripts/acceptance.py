@@ -50,7 +50,8 @@ next ``up``::
     proxy.json        the proxy: its address and the product's, once it listens
     requests.jsonl    the proxy: one line per request the tester made
     probes/           the proxy: each request and answer as sent, cut at 1 MB
-    seal.json         the proxy, when it stops: how many lines it wrote and their SHA-256
+    seal.json         the proxy, when it stops: how many lines it wrote, their SHA-256, and
+                      how many answers reached the tester with no line
     tester/           the tester's: record.json and its screenshots
     replay.json       the last replay of the record's kept checks; control.json, against nothing
 
@@ -589,7 +590,8 @@ def stop_sessions(place: Path) -> int:
 
     Every sealed session ``down`` has not yet ended gets ``down``'s word on its seal: when it
     came, and whether the proxy had stopped before then. Only one that ran until ``down`` came
-    is blessed, by printing the digest of its seal.
+    is blessed, by printing the digest of its seal. Answers that reached the tester with no line
+    in the log are said, and do not stop the blessing: a pass can cite only a logged request.
     """
     began = acceptance_proxy.now()
     every = sessions(place, 2)
@@ -635,10 +637,12 @@ def close(directory: Path, began: str) -> Closed | None:
     name = directory.name
     lines = [f"session {name} ended at {seal.stopped}, {acceptance_record.EARLY}"] if early else []
     lines += [f"session {name} is stale: {acceptance_record.STALE}"] if stale else []
+    said = f"session {name}: answers that reached the tester unlogged: {seal.unlogged}"
+    told = [said] if seal.unlogged else []
     if lines:
-        return Closed(blessed=False, lines=lines)
+        return Closed(blessed=False, lines=told + lines)
     digest = acceptance_record.sha256(path.read_bytes())
-    return Closed(blessed=True, lines=[f"session {name}: seal {digest}"])
+    return Closed(blessed=True, lines=[*told, f"session {name}: seal {digest}"])
 
 
 def still_served(directory: Path) -> bool:
