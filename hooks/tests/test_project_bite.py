@@ -1404,6 +1404,43 @@ def test_a_path_swapped_for_a_link_between_the_check_and_the_plant_is_refused(
     assert "is reached through a symbolic link; a fault changes the copy's own file" in out
 
 
+@pytest.mark.parametrize(
+    "case", [(kind, at) for kind in ("write", "overwrite", "remove") for at in ("src", "src/deep")]
+)
+def test_a_directory_swapped_once_the_walk_holds_it_still_takes_the_fault(
+    tmp_path: Path,
+    *,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    case: tuple[str, str],
+) -> None:
+    # Why: the walk holds the directory open, so the act goes to the copy's own directory even
+    # when its name points at the real tree by then. An act by path would follow the link.
+    kind, swapped = case
+    write(tmp_path / "repo", INNER, "clean\n")
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "swapped", SWAPPED[kind]))
+    before = fingerprint(root)
+    copies: list[Path] = []
+    checked, looked = project_bite.owned, project_bite.entry
+
+    def record(copy: Path, *paths: str) -> None:
+        copies.append(copy)
+        checked(copy, *paths)
+
+    def look_then_swap(here: int, name: str) -> os.stat_result | None:
+        found = looked(here, name)
+        if name in {"planted.txt", "inner.txt"} and not (copies[0] / "aside").exists():
+            (copies[0] / swapped).rename(copies[0] / "aside")
+            (copies[0] / swapped).symlink_to(root / swapped)
+        return found
+
+    monkeypatch.setattr(project_bite, "owned", record)
+    monkeypatch.setattr(project_bite, "entry", look_then_swap)
+    prove(root)
+    assert fingerprint(root) == before
+    assert "bite: lint: swapped: " in capsys.readouterr().out
+
+
 def test_a_process_setup_left_swapping_a_directory_for_a_link_never_changes_the_real_tree(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
