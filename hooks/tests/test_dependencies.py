@@ -1,6 +1,7 @@
 """Dependency-only changes to a guard path are told apart from gate changes."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -655,6 +656,19 @@ PNPM_BOOT_BESIDE = _boot(
     "\nsnapshots:\n\n  pnpm@12.17.0: {}\n\n  pnpm@12.18.0: {}\n",
     1,
 )
+# Why: YAML may write a mapping on one line; pnpm does not, and the reader would see no packages.
+PNPM_BOOT_FLOW = (
+    "---\nlockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    configDependencies: {}\n"
+    "    packageManagerDependencies: {pnpm: {specifier: 12.17.0, version: 12.17.0}}\n\n"
+    "packages: {pnpm@12.17.0: {resolution: {integrity: sha512-p17}}}\n\n"
+    "snapshots: {pnpm@12.17.0: {}}\n\n---\n" + PNPM_12_LOCK.partition("\n---\n")[2]
+)
+PNPM_PROJECT_FLOW = re.sub(
+    r"\npackages:\n.*?\nsnapshots:",
+    "\npackages: {lit@2.0.0: {resolution: {integrity: sha512-old}}}\n\nsnapshots:",
+    PNPM_LOCK.replace("version: 3.1.0", "version: 2.0.0"),
+    flags=re.DOTALL,
+)
 
 
 @pytest.mark.parametrize(
@@ -663,6 +677,13 @@ PNPM_BOOT_BESIDE = _boot(
         (PNPM_12_LOCK, _boot(PNPM_12_LOCK, "12.18.0", "12.17.0"), "pnpm falls from 12.18.0"),
         (PNPM_IN_PROJECT, _boot(PNPM_IN_PROJECT, "12.18.0", "12.17.0"), "pnpm falls"),
         (PNPM_12_LOCK, PNPM_BOOT_BESIDE, "pnpm falls from 12.18.0 to 12.17.0"),
+        (PNPM_12_LOCK, PNPM_BOOT_FLOW, "not in the shape"),
+        (
+            PNPM_12_LOCK,
+            PNPM_BOOT_FLOW.replace("  .:\n    configDependencies: {}\n", "  .: {}\n"),
+            "not in the shape",
+        ),
+        (PNPM_LOCK, PNPM_PROJECT_FLOW, "not in the shape"),
         (PNPM_12_LOCK, _boot(PNPM_12_LOCK, "sha512-pnpm", "sha512-evil"), "changed in place"),
         (
             PNPM_12_LOCK,
@@ -677,7 +698,7 @@ PNPM_BOOT_BESIDE = _boot(
         (
             PNPM_12_LOCK,
             _boot(PNPM_12_LOCK, "  .:\n    configDependencies: {}\n", "  .: x\n"),
-            "its boot document locks",
+            "not in the shape",
         ),
         (
             PNPM_12_LOCK,
