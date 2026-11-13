@@ -1,15 +1,18 @@
 # ratchet
 
-Ratchet is a plugin for coding agents that holds every change to the same standard before it merges. It installs a method in your repository: deterministic gates in three tiers that only tighten, paths the agent cannot edit without you, written records of each decision, and a four-role pipeline that builds a ticket while you are away. A change the gates can judge merges without you; one that touches a guarded path, goes through a one-way door or has an open finding waits for you.
+Ratchet is a plugin for coding agents that holds every change to the same standard before it merges. It installs a method in your repository: deterministic gates in three tiers that only tighten, paths the agent cannot edit without you, written records of each decision, and a pipeline of agents in fixed roles that builds a ticket while you are away. A change the gates can judge merges without you; one that touches a guarded path or has an open finding waits for you, and once others can reach the project so does one that goes through a one-way door.
 
-It is for one developer, or a small team, who has agents write most of the code and wants the checks a software factory would give them without approving every pull request. It enforces concepts, not a stack: it ships the questions a change must answer and the gates that need no stack, and at adoption the agent chooses a current tool for every other question, on any language.
+It is for one developer, or a small team, who has agents write most of the code and wants the checks a software factory would give them without approving every pull request. Hobby projects and solo founders come first. It enforces concepts, not a stack: it ships the questions a change must answer and the gates that need no stack, and the agent chooses a current tool for every other question when the project first needs it, on any language.
+
+It starts small and never stops you mid-idea. On the first commit only the floor runs: format, lint, strict types, secrets, commit subjects and the method's own gates. Every other safeguard arrives with the first thing it guards: a span and a smoke test with the first route, a timeout with the first outbound call, a restore drill once the project holds data you could not recreate. The change that brings the first of anything is never red for it; the next step is to bind what it now owes, and only a second instance added before that is red.
 
 ## What it costs
 
 - **Four plugins.** Ratchet composes with `mattpocock-skills` (how the work is done: `tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grilling`, `pr`, `research`), `pstack` (style and levers: `poteto-mode`, `architect`, `interrogate`, `arena`, `correct`) and `impeccable` (how anything a person sees is designed). In Claude Code they install with it.
 - **Tools on the machine.** `git` 2.36 or later, `python3` 3.11 or later, `just` (or another task runner, rebuilt by hand), the `pre-commit` framework, and `gh` signed in when the repository is on GitHub. Each tool your stack's gates use is chosen and installed at adoption.
-- **Agents.** A ticket built while you are away takes at most nine agents, and two more when it is judged again behind another merge. A drain of N tickets takes at most 11N - 2, and says the number before it starts.
-- **Your keystrokes.** Up to two dialogs at init, one setup command, two dialogs at adoption, and one merge: the adoption's pull request changes guarded paths, so you merge it yourself. After that you write tickets, apply the agent-ready label, answer the questions that shape the product, and merge what the gates leave to you.
+- **Agents.** A ticket built while you are away takes four agents until you declare that people depend on the project, and then at most nine, since a critic and its fix loop join; two more when it is judged again behind another merge. A drain says the number before it starts.
+- **Your keystrokes.** Up to two dialogs at init, one setup command, two dialogs at adoption, and one merge: the adoption's pull request changes guarded paths, so you merge it yourself. After that you write tickets, apply the agent-ready label, answer the questions that shape the product, declare the project's life events when they happen (deployed, holding irreplaceable data, depended on), and merge what the gates leave to you.
+- **Safeguards as you go.** Each one is bound by an agent, in a change of its own, when the project first needs it (`/ratchet:safeguard`, which `/ratchet:next` names). Before you deploy, a one-way door and a route with no flag merge without you.
 
 The feature pipeline runs on Claude Code's Workflow tool. The method, its gates and its guard also run in Grok, Codex, Antigravity, pi and OpenCode, each with a page under `docs/harness/`.
 
@@ -27,24 +30,24 @@ The feature pipeline runs on Claude Code's Workflow tool. The method, its gates 
 
 2. In the repository, empty or not, type `/ratchet:init`. It asks what the product is (and on an empty directory what it is built with), then writes `AGENTS.md` with `CLAUDE.md` linked to it, runs the pstack and impeccable setups, makes the first commit and, with your consent, the remote.
 3. Type `/mattpocock-skills:setup-matt-pocock-skills`. It records the issue tracker and its labels.
-4. Type `/ratchet:adopt`. It asks what kind of software this is and whether to accept the tools it proposes, then the design brief; it binds every gate against a walking skeleton, shows each gate fail on a planted fault, and opens the adoption pull request for you to merge. It installs the commit hooks itself; if your git configuration sets a `core.hooksPath` whose hooks do not run the repository's own, it names one command for you to run so that every commit runs tier 0.
-5. From then on `/ratchet:next` prints the command to type next: a spec with `/mattpocock-skills:to-spec`, `/ratchet:conjecture <spec>` (its tickets inherit the conjecture and operability), `to-tickets`, `/ratchet:conjecture <ticket>` where a ticket needs its own, the agent-ready label, then `/ratchet:feature` to build every ready ticket.
+4. Type `/ratchet:adopt`. It asks what kind of software this is and whether to accept the tools it proposes, then the design brief; it binds the floor, marks every other row with the trigger that will ask it, shows each bound gate fail on a planted fault, and opens the adoption pull request for you to merge. No walking skeleton is built: on an empty repository the next thing written is your idea. It installs the commit hooks itself; if your git configuration sets a `core.hooksPath` whose hooks do not run the repository's own, it names one command for you to run so that every commit runs tier 0.
+5. From then on `/ratchet:next` prints the command to type next: a spec with `/mattpocock-skills:to-spec`, `/ratchet:conjecture <spec>` (its tickets inherit the conjecture and operability), `to-tickets`, `/ratchet:conjecture <ticket>` where a ticket needs its own, the agent-ready label, then `/ratchet:feature` to build every ready ticket. When a change brings the first instance of a kind of code, or you declare a life event, it names `/ratchet:safeguard` first.
 
 ## The eleven commitments
 
 Every repository on the method keeps all eleven. `skills/method/SKILL.md` states them in full; each has a reference page beside it.
 
-1. **One set of entry points.** The binding's table is the only list of gates, CI runs the same entry points, and a gate with nothing to run is red.
+1. **One set of entry points.** The binding's table is the only list of gates, each row with the trigger that asks it, CI runs the same entry points, and a gate once asked is red with nothing to run.
 2. **Three tiers, two aggregates.** Tier 0 on every commit, tier 1 on every pull request, tier 2 on the default branch and nightly; `check` and `check-deep`.
 3. **The ratchet.** Thresholds only rise, checked against the merge base; each gate's effective configuration is snapshotted; mutation testing gates on zero unexplained survivors.
 4. **Guards.** The files that define, run or record a gate are guard paths, enforced by the harness, which the model cannot override.
 5. **Disputes.** An agent that believes a gate is wrong writes a dispute and stops on that gate; the owner decides.
 6. **Records.** A design brief, a glossary whose _Avoid_ lists are banned identifiers, one ADR per lasting decision with its refutation criterion, a brief per feature.
-7. **The pipeline.** A feature is built by four roles with fixed sight lines: spec, implement, critic, review. A change the gates can judge merges without the owner; a guard path, a one-way door or an open finding waits for them.
+7. **The pipeline.** A feature is built by roles with fixed sight lines: spec, implement and review, and a critic once people depend on the project. A change the gates can judge merges without the owner; a guard path or an open finding waits for them, and once the project is deployed so do a one-way door and new surface with no flag.
 8. **Verifiable shape.** Logic sits where every verifier reaches it; declared layers, absolute paths at 100%, hard limits.
 9. **Speed.** Fast local runs and fast CI are asked from the first commit: the suite on every core, one pipeline that runs the same locally and in CI, the long gates sharded over a count the binding holds, everything cached, only what the change can affect run. Each tier has a ceiling in seconds that only falls.
 10. **The merge rule.** A change is merged when no criticism of it is open.
-11. **Operable from the first commit.** Telemetry, feature flags, security testing and load testing are asked of every change, each split across the tiers so the pull request pays only for the cheap part.
+11. **Operable by the time it matters.** A safeguard arrives with the first thing it guards: telemetry, flags, security, load and reliability questions are each asked at the first instance of the code they guard, or once you declare the life event that gives them something to judge. The first one is free.
 
 ## Application types
 
@@ -63,7 +66,11 @@ Every question applies to every type unless `skills/method/application-types.tom
 
 ## No presets
 
-A type decides which questions apply. It never decides the tool. There is no Python preset and no TypeScript one: at adoption the agent recognises the stack, chooses a current tool for each question that applies, checks the choice against the tool's documentation, takes versions from the package registry, and asks the owner one question, accept these or name your own. A tool named in a plugin ages at the plugin's pace; one chosen at adoption is current that day, on any stack (ADR 0017). What earlier bindings taught is kept as rules any recipe must keep, in `skills/method/tiers.md`: above all, that a gate with nothing to run is red.
+A type decides which questions apply. It never decides the tool. There is no Python preset and no TypeScript one: at adoption, and again when a row is owed, the agent recognises the stack, chooses a current tool for each question asked, checks the choice against the tool's documentation, takes versions from the package registry, and asks the owner one question, accept these or name your own. A tool named in a plugin ages at the plugin's pace; one chosen when it is needed is current that day, on any stack (ADR 0017). What earlier bindings taught is kept as rules any recipe must keep, in `skills/method/tiers.md`: above all, that a gate once asked is red with nothing to run.
+
+## When each question is asked
+
+Every question carries a trigger in `skills/method/application-types.toml`. `always` is the floor, asked from the first commit. `code:<kind>` is asked at the first instance of a kind of code (an entry point, an outbound call, a listener, a configuration read, a stored format, a user interface), which the binding's Triggers table marks for this stack and `scripts/triggers.py` counts. `life:<event>` is asked once you declare `deployed`, `irreplaceable-data` or `depended-on` on the binding's `- Life events:` line. Until then a row says `later: <trigger>` and judges nothing. `skills/method/tiers.md` lists every question with its trigger and why it waits there (ADR 0028).
 
 ## The gates that ship
 
@@ -85,11 +92,12 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `ratchet_guards.diff` | 1 | which guard paths changed? |
 | `scripts/settings_rules.py` | 1 | do the permission rules still mirror the manifest? |
 | `scripts/conformance.py` | 1 | does the repository still carry the method: its records, its binding, its application types, its Speed section, its CI shape? `--self-test` shows it bites |
-| `scripts/with_service.py` | 1 | does the deliverable start and answer? Boots a service by any command, waits until a URL answers, stops the whole process tree, retrying once on a new port when a service on a port it picked exits before it answers; with a command after `--` it holds the service up for that command |
+| `scripts/with_service.py` | 1 | does the deliverable start and answer? Boots a service by any command, waits until a URL answers, stops the whole process tree, retrying once on a new port when a service on a port it picked exits before it answers; with a command after `--` it holds the service up for that command. `--refuses NAME` asks whether it exits non-zero, naming the setting, when `NAME` is missing; `--graceful SECONDS` whether, signalled mid-request, it finishes the request and exits in time |
+| `scripts/triggers.py` | 1 | did the change add another instance of a kind whose safeguards are still owed? Counts each kind's instances at the merge base and at head by the binding's Triggers table; the change that brings the first instance is green and names the rows it made owed |
 | `scripts/load_smoke.py` | 1 | does a running service stay correct under seconds of concurrent requests? Judged on errors only, never on latency, and red while it requests nothing but the readiness URL |
 | `scripts/telemetry_sink.py` | 2 | does the telemetry arrive? An OTLP/HTTP receiver that is green only when traces, metrics and logs arrived non-empty for the expected `service.name`; no collector to install |
 | `scripts/project_bite.py` | 1 and 2 | does every gate the repository bound go red on its fault, and on an empty collection? Plants each fault of `quality/bites.toml` in a scratch copy; with `--changed`, only when the change touches a gate |
-| `scripts/merge_ready.py` | after tier 1 | may this change reach the default branch without the owner? The merge judge: guard paths, one-way doors, new surface with no flag, disputes and the pipeline's verdict record, read from the commits |
+| `scripts/merge_ready.py` | after tier 1 | may this change reach the default branch without the owner? The merge judge: guard paths, disputes and the pipeline's verdict record always, one-way doors and new surface with no flag once the binding declares the life events that make them matter, read from the commits |
 | `scripts/merge.py` | with no forge | judge a branch, run `check` on the merge result, and merge it when both pass |
 | `scripts/budget.py` | every tier | did a tier or gate finish under its ceiling in seconds? `--set` records the first ceiling, `--tier` also holds a CI job to its tier's ceiling, and `--over report` reports without blocking on a pull request |
 | `scripts/parallel.py` | every tier | not a gate: runs a tier's gates at once through the repository's own runner, each gate's output whole, every red one named, so local wall clock is the slowest gate and not the sum |
@@ -110,12 +118,13 @@ Every other gate is the repository's: a tool it chose, behind an entry point the
 | `skills/init/` | `/ratchet:init`: the bare bones for any repository: `git init` where needed, an `AGENTS.md` naming the four plugins with `CLAUDE.md` linked to it, the pstack and impeccable one-time setups, the first commit and the remote; the mattpocock-skills setup is the owner's command after it, and a rerun of init creates the triage labels that setup recorded |
 | `skills/adopt/` | `/ratchet:adopt`: the steps and the stack-neutral templates that bind the method to a repository's runner, forge and stack |
 | `skills/feature/` | `/ratchet:feature <ticket>`: the feature preflight on an agent-ready ticket, the branch, then the pipeline. With no ticket: every agent-ready ticket at once, each in a work tree of its own, merged one at a time, one report |
+| `skills/safeguard/` | `/ratchet:safeguard`: binds a row the project now owes. An agent chooses the tool, writes the recipe and the fault, and binds the row in a change of its own |
 | `skills/conjecture/` | `/ratchet:conjecture <ticket or spec>`: the method's two additions to a ticket (or to the spec it came from), its conjecture and how it is operated, drafted from the conversation that produced it |
 | `skills/next/` | `/ratchet:next`: the command the owner types next, decided from the checkout and the tracker |
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
 | `scripts/drain.py` | the queue behind `/ratchet:feature` with no ticket: the plan, the work trees it makes and removes, the rebase, the local merge and the report |
 | `scripts/questions.py` | one line per answer the owner gives a skill, and the proposal of a standing answer once the recommended option was taken three times running |
-| `workflows/pipeline.js` | the four-role pipeline (preflight, spec, implement, critic, review) the feature skill runs, and the second review of a change brought up to date behind another merge |
+| `workflows/pipeline.js` | the feature pipeline (preflight, spec, implement, review, and the critic once the project is depended on) the feature skill runs, and the second review of a change brought up to date behind another merge |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
 | `scripts/` | the gates that ship, in the table above |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |

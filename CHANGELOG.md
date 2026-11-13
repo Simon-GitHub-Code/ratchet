@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+A safeguard arrives with the first thing it guards, and the first one is free (ADR 0028). The method is for hobby and solo projects first, and it must never stop the owner in the middle of an idea. Telemetry, flags, security, load and the new reliability questions are no longer asked of every repository from the first commit. Each question carries a trigger, and is asked once that trigger fires.
+
+### When a question is asked
+
+- Every question in `skills/method/application-types.toml` carries a trigger. `always` is the floor: format, lint, strict types, secrets, commit subjects, the guards, the method's own gates and the tests that exist, asked from the first commit. `code:<kind>` is asked at the first instance of a kind of code: an entry point, an outbound call, a listener, a configuration read, a stored format, a user interface and the other kinds the catalogue lists. `life:<event>` is asked once the owner declares `deployed`, `irreplaceable-data` or `depended-on` on the binding's new `- Life events:` line.
+- A row whose trigger has not fired is bound `later: <trigger>` and judges nothing. A row is bound only after its trigger has fired, so "a gate with nothing to run is red" now reads "a gate once asked is red with nothing to run".
+- The first one is free. The change that brings the first instance of a kind is never red for it, and names the rows it made owed. A later change that adds another instance while a row is still owed is red. A new tier 1 gate, `scripts/triggers.py`, counts instances at the merge base and at head by the binding's new `## Triggers` table.
+- `/ratchet:safeguard` binds an owed row: an agent chooses the tool, writes the recipe and the fault, and binds the row in a change of its own. The route names it before the next feature. It proposes a life event when it sees a sign of one, and declaring it stays the owner's.
+- Adoption no longer builds a walking skeleton. It binds the floor and marks every other row with its trigger.
+- `skills/method/tiers.md` replaces "Operable from the first commit" with a Triggers section: every question with its tier and its trigger, grouped, and why each group waits for its trigger. Commitment 11 is now "Operable by the time it matters".
+
+### Seven reliability questions
+
+- `rolls back safely` (`code:stored-format`, tier 1): the merge base's build runs on the data the head's migrations leave.
+- `survives failing dependencies` (`code:outbound-call`, tier 1): every outbound call has a timeout, and a test meets the dependency erroring, slow and gone.
+- `refuses bad configuration` (`code:config-read`, tier 1): `with_service.py --refuses NAME` boots with the setting missing and expects a non-zero exit that names it.
+- `shuts down gracefully` (`code:listener`, tier 1): `with_service.py --graceful SECONDS` signals it mid-request and expects the request finished and the process gone in time.
+- `incidents tighten a gate` (`always`, tier 1): each record under `docs/incidents/` has a `Bite:` line naming a bite of `quality/bites.toml` that reproduces it. `records.md` gains the incident record, blameless, which the route proposes when the owner reports an incident.
+- `backup restores` (`life:irreplaceable-data`, weekly): the latest backup restores into scratch and the deliverable boots on it.
+- `production answers` (`life:deployed`, weekly and after a deploy): the load smoke against the live URL.
+
+### What waits for a life event
+
+- A one-way door waits for the owner only once the project is `deployed` or holds `irreplaceable-data`.
+- New surface with no flag waits for the owner only once the project is `deployed`.
+- The pipeline's critic and its fix loop run only once the project is `depended-on`. Before that a ticket is built by spec, implement and review, and the merge rule is unchanged.
+- Guard paths, disputes and the ratchet hold from the first commit. The merge judge reads the life events at the merge base, so a change cannot loosen its own judge.
+
+ADR 0028 supersedes, in part, ADR 0012's "from the first commit" and its walking skeleton, and ADR 0020's red gate with nothing to run before its trigger fires.
+
+### Upgrading a 0.10 adoption
+
+- Update the plugin and its pin line, and run `scripts/upgrade.py` for the edits it names.
+- Add `- Life events:` under `## Gates` in `docs/process/binding.md`, and declare what is already true: `deployed` if others can reach the project, `irreplaceable-data` if it holds data you could not recreate, `depended-on` if people outside rely on it. Leaving one out turns off the owner's review of doors and unflagged surface, or the critic, for a project that has them.
+- Add the `## Triggers` table from the template, one row per kind your code has, saying what marks an instance in this stack.
+- Add the seven new rows to the Gates table. Each one whose trigger the code already fires is owed: bind it with `/ratchet:safeguard` before the next change that adds another instance. The rest are `later: <trigger>`.
+- Rows you already bound stay bound. Nothing here unbinds a gate, and the ratchet does not loosen.
+
 ## 0.10.1
 
 Fixes for the eleven issues found while dogfooding 0.10.0 (#20 to #31).

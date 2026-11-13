@@ -16,6 +16,8 @@ The conformance gate requires the rows, the binding's Telemetry and Feature flag
 
 ADR 0017 deleted the presets; it says how to read "the default the presets name" here, and this decision stands.
 
+Superseded in part by ADR 0028: these rows are no longer asked from the first commit, and adopt no longer binds them against a walking skeleton. Each is asked once its trigger fires, at the first instance of the code it guards or once the owner declares the life event that gives it something to judge. The split across the tiers, the rows themselves and the seams stand.
+
 ## Refutation criterion
 
 This is wrong if the rows slow the loop or turn into paperwork. Measure on the next two adoptions: tier 0 stays under its minute and the added tier 1 recipes (`telemetry`, `flag-states` with no changed flag, `load-smoke`, `iac`) add under thirty seconds together on the skeleton; if not, the slow one moves a tier down. And read the first five features built after adoption: if more than one binds a row to `none` to get past it, or ships a flag nobody ever turns on or removes, the row is ceremony and is cut or redesigned. Measured so far: `flags.py` is tens of milliseconds; `trivy config` was 3.9 s warm and 12 s cold on the TypeScript trial, which is why it sits in tier 1 and not tier 0.
