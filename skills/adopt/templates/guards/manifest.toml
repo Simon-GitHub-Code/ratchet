@@ -5,12 +5,17 @@
 # changes a guard path with no prompt: the merge judge reads the change and sends it to the owner.
 # Where the commit would land on the default branch the hook refuses it, since no judge reads that.
 # `edit = "deny"` locks a group the owner edits by hand. Two kinds of file act before any merge and
-# need no group here: the hook asks the owner before a write of a CI workflow
-# (`.github/workflows/**`) or of an agent-instruction file at any depth (`CLAUDE.md`,
+# need no group here: the hook asks the owner before each write it reads of a CI workflow (a file
+# directly under `.github/workflows/`) or of an agent-instruction file at any depth (`CLAUDE.md`,
 # `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`, anything under a `.claude/` directory), on every
 # branch. `edit = "append"` marks records an agent may add to: on the default branch a new glossary
 # term, a new `_Avoid_` item or a new ADR still passes. The hook, the merge judge, `just guard-diff`
-# and a fitness test read this file as the default branch holds it.
+# and a fitness test read this file as the default branch holds it. Once it is there, an agent only
+# adds to it, with an Edit or Write on a branch: a path after the others in a group's or a door's
+# `paths`, or a whole `[[group]]` or `[[door]]` after the ones here. A path that also matches a
+# pattern of a group below it, and any other change, is the owner's. If the
+# default branch loses this file, the hook locks every path its last version named until the owner
+# puts it back. The hook is a check on ordinary writes, not a boundary (ADR 0033).
 
 [[group]]
 name = "tool-config"

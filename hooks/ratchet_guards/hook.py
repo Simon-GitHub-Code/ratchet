@@ -11,16 +11,19 @@ shell, gets no verdict when its commit lands on a branch other than the default:
 default branch only through a merge, and the merge judge sends it to the owner (ADR 0033). Where
 the commit would land on the default branch it is denied, with the way out: make it on a branch.
 In a group whose ``edit`` is ``"deny"`` (the files the owner edits by hand) every change is
-denied. A write of a file that acts the moment it is written, a CI workflow or an
+denied. A write the hook reads of a file that acts the moment it is written, a CI workflow or an
 agent-instruction file at any depth (``ratchet_guards.early``), asks the owner on every branch, in
-one plain sentence. In a group whose ``edit`` is ``"append"`` (the glossary and the decision
+one plain sentence. The hook reads a write whose path the tool call names: it is a check on
+ordinary writes, not a boundary against an agent that sets out to get round it (ADR 0033). In a
+group whose ``edit`` is ``"append"`` (the glossary and the decision
 records) an Edit, Write or MultiEdit that only adds passes on the default branch too:
 ``ratchet_guards.records`` compares the file the call would leave with the merge base of ``HEAD``
 and the default branch (ADR 0014). For a Bash command that bypasses a gate, rewrites history or
 removes a plugin it answers ``deny``. It answers ``ask`` on a merge into the default branch and on
 the agent-ready label, the owner's to give. When no rule fires it prints nothing, so the harness's
 own permission rules decide; Antigravity, which reads no answer as a deny, gets a plain ``ask``,
-its own prompt. It never answers ``allow``. Any failure answers ``ask``.
+its own prompt. It never answers ``allow``. Any failure answers ``ask``, but a git that cannot
+start or runs out of time reads as no manifest, and the path rules then give no verdict.
 
 A verdict covers the whole tool call: Claude Code runs none of a denied Bash command line,
 so a write chained before the refused command is lost with it. The deny message says so and
@@ -45,8 +48,10 @@ The session's working directory does not choose the manifest: an edit from a sub
 monorepo parent or a sibling checkout is judged by the manifest of the checkout it lands in.
 An uncommitted manifest, or one committed
 only on a branch, guards nothing yet: that is the adoption in progress, and only the command
-rules apply until it merges. The plugin's own files are locked either way: ``PLUGIN_ROOT`` (two
-parents above this package) and ``~/.claude/plugins/**``, together with
+rules apply until it merges. Once merged, the manifest file itself takes only appended groups
+and doors from an agent, and a default branch that loses it keeps every path its last version
+named locked (``ratchet_guards.manifest``). The plugin's own files are locked either way:
+``PLUGIN_ROOT`` (two parents above this package) and ``~/.claude/plugins/**``, together with
 ``~/.claude/settings.json`` and ``~/.claude/settings.local.json``, and the same switches of
 the other harnesses (``ratchet_guards.manifest.PLUGIN_HOME_PATTERNS``).
 """
@@ -502,7 +507,7 @@ def _not_additive(call: Call, path: Path, guard: Guard) -> str | None:
 
 
 def _manifest_edit(call: Call, hit: Hit, context: Context, *, guard: Guard) -> Verdict | None:
-    """An Edit or Write that only appends whole groups or doors to the manifest, on a branch.
+    """An Edit or Write that only adds patterns, groups or doors to the manifest, on a branch.
 
     It is compared with the manifest the default branch holds, which the guards are read from.
     """
