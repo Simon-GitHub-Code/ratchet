@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 
+import commits
 import feature_preflight as preflight
 
 SKILLS = Path(__file__).resolve().parents[2] / "skills"
@@ -36,6 +37,15 @@ def test_adopt_leaves_the_permission_rules_to_step_8() -> None:
     assert "creates `.claude/settings.json`" in step_8
     assert "path rules from the manifest on the default branch" in step_8
     assert "permission rules come from the work tree's" in step_8
+
+
+def test_the_feature_skill_shortens_a_long_subject_by_a_fixed_rule() -> None:
+    # Why: issue 27. A subject built from a long slug passed 72 characters, which tier 0 refuses,
+    # and each orchestrator then invented its own shorter one.
+    feature = (SKILLS / "feature/SKILL.md").read_text(encoding="utf-8")
+    assert "drop whole words from the end of the slug until it fits" in feature
+    assert "at most 72 characters" in feature
+    assert commits.MAX_SUBJECT == 72
 
 
 def test_the_fork_test_has_one_wording_the_spec_role_and_the_conjecture_skill_share() -> None:
