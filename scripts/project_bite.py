@@ -46,23 +46,42 @@ exists, the one place ``old`` stands becomes ``new``; a list of them for several
 every file a glob matches). A ``replace`` keeps applying while the lines around ``old`` change,
 where a patch's context lines break on the first unrelated edit beside them. A fault that no
 longer applies (a patch that does not apply, ``old`` standing nowhere or in two places) is
-``THE FAULT WAS NOT PLANTED``, which is red. So is a fault aimed at anything but a file git sees
-in the copy, reached through no symbolic link and in no submodule (an ignored file, ``.git``, a
-new ``.gitignore``): restoring the copy puts back only what git sees, and a fault elsewhere would
-stay planted for the next bite. A file a fault changes is written anew, so another name for the
-same data (a hard link) keeps what it held. ``args`` are appended to the gate's command, and
-``commit = true`` commits the fault in the copy first, for a gate that reads history or the
-index.
+``THE FAULT WAS NOT PLANTED``, which is red. So is a fault, of any kind, aimed where restoring
+the copy does not reach: a file git ignores, ``.git``, a path through a symbolic link, a path
+inside a submodule or another repository setup made, or a new ``.gitignore`` or
+``.gitattributes``, the rules restoring works by. A fault there would stay planted for the next
+bite. A file a fault changes is written anew, so another name for the same data (a hard link)
+keeps what it held. ``args`` are appended to the gate's command, and ``commit = true`` commits
+the fault in the copy first, for a gate that reads history or the index.
 
-For each bite the script runs the gate in the copy and requires green, then plants the fault, runs
-the gate again, and requires red with ``expect`` in its output more often than in that green run
-(a recipe's own text is echoed on every run). No green run serves two bites: what an earlier
-fault's run left behind would be judged as this fault. After each run the copy is put back as it
-stood: every file git sees, the index and ``HEAD``. One line per bite: ``bites``, ``DOES NOT BITE``
-(green with the fault), ``RED BEFORE THE FAULT``, ``RED FOR ANOTHER REASON`` (red, and ``expect``
-no more often than when green) or ``THE FAULT WAS NOT PLANTED``. The run is red on anything but
-``bites``, on a registry that does not parse, on a tool-bound gate with no bite, and on one
-whose question requires a proof no bite of it claims.
+Once setup has run, the copy is recorded: every file git sees or tracks (one an ignore rule
+also matches included), the index, ``HEAD`` and ``.git/info/exclude``. Restoring the copy puts
+all of that back and removes every other file git sees; what git ignores stays as the last run
+left it. The copy is restored after every run and once before the first, so every run of a gate,
+green or with a fault, starts from the copy as restoring leaves it. What restoring takes away is
+absent from every run: an empty directory setup made is gone, since git holds no directory.
+
+For each bite the script runs the gate and requires green, plants the fault, runs the gate again,
+and requires red with ``expect`` in its output more often than in that green run (a recipe's own
+text is echoed on every run). No green run serves two bites: what an earlier fault's run left
+behind would be judged as this fault. After a gate's last bite the gate runs once more with no
+fault, once for each set of ``args`` its bites that bit use. A bite stands only while every later
+run of its command with no fault is green. So ``bites`` proves three things of one command: green
+on the copy as restoring leaves it, red with ``expect`` once the fault is planted, and green again
+on every later run without it. It does not prove the red came from the fault when the gate's
+verdict hangs on state restoring does not put back (what git ignores, the copy's ``.git`` beyond
+the index and the exclude file, anything outside the copy, the clock): such a gate can still flip
+between two runs on its own, and one that alternates green and red bites without reading the
+fault. The closing run costs one run per gate (per set of ``args``): a gate with ``B`` bites runs
+``2B + 1`` times.
+
+One line per bite: ``bites``, ``DOES NOT BITE`` (green with the fault), ``RED BEFORE THE FAULT``
+(red with no fault planted, on the copy as setup made it or as an earlier bite left it), ``RED
+FOR ANOTHER REASON`` (red, and ``expect`` no more often than when green), ``THE FAULT WAS NOT
+PLANTED`` or ``NOT PROVEN`` (red with ``expect``, then red again with no fault planted). A
+gate's lines come once its last run ends. The run is red on anything but ``bites``, on a
+registry that does not parse, on a tool-bound gate with no bite, and on one whose question
+requires a proof no bite of it claims.
 
 A scratch copy is the work tree as git sees it (tracked and untracked files, nothing ignored), as
 a repository of its own under ``$TMPDIR`` with the same index and commit, borrowing the object
@@ -79,8 +98,9 @@ that caps the gates of a tier, else the CPU count, and never more than four. The
 set up alone and the others once it stands, so a cache ``setup`` fills outside the tree (a
 package store, a compiler cache) is filled once. Put
 the build in ``setup`` as well: a gate's own build is then incremental, where a cold one would
-spend a service gate's boot timeout. What a command started and left running is ended when the
-command exits.
+spend a service gate's boot timeout. What a command started and left running in its process
+group is ended when the command exits. A process that left the group, as ``setsid`` or a daemon
+does, is not ended, and runs on.
 
 Usage: ``project_bite.py [--root DIR] [--changed] [--gate NAME]... [--jobs N]``. ``--changed`` is
 the pull-request form: it proves nothing unless the change touches a path that defines a gate
@@ -611,8 +631,9 @@ class Shell:
     def run(self, command: Sequence[str], cwd: Path) -> tuple[int, str]:
         """The exit code and everything the command wrote; 127 when it cannot start.
 
-        What the command started and left running ends with it, and the output says so. The
-        output goes to a file, not a pipe, so a process left behind cannot hold the run open.
+        What the command started and left running in its process group ends with it, and the
+        output says so; a process that left the group runs on. The output goes to a file, not a
+        pipe, so a process left behind cannot hold the run open.
         """
         with tempfile.TemporaryFile() as log:
             with self.lock:
