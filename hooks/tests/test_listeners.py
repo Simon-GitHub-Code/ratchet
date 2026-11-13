@@ -269,19 +269,22 @@ def test_the_gate_leaves_the_listener_as_blocking_as_the_service_made_it(tmp_pat
     assert not flags & os.O_NONBLOCK, "the gate took the connection without touching the flags"
 
 
-def test_a_listener_shut_down_rather_than_closed_is_said_to_be_unread(tmp_path: Path) -> None:
+def test_a_listener_shut_down_is_said_to_be_so_while_the_service_still_holds_it(
+    tmp_path: Path,
+) -> None:
+    # Why: a shutdown resets the connections waiting on the listener at once, before the gate can
+    # take them, and the service may hold the listener long after. The client sees those resets
+    # then, so the gate must say why it cannot judge that port exactly as soon as it happens.
     marker = tmp_path / "stopping"
     with service() as running:
         held = listeners.grab(running.process.pid)
         assert isinstance(held, list)
         with taking(held, marker):
             assert running.tell("shut") == "done"
-            assert running.tell("close") == "done"
-            while not marker.exists():
-                threading.Event().wait(0.01)
+            until(lambda: marker.exists() and gatelib.read_stopping(marker).unread is not None)
     assert gatelib.read_stopping(marker).unread == (
-        f"the service shut its listener on port {running.port} down instead of closing it, "
-        "which reset the connections waiting on it"
+        "the service shut its listener down instead of closing it, which reset the connections "
+        "waiting on it before the gate could take them"
     )
 
 

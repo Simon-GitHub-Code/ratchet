@@ -391,6 +391,18 @@ def test_a_service_that_forges_the_gates_excuse_from_another_address_is_red(
     assert code == 1
 
 
+def test_a_service_that_shuts_its_listener_down_is_judged_the_older_way_and_says_why(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    # Why: a shutdown resets the connections waiting on the listener before the gate can take
+    # them, so the gate cannot tell them from dropped requests, and the smoke judges them by when
+    # they started. It must say so although the service holds the listener for a second more.
+    code, out = graceful("shut", capsys=capfd)
+    assert "is judged the older, less exact way, because the service shut its listener " in out
+    assert re.search(r"\n3 x GET http://127\.0\.0\.1:\d+/work: ConnectionResetError\n", out), out
+    assert code == 1
+
+
 def test_a_correct_drain_the_gate_cannot_look_into_is_judged_as_before_and_green(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

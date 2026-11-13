@@ -420,6 +420,19 @@ def test_a_connection_the_service_accepted_and_reset_after_the_signal_is_red(
     assert code == 1
 
 
+def test_a_green_run_judged_the_older_way_says_so_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: the less exact rule can be green on a service that dropped a request sent just after
+    # the signal, so a green verdict reached by it says so as a red one does.
+    marker, _ = until_stopped(tmp_path, monkeypatch)
+    gatelib.write_stopping(marker, gatelib.Stopping(frozenset(), "the host is not Linux"))
+    with servers.server(handle) as url:
+        code, out = smoke("--until-stopped", "--url", f"{url}/ok", *SHORT, capsys=capsys)
+    assert "is judged the older, less exact way, because the host is not Linux. " in out, out
+    assert code == 0
+
+
 def test_where_the_gate_holds_no_listener_the_smoke_says_it_judged_the_older_way() -> None:
     early, late = (
         load_smoke.Cut("GET u", "ConnectionResetError", 80, named=False, late=late, lost=True)

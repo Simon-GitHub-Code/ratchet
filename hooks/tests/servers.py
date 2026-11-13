@@ -119,13 +119,15 @@ def sleeper(tree: Path) -> subprocess.Popen[bytes]:
 # and holds the fifth until the signal, so the connections behind it wait in the kernel's accept
 # queue; on the signal it answers the fifth and exits 0, and the kernel resets the connections it
 # never accepted, as any correct server's listener close does. ``abandon`` is ``queue`` exiting at
-# once on the signal instead, so it drops the fifth, which it accepted, as well. ``HIDDEN`` makes
-# the service non-dumpable, so no other process may look at its open files.
+# once on the signal instead, so it drops the fifth, which it accepted, as well. ``shut`` is
+# ``queue`` shutting its listener down on the signal, which resets the connections waiting on it
+# at once, and closing it only a second after it answers the fifth. ``HIDDEN`` makes the service
+# non-dumpable, so no other process may look at its open files.
 STOPS = (
-    "import ctypes, os, signal, sys, threading, time, http.server as h\n"
+    "import ctypes, os, signal, socket, sys, threading, time, http.server as h\n"
     "if os.environ.get('HIDDEN'): ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)\n"
     "MODE = os.environ['MODE']\n"
-    "QUEUES = MODE in ('queue', 'abandon')\n"
+    "QUEUES = MODE in ('queue', 'abandon', 'shut')\n"
     "held, stopping = [], threading.Event()\n"
     "class Server(h.HTTPServer if QUEUES else h.ThreadingHTTPServer):\n"
     "    daemon_threads = False\n"
@@ -146,11 +148,13 @@ STOPS = (
     "def stop(*args):\n"
     "    if MODE in ('drop', 'abandon'): os._exit(0)\n"
     "    if MODE == 'slow': time.sleep(3)\n"
+    "    if MODE == 'shut': server.socket.shutdown(socket.SHUT_RDWR)\n"
     "    stopping.set()\n"
     "    threading.Thread(target=server.shutdown).start()\n"
     "if MODE == 'die': threading.Timer(0.3, os._exit, [5]).start()\n"
     "signal.signal(signal.SIGTERM, signal.SIG_IGN if MODE == 'ignore' else stop)\n"
     "server.serve_forever()\n"
+    "if MODE == 'shut': time.sleep(1)\n"
     "server.server_close()\n"
     "sys.exit(1 if MODE == 'late' else 0)"
 )
