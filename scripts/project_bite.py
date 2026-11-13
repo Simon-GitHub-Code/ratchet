@@ -140,6 +140,11 @@ BITING = "RATCHET_BITING"
 # Why: the copy as it stood after setup, as an index of its own: restoring from it rewrites only
 # the files a run changed, so no build tool sees a tree of new timestamps.
 SNAPSHOT = ".git/bite-index"
+# Why: a gate that adds a rule here hides from the restore what it, or a fault, left behind.
+EXCLUDE = ".git/info/exclude"
+# Why: restoring the copy cleans by the one and writes files by the other, so a new one planted
+# would decide how the copy it planted in is put back.
+RULES = (".gitignore", ".gitattributes")
 TAIL = 15
 MAX_LANES = 4
 # Seconds the main thread waits on the lanes at a time: the most a signal waits for its handler.
@@ -189,20 +194,23 @@ def gate_rows(binding: str) -> list[Row]:
     ]
 
 
-def run_git(root: Path, *args: str, index: Path | None = None) -> subprocess.CompletedProcess[str]:
+def run_git(
+    root: Path, *args: str, index: Path | None = None, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
     """``git -C root args``, judging ``root`` and no other tree, through ``index`` when given."""
     return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True,
         text=True,
         check=False,
+        input=stdin,
         env=environment() | ({"GIT_INDEX_FILE": str(index)} if index else {}),
     )
 
 
-def git_in(root: Path, *args: str, index: Path | None = None) -> str:
+def git_in(root: Path, *args: str, index: Path | None = None, stdin: str | None = None) -> str:
     """The stdout of ``run_git``; raises ``Unprovable`` when git fails."""
-    result = run_git(root, *args, index=index)
+    result = run_git(root, *args, index=index, stdin=stdin)
     if result.returncode != 0:
         message = f"git {' '.join(args)} failed in {root}: {result.stderr.strip()}"
         raise Unprovable(message)
@@ -223,7 +231,7 @@ class Write:
 
     def plant(self, copy: Path) -> None:
         """Write the file, as a change git sees."""
-        put(owned(copy, self.path), self.content.encode())
+        put(owned(copy, self.path)[0], self.content.encode())
         git_in(copy, "add", "--intent-to-add", "--", self.path)
 
 
@@ -241,9 +249,8 @@ class Patch:
         shutil.copyfile(copy / SNAPSHOT, check)
         git_in(copy, "update-index", "-q", "--refresh", index=check)
         git_in(copy, "apply", "--check", "--index", self.path, index=check)
-        for written in git_in(copy, "apply", "--numstat", "-z", self.path).split("\0"):
-            if written:
-                owned(copy, written.split("\t", 2)[-1])
+        written = git_in(copy, "apply", "--numstat", "-z", self.path).split("\0")
+        owned(copy, *(line.split("\t", 2)[-1] for line in written if line))
         git_in(copy, "apply", "--intent-to-add", "--whitespace=nowarn", self.path)
 
 
@@ -256,13 +263,14 @@ class Remove:
     def plant(self, copy: Path) -> None:
         """Delete the files; ``Unprovable`` when the globs match none."""
         found = [p for p in visible(copy) if gatelib.matches(p, list(self.patterns))]
-        paths = [copy / p for p in found if (copy / p).is_file()]
-        if not paths:
+        files = [p for p in found if (copy / p).is_file()]
+        if not files:
             message = (
                 f"no file matches {', '.join(self.patterns)}: the collection is empty already, "
                 "and the gate was green on it"
             )
             raise Unprovable(message)
+        paths = owned(copy, *files)
         for path in paths:
             path.unlink()
         # Why: git holds no empty directory, so a collection with no file has no directory either.
@@ -289,7 +297,7 @@ class Replace:
     def plant(self, copy: Path) -> None:
         """Replace each text; ``Unprovable`` when one stands nowhere or in more than one place."""
         for swap in self.swaps:
-            target = owned(copy, swap.path)
+            target = owned(copy, swap.path)[0]
             if not target.is_file():
                 message = f"{swap.path} is not a file in the copy, and 'replace' changes a file"
                 raise Unprovable(message)
@@ -313,34 +321,57 @@ class Replace:
 Fault = Write | Patch | Remove | Replace
 
 
-def owned(copy: Path, path: str) -> Path:
-    """``path`` in the copy, when a fault may change it: a file git sees, reached through no link.
+def owned(copy: Path, *paths: str) -> list[Path]:
+    """Each path in the copy, when a fault may change it: one restoring the copy puts back.
 
-    Restoring the copy puts back only what git sees, so a fault anywhere else would stay planted
-    for the runs after it. ``Unprovable`` says why ``path`` is not such a file.
+    Restoring puts back what the snapshot holds and removes what git sees beside it, so a fault
+    anywhere else would stay planted for the runs after it: through a link, inside another
+    repository, in a file git ignores, or in a new file of the rules restoring works by.
+    ``Unprovable`` says why the first such path is not one.
     """
-    parts = PurePosixPath(path).parts
-    if not inside(path) or ".git" in (part.casefold() for part in parts):
-        message = f"{path} is not a path in the work tree git sees"
-        raise Unprovable(message)
-    target = copy.joinpath(*parts)
-    if any(copy.joinpath(*parts[:depth]).is_symlink() for depth in range(1, len(parts) + 1)):
-        message = f"{path} is reached through a symbolic link; a fault changes the copy's own file"
-        raise Unprovable(message)
-    parents = ["/".join(parts[:depth]) for depth in range(1, len(parts))]
+    parents = sorted({name for path in paths for name in above(path)})
     staged = git_in(copy, "ls-files", "-z", "--stage", "--", *parents) if parents else ""
-    gitlinks = [line.partition("\t")[2] for line in staged.split("\0") if line.startswith("160000")]
-    for name in set(gitlinks).intersection(parents):
-        message = f"{path} is inside the submodule {name}, whose files a copy does not hold"
+    gitlinks = {line.partition("\t")[2] for line in staged.split("\0") if line.startswith("160000")}
+    for path in paths:
+        parts = PurePosixPath(path).parts
+        if not inside(path) or ".git" in (part.casefold() for part in parts):
+            message = f"{path} is not a path in the work tree git sees"
+            raise Unprovable(message)
+        if any(copy.joinpath(*parts[:depth]).is_symlink() for depth in range(1, len(parts) + 1)):
+            message = (
+                f"{path} is reached through a symbolic link; a fault changes the copy's own file"
+            )
+            raise Unprovable(message)
+        # Why: a submodule's files are not copied; a repository setup made is in the copy.
+        for name in (
+            name for name in above(path) if name in gitlinks or (copy / name / ".git").exists()
+        ):
+            message = (
+                f"{path} is inside {name}, a repository of its own, whose files restoring the copy"
+                " does not put back"
+            )
+            raise Unprovable(message)
+        if parts[-1] in RULES and not copy.joinpath(*parts).exists():
+            message = (
+                f"{path} would be a new {parts[-1]}, and restoring the copy works by those rules"
+            )
+            raise Unprovable(message)
+    # Why: judged by the snapshot, a file it holds is tracked even where an ignore rule matches.
+    # 1 is git's answer when it ignores none of the paths; 0 names those it ignores, more is none.
+    ignored = run_git(
+        copy, "check-ignore", "-z", "--stdin", index=copy / SNAPSHOT, stdin="\0".join(paths)
+    )
+    if ignored.returncode != 1:
+        named = ignored.stdout.partition("\0")[0] or " or ".join(paths)
+        message = f"{named} is ignored by git, and restoring the copy puts back only what git sees"
         raise Unprovable(message)
-    if parts[-1] == ".gitignore" and not target.exists():
-        message = f"{path} would be a new .gitignore, and restoring the copy cleans by those rules"
-        raise Unprovable(message)
-    # Why: 1 is git's answer for a path it does not ignore; 0 is ignored, and more is no answer.
-    if run_git(copy, "check-ignore", "-q", "--", path).returncode != 1:
-        message = f"{path} is ignored by git, and restoring the copy puts back only what git sees"
-        raise Unprovable(message)
-    return target
+    return [copy.joinpath(*PurePosixPath(path).parts) for path in paths]
+
+
+def above(path: str) -> list[str]:
+    """The directories ``path`` lies in, the outermost first."""
+    parts = PurePosixPath(path).parts
+    return ["/".join(parts[:depth]) for depth in range(1, len(parts))]
 
 
 def put(target: Path, content: bytes) -> None:
@@ -693,12 +724,17 @@ class Copy:
     shell: Shell
     head: str
     staged: bytes
+    exclude: bytes
 
     def restore(self) -> None:
-        """Put back every file git sees, the index and ``HEAD``; what git ignores stays."""
+        """Put back what the snapshot holds, the index, ``HEAD`` and the exclude file.
+
+        What git sees beside the snapshot is removed. What git ignores stays.
+        """
         snapshot = self.path / SNAPSHOT
         git_in(self.path, "reset", "-q", "--soft", self.head)
         (self.path / ".git/index").write_bytes(self.staged)
+        put(self.path / EXCLUDE, self.exclude)
         git_in(self.path, "checkout-index", "--all", "--force", index=snapshot)
         git_in(self.path, "clean", "-ffdq", index=snapshot)
 
@@ -759,8 +795,38 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Co
         if code != 0:
             message = f"setup `{command}` exited {code} in the scratch copy\n{tail(output)}"
             raise Unprovable(message)
+    snapshot(copy)
+    exclude = copy / EXCLUDE
+    made = Copy(
+        copy,
+        shell,
+        git_in(copy, "rev-parse", "HEAD"),
+        (copy / ".git/index").read_bytes(),
+        exclude.read_bytes() if exclude.is_file() else b"",
+    )
+    # Why: every run then starts from the copy as restoring leaves it, the first green run too;
+    # where setup left what restoring takes away (an empty directory), every run judges without it.
+    made.restore()
+    return made
+
+
+def snapshot(copy: Path) -> None:
+    """The copy as it now stands, as the index ``SNAPSHOT``: every file git sees or tracks."""
     git_in(copy, "add", "--all", index=copy / SNAPSHOT)
-    return Copy(copy, shell, git_in(copy, "rev-parse", "HEAD"), (copy / ".git/index").read_bytes())
+    # Why: `add --all` leaves out a file the index tracks where an ignore rule matches it too.
+    listed = git_in(copy, "ls-files", "-z", "--cached", "--ignored", "--exclude-standard")
+    tracked = [path for path in listed.split("\0") if path and os.path.lexists(copy / path)]
+    if tracked:
+        git_in(
+            copy,
+            "--literal-pathspecs",
+            "add",
+            "--force",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+            index=copy / SNAPSHOT,
+            stdin="\0".join(tracked),
+        )
 
 
 Task = tuple[Row, list[Bite]]
