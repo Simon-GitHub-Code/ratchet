@@ -82,6 +82,12 @@ def red(root: Path) -> list[str]:
     return conformance.failures(root)
 
 
+def start(finding: conformance.Finding) -> tuple[str, ...]:
+    """The template text an agent starts from, for a finding an agent fixes."""
+    assert isinstance(finding.fix, conformance.Agent), finding
+    return finding.fix.start
+
+
 def test_the_pristine_templates_pass() -> None:
     assert red(pristine()) == []
 
@@ -391,7 +397,7 @@ def test_an_entry_point_whose_recipe_is_missing_names_the_recipe_to_copy(repo: P
         )
     ]
     [finding] = conformance.findings(repo)
-    assert finding.add[-2:] == (
+    assert start(finding)[-2:] == (
         "hooks-install:",
         '    python3 "{{ratchet_plugin}}/scripts/hooks_install.py"',
     )
@@ -511,8 +517,8 @@ def test_a_tier_list_a_workflow_reads_and_the_justfile_lacks_is_named_with_the_t
     assert found[0].path == JUSTFILE
     assert found[0].problem.startswith(f"has no `{name}` variable, which the `shape` job of `")
     assert f"`{Path(workflow).name}`" in found[0].problem
-    assert found[0].add == conformance.template_definition(name)
-    assert found[0].add[-1].startswith(f"{name} :=")
+    assert start(found[0]) == conformance.template_definition(name)
+    assert start(found[0])[-1].startswith(f"{name} :=")
 
 
 def test_a_tier_list_may_be_empty_or_exported(repo: Path) -> None:
@@ -624,7 +630,7 @@ def test_the_life_events_line_is_asked_for_and_names_only_known_events(repo: Pat
     [found] = conformance.findings(repo)
     assert found.path == BINDING
     assert found.problem.startswith("has no '- Life events:' line; add it beside")
-    assert found.add == ("- Life events: none",)
+    assert start(found) == ("- Life events: none",)
     assert (
         "`none` turns off the owner's review of one-way doors and unflagged surface"
         in found.problem
@@ -645,8 +651,8 @@ def test_the_triggers_table_is_asked_for_with_the_template_s_text(repo: Path) ->
     replace(BINDING, "## Triggers\n", "## Hunches\n")(repo)
     [found] = conformance.findings(repo)
     assert found.problem.startswith("has no '## Triggers' section; add the template's")
-    assert found.add[0] == "## Triggers"
-    assert "| Kind | Paths | Pattern |" in found.add
+    assert start(found)[0] == "## Triggers"
+    assert "| Kind | Paths | Pattern |" in start(found)
 
 
 def test_the_triggers_table_needs_a_row_per_kind_a_question_of_the_types_names(
@@ -679,7 +685,7 @@ def test_a_dropped_row_of_the_catalogue_prints_the_template_row_to_add(repo: Pat
         "the Gates table has no 'backup restores' row; a row is bound or none, never dropped;"
         " add the template's row, bound or `later: <trigger>`"
     )
-    assert found.add == ("| backup restores | | weekly | | `just restore-drill` |",)
+    assert start(found) == ("| backup restores | | weekly | | `just restore-drill` |",)
 
 
 def test_every_question_of_the_catalogue_has_a_row_in_the_template_binding() -> None:

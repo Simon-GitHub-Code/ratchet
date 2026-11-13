@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import conformance
 import plugin_pin
 import upgrade
 from tests.test_conformance import BINDING, pristine, replace
@@ -154,3 +155,21 @@ def test_an_adoption_before_the_triggers_is_told_what_to_add(
     assert "      - Life events: none" in out
     assert "has no '## Triggers' section; add the template's" in out
     assert "      | Kind | Paths | Pattern |" in out
+
+
+def test_each_kind_of_fix_prints_what_it_does_or_asks() -> None:
+    assert upgrade.describe(conformance.Auto("add the row", lambda text: text or "")) == [
+        "      add the row"
+    ]
+    assert upgrade.describe(conformance.Agent(("| a | b |", ""), ("bind it",))) == [
+        "      | a | b |",
+        "",
+        "      then: bind it",
+    ]
+    assert upgrade.describe(
+        conformance.Owner("is it live?", ("a Dockerfile",), ("owes a row",))
+    ) == [
+        "      ? is it live?",
+        "        seen: a Dockerfile",
+        "        then: owes a row",
+    ]

@@ -185,22 +185,56 @@ TIMED = frozenset({"perf", "load"})
 
 
 @dataclass(frozen=True)
-class Finding:
-    """One thing the repository lacks: the file, what is wrong, and the text to add when known.
+class Auto:
+    """A fix the upgrade makes itself: one line for the report, and the text it makes of a file."""
 
-    The conformance gate prints the first two on one line; ``upgrade.py`` prints ``add`` too.
+    does: str
+    want: Callable[[str | None], str]
+
+
+@dataclass(frozen=True)
+class Agent:
+    """A fix that needs judgement: the template text to start from, and what an answer asks next."""
+
+    start: tuple[str, ...] = ()
+    then: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Owner:
+    """A call only the owner makes: the question, what the repository shows of it, what follows."""
+
+    ask: str
+    evidence: tuple[str, ...] = ()
+    then: tuple[str, ...] = ()
+
+
+Fix = Auto | Agent | Owner
+
+
+@dataclass(frozen=True)
+class Finding:
+    """One thing the repository lacks: the file, what is wrong, and who fixes it.
+
+    The conformance gate prints the first two on one line; ``upgrade.py`` prints the fix too.
     """
 
     path: str
     problem: str
-    add: tuple[str, ...] = ()
+    fix: Fix
 
     def __str__(self) -> str:
         """The one line the conformance gate prints."""
         return f"{self.path}: {self.problem}"
 
 
-Check = Callable[[Path], Iterable["str | Finding"]]
+Check = Callable[[Path], Iterable[Finding]]
+
+
+def agent(line: str, start: tuple[str, ...] = (), then: tuple[str, ...] = ()) -> Finding:
+    """A finding an agent fixes, from a check's one line: every line starts with its path."""
+    path, _, problem = line.partition(": ")
+    return Finding(path, problem, Agent(start, then))
 
 
 def read(path: Path) -> str | None:
@@ -238,43 +272,43 @@ def defines_recipe(justfile: str, name: str) -> bool:
     return re.search(pattern, justfile, re.MULTILINE) is not None
 
 
-def check_agent_instructions(root: Path) -> Iterable[str | Finding]:
+def check_agent_instructions(root: Path) -> Iterable[Finding]:
     name = "AGENTS.md"
     text = read(root / name)
     if text is None:
         name, text = "CLAUDE.md", read(root / "CLAUDE.md")
     if text is None:
-        yield "AGENTS.md (or CLAUDE.md): missing"
+        yield agent("AGENTS.md (or CLAUDE.md): missing")
     elif "ratchet:method" not in text:
-        yield "AGENTS.md: does not tell agents to load the ratchet:method skill"
+        yield agent("AGENTS.md: does not tell agents to load the ratchet:method skill")
     elif ASKING not in text:
         yield Finding(
             name,
             f"has no '{ASKING}' section; copy it from the template AGENTS.md",
-            (ASKING, "", section(read(AGENTS_TEMPLATE) or "", ASKING).strip()),
+            Agent(start=(ASKING, "", section(read(AGENTS_TEMPLATE) or "", ASKING).strip())),
         )
 
 
-def check_glossary(root: Path) -> Iterable[str]:
+def check_glossary(root: Path) -> Iterable[Finding]:
     if (root / "GLOSSARY-MAP.md").is_file():
         return
     text = read(root / "GLOSSARY.md")
     if text is None:
-        yield "GLOSSARY.md (or GLOSSARY-MAP.md): missing"
+        yield agent("GLOSSARY.md (or GLOSSARY-MAP.md): missing")
     elif "## Language" not in text:
-        yield "GLOSSARY.md: has no '## Language' section"
+        yield agent("GLOSSARY.md: has no '## Language' section")
     elif GLOSSARY_PLACEHOLDER in text:
-        yield f"GLOSSARY.md: still names '{GLOSSARY_PLACEHOLDER}'; name the project"
+        yield agent(f"GLOSSARY.md: still names '{GLOSSARY_PLACEHOLDER}'; name the project")
 
 
-def check_brief(root: Path) -> Iterable[str]:
+def check_brief(root: Path) -> Iterable[Finding]:
     text = read(root / "docs/design-brief.md")
     if text is None:
-        yield "docs/design-brief.md: missing"
+        yield agent("docs/design-brief.md: missing")
         return
     for heading in ("## Slice one", "## Explicitly out"):
         if heading not in text:
-            yield f"docs/design-brief.md: has no '{heading}' section"
+            yield agent(f"docs/design-brief.md: has no '{heading}' section")
 
 
 def numbered_files(directory: Path) -> list[tuple[int, Path]]:
@@ -286,39 +320,39 @@ def numbered_files(directory: Path) -> list[tuple[int, Path]]:
     return found
 
 
-def check_adrs(root: Path) -> Iterable[str]:
+def check_adrs(root: Path) -> Iterable[Finding]:
     directory = root / "docs/adr"
     if not directory.is_dir():
-        yield "docs/adr: missing"
+        yield agent("docs/adr: missing")
         return
     files = numbered_files(directory)
     if not files:
-        yield "docs/adr: no NNNN-<slug>.md record"
+        yield agent("docs/adr: no NNNN-<slug>.md record")
         return
     numbers = [number for number, _ in files]
     if numbers != list(range(1, len(numbers) + 1)):
-        yield f"docs/adr: numbering has gaps or duplicates: {numbers}"
+        yield agent(f"docs/adr: numbering has gaps or duplicates: {numbers}")
     for number, path in files:
         yield from check_adr(number, path, path.relative_to(root))
 
 
-def check_adr(number: int, path: Path, rel: Path) -> Iterable[str]:
+def check_adr(number: int, path: Path, rel: Path) -> Iterable[Finding]:
     text = path.read_text(encoding="utf-8")
     match = ADR_FRONT_MATTER.match(text)
     if match is None:
-        yield f"{rel}: opens with a '# ' title, optionally after 'status:' front matter"
+        yield agent(f"{rel}: opens with a '# ' title, optionally after 'status:' front matter")
         return
     status, superseded_by = match.group("status"), match.group("by")
     if status is not None and not ADR_STATUS.match(status):
-        yield f"{rel}: status '{status}' is not {ADR_STATUS_WORDS}"
+        yield agent(f"{rel}: status '{status}' is not {ADR_STATUS_WORDS}")
     if status == "superseded" and superseded_by is None:
-        yield f"{rel}: a superseded ADR names its successor: 'superseded-by: NNNN'"
+        yield agent(f"{rel}: a superseded ADR names its successor: 'superseded-by: NNNN'")
     if REFUTATION_SECTION not in text:
-        yield f"{rel}: has no '{REFUTATION_SECTION}' section"
+        yield agent(f"{rel}: has no '{REFUTATION_SECTION}' section")
     elif empty_body(text, REFUTATION_SECTION):
-        yield f"{rel}: '{REFUTATION_SECTION}' names no observation that would show it wrong"
+        yield agent(f"{rel}: '{REFUTATION_SECTION}' names no observation that would show it wrong")
     if number == 1 and "Ratchet method" not in text:
-        yield f"{rel}: ADR 0001 records adopting the Ratchet method"
+        yield agent(f"{rel}: ADR 0001 records adopting the Ratchet method")
 
 
 def section(text: str, heading: str) -> str:
@@ -369,7 +403,7 @@ def template_block(heading: str) -> tuple[str, ...]:
     return (heading, *section(text, heading).rstrip().splitlines())
 
 
-def check_entry_points(root: Path, text: str) -> Iterable[str | Finding]:
+def check_entry_points(root: Path, text: str) -> Iterable[Finding]:
     """Every entry point has a row naming its command, and a ``just`` command has its recipe."""
     commands = dict(table_cells(section(text, "## Entry points")))
     rows = template_rows()
@@ -382,10 +416,10 @@ def check_entry_points(root: Path, text: str) -> Iterable[str | Finding]:
                 "docs/process/binding.md",
                 f"the Entry points table has no row for '{name}'; add the template's row {row},"
                 " with your runner's command",
-                (row,),
+                Agent(start=(row,)),
             )
         elif not command or "<" in command:
-            yield f"docs/process/binding.md: entry point '{name}' names no command"
+            yield agent(f"docs/process/binding.md: entry point '{name}' names no command")
             continue
         recipe = RUNS_JUST.match(command.strip("`"))
         if justfile is None or INCLUDES.search(justfile) or recipe is None:
@@ -395,19 +429,19 @@ def check_entry_points(root: Path, text: str) -> Iterable[str | Finding]:
                 "justfile",
                 f"has no `{recipe.group(1)}` recipe, which the binding's entry point '{name}'"
                 " runs; copy it from the template justfile",
-                template_definition(recipe.group(1)),
+                Agent(start=template_definition(recipe.group(1))),
             )
 
 
-def check_binding(root: Path) -> Iterable[str | Finding]:
+def check_binding(root: Path) -> Iterable[Finding]:
     text = read(root / "docs/process/binding.md")
     if text is None:
-        yield "docs/process/binding.md: missing"
+        yield agent("docs/process/binding.md: missing")
         return
     yield from check_entry_points(root, text)
     gates = section(text, "## Gates")
     if not gates:
-        yield "docs/process/binding.md: has no '## Gates' section"
+        yield agent("docs/process/binding.md: has no '## Gates' section")
         return
     # Why: ADR 0017. The types decide which rows apply; a row that applies is bound or an
     # accepted gap, and one that does not may say which type the repository is not.
@@ -422,16 +456,16 @@ def check_binding(root: Path) -> Iterable[str | Finding]:
     for failure in catalogue.failures(text, rows, adrs):
         question = dropped.get(failure)
         if question is None:
-            yield f"docs/process/binding.md: {failure}"
+            yield agent(f"docs/process/binding.md: {failure}")
             continue
         yield Finding(
             "docs/process/binding.md",
             f"{failure}; add the template's row, bound or `later: <trigger>`",
-            (template_gate_row(question),),
+            Agent(start=(template_gate_row(question),)),
         )
 
 
-def declared_events(text: str) -> Iterable[str | Finding]:
+def declared_events(text: str) -> Iterable[Finding]:
     """The ``- Life events:`` line (ADR 0028): present, and naming only events the catalogue has."""
     match = application_types.EVENTS.search(text)
     if match is None:
@@ -441,19 +475,19 @@ def declared_events(text: str) -> Iterable[str | Finding]:
             " event counts as declared; `none` turns off the owner's review of one-way doors and"
             " unflagged surface and the critic, so a project that is live writes its events"
             " instead (ADR 0028)",
-            ("- Life events: none",),
+            Agent(start=("- Life events: none",)),
         )
         return
     known = application_types.load().events
     for name in sorted(application_types.life_events(text)):
         if name not in known:
-            yield (
+            yield agent(
                 f"{TRIGGERS_PATH}: '- Life events:' names '{name}'; the events are"
                 f" {', '.join(known)}"
             )
 
 
-def check_triggers(root: Path) -> Iterable[str | Finding]:
+def check_triggers(root: Path) -> Iterable[Finding]:
     """The Life events line and the Triggers table: how a repository says a trigger has fired.
 
     Why: ADR 0028. The ``triggers`` gate counts instances with this table, so every kind a question
@@ -469,21 +503,21 @@ def check_triggers(root: Path) -> Iterable[str | Finding]:
             TRIGGERS_PATH,
             "has no '## Triggers' section; add the template's, one row per kind of code a question"
             " asked of these types names (ADR 0028)",
-            template_block("## Triggers"),
+            Agent(start=template_block("## Triggers")),
         )
         return
     kinds, problems = triggers.parse(text)
     for problem in problems:
-        yield f"{TRIGGERS_PATH}: {problem}"
+        yield agent(f"{TRIGGERS_PATH}: {problem}")
     for name in kinds:
         if name not in catalogue.kinds:
-            yield (
+            yield agent(
                 f"{TRIGGERS_PATH}: the Triggers table names kind '{name}', which the catalogue"
                 f" lacks; the kinds are {', '.join(catalogue.kinds)}"
             )
     types = set(application_types.declared(text) or [])
     for name in sorted(catalogue.kinds_asked(types) - set(kinds)):
-        yield (
+        yield agent(
             f"{TRIGGERS_PATH}: the Triggers table has no row for kind '{name}', which a question"
             f" asked of these types is triggered by ({catalogue.kinds[name]});"
             " write its Paths, or `none: <reason>`"
@@ -495,18 +529,18 @@ def later(tool: str) -> bool:
     return application_types.LATER.match(tool) is not None
 
 
-def check_operability(root: Path) -> Iterable[str]:
+def check_operability(root: Path) -> Iterable[Finding]:
     text = read(root / "docs/process/binding.md") or ""
     asked = set(FIRST_CELL.findall(section(text, "## Gates")))
     for question in OPERABILITY_QUESTIONS:
         if text and question not in asked:
-            yield f"docs/process/binding.md: the Gates table has no '{question}' row"
+            yield agent(f"docs/process/binding.md: the Gates table has no '{question}' row")
     waiting = {row.question for row in project_bite.gate_rows(text) if later(row.tool)}
     for heading, questions in OPERABILITY_SECTIONS.items():
         if text and not waiting >= set(questions) and empty_body(text, heading):
-            yield f"docs/process/binding.md: has no '{heading}' section, or it is empty"
+            yield agent(f"docs/process/binding.md: has no '{heading}' section, or it is empty")
     if not (root / FLAG_REGISTRY).is_file():
-        yield f"{FLAG_REGISTRY}: missing; an empty file declares no flags"
+        yield agent(f"{FLAG_REGISTRY}: missing; an empty file declares no flags")
 
 
 def pr_template_path(root: Path) -> str:
@@ -515,10 +549,10 @@ def pr_template_path(root: Path) -> str:
     return match.group(1) if match else DEFAULT_PR_TEMPLATE
 
 
-def check_speed(root: Path) -> Iterable[str]:
+def check_speed(root: Path) -> Iterable[Finding]:
     text = read(root / "docs/process/binding.md") or ""
     if text and SPEED_SECTION not in text:
-        yield f"docs/process/binding.md: has no '{SPEED_SECTION}' section (ceilings, shards)"
+        yield agent(f"docs/process/binding.md: has no '{SPEED_SECTION}' section (ceilings, shards)")
     elif text:
         yield from check_speed_parts(section(text, SPEED_SECTION))
     workflows = root / WORKFLOWS
@@ -529,60 +563,64 @@ def check_speed(root: Path) -> Iterable[str]:
         for marker, meaning in CI_SHAPE:
             builds = path.name != MERGE_WORKFLOW or marker != "cache"
             if builds and marker not in content:
-                yield f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)"
+                yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
         for name, marker, meaning in CEILING_SHAPE:
             if path.name == name and marker not in content:
-                yield f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)"
+                yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
         if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
-            yield (
+            yield agent(
                 f"{path.relative_to(root)}: no long gate runs over the binding's shard count "
                 f"('{SHARD_MATRIX}' absent)"
             )
 
 
-def check_speed_parts(body: str) -> Iterable[str]:
+def check_speed_parts(body: str) -> Iterable[Finding]:
     stated = dict(SPEED_PART.findall(body))
     for part in SPEED_PARTS:
         value = stated.get(part, "")
         if part == "Shards" and not SHARD_COUNT.fullmatch(value):
-            yield (
+            yield agent(
                 "docs/process/binding.md: the Speed section needs '- Shards: N', a whole "
                 "number alone on its line, 1 on day one; CI reads it"
             )
         elif not value or value.startswith("<"):
-            yield f"docs/process/binding.md: the Speed section does not say how '{part}' is met"
+            yield agent(
+                f"docs/process/binding.md: the Speed section does not say how '{part}' is met"
+            )
 
 
-def check_manifest(root: Path) -> Iterable[str]:
+def check_manifest(root: Path) -> Iterable[Finding]:
     path = root / "guards/manifest.toml"
     if not path.is_file():
-        yield "guards/manifest.toml: missing"
+        yield agent("guards/manifest.toml: missing")
         return
     try:
         manifest = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as error:
-        yield f"guards/manifest.toml: {error}"
+        yield agent(f"guards/manifest.toml: {error}")
         return
     groups = manifest.get("group")
     if not isinstance(groups, list) or not groups:
-        yield "guards/manifest.toml: has no [[group]]"
+        yield agent("guards/manifest.toml: has no [[group]]")
         return
     locked: set[str] = set()
     for group in groups:
         name = group.get("name", "<unnamed>")
         if len(str(group.get("reason", ""))) < MIN_REASON:
-            yield f"guards/manifest.toml: group '{name}' needs a reason of {MIN_REASON}+ characters"
+            yield agent(
+                f"guards/manifest.toml: group '{name}' needs a reason of {MIN_REASON}+ characters"
+            )
         if not isinstance(group.get("paths"), list):
-            yield f"guards/manifest.toml: group '{name}' needs a paths list"
+            yield agent(f"guards/manifest.toml: group '{name}' needs a paths list")
         elif not group["paths"]:
-            yield f"guards/manifest.toml: group '{name}' has no paths yet; bind or remove it"
+            yield agent(f"guards/manifest.toml: group '{name}' has no paths yet; bind or remove it")
         elif group.get("edit") == "deny":
             locked.update(group["paths"])
     for pattern in sorted(LOCKED_PATTERNS - locked):
-        yield f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group"
+        yield agent(f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group")
 
 
-def check_doors(root: Path) -> Iterable[str]:
+def check_doors(root: Path) -> Iterable[Finding]:
     """ADR 0021: every kind of one-way door is bound, or says why the repository has none."""
     text = read(root / "guards/manifest.toml")
     try:
@@ -596,16 +634,18 @@ def check_doors(root: Path) -> Iterable[str]:
     kinds = {door.get("on", "change") for door in doors}
     for kind in DOOR_KINDS:
         if kind not in kinds:
-            yield (
+            yield agent(
                 f"guards/manifest.toml: no [[door]] with on = '{kind}'; the merge judge reads"
                 " the one-way doors from it"
             )
     for door in doors:
         name = door.get("name", "<unnamed>")
         if len(str(door.get("reason", ""))) < MIN_REASON:
-            yield f"guards/manifest.toml: door '{name}' needs a reason of {MIN_REASON}+ characters"
+            yield agent(
+                f"guards/manifest.toml: door '{name}' needs a reason of {MIN_REASON}+ characters"
+            )
         if not door.get("paths") and len(str(door.get("none", ""))) < MIN_REASON:
-            yield (
+            yield agent(
                 f"guards/manifest.toml: door '{name}' has no paths yet; bind it, or say why the"
                 ' repository has none with `none = "<reason>"`'
             )
@@ -613,32 +653,32 @@ def check_doors(root: Path) -> Iterable[str]:
 
 def forge_workflow(
     root: Path, name: str, *, unmet: str, shape: tuple[tuple[str, str], ...]
-) -> Iterable[str]:
+) -> Iterable[Finding]:
     """A workflow that a forge running ``ci`` must also have, and the words that show its shape."""
     if not (root / WORKFLOWS / "ci.yml").is_file():
         return
     text = read(root / WORKFLOWS / name)
     if text is None:
-        yield f"{WORKFLOWS / name}: missing; {unmet}"
+        yield agent(f"{WORKFLOWS / name}: missing; {unmet}")
         return
     for marker, meaning in shape:
         if marker not in text:
-            yield f"{WORKFLOWS / name}: nothing {meaning} ('{marker}' absent)"
+            yield agent(f"{WORKFLOWS / name}: nothing {meaning} ('{marker}' absent)")
 
 
-def check_merge_workflow(root: Path) -> Iterable[str]:
+def check_merge_workflow(root: Path) -> Iterable[Finding]:
     """ADR 0021: a forge that runs ``ci`` has the workflow that merges what the judge passes."""
     unmet = "nothing merges a change the judge passes"
     return forge_workflow(root, MERGE_WORKFLOW, unmet=unmet, shape=MERGE_SHAPE)
 
 
-def check_weekly_workflow(root: Path) -> Iterable[str]:
+def check_weekly_workflow(root: Path) -> Iterable[Finding]:
     """ADR 0025: a forge that runs ``ci`` schedules the weekly gates and files what they find."""
     unmet = "nothing runs the weekly gates, so a finding is seen only when someone thinks to look"
     return forge_workflow(root, WEEKLY_WORKFLOW, unmet=unmet, shape=WEEKLY_SHAPE)
 
 
-def check_plugin_pin(root: Path) -> Iterable[str | Finding]:
+def check_plugin_pin(root: Path) -> Iterable[Finding]:
     """The plugin version has one home, the binding; the workflows and the justfile follow it."""
     binding = read(root / "docs/process/binding.md")
     if binding is None:
@@ -650,7 +690,7 @@ def check_plugin_pin(root: Path) -> Iterable[str | Finding]:
             "docs/process/binding.md",
             "no '- Ratchet plugin: <version> at <commit>' line; add under '## Runner', for the"
             f" plugin in use: {line}",
-            (line,),
+            Agent(start=(line,)),
         )
     yield from check_pin_recipe(root)
     if pin is None:
@@ -659,12 +699,12 @@ def check_plugin_pin(root: Path) -> Iterable[str | Finding]:
         text = read(root / WORKFLOWS / name) or ""
         refs = set(PLUGIN_REF.findall(text))
         if not refs and "RATCHET_PLUGIN" in text:
-            yield (
+            yield agent(
                 f"{WORKFLOWS / name}: checks no plugin out by `repository:` then `ref:`, so "
                 "nothing holds it to the commit the binding pins"
             )
         for ref in sorted(refs - {pin.commit}):
-            yield (
+            yield agent(
                 f"{WORKFLOWS / name}: checks the plugin out at '{ref}', not the commit the "
                 f"binding pins ({pin.commit})"
             )
@@ -678,7 +718,7 @@ def check_pin_recipe(root: Path) -> Iterable[Finding]:
             "no tier runs plugin_pin.py, so a local run can use a plugin other than the one the"
             " binding pins; copy `plugin-pin` from the template justfile, as the first dependency"
             " of each tier",
-            template_definition("plugin-pin"),
+            Agent(start=template_definition("plugin-pin")),
         )
 
 
@@ -708,7 +748,7 @@ def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
                     "justfile",
                     f"has no `{name}` variable, which the `shape` job of `{workflow}` reads with"
                     f" `just --evaluate {name}`; add the template's, naming {meaning}",
-                    template_definition(name),
+                    Agent(start=template_definition(name)),
                 )
 
 
@@ -727,7 +767,7 @@ def check_runner(root: Path) -> Iterable[Finding]:
             " adoption; add the template's `changed` variable and run diff-coverage, test-counts"
             " and mutation-changed as `{{changed}} -- <command>`, with `{base}` for the commit"
             " compared with",
-            template_definition("changed"),
+            Agent(start=template_definition("changed")),
         )
     ratchet = "\n".join(definition(justfile, "ratchet"))
     if ratchet and "hooks-installed" not in ratchet and "hooks_installed.py" not in ratchet:
@@ -735,21 +775,21 @@ def check_runner(root: Path) -> Iterable[Finding]:
             "justfile",
             "the `ratchet` recipe raises the thresholds without asking whether a commit would run"
             " tier 0; make `just hooks-installed` its first line, as the template's is",
-            template_definition("ratchet"),
+            Agent(start=template_definition("ratchet")),
         )
     if "--jobs" in code and "RATCHET_JOBS" not in code:
         yield Finding(
             "justfile",
             "passes `--jobs` without reading RATCHET_JOBS, the one number that caps the gates"
             " and the bite copies at once; use the template's `jobs` variable",
-            template_definition("jobs"),
+            Agent(start=template_definition("jobs")),
         )
     if gates & TIMED and "parallel.py" in code and "--alone" not in code:
         yield Finding(
             "justfile",
             "nothing runs `perf` and `load` alone, so other gates disturb the time they judge;"
             " add the template's `alone` variable and pass `{{alone}}` to `parallel.py`",
-            template_definition("alone"),
+            Agent(start=template_definition("alone")),
         )
     if {"load-smoke", "flag-states"} <= gates and "--temporary" not in code:
         yield Finding(
@@ -758,7 +798,7 @@ def check_runner(root: Path) -> Iterable[Finding]:
             " (`flags.py --temporary`); add the template's `flags_on` and `probed`, bind"
             " `flags_on` to the flag seam's override, and boot load-smoke, api-deep, dast,"
             " pentest, load and load-soak through `{{probed}}`",
-            template_definition("flags_on") + template_definition("probed"),
+            Agent(start=template_definition("flags_on") + template_definition("probed")),
         )
 
 
@@ -770,34 +810,38 @@ def hook_source(path: Path) -> str | None:
     return read(path)
 
 
-def check_framework_hooks(text: str) -> Iterable[str]:
+def check_framework_hooks(text: str) -> Iterable[Finding]:
     """The ``pre-commit`` framework's config: the commit-msg stage installed, tree gates only."""
     if not (INSTALLS_COMMIT_MSG.search(text) and COMMIT_MSG_STAGE.search(text)):
-        yield f"{COMMIT_HOOKS}: no commit-msg hook installed, so a bad subject is first seen in CI"
+        yield agent(
+            f"{COMMIT_HOOKS}: no commit-msg hook installed, so a bad subject is first seen in CI"
+        )
     if WHOLE_TIER0_ENTRY.search(text):
-        yield f"{COMMIT_HOOKS}: {WHOLE_TIER0}"
+        yield agent(f"{COMMIT_HOOKS}: {WHOLE_TIER0}")
 
 
-def check_other_hooks(name: str, text: str, install: str | None) -> Iterable[str]:
+def check_other_hooks(name: str, text: str, install: str | None) -> Iterable[Finding]:
     """A mechanism other than the ``pre-commit`` framework: both hooks, tree gates, a command."""
     for hook in hooks_installed.HOOKS:
         if hook not in text:
-            yield f"{name}: names no `{hook}` hook, so a commit would skip that half of tier 0"
+            yield agent(
+                f"{name}: names no `{hook}` hook, so a commit would skip that half of tier 0"
+            )
     if RUNS_WHOLE_TIER0.search(text):
-        yield f"{name}: {WHOLE_TIER0}"
+        yield agent(f"{name}: {WHOLE_TIER0}")
     if install is None:
-        yield (
+        yield agent(
             "docs/process/binding.md: the `- Commit hooks:` line names no command after "
             "', installed by', so a red `hooks-installed` cannot say what the owner runs"
         )
 
 
-def check_commit_hooks(root: Path) -> Iterable[str]:
+def check_commit_hooks(root: Path) -> Iterable[Finding]:
     """The hooks the binding names exist and run tier 0 in its two stages; the probe proves it."""
     name, install = hooks_installed.mechanism(root)
     text = hook_source(root / name)
     if text is None:
-        yield f"{name}: missing; the tier 0 commit hooks are installed from it"
+        yield agent(f"{name}: missing; the tier 0 commit hooks are installed from it")
         return
     if name == str(COMMIT_HOOKS):
         yield from check_framework_hooks(text)
@@ -805,58 +849,59 @@ def check_commit_hooks(root: Path) -> Iterable[str]:
         yield from check_other_hooks(name, text, install)
     justfile = read(root / "justfile")
     if justfile is not None and hooks_installed.PROBE_ENV not in justfile:
-        yield (
+        yield agent(
             f"justfile: the `pre-commit` and `commit-msg` recipes do not answer "
             f"{hooks_installed.PROBE_ENV}, so `hooks_installed.py` cannot tell whether a commit "
             f"would run tier 0; copy them from {hooks_installed.TEMPLATE}"
         )
 
 
-def check_settings(root: Path) -> Iterable[str]:
+def check_settings(root: Path) -> Iterable[Finding]:
     if (root / settings_rules.MANIFEST).is_file():
-        yield from settings_rules.drift(root)
+        for line in settings_rules.drift(root):
+            yield agent(line)
 
 
-def check_quality(root: Path) -> Iterable[str]:
+def check_quality(root: Path) -> Iterable[Finding]:
     for name in ("thresholds", "mutation-register"):
         path = root / "quality" / f"{name}.toml"
         if not path.is_file():
-            yield f"quality/{name}.toml: missing"
+            yield agent(f"quality/{name}.toml: missing")
             continue
         try:
             data = tomllib.loads(path.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as error:
-            yield f"quality/{name}.toml: {error}"
+            yield agent(f"quality/{name}.toml: {error}")
             continue
         if name == "mutation-register":
             yield from check_register(data)
     if not (root / "quality/snapshots").is_dir():
-        yield "quality/snapshots: missing"
+        yield agent("quality/snapshots: missing")
 
 
-def check_register(data: dict[str, object]) -> Iterable[str]:
+def check_register(data: dict[str, object]) -> Iterable[Finding]:
     survivors = data.get("survivor", [])
     if not isinstance(survivors, list):
-        yield "quality/mutation-register.toml: 'survivor' is not an array of tables"
+        yield agent("quality/mutation-register.toml: 'survivor' is not an array of tables")
         return
     for index, entry in enumerate(survivors):
         for key in ("tool", "identity", "reason", "date"):
             if key not in entry:
-                yield f"quality/mutation-register.toml: survivor {index} lacks '{key}'"
+                yield agent(f"quality/mutation-register.toml: survivor {index} lacks '{key}'")
         if len(str(entry.get("reason", ""))) < MIN_REGISTER_REASON:
-            yield (
+            yield agent(
                 f"quality/mutation-register.toml: survivor {index} needs a reason of "
                 f"{MIN_REGISTER_REASON}+ characters"
             )
 
 
-def check_bites(root: Path) -> Iterable[str]:
+def check_bites(root: Path) -> Iterable[Finding]:
     # Why: ADR 0020. The method ships no tool, so the repository shows each gate it bound going
     # red on a planted fault; a gate with no bite, or a collection never shown empty, is unproven.
-    return project_bite.failures(root)
+    return (agent(line) for line in project_bite.failures(root))
 
 
-def check_incidents(root: Path) -> Iterable[str]:
+def check_incidents(root: Path) -> Iterable[Finding]:
     """Each record under ``docs/incidents/`` names a fault in the bite registry that reproduces it.
 
     Why: ADR 0028. An incident that taught the repository something must leave a gate that fails on
@@ -870,46 +915,48 @@ def check_incidents(root: Path) -> Iterable[str]:
         named = INCIDENT_BITE.findall(path.read_text(encoding="utf-8"))
         where = path.relative_to(root)
         if not named:
-            yield (
+            yield agent(
                 f"{where}: names no bite; add a line `bite: <gate>/<name>` for a [[bite]] of"
                 f" {project_bite.REGISTRY} that reproduces it"
             )
         for name in named:
             if name not in held:
-                yield f"{where}: names bite '{name}', which {project_bite.REGISTRY} does not hold"
+                yield agent(
+                    f"{where}: names bite '{name}', which {project_bite.REGISTRY} does not hold"
+                )
 
 
-def check_disputes(root: Path) -> Iterable[str]:
+def check_disputes(root: Path) -> Iterable[Finding]:
     directory = root / "docs/disputes"
     if not directory.is_dir():
-        yield "docs/disputes: missing"
+        yield agent("docs/disputes: missing")
         return
     for _, path in numbered_files(directory):
         text = path.read_text(encoding="utf-8")
         match = re.search(r"^- Status: (\S+)$", text, re.MULTILINE)
         if match is None or match.group(1) not in DISPUTE_STATUSES:
-            yield f"{path.relative_to(root)}: needs '- Status: open|upheld|rejected'"
+            yield agent(f"{path.relative_to(root)}: needs '- Status: open|upheld|rejected'")
         for section in DISPUTE_SECTIONS:
             if section not in text:
-                yield f"{path.relative_to(root)}: has no '{section}' section"
+                yield agent(f"{path.relative_to(root)}: has no '{section}' section")
 
 
-def check_features(root: Path) -> Iterable[str]:
+def check_features(root: Path) -> Iterable[Finding]:
     # Why: the pipeline's spec role writes docs/features/<slug>/spec.md; the directory is the
     # method's. The feature's input is a tracker ticket, which the feature preflight checks.
     if not (root / "docs/features").is_dir():
-        yield "docs/features: missing"
+        yield agent("docs/features: missing")
 
 
-def check_pr_template(root: Path) -> Iterable[str]:
+def check_pr_template(root: Path) -> Iterable[Finding]:
     relative = pr_template_path(root)
     text = read(root / relative)
     if text is None:
-        yield f"{relative}: missing (the binding names the pull request template)"
+        yield agent(f"{relative}: missing (the binding names the pull request template)")
         return
     for heading in PR_SECTIONS:
         if not re.search(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE):
-            yield f"{relative}: has no '{heading}' section"
+            yield agent(f"{relative}: has no '{heading}' section")
 
 
 # Why: the pin comes first, since an upgrade reads the plugin's commit from it.
@@ -941,14 +988,7 @@ CHECKS: tuple[Check, ...] = (
 
 def findings(root: Path) -> list[Finding]:
     """Every failure of every check, in the order of ``CHECKS``."""
-    found = [failure for check in CHECKS for failure in check(root)]
-    return [item if isinstance(item, Finding) else as_finding(item) for item in found]
-
-
-def as_finding(line: str) -> Finding:
-    """A check's one line, as a finding: every line starts with the path it is about."""
-    path, _, problem = line.partition(": ")
-    return Finding(path, problem)
+    return [failure for check in CHECKS for failure in check(root)]
 
 
 def failures(root: Path) -> list[str]:

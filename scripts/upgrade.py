@@ -25,7 +25,7 @@ from pathlib import Path
 import conformance
 import gatelib
 import plugin_pin
-from conformance import Finding
+from conformance import Agent, Auto, Finding, Owner, agent
 
 # Why: the guard reads the manifest under hooks/, and this script reads it the same way.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -49,17 +49,14 @@ def pin_finding(root: Path, plugin: Path) -> Finding | None:
     used = plugin_pin.version_of(plugin) or "an unknown version"
     pinned = f"{pin.version} at {pin.commit}"
     if standing is plugin_pin.Relation.OLDER:
-        return Finding(
-            str(gatelib.BINDING),
-            f"pins {pinned}, newer than the plugin in use, {used}; update the plugin and run this"
-            " report again, since it reads the rules of the plugin it runs from",
+        return agent(
+            f"{gatelib.BINDING}: pins {pinned}, newer than the plugin in use, {used}; update the"
+            " plugin and run this report again, since it reads the rules of the plugin it runs from"
         )
-    line = plugin_pin.line_for(plugin)
-    return Finding(
-        str(gatelib.BINDING),
-        f"pins {pinned}, and the plugin in use is {used}; replace the pin line with the one"
-        " below, and every workflow `ref` that checks the plugin out with its commit",
-        (line,),
+    return agent(
+        f"{gatelib.BINDING}: pins {pinned}, and the plugin in use is {used}; replace the pin line"
+        " with the one below, and every workflow `ref` that checks the plugin out with its commit",
+        (plugin_pin.line_for(plugin),),
     )
 
 
@@ -85,6 +82,18 @@ def by_file(found: list[Finding]) -> dict[str, list[Finding]]:
     return files
 
 
+def describe(fix: Auto | Agent | Owner) -> list[str]:
+    """The lines under a finding that say who fixes it and with what."""
+    if isinstance(fix, Auto):
+        return [f"{INDENT}{fix.does}"]
+    if isinstance(fix, Owner):
+        asked = [f"{INDENT}? {fix.ask}"]
+        asked += [f"{INDENT}  seen: {line}" for line in fix.evidence]
+        return asked + [f"{INDENT}  then: {line}" for line in fix.then]
+    lines = [f"{INDENT}{line}" if line else "" for line in fix.start]
+    return lines + [f"{INDENT}then: {line}" for line in fix.then]
+
+
 def render(root: Path, plugin: Path, found: list[Finding]) -> str:
     version = plugin_pin.version_of(plugin) or "of an unknown version"
     if not found:
@@ -97,7 +106,7 @@ def render(root: Path, plugin: Path, found: list[Finding]) -> str:
         lines = [f"{path}: {who}"]
         for item in items:
             lines.append(f"  - {item.problem}")
-            lines += [f"{INDENT}{line}" if line else "" for line in item.add]
+            lines += describe(item.fix)
         blocks.append("\n".join(lines))
     files = len(by_file(found))
     blocks.append(
