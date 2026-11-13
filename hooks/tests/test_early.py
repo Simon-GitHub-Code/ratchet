@@ -85,6 +85,31 @@ def test_a_dead_worktree_still_holds_instruction_files_of_its_own(path: str) -> 
     assert kind_of(path) is Kind.INSTRUCTIONS
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".claude/rules/worktrees/x.md",
+        ".claude/skills/worktrees/SKILL.md",
+        "src/worktrees/.claude/rules/a.md",
+        "worktrees/.claude/settings.json",
+    ],
+)
+def test_a_worktrees_directory_anywhere_else_excuses_no_instruction_file(path: str) -> None:
+    # Why: only .claude/worktrees/ itself holds agent checkouts.
+    assert kind_of(path) is Kind.INSTRUCTIONS
+
+
+def test_a_path_through_dot_dot_is_judged_where_it_lands() -> None:
+    assert asked(write("/repo/src/../.github/workflows/ci.yml"), make_guard()) == question(
+        WORKFLOW, ".github/workflows/ci.yml"
+    )
+
+
+def test_a_glob_in_a_program_that_writes_is_no_instruction_file_it_names() -> None:
+    program = "python3 -c \"import glob; glob.glob('src/*/CLAUDE.md'); open('out.txt', 'w')\""
+    assert asked(bash(program), make_guard()) == {}
+
+
 @pytest.mark.parametrize("path", [".github/workflows/ci.yml", ".GitHub/Workflows/deep.yaml"])
 def test_a_workflow_is_one_under_the_root_workflows_directory(path: str) -> None:
     assert kind_of(path) is Kind.WORKFLOW

@@ -810,6 +810,15 @@ def test_the_branch_of_the_checkout_the_line_runs_in_does_not_decide_for_another
     assert not on_main.lands_now(Context(ROOT), WORKTREE / "CLAUDE.md")
 
 
+def test_a_switch_the_line_makes_counts_for_its_own_checkout_only() -> None:
+    worktree_on_main = make_guard(Heads(branch="feat/x", heads={WORKTREE: "main"}))
+    assert worktree_on_main.lands_now(Context(ROOT).switched_to("feat/y"), WORKTREE / "CLAUDE.md")
+    worktree_on_a_branch = make_guard(Heads(branch="feat/x", heads={WORKTREE: "feat/y"}))
+    assert not worktree_on_a_branch.lands_now(
+        Context(ROOT).switched_to("main"), WORKTREE / "CLAUDE.md"
+    )
+
+
 def test_a_change_lands_now_in_a_file_that_is_in_no_checkout() -> None:
     guard = make_guard(Heads(branch="feat/x"))
     assert guard.lands_now(Context(ROOT), Path("/nowhere/notes.md"))
@@ -892,6 +901,8 @@ def test_a_switch_on_the_same_line_moves_a_shell_write_between_branch_and_main(
         "git switch -C $B",
         "bash -c 'git switch main'",
         "eval git switch main",
+        "bash -c 'git symbolic-ref HEAD refs/heads/main'",
+        "eval git bisect reset main",
         "echo main | xargs git switch",
         "for b in main; do git switch $b; done",
         "find . -maxdepth 0 -exec git checkout main ';'",
