@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import drain
 import merge_ready
 from tests.repos import branch, commit, repository, write
 
@@ -573,3 +574,36 @@ def test_the_critics_share_of_the_size_is_not_counted_when_it_does_not_run() -> 
     full = {**over, "implementationLines": 800}
     ran = _run({"ref": "4"}, preflight=YOUNG, spec={**sized, "changeEstimate": full})
     assert "no critic, records 50" in ran["result"]["verdictForcedBy"][0]
+
+
+OWED_LINE = (
+    "triggers: 'outbound-call' gained 1 instance(s) (src/b.py:2) while the base already held 1"
+    " and these rows are still `later:`: survives failing dependencies."
+)
+
+
+def test_a_red_triggers_gate_is_left_to_the_safeguard_and_the_drain_reads_it() -> None:
+    # Why: ADR 0028. Quieting the gate is the owner's to decide through /ratchet:safeguard, and
+    # the drain recognises the parked run by the gate's own line in checkOutput.
+    red = {**IMPLEMENTED, "checkPasses": False, "checkOutput": OWED_LINE, "notes": "outbound-call"}
+    answers = {
+        "implement": red,
+        "critique": CRITIQUED,
+        "review": {**REVIEW, "checkPasses": False, "checkOutput": "check: red"},
+    }
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    prompt = ran["prompts"]["implement"]
+    assert "red on the `triggers` gate" in prompt
+    assert "do not edit the binding, the justfile or quality/" in prompt
+    assert "`checkPasses: false`" in prompt
+    assert "`/ratchet:safeguard`" in prompt
+    assert ran["result"]["checkPasses"] is False
+    assert drain.owed_kinds(ran["result"]) == ["outbound-call"]
+
+
+def test_the_fix_agent_is_told_the_same_about_a_red_triggers_gate() -> None:
+    kept = {**CRITIQUED, "findings": [{"severity": "major", "title": "open"}]}
+    answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
+    answers |= {"fix-1": IMPLEMENTED, "critique-1": CRITIQUED}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert "red on the `triggers` gate" in ran["prompts"]["fix-1"]

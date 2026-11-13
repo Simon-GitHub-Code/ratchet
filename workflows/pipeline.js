@@ -184,6 +184,13 @@ const CHANGE_SIZE_FIELD = {
   },
 }
 const CHANGE_SIZE_RULE = 'Run the binding\'s change-size entry point last and return the lines changed and the ceiling it prints as `changeSize`; omit it when the binding binds no such gate.'
+// Why: ADR 0028. A red `triggers` gate says a second instance of a kind arrived while its
+// safeguards are still owed. Quieting it in the binding, the justfile or quality/ would be the
+// implementer loosening the judge; binding the rows is /ratchet:safeguard's, run by the owner. The
+// drain parks the run on the gate's own line, so the line must survive in `checkOutput`.
+const TRIGGERS_RULE = 'If `check` is red on the `triggers` gate (a line `triggers: \'<kind>\' gained N instance(s)`: a second instance of a kind whose safeguards are owed), do not edit the binding, the justfile or quality/ to quiet it and do not write a dispute. Finish the rest, then return with `checkPasses: false`, keep that gate line verbatim in `checkOutput`, and name the kind and `/ratchet:safeguard` in `notes`.'
+// The line the `triggers` gate prints; scripts/drain.py matches the same one.
+const OWED_RED = /triggers: '[^']+' gained \d+ instance/
 const ROOM_NUMERATOR = 2
 const ROOM_DENOMINATOR = 3
 
@@ -684,6 +691,8 @@ names when an interface changes, with the entry point it names.
 
 ${CHANGE_SIZE_RULE}
 
+${TRIGGERS_RULE}
+
 Finish when every listed test passes AND \`check\` exits 0. If a gate blocks you and you
 believe the gate, not your code, is wrong, write a gate dispute and list it in \`disputes\`.
 If you cannot get there, return anyway with \`checkPasses: false\` and explain in \`notes\`.`
@@ -716,7 +725,11 @@ ${JSON.stringify(minors, null, 2)}
 Resolve each blocking finding by changing the implementation; the tests are fixed inputs. A
 critic test that asserts something the spec contradicts stays red and is explained in
 \`notes\`. A finding that can only be resolved by changing a guard path, or a gate you believe
-is wrong, becomes a gate dispute listed in \`disputes\`. Finish when the spec tests and the
+is wrong, becomes a gate dispute listed in \`disputes\`.
+
+${TRIGGERS_RULE}
+
+Finish when the spec tests and the
 critic's tests pass and \`check\` exits 0; otherwise return with \`checkPasses: false\` and
 explain.`
 }
@@ -1316,7 +1329,11 @@ else if (CRITIC && iterations === 0) log('No blocking findings; fix loop skipped
 // ---------------------------------------------------------------------------
 phase('Review')
 const review = must(await agent(reviewPrompt(spec), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
+// Why: the drain reads the owed kind from this output (scripts/drain.py OWED_RED). The reviewer
+// reports its own run of check, which may not repeat the line the implementer was stopped on.
+const builderOutput = lastCheckOutput
 lastCheckOutput = review.checkOutput
+if (OWED_RED.test(builderOutput || '') && !OWED_RED.test(lastCheckOutput || '')) lastCheckOutput = `${builderOutput}\n${lastCheckOutput}`
 log(`Review: ${review.verdict}, ${review.issues.length} issue(s)` + (review.adrSuggested ? `, ADR suggested: ${review.adrSuggested}` : ''))
 
 // The verdict is derived from the evidence the agents returned, never taken on the reviewer's
