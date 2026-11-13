@@ -46,7 +46,13 @@ FORBIDDEN = (
     (re.compile(r"--dangerously-skip-permissions"), "skips permissions"),
 )
 USER_FILES = re.compile(r"(~|\$HOME|\$\{HOME\}|/home/[^/\s]+)/\.claude\b")
-WRITES = re.compile(r">|\btee\b|\bsed\s+-i|\brm\b|\bmv\b|\bcp\b|\bjq\b.*>|\bpython3?\b|\bchmod\b")
+# Why: `2>&1` and `> /dev/null` are not writes; a preflight that lists ~/.claude/rules uses both.
+WRITES = re.compile(
+    r"(?<![\d&])>>?(?!&)(?!\s*/dev/null)|\btee\b|\bsed\s+-i"
+    r"|\b(rm|mv|cp|ln|chmod|touch|truncate|install)\b|\bpython3?\b"
+)
+SEGMENTS = re.compile(r"&&|\|\||[;|\n]")
+INTO_USER_FILES = re.compile(rf"^\s*(cd|pushd)\s+[\"']?{USER_FILES.pattern}")
 
 
 def refusal(command: str) -> str | None:
@@ -54,8 +60,11 @@ def refusal(command: str) -> str | None:
     for pattern, why in FORBIDDEN:
         if pattern.search(command):
             return why
-    if USER_FILES.search(command) and WRITES.search(command):
-        return "may change the user's settings or installed plugins"
+    inside = False
+    for segment in SEGMENTS.split(command):
+        inside = inside or bool(INTO_USER_FILES.search(segment))
+        if (inside or USER_FILES.search(segment)) and WRITES.search(segment):
+            return "may change the user's settings or installed plugins"
     return None
 
 
@@ -69,9 +78,14 @@ def forbidden_write(path: str, *, root: Path, protected: tuple[Path, ...]) -> bo
     Why not every write outside the run directory: the product puts its own work trees under
     the temp location (the drain's ``/tmp/ratchet-queue-<uid>``), and an owner answering
     Claude Code's "outside allowed working directories" prompt there says yes. The protected
-    trees are the user's home and the plugin checkout under test.
+    trees are the user's home, the plugin checkout and the run's pinned clone of it.
     """
     target = Path(path).resolve()
+    trees = [p.resolve() for p in protected]
+    # Why: a protected tree inside the run directory (the pinned plugin) still wins.
+    inside = [p for p in trees if _under(p, root.resolve())]
+    if any(_under(target, p) for p in inside):
+        return True
     if _under(target, root.resolve()):
         return False
-    return any(_under(target, p.resolve()) for p in protected)
+    return any(_under(target, p) for p in trees)

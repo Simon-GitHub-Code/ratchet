@@ -103,6 +103,11 @@ class Config:
         """The owner's project directory."""
         return self.root / "app"
 
+    @property
+    def pinned(self) -> Path:
+        """The plugin under test: a clone of the checkout's HEAD, taken when the run starts."""
+        return self.root / "plugin"
+
 
 def checked_root(path: Path) -> Path:
     """The run directory: under the system temp location, and empty or new."""
@@ -172,10 +177,15 @@ class Log:
             self.emit(str(event["kind"]), **fields)
 
 
-def child_env(root: Path) -> dict[str, str]:
-    """What every process of the run sees: no forge credentials, no editor, no prompts."""
+def child_env(config: Config) -> dict[str, str]:
+    """What every process of the run sees: no forge credentials, no editor, no prompts.
+
+    ``RATCHET_PLUGIN`` points the adopted project's gates at the plugin under test; without it
+    they run from the installed marketplace copy, whatever checkout the run was given.
+    """
     return {
-        "GH_CONFIG_DIR": str(root / "gh"),
+        "RATCHET_PLUGIN": str(config.pinned),
+        "GH_CONFIG_DIR": str(config.root / "gh"),
         "GH_TOKEN": "",
         "GITHUB_TOKEN": "",
         "GIT_MERGE_AUTOEDIT": "no",
@@ -205,7 +215,7 @@ class Owner:
             output_format={"type": "json_schema", "schema": schema},
             cwd=str(self.cwd),
             cli_path=shutil.which("claude"),
-            env=child_env(self.config.root),
+            env=child_env(self.config),
         )
         found: object = ""
         async for message in query(prompt=prompt, options=options):
@@ -265,7 +275,7 @@ class Session:
         self.last_text = ""
         self.costs: dict[str, float] = {}
         self.stderr = (config.root / "stderr.log").open("a", encoding="utf-8")
-        root = str(config.root)
+        app = str(config.app)
         self.client = ClaudeSDKClient(
             ClaudeAgentOptions(
                 cwd=str(config.app),
@@ -273,14 +283,14 @@ class Session:
                 cli_path=shutil.which("claude"),
                 setting_sources=["user", "project", "local"],
                 settings=json.dumps({"enabledPlugins": {"ratchet@ratchet": False}}),
-                plugins=[{"type": "local", "path": str(config.plugin)}],
-                allowed_tools=[*TOOLS, *(f"{t}(/{root}/**)" for t in WRITE_TOOLS)],
+                plugins=[{"type": "local", "path": str(config.pinned)}],
+                allowed_tools=[*TOOLS, *(f"{t}(/{app}/**)" for t in WRITE_TOOLS)],
                 disallowed_tools=list(safety.DENY_RULES),
                 permission_mode="default",
                 can_use_tool=self.can_use_tool,
                 hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[self.refuse])]},
                 max_budget_usd=config.budget.usd,
-                env=child_env(config.root),
+                env=child_env(config),
                 stderr=lambda line: self.stderr.write(line + "\n"),
             )
         )
@@ -323,7 +333,7 @@ class Session:
         if tool_name == "Bash":
             refused = safety.refusal(str(tool_input.get("command", "")))
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
-        protected = (Path.home(), self.config.plugin)
+        protected = (Path.home(), self.config.plugin, self.config.pinned)
         if (
             tool_name in WRITE_TOOLS
             and path
@@ -450,13 +460,13 @@ class Driver:
 
     def route(self) -> steps.Instruction:
         """The route's instruction for the checkout now."""
-        script = self.config.plugin / "scripts/route.py"
+        script = self.config.pinned / "scripts/route.py"
         done = subprocess.run(
             [sys.executable, str(script), "--root", str(self.app), "--json"],
             capture_output=True,
             text=True,
             check=True,
-            env={**os.environ, **child_env(self.config.root)},
+            env={**os.environ, **child_env(self.config)},
         )
         return steps.Instruction.parse(json.loads(done.stdout))
 
@@ -492,7 +502,7 @@ class Driver:
             reply = await self.owner.answer(question, owner.Channel.ALSO)
             if reply.text.startswith("Yes"):
                 return steps.Move(steps.Action.TYPE, f"/ratchet:safeguard {event}")
-            script = self.config.plugin / "scripts/route.py"
+            script = self.config.pinned / "scripts/route.py"
             await asyncio.to_thread(
                 subprocess.run,
                 [sys.executable, str(script), "--root", str(self.app), "--decline", event],
@@ -561,7 +571,7 @@ class Driver:
             check=False,
             stdin=subprocess.DEVNULL,
             timeout=PASTE_TIMEOUT_S,
-            env={**os.environ, **child_env(self.config.root)},
+            env={**os.environ, **child_env(self.config)},
         )
         return done.stdout + done.stderr, done.returncode
 
@@ -707,6 +717,19 @@ def _plugin_meta(plugin: Path) -> dict[str, object]:
     }
 
 
+def _pin(config: Config) -> None:
+    """Clone the checkout's HEAD into the run, so a commit landing on it mid-run changes nothing.
+
+    Why: the first baseline ran against the main checkout and a merge landed on it eight minutes
+    in; the run measured two plugins. Uncommitted changes in the checkout are not under test.
+    """
+    subprocess.run(
+        ["git", "clone", "--quiet", "--shared", str(config.plugin), str(config.pinned)],
+        check=True,
+        capture_output=True,
+    )
+
+
 def _other_plugins() -> dict[str, object]:
     path = Path.home() / ".claude/plugins/installed_plugins.json"
     data = json.loads(path.read_text(encoding="utf-8")).get("plugins", {})
@@ -785,6 +808,9 @@ async def drive(config: Config) -> dict[str, object]:
         git_hooks_path=_version(["git", "config", "--global", "--get", "core.hooksPath"]) or None,
         load_avg=os.getloadavg(),
     )
+    _pin(config)
+    if run_git(config.plugin, "status", "--porcelain"):
+        sys.stderr.write(f"note: uncommitted changes in {config.plugin} are not under test\n")
     owner_ = Owner(config, log)
     reason, detail = steps.Stop.ERROR, ""
     async with Session(config, log, owner_) as session:

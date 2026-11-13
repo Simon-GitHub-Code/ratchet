@@ -49,6 +49,7 @@ def test_commands_that_reach_a_remote_or_change_the_users_plugins_are_refused() 
         "git config remote.origin.url git@github.com:me/app.git",
         "echo 'be terse' >> ~/.claude/CLAUDE.md",
         "cd ~/.claude && sed -i s/a/b/ settings.json",
+        "cat ~/.claude/settings.json | jq . | tee ~/.claude/settings.json",
     ):
         assert safety.refusal(command), command
 
@@ -59,6 +60,8 @@ def test_reading_forge_tools_and_user_files_is_not_refused() -> None:
         "cat ~/.claude/settings.json",
         "git remote -v",
         "git log --oneline | grep push",
+        "git rev-parse --show-toplevel; gh auth status 2>&1 | head -5; ls ~/.claude/rules/",
+        "cat ~/.claude/settings.json > /dev/null && echo ok > notes.txt",
         "git commit -m 'save the link on push of the button'",
         "python3 -c 'print(1)' > out.txt",
     ):
@@ -71,9 +74,10 @@ def test_the_owner_declines_writes_into_a_protected_tree_but_not_the_products_wo
     home, root = tmp_path / "home", tmp_path / "home" / "run"
 
     def forbidden(path: Path) -> bool:
-        return safety.forbidden_write(str(path), root=root, protected=(home,))
+        return safety.forbidden_write(str(path), root=root, protected=(home, root / "plugin"))
 
     assert not forbidden(root / "app" / "x.ts")
     assert not forbidden(tmp_path / "ratchet-queue-1001" / "app-1" / "x.ts")
     assert forbidden(home / ".claude" / "settings.json")
     assert forbidden(home)
+    assert forbidden(root / "plugin" / "scripts" / "route.py")
