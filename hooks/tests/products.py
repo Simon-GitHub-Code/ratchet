@@ -19,7 +19,8 @@ from tests import repos
 # Why each route: `/` and `/items` are the product a tester tries; `/flag` shows the flag the
 # justfile's `flags_on` turns on; the rest are the shapes of answer the proxy must pass through
 # unchanged (a large body, one with no length, no content, one that breaks off, the request's
-# own headers echoed, one compressed when the request accepts gzip), a route that holds a
+# own headers echoed, one compressed when the request accepts gzip or names no coding, as RFC
+# 9110 allows), a route that holds a
 # request open and one that answers half a second late. `/held` answers only once the file `GO`
 # names exists, and `/drip` sends its head and half its body, then the rest once it does.
 # `BOOTING` names a file the app writes its process id to as it starts, and `DELAY` holds it
@@ -90,7 +91,8 @@ class App(BaseHTTPRequestHandler):
             return self.send(200, body, "application/json")
         if self.path == "/gzip":
             body = b"compressed when asked"
-            packed = "gzip" in self.headers.get("Accept-Encoding", "")
+            accepted = self.headers.get("Accept-Encoding")
+            packed = accepted is None or "gzip" in accepted
             self.send_response(200)
             if packed:
                 body = gzip.compress(body)
