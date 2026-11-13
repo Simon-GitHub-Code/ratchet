@@ -118,6 +118,18 @@ def test_the_safeguard_skill_asks_one_question_and_commits_as_the_gate_accepts()
     assert "`chore(method): safeguard <what>`" in safeguard
 
 
+def test_the_safeguard_skill_leaves_the_manifest_and_settings_to_the_owner() -> None:
+    # Why: both are in the manifest's `deny` group, so an agent that tried to write them is
+    # refused after adoption; the hand-over says what the owner adds and runs.
+    safeguard = (SKILLS / "safeguard/SKILL.md").read_text(encoding="utf-8")
+    assert "denied to an agent after adoption" in safeguard
+    assert "print the exact lines for the owner to add" in safeguard
+    assert "`just settings`" in safeguard
+    assert "`snapshots-check` holds the tool's effective configuration" in safeguard
+    guards = (SKILLS / "method/guards.md").read_text(encoding="utf-8")
+    assert "the owner does both" in guards
+
+
 def test_no_method_page_tells_an_agent_to_load_a_user_invoked_skill() -> None:
     # Why: the harness refuses those skills to an agent; a page that says "load pstack:interrogate"
     # sends the agent into a refusal or an imitation. Only the owner's slash form may appear.
