@@ -3,6 +3,7 @@
 import json
 import subprocess
 from collections.abc import Callable, Sequence
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -389,8 +390,17 @@ OPERABILITY = (
 BODY = "## What to build\n\nA thing." + CONJECTURE
 
 
-def adopted(tmp_path: Path, types: str, body: str, *, gh: Gh | None = None) -> preflight.Report:
-    binding = f"# Binding\n\n## Gates\n\n- Application types: {types}\n"
+def adopted(
+    tmp_path: Path,
+    types: str,
+    body: str,
+    *,
+    gh: Gh | None = None,
+    extra: tuple[str, str] = ("- Life events: deployed\n", ""),
+) -> preflight.Report:
+    """An adopted repository; ``extra`` is the binding's lines before ``## Gates`` and its rows."""
+    life, rows = extra
+    binding = f"# Binding\n\n{life}\n## Gates\n\n- Application types: {types}\n{rows}"
     root = repository(tmp_path, {"docs/process/binding.md": binding})
     install_hooks(root)
     return run(root, "4", gh or gh_returning(issue(body=body, labels=("ready-for-agent",))))
@@ -494,3 +504,50 @@ def test_a_ticket_inherits_the_operability_of_its_parent_spec(tmp_path: Path) ->
 def test_a_repository_that_is_not_adopted_is_not_asked_for_hooks(tmp_path: Path) -> None:
     root = repository(tmp_path)
     assert run(root, "4", gh_returning(issue(labels=("ready-for-agent",)))).ok
+
+
+LIVE = "- Life events: deployed\n"
+
+
+def events(names: str) -> tuple[str, str]:
+    return f"- Life events: {names}\n", ""
+
+
+def row(question: str, tool: str) -> str:
+    return f"\n| {question} | {tool} |\n"
+
+
+def test_a_line_whose_row_waits_is_not_yet_asked(tmp_path: Path) -> None:
+    gates = row("telemetry emitted", "later: code:entry-point") + row("load smoke", "`later: x`")
+    report = adopted(tmp_path / "waits", "service", BODY, extra=(LIVE, gates))
+    assert report.failures[0].detail == (
+        "4: `## Operability` lacks `Flag:` (the flag the behaviour ships behind), `Security:` (the"
+        " surface it adds: routes, inputs, who may call); write each, or `none` and why"
+    )
+    bound = row("telemetry emitted", "otel") + row("load smoke", "k6")
+    asked = adopted(tmp_path / "bound", "service", BODY, extra=(LIVE, bound))
+    assert "`Signal:`" in asked.failures[0].detail
+    assert "`Load:`" in asked.failures[0].detail
+
+
+def test_the_flag_line_waits_for_the_deployed_event(tmp_path: Path) -> None:
+    assert adopted(tmp_path / "young", "cli", BODY, extra=events("none")).ok
+    assert adopted(tmp_path / "other", "cli", BODY, extra=events("depended-on")).ok
+    live = adopted(tmp_path / "live", "cli", BODY, extra=events("irreplaceable-data, deployed"))
+    assert "lacks `Flag:`" in live.failures[0].detail
+
+
+def test_the_critic_runs_only_for_a_project_that_is_depended_on(tmp_path: Path) -> None:
+    gh = gh_returning(issue(body=BODY, labels=("ready-for-agent",)))
+    asked = adopted(
+        tmp_path / "asked", "library", BODY, extra=events("deployed, depended-on"), gh=gh
+    )
+    assert asked.critic
+    assert "`depended-on`: others rely on it" in asked.critic_reason
+    for name, named in (("none", "none"), ("deployed", "deployed")):
+        report = adopted(tmp_path / name, "library", BODY, extra=events(named), gh=gh)
+        assert not report.critic
+        assert "declares no `depended-on` life event" in report.critic_reason
+    bare = run(repository(tmp_path / "bare"), "4", gh)
+    assert not bare.critic
+    assert json.loads(json.dumps(asdict(asked)))["critic"] is True
