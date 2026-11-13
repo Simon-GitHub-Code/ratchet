@@ -3,7 +3,7 @@
 import shlex
 from collections.abc import Callable
 
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from ratchet_guards import bash
@@ -28,6 +28,27 @@ def _sets_a_variable(command: str) -> bool:
     shell, so the later command no longer meets it and the row is no longer the same command.
     """
     return any(word in command for word in ("S=", "T=", "export ", "declare "))
+
+
+_SHELL_CHANGERS = frozenset(
+    {"alias", "shopt", "enable", "function", "trap", "eval", ".", "source", "typeset", "{", "if"}
+)
+
+
+def _changes_the_shell(command: str) -> bool:
+    """Whether the command's first part changes what a later part of its line means.
+
+    A wrapper in front only of that part (``sudo alias cd=true; cd /tmp``) runs a program, not
+    the builtin, the assignment or the group, so the later part meets a plain shell: another
+    command.
+    """
+    first = command.split(maxsplit=1)[0]
+    return first in _SHELL_CHANGERS or "=" in first
+
+
+def _prefixes(wrap: Callable[[str], str]) -> bool:
+    """Whether ``wrap`` only puts words in front, so it wraps the first part of a line alone."""
+    return wrap("a; b").endswith(" a; b")
 
 
 FLAGGED = [(command, expected) for command, expected in DENIED + ASKED if _one_line(command)]
@@ -73,6 +94,7 @@ def test_wrapping_never_unblocks_a_flagged_command(
     flagged: tuple[str, list[str]], wrappers: list[Callable[[str], str]]
 ) -> None:
     command, expected = flagged
+    assume(not (_changes_the_shell(command) and any(_prefixes(wrap) for wrap in wrappers)))
     for wrap in wrappers:
         command = wrap(command)
     assert set(expected) <= set(rules(command))
