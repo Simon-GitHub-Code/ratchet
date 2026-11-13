@@ -27,9 +27,11 @@ session's ``live.lock`` any more because the supervisor that held it died, it st
 writes ``seal.json``: how many lines it wrote, their digest, and how many answers reached the
 tester with no line (still going out at the seal, or a line the disk refused). Started after the
 supervisor died, it serves nothing and exits 1, and ``with_service.py`` then stops the product.
-A log that does not match its seal was changed, cut short or added to after the proxy wrote it,
-and a log with no seal is from a session that never ended. Nothing in the log is written after
-the seal, and no answer begins after it.
+When the session's directory is removed while it runs, it stops, seals nothing and exits 1, so
+a session nothing can find any more does not run on. A log that does not match its seal was
+changed, cut short or added to after the proxy wrote it, and a log with no seal is from a
+session that never ended. Nothing in the log is written after the seal, and no answer begins
+after it.
 
 ``SESSION_DIR/proxy.json`` appears once the proxy listens: its address, the product's, and its
 process id. ``--null`` is the control a kept check must fail against: every ``GET`` and ``HEAD``
@@ -405,10 +407,14 @@ def digest_of(path: Path) -> str | None:
 
 
 def serve(directory: Path, parent: int) -> int:
-    """Log the session of ``directory`` until it stops, while its parent and supervisor live."""
+    """Log the session of ``directory`` until it stops, while its parent and supervisor live.
+
+    It stops, too, when the directory is removed: nothing can find the session to end it then,
+    and there is nowhere to seal its log.
+    """
 
     def going() -> bool:
-        return os.getppid() == parent and not abandoned(directory)
+        return os.getppid() == parent and directory.is_dir() and not abandoned(directory)
 
     if not going():
         print("acceptance_proxy: the supervisor is gone; nothing was served", file=sys.stderr)
@@ -427,7 +433,14 @@ def serve(directory: Path, parent: int) -> int:
         directory / "proxy.json",
         {"url": f"http://127.0.0.1:{port}/", "upstream": origin, "pid": os.getpid()},
     )
-    server.log.seal(facts | {"stopped": until_stopped(server, going)})
+    stopped = until_stopped(server, going)
+    if not directory.is_dir():
+        print(
+            "acceptance_proxy: the session's directory was removed; nothing is sealed",
+            file=sys.stderr,
+        )
+        return 1
+    server.log.seal(facts | {"stopped": stopped})
     return 0
 
 
