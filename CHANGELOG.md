@@ -4,13 +4,13 @@
 
 ### Guard
 
-- A `cd` inside a subshell (`( … )`), in a pipeline stage before the last or in a background job no longer moves the commands after it, as the shell does not. A `cd` in a `{ … }` group or a `case` branch still does. The operator after a subshell is read, so `(true) || cd /tmp && rm …` is judged where the shell stands. `env -C`, `sudo -D`, `uv --directory` and `poetry -C` run their command in that directory, and the guard judges it there too.
+- A `cd` inside a subshell (`( … )`), in a pipeline stage before the last or in a background job no longer moves the commands after it, as the shell does not. A `cd` in a `{ … }` group or a `case` branch still does. The operator after a subshell is read, so `(true) || cd /tmp && rm …` is judged where the shell stands. On a line with a `case` or a heredoc no parenthesis is read as a subshell, since a pattern's `)` or a heredoc body could close one early; a `cd` inside one is then judged in force for what follows. A `$'…'` word is read whole, its escaped quote included. `env -C`, `sudo -D`, `uv --directory` and `poetry -C` run their command in that directory, and the guard judges it there too.
 - The ask after a `cd` the guard cannot resolve names the file, says that in a project Ratchet guards it is the owner's, and says what approving and denying each do.
-- The agent-ready label is asked about only on a ticket, a file at `.scratch/<feature>/issues/<name>.md`, the place the route and the preflight read one, read in any case, through `..` and links. A change description or a spec that names the label no longer asks. A command that writes `.scratch`, a feature's directory or its `issues` and names the label still asks.
+- The agent-ready label is asked about only on a ticket, a file at `.scratch/<feature>/issues/<name>.md`, the place the route and the preflight read one, read in any case, through `..` and links. A change description or a spec that names the label no longer asks. A command that writes `.scratch`, a feature's directory or its `issues` and names the label still asks. The feature preflight now refuses a local ticket anywhere else, as written or as a link resolves, so a label the guard did not ask about never starts a feature.
 
 ### Gates
 
-- `guard-diff` reads a pnpm 11 or later lockfile, whose boot document (the pnpm that runs and the config dependencies) comes before the project's. Each document is compared on its own, so a pnpm rolled back in the boot document is refused even when the project locks a newer one. `transitivePeerDependencies` is read as the list pnpm writes; a list anywhere else is refused.
+- `guard-diff` reads a pnpm 11 or later lockfile, whose boot document (the pnpm that runs and the config dependencies) comes before the project's. Each document is compared on its own, so a pnpm rolled back in the boot document is refused even when the project locks a newer one, as is an older pnpm locked beside the newest in the boot document, which runs the one its pin names. `transitivePeerDependencies` is read as the list pnpm writes; a list anywhere else is refused.
 
 ## 0.11.0
 
