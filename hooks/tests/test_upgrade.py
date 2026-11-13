@@ -77,7 +77,10 @@ def test_a_missing_tier_list_is_printed_with_the_template_s_definition(
     replace("justfile", "tier2_sharded :=", "tier2_shard :=")(repo)
     code, out = report(repo, plugin, capsys)
     assert code == 1
-    assert "  - has no `tier2_sharded` variable, which the `shape` job of `deep.yml` reads" in out
+    assert (
+        "  - has no `tier2_sharded` variable, which the template's `shape` job of `deep.yml` reads"
+        in out
+    )
     assert '      tier2_sharded := "mutation e2e test-stability"' in out
 
 

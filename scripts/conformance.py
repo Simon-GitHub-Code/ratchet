@@ -138,6 +138,9 @@ ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
 GLOSSARY_PLACEHOLDER = "<project>"
 PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
+TOOLCHAIN_MARKER = "# bind: toolchain setup"
+TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
+TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
 PLUGIN_REF = re.compile(r'repository:\s*\S*ratchet\S*?[,\s]+ref:\s*"?([^",\s}]+)')
 COMMIT_HOOKS = Path(hooks_installed.COMMIT_HOOKS)
 RUNS_WHOLE_TIER0 = re.compile(r"^(?!\s*#).*\btier0\b(?!-)", re.MULTILINE)
@@ -466,16 +469,42 @@ def check_binding(root: Path) -> Iterable[Finding]:
         application_types.dropped(question): question
         for question in sorted(catalogue.questions - {question for question, _ in rows})
     }
+    typing = catalogue.types_problem(text)
     for failure in catalogue.failures(text, rows, adrs):
         question = dropped.get(failure)
-        if question is None:
+        if question is not None:
+            yield Finding(
+                "docs/process/binding.md",
+                f"{failure}; add the template's row, bound or `later: <trigger>`",
+                Agent(start=(template_gate_row(question),), then=bite_follows(question)),
+            )
+        elif failure == typing:
+            yield agent(f"docs/process/binding.md: {failure}", then=triggers_follow(catalogue))
+        else:
             yield agent(f"docs/process/binding.md: {failure}")
-            continue
-        yield Finding(
-            "docs/process/binding.md",
-            f"{failure}; add the template's row, bound or `later: <trigger>`",
-            Agent(start=(template_gate_row(question),)),
-        )
+
+
+def bite_follows(question: str) -> tuple[str, ...]:
+    """What binding a Gates row asks next: a bite of the gate it names, unless it waits."""
+    gate = next(
+        row.gate
+        for row in project_bite.gate_rows(read(ADOPT_TEMPLATES / "docs/process/binding.md") or "")
+        if row.question == question
+    )
+    needs = (
+        f"binding '{question}' to a tool needs a [[bite]] for gate '{gate}' in"
+        f" {project_bite.REGISTRY}; a row that says `later: <trigger>` needs none"
+    )
+    return (needs,)
+
+
+def triggers_follow(catalogue: application_types.Catalogue) -> tuple[str, ...]:
+    """What naming the types asks next: the Triggers kinds each type is asked about (ADR 0028)."""
+    return tuple(
+        f"`{name}` asks the Triggers table for the kinds {', '.join(sorted(kinds))}"
+        for name in catalogue.types
+        if (kinds := catalogue.kinds_asked({name}))
+    )
 
 
 def life_events_question(root: Path) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -567,8 +596,10 @@ def later(tool: str) -> bool:
 def check_operability(root: Path) -> Iterable[Finding]:
     text = read(root / "docs/process/binding.md") or ""
     asked = set(FIRST_CELL.findall(section(text, "## Gates")))
+    catalogued = application_types.load().questions
     for question in OPERABILITY_QUESTIONS:
-        if text and question not in asked:
+        # Why: the types check asks every question the catalogue holds, once.
+        if text and question not in asked and question not in catalogued:
             yield agent(f"docs/process/binding.md: the Gates table has no '{question}' row")
     waiting = {row.question for row in project_bite.gate_rows(text) if later(row.tool)}
     for heading, questions in OPERABILITY_SECTIONS.items():
@@ -749,6 +780,37 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
             )
 
 
+def check_toolchain(root: Path) -> Iterable[Finding]:
+    """A workflow whose toolchain setup is still the template's placeholder.
+
+    Why: a job that builds the project fails at its first step without a toolchain, and the
+    template's own workflows, copied in by an upgrade, say nothing about it.
+    """
+    for path in sorted((root / WORKFLOWS).glob("*.yml")):
+        template = read(ADOPT_TEMPLATES / ".github/workflows" / path.name)
+        if template is None:
+            continue
+        unbound = set(after_marker(template.splitlines()).values())
+        for number, following in after_marker(
+            path.read_text(encoding="utf-8").splitlines()
+        ).items():
+            if following in unbound:
+                yield agent(
+                    f"{path.relative_to(root)}: line {number} still says '{TOOLCHAIN_MARKER}' and"
+                    " the next line is the template's, so no step sets up the project's toolchain;"
+                    " add the steps that install it, pinned by commit SHA"
+                )
+
+
+def after_marker(lines: list[str]) -> dict[int, str]:
+    """Each line (counted from 1) that holds the toolchain marker, with the line after it."""
+    return {
+        number: lines[number]
+        for number, line in enumerate(lines, start=1)
+        if TOOLCHAIN_MARKER in line and number < len(lines)
+    }
+
+
 def check_pin_recipe(root: Path) -> Iterable[Finding]:
     justfile = read(root / "justfile")
     if justfile is not None and "plugin_pin.py" not in justfile:
@@ -778,15 +840,20 @@ def defines_variable(justfile: str, name: str) -> bool:
 
 
 def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
-    """A tier list the tier workflows read, which the justfile does not define."""
+    """A tier list the tier workflows read, which the justfile does not define.
+
+    Why: the template's workflows read the lists, so one that exists gets them whether or not it
+    reads them yet; asking only when it did hid four items until the workflow was replaced.
+    """
     for workflow, lists in TIER_LISTS.items():
-        text = read(root / WORKFLOWS / workflow) or ""
+        if not (root / WORKFLOWS / workflow).is_file():
+            continue
         for name, meaning in lists:
-            if f"--evaluate {name}" in text and not defines_variable(justfile, name):
+            if not defines_variable(justfile, name):
                 yield Finding(
                     "justfile",
-                    f"has no `{name}` variable, which the `shape` job of `{workflow}` reads with"
-                    f" `just --evaluate {name}`; add the template's, naming {meaning}",
+                    f"has no `{name}` variable, which the template's `shape` job of `{workflow}`"
+                    f" reads with `just --evaluate {name}`; add the template's, naming {meaning}",
                     Agent(start=template_definition(name)),
                 )
 
@@ -1013,6 +1080,7 @@ CHECKS: tuple[Check, ...] = (
     check_doors,
     check_merge_workflow,
     check_weekly_workflow,
+    check_toolchain,
     check_settings,
     check_commit_hooks,
     check_runner,
@@ -1446,6 +1514,7 @@ def weekly_mutations() -> list[Mutation]:
         (root / WORKFLOWS / WEEKLY_WORKFLOW).unlink()
 
     workflow = str(WORKFLOWS / WEEKLY_WORKFLOW)
+    unset_toolchain = rewrite(workflow, TOOLCHAIN_STEP, TOOLCHAIN_PLACEHOLDER)
     return [
         ("forge without the weekly workflow", no_weekly_workflow),
         ("weekly workflow that runs on no schedule", rewrite(workflow, "schedule:", "push:")),
@@ -1453,6 +1522,7 @@ def weekly_mutations() -> list[Mutation]:
             "weekly workflow that cannot open an issue",
             rewrite(workflow, "issues: write", "issues: read"),
         ),
+        ("weekly workflow whose toolchain was never set up", unset_toolchain),
         (
             "binding without the weekly entry point",
             rewrite("docs/process/binding.md", "| weekly | `just weekly` |\n", ""),
@@ -1575,12 +1645,13 @@ def fill_placeholders(root: Path) -> None:
     binding.write_text(fill_binding(binding.read_text()))
     registry = root / project_bite.REGISTRY
     registry.write_text(registry.read_text() + fill_registry(binding.read_text()))
+    pinned = {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40, TOOLCHAIN_PLACEHOLDER: TOOLCHAIN_STEP}
     fills = {
         "GLOSSARY.md": {GLOSSARY_PLACEHOLDER: "the project"},
-        str(WORKFLOWS / "ci.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
-        str(WORKFLOWS / "deep.yml"): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
-        str(WORKFLOWS / MERGE_WORKFLOW): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
-        str(WORKFLOWS / WEEKLY_WORKFLOW): {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40},
+        str(WORKFLOWS / "ci.yml"): pinned,
+        str(WORKFLOWS / "deep.yml"): pinned,
+        str(WORKFLOWS / MERGE_WORKFLOW): pinned,
+        str(WORKFLOWS / WEEKLY_WORKFLOW): pinned,
     }
     for name, replacements in fills.items():
         target = root / name

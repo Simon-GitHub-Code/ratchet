@@ -12,6 +12,7 @@ import pytest
 
 import application_types
 import conformance
+from tests import adopted
 from tests.repos import repository
 from tests.support import PLUGIN_ROOT
 
@@ -548,7 +549,9 @@ def test_a_tier_list_a_workflow_reads_and_the_justfile_lacks_is_named_with_the_t
     found = conformance.findings(repo)
     assert len(found) == 1, found
     assert found[0].path == JUSTFILE
-    assert found[0].problem.startswith(f"has no `{name}` variable, which the `shape` job of `")
+    assert found[0].problem.startswith(
+        f"has no `{name}` variable, which the template's `shape` job of `"
+    )
     assert f"`{Path(workflow).name}`" in found[0].problem
     assert start(found[0]) == conformance.template_definition(name)
     assert start(found[0])[-1].startswith(f"{name} :=")
@@ -560,13 +563,17 @@ def test_a_tier_list_may_be_empty_or_exported(repo: Path) -> None:
     assert red(repo) == []
 
 
-def test_a_tier_list_is_asked_only_of_a_workflow_that_reads_it(repo: Path) -> None:
-    for name in ("tier1_gates", "tier1_sharded", "tier2_gates", "tier2_sharded"):
+def test_a_tier_list_is_asked_wherever_a_tier_workflow_exists(repo: Path) -> None:
+    # Why: the template's workflows read the lists, so an upgrade that replaces an old workflow
+    # must find them already asked for; asking only of one that read them hid four items.
+    names = ("tier1_gates", "tier1_sharded", "tier2_gates", "tier2_sharded")
+    for name in names:
         without_variable(repo, name)
     for workflow in (CI, DEEP):
         text = (repo / workflow).read_text(encoding="utf-8")
         (repo / workflow).write_text(text.replace("--evaluate", "--list"), encoding="utf-8")
-    assert [line for line in red(repo) if "variable" in line] == []
+    asked = [line for line in red(repo) if "variable" in line]
+    assert [line.split("`")[1] for line in asked] == list(names)
     remove(CI, DEEP)(repo)
     assert [line for line in red(repo) if "variable" in line] == []
 
@@ -586,6 +593,7 @@ def test_a_repository_whose_runner_is_not_just_is_not_read_for_recipes(repo: Pat
 
 LATER = "| rolls back safely | later: life:deployed and code:stored-format |"
 GATE = "docs/process/binding.md"
+GATES = "## Gates"
 
 
 def waiting(root: Path, question: str, trigger: str) -> None:
@@ -726,11 +734,88 @@ def test_a_dropped_row_of_the_catalogue_prints_the_template_row_to_add(repo: Pat
         " add the template's row, bound or `later: <trigger>`"
     )
     assert start(found) == ("| backup restores | | weekly | | `just restore-drill` |",)
+    assert isinstance(found.fix, conformance.Agent)
+    needs = (
+        "binding 'backup restores' to a tool needs a [[bite]] for gate 'restore-drill' in"
+        " quality/bites.toml; a row that says `later: <trigger>` needs none"
+    )
+    assert found.fix.then == (needs,)
+
+
+def test_a_missing_types_line_names_the_triggers_each_type_will_ask(repo: Path) -> None:
+    replace(BINDING, "- Application types: cli\n", "")(repo)
+    [found] = conformance.findings(repo)
+    assert found.problem.startswith("has no '- Application types:' line")
+    assert isinstance(found.fix, conformance.Agent)
+    asks = application_types.load().kinds_asked({"service"})
+    assert f"`service` asks the Triggers table for the kinds {', '.join(sorted(asks))}" in (
+        found.fix.then
+    )
+
+
+def test_nothing_hides_a_gates_row_behind_the_types_line(tmp_path: Path) -> None:
+    # Why: an upgrade reports once, so the rows 0.11 asks of an 0.8 adoption show before its types.
+    root = adopted.copy(adopted.adopted("0.8.2"), tmp_path / "repo")
+
+    def gates() -> list[str]:
+        return [f.problem for f in conformance.findings(root) if "Gates table has no" in f.problem]
+
+    without = gates()
+    text = (root / BINDING).read_text(encoding="utf-8")
+    held = {question for question, _ in conformance.table_cells(conformance.section(text, GATES))}
+    owed = application_types.load().questions - held
+    assert owed, "an 0.8.2 adoption lacks rows the catalogue has since gained"
+    for question in owed:
+        assert any(line.startswith(application_types.dropped(question)) for line in without)
+    assert len(without) == len(set(without)), "no row is asked twice"
+    assert any("'backup restores'" in line for line in without)
+    assert any("types:' line" in f.problem for f in conformance.findings(root))
+    (root / BINDING).write_text("- Application types: cli\n" + text, encoding="utf-8")
+    assert gates() == without
+    assert not any("types:' line" in f.problem for f in conformance.findings(root))
 
 
 def test_every_question_of_the_catalogue_has_a_row_in_the_template_binding() -> None:
     for question in conformance.application_types.load().questions:
         assert conformance.template_gate_row(question).startswith(f"| {question} |")
+
+
+WEEKLY = ".github/workflows/weekly.yml"
+
+
+def test_a_workflow_with_the_toolchain_placeholder_in_front_of_the_template_s_step_is_red(
+    repo: Path,
+) -> None:
+    # Why: an upgrade copies the template's workflow in, and a job with no toolchain fails at its
+    # first step with nothing in the report.
+    replace(WEEKLY, conformance.TOOLCHAIN_STEP, conformance.TOOLCHAIN_PLACEHOLDER)(repo)
+    [found] = conformance.findings(repo)
+    assert found.path == WEEKLY
+    assert found.problem.startswith("line 39 still says '# bind: toolchain setup' and the next")
+    assert isinstance(found.fix, conformance.Agent)
+
+
+def test_a_toolchain_the_project_bound_is_not_asked_for_again(repo: Path) -> None:
+    marker = conformance.TOOLCHAIN_PLACEHOLDER
+    project = "      - uses: actions/setup-node@v5"
+    replace(WEEKLY, conformance.TOOLCHAIN_STEP, f"{marker}\n{project}")(repo)
+    assert red(repo) == [], "the comment may stay above the project's own step"
+    text = (repo / WEEKLY).read_text(encoding="utf-8")
+    (repo / WEEKLY).write_text(text.rstrip("\n") + f"\n{marker}", encoding="utf-8")
+    assert red(repo) == [], "a marker with nothing after it has no template line to match"
+    write(".github/workflows/release.yml", f"concurrency: cache\n{marker}\n- run: x\n")(repo)
+    assert red(repo) == [], "a workflow the template lacks has no unbound toolchain to compare"
+
+
+def test_a_question_the_catalogue_asks_is_not_asked_twice_of_a_binding_without_types(
+    repo: Path,
+) -> None:
+    replace(BINDING, "- Application types: cli\n", "")(repo)
+    replace(BINDING, "| telemetry emitted |", "| tracing |")(repo)
+    lines = red(repo)
+    assert len([line for line in lines if "'telemetry emitted'" in line]) == 1
+    replace(BINDING, "| feature flags declared |", "| flags |")(repo)
+    assert f"{BINDING}: the Gates table has no 'feature flags declared' row" in red(repo)
 
 
 def record(name: str, text: str) -> Mutate:
