@@ -9,26 +9,28 @@ What this catches: a new ``**Ask**`` line whose key is not registered, whose kin
 ``product``, whose text differs from the registry's, or whose skill the registry does not list;
 a sentence in any skill page or template that tells an agent to ask, confirm or wait for an
 answer in the words below without an ``**Ask**`` key; a registered question no skill asks or an
-assumption no skill states; a product question whose text uses a method term; a sentence that
-puts questions to the owner one at a time, alone or one per message, where ADR 0034 puts all of
-a step's open questions in one message. That last check also reads ``workflows/pipeline.js``,
-whose strings tell the orchestrator how to put a blocked run's open questions to the owner.
+assumption no skill states; a product question whose text uses a method term; and a sentence
+about asking that puts questions to the owner one at a time, one by one, alone, one (question)
+per message, in a message of its own or a separate message, separately, singly, individually,
+each in turn or one after another, where ADR 0034 puts all of a step's open questions in one
+message. That last check also reads ``workflows/pipeline.js``, whose strings tell the
+orchestrator how to put a blocked run's open questions to the owner; the other checks skip
+``workflows/``.
 
 A negation before the asking words ("never ask the owner") is a rule, not a question, unless
 ``until`` comes between them ("do not start until you ask the owner"), which still asks.
 
 What it cannot catch: a question worded outside ``ASKING`` ("see what the owner thinks", "run
 the table past them"); a sentence that puts any other negation before the asking words and
-still asks ("do not bind a row before you ask the owner"); a quoted question with no word
-that addresses anyone within forty characters of it; a non-product question someone registers
-as ``product`` with matching skill text, since nothing reviews the registry's diff on its own
-(ADR 0034); questions a companion
-plugin's own skill asks, which only the rule in the ``AGENTS.md`` template governs; an unkeyed
-question in the pipeline's prompts in ``workflows/``, whose open questions are bounded by their
-schema's kinds, since only the one-message check reads that script;
-whether an agent obeys the page at run time, which only a live run shows; and a sentence that asks
-one by one in other words ("each in turn", "then the next"), or whose asking words are two
-sentences back.
+still asks ("do not bind a row before you ask the owner"); a quoted question with no word that
+addresses anyone within forty characters of it; a non-product question someone registers as
+``product`` with matching skill text, since nothing reviews the registry's diff on its own (ADR
+0034); questions a companion plugin's own skill asks, which only the rule in the ``AGENTS.md``
+template governs; an unkeyed question in the pipeline's prompts in ``workflows/``, whose open
+questions are bounded by their schema's kinds; whether an agent obeys the page at run time,
+which only a live run shows; a sentence that asks one by one in words the one-message check
+lacks ("then the next", "after each answer", "in a second message", "follow up with the
+rest"); and one whose asking words are two sentences back or in another paragraph.
 """
 
 import re
@@ -264,8 +266,9 @@ def test_a_rule_against_asking_is_not_a_question(tmp_path: Path) -> None:
 
 
 ONE_BY_ONE = re.compile(
-    r"\bone at a time\b|\b(?:owner|asked|questions?) alone\b"
-    r"|\bone per message\b|\bone after another\b",
+    r"\bone at a time\b|\b(?:owner|asked|questions?) alone\b|\bone by one\b"
+    r"|\bone (?:question )?per message\b|\bone after another\b|\ba message of its own\b"
+    r"|\bseparate messages?\b|\bseparately\b|\bsingly\b|\bindividually\b|\beach in turn\b",
     re.IGNORECASE,
 )
 ABOUT_ASKING = re.compile(r"\bask(?:s|ed|ing)?\b|\bquestions?\b|\bdialogs?\b", re.IGNORECASE)
@@ -321,6 +324,41 @@ def test_the_pipeline_script_is_read_for_questions_asked_one_by_one(tmp_path: Pa
     assert asked_one_by_one(tmp_path / "skills", also=(script,)) == [
         "pipeline.js:1: const told = [ 'Put each open question to the owner, one at a time', ]"
     ]
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Ask the questions one by one, in this order.",
+        "One question per message, each in the words written here.",
+        "Each question goes in a message of its own.",
+        "Ask the owner each question separately.",
+        "Put each question to the owner in a separate message.",
+        "Ask them singly, in the user's words.",
+        "Ask every fork, each in turn, with the answer the spec leans to first.",
+    ],
+)
+def test_each_way_of_asking_one_by_one_the_verifier_planted_is_caught(
+    tmp_path: Path, sentence: str
+) -> None:
+    # Why: the verifier of PR #47 replaced "all in one message" with each of these, and the check
+    # caught only "one at a time" and "one per message".
+    page = tmp_path / "skills/demo/SKILL.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(sentence + "\n", encoding="utf-8")
+    assert asked_one_by_one(tmp_path / "skills", also=()) != [], sentence
+
+
+def test_the_feature_skill_asks_a_parked_tickets_questions_in_one_message() -> None:
+    # Why: the verifier removed "all in one message" from the step that asks them, and nothing
+    # went red: the step said nothing about how many messages, which the check cannot see.
+    text = " ".join((SKILLS / "feature/SKILL.md").read_text(encoding="utf-8").split())
+    step_7 = text.split("7. **The questions, then the route.**", 1)[1].split(" ## ", 1)[0]
+    assert "ask every parked ticket's open questions as `feature.open-question`, all in one" in (
+        step_7
+    )
+    asking = text.split("## Questions for the owner", 1)[1]
+    assert "All of them in one message, each as the spec role wrote it" in asking
 
 
 def test_a_question_asked_one_by_one_is_caught(tmp_path: Path) -> None:
