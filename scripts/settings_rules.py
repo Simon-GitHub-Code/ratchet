@@ -16,9 +16,10 @@ A group's ``exclude`` has no permission-rule equivalent, so a manifest that uses
 list the paths the group should cover instead. The rules the plugin generates are the whole of
 what it writes: a rule no version of it generates is the project's own, and ``regenerated`` keeps
 it where it stood, so ``--check`` still reports it and no write removes it. A rule the plugin
-writes in ``ask`` that the project holds in ``deny`` is stricter than the plugin's: it stays in
-``deny``, and neither list reports it. A rule the plugin
-generated under an earlier mapping, such as the ``ask`` an append group once had, is regenerated.
+writes in ``ask``, or for a group it writes no rule for, that the project holds in ``deny`` is
+stricter than the plugin's: it stays in ``deny``, and neither list reports it. No regeneration
+takes a rule out of ``deny``. A rule the plugin generated in ``ask`` under an earlier mapping,
+such as the ``ask`` an append group once had, is regenerated.
 
 Usage: ``settings_rules.py [--root DIR] [--check | --write]``. ``--check`` (the default) prints
 one line per rule missing from or foreign to the lists and exits 1 on any. ``--write`` regenerates
@@ -200,10 +201,17 @@ def drifts(root: Path) -> list[Drift]:
 
 
 def stricter(settings: dict[str, object], manifest: dict[str, object]) -> list[str]:
-    """The rules the plugin asks for that the project denies: stricter than the plugin's, kept."""
-    (_, ask), _ = rules(manifest)
-    denied = listed(settings, "deny")
-    return [rule for rule in ask if rule in denied]
+    """The rules the project denies that the plugin writes in ``ask`` or not at all: kept.
+
+    Why: ``deny`` is as strict as a rule gets. A rule the plugin could write that the project
+    holds there is the owner's choice, and taking it out of ``deny`` would loosen it.
+    """
+    (deny, _), _ = rules(manifest)
+    return [
+        rule
+        for rule in listed(settings, "deny")
+        if rule not in deny and plugin_writes(rule, manifest)
+    ]
 
 
 def drifts_of(manifest: dict[str, object], settings: dict[str, object]) -> list[Drift]:

@@ -52,7 +52,9 @@ import gatelib
 PLUGIN = Path(__file__).resolve().parents[1]
 MANIFEST = Path(".claude-plugin/plugin.json")
 PIN = re.compile(r"^- Ratchet plugin: (\S+) at ([0-9a-f]{40})$", re.MULTILINE)
-PIN_LINE = re.compile(r"^- Ratchet plugin:[^\r\n]*", re.MULTILINE)
+# Why: a line that only starts like the pin, such as a note on where the plugin comes from, is
+# the project's own; only a line of the pin's shape, real or placeholder, is the pin.
+PIN_LINE = re.compile(r"^- Ratchet plugin: \S+ at \S+[ \t]*(?=\r?$)", re.MULTILINE)
 PLUGIN_REF = re.compile(r'repository:\s*\S*ratchet\S*?[,\s]+ref:\s*"?([^",\s}]+)')
 COMMIT = re.compile(r"[0-9a-f]{40}")
 RUNNER = "## Runner"

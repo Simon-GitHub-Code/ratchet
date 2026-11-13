@@ -341,8 +341,8 @@ def test_chained_wants_apply_in_order_and_an_empty_chain_changes_nothing(
     assert both(current) == f"{text if current is None else current}!"
 
 
-def test_a_git_that_fails_in_a_scratch_repository_raises(tmp_path: Path) -> None:
-    gatelib.scratch_git(tmp_path, "init", "-q")
-    assert gatelib.scratch_git(tmp_path, "check-ignore", "x", ok=(0, 1)) == ""
+def test_a_git_that_fails_raises_instead_of_answering(tmp_path: Path) -> None:
+    gatelib.git_checked(tmp_path, "init", "-q")
+    assert gatelib.git_checked(tmp_path, "check-ignore", "x", ok=(0, 1)) == ""
     with pytest.raises(subprocess.CalledProcessError):
-        gatelib.scratch_git(tmp_path, "check-ignore", "x")
+        gatelib.git_checked(tmp_path, "check-ignore", "x")

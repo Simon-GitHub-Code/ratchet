@@ -235,7 +235,7 @@ def test_a_rule_the_owner_made_stricter_stays_stricter_and_is_named(
         assert rule in permissions["deny"]
         assert rule not in permissions["ask"]
         assert f"`{rule}`" in out.split("For an agent:")[0]
-    assert "keeping in deny what the plugin asks:" in out
+    assert "keeping in deny what you made stricter:" in out
     assert not [d for d in settings_rules.drifts(root) if any(r in d.line for r in STRICTER)]
 
 
@@ -398,19 +398,15 @@ ASKING = "## Asking the owner"
 LATIN = "\n- Owner: Ren\xe9 M\xfcller\n".encode("latin-1")
 
 
-def test_a_file_that_is_not_utf8_is_never_rewritten_and_its_item_is_an_agent_s(
-    tmp_path: Path,
-) -> None:
-    root = fixture("0.9.2", tmp_path)
-    agents = root / "AGENTS.md"
-    agents.write_bytes(agents.read_bytes() + LATIN)
-    commit(root)
-    before = agents.read_bytes()
-    result = planned(root)
-    assert "AGENTS.md" not in result.changes
-    assert any(f.path == "AGENTS.md" and ASKING in f.problem for f in result.agent)
-    upgrade.apply(root, result.changes)
-    assert agents.read_bytes() == before
+def test_a_trial_never_writes_a_file_that_is_not_utf8_or_one_under_guards(tmp_path: Path) -> None:
+    (tmp_path / "notes.md").write_bytes(LATIN)
+    (tmp_path / "guards").mkdir()
+    (tmp_path / "linked.md").symlink_to("guards/kept.md")
+    for name in ("notes.md", "linked.md"):
+        with conformance.made(tmp_path, name, lambda text: f"{text}more\n") as changed:
+            assert not changed
+    assert (tmp_path / "notes.md").read_bytes() == LATIN
+    assert not (tmp_path / "guards/kept.md").exists()
 
 
 def test_a_binding_that_is_not_utf8_is_refused_with_its_name(tmp_path: Path) -> None:
@@ -425,13 +421,18 @@ def test_a_binding_that_is_not_utf8_is_refused_with_its_name(tmp_path: Path) -> 
     assert files(root) == before
 
 
-def test_a_file_a_check_reads_that_is_not_utf8_is_a_refusal_not_a_crash(tmp_path: Path) -> None:
+@pytest.mark.parametrize("name", [JUSTFILE, "AGENTS.md"])
+def test_a_file_a_check_reads_that_is_not_utf8_is_a_refusal_not_a_crash(
+    name: str, tmp_path: Path
+) -> None:
     root = fixture("0.9.2", tmp_path)
-    (root / JUSTFILE).write_bytes((root / JUSTFILE).read_bytes() + b"# caf\xe9\n")
+    (root / name).write_bytes((root / name).read_bytes() + b"# caf\xe9\n")
     commit(root)
+    before = files(root)
     result = upgrade.plan(root, PLUGIN_ROOT)
     assert isinstance(result, upgrade.Refused)
-    assert "is not UTF-8 text" in result.reason
+    assert result.reason.startswith("a file the checks read is not UTF-8 text")
+    assert files(root) == before
 
 
 def ignored_by_local_config(root: Path) -> None:

@@ -434,7 +434,7 @@ def test_only_what_git_sees_is_copied_and_a_link_stays_a_link(tmp_path: Path) ->
     (root / "link.md").symlink_to("kept.md")
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
-    assert gatelib.copy_seen(root, sandbox) == frozenset()
+    assert gatelib.copy_seen(root, sandbox) == {}
     assert sorted(
         str(p.relative_to(sandbox))
         for p in sandbox.rglob("*")

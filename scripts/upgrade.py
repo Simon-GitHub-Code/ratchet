@@ -179,6 +179,14 @@ class StuckError(Exception):
         self.autos = autos
 
 
+class NotTextError(Exception):
+    """A file the plan must edit is not UTF-8 text, so an edit would lose its other bytes."""
+
+    def __init__(self, name: str) -> None:
+        """Keep the file's name for the refusal."""
+        super().__init__(f"{name} is not UTF-8 text, so the upgrade does not write it")
+
+
 def inside(sandbox: Path, name: str) -> str:
     """The path of ``name`` once symlinks are followed, relative to the sandbox.
 
@@ -197,7 +205,10 @@ def pass_over(sandbox: Path, autos: list[Finding], done: dict[str, list[str]]) -
         target = sandbox / name
         data = target.read_bytes() if target.is_file() else None
         for fix in wants:
-            made = gatelib.edited(fix.want, data)
+            try:
+                made = gatelib.edited(fix.want, data)
+            except UnicodeDecodeError:
+                raise NotTextError(name) from None
             if made is None:
                 continue
             data = made
@@ -243,7 +254,6 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
     changes: dict[str, Change] = {}
     with tempfile.TemporaryDirectory(prefix="ratchet-upgrade-") as scratch:
         sandbox = Path(scratch) / "tree"
-        outside = gatelib.copy_seen(root, sandbox)
         line = plugin_pin.line_for(plugin)
         pin = Finding(
             str(gatelib.BINDING),
@@ -251,17 +261,22 @@ def plan(root: Path, plugin: Path) -> Plan | Refused | Stuck:
             Auto(f"pinned: {line}", plugin_pin.with_pin(line)),
         )
         try:
+            foreign = conformance.copied(root, sandbox)
             touched = pass_over(sandbox, [pin], done)
             converged = converge(sandbox, done)
         except StuckError as error:
             return Stuck(error.autos)
+        except NotTextError as error:
+            return Refused(str(error))
+        except UnicodeDecodeError as error:
+            return Refused(
+                f"a file the checks read is not UTF-8 text, so nothing is written: {error}"
+            )
         for name in sorted(touched | converged.touched):
             before = (root / name).read_bytes() if (root / name).is_file() else None
             changes[name] = Change(before, (sandbox / name).read_bytes())
         reason = (
-            (unwritable(sandbox, changes, outside) or unreadable(root, sandbox))
-            if changes
-            else None
+            (unwritable(root, changes, foreign) or unreadable(root, sandbox)) if changes else None
         )
         if reason is not None:
             return Refused(reason)
@@ -289,20 +304,24 @@ def joined(names: list[str]) -> str:
     return f"{', '.join(head)} and {last}" if head else last
 
 
-def unwritable(sandbox: Path, changes: dict[str, Change], outside: frozenset[str]) -> str | None:
+def unwritable(root: Path, changes: dict[str, Change], foreign: dict[str, str]) -> str | None:
     """Why the plan must not write what it changed, or ``None``.
 
-    A file that leads out of the repository through a link would be written outside it. A file
-    git ignores is one the plan, which reads only what git sees, would write over unread, and one
-    the change git carries would never hold. Git is asked in the sandbox, which ignores what the
-    repository does and already holds each planned file, so a directory the plan makes counts.
+    A file that leads out of the repository through a link, or lies in a submodule, is not this
+    repository's to write; nor is one under ``guards/``, which the manifest gives to the owner. A
+    file git ignores is one the plan, which reads only what git sees, would write over unread,
+    and one the change would never carry. Git is asked in the repository itself, so every rule it
+    reads counts: ignore files tracked or not, the repository's config, the user's.
     """
     names = write_order(changes)
-    out = [name for name in names if any(name == o or name.startswith(f"{o}/") for o in outside)]
-    if out:
-        return f"{out[0]} leads outside the repository, so the upgrade does not write it"
+    for name in names:
+        for prefix, why in foreign.items():
+            if name == prefix or name.startswith(f"{prefix}/"):
+                return f"{name} {why}, so the upgrade does not write it"
+        if conformance.under_guards(name):
+            return f"{name} is under guards/, which the upgrade never writes"
     asked = ("-c", "core.quotepath=off", "check-ignore", "--", *names)
-    ignored = gatelib.scratch_git(sandbox, *asked, ok=(0, 1)).splitlines()
+    ignored = gatelib.git_checked(root, *asked, ok=(0, 1)).splitlines()
     if ignored:
         return (
             f"git ignores {joined(ignored)}, so the upgrade, which reads only what git sees, would"

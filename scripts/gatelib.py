@@ -182,9 +182,11 @@ def read_text(path: Path) -> str | None:
 def edited(want: Want, data: bytes | None) -> bytes | None:
     """The bytes ``want`` makes of a file's, or ``None`` when it leaves the file as it is.
 
-    A file whose every line ends in CRLF is edited as LF and written back in CRLF.
+    A file whose every line ends in CRLF is edited as LF and written back in CRLF. A file that is
+    not UTF-8 raises ``UnicodeDecodeError``: decoded leniently and written back, its other bytes
+    would be lost.
     """
-    text = None if data is None else data.decode("utf-8", errors="replace")
+    text = None if data is None else data.decode("utf-8")
     crlf = text is not None and "\r\n" in text and text.count("\n") == text.count("\r\n")
     plain = text.replace("\r\n", "\n") if text is not None and crlf else text
     made = want(plain)
@@ -209,17 +211,15 @@ def seen(root: Path) -> list[str]:
     return sorted(found)
 
 
-def copy_seen(root: Path, target: Path) -> frozenset[str]:
-    """What git sees of ``root`` copied to ``target``, made a repository that holds it.
+def copy_seen(root: Path, target: Path) -> dict[str, str]:
+    """What git sees of ``root`` copied to ``target``, made a repository whose index holds it.
 
-    The copy's index holds every file copied, and it ignores what ``root`` ignores, so git says
-    of a file made there what it would say of it in ``root``. A link that stays in the tree is a
-    link in the copy. One that leads out of the tree is copied
-    as what it leads to, so the copy reads as ``root`` does, and its name is returned: a write
-    there would land outside the repository.
+    A link that stays in the tree is a link in the copy. What is not this repository's to write
+    is copied as ``root`` reads it, and returned by name with why: a link that leads out of the
+    tree, copied as what it leads to, and a submodule, copied as its files.
     """
     home = root.resolve()
-    outside = set()
+    foreign = {}
     for name in seen(root):
         source, copy = root / name, target / name
         lands, link = Path(os.path.realpath(source)), source.is_symlink()
@@ -227,28 +227,27 @@ def copy_seen(root: Path, target: Path) -> frozenset[str]:
         if link and lands.is_relative_to(home):
             copy.symlink_to(os.path.relpath(target / lands.relative_to(home), copy.parent))
             continue
-        if link:
-            outside.add(name)
         if lands.is_file():
             shutil.copy2(lands, copy)
-        elif link and lands.is_dir():
-            shutil.copytree(lands, copy, symlinks=True)
-    scratch_git(target, "init", "-q")
-    exclude = git(root, "rev-parse", "--git-path", "info/exclude")
-    if exclude is not None and (root / exclude).is_file():
-        shutil.copy2(root / exclude, target / ".git/info/exclude")
-    scratch_git(target, "add", "--all", "--force")
-    return frozenset(outside)
+        elif lands.is_dir():
+            shutil.copytree(lands, copy, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        if link:
+            foreign[name] = "leads outside the repository"
+        elif lands.is_dir():
+            foreign[name] = f"is in the submodule {name}"
+    git_checked(target, "init", "-q")
+    git_checked(target, "add", "--all", "--force")
+    return foreign
 
 
-def scratch_git(target: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
-    """``git -C target args`` stdout in a scratch repository, whatever repository a hook exported.
+def git_checked(root: Path, *args: str, ok: tuple[int, ...] = (0,)) -> str:
+    """``git -C root args`` stdout, whatever repository a hook exported.
 
     An exit status outside ``ok`` raises, so a git that failed is never read as an answer.
     """
     environment = {k: v for k, v in os.environ.items() if k not in REPOSITORY_VARIABLES}
     result = subprocess.run(
-        ["git", "-C", str(target), *args],
+        ["git", "-C", str(root), *args],
         capture_output=True,
         text=True,
         check=False,

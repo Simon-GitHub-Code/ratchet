@@ -259,7 +259,8 @@ def test_regenerated_keeps_own_rules_other_keys_and_a_stricter_rule_and_moves_a_
     }
     out = json.loads(settings_rules.regenerated(PARSED)(json.dumps(held)))
     (deny, ask), _ = settings_rules.rules(PARSED)
-    assert out["permissions"]["deny"] == [*deny, "Edit(/GLOSSARY-MAP.md)", "Bash(rm:*)"]
+    kept = ["Edit(/GLOSSARY-MAP.md)", "Edit(/GLOSSARY.md)"]
+    assert out["permissions"]["deny"] == [*deny, *kept, "Bash(rm:*)"]
     assert out["permissions"]["ask"] == [
         *(rule for rule in ask if rule != "Edit(/GLOSSARY-MAP.md)"),
         "mine",

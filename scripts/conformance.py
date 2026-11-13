@@ -9,6 +9,7 @@ to pass and each mutated one to fail, so the checker is shown to bite.
 from __future__ import annotations
 
 import contextlib
+import os
 import re
 import shutil
 import sys
@@ -244,7 +245,7 @@ class Finding:
 
     def __post_init__(self) -> None:
         """Refuse an edit under ``guards/``: the manifest says who may edit those paths."""
-        if isinstance(self.fix, Auto | Edit) and PurePosixPath(self.path).parts[:1] == ("guards",):
+        if isinstance(self.fix, Auto | Edit) and under_guards(self.path):
             message = f"{self.path}: an upgrade never writes under guards/ by itself"
             raise ValueError(message)
 
@@ -254,6 +255,11 @@ class Finding:
 
 
 Check = Callable[[Path], Iterable[Finding]]
+
+
+def under_guards(path: str) -> bool:
+    """Whether ``path``, relative to the repository, is under ``guards/``."""
+    return PurePosixPath(path).parts[:1] == ("guards",)
 
 
 def agent(line: str, start: tuple[str, ...] = (), then: tuple[str, ...] = ()) -> Finding:
@@ -274,13 +280,20 @@ def owner(
 def made(tree: Path, name: str, want: gatelib.Want) -> Iterator[bool]:
     """The tree with ``want`` made of its file ``name`` until the block ends; whether it changed.
 
-    The file is followed through links inside the tree and never written outside it. When the
-    block ends the file holds its bytes again, or is gone with the directories made for it.
+    The file is followed through links inside the tree. It is never written outside the tree or
+    under ``guards/``, and never when it is not UTF-8. When the block ends the file holds its
+    bytes again, or is gone with the directories made for it.
     """
-    target = (tree / name).resolve()
+    home, target = tree.resolve(), (tree / name).resolve()
+    if not target.is_relative_to(home) or under_guards(str(target.relative_to(home))):
+        yield False
+        return
     data = target.read_bytes() if target.is_file() else None
-    after = gatelib.edited(want, data)
-    if after is None or not target.is_relative_to(tree.resolve()):
+    try:
+        after = gatelib.edited(want, data)
+    except UnicodeDecodeError:
+        after = None
+    if after is None:
         yield False
         return
     created = [parent for parent in target.parents if not parent.exists()]
@@ -320,25 +333,46 @@ def read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
+def justfile_paths(root: Path) -> list[Path]:
+    """The justfile and every file it imports that exists, in the order ``just`` reads them."""
+    found: list[Path] = []
+    waiting = [root / "justfile"]
+    while waiting:
+        path = waiting.pop(0)
+        if not path.is_file() or path.resolve() in {known.resolve() for known in found}:
+            continue
+        found.append(path)
+        text = read(path) or ""
+        waiting += [path.parent / Path(name).expanduser() for name in justfile_text.imports(text)]
+    return found
+
+
 def read_justfile(root: Path) -> str | None:
     """The justfile and every file it imports, in the order ``just`` reads them, as one text.
 
     Why: ``just`` reads an imported recipe as the justfile's own, so a check that read the
     justfile alone would ask for a recipe it already has, and an edit would define it twice.
     """
-    texts: list[str] = []
-    read_already: set[Path] = set()
-    waiting = [root / "justfile"]
-    while waiting:
-        path = waiting.pop(0)
-        text = None if path.resolve() in read_already else read(path)
-        read_already.add(path.resolve())
-        if text is not None:
-            texts.append(text)
-            waiting += [
-                path.parent / Path(name).expanduser() for name in justfile_text.imports(text)
-            ]
+    texts = [read(path) or "" for path in justfile_paths(root)]
     return "\n".join(texts) if texts else None
+
+
+def copied(root: Path, target: Path) -> dict[str, str]:
+    """``gatelib.copy_seen``, with every file of the repository the justfile imports.
+
+    Why: ``just`` reads an import git ignores, such as an optional ``import? 'local.just'``. A copy
+    without it would judge the justfile as ``just`` never reads it, and copy a recipe that file
+    already defines.
+    """
+    foreign = gatelib.copy_seen(root, target)
+    home = root.resolve()
+    for path in justfile_paths(root):
+        lands = path.resolve()
+        name = os.path.relpath(path, root)
+        if lands.is_relative_to(home) and not os.path.lexists(target / name):
+            (target / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(lands, target / name)
+    return foreign
 
 
 def template_file(path: str) -> str:
@@ -1184,7 +1218,7 @@ def settings_finding(
     kept = settings_rules.stricter(settings or {}, manifest)
     does = "regenerate the permission rules from the manifest, keeping the project's own"
     if kept:
-        does += f"; keeping in deny what the plugin asks: {', '.join(f'`{r}`' for r in kept)}"
+        does += f"; keeping in deny what you made stricter: {', '.join(f'`{r}`' for r in kept)}"
     broken = (f"{path} is not a JSON object, so it is left as it is",) if settings is None else ()
     edit = Edit(does, settings_rules.regenerated(manifest), Agent(then=broken))
     return Finding(path, problem, edit)
@@ -1353,7 +1387,7 @@ def findings(root: Path, *, owned: bool = False) -> list[Finding]:
         tree = root
         if not owned:
             tree = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="ratchet-trial-")))
-            gatelib.copy_seen(root, tree)
+            copied(root, tree)
         return [tried(tree, check, failure) for check, failure in found]
 
 
