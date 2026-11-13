@@ -22,8 +22,13 @@
 #   write    { path = "...", content = "..." } creates or replaces one file. `content` may be a
 #            list of strings, joined, so a planted secret can be split and no scanner reads this
 #            file as a leak.
-#   patch    a diff under quality/bites/, applied with `git apply`, for a fault in several files
-#            or in the middle of one
+#   replace  { path = "...", old = "...", new = "..." }, or a list of them: in a file that exists,
+#            the one place `old` stands becomes `new`. Use it for a fault inside a file that
+#            other changes also edit (a manifest, a lockfile, a config): it keeps applying while
+#            the lines around `old` change. `old` standing nowhere or in two places is red, and
+#            says so.
+#   patch    a diff under quality/bites/, applied with `git apply`, for a fault `replace` cannot
+#            state; its context lines stop applying when an unrelated edit lands beside them
 #   remove   globs; every file they match is deleted. A gate that judges a collection (tests,
 #            benchmarks, fuzz targets, examples, scenarios) carries one such bite, since a gate
 #            with nothing to run is red.
@@ -50,6 +55,12 @@
 # name = "no benchmark"
 # remove = ["<the benchmarks' glob>"]
 # expect = "<the recipe's words for nothing to run>"
+#
+# [[bite]]
+# gate = "pins"
+# name = "a floating range"
+# replace = { path = "<the manifest>", old = "<a pinned version, as it stands>", new = "<a range>" }
+# expect = "<the recipe's words for a floating range>"
 #
 # [[bite]]
 # gate = "telemetry"
