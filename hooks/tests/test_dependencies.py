@@ -733,7 +733,7 @@ PNPM_PROJECT_FLOW = re.sub(
         (
             PNPM_12_LOCK,
             PNPM_12_LOCK.replace("version: 12.18.0", "version: 12.19.0"),
-            "pnpm is pinned to 12.19.0 in the boot document, which locks no such package",
+            "the boot document pins pnpm 12.19.0 but locks no such package",
         ),
         (PNPM_12_LOCK, PNPM_BOOT_FLOW, "not in the shape"),
         (

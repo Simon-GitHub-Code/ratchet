@@ -292,7 +292,13 @@ _PNPM_FIELD = re.compile(r"(\w+):\s*('[^']*'|[^,}]+)")
 # the leading marker only when it writes both.
 _PNPM_DOCUMENT = "---"
 PNPM_BOOT = "boot document"
+# Why: the boot document may lock two pnpm versions after an upgrade; its pin picks the one that
+# runs, so a pin moved back is a rollback though no locked package changes.
+PNPM_PIN = "boot document pin"
 _PNPM_BOOT_GROUPS = frozenset({"configDependencies", "packageManagerDependencies"})
+# Why: an anchor, alias, tag or merge key changes what a value is without changing its text; pnpm
+# writes none, so one where a value, an item or a flow entry starts is refused.
+_PNPM_YAML_MARK = re.compile(r"(?:^|[:\-{\[,]\s*)[&*!]|<<")
 
 
 def _pnpm_tree(text: str) -> Data:
@@ -309,6 +315,9 @@ def _pnpm_tree(text: str) -> Data:
         body = line.strip()
         if not body or body.startswith("#"):
             continue
+        if _PNPM_YAML_MARK.search(body):
+            msg = "it uses a YAML anchor, alias, tag or merge key, which pnpm does not write"
+            raise NotDependencyOnlyError(msg)
         indent = len(line) - len(line.lstrip())
         match = _PNPM_KEY.match(body)
         item = _PNPM_ITEM.match(body)
@@ -403,7 +412,26 @@ def _pnpm_artifact(entry: Data) -> Artifact:
 
 
 def _pnpm_lock(data: Data) -> Inventories:
-    return {name: _pnpm_inventory(_table(data, name)) for name in data}
+    inventories = {name: _pnpm_inventory(_table(data, name)) for name in data}
+    if PNPM_BOOT in data:
+        inventories[PNPM_PIN] = _pnpm_pins(_table(data, PNPM_BOOT), inventories[PNPM_BOOT])
+    return inventories
+
+
+def _pnpm_pins(boot: Data, locked: Locked) -> Locked:
+    """The versions the boot document's importers pin, each with the package it locks."""
+    pins: Locked = {}
+    for importer in _block(boot.get("importers")).values():
+        for group in _block(importer).values():
+            for name, spec in _block(group).items():
+                version = spec.get("version", "") if isinstance(spec, dict) else ""
+                pinned = str(version).split("(", 1)[0]
+                artifact = locked.get(normalise(name), {}).get(pinned)
+                if artifact is None:
+                    msg = f"the boot document pins {name} {pinned} but locks no such package"
+                    raise NotDependencyOnlyError(msg)
+                _lock(pins, name, version=pinned, artifact=artifact)
+    return pins
 
 
 def _pnpm_inventory(data: Data) -> Locked:
@@ -549,7 +577,7 @@ def _lockfile(file: str, before: str, after: str) -> list[Change]:
         if a.kind == "registry"
     }
     found: list[Change] = []
-    for table in sorted(old.keys() | new.keys(), key=lambda table: table != LOCKFILE):
+    for table in sorted(old.keys() | new.keys(), key=lambda table: (table != LOCKFILE, table)):
         was_table, now_table = old.get(table, {}), new.get(table, {})
         # Why: pnpm's boot document runs the one pnpm its pin names, so no version sits beside
         # another there: an older one added is the one that runs.
