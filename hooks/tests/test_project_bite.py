@@ -1024,11 +1024,19 @@ def test_a_fault_in_a_file_another_name_shares_stays_in_the_name_it_was_planted_
     assert "bite: lint: by write: DOES NOT BITE" in out
 
 
+# What a bite whose gate was red again with no fault planted says first.
+RETURNS = (
+    "  the gate did not return to green once the fault was gone, so its red may come from what"
+    " its own runs leave and not from the fault"
+)
+
+
 def test_each_bite_is_judged_against_a_green_run_of_its_own_just_before_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Why: one green run served every bite of a gate, so a gate left red by the first fault
-    # (a cache, a mark in an ignored file) made every later fault bite.
+    # (a cache, a mark in an ignored file) made every later fault bite. A gate that stays red
+    # after a fault is one red from its second run on, so the first fault is not proven either.
     gate = (
         "test -f ignored/seen && { echo L001 still red; exit 1; }\n"
         "grep -rl planted src && { mkdir -p ignored; touch ignored/seen; echo L001; exit 1; }\n"
@@ -1038,8 +1046,26 @@ def test_each_bite_is_judged_against_a_green_run_of_its_own_just_before_it(
     root = project(tmp_path / "repo", {"lint": gate}, registry)
     assert prove(root) == 1
     out = capsys.readouterr().out
-    assert "bite: lint: first: bites" in out
+    assert f"bite: lint: first: NOT PROVEN\n{RETURNS}\n  L001 still red" in out
     assert "bite: lint: blind: RED BEFORE THE FAULT\n  L001 still red" in out
+
+
+@pytest.mark.parametrize("keeps", ["in a directory git ignores", "outside the copy"])
+def test_a_gate_red_again_with_no_fault_planted_proves_no_bite_before_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], keeps: str
+) -> None:
+    # Why: a gate red from its second run on, by a count it keeps, was red on every fault, and a
+    # fault it never reads bit.
+    count = "ignored/runs" if keeps == "in a directory git ignores" else str(tmp_path / "runs")
+    gate = (
+        f"mkdir -p ignored; n=$(cat {count} 2>/dev/null || echo 0); echo $((n + 1)) > {count}\n"
+        'test "$n" -ge 1 && { echo "L001 on run $((n + 1))"; exit 1; }; exit 0'
+    )
+    root = project(tmp_path / "repo", {"lint": gate}, bite("lint", "blind", BLIND))
+    assert prove(root) == 1
+    out = capsys.readouterr().out
+    assert f"bite: lint: blind: NOT PROVEN\n{RETURNS}\n  L001 on run 3\n" in out
+    assert "bite: red: 0 of 1 faults bit" in out
 
 
 @pytest.mark.parametrize(
