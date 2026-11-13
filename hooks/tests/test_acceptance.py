@@ -2,15 +2,18 @@
 
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -287,57 +290,125 @@ def test_check_refuses_a_session_still_running_and_one_never_begun(
     )
 
 
-def seeded(directory: Path, name: str) -> None:
-    """Change what is on disk the way a careless or dishonest tester might."""
-    log = directory / "requests.jsonl"
-    lines = log.read_bytes().splitlines(keepends=True)
-    shot = directory / "tester" / "shots" / "list.png"
-    first = str(json.loads(lines[0])["id"])
-    if name == "truncated log":
-        log.write_bytes(b"".join(lines[:-1]))
-    elif name == "changed log":
-        log.write_bytes(log.read_bytes().replace(b'"status": 303', b'"status": 200'))
-    elif name == "a line added":
-        log.write_bytes(log.read_bytes() + lines[0])
-    elif name == "no seal":
-        (directory / "seal.json").unlink()
-    elif name == "changed answer":
-        (directory / "probes" / f"{first}.response").write_bytes(b"There is nothing left.")
-    elif name == "empty screenshot":
-        shot.write_bytes(b"")
-    elif name == "screenshot outside":
-        record = json.loads((directory / acceptance.RECORD).read_text(encoding="utf-8"))
-        record["criteria"][0]["screenshots"] = ["../seal.json"]
-        write_record(directory, record)
+def edit_record(directory: Path, change: Callable[[dict[str, Any]], object]) -> None:
+    record = json.loads((directory / acceptance.RECORD).read_text(encoding="utf-8"))
+    change(record)
+    write_record(directory, record)
 
 
-@pytest.mark.parametrize(
-    ("name", "sentence"),
-    [
-        (
-            "truncated log",
-            "the request log was cut short: the harness logged 3 requests and the file holds 2",
+def edit_lines(path: Path, change: Callable[[list[bytes]], list[bytes]]) -> None:
+    path.write_bytes(b"".join(change(path.read_bytes().splitlines(keepends=True))))
+
+
+def trim_ticket(directory: Path) -> None:
+    ticket = directory / "ticket.md"
+    kept = [line for line in ticket.read_text("utf-8").splitlines() if "empty list" not in line]
+    ticket.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    edit_record(
+        directory,
+        lambda r: r.update(criteria=[c for c in r["criteria"] if "empty list" not in c["text"]]),
+    )
+
+
+def drop_web_ui(directory: Path) -> None:
+    facts = json.loads((directory / "session.json").read_text(encoding="utf-8"))
+    (directory / "session.json").write_text(json.dumps({**facts, "types": ["service"]}))
+    edit_record(directory, lambda r: [c.pop("screenshots", None) for c in r["criteria"]])
+
+
+def change_first_answer(directory: Path) -> None:
+    first = products.log(directory)[0]["id"]
+    (directory / "probes" / f"{first}.response").write_bytes(b"There is nothing left.")
+
+
+# Each way a careless or dishonest tester might change what is on disk, and what `check` says.
+SEEDED: dict[str, tuple[Callable[[Path], object], str]] = {
+    "truncated log": (
+        lambda d: edit_lines(d / "requests.jsonl", lambda lines: lines[:-1]),
+        "the request log was cut short: the harness logged 3 requests and the file holds 2",
+    ),
+    "changed log": (
+        lambda d: edit_lines(
+            d / "requests.jsonl",
+            lambda lines: [line.replace(b'"status": 303', b'"status": 200') for line in lines],
         ),
-        ("changed log", "the request log was changed after the harness wrote it"),
-        (
-            "a line added",
-            "the request log holds 4 lines but the harness logged 3 requests",
-        ),
-        ("no seal", "the request log was never sealed: the session did not end with `down`"),
-        ("changed answer", "whose stored answer was changed or lost"),
-        ("empty screenshot", "cites screenshot shots/list.png, which is not a PNG file"),
-        ("screenshot outside", "cites screenshot ../seal.json, which is not a PNG file"),
-    ],
-)
+        "the request log was changed after the harness wrote it",
+    ),
+    "a line added": (
+        lambda d: edit_lines(d / "requests.jsonl", lambda lines: [*lines, lines[0]]),
+        "the request log holds 4 lines but the harness logged 3 requests",
+    ),
+    "no seal": (lambda d: (d / "seal.json").unlink(), "the request log was never sealed"),
+    "changed answer": (change_first_answer, "whose stored answer was changed or lost"),
+    "empty screenshot": (
+        lambda d: (d / "tester" / "shots" / "list.png").write_bytes(b""),
+        "cites screenshot shots/list.png, which is not a PNG file",
+    ),
+    "screenshot outside": (
+        lambda d: edit_record(d, lambda r: r["criteria"][0].update(screenshots=["../seal.json"])),
+        "cites screenshot ../seal.json, which is not a PNG file",
+    ),
+    "ticket trimmed": (trim_ticket, "the session's copy of the ticket was changed after `up`"),
+    "session file edited": (drop_web_ui, "session.json was changed after `up`"),
+}
+
+
+@pytest.mark.parametrize("name", SEEDED)
 def test_check_holds_the_record_to_the_files_the_tester_did_not_write(
-    tried: Path, capsys: pytest.CaptureFixture[str], *, name: str, sentence: str
+    tried: Path, capsys: pytest.CaptureFixture[str], name: str
 ) -> None:
-    seeded(tried, name)
+    seed, sentence = SEEDED[name]
+    seed(tried)
     code, out = check(tried.parents[5], capsys)
     print(f"{name}: {out[0]}")  # noqa: T201 # -- the demonstration prints each refusal
     assert code == 1
     assert any(sentence in line for line in out), out
     assert out[-1] == "acceptance check: red"
+
+
+def test_down_prints_the_seal_and_check_holds_the_session_to_it(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, (url, _) = up(product, capsys)
+    products.tried(url)
+    _, said = down(product, capsys)
+    directory = session(product)
+    digest = hashlib.sha256((directory / "seal.json").read_bytes()).hexdigest()
+    assert said == [f"session {directory.name}: seal {digest}", "acceptance down: stopped 1"]
+    write_record(directory, products.good_record(directory))
+    assert run(product, "check", "--slug", SLUG, "--seal", digest, capsys=capsys) == (
+        0,
+        ["acceptance check: green"],
+    )
+    log = directory / "requests.jsonl"
+    log.write_bytes(log.read_bytes() + log.read_bytes().splitlines(keepends=True)[0])
+    seal = json.loads((directory / "seal.json").read_text(encoding="utf-8"))
+    seal |= {"requests": 4, "sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
+    (directory / "seal.json").write_text(json.dumps(seal), encoding="utf-8")
+    code, out = run(product, "check", "--slug", SLUG, "--seal", digest, capsys=capsys)
+    assert code == 1
+    assert out[0] == f"seal.json is not the seal `down` printed ({digest[:12]}): it was rewritten"
+
+
+def test_a_session_that_ended_before_down_came_is_not_blessed(
+    product: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, (url, _) = up(product, capsys)
+    products.tried(url)
+    directory = session(product)
+    proxy = json.loads((directory / "proxy.json").read_text(encoding="utf-8"))
+    os.kill(proxy["pid"], signal.SIGTERM)
+    assert acceptance.wait_unlocked(directory, acceptance.STOP_GRACE)
+    code, out = down(product, capsys)
+    assert code == 1
+    assert out[0].startswith(f"session {directory.name} ended at ")
+    assert out[0].endswith(", before `down` came: something stopped it early")
+    assert out[-1] == "acceptance down: stopped 0"
+    write_record(directory, products.good_record(directory))
+    code, out = check(product, capsys)
+    assert code == 1
+    assert any(line.endswith("before `down` came: something stopped it early") for line in out)
+    assert down(product, capsys) == (0, ["acceptance down: nothing was running"])
 
 
 @pytest.mark.parametrize(
@@ -481,7 +552,7 @@ def test_the_summary_is_the_same_bytes_every_run_and_carries_the_kept_checks(
 def test_no_summary_of_a_record_that_does_not_hold(
     tried: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    seeded(tried, "changed log")
+    SEEDED["changed log"][0](tried)
     root = tried.parents[5]
     code, out = run(root, "summary", "--slug", SLUG, capsys=capsys)
     assert (code, out[-1]) == (1, "acceptance summary: red")
