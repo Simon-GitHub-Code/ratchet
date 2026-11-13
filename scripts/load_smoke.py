@@ -20,6 +20,7 @@ Usage::
     load_smoke.py --url URL [--url URL]... [--ready URL] [--concurrency 8] [--seconds 5]
                   [--min-requests 20] [--timeout 5]
     load_smoke.py --health-only [--ready URL] ...
+    load_smoke.py --until-stopped --url URL ...        # inside with_service.py --graceful
 
 A ``--url`` is ``[METHOD] URL [STATUS [BODY]]``, one argument, words separated by spaces:
 ``http://127.0.0.1:8000/health``, ``POST http://127.0.0.1:8000/links 201 {"url": "http://a.b"}``.
@@ -27,6 +28,21 @@ The method defaults to GET. The expected status defaults to any 2xx or 3xx, so a
 (404) is red and not vacuously green; a status you name must match exactly. A body is sent as
 JSON. Workers start at different URLs and take them in turn, each sending at least one request.
 Run it inside ``with_service.py``.
+
+Against a live deployment, with no ``with_service.py`` and nothing booted, pass the deployment's
+own readiness route as ``--ready`` and its routes as ``--url``: ``load_smoke.py --ready
+https://app.example.com/health --url https://app.example.com/links``. That is the "production
+answers" probe. It is judged on errors only, as everywhere, and sends the same few seconds of
+overlapping requests, so point it at a route that is safe to repeat.
+
+``--until-stopped`` is for ``with_service.py --graceful``, which stops the service partway
+through the run and exports ``RATCHET_STOPPING``, a path that exists from the signal on. The line
+is drawn by when a request started. One that started before the signal is in flight and must
+complete: a reset, a timeout, a 5xx or a wrong status is an error as always. One that started
+after it meets a service that has closed its listener, so a refused or reset connection is
+expected, not counted, and ends that worker; a timeout or an error status after the signal is still
+red. Without the flag a refused connection is always an error. The flag is red without
+``RATCHET_STOPPING``, since it could not tell the two apart.
 
 It ends within ``--seconds`` plus ``--timeout``: ten seconds at the defaults, even when the
 service hangs. Each request opens a new connection, which is what a burst of clients does.
@@ -51,6 +67,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import gatelib
@@ -124,31 +141,47 @@ def targets_of(parser: argparse.ArgumentParser, options: argparse.Namespace) -> 
     )
 
 
-def attempt(goal: Target, timeout: float) -> tuple[float | None, str | None]:
-    """One request: its latency in seconds when an answer came, and what was wrong if anything."""
+class Closed(Exception):  # noqa: N818 # -- not a fault: the service stopped taking requests
+    """A request that started after the stop signal met a closed listener."""
+
+
+def attempt(
+    goal: Target, timeout: float, stopping: Path | None = None
+) -> tuple[float | None, str | None]:
+    """One request: its latency in seconds when an answer came, and what was wrong if anything.
+
+    With ``stopping`` set, a connection error on a request that began after that path appeared
+    raises ``Closed`` instead of being counted.
+    """
+    after_signal = stopping is not None and stopping.exists()
     started = time.perf_counter()
     try:
         status = gatelib.http_status(goal.method, goal.url, body=goal.body, timeout=timeout)
     except TimeoutError:
         return None, f"{goal.label()}: timed out after {timeout:g}s"
     except (OSError, http.client.HTTPException) as error:
+        if after_signal and isinstance(error, ConnectionError):
+            raise Closed from error
         return None, f"{goal.label()}: {type(error).__name__}"
     wrong = None if goal.accepts(status) else f"{goal.label()}: HTTP {status}"
     return time.perf_counter() - started, wrong
 
 
 def work(
-    targets: list[Target], first: int, deadline: float, *, timeout: float
+    targets: list[Target], first: int, deadline: float, *, timeout: float, stopping: Path | None
 ) -> tuple[list[float], collections.Counter[str]]:
     """One worker's latencies and errors: at least one request, then until the deadline.
 
-    It starts at URL ``first`` and takes them in turn.
+    It starts at URL ``first`` and takes them in turn, and stops early on ``Closed``.
     """
     latencies: list[float] = []
     errors: collections.Counter[str] = collections.Counter()
     turn = first
     while True:
-        latency, wrong = attempt(targets[turn % len(targets)], timeout)
+        try:
+            latency, wrong = attempt(targets[turn % len(targets)], timeout, stopping)
+        except Closed:
+            break
         if latency is not None:
             latencies.append(latency)
         if wrong:
@@ -164,14 +197,21 @@ def percentile(sorted_values: list[float], fraction: float) -> float:
 
 
 def hammer(
-    targets: list[Target], concurrency: int, seconds: float, *, timeout: float
+    targets: list[Target],
+    concurrency: int,
+    seconds: float,
+    *,
+    timeout: float,
+    stopping: Path | None = None,
 ) -> tuple[list[float], collections.Counter[str]]:
     """Run ``concurrency`` workers for ``seconds``; every latency and every error counted."""
     deadline = time.monotonic() + seconds
     results: list[tuple[list[float], collections.Counter[str]]] = []
     threads = [
         threading.Thread(
-            target=lambda n=n: results.append(work(targets, n, deadline, timeout=timeout)),
+            target=lambda n=n: results.append(
+                work(targets, n, deadline, timeout=timeout, stopping=stopping)
+            ),
             daemon=True,
         )
         for n in range(concurrency)
@@ -192,6 +232,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--url", action="append", type=target, default=[])
     parser.add_argument("--ready", default=os.environ.get(gatelib.READY_ENV))
     parser.add_argument("--health-only", action="store_true")
+    parser.add_argument("--until-stopped", action="store_true")
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--seconds", type=float, default=5.0)
     parser.add_argument("--min-requests", type=int, default=20)
@@ -199,11 +240,20 @@ def main(argv: list[str]) -> int:
     options = parser.parse_args(argv[1:])
     if options.concurrency < 1 or options.seconds <= 0 or options.timeout <= 0:
         parser.error("--concurrency, --seconds and --timeout must be positive")
+    stopping = os.environ.get(gatelib.STOPPING_ENV)
+    if options.until_stopped and not stopping:
+        parser.error(
+            f"--until-stopped needs {gatelib.STOPPING_ENV}, set by with_service.py --graceful"
+        )
     targets = targets_of(parser, options)
     if isinstance(targets, str):
         return gatelib.report("load-smoke", [targets])
     latencies, errors = hammer(
-        targets, options.concurrency, options.seconds, timeout=options.timeout
+        targets,
+        options.concurrency,
+        options.seconds,
+        timeout=options.timeout,
+        stopping=Path(stopping) if options.until_stopped and stopping else None,
     )
     if latencies:
         p50, p95, p99, worst = (percentile(latencies, f) * 1000 for f in (0.5, 0.95, 0.99, 1.0))
