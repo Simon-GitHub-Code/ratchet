@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import drain
 import merge_ready
 from tests.repos import branch, commit, repository, write
@@ -194,6 +196,7 @@ LINK_FIELD = {
     "oversized": "17: a link over 2048 characters answers 400 and saves nothing",
     "hostile": "9: markup characters show as text in the title and the href",
 }
+CHECKED = {"ticketPromises": PROMISES, "acceptedInputs": [LINK_FIELD]}
 REVIEW = {
     "verdict": "approve",
     "ticketPromises": PROMISES,
@@ -253,7 +256,11 @@ ASKED = {
 
 
 def _run(args: object, **answers: object) -> dict[str, Any]:
-    """What the script returns for ``args`` when each agent answers ``answers[its label]``."""
+    """What the script returns for ``args`` when each agent answers ``answers[its label]``.
+
+    The ticket check reads the faithful spec unless a test answers for it.
+    """
+    answers = {"ticket-check": CHECKED, **answers}
     node = shutil.which("node")
     assert node, "node runs the workflow script"
     run = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
@@ -357,10 +364,10 @@ def test_a_product_question_stops_the_run_with_its_options() -> None:
     assert _run(None)["labels"] == [], "no ticket, no agent"
 
 
-def test_a_clean_run_spawns_five_agents_and_records_no_question() -> None:
+def test_a_clean_run_spawns_six_agents_and_records_no_question() -> None:
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
-    assert ran["labels"] == ["preflight", "spec", "implement", "critique", "review"]
+    assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement", "critique", "review"]
     assert "This is a second review." not in ran["prompts"]["review"]
     result = ran["result"]
     assert (result["verdict"], result["branch"]) == ("approve", "feature/4-expiry")
@@ -379,6 +386,7 @@ def test_a_test_the_critic_kept_failing_is_fixed_before_the_review() -> None:
     assert ran["labels"] == [
         "preflight",
         "spec",
+        "ticket-check",
         "implement",
         "critique",
         "fix-1",
@@ -391,7 +399,7 @@ def test_a_test_the_critic_kept_failing_is_fixed_before_the_review() -> None:
     ran = _run(
         {"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **{**answers, "critique": passing}
     )
-    assert ran["labels"] == ["preflight", "spec", "implement", "critique", "review"]
+    assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement", "critique", "review"]
 
 
 def test_a_change_with_no_room_under_the_ceiling_stops_before_the_next_stage() -> None:
@@ -409,7 +417,7 @@ def test_a_change_with_no_room_under_the_ceiling_stops_before_the_next_stage() -
     fits = {**SPECIFIED, "changeSize": {"lines": 1000, "ceiling": 1500}}
     built = {**IMPLEMENTED, "changeSize": {"lines": 1200, "ceiling": 1500}}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=fits, **{**answers, "implement": built})
-    assert ran["labels"] == ["preflight", "spec", "implement"]
+    assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement"]
     assert ran["result"]["tooLarge"]["stage"] == "the implementation"
     assert sorted(ran["result"]["filesChanged"]) == ["src/links.py", "tests/test_expiry.py"]
 
@@ -431,7 +439,7 @@ def test_a_finding_whose_kept_test_passes_starts_no_fix_round() -> None:
     kept = {**CRITIQUED, "findings": [held], "testsAdded": tests}
     answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
-    assert ran["labels"] == ["preflight", "spec", "implement", "critique", "review"]
+    assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement", "critique", "review"]
     result = ran["result"]
     assert (result["verdict"], result["unresolvedBlockingFindings"]) == ("approve", [])
     assert result["criticFindings"] == [held], "the review still reads it"
@@ -532,7 +540,7 @@ YOUNG = {
 def test_a_project_nobody_depends_on_goes_spec_implement_review() -> None:
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
-    assert ran["labels"] == ["preflight", "spec", "implement", "review"]
+    assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement", "review"]
     assert any(line.startswith("Critique and Fix skipped: the binding") for line in ran["logs"])
     result = ran["result"]
     assert result["verdict"] == "approve"
@@ -555,7 +563,14 @@ def test_a_project_that_is_depended_on_runs_the_critic() -> None:
     old = {**PREFLIGHT, "critic": True, "critic_reason": "others rely on it"}
     for preflight in (old, PREFLIGHT):
         ran = _run({"ref": "4"}, preflight=preflight, spec=SPECIFIED, **answers)
-        assert ran["labels"] == ["preflight", "spec", "implement", "critique", "review"]
+        assert ran["labels"] == [
+            "preflight",
+            "spec",
+            "ticket-check",
+            "implement",
+            "critique",
+            "review",
+        ]
         assert ran["result"]["critic"]["ran"] is True
     assert ran["result"]["critic"]["reason"] == ""
 
@@ -639,7 +654,7 @@ def test_the_fix_agent_is_told_the_same_about_a_red_triggers_gate() -> None:
     assert "red on the `triggers` gate" in ran["prompts"]["fix-1"]
 
 
-# --- the review reads the ticket the spec was written from ---------------------------------------
+# --- the ticket is read against the spec before the build and against the change after it ------
 
 KINDS: dict[str, type] = {
     "object": dict,
@@ -674,13 +689,13 @@ def _valid(value: object, schema: dict[str, Any]) -> bool:
     return all(checks)
 
 
-def _built(review: dict[str, object], ref: str = "4") -> dict[str, Any]:
-    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": review}
+def _built(review: dict[str, object], ref: str = "4", **answers: object) -> dict[str, Any]:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": review, **answers}
     return _run({"ref": ref}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
 
 
-def _review_schema() -> dict[str, Any]:
-    schema: dict[str, Any] = _built(REVIEW)["schemas"]["review"]
+def _schema(label: str) -> dict[str, Any]:
+    schema: dict[str, Any] = _built(REVIEW)["schemas"][label]
     return schema
 
 
@@ -689,28 +704,73 @@ def _reread(promise: str, reading: dict[str, str]) -> list[dict[str, object]]:
     return [p if p["promise"] != promise else {"promise": promise, **reading} for p in PROMISES]
 
 
-def test_the_review_reads_the_ticket_the_spec_was_written_from() -> None:
-    prompt = _built(REVIEW, ".scratch/list/issues/01-save-a-link.md")["prompts"]["review"]
-    inputs = prompt.split("Inputs you may read")[1].split("Load the")[0]
-    assert "The ticket: the file `.scratch/list/issues/01-save-a-link.md`" in inputs
+NO_SCRIPT = "It has no client JavaScript"
+SAVED = "Saving a link answers `303` to the list"
+OUT_OF_SCOPE = {"reading": "dropped", "specLine": "Out of scope: client JavaScript"}
+GAP = {**CHECKED, "ticketPromises": _reread(NO_SCRIPT, OUT_OF_SCOPE)}
+TICKET_FILE = ".scratch/list/issues/01-save-a-link.md"
+
+
+def test_every_role_that_reads_a_local_ticket_reads_it_as_the_base_holds_it() -> None:
+    # Why: an agent of the run can edit the ticket file in the working tree, and the check and the
+    # review would then read the ticket it wrote instead of the one the owner agreed.
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    based = {**PREFLIGHT, "base": "main"}
+    ran = _run({"ref": TICKET_FILE}, preflight=based, spec=SPECIFIED, **answers)
+    shown = f"(`git show main:{TICKET_FILE}`, run from the repository root"
+    for role in ("spec", "ticket-check", "review"):
+        assert shown in ran["prompts"][role], role
+        assert "not the copy in the working tree" in ran["prompts"][role], role
+    rejudge = {"ref": TICKET_FILE, "base": "main", "branch": "feature/4-expiry", "rejudge": REJUDGE}
+    assert shown in _run(rejudge, **{"review-again": REVIEW})["prompts"]["review-again"]
+    unbased = _built(REVIEW, TICKET_FILE)["prompts"]["review"]
+    inputs = unbased.split("Inputs you may read")[1].split("Load the")[0]
+    assert f"The ticket: the file `{TICKET_FILE}` under the repository root" in inputs
     assert "`## Answers`" in inputs
-    assert "the ticket are outside your inputs" not in prompt
+    assert "the ticket are outside your inputs" not in unbased
     tracker = "`gh issue view 4 --json number,title,body,labels,comments`"
-    assert tracker in _built(REVIEW)["prompts"]["review"]
+    for role in ("spec", "ticket-check", "review"):
+        assert tracker in _built(REVIEW)["prompts"][role], role
     assert tracker in _again({}, **{"review-again": REVIEW})["prompts"]["review-again"]
 
 
-def test_a_review_that_skips_the_ticket_or_the_inputs_is_not_a_review() -> None:
-    schema = _review_schema()
-    assert _valid(REVIEW, schema)
-    for axis in ("ticketPromises", "acceptedInputs"):
-        assert not _valid({k: v for k, v in REVIEW.items() if k != axis}, schema), axis
-    assert not _valid({**REVIEW, "ticketPromises": []}, schema), "every ticket promises something"
-    assert _valid({**REVIEW, "acceptedInputs": []}, schema), "a change may accept nothing"
+def test_the_ticket_check_reads_the_ticket_and_the_spec_and_nothing_else() -> None:
+    prompt = _built(REVIEW)["prompts"]["ticket-check"]
+    assert "Read these two and nothing else (no code, no tests, no other record)" in prompt
+    assert "- The spec: `docs/features/expiry/spec.md`" in prompt
+    assert "run `check`" not in prompt
+    assert "what a gate charges" in prompt, "a sentence about the method's work is no promise"
+
+
+def test_the_check_and_the_review_answer_the_same_two_axes() -> None:
+    check, review = _schema("ticket-check"), _schema("review")
+    assert check["required"] == ["ticketPromises", "acceptedInputs"]
+    for axis in check["required"]:
+        assert check["properties"][axis] == review["properties"][axis], axis
+        assert axis in review["required"], axis
+    prompts = _built(REVIEW)["prompts"]
+    for role in ("ticket-check", "review"):
+        assert "- `dropped`: no criterion carries it;" in prompts[role], role
+        assert "an assumption decides no case." in prompts[role], role
+
+
+def test_the_schema_forces_an_answer_on_each_axis_and_cannot_force_a_whole_one() -> None:
+    for label, answer in (("ticket-check", CHECKED), ("review", REVIEW)):
+        schema = _schema(label)
+        assert _valid(answer, schema), label
+        for axis in ("ticketPromises", "acceptedInputs"):
+            assert not _valid({k: v for k, v in answer.items() if k != axis}, schema), axis
+        assert not _valid({**answer, "ticketPromises": []}, schema), (
+            "every ticket promises something"
+        )
+        assert _valid({**answer, "acceptedInputs": []}, schema), "a change may accept nothing"
+        assert _valid({**answer, "ticketPromises": PROMISES[:1]}, schema), (
+            "it cannot know the ticket"
+        )
 
 
 def test_each_reading_of_a_promise_carries_what_shows_it() -> None:
-    schema = _review_schema()
+    schema = _schema("review")
 
     def holds(entry: dict[str, object]) -> bool:
         return _valid({**REVIEW, "ticketPromises": [entry]}, schema)
@@ -730,18 +790,127 @@ def test_each_reading_of_a_promise_carries_what_shows_it() -> None:
     undecided = {k: v for k, v in LINK_FIELD.items() if k != "hostile"}
     assert not _valid({**REVIEW, "acceptedInputs": [undecided]}, schema), "a case left out"
     assert _valid({**REVIEW, "acceptedInputs": [{**LINK_FIELD, "hostile": None}]}, schema)
+    blank = {**LINK_FIELD, "empty": ""}
+    assert not _valid({**REVIEW, "acceptedInputs": [blank]}, schema), "a blank decides nothing"
 
 
-def test_a_spec_that_drops_a_ticket_promise_is_refused(tmp_path: Path) -> None:
+def test_a_gap_the_check_finds_is_amended_once_and_the_run_goes_on() -> None:
+    # Why: a gap found by the review after the build blocked a change nothing could repair: no
+    # role after the review fixes the spec, and the stash went to an owner who cannot read code.
+    tests = ["tests/test_expiry.py", "tests/test_no_script.py"]
+    failures = [{"testFile": f, "content": "AssertionError"} for f in tests]
+    amended = {**SPECIFIED, "testFiles": tests, "failures": failures}
+    gap = {**GAP, "acceptedInputs": [{**LINK_FIELD, "oversized": None}]}
+    answers = {"ticket-check": gap, "spec-amend": amended, "ticket-recheck": CHECKED}
+    ran = _built(REVIEW, **answers)
+    assert ran["labels"] == [
+        "preflight",
+        "spec",
+        "ticket-check",
+        "spec-amend",
+        "ticket-recheck",
+        "implement",
+        "critique",
+        "review",
+    ]
+    amend = ran["prompts"]["spec-amend"]
+    assert "This is an AMEND." in amend
+    assert f'"promise": "{NO_SCRIPT}"' in amend
+    assert '"case": "oversized"' in amend
+    assert "This is an AMEND." not in ran["prompts"]["spec"]
+    assert "tests/test_no_script.py" in ran["prompts"]["implement"], "the amended spec is built"
+    result = ran["result"]
+    assert (result["verdict"], result["testFiles"]) == ("approve", tests)
+
+
+def test_what_the_amend_leaves_open_is_asked_before_anything_is_built() -> None:
+    gap = {**GAP, "acceptedInputs": [{**LINK_FIELD, "empty": None}]}
+    ran = _built(REVIEW, **{"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": gap})
+    assert ran["labels"] == ["preflight", "spec", "ticket-check", "spec-amend", "ticket-recheck"]
+    result = ran["result"]
+    assert result["verdict"] == "blocked"
+    asked = result["openQuestions"]
+    assert [q["question"] for q in asked] == [
+        (
+            f'The ticket says: "{NO_SCRIPT}". The plan leaves this out (Out of scope: client'
+            " JavaScript). Should the app be built without it?"
+        ),
+        (
+            "The plan does not say what happens when the link field of the save form is left empty."
+            " Should the app make that safe?"
+        ),
+    ]
+    assert [(q["kind"], len(q["options"])) for q in asked] == [("direction", 2)] * 2
+    assert asked[0]["options"][0] == "No: the plan is changed so the app does what the ticket says"
+    assert "under `## Answers`" in result["requiredByOrchestrator"][0]
+    assert result["ticketPromises"] == gap["ticketPromises"]
+
+
+def test_an_amend_that_asks_the_owner_stops_the_run_there() -> None:
+    asked = {**SPECIFIED, "openQuestions": [ASKED]}
+    ran = _built(REVIEW, **{"ticket-check": GAP, "spec-amend": asked})
+    assert ran["labels"] == ["preflight", "spec", "ticket-check", "spec-amend"]
+    assert (ran["result"]["verdict"], ran["result"]["openQuestions"]) == ("blocked", [ASKED])
+
+
+def test_a_reading_the_check_and_the_spec_role_do_not_share_is_an_assumption() -> None:
+    # Why: one of three readings of a faithful spec took a sentence about what a gate charges for
+    # a promise of the product the spec bent.
+    charge = "Each is the first of its kind and free"
+    bent = {
+        "promise": charge,
+        "reading": "bent",
+        "specLine": "Placement: no criterion names a charge",
+        "change": "the spec says nothing of what the gate charges",
+    }
+    read = {**CHECKED, "ticketPromises": [*PROMISES, bent]}
+    ran = _built(REVIEW, **{"ticket-check": read, "spec-amend": SPECIFIED, "ticket-recheck": read})
+    assert ran["labels"][-5:] == ["spec-amend", "ticket-recheck", "implement", "critique", "review"]
+    result = ran["result"]
+    assert (result["verdict"], result["verdictRecord"]["unresolved"]) == ("approve", [])
+    surfaced = {"question": charge, "assumed": bent["specLine"], "refuter": bent["change"]}
+    assert result["assumptions"] == [*SPECIFIED["assumptions"], surfaced]
+    assert result["verdictRecord"]["assumptions"] == result["assumptions"]
+
+
+def test_a_promise_the_spec_decided_for_the_owner_starts_no_amend_and_is_listed_once() -> None:
+    assumed = {
+        "reading": "assumed",
+        "specLine": "Ticket 01 saves whatever is pasted (no check that it is a web link)",
+        "ownerSees": "a blank save makes an item with no title",
+    }
+    read = {**CHECKED, "ticketPromises": _reread(SAVED, assumed)}
+    ran = _built({**REVIEW, "ticketPromises": read["ticketPromises"]}, **{"ticket-check": read})
+    assert "spec-amend" not in ran["labels"]
+    result = ran["result"]
+    assert (result["verdict"], result["verdictRecord"]["unresolved"]) == ("approve", [])
+    surfaced = {"question": SAVED, "assumed": assumed["specLine"], "refuter": assumed["ownerSees"]}
+    assert result["assumptions"] == [*SPECIFIED["assumptions"], surfaced], "check and review, once"
+    assert result["verdictRecord"]["assumptions"] == result["assumptions"]
+
+
+def test_the_review_starts_from_the_readings_the_check_settled() -> None:
+    gap = {**GAP, "acceptedInputs": [{**LINK_FIELD, "oversized": None}]}
+    settled = {**CHECKED, "acceptedInputs": [{**LINK_FIELD, "oversized": "17: a settled length"}]}
+    answers = {"ticket-check": gap, "spec-amend": SPECIFIED, "ticket-recheck": settled}
+    prompt = _built(REVIEW, **answers)["prompts"]["review"]
+    assert "They are decided: do not argue them again." in prompt
+    assert '"oversized": "17: a settled length"' in prompt
+    again = _again({}, **{"review-again": REVIEW})["prompts"]["review-again"]
+    assert "do not argue them again" not in again
+
+
+def test_a_change_that_drops_a_ticket_promise_is_refused(tmp_path: Path) -> None:
     # Why: the spec is what the implementer builds and what the review judged the build against,
-    # so a spec that left out a promise of the ticket was built to the letter, approved and merged.
-    dropped = {"reading": "dropped", "specLine": "Acceptance criteria: no criterion names a tab"}
-    result = _built({**REVIEW, "ticketPromises": _reread(NEW_TAB, dropped)})["result"]
+    # so a promise of the ticket the build lost was approved and merged.
+    lost = {"reading": "dropped", "specLine": "Acceptance criteria: no criterion names a tab"}
+    result = _built({**REVIEW, "ticketPromises": _reread(NEW_TAB, lost)})["result"]
     assert result["verdict"] == "request_changes"
     assert result["verdictForcedBy"] == ["1 blocker/major review issue(s)"]
-    title = f'the spec drops the ticket\'s promise "{NEW_TAB}"'
+    title = f'the change drops the ticket\'s promise "{NEW_TAB}"'
     assert result["verdictRecord"]["unresolved"] == [title]
-    assert [i["location"] for i in result["reviewIssues"]] == [dropped["specLine"]]
+    assert [i["location"] for i in result["reviewIssues"]] == [lost["specLine"]]
+    assert result["ticketFindings"] == result["reviewIssues"]
 
     root = repository(tmp_path, {"guards/manifest.toml": MANIFEST_TOML, "src/a.py": "x = 1\n"})
     branch(root, "feature/4-thing")
@@ -754,42 +923,81 @@ def test_a_spec_that_drops_a_ticket_promise_is_refused(tmp_path: Path) -> None:
     assert title in refused
 
 
-def test_a_bent_promise_blocks_and_an_assumed_one_goes_to_the_owner() -> None:
+def test_a_bent_reading_at_the_review_holds_no_merge() -> None:
     bent = {"reading": "bent", "specLine": "7: opens it in place", "change": "no new tab"}
     result = _built({**REVIEW, "ticketPromises": _reread(NEW_TAB, bent)})["result"]
-    assert result["verdictRecord"]["unresolved"] == [
-        f'the spec bends the ticket\'s promise "{NEW_TAB}"'
-    ]
-    saved = "Saving a link answers `303` to the list"
-    assumed = {
-        "reading": "assumed",
-        "specLine": "Ticket 01 saves whatever is pasted (no check that it is a web link)",
-        "ownerSees": "a blank save makes an item with no title",
-    }
-    result = _built({**REVIEW, "ticketPromises": _reread(saved, assumed)})["result"]
     assert (result["verdict"], result["verdictRecord"]["unresolved"]) == ("approve", [])
-    surfaced = {"question": saved, "assumed": assumed["specLine"], "refuter": assumed["ownerSees"]}
+    assert result["ticketFindings"] == []
+    surfaced = {"question": NEW_TAB, "assumed": bent["specLine"], "refuter": bent["change"]}
     assert result["assumptions"] == [*SPECIFIED["assumptions"], surfaced]
-    assert result["verdictRecord"]["assumptions"] == result["assumptions"]
 
 
-def test_an_input_case_no_criterion_decides_blocks() -> None:
-    undecided = {**LINK_FIELD, "empty": None, "hostile": None}
-    result = _built({**REVIEW, "acceptedInputs": [undecided]})["result"]
+@pytest.mark.parametrize(
+    ("case", "value"),
+    [
+        ("empty", "an empty value"),
+        ("oversized", "an oversized value"),
+        ("hostile", "a hostile value"),
+    ],
+)
+def test_an_input_case_the_change_leaves_undecided_blocks(case: str, value: str) -> None:
+    result = _built({**REVIEW, "acceptedInputs": [{**LINK_FIELD, case: None}]})["result"]
     assert result["verdict"] == "request_changes"
-    assert result["verdictRecord"]["unresolved"] == [
-        "no criterion says what happens to an empty value of the link field of the save form",
-        "no criterion says what happens to a hostile value of the link field of the save form",
-    ]
+    title = f"no criterion says what happens to {value} of the link field of the save form"
+    assert result["verdictRecord"]["unresolved"] == [title]
+    assert [i["title"] for i in result["ticketFindings"]] == [title]
+
+
+def test_a_run_after_a_lost_promise_hands_the_spec_role_what_was_lost() -> None:
+    # Why: a rerun's spec role never saw why the last run was refused, so it wrote the same spec.
+    lost = {"reading": "dropped", "specLine": "15: the page holds no script element"}
+    first = _built({**REVIEW, "ticketPromises": _reread(NO_SCRIPT, lost)})["result"]
+    assert first["verdict"] == "request_changes"
+    findings = first["ticketFindings"]
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    args = {"ref": "4", "ticketFindings": findings}
+    again = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **answers)["prompts"]["spec"]
+    assert "its review refused the change because the build lost these" in again
+    assert '"location": "15: the page holds no script element"' in again
+    assert "its review refused the change" not in _built(REVIEW)["prompts"]["spec"]
 
 
 def test_the_second_review_reads_the_ticket_by_the_same_rules() -> None:
-    dropped = {"reading": "dropped", "specLine": "Out of scope: client JavaScript"}
-    review = {**REVIEW, "ticketPromises": _reread("It has no client JavaScript", dropped)}
-    assumption = {"question": "q", "assumed": "a", "refuter": "r"}
-    result = _again({"assumptions": [assumption]}, **{"review-again": review})["result"]
-    assert result["verdict"] == "request_changes"
-    assert result["verdictRecord"]["unresolved"] == [
-        'the spec drops the ticket\'s promise "It has no client JavaScript"'
+    # Why: on a rejudge the skill passes back the first run's assumptions, the ones the first
+    # review surfaced among them, so the second review's readings must not list one twice.
+    first = {"question": NEW_TAB, "assumed": "7: a new tab", "refuter": "a blank item"}
+    given = [{"question": "q", "assumed": "a", "refuter": "r"}, first]
+    seen = {"reading": "assumed", "specLine": "Assumptions: any text", "ownerSees": "an empty item"}
+    again = {"reading": "assumed", "specLine": "7: a new tab", "ownerSees": "a blank item"}
+    readings = {NO_SCRIPT: OUT_OF_SCOPE, SAVED: seen, NEW_TAB: again}
+    promises = [
+        p if p["promise"] not in readings else {"promise": p["promise"], **readings[p["promise"]]}
+        for p in PROMISES
     ]
-    assert result["verdictRecord"]["assumptions"] == [assumption]
+    result = _again(
+        {"assumptions": given}, **{"review-again": {**REVIEW, "ticketPromises": promises}}
+    )["result"]
+    assert result["verdict"] == "request_changes"
+    title = f'the change drops the ticket\'s promise "{NO_SCRIPT}"'
+    assert result["verdictRecord"]["unresolved"] == [title]
+    assert [i["title"] for i in result["reviewIssues"]] == [title]
+    surfaced = {"question": SAVED, "assumed": seen["specLine"], "refuter": seen["ownerSees"]}
+    assert result["assumptions"] == [*given, surfaced], "each promise once"
+    assert result["verdictRecord"]["assumptions"] == result["assumptions"]
+
+
+def test_the_drain_counts_every_agent_a_run_can_spawn() -> None:
+    # Why: the drain states its cost before it starts, from the number the script declares.
+    worst = {"ticket-check": GAP, "spec-amend": SPECIFIED, "ticket-recheck": CHECKED}
+    worst |= {"implement": IMPLEMENTED, "review": REVIEW}
+    young = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **worst)["labels"]
+    assert len(young) == drain.YOUNG_PIPELINE_AGENTS
+    owed = {**CRITIQUED, "findings": [{"severity": "major", "title": "open"}]}
+    rounds = {"critique": owed, "fix-1": IMPLEMENTED, "critique-1": owed}
+    rounds |= {"fix-2": IMPLEMENTED, "critique-2": owed}
+    depended_on = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **worst, **rounds)
+    assert len(depended_on["labels"]) == drain.PIPELINE_AGENTS
+    rebased = _again(
+        {"conflicts": ["flags.toml"]}, reconcile=IMPLEMENTED, **{"review-again": REVIEW}
+    )
+    assert len(rebased["labels"]) == drain.UPDATE_AGENTS
