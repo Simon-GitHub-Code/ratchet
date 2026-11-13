@@ -44,6 +44,12 @@ def run(*args: str, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
     return code, capsys.readouterr().out
 
 
+def run_both(*args: str, capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
+    code = with_service.main(["with_service.py", *args])
+    seen = capsys.readouterr()
+    return code, seen.out, seen.err
+
+
 def test_smoke_boots_probes_and_stops_the_whole_process_tree(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -110,7 +116,29 @@ def test_a_service_that_exits_before_it_answers_is_red(
     code, out = run("--boot", boot, "--ready", READY, capsys=capsys)
     assert code == 1
     assert "the service exited with code 4 before http://127.0.0.1:" in out
-    assert "boot output (tail):\n  boom" in out
+    assert "boot output:\n  boom" in out
+
+
+def test_an_early_exit_shows_what_the_service_wrote_on_stdout_and_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    boot = "echo to-stdout; echo to-stderr >&2; exit 2 # {port}"
+    code, out, _ = run_both("--boot", boot, "--ready", READY, capsys=capsys)
+    assert code == 1
+    assert "the service exited with code 2 before" in out
+    assert "boot output:\n  to-stdout\n  to-stderr\n" in out
+
+
+def test_an_early_exit_with_long_output_keeps_the_first_lines_the_cause_is_usually_in(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    boot = "echo cause; for i in $(seq 100); do echo line-$i; done; exit 2 # {port}"
+    code, out, _ = run_both("--boot", boot, "--ready", READY, capsys=capsys)
+    assert code == 1
+    assert "boot output:\n  cause\n" in out
+    assert "... 41 lines left out ...\n" in out, "101 lines, 30 of them first and 30 last"
+    assert "  line-100\n" in out
+    assert "line-50\n" not in out
 
 
 def test_an_early_exit_says_what_ran_where_and_for_how_long_even_when_it_printed_nothing(

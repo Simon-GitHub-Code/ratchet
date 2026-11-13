@@ -15,9 +15,10 @@ Usage::
   and answered; the verdict line is ``with_service: green``.
 * Ready means the URL answers with a status below 400. The probe repeats every 100 ms until
   ``--timeout`` (30 s by default; raise it for a service that compiles on start). A service that
-  exits before it answers, or never answers, is red, with the last lines of its output; an
-  early exit also says the command as it ran, where, and for how long, and says so when the
-  command printed nothing.
+  never answers is red, with the last lines of its output. One that exits before it answers is
+  red with everything it wrote, the start and the end when that is long, since the cause of an
+  exit is usually the first thing it said; that also says the command as it ran, where, and for
+  how long, and says so when the command printed nothing.
 * ``{port}`` in ``--boot``, ``--ready``, an ``--env`` value or the command is replaced by a free
   port the kernel picked, and ``PORT`` is exported with it, so parallel CI jobs on one host do
   not collide on a fixed port. The boot output is shown only when the run is red.
@@ -57,6 +58,9 @@ import gatelib
 
 POLL = 0.1
 TAIL = 30
+# An exited service shows its first lines as well: the cause is usually the first thing it
+# said, and a long start-up can push it out of the tail.
+HEAD = 30
 PORT_TOKEN = "{port}"  # noqa: S105 # -- a placeholder, not a credential
 
 
@@ -69,8 +73,10 @@ def probe(url: str) -> str | None:
     return None if status < 400 else f"HTTP {status}"  # noqa: PLR2004 # -- the HTTP error class
 
 
-def wait_ready(process: subprocess.Popen[bytes], options: argparse.Namespace) -> str | None:
-    """``None`` once the ready URL answers; else why the service is not ready."""
+def wait_ready(
+    process: subprocess.Popen[bytes], options: argparse.Namespace
+) -> tuple[str | None, bool]:
+    """``(None, False)`` once the ready URL answers; else why not, and whether it exited."""
     url, timeout = options.ready, options.timeout
     started = time.monotonic()
     deadline = started + timeout
@@ -81,22 +87,31 @@ def wait_ready(process: subprocess.Popen[bytes], options: argparse.Namespace) ->
             return (
                 f"the service exited with code {code} before {url} answered, {took:.1f}s after"
                 f" `{options.boot}` started in {Path.cwd()}"
-            )
+            ), True
         seen = probe(url)
         if seen is None:
-            return None
+            return None, False
         if time.monotonic() >= deadline:
-            return f"{url} did not answer within {timeout:g}s; the last probe saw {seen}"
+            return f"{url} did not answer within {timeout:g}s; the last probe saw {seen}", False
         time.sleep(POLL)
 
 
-def tail(log: IO[bytes]) -> list[str]:
-    """The last lines the service wrote, indented, for a red verdict."""
+def tail(log: IO[bytes], *, exited: bool = False) -> list[str]:
+    """What the service wrote, indented, for a red verdict.
+
+    The last lines; for a service that exited, the first lines too, with the count left out
+    between them when there are more than both hold.
+    """
     log.seek(0)
-    lines = log.read().decode("utf-8", errors="replace").splitlines()[-TAIL:]
+    lines = log.read().decode("utf-8", errors="replace").splitlines()
     if not lines:
         return ["boot output: none, the boot command printed nothing"]
-    return ["boot output (tail):", *(f"  {line}" for line in lines)]
+    if not exited:
+        return ["boot output (tail):", *(f"  {line}" for line in lines[-TAIL:])]
+    if len(lines) > HEAD + TAIL:
+        left = len(lines) - HEAD - TAIL
+        lines = [*lines[:HEAD], f"... {left} lines left out ...", *lines[-TAIL:]]
+    return ["boot output:", *(f"  {line}" for line in lines)]
 
 
 def start(
@@ -116,16 +131,16 @@ def start(
 
 def serve(
     options: argparse.Namespace, command: list[str], env: dict[str, str]
-) -> tuple[int, list[str]]:
-    """Boot, wait, run the command, stop; the exit code and the problems."""
-    code, problems = 1, []
+) -> tuple[int, list[str], bool]:
+    """Boot, wait, run the command, stop; the exit code, the problems, and whether it exited."""
+    code, problems, exited = 1, [], False
     with tempfile.TemporaryFile() as log:
         try:
             with contextlib.ExitStack() as running:
                 with gatelib.signals_held():
                     process = start(options, env, log)
                     running.callback(gatelib.stop_group, process)
-                not_ready = wait_ready(process, options)
+                not_ready, exited = wait_ready(process, options)
                 if not_ready:
                     problems = [not_ready]
                 elif command:
@@ -133,12 +148,12 @@ def serve(
                 else:
                     code = 0
         except gatelib.Interrupted as stop:
-            code, problems = 128 + stop.signum, [str(stop)]
+            code, problems, exited = 128 + stop.signum, [str(stop)], False
         if gatelib.listening(options.ready):
             code, problems = 1, [*problems, f"{options.ready} still answers after the stop"]
         if problems:
-            problems += tail(log)
-    return code, problems
+            problems += tail(log, exited=exited)
+    return code, problems, exited
 
 
 def pair(text: str) -> tuple[str, str]:
@@ -177,7 +192,7 @@ def main(argv: list[str]) -> int:
         problem = f"{options.ready} already answers before the boot: free the port or use {{port}}"
         return gatelib.report("with_service", [problem])
     with gatelib.interrupts_raise():
-        code, problems = serve(options, command, env)
+        code, problems, _ = serve(options, command, env)
     gatelib.report("with_service", problems)
     return code
 
