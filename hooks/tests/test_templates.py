@@ -7,11 +7,13 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import tomllib
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import change_size
 import pins
 import plugin_pin
 
@@ -211,6 +213,7 @@ def test_a_recipe_learns_its_shard_from_the_environment_and_is_whole_without_one
     assert 'shards := env_var_or_default("SHARDS", "1")' in JUSTFILE
     for name in ("test", "mutation-changed", "mutation", "e2e"):
         assert "shard {{shard}} of {{shards}}" in recipe(name), name
+    assert "test_runner" in recipe("test"), "the test gate runs the runner adoption provisioned"
 
 
 def test_a_gate_that_requests_routes_boots_with_the_flags_due_for_removal_on() -> None:
@@ -232,7 +235,7 @@ def test_the_three_service_gates_arrive_bound_to_the_shipped_scripts() -> None:
     assert 'scripts/telemetry_sink.py" --service "{{service}}" -- {{booted}} --' in recipe(
         "telemetry-e2e"
     )
-    for name in ("boot", "ready", "service"):
+    for name in ("boot", "ready", "service", "test_runner"):
         assert re.search(rf'^{name} := "bind: ', JUSTFILE, re.MULTILINE), name
     for question, script in (
         ("starts and answers", "with_service.py"),
@@ -240,6 +243,121 @@ def test_the_three_service_gates_arrive_bound_to_the_shipped_scripts() -> None:
         ("telemetry arrives", "telemetry_sink.py"),
     ):
         assert f"\n| {question} | `ratchet` plugin `scripts/{script}`" in BINDING
+
+
+def all_recipes() -> set[str]:
+    just = shutil.which("just")
+    assert just
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        [just, "--justfile", str(TEMPLATES / "justfile"), "--summary"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return set(done.stdout.split())
+
+
+def run_template(tmp_path: Path, settings: dict[str, str], *words: str) -> str:
+    just = shutil.which("just")
+    assert just
+    sets = [word for name, value in settings.items() for word in ("--set", name, value)]
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        [just, "--justfile", str(TEMPLATES / "justfile"), *sets, *words],
+        cwd=tmp_path,
+        env={**os.environ, "RATCHET_PLUGIN": "/plugin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+# Why: the first ticket of the 2026-11-13 dogfood, measured by change_size.py (ADR 0032).
+FIRST_SLICE_FILES = 20
+FIRST_SLICE_LINES = 683
+
+
+def test_the_change_size_ceiling_is_there_before_the_first_feature_and_its_first_slice_fits(
+    tmp_path: Path,
+) -> None:
+    # Why: ADR 0032. The spec stage stops a ticket over two thirds of the ceiling as too large,
+    # so a first slice the pipeline builds must fit under that, with no ceiling to record first.
+    path = TEMPLATES / "quality/thresholds.toml"
+    ceiling = tomllib.loads(path.read_text(encoding="utf-8"))["ceilings"]["change"]
+    assert ceiling["files"] * 2 >= FIRST_SLICE_FILES * 3, "the first slice's files fit"
+    assert ceiling["lines"] * 2 >= FIRST_SLICE_LINES * 3, "the first slice's lines fit"
+    (tmp_path / "quality").mkdir()
+    shutil.copy(path, tmp_path / "quality/thresholds.toml")
+    assert change_size.ceilings(tmp_path) == (40, 1500), "the gate reads the template's ceiling"
+
+
+def test_start_runs_the_deliverable_on_its_port_and_says_where_to_open_it(tmp_path: Path) -> None:
+    needs_just()
+    server = {"boot": "echo started on {port}", "ready": "http://127.0.0.1:{port}/", "port": "3000"}
+    out = run_template(tmp_path, server, "start")
+    assert "open http://127.0.0.1:3000/ once it is up" in out
+    assert "started on 3000" in out
+    assert "{port}" not in out
+
+
+def test_start_hands_a_tool_with_no_address_the_words_after_it(tmp_path: Path) -> None:
+    needs_just()
+    out = run_template(tmp_path, {"boot": "echo cli", "ready": "none"}, "start", "--version")
+    assert "cli --version" in out
+    assert "open " not in out, "no address to open"
+
+
+def test_start_gives_the_port_to_the_whole_boot_line_as_the_gates_do(tmp_path: Path) -> None:
+    # Why: `boot` builds what it runs, so a line of `build && run` is usual, and an assignment in
+    # front of the line would reach `build` alone; with_service.py exports PORT to the whole line.
+    needs_just()
+    boot = {"boot": "true && sh -c 'echo port is $PORT'", "ready": "none", "port": "3000"}
+    assert "port is 3000" in run_template(tmp_path, boot, "start")
+
+
+@pytest.mark.parametrize(
+    ("files", "ran"),
+    [(["a.test.ts", "b.test.ts"], "ran a.test.ts b.test.ts"), ([], "ran")],
+    ids=["the files named", "every test with none"],
+)
+def test_test_files_runs_the_runner_over_the_files_named(
+    tmp_path: Path, files: list[str], ran: str
+) -> None:
+    needs_just()
+    out = run_template(tmp_path, {"test_runner": "echo ran"}, "test-files", *files)
+    assert out.strip() == ran
+
+
+def test_start_and_test_files_are_entry_points_and_in_no_tier() -> None:
+    needs_just()
+    lists = (
+        "tier0_gates",
+        "tier0_tree_gates",
+        "tier1_gates",
+        "tier2_gates",
+        "tier1_sharded",
+        "tier2_sharded",
+        "weekly_gates",
+    )
+    for name in lists:
+        assert not {"start", "test-files"} & set(gate_list(name)), name
+    assert {"start", "test-files"} <= all_recipes()
+
+
+def test_every_entry_point_the_binding_names_is_a_recipe_of_the_justfile() -> None:
+    needs_just()
+    section = BINDING.split("## Entry points", 1)[1].split("\n## ", 1)[0]
+    rows = [line for line in section.splitlines() if line.startswith("|")][2:]
+    row = re.compile(r"^\| [^|]+ \| `just ([a-z][a-z0-9-]*)[^`]*` \|$", re.MULTILINE)
+    named = row.findall("\n".join(rows))
+    assert len(named) == len(rows), "every row of the table is read"
+    assert set(named) <= all_recipes(), set(named) - all_recipes()
+
+
+def test_the_binding_names_the_tests_every_role_writes_and_how_they_run() -> None:
+    tests = BINDING.split("\n## Tests\n", 1)[1].split("\n## ", 1)[0]
+    assert "just test-files" in tests
 
 
 def test_the_ci_templates_are_green_on_the_pins_gate() -> None:
