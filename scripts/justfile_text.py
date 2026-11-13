@@ -7,12 +7,14 @@ so a line added follows its recipe's body and a copied recipe keeps the template
 
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from gatelib import Want
 
@@ -173,7 +175,16 @@ def parse_head(line: str, name_end: int) -> Head | None:
 
 
 def blocks(lines: Sequence[str]) -> list[Block]:
-    """The top-level definitions of a justfile, in order."""
+    """The top-level definitions of a justfile, in order.
+
+    Why: an upgrade runs each check again on every edit it tries, and so parses the same few
+    justfiles hundreds of times; the parse of one text is kept.
+    """
+    return list(_blocks(tuple(lines)))
+
+
+@functools.lru_cache(maxsize=256)
+def _blocks(lines: tuple[str, ...]) -> tuple[Block, ...]:
     found = []
     pending = None
     index = 0
@@ -198,7 +209,7 @@ def blocks(lines: Sequence[str]) -> list[Block]:
         found.append(Block(name.group(1), start, index, end, parse_head(line, name.end())))
         pending = None
         index = end
-    return found
+    return tuple(found)
 
 
 def template_recipe(template: str, name: str) -> tuple[list[str], Block, Head] | None:
@@ -330,9 +341,18 @@ STRING = re.compile(r"\"([^\"]*)\"|'([^']*)'")
 QUOTED = re.compile(r'"([^"]*)"')
 
 
+@functools.lru_cache(maxsize=256)
+def variables(justfile: str) -> Mapping[str, str]:
+    """Each variable's value as written, the first definition of a name winning."""
+    found: dict[str, str] = {}
+    for match in VARIABLE.finditer(justfile):
+        found.setdefault(match.group(1), match.group(2))
+    return MappingProxyType(found)
+
+
 def listed(justfile: str, name: str, seen: frozenset[str] = frozenset()) -> set[str]:
     """The words variable ``name`` lists, through each variable its value is built from."""
-    value = next((m.group(2) for m in VARIABLE.finditer(justfile) if m.group(1) == name), None)
+    value = variables(justfile).get(name)
     if value is None or name in seen:
         return set()
     found = {word for one, other in STRING.findall(value) for word in (one or other).split()}
@@ -347,6 +367,11 @@ def reaches(justfile: str, recipe: str) -> set[str]:
     That is the recipes it depends on or calls with ``just``, and every word a variable its lines
     interpolate lists, such as a tier's list of gates, followed through each of those in turn.
     """
+    return set(_reaches(justfile, recipe))
+
+
+@functools.lru_cache(maxsize=1024)
+def _reaches(justfile: str, recipe: str) -> frozenset[str]:
     lines = justfile.split("\n")
     defined = {block.name: (block, block.parsed) for block in blocks(lines) if block.parsed}
     waiting, found = [recipe], set()
@@ -362,7 +387,7 @@ def reaches(justfile: str, recipe: str) -> set[str]:
         waiting += [*head.before, *head.after, *JUST_CALL.findall(body)]
         for variable in INTERPOLATION.findall(body):
             waiting += sorted(listed(justfile, variable))
-    return found - {recipe}
+    return frozenset(found - {recipe})
 
 
 def undefined(justfile: str, recipe: str) -> list[str]:
