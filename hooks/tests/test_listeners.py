@@ -235,14 +235,14 @@ def test_a_connection_the_service_never_accepted_is_written_down_before_it_is_re
         assert isinstance(held, list)
         waiting = socket.create_connection(("127.0.0.1", running.port))
         waiting.settimeout(10)
-        client = waiting.getsockname()[1]
+        name = gatelib.connection(waiting.getpeername(), waiting.getsockname())
         with taking(held, marker):
             assert running.tell("close") == "done"
             with pytest.raises(ConnectionResetError):
                 waiting.recv(1)
             stopping = gatelib.read_stopping(marker)
         waiting.close()
-    assert stopping == gatelib.Stopping(frozenset({(running.port, client)}), None), (
+    assert stopping == gatelib.Stopping(frozenset({name}), None), (
         "the client found its connection in the marker once it saw the reset"
     )
     assert held[0].copy.fileno() == -1, "the copy is let go of when the command ends"

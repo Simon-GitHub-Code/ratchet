@@ -8,7 +8,6 @@ import ssl
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -301,19 +300,26 @@ def test_a_refusal_after_the_signal_is_expected_and_before_it_is_an_error(
     assert after == (0, "load-smoke: green\n")
 
 
+def tried(client_port: int) -> gatelib.Connection:
+    return gatelib.Connection("127.0.0.1", 443, "127.0.0.1", client_port)
+
+
 def test_a_failure_after_the_signal_is_closed_when_refused_and_cut_otherwise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     marker = tmp_path / "stopping"
     goal = load_smoke.Target("GET", "https://127.0.0.1/", None, None)
+    named = gatelib.Stopping(frozenset({tried(40000)}), None)
 
-    def fail(error: OSError, *clients: int) -> None:
+    def fail(error: OSError, *clients: int, naming: gatelib.Stopping = named) -> None:
         """``http_status`` failing once the signal landed, after trying ``clients`` ports."""
 
-        def http_status(*_: object, connecting: Callable[[object], None], **__: object) -> int:
+        def http_status(
+            *_: object, connecting: Callable[[gatelib.Connection], None], **__: object
+        ) -> int:
             for client in clients:
-                connecting(SimpleNamespace(getsockname=lambda port=client: ("127.0.0.1", port)))
-            marker.touch()  # the signal lands while the request is in flight
+                connecting(tried(client))
+            gatelib.write_stopping(marker, naming)  # the signal lands while the request is out
             raise error
 
         monkeypatch.setattr(gatelib, "http_status", http_status)
@@ -323,16 +329,41 @@ def test_a_failure_after_the_signal_is_closed_when_refused_and_cut_otherwise(
     with pytest.raises(load_smoke.Closed):
         load_smoke.attempt(goal, 1, marker)
     # Any other failure may be one the service accepted: whose it was is judged at the end, by
-    # the port of the last connect tried.
+    # whether the gate had named the last connection tried when the client saw it fail.
     fail(ConnectionResetError(), 39999, 40000)
     with pytest.raises(load_smoke.Cutoff) as cutoff:
         load_smoke.attempt(goal, 1, marker)
     assert cutoff.value.cut == load_smoke.Cut(
-        "GET https://127.0.0.1/", "ConnectionResetError", 443, 40000, late=True, lost=True
+        "GET https://127.0.0.1/", "ConnectionResetError", 443, named=True, late=True, lost=True
     )
     # With no connect tried there is no connection to match, so it counts.
     fail(OSError("no address"))
     assert load_smoke.attempt(goal, 1, marker) == (None, "GET https://127.0.0.1/: OSError")
+
+
+def test_a_name_the_gate_writes_only_after_the_client_saw_the_reset_is_not_the_gates_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Why: the gate names a connection before it resets it. A service that resets a request,
+    # waits for the client to let its port go and then connects from that same address and
+    # port gets the gate to name a connection exactly like the one it dropped, but too late.
+    marker = tmp_path / "stopping"
+    gatelib.write_stopping(marker, gatelib.Stopping(frozenset(), None))
+    goal = load_smoke.Target("GET", "https://127.0.0.1/", None, None)
+
+    def http_status(
+        *_: object, connecting: Callable[[gatelib.Connection], None], **__: object
+    ) -> int:
+        connecting(tried(40000))
+        raise ConnectionResetError
+
+    monkeypatch.setattr(gatelib, "http_status", http_status)
+    with pytest.raises(load_smoke.Cutoff) as cutoff:
+        load_smoke.attempt(goal, 1, marker)
+    forged = gatelib.Stopping(frozenset({tried(40000)}), None)
+    assert load_smoke.judge([cutoff.value.cut], forged)[0] == {
+        "GET https://127.0.0.1/: ConnectionResetError": 1
+    }
 
 
 def cut_after_signal(
@@ -350,13 +381,15 @@ def cut_after_signal(
     """
     marker, _ = until_stopped(tmp_path, monkeypatch)
     gatelib.write_stopping(marker, gatelib.Stopping(frozenset(), None))
-    taken: set[tuple[int, int]] = set()
+    taken: set[gatelib.Connection] = set()
     lock = threading.Lock()
 
     def handle(handler: http.server.BaseHTTPRequestHandler) -> None:
         if as_gate:
             with lock:
-                taken.add((handler.connection.getsockname()[1], handler.client_address[1]))
+                taken.add(
+                    gatelib.connection(handler.connection.getsockname(), handler.client_address)
+                )
                 gatelib.write_stopping(marker, gatelib.Stopping(frozenset(taken), None))
         handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, listeners.RESET)
         handler.connection.close()
@@ -389,8 +422,8 @@ def test_a_connection_the_service_accepted_and_reset_after_the_signal_is_red(
 
 def test_where_the_gate_holds_no_listener_the_smoke_says_it_judged_the_older_way() -> None:
     early, late = (
-        load_smoke.Cut("GET u", "ConnectionResetError", 80, client, late=late, lost=True)
-        for client, late in ((1, False), (2, True))
+        load_smoke.Cut("GET u", "ConnectionResetError", 80, named=False, late=late, lost=True)
+        for late in (False, True)
     )
     errors, notes = load_smoke.judge([early, late], gatelib.Stopping(frozenset(), "no Linux"))
     assert errors == {"GET u: ConnectionResetError": 1}, "only the request sent before the signal"
@@ -454,8 +487,10 @@ def test_where_the_gate_holds_no_listener_a_failure_is_judged_exactly_as_main_ju
     fallback = gatelib.Stopping(frozenset(), "the gate holds no listener")
     goal = load_smoke.Target("GET", "http://127.0.0.1:8000/work", None, None)
 
-    def http_status(*_: object, connecting: Callable[[object], None], **__: object) -> int:
-        connecting(SimpleNamespace(getsockname=lambda: ("127.0.0.1", 40000)))
+    def http_status(
+        *_: object, connecting: Callable[[gatelib.Connection], None], **__: object
+    ) -> int:
+        connecting(gatelib.Connection("127.0.0.1", 8000, "127.0.0.1", 40000))
         if at_failure:
             gatelib.write_stopping(marker, fallback)
         raise error

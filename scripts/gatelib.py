@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import fnmatch
+import ipaddress
 import json
 import os
 import re
@@ -25,7 +26,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple, cast
 from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
@@ -451,16 +452,44 @@ def run_command(command: list[str], env: dict[str, str]) -> tuple[int, list[str]
     return code, ([] if code == 0 else [f"the command exited with code {code}"])
 
 
+class Connection(NamedTuple):
+    """One TCP connection, by both its ends: the service's address and port, then the client's.
+
+    No two open connections share all four, so a name the gate writes matches one connection.
+    """
+
+    host: str
+    port: int
+    client: str
+    client_port: int
+
+
+def connection(service: tuple[object, ...], client: tuple[object, ...]) -> Connection:
+    """The connection between two socket addresses, written alike from either end."""
+    return Connection(*end(service), *end(client))
+
+
+def end(address: tuple[object, ...]) -> tuple[str, int]:
+    """One end of a connection: its IP address as both ends write it, and its port.
+
+    An IPv4 address that a dual-stack listener sees mapped into IPv6 is written as IPv4.
+    """
+    host, port = address[:2]
+    ip = ipaddress.ip_address(str(host))
+    mapped = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) else None
+    return str(mapped or ip), cast("int", port)
+
+
 @dataclass(frozen=True)
 class Stopping:
     """What ``with_service.py --graceful`` tells the command, from the stop signal on.
 
-    ``taken`` are the connections, as ``(service port, client port)``, that the gate accepted
-    from a listener the service had let go of, and then reset: the service never accepted them.
-    ``unread`` says why the gate could not take them, when it could not.
+    ``taken`` are the connections that the gate accepted from a listener the service had let go
+    of, and then reset: the service never accepted them. ``unread`` says why the gate could not
+    take them, when it could not.
     """
 
-    taken: frozenset[tuple[int, int]]
+    taken: frozenset[Connection]
     unread: str | None
 
 
@@ -475,7 +504,7 @@ def write_stopping(path: Path, stopping: Stopping) -> None:
 def read_stopping(path: Path) -> Stopping:
     """What ``path`` holds; it exists from the stop signal on."""
     data = json.loads(path.read_text(encoding="utf-8"))
-    return Stopping(frozenset((port, client) for port, client in data["taken"]), data["unread"])
+    return Stopping(frozenset(Connection(*taken) for taken in data["taken"]), data["unread"])
 
 
 def reach(
@@ -483,17 +512,17 @@ def reach(
     address: tuple[object, ...],
     *,
     timeout: float | None,
-    connecting: Callable[[socket.socket], None] | None,
+    connecting: Callable[[Connection], None] | None,
 ) -> None:
-    """Connect ``sock`` within ``timeout``, handing it to ``connecting`` once it has a port.
+    """Connect ``sock`` within ``timeout``, naming the connection to ``connecting`` at once.
 
-    The connect starts without blocking, which is when the kernel picks the local port, so
-    ``connecting`` learns it before the connection can be made, or reset.
+    The connect starts without blocking, which is when the kernel picks the local address and
+    port, so ``connecting`` learns them before the connection can be made, or reset.
     """
     sock.settimeout(0)
     code = sock.connect_ex(address)
     if connecting:
-        connecting(sock)
+        connecting(connection(address, sock.getsockname()))
     if code == errno.EINPROGRESS:
         with selectors.DefaultSelector() as waiting:
             waiting.register(sock, selectors.EVENT_WRITE)
@@ -507,9 +536,9 @@ def reach(
 
 
 class Told(HTTPConnection):
-    """An ``HTTPConnection`` that hands each socket it tries to ``connecting``; see ``reach``."""
+    """An ``HTTPConnection`` naming each connection it tries to ``connecting``; see ``reach``."""
 
-    connecting: Callable[[socket.socket], None] | None = None
+    connecting: Callable[[Connection], None] | None = None
 
     def connect(self) -> None:
         """Connect to each address of the host in turn, as ``socket.create_connection`` does."""
@@ -539,13 +568,13 @@ def http_status(
     *,
     body: bytes | None = None,
     timeout: float = 5.0,
-    connecting: Callable[[socket.socket], None] | None = None,
+    connecting: Callable[[Connection], None] | None = None,
 ) -> int:
     """The status of one request, redirects not followed; raises ``OSError`` or ``HTTPException``.
 
-    ``http`` and ``https`` only. A body is sent as JSON. ``connecting`` is given each socket
-    tried, as soon as it has a local port: a reset that lands before the connect returns still
-    leaves the caller that port.
+    ``http`` and ``https`` only. A body is sent as JSON. ``connecting`` is given each
+    connection tried, as soon as its local end has a port: a reset that lands before the connect
+    returns still leaves the caller its name.
     """
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:

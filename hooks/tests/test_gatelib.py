@@ -165,36 +165,34 @@ def test_http_status_names_the_client_port_however_soon_the_connection_is_reset(
     scheme: str,
 ) -> None:
     # Why: the load smoke matches a connection reset after the stop signal against the ones the
-    # gate took, by the client's port. A reset can land before the connect returns, or during
-    # the TLS handshake, and the port must be known all the same.
+    # gate took, by both of its ends. A reset can land before the connect returns, or during the
+    # TLS handshake, and the connection must be named all the same, as the gate names it.
     with socket.create_server(("127.0.0.1", 0)) as listener:
-        clients: list[int] = []
-        accepted: list[int] = []
+        clients: list[gatelib.Connection] = []
+        accepted: list[gatelib.Connection] = []
         url = f"{scheme}://127.0.0.1:{listener.getsockname()[1]}/"
 
         def cut() -> None:
             connection, client = listener.accept()
-            accepted.append(client[1])
+            accepted.append(gatelib.connection(connection.getsockname(), client))
             connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, listeners.RESET)
             connection.close()
 
         cutter = threading.Thread(target=cut)
         cutter.start()
         with pytest.raises(OSError):  # noqa: PT011 # -- a reset, or a broken pipe while sending
-            gatelib.http_status(
-                "GET", url, timeout=5, connecting=lambda sock: clients.append(sock.getsockname()[1])
-            )
+            gatelib.http_status("GET", url, timeout=5, connecting=clients.append)
         cutter.join()
     assert clients == accepted
 
 
 def test_http_status_says_why_a_connect_failed_or_that_it_timed_out() -> None:
-    tried: list[int] = []
+    tried: list[gatelib.Connection] = []
     with pytest.raises(OSError, match="Network is unreachable"):
-        gatelib.http_status(
-            "GET", "http://255.255.255.255/", connecting=lambda sock: tried.append(sock.fileno())
-        )
-    assert len(tried) == 1, "the socket is named even when the connect fails at once"
+        gatelib.http_status("GET", "http://255.255.255.255/", connecting=tried.append)
+    assert [each.host for each in tried] == ["255.255.255.255"], (
+        "the connection is named even when the connect fails at once"
+    )
     # A listener whose accept queue is full drops the next connect's SYN, so it never connects.
     with socket.create_server(("127.0.0.1", 0), backlog=0) as listener:
         url = f"http://127.0.0.1:{listener.getsockname()[1]}/"
@@ -202,11 +200,21 @@ def test_http_status_says_why_a_connect_failed_or_that_it_timed_out() -> None:
             gatelib.http_status("GET", url, timeout=0.2)
 
 
+def test_an_ipv4_client_of_a_dual_stack_listener_is_named_alike_from_both_ends() -> None:
+    # Why: a listener on [::] sees an IPv4 client mapped into IPv6; the client writes it as IPv4.
+    seen_by_gate = gatelib.connection(("::ffff:127.0.0.1", 80, 0, 0), ("::ffff:127.0.0.1", 5, 0, 0))
+    seen_by_client = gatelib.connection(("127.0.0.1", 80), ("127.0.0.1", 5))
+    assert seen_by_gate == seen_by_client == gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)
+    assert gatelib.connection(("::1", 80, 0, 0), ("::1", 5, 0, 0)).host == "::1"
+
+
 def test_the_stop_marker_is_replaced_whole_and_read_back(tmp_path: Path) -> None:
     marker = tmp_path / "stopping"
-    gatelib.write_stopping(marker, gatelib.Stopping(frozenset({(80, 5), (80, 4)}), None))
-    gatelib.write_stopping(marker, gatelib.Stopping(frozenset({(81, 6)}), "no Linux"))
-    assert gatelib.read_stopping(marker) == gatelib.Stopping(frozenset({(81, 6)}), "no Linux")
+    first = gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)
+    then = gatelib.Connection("::1", 81, "::1", 6)
+    gatelib.write_stopping(marker, gatelib.Stopping(frozenset({first}), None))
+    gatelib.write_stopping(marker, gatelib.Stopping(frozenset({then}), "no Linux"))
+    assert gatelib.read_stopping(marker) == gatelib.Stopping(frozenset({then}), "no Linux")
     assert [path.name for path in tmp_path.iterdir()] == ["stopping"]
 
 

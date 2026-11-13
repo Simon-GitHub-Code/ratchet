@@ -101,11 +101,6 @@ class Target:
         """Whether ``status`` is the one wanted, or any success when none was named."""
         return status == self.status if self.status else status < FAILED
 
-    def port(self) -> int:
-        """The port the request goes to."""
-        parts = urlsplit(self.url)
-        return parts.port or (443 if parts.scheme == "https" else 80)
-
 
 def target(text: str) -> Target:
     """Parse a ``--url`` value; ``argparse.ArgumentTypeError`` says what is wrong with it."""
@@ -160,15 +155,17 @@ class Closed(Exception):  # noqa: N818 # -- not a fault: the service stopped tak
 class Cut:
     """A connection that failed after the stop signal, judged once the run is over.
 
-    ``port`` is the service's, ``client`` the local port of the last connect tried. ``late`` is
-    whether the request started after the signal, and ``lost`` whether the connection was reset,
-    aborted or broken: what the start-time rule needs where the gate holds no listener.
+    ``port`` is the service's. ``named`` is whether the gate had named the connection, as one it
+    took and reset, by the time the client saw it fail: the gate names it before the reset, so a
+    name written later is not the gate's reset. ``late`` is whether the request started after
+    the signal, and ``lost`` whether the connection was reset, aborted or broken: what the
+    start-time rule needs where the gate holds no listener.
     """
 
     label: str
     error: str
     port: int
-    client: int
+    named: bool
     late: bool
     lost: bool
 
@@ -192,7 +189,7 @@ def attempt(
     connections the gate took. A timeout always counts, and so does a failure before a connect
     was even tried.
     """
-    clients: list[int] = []
+    clients: list[gatelib.Connection] = []
     late = stopping is not None and stopping.exists()
     started = time.perf_counter()
     try:
@@ -201,7 +198,7 @@ def attempt(
             goal.url,
             body=goal.body,
             timeout=timeout,
-            connecting=lambda sock: clients.append(sock.getsockname()[1]),
+            connecting=clients.append,
         )
     except TimeoutError:
         return None, f"{goal.label()}: timed out after {timeout:g}s"
@@ -210,8 +207,9 @@ def attempt(
             return None, f"{goal.label()}: {type(error).__name__}"
         if isinstance(error, ConnectionRefusedError):
             raise Closed from error
+        named = clients[-1] in gatelib.read_stopping(stopping).taken
         lost = isinstance(error, ConnectionError)
-        cut = Cut(goal.label(), type(error).__name__, goal.port(), clients[-1], late, lost)
+        cut = Cut(goal.label(), type(error).__name__, clients[-1].port, named, late, lost)
         raise Cutoff(cut) from error
     wrong = None if goal.accepts(status) else f"{goal.label()}: HTTP {status}"
     return time.perf_counter() - started, wrong
@@ -263,7 +261,7 @@ def counts(cut: Cut, stopping: gatelib.Stopping) -> bool:
     """
     if stopping.unread:
         return not (cut.late and cut.lost)
-    return (cut.port, cut.client) not in stopping.taken
+    return not cut.named
 
 
 def judge(

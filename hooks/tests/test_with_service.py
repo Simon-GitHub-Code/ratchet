@@ -376,7 +376,7 @@ def test_the_request_a_service_accepted_and_dropped_is_red_beside_those_it_never
 
 
 def test_a_service_that_forges_the_gates_excuse_from_another_address_is_red(
-    capsys: pytest.CaptureFixture[str],
+    capfd: pytest.CaptureFixture[str],
 ) -> None:
     # Why: the gate names each connection it took. A name of two ports matched a connection the
     # service made to itself from another address with the client's port, so the requests it
@@ -385,7 +385,7 @@ def test_a_service_that_forges_the_gates_excuse_from_another_address_is_red(
         *("--boot", f"exec {python(FORGE)}", "--ready", READY),
         *("--graceful", "2", "--signal-after", "0.5", "--", sys.executable, str(LOAD)),
         *("--url", "http://127.0.0.1:{port}/work", *BUSY),
-        capsys=capsys,
+        capsys=capfd,
     )
     assert re.search(r"\n\d+ x GET http://127\.0\.0\.1:\d+/work: ConnectionResetError\n", out), out
     assert code == 1

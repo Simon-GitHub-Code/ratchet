@@ -273,8 +273,8 @@ def grab(group: int) -> list[Listener] | str:
     return found or NONE_FOUND
 
 
-def queued(listener: socket.socket) -> list[tuple[socket.socket, int]]:
-    """Every connection waiting on ``listener``, accepted, with its client's port.
+def queued(listener: socket.socket) -> list[tuple[socket.socket, gatelib.Connection]]:
+    """Every connection waiting on ``listener``, accepted, with its name.
 
     The listener keeps the flags the service gave it: they belong to the open file the gate's
     copy shares with the service. So it is polled, and accepted from only while a connection
@@ -282,22 +282,22 @@ def queued(listener: socket.socket) -> list[tuple[socket.socket, int]]:
     """
     waiting = select.poll()
     waiting.register(listener, select.POLLIN)
-    taken: list[tuple[socket.socket, int]] = []
+    taken: list[tuple[socket.socket, gatelib.Connection]] = []
     while waiting.poll(0):
         connection, client = listener.accept()
-        taken.append((connection, int(client[1])))
+        taken.append((connection, gatelib.connection(connection.getsockname(), client)))
     return taken
 
 
 def take(held: list[Listener], marker: Path, ended: threading.Event) -> None:
     """Until ``ended``, take what queues on each listener the service has let go of.
 
-    Each connection's ports go into ``marker`` before the gate resets it, so a client that sees
-    the reset finds them there. A listener that no longer listens when the service lets go of it
-    was shut down rather than closed, which reset its queue before the gate could take it; the
-    marker's ``unread`` then says so. The copies are closed on return.
+    Each connection's name, both its addresses and ports, goes into ``marker`` before the gate
+    resets it, so a client that sees the reset finds it there. A listener that no longer listens
+    when the service lets go of it was shut down rather than closed, which reset its queue before
+    the gate could take it; the marker's ``unread`` then says so. The copies are closed on return.
     """
-    taken: set[tuple[int, int]] = set()
+    taken: set[gatelib.Connection] = set()
     waiting, free = list(held), []
     unread = said = None
     try:
@@ -310,23 +310,23 @@ def take(held: list[Listener], marker: Path, ended: threading.Event) -> None:
                     for each in waiting:
                         each.copy.close()
                     waiting = []
-                elif not state:
+                    break
+                if not state:
                     continue
-                elif listens(listener.copy):
-                    waiting.remove(listener)
+                waiting.remove(listener)
+                if listens(listener.copy):
                     free.append(listener)
                 else:
-                    waiting.remove(listener)
                     unread = (
                         f"the service shut its listener on port {listener.port} down instead of "
                         "closing it, which reset the connections waiting on it"
                     )
-            fresh = [(each.port, *one) for each in free for one in queued(each.copy)]
+            fresh = [one for each in free for one in queued(each.copy)]
             if fresh or unread != said:
-                taken.update((port, client) for port, _, client in fresh)
+                taken.update(name for _, name in fresh)
                 gatelib.write_stopping(marker, gatelib.Stopping(frozenset(taken), unread))
                 said = unread
-            for _, connection, _ in fresh:
+            for connection, _ in fresh:
                 connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, RESET)
                 connection.close()
     finally:
