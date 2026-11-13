@@ -484,6 +484,12 @@ def file_under_another_tree(directory: Path) -> None:
     directory.rename(elsewhere)
 
 
+def link_out(directory: Path) -> None:
+    tester = directory / "tester"
+    (tester / "shots" / "again.png").symlink_to("list.png")
+    (tester / "p").symlink_to(os.path.relpath(directory.parents[5], tester))
+
+
 def change_first_answer(directory: Path) -> None:
     first = products.log(directory)[0]["id"]
     (directory / "probes" / f"{first}.response").write_bytes(b"There is nothing left.")
@@ -523,6 +529,10 @@ SEEDED: dict[str, tuple[Callable[[Path], object], str]] = {
     "ticket trimmed": (trim_ticket, "the session's copy of the ticket was changed after `up`"),
     "session file edited": (drop_web_ui, "session.json was changed after `up`"),
     "filed under another tree": (file_under_another_tree, "but is filed under"),
+    "a link out of the tester's directory": (
+        link_out,
+        "tester/p is a link out of the tester's directory, to ",
+    ),
 }
 
 

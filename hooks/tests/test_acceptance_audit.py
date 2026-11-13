@@ -88,6 +88,40 @@ def test_every_way_of_naming_a_file_of_the_product_is_flagged(
     ]
 
 
+def test_a_path_is_judged_through_the_links_it_passes(
+    root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    session = acceptance.store(root) / "save-link" / "head" / "session"
+    tester = session / "tester"
+    tester.mkdir(parents=True)
+    up = "/".join([".."] * len(tester.relative_to(root).parts))
+    (tester / "p").symlink_to(up)
+    real, outside = root.resolve(), root.parent.resolve()
+    settings = real / "src" / "settings.py"
+    log = real / session.relative_to(root) / "requests.jsonl"
+    lines = [
+        call("Bash", {"command": f"ln -s {up} p"}, tester),
+        call("Bash", {"command": "cat p/src/settings.py"}, tester),
+        call("Read", {"file_path": str(tester / "p" / "src" / "settings.py")}, tester),
+        call("Edit", {"file_path": str(tester / "p" / log.relative_to(real))}, root.parent),
+        call("Bash", {"command": f"cd {tester} && ln -sfn {up}/src q"}, root.parent),
+        call("Bash", {"command": "cat q/settings.py"}, tester),
+        call("Bash", {"command": f"ln -s {root.parent} out && ln -s list.png shot.png"}, tester),
+    ]
+    code, out = audited(lines, root, capsys)
+    assert code == 1
+    assert out == [
+        f"line 1, Bash, links {tester / 'p'} to {real}, which leads into the product",
+        f"line 2, Bash, names {settings}, inside the product",
+        f"line 3, Read, names {settings}, inside the product",
+        f"line 4, Edit, names {log}, inside the product",
+        f"line 5, Bash, names {real / 'src'}, inside the product",
+        f"line 6, Bash, names {settings}, inside the product",
+        f"line 7, Bash, links {tester / 'out'} to {outside}, which leads into the product",
+        "acceptance audit: red, the tester looked inside the product (7 tool calls)",
+    ]
+
+
 def test_the_main_checkout_of_a_work_tree_is_the_product_too(tmp_path: Path) -> None:
     main, tree = tmp_path / "main", tmp_path / "tree"
     evidence = main / ".git" / "ratchet" / "acceptance"
