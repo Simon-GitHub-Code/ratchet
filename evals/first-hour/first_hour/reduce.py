@@ -84,7 +84,6 @@ class _Fold:
     agents: dict[str, str] = field(default_factory=dict)
     workflows: int = 0
     guard_denials: int = 0
-    refusals: list[Event] = field(default_factory=list)
     denials: list[Event] = field(default_factory=list)
     apps: list[Event] = field(default_factory=list)
     usable_min: float | None = None
@@ -154,9 +153,6 @@ class _Fold:
     def on_guard_denial(self, _event: Event) -> None:
         self.guard_denials += 1
 
-    def on_refusal(self, event: Event) -> None:
-        self.refusals.append(event)
-
     def on_denied(self, event: Event) -> None:
         self.denials.append(event)
 
@@ -172,7 +168,8 @@ class _Fold:
 
     def on_integrity(self, event: Event) -> None:
         self.integrity = {"unchanged": event.get("unchanged"), "files": event.get("files")}
-        for key in ("changed", "before", "after", "removed_work_trees", "claude_projects"):
+        kept = ("changed", "before", "after", "stopped", "reaped")
+        for key in (*kept, "removed_work_trees", "claude_projects"):
             if key in event:
                 self.integrity[key] = event[key]
 
@@ -349,10 +346,6 @@ def reduce(events: Iterable[Event]) -> dict[str, object]:
             + sum(d.get("at") == "prompt" for d in fold.denials),
         },
         "guard_denials": fold.guard_denials,
-        "harness_refusals": [
-            {"minute": _minute(r), "why": r.get("why"), "command": r.get("command")}
-            for r in fold.refusals
-        ],
         "harness_denials": [
             {"minute": _minute(d), "tool": d.get("tool"), "why": d.get("why"), "at": d.get("at")}
             for d in fold.denials

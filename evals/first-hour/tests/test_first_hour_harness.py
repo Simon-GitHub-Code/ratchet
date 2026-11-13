@@ -100,6 +100,8 @@ def test_a_signal_stops_the_run_ends_its_processes_and_writes_the_measurements(
     metrics = json.loads((tmp_path / "run" / "metrics.json").read_text())
     assert metrics["stop"]["reason"] == "interrupted"
     assert metrics["stop"]["detail"] == signum.name
+    assert metrics["integrity"]["stopped"] >= (1 if where == "paste" else 0)
+    assert metrics["integrity"]["reaped"] == 0
     left = subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True, check=False)
     assert left.stdout == ""
 

@@ -191,7 +191,6 @@ def recorded() -> list[dict[str, object]]:
             "origin": "permission",
             "decision": "deny",
         },
-        {"s": 178, "step": "03-feature", "kind": "refusal", "why": "pushes", "command": "git push"},
         {"s": 179, "step": "03-feature", "kind": "ask", "text": "please commit"},
         {"s": 180, "step": "03-feature", "kind": "owner-cost", "usd": 0.25},
         *message_events(
@@ -250,7 +249,6 @@ def test_a_recorded_run_reduces_to_its_measurements() -> None:
     assert q["by_channel"] == {"dialog": 2}
     assert m["prompts"] == {"total": 3, "guard": 2, "permission": 1, "unknown": 0, "denied": 1}
     assert m["guard_denials"] == 1
-    assert m["harness_refusals"] == [{"minute": 3.0, "why": "pushes", "command": "git push"}]
     assert m["pastes"]["count"] == 3
     assert m["asks"] == 1
     assert [x["how"] for x in m["merges"]] == ["hand", "agent"]

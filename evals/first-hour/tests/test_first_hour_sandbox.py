@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import first_hour_fakes as fakes
 import pytest
 
 from first_hour import policy, sandbox
@@ -30,22 +31,13 @@ LEAKY = {
 SECRETS = [v for k, v in LEAKY.items() if "secret" in v]
 
 
-def _bwrap_works() -> bool:
-    if shutil.which("bwrap") is None:
-        return False
-    done = subprocess.run(
-        ["bwrap", "--ro-bind", "/", "/", "true"], capture_output=True, check=False
-    )
-    return done.returncode == 0
-
-
 @pytest.fixture(autouse=True)
 def _own_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Each test's runtime directory sits in its own temp, not in the machine's."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
 
-needs_bwrap = pytest.mark.skipif(not _bwrap_works(), reason="bwrap cannot make a sandbox here")
+needs_bwrap = pytest.mark.skipif(not fakes.bwrap_works(), reason="bwrap cannot make a sandbox here")
 
 
 @pytest.fixture
