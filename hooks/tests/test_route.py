@@ -72,14 +72,145 @@ def test_the_stages_before_adoption(tmp_path: Path) -> None:
     assert route.decide(root, None).then == route.GRILL
 
 
-def test_a_dirty_tree_is_finished_first(tmp_path: Path) -> None:
+def test_a_dirty_tree_is_finished_first_and_never_committed_on_the_default_branch(
+    tmp_path: Path,
+) -> None:
     root = repository(tmp_path, ADOPTED)
     write(root, "src/x.py", "x = 1\n")
     step = route.decide(root, None)
-    assert step.command == "run `just check`, then commit on branch `main`"
+    assert step.command == "run `just check`, then commit on a branch of its own, never on `main`"
     assert step.stage == "change"
+    assert step.then.startswith("`just merge <branch>` merges it when")
+    branch(root, "feature/4-x")
+    assert (
+        route.decide(root, None).command == "run `just check`, then commit on branch `feature/4-x`"
+    )
     write(root, "docs/process/binding.md", "# Binding without a table\n")
     assert route.check_command(root) == route.CHECK_FALLBACK
+
+
+MANIFEST = (
+    '[[group]]\nname = "records"\nreason = "Added to, never changed."\nedit = "append"\n'
+    'paths = ["docs/adr/**", "GLOSSARY.md"]\n\n'
+    '[[group]]\nname = "decisions"\nreason = "The owner\'s."\npaths = ["docs/process/**"]\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("files", "listed"),
+    [
+        ({".scratch/f/spec.md": "# F\n"}, ".scratch/f/spec.md"),
+        (
+            {f".scratch/f/issues/0{n}-x.md": "# X\n" for n in range(1, 6)},
+            (
+                ".scratch/f/issues/01-x.md, .scratch/f/issues/02-x.md, .scratch/f/issues/03-x.md"
+                " and 2 more"
+            ),
+        ),
+    ],
+)
+def test_records_alone_on_the_default_branch_are_an_agents_to_land(
+    tmp_path: Path, files: dict[str, str], listed: str
+) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    for path, text in files.items():
+        write(root, path, text)
+    step = route.decide(root, None)
+    assert step.command == "`just merge --records`"
+    assert step.stage == "records"
+    assert step.then == route.NEXT
+    assert f"holds records alone ({listed}): an agent runs this" in step.why
+    git(root, "remote", "add", "origin", "https://example.invalid/r.git")
+    step = route.decide(root, None)
+    assert step.command == f"commit them on a branch of their own, then {route.PULL_REQUEST}"
+    assert step.then == route.WAIT
+
+
+@pytest.mark.parametrize(
+    ("manifest", "files"),
+    [
+        (MANIFEST, {".scratch/f/spec.md": "# F\n", "src/x.py": "x = 1\n"}),
+        (MANIFEST, {"docs/process/notes.md": "# Notes\n"}),
+        (None, {".scratch/f/spec.md": "# F\n"}),
+    ],
+    ids=["code among records", "a guard path", "no manifest on the default branch"],
+)
+def test_more_than_records_on_the_default_branch_goes_on_a_branch(
+    tmp_path: Path, manifest: str | None, files: dict[str, str]
+) -> None:
+    root = repository(tmp_path, ADOPTED | ({"guards/manifest.toml": manifest} if manifest else {}))
+    for path, text in files.items():
+        write(root, path, text)
+    assert route.decide(root, None).stage == "change"
+
+
+def test_records_on_a_detached_head_go_on_a_branch(tmp_path: Path) -> None:
+    # Why: `merge --records` lands from the default branch by name, and refuses a detached HEAD.
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    git(root, "checkout", "-q", "--detach")
+    write(root, ".scratch/f/spec.md", "# F\n")
+    assert route.decide(root, None).stage == "change"
+
+
+def test_a_records_branch_the_judge_left_to_the_owner_is_named(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    branch(root, "records/20261113-031415")
+    write(root, ".scratch/f/issues/01-x.md", "Status: ready-for-agent\n")
+    commit(root, "docs(records): land what the owner's conversation wrote")
+    git(root, "checkout", "-q", "main")
+    step = route.decide(root, None)
+    assert step.command == (
+        "`git switch main && git merge --no-ff records/20261113-031415`, typed by the owner"
+    )
+    assert step.why == (
+        "the merge judge leaves branch `records/20261113-031415` to the owner: no verdict record"
+        " (docs/features/<slug>/verdict.json) is part of the change, so it is not the product of"
+        " the pipeline; its paths are records, but .scratch/f/issues/01-x.md gives a ticket the"
+        " agent-ready label `ready-for-agent`, which is the owner's act;"
+        " `just merge records/20261113-031415` prints every reason"
+    )
+    assert step.stage == "records"
+
+
+def test_a_records_branch_a_stopped_run_committed_is_an_agents_to_merge(tmp_path: Path) -> None:
+    # Why: a run killed while `check` ran on the merge result never heard the judge's answer; the
+    # route asks the judge itself, and says nothing the judge did not say.
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    branch(root, "records/20261113-064145")
+    write(root, ".scratch/f/spec.md", "# F\n")
+    commit(root, "docs(records): land what the owner's conversation wrote")
+    git(root, "checkout", "-q", "main")
+    step = route.decide(root, None)
+    assert step == route.Step(
+        "`just merge records/20261113-064145`",
+        "branch `records/20261113-064145` holds records a run of `just merge --records` committed"
+        " and did not merge; the merge judge passes them, so an agent runs this, and it merges"
+        " them when `check` is green on the merge result",
+        route.NEXT,
+        "records",
+    )
+
+
+@pytest.mark.parametrize(
+    "committed", [False, True], ids=["in the commit hooks", "after its commit"]
+)
+def test_a_run_stopped_on_its_records_branch_is_resumed_by_the_same_command(
+    tmp_path: Path, *, committed: bool
+) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    branch(root, "records/20261113-064102")
+    write(root, ".scratch/f/spec.md", "# F\n")
+    git(root, "add", "--all")
+    if committed:
+        commit(root, "docs(records): land what the owner's conversation wrote")
+    step = route.decide(root, None)
+    assert step == route.Step(
+        "`just merge --records`",
+        "a run of `just merge --records` stopped on branch `records/20261113-064102` before it"
+        " switched back to `main`: an agent runs it again, and it picks up where that run stopped",
+        route.NEXT,
+        "records",
+    )
 
 
 def test_a_working_branch_waits_for_its_pull_request(tmp_path: Path) -> None:
@@ -201,7 +332,7 @@ def test_without_a_forge_the_owner_merges_the_branch(tmp_path: Path) -> None:
     # pull request then has nowhere to go.
     root = repository(tmp_path, ADOPTED)
     write(root, "notes.md", "x\n")
-    assert route.decide(root, None).then == route.NEXT
+    assert route.decide(root, None).then.startswith("`just merge <branch>` merges it when")
     branch(root, "feature/4-x")
     write(root, "src/x.py", "x = 1\n")
     assert route.decide(root, None).then.startswith("`just merge <branch>` merges it when")
@@ -258,6 +389,41 @@ def test_a_ticket_whose_feature_run_blocked_waits_for_the_default_branch_to_move
     write(root, "package.json", "{}\n")
     commit(root, "build: the guard edit the run named")
     assert route.decide(root, None).command == f"{route.FEATURE} {ticket}", "main moved on"
+
+
+HELD = ".scratch/f/issues/02-b.md"
+HELD_TEXT = "# 02: B\n\nStatus: ready-for-agent" + CONJECTURE
+
+
+@pytest.mark.parametrize(
+    ("path", "text", "released"),
+    [
+        (".scratch/g/spec.md", "# G\n", False),
+        (".scratch/g/issues/01-a.md", "# 01: A\n\nStatus: needs-triage\n", False),
+        ("GLOSSARY.md", ADOPTED["GLOSSARY.md"] + "\n**Order**: what a customer places.\n", False),
+        (HELD, HELD_TEXT + "\n## Answers\n\nQ: a? A: b.\n", True),
+        (".scratch/f/spec.md", "# F\n\nThe owner's answer.\n", True),
+        ("docs/adr/0002-x.md", "# X\n", True),
+    ],
+    ids=["a spec", "a ticket", "a term", "the answers", "its spec", "a decision"],
+)
+def test_records_an_agent_lands_do_not_release_a_blocked_run(
+    tmp_path: Path, path: str, text: str, *, released: bool
+) -> None:
+    # Why: records alone reach the default branch without the owner (ADR 0031), so the default
+    # branch moving no longer means the owner answered; only a move that could answer does.
+    files = {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: HELD_TEXT}
+    root = repository(tmp_path, files)
+    git(root, "switch", "-q", "-c", "feature/2-b")
+    write(root, "docs/features/b/spec.md", "draft\n")
+    git(root, "stash", "push", "-q", "-u", "-m", "feature/2-b: blocked run")
+    git(root, "switch", "-q", "main")
+    write(root, path, text)
+    commit(root, "docs(records): land what the owner's conversation wrote")
+    step = route.decide(root, None)
+    assert (step.stage, step.command) == (
+        ("build", f"{route.FEATURE} {HELD}") if released else ("blocked-run", step.command)
+    )
 
 
 def test_only_a_blocked_run_holds_a_ticket(tmp_path: Path) -> None:

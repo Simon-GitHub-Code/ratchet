@@ -12,8 +12,8 @@ its ceiling; 0 otherwise. A missing ceiling reports and passes: that is the firs
 slowest gate: the gate is also held to ``ceilings.seconds.TIER``, and the lower of the two
 ceilings is the one judged. So the tier ceilings adopt sets are measured in CI with no job that
 adds the gates up. ``--over report`` is for a pull request, whose runner varies: a run over its
-ceiling is printed and recorded as red and exits 0. The default, ``--over block``, is what the
-default branch, the nightly and a local run use.
+ceiling is printed, raised as a warning annotation, recorded as red and exits 0. The default,
+``--over block``, is what the default branch, the nightly and a local run use.
 
 ``--set`` records the measured time times ``HEADROOM`` (default 1.5) as the key's own ceiling
 when none exists or the new value is lower; it never raises one, because raising a ceiling is a
@@ -173,6 +173,10 @@ def main(argv: list[str]) -> int:
     ceiling, tier = held(text, options.key, options.tier)
     outcome = Outcome(options.key, seconds, ceiling, exit_code, tier, options.over == "block")
     print(outcome.line())
+    if outcome.status == "red" and not outcome.blocks:
+        # Why: a pull request's run stays green over its ceiling, so the line is raised where the
+        # run's page and `gh run view` show it; printed alone, it waited for the default branch.
+        print(f"::warning title=ratchet-budget::{outcome.line()}")
     if options.report:
         report(root / options.report, outcome)
     if options.headroom is not None and exit_code == 0:
