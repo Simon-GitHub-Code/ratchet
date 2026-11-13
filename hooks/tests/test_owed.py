@@ -2,7 +2,10 @@
 
 import atexit
 import functools
+import json
 import shutil
+import subprocess
+import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -367,6 +370,56 @@ def test_the_template_manifest_sends_a_ledger_change_to_the_owner() -> None:
     group = manifest.group_of(LEDGER)
     assert group is not None
     assert group.name == "ratchets"
+
+
+KEYS_FROM = """
+import json, re, shutil, sys
+from pathlib import Path
+plugin, scratch, *repositories = map(Path, sys.argv[1:])
+sys.path.insert(0, str(plugin / "scripts"))
+import conformance
+templates = plugin / "skills"
+found = {}
+for label, mutate in conformance.mutations():
+    target = scratch / re.sub(r"\\W+", "-", label)
+    shutil.copytree(templates / "init/templates", target, symlinks=True)
+    shutil.copytree(templates / "adopt/templates", target, symlinks=True, dirs_exist_ok=True)
+    conformance.fill_placeholders(target)
+    mutate(target)
+    found[label] = [list(failure.key()) for _, failure in conformance.raised(target)]
+for repository in repositories:
+    found[repository.name] = [list(f.key()) for _, f in conformance.raised(repository)]
+print(json.dumps(found))
+"""
+PLUGIN_PARTS = (".claude-plugin", "scripts", "skills", "hooks/ratchet_guards")
+
+
+def keys_from(plugin: Path, place: Path) -> dict[str, list[list[str]]]:
+    """Every key every check raises, from a plugin copy at ``plugin``, on repositories in ``place``.
+
+    The repositories are each self-test mutation of the templates and the two older adoptions.
+    """
+    for part in PLUGIN_PARTS:
+        ignore = shutil.ignore_patterns("__pycache__")
+        shutil.copytree(PLUGIN_ROOT / part, plugin / part, symlinks=True, ignore=ignore)
+    fixtures = [adopted.copy(adopted.adopted(v), place / f"adopted-{v}") for v in adopted.RELEASES]
+    done = subprocess.run(  # -- a fixed argv, this interpreter on the plugin copy
+        [sys.executable, "-c", KEYS_FROM, str(plugin), str(place / "mutated"), *map(str, fixtures)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(done.stdout)
+
+
+def test_no_owed_key_holds_where_the_plugin_or_the_project_lies(tmp_path: Path) -> None:
+    """An owed entry is the same debt from any checkout of the plugin, so CI excuses what it lists."""
+    one = keys_from(tmp_path / "plugin-one", tmp_path / "here")
+    two = keys_from(tmp_path / "elsewhere/plugin-two", tmp_path / "there/deeper")
+    assert one.keys() == two.keys()
+    for name, keys in one.items():
+        assert keys == two[name], name
+        assert not [key for key in keys if str(tmp_path) in json.dumps(key)], name
 
 
 def test_a_missing_recipe_is_the_same_debt_as_what_it_needs_arrives() -> None:
