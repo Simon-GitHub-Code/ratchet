@@ -22,7 +22,7 @@ The owner is asked about the product they are making and about nothing else (ADR
 4. **Ask** `init.place`: "Where will people use it: on this computer only, on other devices at home, or from anywhere?"
 5. **Ask** `init.online`: "Should this project be kept on this computer only, or also as a private copy on your GitHub account?" Only when `gh auth status` succeeds and `origin` is missing (`glab` and GitLab alike); otherwise the repository stays local and the hand-over says why. The remote is created only from an answer that asks for it.
 
-**What the owner asked for wins.** Anything typed after the command (`/ratchet:init no GitHub, use Python`) is a preference: it settles the choice it names, it wins over the defaults below, and a question it answers is not asked ("no GitHub" answers `init.online`). Each one is listed under **Assumed** as "you asked for".
+**What the owner asked for wins.** Anything typed after the command (`/ratchet:init no GitHub, use Python`) is a preference. It chooses among the options a choice allows and never loosens a safeguard, as [the rule on preferences](../method/records.md#a-preference-typed-after-a-command) says: read it before you act on one. Within that, it settles the choice it names, it wins over the defaults below, and a question it answers is not asked ("no GitHub" answers `init.online`). Each one is listed under **Assumed** as "you asked for", or as not applied with the route that exists.
 
 Questions 2 and 3 are `impeccable init`'s own first two; asked here, they are passed to it in step 5 so it does not ask again.
 

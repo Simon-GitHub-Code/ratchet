@@ -31,7 +31,7 @@ On an empty repository none of the three is asked. So a repository with code is 
 
 A choice the owner's words already make is not asked. A deeper interview is the owner's `/mattpocock-skills:grill-with-docs`; adoption does not wait for it.
 
-**What the owner asked for wins.** Anything typed after the command (`/ratchet:adopt use ESLint, no GitHub`) is a preference: it settles the choice it names, it wins over the defaults below unless it cannot answer a row (then say why, and take the default), and a question it answers is not asked. Each one is listed under **Assumed** as "you asked for".
+**What the owner asked for wins.** Anything typed after the command (`/ratchet:adopt use ESLint, no GitHub`) is a preference. It chooses among the options a row allows and never loosens a safeguard, as [the rule on preferences](../method/records.md#a-preference-typed-after-a-command) says: read it before you act on one. Within that, it settles the choice it names, it wins over the defaults below unless it cannot answer a row (then say why, and take the default), and a question it answers is not asked, except a life event's: the owner's answer to that question is the only declaration. Each one is listed under **Assumed** as "you asked for", or as not applied with the route that exists.
 
 **Everything else is assumed.** Act on each with no question and list it at the end of the hand-over under **Assumed**, in plain words, with what changing it later costs and what the owner can say to change it:
 

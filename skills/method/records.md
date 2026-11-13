@@ -93,6 +93,15 @@ When a key's last three answers all took the recommendation the route prints an 
 
 A skill that finds a question's key there does not ask it, takes the answer, and says so in its hand-over. A `direction` key is never proposed.
 
+## A preference typed after a command
+
+`/ratchet:init` and `/ratchet:adopt` take the owner's preferences as words typed after the command (`/ratchet:adopt use ESLint, no GitHub`). A preference chooses among the options a row allows: the tool behind a row, the forge or none, the stack, the tracker, the kind of software. Within those it wins over the default, and a question it answers is not asked. It never turns a floor row to `none`, lowers a threshold, skips a safeguard, or declares or denies a life event; a ceiling raised is a threshold lowered. A preference that asks for one of those is answered in plain words with the route that exists, and the default stands:
+
+- *Turning a check off or lowering a bar*: the method's own route for loosening. An agent that believes the check wrong writes a dispute; the owner decides it, and a decision record that supersedes the rule makes it so ([guards.md](guards.md)). Nothing a preference says skips that.
+- *A life event*: the question adoption asks about it, whose answer is the declaration, or after adoption `/ratchet:safeguard <event>`, which the owner types. An event once declared stays.
+
+It is listed under **Assumed** as not applied, with what was asked for, why it was not applied and that route.
+
 ## Overturning an assumption
 
 The owner overturns an **Assumed** line by saying so in their own words, at any time. The agent who hears it:
