@@ -39,6 +39,8 @@ _GROUP = "group"
 # bash may show it a `)` that bash does not see; either would close a subshell early.
 _UNSURE_WORDS = frozenset({"case", "esac"})
 _HEREDOC_OPERATOR = "<<"
+# Why: after these reserved words a command starts, so a `(` there opens a subshell.
+_OPENERS = frozenset({"{", "!", "if", "then", "else", "elif", "do", "while", "until"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,8 +308,9 @@ def _is_fd_target(operator: str, word: str) -> bool:
 class _Splitter:
     """Groups tokens into simple commands and tells a subshell's parentheses from the others.
 
-    A ``(`` where a command starts opens a subshell when ``subshells`` is set. One after a word
-    (a definition, an array, a process substitution) does not, nor does the ``)`` that closes
+    A ``(`` where a command starts, alone or after a reserved word such as ``{`` or ``then``,
+    opens a subshell when ``subshells`` is set. One after another word (a definition, an array,
+    a process substitution) does not, nor does the ``)`` that closes
     it. Without ``subshells`` no parenthesis is read as a subshell, which keeps a ``cd`` inside
     one in force for what follows: the reading that protects.
     """
@@ -339,7 +342,8 @@ class _Splitter:
         if "<" in operator or ">" in operator:
             self.redirect = operator
             return
-        if operator == "(" and self.subshells and not (self.words or self.writes or self.redirect):
+        starts = not (self.writes or self.redirect) and _OPENERS.issuperset(self.words)
+        if operator == "(" and self.subshells and starts:
             self.nesting.append(_SUBSHELL)
             self.opens += 1
             return
