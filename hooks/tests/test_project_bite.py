@@ -494,7 +494,12 @@ def test_an_interrupt_stops_the_gates_promptly_whichever_thread_receives_it(
     # Why: the kernel hands a process-directed signal to any thread. One handed to a lane's
     # thread waited for the gate to finish, while the main thread slept in a blocking call.
     started, stopped = tmp_path / "started", tmp_path / "stopped"
-    slow = f"trap 'echo ended by the runner > {stopped}; exit 143' TERM\ntouch {started}\nsleep 60"
+    # Why: a shell runs a trap only between commands, so the gate waits in short sleeps; one
+    # long sleep forked just after the signal would hold the trap back for its whole length.
+    slow = (
+        f"trap 'echo ended by the runner > {stopped}; exit 143' TERM\n"
+        f"while :; do touch {started}; sleep 0.05; done"
+    )
     registry = bite("slow", "a planted word") + bite("next", "a planted word")
     root = project(tmp_path / "repo", {"slow": slow, "next": LINT}, registry)
     sent: list[float] = []
