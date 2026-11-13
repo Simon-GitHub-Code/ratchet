@@ -115,32 +115,87 @@ def sleeper(tree: Path) -> subprocess.Popen[bytes]:
 # request is in flight at any moment while a load smoke runs. Modes: ``drain`` finishes the
 # requests in flight and exits 0; ``ignore`` never stops; ``drop`` exits 0 at once and cuts them
 # off; ``late`` drains but exits 1; ``slow`` drains after a 3 s pause; ``die`` exits before it
-# is signalled.
+# is signalled. ``queue`` serves one request at a time, answers the first four ``/work`` at once
+# and holds the fifth until the signal, so the connections behind it wait in the kernel's accept
+# queue; on the signal it answers the fifth and exits 0, and the kernel resets the connections it
+# never accepted, as any correct server's listener close does. ``abandon`` is ``queue`` exiting at
+# once on the signal instead, so it drops the fifth, which it accepted, as well. ``shut`` is
+# ``queue`` shutting its listener down on the signal, which resets the connections waiting on it
+# at once, and closing it only a second after it answers the fifth. ``HIDDEN`` makes the service
+# non-dumpable, so no other process may look at its open files.
 STOPS = (
-    "import os, signal, sys, threading, time, http.server as h\n"
+    "import ctypes, os, signal, socket, sys, threading, time, http.server as h\n"
+    "if os.environ.get('HIDDEN'): ctypes.CDLL(None).prctl(4, 0, 0, 0, 0)\n"
     "MODE = os.environ['MODE']\n"
-    "class Server(h.ThreadingHTTPServer):\n"
+    "QUEUES = MODE in ('queue', 'abandon', 'shut')\n"
+    "held, stopping = [], threading.Event()\n"
+    "class Server(h.HTTPServer if QUEUES else h.ThreadingHTTPServer):\n"
     "    daemon_threads = False\n"
     "    block_on_close = True\n"
     "    def handle_error(self, request, client_address): pass\n"
     "class Handler(h.BaseHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
     "    def do_GET(self):\n"
-    "        if self.path == '/work': time.sleep(0.3)\n"
+    "        if self.path == '/work' and not QUEUES: time.sleep(0.3)\n"
+    "        if self.path == '/work' and QUEUES:\n"
+    "            held.append(self.connection)\n"
+    "            if len(held) == 5: stopping.wait()\n"
     "        self.send_response(200)\n"
     "        self.send_header('Content-Length', '2')\n"
     "        self.end_headers()\n"
     "        self.wfile.write(b'ok')\n"
     "server = Server(('127.0.0.1', int(os.environ['PORT'])), Handler)\n"
     "def stop(*args):\n"
-    "    if MODE == 'drop': os._exit(0)\n"
+    "    if MODE in ('drop', 'abandon'): os._exit(0)\n"
     "    if MODE == 'slow': time.sleep(3)\n"
+    "    if MODE == 'shut': server.socket.shutdown(socket.SHUT_RDWR)\n"
+    "    stopping.set()\n"
     "    threading.Thread(target=server.shutdown).start()\n"
     "if MODE == 'die': threading.Timer(0.3, os._exit, [5]).start()\n"
     "signal.signal(signal.SIGTERM, signal.SIG_IGN if MODE == 'ignore' else stop)\n"
     "server.serve_forever()\n"
+    "if MODE == 'shut': time.sleep(1)\n"
     "server.server_close()\n"
     "sys.exit(1 if MODE == 'late' else 0)"
+)
+
+# Why: a broken service that forges the gate's excuse. It answers ``/work`` after 0.3 s. On SIGTERM
+# it stops accepting and, for each request in hand, connects to its own listener from 127.0.0.2 with
+# that request's client port, so the gate takes a connection with the same ports. It then closes
+# the listener, waits for the gate, and resets the requests it holds: those it dropped.
+FORGE = (
+    "import os, signal, socket, struct, threading, time\n"
+    "PORT = int(os.environ['PORT'])\n"
+    "listener = socket.create_server(('127.0.0.1', PORT))\n"
+    "listener.settimeout(0.01)\n"
+    "held, stopping = {}, threading.Event()\n"
+    "def serve(connection, client):\n"
+    "    data = b''\n"
+    "    while b'\\r\\n\\r\\n' not in data and (chunk := connection.recv(4096)):\n"
+    "        data += chunk\n"
+    "    if data.startswith(b'GET /work'):\n"
+    "        held[client] = connection\n"
+    "        if stopping.wait(0.3): return\n"
+    "        del held[client]\n"
+    "    connection.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok')\n"
+    "    connection.close()\n"
+    "signal.signal(signal.SIGTERM, lambda *_: stopping.set())\n"
+    "while not stopping.is_set():\n"
+    "    try: connection, (_, client) = listener.accept()\n"
+    "    except TimeoutError: continue\n"
+    "    threading.Thread(target=serve, args=(connection, client)).start()\n"
+    "time.sleep(0.05)\n"
+    "forged = []\n"
+    "for client in list(held):\n"
+    "    forged.append(socket.socket())\n"
+    "    forged[-1].bind(('127.0.0.2', client))\n"
+    "    forged[-1].connect(('127.0.0.1', PORT))\n"
+    "listener.close()\n"
+    "time.sleep(0.2)\n"
+    "for connection in held.values():\n"
+    "    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))\n"
+    "    connection.close()\n"
+    "os._exit(0)\n"
 )
 
 # Why: a service that reads ``NAME``, and what it does when it is missing is chosen by ``MODE``:

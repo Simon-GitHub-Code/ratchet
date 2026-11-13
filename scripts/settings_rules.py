@@ -216,7 +216,7 @@ def stricter(settings: dict[str, object], manifest: dict[str, object]) -> list[s
     """
     return [
         rule
-        for rule in listed(settings, "deny")
+        for rule in dict.fromkeys(listed(settings, "deny"))
         if rule not in DENY and plugin_writes(rule, manifest)
     ]
 

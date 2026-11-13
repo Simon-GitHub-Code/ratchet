@@ -3,7 +3,7 @@
 import shlex
 from collections.abc import Callable
 
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from ratchet_guards import bash
@@ -29,6 +29,27 @@ def _sets_a_variable(command: str) -> bool:
     shell, so the later command no longer meets it and the row is no longer the same command.
     """
     return any(word in command for word in ("S=", "T=", "export ", "declare "))
+
+
+_SHELL_CHANGERS = frozenset(
+    {"alias", "shopt", "enable", "function", "trap", "eval", ".", "source", "typeset", "{", "if"}
+)
+
+
+def _changes_the_shell(command: str) -> bool:
+    """Whether the command's first part changes what a later part of its line means.
+
+    A wrapper in front only of that part (``sudo alias cd=true; cd /tmp``) runs a program, not
+    the builtin, the assignment or the group, so the later part meets a plain shell: another
+    command.
+    """
+    first = command.split(maxsplit=1)[0]
+    return first in _SHELL_CHANGERS or "=" in first
+
+
+def _prefixes(wrap: Callable[[str], str]) -> bool:
+    """Whether ``wrap`` only puts words in front, so it wraps the first part of a line alone."""
+    return wrap("a; b").endswith(" a; b")
 
 
 FLAGGED = [
@@ -91,6 +112,7 @@ def test_wrapping_never_unblocks_a_flagged_command(
     flagged: tuple[str, list[str], Guard | None], wrappers: list[Callable[[str], str]]
 ) -> None:
     command, expected, guard = flagged
+    assume(not (_changes_the_shell(command) and any(_prefixes(wrap) for wrap in wrappers)))
     for wrap in wrappers:
         command = wrap(command)
     assert set(expected) <= set(rules(command, guard))
@@ -170,6 +192,105 @@ def test_shell_writes_to_product_code_are_allowed(name: str, write: Callable[[st
     path = f"app/adapters/{name}.py"
     assert MANIFEST.group_of(path) is None
     assert rules(write(path)) == []
+
+
+# Constructs the guard reads as bash does: a line made only of these has its subshells followed.
+MODELLED = [
+    "ls",
+    "true",
+    "x=1",
+    "echo ')' '('",
+    'echo "a ) b"',
+    "echo \\) \\(",
+    "echo $(pwd) `pwd`",
+    'echo "$(ls)"',
+    "echo ${v:-)} ${v#(}",
+    'echo "${v:-)}"',
+    "echo $'a\\\\'",
+    "echo `echo \\`echo )\\``",
+    "echo $[ ( 1 ) ]",
+    "echo $$",
+    "a=(1 2)",
+    "ls | wc -l",
+    "ls 2>&1 >/dev/null",
+    "{ ls; }",
+    "if true; then ls; fi",
+    "while false; do :; done",
+    "git status",
+    "(ls)",
+    "(cd /tmp && ls)",
+]
+# Constructs it does not model: a heredoc, a case, a quote left open or one bash and sh end apart,
+# a `${ cmd; }`, and the commands that run text the line does not show or change what a later
+# word means.
+UNMODELLED = [
+    "echo $'\\')'",
+    "echo \"${x:-'}'}\"",
+    "cat <<E\n)\nE\n",
+    "true |<<E cat\n)\nE\n",
+    "cat <<'E F'\n)\nE F\n",
+    "case a in a) :;; esac",
+    "x=${ :; }",
+    'echo "${| :; }"',
+    'echo "$(echo case)"',
+    "eval :",
+    "command eval :",
+    "f() { :; }",
+    "function f { :; }",
+    "alias a=b",
+    "source /dev/null",
+    ". /dev/null",
+    "trap : EXIT",
+    "shopt -s extglob",
+    "enable -n test",
+    "cat <(cd /tmp) > out.txt",
+    "(( x = 1 << y ))\ny\n",
+]
+SUBSHELL_MOVES = [
+    "(cd .github/workflows)",
+    "(cd .github/workflows && ls)",
+    "( (cd .github/workflows) )",
+    "(cd .github/workflows) | cat",
+    "(cd .github/workflows; ls) > out.txt",
+]
+_LATER = st.sampled_from(["; ", "\n", " && ", " || "])
+_PLACES = st.sampled_from(["before", "inside", "after"])
+
+
+def _line(parts: list[str], later: str) -> str:
+    """``parts`` as one command line, each part ended so the next starts a command."""
+    return "".join(part if part.endswith("\n") else part + later for part in parts)
+
+
+@given(
+    move=st.sampled_from(SUBSHELL_MOVES),
+    construct=st.sampled_from(UNMODELLED),
+    place=_PLACES,
+    harmless=st.lists(st.sampled_from(MODELLED), max_size=3),
+    later=_LATER,
+)
+def test_a_subshell_cd_stays_in_force_on_a_line_the_guard_does_not_model(
+    *, move: str, construct: str, place: str, harmless: list[str], later: str
+) -> None:
+    assume(not (place == "inside" and "\n" in construct))
+    if place == "inside":
+        move = move.replace("(cd .github/workflows", f"(cd .github/workflows; {construct.strip()}")
+    parts = {"before": [construct, move], "inside": [move], "after": [move, construct]}[place]
+    line = _line([*harmless, *parts], later) + "echo x > ci.yml"
+    assert {"workflow-write", "unreadable"} & set(rules(line))
+
+
+@given(
+    move=st.sampled_from(SUBSHELL_MOVES),
+    harmless=st.lists(st.sampled_from(MODELLED), max_size=4),
+    after=st.lists(st.sampled_from(MODELLED), max_size=2),
+    later=_LATER,
+)
+def test_a_subshell_cd_is_left_behind_on_a_line_the_guard_models(
+    *, move: str, harmless: list[str], after: list[str], later: str
+) -> None:
+    line = _line([*harmless, move, *after], later) + "echo x > ci.yml"
+    assert rules(line) == []
 
 
 @given(text=st.text(max_size=200))

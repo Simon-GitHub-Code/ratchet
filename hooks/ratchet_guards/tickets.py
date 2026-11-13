@@ -3,29 +3,76 @@
 On a local markdown tracker (mattpocock-skills' ``.scratch/<feature>/``) a ticket's label is its
 ``Status:`` line, so writing the agent-ready label there is the act ``gh issue edit
 --add-label`` is on a forge: the owner's agreement that the ticket is ready to build, which the
-feature preflight reads as such. An Edit, Write or MultiEdit of a markdown file under
-``.scratch/`` that leaves the file with that status where it had none asks.
+feature preflight reads as such. A ticket is what the route and the preflight read as one, a
+markdown file at ``.scratch/<feature>/issues/<name>.md``; the spec beside it and a change
+description under ``.scratch/changes/`` are not. An Edit, Write or MultiEdit of a ticket that
+leaves it with that status where it had none asks.
 
 A command line or a patch cannot be run ahead to see what a file will hold. There the label is
 read as ``gh`` reads it: a call whose text names the label and which writes a ticket that does
-not hold the status gives it, and asks. One call that writes every ticket of a spec is one ask,
-which names each of them. Out of reach, as for every shell rule (ADR 0024): a script run by
-path, a file copied into place, a label put together when the command runs.
+not hold the status gives it, and asks. So does one that writes a directory tickets live in
+(``.scratch``, a feature's directory or its ``issues``), which may bring tickets with it. A path
+is read the way the shell and the filesystem may read it: in any case, through ``..`` and links,
+and with a glob, a brace expansion, a variable or a substitution in any part standing for
+whatever it could spell. One call that writes every ticket of a spec is one ask, which names
+each of them. Out of reach, as for every shell rule (ADR 0024): a script run by path, a file
+copied into place, a label put together when the command runs.
+
+The ask is a courtesy on the honest path, not the control. A command can still give a ticket
+the label without one: copy a file that holds it into place (``cp notes/ready.md
+.scratch/feat/issues/01.md``), or hard-link a ticket, write the label through the second name
+and remove it. Catching a label the owner did not give is the merge judge's job, not this ask's.
 """
 
+import posixpath
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gh import ready_label
+from ratchet_guards.shell import PLACEHOLDER
 from ratchet_guards.verdict import Verdict
 
 TRACKER_DIRECTORY = ".scratch"
+TICKETS_DIRECTORY = "issues"
+TICKET_SUFFIX = ".md"
+# Why: a glob, a brace expansion, a variable or a substitution may spell any name there.
+_GLOB = re.compile(rf"[*?[{{$`]|{re.escape(PLACEHOLDER)}")
 RULE = "agent-ready-label"
 STATUS_LINE = re.compile(
     r"^\*{0,2}status:?\*{0,2}:?\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE
 )
+
+
+def _readings(path: Path, guard: Guard) -> tuple[Path, ...]:
+    """``path`` as written with ``..`` folded, and as the filesystem resolves it."""
+    return (Path(posixpath.normpath(path)), guard.locator.filesystem.canonical(path))
+
+
+def _part(part: str, name: str) -> bool:
+    """Whether a path part may name ``name``: in any case, or as a pattern or expansion."""
+    return part.casefold() == name or _GLOB.search(part) is not None
+
+
+def _is_ticket(path: Path) -> bool:
+    """Whether ``path`` is a ticket: ``.scratch/<feature>/issues/<name>.md``."""
+    *_, tracker, _, issues, name = ("", "", "", *path.parts)
+    return (
+        _part(tracker, TRACKER_DIRECTORY)
+        and _part(issues, TICKETS_DIRECTORY)
+        and (name.casefold().endswith(TICKET_SUFFIX) or _GLOB.search(name) is not None)
+    )
+
+
+def _holds_tickets(path: Path) -> bool:
+    """Whether ``path`` is ``.scratch``, a feature's directory in it, or that feature's issues."""
+    *_, tracker, feature, last = ("", "", *path.parts)
+    return (
+        _part(last, TRACKER_DIRECTORY)
+        or _part(feature, TRACKER_DIRECTORY)
+        or (_part(tracker, TRACKER_DIRECTORY) and _part(last, TICKETS_DIRECTORY))
+    )
 
 
 def statuses(text: str) -> set[str]:
@@ -58,7 +105,7 @@ def check(
 
     The label's spelling is the record of the checkout holding the ticket, not the session's.
     """
-    if path.suffix != ".md" or TRACKER_DIRECTORY not in path.parts:
+    if not any(map(_is_ticket, _readings(path, guard))):
         return None
     label = ready_label(Context(path.parent), guard)
     before = guard.locator.filesystem.read_text(path) or ""
@@ -82,13 +129,15 @@ def named(words: Iterable[str], text: str, context: Context, *, guard: Guard) ->
     given: dict[str, list[str]] = {}
     for word in filter(None, words):
         path = context.cwd / filesystem.expand(word)
-        if TRACKER_DIRECTORY not in path.parts:
-            continue
-        for ticket in filesystem.glob(path) or [path]:
-            label = ready_label(Context(ticket.parent), guard)
-            held = statuses(filesystem.read_text(ticket) or "")
-            if ticket.suffix == ".md" and label in text and label not in held:
-                given.setdefault(label, []).append(ticket.name)
+        for found in filesystem.glob(path) or [path]:
+            readings = _readings(found, guard)
+            ticket = any(map(_is_ticket, readings))
+            if not ticket and not any(map(_holds_tickets, readings)):
+                continue
+            label = ready_label(Context(found.parent), guard)
+            held = statuses(filesystem.read_text(found) or "") if ticket else set[str]()
+            if label in text and label not in held:
+                given.setdefault(label, []).append(found.name if ticket else f"{found.name}/")
     return [
         Verdict(RULE, _detail(list(dict.fromkeys(names)), label)) for label, names in given.items()
     ]

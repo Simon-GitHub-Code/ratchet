@@ -12,7 +12,7 @@ import pytest
 
 from ratchet_guards import hook
 from ratchet_guards.context import Guard
-from ratchet_guards.manifest import COMMITTED, MANIFEST_PATH, parse
+from ratchet_guards.manifest import COMMITTED, EMPTY, MANIFEST_PATH, parse
 from ratchet_guards.paths import Checkout
 from ratchet_guards.verdict import RULES, Decision, Verdict
 from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, ROOT, FakeRepo, make_guard
@@ -205,6 +205,20 @@ def test_a_deny_ends_with_the_way_out_of_its_rule() -> None:
     locked = hook.reason(Verdict("guard-path-locked", "x is in guard group 'g'. Because."))
     assert "gate dispute (docs/disputes/NNNN-<slug>.md)" in locked
     assert COMMITTED not in locked
+
+
+def test_a_deny_about_a_folder_the_guard_cannot_work_out_says_how_to_write_it_out() -> None:
+    command = "cd $S && sed -i s/a/b/ .github/workflows/ci.yml"
+    verdict = hook.decide(payload("Bash", command=command), make_guard(manifest=EMPTY))
+    assert verdict is not None
+    assert hook.reason(verdict) == (
+        "Ratchet guard denied this tool call; no part of it ran. It writes a relative path after "
+        "a cd the guard cannot follow; it may be a guard path that only the owner changes, or one "
+        "on the default branch: .github/workflows/ci.yml, changed by sed. Give the file a path "
+        "the guard can follow, an absolute one or one after a `cd` to a literal directory, and it "
+        "is judged where it lands. If the call also did unrelated work, redo that in a tool call "
+        "of its own."
+    )
 
 
 def test_run_fails_closed() -> None:

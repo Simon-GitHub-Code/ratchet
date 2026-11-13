@@ -14,7 +14,7 @@ asked on every branch.
 import pytest
 
 from ratchet_guards.manifest import EMPTY
-from tests.support import FakeRepo, make_guard, rules
+from tests.support import ROOT, FakeRepo, make_guard, rules
 
 W = "guard-path-write"
 P = "guard-path-default"
@@ -162,6 +162,9 @@ DENIED: list[tuple[str, list[str]]] = [
     ("declare -x HOME=/tmp/evil; git fetch", ["hooks-path"]),
     ("env HOME=/tmp/evil git commit -m x", ["hooks-path"]),
     ("HOME=/tmp/evil; git commit -m x", ["hooks-path"]),
+    ("{ HOME=/tmp/evil; git commit -m x; }", ["hooks-path"]),
+    ("if true; then typeset -x GIT_DIR=/r/.git; git reset old; fi", ["reset-main"]),
+    ("{ CDPATH=/tmp; cd sub && rm -rf .github/workflows; }", [P, U, F]),
     ("git --git-dir=/r/.git reset --soft old", ["reset-main"]),
     ("git --git-dir /r/.git reset --soft old", ["reset-main"]),
     ("git --git-dir=/r/.git --work-tree=/r reset --keep old", ["reset-main"]),
@@ -211,17 +214,17 @@ DENIED: list[tuple[str, list[str]]] = [
     ("env cd /tmp && rm -rf .github/workflows", [P, F]),
     ("X=1 cd /tmp && rm -rf .github/workflows", [P, F]),
     ("/bin/cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("cd() { :; }; cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("sudo cd() { :; }; cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("cd () { :; }; cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("function cd { :; }; cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("alias cd=true; cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("shopt -s expand_aliases; cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("enable -n cd; cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("trap 'cd /repo' DEBUG; cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("eval 'cd() { :; }'; cd /tmp && rm -rf .github/workflows", [P, F]),
-    (". ./lib.sh; cd /tmp && rm -rf .github/workflows", [P, F]),
-    ("source lib.sh && cd /tmp && rm -rf .github/workflows", [P, F]),
+    ("cd() { :; }; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    ("sudo cd() { :; }; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    ("cd () { :; }; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    ("function cd { :; }; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    ("alias cd=true; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    ("shopt -s expand_aliases; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    ("enable -n cd; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    ("trap 'cd /repo' DEBUG; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    ("eval 'cd() { :; }'; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    (". ./lib.sh; cd /tmp && rm -rf .github/workflows", [P, U, F]),
+    ("source lib.sh && cd /tmp && rm -rf .github/workflows", [P, U, F]),
     ("cd /tmp && cd - && rm -rf .github/workflows", [P, U, F]),
     ("cd /tmp && popd && rm -rf .github/workflows", [P, U, F]),
     ('cd /tmp && cd "$OLDPWD" && rm -rf .github/workflows', [P, U, F]),
@@ -234,6 +237,63 @@ DENIED: list[tuple[str, list[str]]] = [
     ("pushd /nonexistent; rm -rf .github/workflows", [P, F]),
     ("cd .github && echo $(rm -rf workflows)", [P, F]),
     ("cd .github; rm -rf workflows", [P, F]),
+    ("(true) || cd /tmp && rm -rf .github/workflows", [P, F]),
+    ("(false) | cd /tmp && rm -rf .github/workflows", [P, F]),
+    ("{ (true) || cd /tmp && rm -rf .github/workflows; }", [P, F]),
+    ("if true; then (false) | cd /tmp && rm -rf .github/workflows; fi", [P, F]),
+    ("{ cd .github/workflows; }; echo x > ci.yml", [P, F]),
+    ("case a in a) cd .github/workflows;; esac; echo x > ci.yml", [P, F]),
+    ("cd .github/workflows; (ls); echo x > ci.yml", [P, F]),
+    ("((cd /tmp); cd .github/workflows; echo x > ci.yml)", [P, F]),
+    ("echo | cd .github/workflows; echo x > ci.yml", [P, F]),
+    ("(cd .github/workflows; case a in a) :;; b) echo x > ci.yml;; esac)", [P, F]),
+    ("(cd .github/workflows; case a in a) 'esac';; b) echo x > ci.yml;; esac)", [P, F]),
+    ("(cd .github/workflows; echo case; echo x > ci.yml)", [P, F]),
+    ("case y in x) ;; (case|*) cd .github/workflows;; z|esac) ;; esac; echo x > ci.yml", [P, F]),
+    ("case a in a) (cd .github/workflows);; esac; echo x > ci.yml", [P, F]),
+    ("(cd .github/workflows; echo $'\\') '\\'; echo x > ci.yml)", [P, "unreadable", F]),
+    ("(cd .github/workflows; cat <<E\\ F\nE\n)\nE F\necho x > ci.yml)", [P, F]),
+    ("(cd .github/workflows; (( x = 1 << y ))\n)\ny\necho x > ci.yml)", [P, F]),
+    ("echo $$'\\'; echo hi > .github/workflows/ci.yml; echo '\\'", [P, F]),
+    ("(cd .github/workflows; echo ${x#)}; echo hi > ci.yml)", [P, F]),
+    ("(cd .github/workflows; echo ${x/)/} ${y:-${z#)}}; echo hi > ci.yml)", [P, F]),
+    ("echo ${x:-$(rm -rf .github/workflows)}", [P, F]),
+    ("echo ${x:-`rm -rf .github/workflows`}", [P, F]),
+    ("x=${ rm -f justfile; }", [P]),
+    ("x=${| rm -rf .github guards; }", [P, W]),
+    ("x=${\nrm -f justfile\n}", [P]),
+    ("x=${\trm -f justfile;}", [P]),
+    ('echo "${ rm -f justfile; }"', [P]),
+    ("echo ${v:-${ rm -f justfile; }}", [P]),
+    ('echo "${v:-${| rm -f justfile; }}"', [P]),
+    ("x=${ git commit --no-verify -m x; }", ["no-verify"]),
+    ("x=${ { cd .github; }; }; echo x > workflows/ci.yml", [P, F]),
+    ("x=${ cd .github/workflows; }; echo x > ci.yml", [P, F]),
+    ("echo ${ cd .github; }; echo x > workflows/ci.yml", [P, F]),
+    ('echo "${| cd .github; }" >/dev/null; echo x > workflows/ci.yml', [P, F]),
+    ("x=${ cd .github; } cp a workflows/ci.yml", [P, F]),
+    ("echo ${ echo }; cd .github; }; echo x > workflows/ci.yml", [P, "unreadable", F]),
+    ("(cd .github; true |<<E cat\n)\nE\necho x > workflows/ci.yml)", [P, F]),
+    ("(cd .github;<<E cat\n)\nE\necho x > workflows/ci.yml)", [P, F]),
+    ("true |<<E cat\n'\nE\nrm -f justfile\necho '", [P, "unreadable"]),
+    ("cd .github;>workflows/ci.yml", [P, F]),
+    ("cd .github&&>workflows/ci.yml", [P, F]),
+    ('(cd .github; echo "${v:-" ) "}"; echo x > workflows/ci.yml)', [P, F]),
+    ("(cd .github; (cd workflows); echo x > workflows/ci.yml)", [P, F]),
+    ("function f { rm -f justfile; }; f", [P, U]),
+    ("cat <<E\\ F\nE F\nrm -f justfile\nE", [P]),
+    ("cat <<'E F'\nE F\nrm -f justfile\nE", [P]),
+    ("(( x = 1 << y ))\nrm -f justfile\ny", [P]),
+    ("echo $(( 1 << 2 ))\nrm -f justfile\n2", [P]),
+    ("env -C .github/workflows tee ci.yml", [P, F]),
+    ("env --chdir=.github/workflows tee ci.yml", [P, F]),
+    ("env --ch .github/workflows tee ci.yml", [P, F]),
+    ("env -iC.github/workflows tee ci.yml", [P, F]),
+    ("nice env -i -C .github/workflows tee ci.yml", [P, F]),
+    ("sudo -u root -D .github/workflows tee ci.yml", [P, F]),
+    ("uv run --directory .github/workflows tee ci.yml", [P, F]),
+    ("uv --directory=.github/workflows run tee ci.yml", [P, F]),
+    ("poetry -C .github/workflows run tee ci.yml", [P, F]),
     ("cd a; cd b; cd c; cd d; cd e; cd f; cd g; ls", ["unreadable"]),
     ("git log -1 --format=%H old --output=.git/refs/heads/main", [W]),
     ("git log -1 --format=%H --output .git/refs/heads/main old", [W]),
@@ -907,6 +967,7 @@ ASKED_ELSEWHERE: list[str] = [
     f"S=/a; export S; cd $S && {LOST}",
     f"S=/a; cd() {{ :; }}; cd $S && {LOST}",
     f"cd /tmp && cd $S && {LOST}",
+    f"env -C $S {LOST}",
 ]
 NOT_ASKED_ELSEWHERE: list[str] = [
     "cd $S && ls",
@@ -919,9 +980,25 @@ NOT_ASKED_ELSEWHERE: list[str] = [
     "cd /tmp/x && cd $S && cd /tmp/y && " + LOST,
     "S=/a; cd $S && sed -i s/a/b/ src/app.py",
     f"S=/a; if x; then S=/b; fi; cd $S && {LOST}",
+    f"(cd $S); {LOST}",
+    f"(cd $S && ls) && {LOST}",
 ]
 
 ALLOWED: list[str] = [
+    "(cd /plugin && ls) ; cp /plugin/README.md notes.md",
+    "(cd .github/workflows && ls); echo x > ci.yml",
+    "(cd .github/workflows) && echo x > ci.yml",
+    "(cd .github/workflows) || echo x > ci.yml",
+    "( (cd .github/workflows) ); echo x > ci.yml",
+    "((cd .github/workflows)); echo x > ci.yml",
+    "(cd .github/workflows) | cat; echo x > ci.yml",
+    "(cd .github/workflows) > out.txt; echo x > ci.yml",
+    "(cd .github/workflows &); echo x > ci.yml",
+    "{ (cd .github/workflows); echo x > ci.yml; }",
+    "if true; then (cd .github/workflows); fi; echo x > ci.yml",
+    "cd .github/workflows | cat; echo x > ci.yml",
+    "cd .github/workflows & echo x > ci.yml",
+    "echo $(cd .github/workflows) > out.txt; echo x > ci.yml",
     "S=/tmp/x; cd $S && make; echo x > out.txt",
     "S=/tmp/x; cd ${S} && sed -i s/a/b/ src/app.py",
     "S=/tmp; cd $S/y && rm -rf build",
@@ -1630,3 +1707,70 @@ def test_a_write_after_a_directory_the_guard_cannot_resolve_is_refused_on_any_br
 @pytest.mark.parametrize("command", NOT_ASKED_ELSEWHERE)
 def test_a_write_that_is_no_guard_path_after_such_a_directory_is_not_asked(command: str) -> None:
     assert rules(command, make_guard(manifest=EMPTY)) == []
+
+
+# Run in /repo/app: each line moves the shell, or may, in a way the line does not spell out as a
+# `cd` the guard can read, and then writes the root's justfile. As in the tables above, a row is
+# judged on the branch without ``P``, and on ``main`` with it.
+FROM_APP: list[tuple[str, list[str]]] = [
+    ("eval 'cd ..'; echo x > justfile", [UNRESOLVED]),
+    ('eval "(cd ..); cd .."; echo x > justfile', [UNRESOLVED]),
+    ("command eval 'cd ..'; echo x > justfile", [UNRESOLVED]),
+    ("builtin source ./up.sh; echo x > justfile", [UNRESOLVED]),
+    (". ./up.sh && echo x > justfile", [UNRESOLVED]),
+    ("trap 'cd ..' DEBUG; echo x > justfile", [UNRESOLVED]),
+    ("shopt -s cdable_vars; up=..; cd up; echo x > justfile", [UNRESOLVED]),
+    ("shopt -s expand_aliases; alias up='cd ..'\nup; echo x > justfile", [UNRESOLVED]),
+    ("function f { cd ..; }; f; echo x > justfile", [P, UNRESOLVED]),
+    ("f() { cd ..; }; f; echo x > justfile", [P, UNRESOLVED]),
+    # Why: `HOME=/x cd` goes to /x, as does `cd ~` once the line has set HOME.
+    ("HOME=/repo cd; echo x > justfile", [P, UNRESOLVED]),
+    ("HOME=/repo builtin cd; rm -f justfile", [P, UNRESOLVED]),
+    ("HOME=/repo; cd ~ && echo x > justfile", [P, UNRESOLVED]),
+    ("{ HOME=/repo; cd; echo x > justfile; }", [P, UNRESOLVED]),
+    ("HOME=/ ; cd ~/repo && echo x > justfile", [P, UNRESOLVED]),
+    ("HOME=$1 cd; echo x > justfile", [UNRESOLVED]),
+    ("CDPATH=/ cd repo; echo x > justfile", [UNRESOLVED]),
+    # Why: bash falls back to the target as written, so that reading stays among the others.
+    ("CDPATH=/tmp cd ..; echo x > justfile", [P, UNRESOLVED]),
+    ("export CDPATH=/tmp; cd sub && rm -f ../../justfile", [P, UNRESOLVED]),
+    ("HOME=/tmp; cd ~/../../repo && rm -f justfile", [P, UNRESOLVED]),
+    ("cd .. && pushd app && pushd && echo x > justfile", [P, UNRESOLVED]),
+    ("v=${ cd ..; }; cp notes.md justfile", [P]),
+    ("echo ${ cd ..; }; cp notes.md justfile", [P]),
+    ("echo ${| cd ..; }; cp notes.md justfile", [P]),
+    ("(cd ..; true |<<E cat\n)\nE\ncp notes.md justfile)", [P]),
+    ("(cd ..; ( cd app ); cp notes.md justfile)", [P]),
+    ("cd ..;>justfile", [P]),
+    ('echo "$(echo case)"; rm -f ../justfile', ["unreadable"]),
+    # Why: posix mode and sh read a `'` in a quoted `${x-...}` as a character, bash as a quote.
+    ('set -o posix\necho "${x:-\'}"; echo x > ../justfile #\'}"', [P, "unreadable"]),
+    ("echo \"${x:-'}\"'}\"; rm -f ../justfile; echo '", ["unreadable"]),
+    # Why: sh reads `$'a\'` as `$` and a quote that the escaped quote ends.
+    ("sh <<'E'\necho $'a\\'; rm -f ../justfile #'\nE", [P, "unreadable"]),
+    ("echo $'\\''; rm -f ../justfile; echo ''", ["unreadable"]),
+    # Why: bash may end a `${ cmd; }` at a `}` after a compound command or a redirect.
+    ("cd ..${ :; { :; } }; rm -rf quality\n}", ["unreadable", UNRESOLVED]),
+    ("cd ..${ : >}; rm -rf quality }", [UNRESOLVED]),
+    # Why: inside backticks, an escaped backtick opens a nested substitution, ending nothing.
+    (": `: \\`;(`; : \\`; cd ..; : `: \\`;)`; : \\`; echo x > justfile", [P, "unreadable"]),
+    ("echo `echo \\`echo ok\\``; cd ..; echo x > justfile", [P]),
+    # Why: `$[ ... ]` is an arithmetic expansion, so a parenthesis in it opens no subshell.
+    (": $[\n( ]\ncd ..\n: $[\n) ]\necho x > justfile", [P]),
+    ("echo $[ 1 << 2 ]; cd ..; echo x > justfile", [P]),
+    # Why: on a line the guard does not model, a `cd` in a pipeline is read as staying in force.
+    ("case a in a) :;; esac; cd .. | cat; echo x > justfile", [P]),
+    ("eval :; cd .. & echo x > justfile", [P, UNRESOLVED]),
+]
+
+
+@pytest.mark.parametrize(("command", "expected"), FROM_APP)
+def test_a_move_the_line_does_not_spell_out_is_followed_or_refused(
+    command: str, expected: list[str]
+) -> None:
+    assert rules(command, cwd=ROOT / "app") == on_a_branch(expected)
+
+
+@pytest.mark.parametrize("command", [command for command, expected in FROM_APP if P in expected])
+def test_a_write_followed_to_the_root_is_refused_on_main(command: str) -> None:
+    assert P in rules(command, make_guard(FakeRepo(branch="main")), cwd=ROOT / "app")
