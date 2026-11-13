@@ -177,6 +177,13 @@ def test_the_start_command_comes_from_the_readme_then_the_justfile_then_package_
     assert appcheck.start_command(tmp_path) == appcheck.Start("pnpm start", "README.md")
 
 
+def test_a_readme_test_or_sync_command_is_not_taken_for_the_start_command(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "```\nuv sync\nuv run pytest -q\nnpx vitest run\n```\n", "utf-8"
+    )
+    assert appcheck.start_command(tmp_path) is None
+
+
 def test_a_package_json_that_is_not_json_or_has_no_scripts_names_nothing(tmp_path: Path) -> None:
     (tmp_path / "package.json").write_text("{nope", "utf-8")
     assert appcheck.start_command(tmp_path) is None

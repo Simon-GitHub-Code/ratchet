@@ -193,12 +193,15 @@ def _took(question: Event) -> bool:
 
 def _questions(questions: list[Event]) -> dict[str, object]:
     classes = Counter(str(q.get("class")) for q in questions)
+    # Why: only a dialog or an also: line has options to mark recommended; a prose question's
+    # recommendation is whatever the turn said, so it is counted by its class alone.
+    offered = [q for q in questions if q.get("channel") != "prose"]
     return {
         "total": len(questions),
         "product": classes["product"],
         "default_able": classes["default-able"],
-        "recommended_offered": sum(q.get("recommended") is not None for q in questions),
-        "took_recommended": sum(_took(q) for q in questions),
+        "recommended_offered": sum(q.get("recommended") is not None for q in offered),
+        "took_recommended": sum(_took(q) for q in offered),
         "by_channel": dict(Counter(str(q.get("channel")) for q in questions)),
         "list": [
             {

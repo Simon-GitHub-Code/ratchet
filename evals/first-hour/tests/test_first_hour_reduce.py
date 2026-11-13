@@ -323,6 +323,22 @@ def test_an_answer_that_quotes_the_recommended_label_counts_as_taken() -> None:
     assert reduce.reduce(run)["questions"]["took_recommended"] == 1
 
 
+def test_a_prose_question_counts_by_its_class_but_not_as_a_recommendation_offered() -> None:
+    run = [
+        {
+            "s": 0,
+            "kind": "question",
+            "class": "default-able",
+            "channel": "prose",
+            "recommended": "the assistant's recommendation",
+            "took_recommended": True,
+            "answer": "go with what you recommend",
+        }
+    ]
+    q = reduce.reduce(run)["questions"]
+    assert (q["default_able"], q["recommended_offered"], q["took_recommended"]) == (1, 0, 0)
+
+
 def test_the_shipped_persona_loads_from_its_stem_or_its_path() -> None:
     persona = load("read-later")
     assert persona.slice.kind == "html-form"

@@ -30,9 +30,12 @@ DENY_RULES = (
     "Bash(claude mcp:*)",
 )
 
+# Why: git's global options (-C dir, -c key=value, --git-dir=...) may sit before the subcommand.
+GIT_OPTIONS = r"(?:\s+-[cC]\s+\S+|\s+--[\w-]+(?:=\S+)?)*"
 FORBIDDEN = (
-    (re.compile(r"\bgit\s+push\b"), "pushes"),
-    (re.compile(r"\bgit\s+remote\s+(add|set-url)\b"), "adds a remote"),
+    (re.compile(rf"\bgit{GIT_OPTIONS}\s+push\b"), "pushes"),
+    (re.compile(rf"\bgit{GIT_OPTIONS}\s+remote\s+(add|set-url)\b"), "adds a remote"),
+    (re.compile(r"\bremote\.[\w.-]+\.(url|pushurl)\b"), "adds a remote"),
     (re.compile(r"\bgh\s+(repo|pr|issue|label|release)\s+(create|fork)\b"), "writes to a forge"),
     (re.compile(r"\bglab\s+(repo|mr|issue|label|release)\s+(create|fork)\b"), "writes to a forge"),
     (
@@ -42,9 +45,7 @@ FORBIDDEN = (
     (re.compile(r"\bclaude\s+mcp\s+(add|remove)"), "changes the MCP servers"),
     (re.compile(r"--dangerously-skip-permissions"), "skips permissions"),
 )
-USER_FILES = re.compile(
-    r"(~|\$HOME|\$\{HOME\}|/home/[^/\s]+)/\.claude/(settings[^/\s]*\.json|plugins/(installed_plugins|known_marketplaces)\.json)"
-)
+USER_FILES = re.compile(r"(~|\$HOME|\$\{HOME\}|/home/[^/\s]+)/\.claude\b")
 WRITES = re.compile(r">|\btee\b|\bsed\s+-i|\brm\b|\bmv\b|\bcp\b|\bjq\b.*>|\bpython3?\b|\bchmod\b")
 
 

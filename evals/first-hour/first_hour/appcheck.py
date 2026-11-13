@@ -31,7 +31,9 @@ if TYPE_CHECKING:
 
 NO_WAY = "no way to start it: no run command in the README, justfile or package.json"
 START_WORDS = re.compile(r"\b(start|dev|serve|server|run|up|app|main)\b")
-NOT_START = re.compile(r"\b(install|test|check|lint|build|fmt|format|typecheck|ci)\b")
+NOT_START = re.compile(
+    r"\b(install|sync|test|pytest|vitest|jest|check|lint|build|fmt|format|typecheck|ci)\b"
+)
 README_LINE = re.compile(r"^\s*\$?\s*((?:just|npm|pnpm|yarn|bun|node|python3?|uv|make|deno)\s.+)$")
 RECIPE = re.compile(r"^([A-Za-z][\w-]*)(?:\s+[^:\n]*)?:(?!=)", re.MULTILINE)
 URL = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d+)")

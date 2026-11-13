@@ -44,6 +44,11 @@ def test_commands_that_reach_a_remote_or_change_the_users_plugins_are_refused() 
         "claude --dangerously-skip-permissions -p hi",
         "echo '{}' > ~/.claude/settings.json",
         "sed -i s/a/b/ /home/me/.claude/plugins/installed_plugins.json",
+        "git -C . push",
+        "git -c user.name=x remote add origin ../elsewhere",
+        "git config remote.origin.url git@github.com:me/app.git",
+        "echo 'be terse' >> ~/.claude/CLAUDE.md",
+        "cd ~/.claude && sed -i s/a/b/ settings.json",
     ):
         assert safety.refusal(command), command
 
@@ -53,6 +58,8 @@ def test_reading_forge_tools_and_user_files_is_not_refused() -> None:
         "git init -b main && claude plugin list; gh auth status; command -v glab",
         "cat ~/.claude/settings.json",
         "git remote -v",
+        "git log --oneline | grep push",
+        "git commit -m 'save the link on push of the button'",
         "python3 -c 'print(1)' > out.txt",
     ):
         assert safety.refusal(command) is None, command

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from first_hour.persona import Persona
 
 RECOMMENDED = re.compile(r"\brecommend(?:ed)?\b", re.IGNORECASE)
+NOT_RECOMMENDED = re.compile(r"\b(?:not|n't|never)\s+(?:\w+\s+)?recommend", re.IGNORECASE)
 GO_AHEAD = "Please go ahead with what you recommend."
 TURN_TAIL = 6000
 
@@ -64,7 +65,9 @@ class Question:
             if RECOMMENDED.search(option.label):
                 return option.label
         for option in self.options:
-            if RECOMMENDED.search(option.description):
+            if RECOMMENDED.search(option.description) and not NOT_RECOMMENDED.search(
+                option.description
+            ):
                 return option.label
         return None
 

@@ -44,6 +44,19 @@ def test_a_question_with_no_recommendation_has_none() -> None:
     assert question.recommended is None
 
 
+def test_an_option_described_as_not_recommended_is_not_the_recommendation() -> None:
+    question = owner.Question(
+        "H",
+        "Q?",
+        (
+            owner.Option("Push to GitHub", "Not recommended for a local app."),
+            owner.Option("Keep it local", "We'd recommend this."),
+            owner.Option("Both", "I don't recommend it."),
+        ),
+    )
+    assert question.recommended == "Keep it local"
+
+
 def test_a_default_able_question_takes_the_recommended_option_whatever_the_model_picked() -> None:
     stack, _ = owner.questions_of(DIALOG)
     verdict = owner.Verdict(owner.Kind.DEFAULT_ABLE, ("Python, Flask",), "no idea")

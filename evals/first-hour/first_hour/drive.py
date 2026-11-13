@@ -43,6 +43,7 @@ from claude_agent_sdk import (
     ResultMessage,
     SystemMessage,
     TaskNotificationMessage,
+    TaskStartedMessage,
     ToolPermissionContext,
     query,
 )
@@ -62,9 +63,12 @@ TERMINAL = frozenset({"completed", "failed", "stopped", "killed", "error"})
 OTHER_PLUGINS = ("mattpocock-skills", "pstack", "impeccable")
 USER_FILES = (
     Path.home() / ".claude/settings.json",
+    Path.home() / ".claude/settings.local.json",
+    Path.home() / ".claude/CLAUDE.md",
     Path.home() / ".claude/plugins/installed_plugins.json",
     Path.home() / ".claude/plugins/known_marketplaces.json",
 )
+USER_DIRS = (Path.home() / ".claude/rules", Path.home() / ".claude/agents")
 TOOLS = (
     "Read", "Glob", "Grep", "Bash", "Skill", "Agent", "Task", "Workflow", "TodoWrite",
     "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskOutput", "WebFetch", "WebSearch",
@@ -141,6 +145,7 @@ class Log:
 
     root: Path
     t0: float = field(default_factory=time.monotonic)
+    epoch: float = field(default_factory=time.time)
     step: str = "setup"
 
     def elapsed(self) -> float:
@@ -149,7 +154,8 @@ class Log:
 
     def emit(self, kind: str, **fields: object) -> None:
         """Append one event to the log."""
-        event = {"s": round(self.elapsed(), 1), "step": self.step, "kind": kind, **fields}
+        event: dict[str, object] = {"s": round(self.elapsed(), 1), "step": self.step, "kind": kind}
+        event.update(fields)
         with (self.root / "events.jsonl").open("a", encoding="utf-8") as out:
             out.write(json.dumps(event, default=str) + "\n")
 
@@ -257,7 +263,7 @@ class Session:
         self.queue: asyncio.Queue[object] = asyncio.Queue()
         self.waiting: set[str] = set()
         self.last_text = ""
-        self.usd = 0.0
+        self.costs: dict[str, float] = {}
         self.stderr = (config.root / "stderr.log").open("a", encoding="utf-8")
         root = str(config.root)
         self.client = ClaudeSDKClient(
@@ -358,9 +364,14 @@ class Session:
         }
 
     def _track(self, message: object) -> None:
-        if isinstance(message, SystemMessage) and message.subtype == "background_tasks_changed":
+        # Why: the SDK says not to replace the set with a snapshot, which can miss an agent
+        # moved to the background later; ids are added from either and cleared on a terminal
+        # status only, and IDLE_S bounds an id nothing ever clears.
+        if isinstance(message, TaskStartedMessage) and message.task_type in WAITED_TASKS:
+            self.waiting.add(message.task_id)
+        elif isinstance(message, SystemMessage) and message.subtype == "background_tasks_changed":
             tasks = message.data.get("tasks") or []
-            self.waiting = {
+            self.waiting |= {
                 str(t.get("task_id"))
                 for t in tasks
                 if isinstance(t, dict) and t.get("task_type") in WAITED_TASKS
@@ -383,7 +394,7 @@ class Session:
                 with contextlib.suppress(Exception):
                     await self.client.interrupt()
                 raise Deadline
-            wait = min(SETTLE_S if settled and not self.waiting else left, left)
+            wait = min(SETTLE_S if settled and not self.waiting else IDLE_S, left)
             try:
                 message = await asyncio.wait_for(self.queue.get(), timeout=wait)
             except TimeoutError:
@@ -402,7 +413,10 @@ class Session:
             if isinstance(message, ResultMessage):
                 settled = True
                 self.last_text = message.result or self.last_text
-                self.usd = max(self.usd, message.total_cost_usd or 0.0)
+                session = message.session_id
+                self.costs[session] = max(
+                    self.costs.get(session, 0.0), message.total_cost_usd or 0.0
+                )
                 if "budget" in (message.subtype or ""):
                     raise OverBudget
             elif isinstance(message, AssistantMessage):
@@ -494,7 +508,8 @@ class Driver:
             reply = await self.owner.read_turn(self.owner_text)
             if not reply.needs_reply:
                 return
-            default = reply.kind is owner.Kind.DEFAULT_ABLE
+            offered = bool(owner.RECOMMENDED.search(self.owner_text[-3000:]))
+            took = offered and reply.kind is owner.Kind.DEFAULT_ABLE
             self.log.emit(
                 "question",
                 channel=owner.Channel.PROSE.value,
@@ -502,8 +517,8 @@ class Driver:
                 header="turn end",
                 question=self.owner_text[-800:],
                 options=[],
-                recommended="the assistant's recommendation" if default else None,
-                took_recommended=default,
+                recommended="the assistant's recommendation" if offered else None,
+                took_recommended=took,
                 answer=reply.text,
                 reason=reply.reason,
             )
@@ -523,7 +538,8 @@ class Driver:
             command=command,
             gates=[dataclasses.asdict(g) for g in found],
         )
-        if any(g.status is gates.Status.RED for g in found):
+        # Why: rerunning a merge command would land the merge on a flaky second try.
+        if "merge" not in command and any(g.status is gates.Status.RED for g in found):
             again, _code = self.shell(command)
             self.log.emit(
                 "gates",
@@ -605,8 +621,16 @@ class Driver:
                 how = "hand"
             else:
                 how = "entry-point"
+            # Why: timed by the commit, not by when the step's later pastes finished.
+            stamp = run_git(self.app, "log", "-1", "--format=%ct", commit) or ""
+            at = int(stamp) - self.log.epoch if stamp.isdigit() else self.log.elapsed()
             self.log.emit(
-                "merge", commit=commit[:12], branch=branch, how=how, owner_text=self.owner_text
+                "merge",
+                s=round(at, 1),
+                commit=commit[:12],
+                branch=branch,
+                how=how,
+                owner_text=self.owner_text,
             )
         if new:
             result = self.app_check(self.log.step)
@@ -633,7 +657,7 @@ class Driver:
 
     def spent(self) -> float:
         """Dollars spent so far, product session and owner model."""
-        return self.session.usd + self.owner.usd
+        return sum(self.session.costs.values()) + self.owner.usd
 
     async def loop(self) -> tuple[steps.Stop, str]:
         """Follow the route until a stop condition holds."""
@@ -647,7 +671,6 @@ class Driver:
                 then=instruction.then,
                 also=list(instruction.also),
             )
-            override = await self.life_events(instruction)
             self.history.append(steps.Seen(instruction.command, self.state()))
             reason = steps.stop_reason(
                 self.config.budget,
@@ -658,6 +681,7 @@ class Driver:
             )
             if reason is not None:
                 return reason, instruction.command
+            override = await self.life_events(instruction)
             move = override or steps.move_for(instruction)
             if move.action is steps.Action.FORGE:
                 return steps.Stop.FORGE, instruction.command
@@ -700,9 +724,10 @@ def _other_plugins() -> dict[str, object]:
 
 
 def _fingerprints() -> dict[str, str | None]:
+    files = [*USER_FILES, *(f for d in USER_DIRS if d.is_dir() for f in sorted(d.rglob("*")))]
     return {
         str(p): hashlib.sha256(p.read_bytes()).hexdigest()[:16] if p.is_file() else None
-        for p in USER_FILES
+        for p in files
     }
 
 
