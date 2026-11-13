@@ -1454,17 +1454,25 @@ def ledger_raised(root: Path, keys: list[owed.Key]) -> list[tuple[Check, Finding
         for problem in ledger.problems:
             yield Finding(str(owed.LEDGER), problem, Agent(), rule=owed.OWN)
         _, stale = owed.excused(keys, ledger.entries)
-        found = Counter(keys)
-        for key, extra in sorted(stale.items()):
-            rule, path, problem = key
-            entries = "an entry owes" if extra == 1 else f"{extra} entries owe"
-            yield Finding(
-                str(owed.LEDGER),
-                f"{entries} '{problem}' for {path} ({rule}), which is no longer found;"
-                " an entry goes once its finding is fixed",
-                Edit("drop the entry whose finding is fixed", owed.kept(key, found[key]), Agent()),
-                rule=owed.OWN,
-            )
+        if not stale:
+            return
+        count = stale.total()
+        named = [
+            f"'{problem}' for {path} ({rule})" + ("" if extra == 1 else f", {extra} entries")
+            for (rule, path, problem), extra in sorted(stale.items())
+        ]
+        if count == 1:
+            problem = f"an entry owes {named[0]}, which is no longer found"
+            does = "drop the entry whose finding is fixed"
+        else:
+            problem = f"{count} entries owe what is no longer found: {'; '.join(named)}"
+            does = f"drop the {count} entries whose findings are fixed"
+        yield Finding(
+            str(owed.LEDGER),
+            f"{problem}; an entry goes once its finding is fixed",
+            Edit(does, owed.kept(Counter(keys)), Agent()),
+            rule=owed.OWN,
+        )
 
     return [(check_owed, failure) for failure in check_owed(root)]
 

@@ -142,8 +142,12 @@ def excused(keys: Sequence[Key], entries: Sequence[Entry]) -> tuple[list[bool], 
     return owed, +left
 
 
-def kept(key: Key, count: int) -> gatelib.Want:
-    """The want that leaves the ledger ``count`` entries with ``key``, the first in order."""
+def kept(found: Counter[Key]) -> gatelib.Want:
+    """The want that leaves the ledger as many entries of each key as ``found`` has findings.
+
+    Why: every stale entry goes in this one edit. One edit per entry was a trial each, and the
+    time grew with the square of their number.
+    """
 
     def keep(text: str | None) -> str:
         ledger = parse(text)
@@ -153,7 +157,7 @@ def kept(key: Key, count: int) -> gatelib.Want:
         entries = []
         for entry in ledger.entries:
             seen[entry.key] += 1
-            if entry.key != key or seen[key] <= count:
+            if seen[entry.key] <= found[entry.key]:
                 entries.append(entry)
         return render(entries) if len(entries) < len(ledger.entries) else text or ""
 

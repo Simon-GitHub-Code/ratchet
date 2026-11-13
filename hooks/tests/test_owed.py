@@ -129,10 +129,11 @@ def test_an_entry_excuses_one_finding_with_its_check_file_and_problem() -> None:
 def test_dropping_a_stale_entry_keeps_as_many_as_are_found() -> None:
     other = entry(problem="gate 'types' has no bite")
     text = owed.render([ENTRY, ENTRY, other])
-    kept = owed.parse(owed.kept(ENTRY.key, 1)(text)).entries
+    kept = owed.parse(owed.kept(Counter([ENTRY.key, other.key]))(text)).entries
     assert list(kept) == sorted([ENTRY, other])
-    assert owed.kept(ENTRY.key, 2)(text) == text
-    assert owed.kept(ENTRY.key, 0)("[[owed\n") == "[[owed\n", "a ledger that does not read stays"
+    assert owed.parse(owed.kept(Counter([ENTRY.key]))(text)).entries == (ENTRY,)
+    assert owed.kept(Counter([ENTRY.key, ENTRY.key, other.key]))(text) == text
+    assert owed.kept(Counter())("[[owed\n") == "[[owed\n", "a ledger that does not read stays"
 
 
 def test_a_record_adds_entries_and_nothing_when_there_is_none() -> None:
