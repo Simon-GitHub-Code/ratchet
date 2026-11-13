@@ -715,16 +715,17 @@ class Copy:
         for bite in bites:
             command = [*shlex.split(row.command), *bite.args]
             # Why: a green run taken before an earlier fault says nothing of what that fault left
-            # behind (a cache, a mark in an ignored file), so each fault gets a green run of its own
+            # behind (a cache, a mark in an ignored file), so each fault gets its own green run.
             code, green = self.run(command)
             if code != 0:
                 yield Outcome(bite, Verdict.RED_BEFORE, tail(green))
                 continue
             try:
                 bite.plant(self.path)
-            except Unprovable as error:
+            # Why: every way a fault fails to plant is one verdict, a file the system refuses too.
+            except (Unprovable, OSError) as error:
                 self.restore()
-                yield Outcome(bite, Verdict.NOT_PLANTED, str(error))
+                yield Outcome(bite, Verdict.NOT_PLANTED, str(error).replace(f"{self.path}/", ""))
                 continue
             yield judge(bite, green, self.run(command))
 

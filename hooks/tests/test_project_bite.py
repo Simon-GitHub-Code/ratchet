@@ -944,10 +944,10 @@ def test_each_bite_is_judged_against_a_green_run_of_its_own_just_before_it(
 @pytest.mark.parametrize(
     "case",
     [
-        ('replace = { path = "src/code.txt", old = "clean", new = "x" }', "src/code.txt is not"),
-        ('write = { path = "src/other.txt/x", content = "planted" }', "src/other.txt/x"),
-        ('remove = ["src/code.txt"]', "no file matches src/code.txt"),
-        ('patch = "quality/bites/p.patch"', "git apply"),
+        ('replace = { path = "src/code.txt", old = "clean", new = "x" }', "  src/code.txt is not"),
+        ('write = { path = "src/other.txt/x", content = "x" }', "File exists: 'src/other.txt'"),
+        ('remove = ["src/code.txt"]', "  no file matches src/code.txt"),
+        ('patch = "quality/bites/p.patch"', "  git apply"),
     ],
 )
 def test_every_kind_of_fault_that_cannot_be_planted_says_so_and_nothing_else(
@@ -963,7 +963,21 @@ def test_every_kind_of_fault_that_cannot_be_planted_says_so_and_nothing_else(
     assert prove(root) == 1
     out = capsys.readouterr().out
     assert "bite: lint: gone: THE FAULT WAS NOT PLANTED\n" in out
-    assert f"  {says}" in out
+    assert says in out
+
+
+def test_a_file_a_gate_hid_from_git_is_gone_before_the_next_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gate = (
+        "test -e new/x && { echo L001 left behind; exit 1; }\n"
+        "mkdir -p new; echo x > new/.gitignore; echo planted > new/x\n"
+        f"{LINT}"
+    )
+    registry = bite("lint", "first") + bite("lint", "second")
+    root = project(tmp_path / "repo", {"lint": gate}, registry)
+    assert prove(root) == 0
+    assert capsys.readouterr().out.count(": bites\n") == 2
 
 
 # A gate that caches its verdict in an ignored directory, by a checksum of what it reads.
