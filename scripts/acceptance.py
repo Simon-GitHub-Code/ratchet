@@ -22,7 +22,9 @@ Usage::
 ``with_service.py``, on a port the kernel picks, puts ``acceptance_proxy.py`` in front of it,
 and prints two lines: the one address the tester gets, and the directory the tester writes its
 record (``record.json``) and screenshots in. It returns while the product keeps running. Run
-again while that session lives, it prints the same two lines. When the product cannot start
+again while that session lives, it prints the same two lines, waiting first when it still boots.
+A session of the same work tree that serves a tree the work tree no longer holds is stopped
+first and sealed stale, so one work tree serves one tree at a time. When the product cannot start
 (``boot`` is ``"none"`` or a placeholder, ``ready`` is ``"none"``, the boot exits or never
 answers) it writes the record itself, a blocker in plain words with every line of the ticket
 ``unsure``, and exits 1. Exit 2 is a harness that cannot run here: a type it does not try, a
@@ -280,21 +282,8 @@ def tree_of(root: Path, slug: str, commit: str | None = None) -> str:
         return index("write-tree")
 
 
-def locked(directory: Path) -> bool:
-    """Whether a live process holds the session's lock."""
-    path = directory / "live.lock"
-    if not path.is_file():
-        return False
-    with path.open("rb") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-    return False
-
-
 def state(directory: Path) -> State:
-    held, served = locked(directory), (directory / "proxy.json").is_file()
+    held, served = acceptance_proxy.locked(directory), (directory / "proxy.json").is_file()
     if held:
         return State.LIVE if served else State.STARTING
     if (directory / "seal.json").is_file():
@@ -441,7 +430,7 @@ def launch(root: Path, directory: Path, boot: Boot) -> int:
                     text=True,
                 )
                 lock.write(started.stdout.strip())
-        url = wait_serving(lambda: locked(directory), directory, 2 * boot.timeout + DOWN_WAIT)
+        url = awaited(directory)
     except gatelib.Interrupted:
         end(directory)
         shutil.rmtree(directory)
@@ -474,15 +463,41 @@ def up(root: Path, slug: str, ticket: Path) -> int:
     tree = tree_of(root, slug)
     with serialized(place, slug):
         prune(place, dt.datetime.now(dt.UTC))
-        for directory in sessions(place / slug / tree, 1):
-            if state(directory) is State.LIVE:
-                print((read_json(directory / "proxy.json") or {})["url"])
+        running = [
+            directory
+            for directory in sessions(place / slug, 2)
+            if state(directory) in (State.LIVE, State.STARTING)
+        ]
+        for directory in running:
+            facts = read_json(directory / "session.json") or {}
+            if directory.parent.name != tree and facts.get("root") == str(root):
+                for line in retire(directory):
+                    print(line, file=sys.stderr)
+        for directory in running:
+            if directory.parent.name == tree and (url := awaited(directory)):
+                print(url)
                 print(directory / "tester")
                 return 0
         directory = begin(root, place / slug / tree, ticket=text, binding=binding)
         if binding.boot is None:
             return cannot_start(directory, binding.why)
         return launch(root, directory, binding.boot)
+
+
+def awaited(directory: Path) -> str | None:
+    """The address of a running session once it serves; ``None`` when it stops before it does."""
+    timeout = float(str((read_json(directory / "session.json") or {})["timeout"]))
+    return wait_serving(
+        lambda: acceptance_proxy.locked(directory), directory, 2 * timeout + DOWN_WAIT
+    )
+
+
+def retire(directory: Path) -> list[str]:
+    """Stop a session of a tree its work tree no longer holds, sealed stale; what was said of it."""
+    began = acceptance_proxy.now()
+    problems = end(directory)
+    closed = close(directory, began)
+    return problems + (closed.lines if closed else [])
 
 
 def begin(root: Path, under: Path, *, ticket: str, binding: Binding) -> Path:
@@ -533,7 +548,7 @@ def supervise(directory: Path) -> int:
 
 def wait_unlocked(directory: Path, limit: float) -> bool:
     deadline = time.monotonic() + limit
-    while locked(directory):
+    while acceptance_proxy.locked(directory):
         if time.monotonic() > deadline:
             return False
         time.sleep(POLL)
@@ -553,7 +568,7 @@ def end(directory: Path) -> list[str]:
     """
     text = (directory / "live.lock").read_text(encoding="utf-8").strip()
     pid = int(text) if text.isdigit() else None
-    if pid is not None and locked(directory):
+    if pid is not None and acceptance_proxy.locked(directory):
         with contextlib.suppress(ProcessLookupError):
             os.kill(pid, signal.SIGTERM)
     problems = []

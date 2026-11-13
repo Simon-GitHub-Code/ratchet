@@ -18,10 +18,12 @@ The tester receives only the address; it never writes the log, so a request it c
 made through here.
 
 The proxy is the log's only writer, and it keeps a running SHA-256 of every byte it wrote. On
-SIGTERM, SIGINT or SIGHUP, or when the process that started it is gone, it stops listening and
-writes ``seal.json``: how many lines it wrote and their digest. A log that does not match its
-seal was changed, cut short or added to after the proxy wrote it, and a log with no seal is from
-a session that never ended. Nothing in the log is written after the seal.
+SIGTERM, SIGINT or SIGHUP, when the process that started it is gone, or when nothing holds the
+session's ``live.lock`` any more because the supervisor that held it died, it stops listening and
+writes ``seal.json``: how many lines it wrote and their digest. Started after the supervisor
+died, it serves nothing and exits 1, and ``with_service.py`` then stops the product. A log that
+does not match its seal was changed, cut short or added to after the proxy wrote it, and a log
+with no seal is from a session that never ended. Nothing in the log is written after the seal.
 
 ``SESSION_DIR/proxy.json`` appears once the proxy listens: its address, the product's, and its
 process id. ``--null`` is the control a kept check must fail against: every ``GET`` and ``HEAD``
@@ -31,6 +33,7 @@ is an empty page, everything else a ``303`` to ``/``.
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
 import hashlib
 import http.client
 import http.server
@@ -310,15 +313,37 @@ def stopping(signum: int, frame: FrameType | None) -> None:
     STOP.set()
 
 
-def until_stopped(server: http.server.ThreadingHTTPServer, parent: int) -> str:
-    """Serve until a signal, or until ``parent``, which started this process, is gone.
+def locked(directory: Path) -> bool:
+    """Whether a live process holds the session's lock, ``live.lock``."""
+    path = directory / "live.lock"
+    if not path.is_file():
+        return False
+    with path.open("rb") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+    return False
+
+
+def abandoned(directory: Path) -> bool:
+    """Whether the session's supervisor is gone: its lock is there and nothing holds it.
+
+    The kernel lets go of the lock however the supervisor dies, ``SIGKILL`` too. A replay's
+    directory has no lock, so its proxy is never abandoned.
+    """
+    return (directory / "live.lock").is_file() and not locked(directory)
+
+
+def until_stopped(server: http.server.ThreadingHTTPServer, going: Callable[[], bool]) -> str:
+    """Serve until a signal, or until ``going`` says what this serves for is gone.
 
     Returns when the stop was asked for.
     """
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
     thread.start()
     while not STOP.wait(WATCH):
-        if os.getppid() != parent:
+        if not going():
             break
     stopped = now()
     server.shutdown()
@@ -333,6 +358,14 @@ def digest_of(path: Path) -> str | None:
 
 
 def serve(directory: Path, parent: int) -> int:
+    """Log the session of ``directory`` until it stops, while its parent and supervisor live."""
+
+    def going() -> bool:
+        return os.getppid() == parent and not abandoned(directory)
+
+    if not going():
+        print("acceptance_proxy: the supervisor is gone; nothing was served", file=sys.stderr)
+        return 1
     session = str(json.loads((directory / "session.json").read_text(encoding="utf-8"))["session"])
     facts: dict[str, object] = {"session": session}
     facts |= {"ticketSha256": digest_of(directory / "ticket.md")}
@@ -347,13 +380,14 @@ def serve(directory: Path, parent: int) -> int:
         directory / "proxy.json",
         {"url": f"http://127.0.0.1:{port}/", "upstream": origin, "pid": os.getpid()},
     )
-    server.log.seal(facts | {"stopped": until_stopped(server, parent)})
+    server.log.seal(facts | {"stopped": until_stopped(server, going)})
     return 0
 
 
 def null(parent: int) -> int:
     port = int(os.environ["PORT"])
-    until_stopped(http.server.ThreadingHTTPServer(("127.0.0.1", port), Nothing), parent)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Nothing)
+    until_stopped(server, lambda: os.getppid() == parent)
     return 0
 
 
