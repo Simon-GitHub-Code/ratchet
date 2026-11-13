@@ -124,6 +124,8 @@ TRACKER = f"{TRACKER_DIRECTORY}/**/*.md"
 TICKETS = f"{TRACKER_DIRECTORY}/**/issues/*.md"
 NUMBER = re.compile(r"\d+")
 CHANGE_NAME = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
+TITLE = re.compile(r"^#[ \t]+(\S.*)$", re.MULTILINE)
+TITLE_WIDTH = 100
 TEMPLATE = Path(__file__).resolve().parents[1] / "skills" / "adopt" / "templates" / MANIFEST_PATH
 NOT_A_RECORD = "is not a record"
 SHOWN = 3
@@ -784,6 +786,10 @@ def ticket_refusal(change: Change, path: str) -> str | None:
     )
 
 
+def nothing(_change: Change, _path: str) -> None:
+    return None
+
+
 def not_an_addition(change: Change, path: str) -> str | None:
     note = addition(change, path)
     return None if note is None else f"is {note}"
@@ -796,12 +802,14 @@ class RecordKind:
     ``shape`` is its whole path, as the template or skill that writes it names it. A kind that is
     ``appended`` is held by ``edit = "append"`` groups of the default branch's manifest, as the
     template holds it; any other kind by no group. No one-way door holds either. ``refuses``
-    says why one change of it is more than such a record takes.
+    says why one change of it is more than such a record takes. A kind that ``decides`` is a
+    decision, which the owner agrees to however it is written: the judge cannot read meaning.
     """
 
     shape: re.Pattern[str]
     refuses: Callable[[Change, str], str | None]
     appended: bool = False
+    decides: bool = False
 
 
 # Why closed: a file no skill writes is no record, so a name the judge was never told of, an
@@ -816,8 +824,8 @@ RECORDS = (
     RecordKind(re.compile(rf"\.scratch/changes/{CHANGE_NAME}\.md"), tracker_refusal),
     # a term or an `_Avoid_` item that domain-modeling adds (ADR 0014)
     RecordKind(re.compile(r"GLOSSARY\.md"), not_an_addition, appended=True),
-    # a decision record domain-modeling or the pipeline writes (ADR 0014)
-    RecordKind(re.compile(rf"docs/adr/\d{{4}}-{SLUG}\.md"), not_an_addition, appended=True),
+    # a decision record domain-modeling writes: the owner's to agree, so --records can land it
+    RecordKind(re.compile(rf"docs/adr/\d{{4}}-{SLUG}\.md"), nothing, appended=True, decides=True),
 )
 
 
@@ -867,15 +875,44 @@ def refusal(change: Change, path: str, *, kind: RecordKind, sides: tuple[str, st
     return twin(change, path) or unreadable(change, path) or kind.refuses(change, path)
 
 
-def unrecorded(change: Change, manifest: Manifest) -> dict[str, str]:
-    """Each path whose change is more than a record takes, with why; empty for records alone."""
+def decision(change: Change, path: str) -> Reason:
+    """The owner's question for a decision record: one sentence that names its title."""
+    found = TITLE.search(change.after(path) or "")
+    named = found.group(1).strip() if found else PurePosixPath(path).stem
+    title = "".join(character for character in named if character.isprintable())[:TITLE_WIDTH]
+    return Reason("record", f'{path} records a decision: "{title}". Yours to agree.')
+
+
+def records_alone(change: Change, manifest: Manifest) -> list[Reason]:
+    """Why a change with no verdict record is the owner's; none when it is records alone.
+
+    More than records is the plain reason. Records some change of which is more than a record
+    takes name up to three of them, and each decision record asks its own question.
+    """
     sides = modes(change)
-    found = {
-        path: NOT_A_RECORD if kind is None else refusal(change, path, kind=kind, sides=sides[path])
-        for path in change.paths
-        for kind in [record_kind(manifest, path)]
-    }
-    return {path: why for path, why in found.items() if why is not None}
+    refused: dict[str, str] = {}
+    decided = []
+    for path in change.paths:
+        kind = record_kind(manifest, path)
+        why = NOT_A_RECORD if kind is None else refusal(change, path, kind=kind, sides=sides[path])
+        if why is not None:
+            refused[path] = why
+        elif kind is not None and kind.decides:
+            decided.append(decision(change, path))
+    text = (
+        "no verdict record (docs/features/<slug>/verdict.json) is part of the change, so it is"
+        " not the product of the pipeline"
+    )
+    if not change.paths or NOT_A_RECORD in refused.values():
+        return [Reason("record", text)]
+    if not refused:
+        return decided
+    lines = [f"{path} {why}" for path, why in refused.items()]
+    rest = f"; and {len(lines) - SHOWN} more" if len(lines) > SHOWN else ""
+    return [
+        Reason("record", f"{text}; its paths are records, but {'; '.join(lines[:SHOWN])}{rest}"),
+        *decided,
+    ]
 
 
 def not_records(root: Path, base_ref: str, paths: Iterable[str]) -> list[str]:
@@ -944,18 +981,7 @@ def record_reasons(change: Change, manifest: Manifest) -> list[Reason]:
     """
     found = [path for path in change.paths if RECORD.match(path)]
     if not found:
-        refused = unrecorded(change, manifest)
-        if change.paths and not refused:
-            return []
-        text = (
-            "no verdict record (docs/features/<slug>/verdict.json) is part of the change, so it is"
-            " not the product of the pipeline"
-        )
-        if refused and NOT_A_RECORD not in refused.values():
-            lines = [f"{path} {why}" for path, why in refused.items()]
-            rest = f"; and {len(lines) - SHOWN} more" if len(lines) > SHOWN else ""
-            text += f"; its paths are records, but {'; '.join(lines[:SHOWN])}{rest}"
-        return [Reason("record", text)]
+        return records_alone(change, manifest)
     if len(found) != 1:
         text = (
             f"the change touches {len(found)} verdict records ({', '.join(found)}), and one change"

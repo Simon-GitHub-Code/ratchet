@@ -1099,13 +1099,9 @@ def tracked(tmp_path: Path) -> Path:
         {SPEC: "# Thing\n\nStatus: ready-for-agent\n\n## Conjecture\n\nIt works; or not.\n"},
         {".scratch/thing/issues/02-b.md": "# 02: B\n\nStatus: needs-triage\n"},
         {TICKET: AGREED + "\n## Conjecture\n\nIt works.\n\n## Answers\n\nQ: a? A: b.\n"},
-        {
-            "GLOSSARY.md": GLOSSARY + "\n**Order**:\nWhat a customer places.\n",
-            "docs/adr/0002-orders.md": ADR,
-            CHANGES: "## Summary\n",
-        },
+        {"GLOSSARY.md": GLOSSARY + "\n**Order**:\nWhat a customer places.\n", CHANGES: "## S\n"},
     ],
-    ids=["a spec", "its conjecture", "a ticket", "answers on an agreed one", "a term and an adr"],
+    ids=["a spec", "its conjecture", "a ticket", "answers on an agreed one", "a term"],
 )
 def test_records_alone_are_asked_no_verdict_record(
     tracked: Path, files: dict[str, str | None]
@@ -1145,7 +1141,8 @@ def test_records_alone_are_asked_no_verdict_record(
             {"docs/adr/0001-plain.md": ADR.replace("Because.", "Because I said so.")},
             [
                 f"guard: docs/adr/0001-plain.md (records): {REWRITTEN_ADR}",
-                f"{BUT}docs/adr/0001-plain.md is {REWRITTEN_ADR}",
+                'record: docs/adr/0001-plain.md records a decision: "We keep it plain". Yours to'
+                " agree.",
             ],
         ),
         ({}, [PLAIN_RECORD]),
@@ -1535,6 +1532,40 @@ def test_every_name_no_skill_writes_is_more_than_records(plain: Path, path: str)
     assert printed.startswith(merge_ready.OWNER), printed
     assert printed.endswith(f"\n{PLAIN_RECORD}\n"), printed
     assert merge_ready.not_records(plain, "main", [path]) == [path]
+
+
+@pytest.mark.parametrize(
+    ("text", "title"),
+    [
+        ("---\nstatus: accepted\n---\n# Keep \x1b[2Jit\n\n## Decision\n", "Keep [2Jit"),
+        ("No heading at all.\n", "0002-orders"),
+    ],
+    ids=["a title with a terminal escape", "no title"],
+)
+def test_a_decision_is_asked_by_a_title_the_owner_can_read(
+    tracked: Path, text: str, title: str
+) -> None:
+    path = "docs/adr/0002-orders.md"
+    change(tracked, {path: text, CHANGES: "## Summary\n"}, record=False)
+    assert judged(tracked)[-1] == DECISION.format(path=path, title=title)
+
+
+def test_no_adr_can_be_dressed_as_the_adoptions(tmp_path: Path) -> None:
+    # Why: the adoption is read from the default branch, which holds no manifest before it and
+    # one ever after; nothing an ADR says or is named makes a later change the adoption.
+    text = merge_ready.TEMPLATE.parents[1] / "docs/adr/0001-adopt-the-ratchet-method.md"
+    path = "docs/adr/0002-adopt-the-ratchet-method.md"
+    title = "This repository is built and verified under the Ratchet method"
+    repository(tmp_path, dict(BASE))
+    branch(tmp_path, "adopt-ratchet")
+    dressed = {path: text.read_text(encoding="utf-8"), ".scratch/changes/adopt-ratchet.md": "#\n"}
+    change(tmp_path, dressed, record=False)
+    notes: list[str] = []
+    reasons = [str(reason) for reason in merge_ready.judge(tmp_path, "main", "HEAD", notes=notes)]
+    assert (reasons[-1], notes) == (DECISION.format(path=path, title=title), [])
+    change(tmp_path, {"guards/manifest.toml": None, BINDING: None}, record=False)
+    assert merge_ready.judge(tmp_path, "main", "HEAD", notes=notes)[-1].text == PLAIN_RECORD[8:]
+    assert notes == []
 
 
 def test_a_record_that_runs_is_no_record(tmp_path: Path) -> None:
