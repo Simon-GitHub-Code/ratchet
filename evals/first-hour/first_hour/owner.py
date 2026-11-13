@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from first_hour.persona import Persona
 
 RECOMMENDED = re.compile(r"\brecommend(?:ed)?\b", re.IGNORECASE)
@@ -192,7 +193,7 @@ def names(pick: str, label: str) -> bool:
 
 
 def label_for(labels: Iterable[str], pick: str) -> str | None:
-    """The option a pick names; of several, the longest, as "Accept, keep it local" is not "Accept"."""
+    """The option a pick names; of several the longest: "Accept, keep it local" is not "Accept"."""
     matches = [label for label in labels if names(pick, label)]
     return max(matches, key=len) if matches else None
 

@@ -19,13 +19,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
     from first_hour.persona import Slice
 
 NO_WAY = "no way to start it: no run command in the README, justfile or package.json"
@@ -191,7 +192,7 @@ def _listening(port: int) -> bool:
         return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
-def _wait(process: subprocess.Popen[bytes], log: Path, port: int, timeout: float) -> int | None:
+def _wait(process: subprocess.Popen[bytes], log: Path, *, port: int, timeout: float) -> int | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _listening(port):
@@ -205,7 +206,8 @@ def _wait(process: subprocess.Popen[bytes], log: Path, port: int, timeout: float
     return None
 
 
-def _stop(process: subprocess.Popen[bytes]) -> None:
+def stop(process: subprocess.Popen[bytes]) -> None:
+    """Stop the app's whole process group: a polite signal, then a kill."""
     with contextlib.suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
     try:
@@ -235,7 +237,7 @@ def check(root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S) ->
             start_new_session=True,
         )
     try:
-        bound = _wait(process, log, port, timeout)
+        bound = _wait(process, log, port=port, timeout=timeout)
         if bound is None:
             tail = log.read_text(encoding="utf-8", errors="replace")[-400:].strip()
             return Result(
@@ -278,4 +280,4 @@ def check(root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S) ->
             finding=f"request failed: {error}",
         )
     finally:
-        _stop(process)
+        stop(process)

@@ -31,7 +31,7 @@ DIALOG = {
 }
 
 
-def test_a_dialog_reads_as_its_questions_with_the_recommended_option_found():
+def test_a_dialog_reads_as_its_questions_with_the_recommended_option_found() -> None:
     stack, out = owner.questions_of(DIALOG)
     assert stack.recommended == "TypeScript, Node, SQLite (Recommended)"
     assert out.multi
@@ -39,12 +39,12 @@ def test_a_dialog_reads_as_its_questions_with_the_recommended_option_found():
     assert owner.questions_of({"questions": "nonsense"}) == []
 
 
-def test_a_question_with_no_recommendation_has_none():
+def test_a_question_with_no_recommendation_has_none() -> None:
     question = owner.Question("H", "Q?", (owner.Option("A"), owner.Option("B")))
     assert question.recommended is None
 
 
-def test_a_default_able_question_takes_the_recommended_option_whatever_the_model_picked():
+def test_a_default_able_question_takes_the_recommended_option_whatever_the_model_picked() -> None:
     stack, _ = owner.questions_of(DIALOG)
     verdict = owner.Verdict(owner.Kind.DEFAULT_ABLE, ("Python, Flask",), "no idea")
     answer = owner.answer(stack, verdict)
@@ -56,7 +56,9 @@ def test_a_default_able_question_takes_the_recommended_option_whatever_the_model
     assert event["channel"] == "dialog"
 
 
-def test_a_product_question_keeps_the_owners_pick_and_says_the_recommendation_was_declined():
+def test_a_product_question_keeps_the_owners_pick_and_says_the_recommendation_was_declined() -> (
+    None
+):
     stack, _ = owner.questions_of(DIALOG)
     verdict = owner.Verdict(owner.Kind.PRODUCT, ("python, flask",), "I like Python")
     answer = owner.answer(stack, verdict)
@@ -65,25 +67,25 @@ def test_a_product_question_keeps_the_owners_pick_and_says_the_recommendation_wa
     assert not answer.took_recommended
 
 
-def test_a_pick_matches_a_label_with_or_without_its_recommended_suffix():
+def test_a_pick_matches_a_label_with_or_without_its_recommended_suffix() -> None:
     stack, _ = owner.questions_of(DIALOG)
     verdict = owner.Verdict(owner.Kind.PRODUCT, ("TypeScript, Node, SQLite",), "")
     assert owner.answer(stack, verdict).took_recommended
 
 
-def test_a_multi_select_product_question_answers_every_matching_label_once():
+def test_a_multi_select_product_question_answers_every_matching_label_once() -> None:
     _, out = owner.questions_of(DIALOG)
     verdict = owner.Verdict(owner.Kind.PRODUCT, ("Tags", "Sharing", "Tags", "Nope"), "")
     assert owner.answer(out, verdict).text == "Tags, Sharing"
 
 
-def test_a_single_select_keeps_only_the_first_matching_pick():
+def test_a_single_select_keeps_only_the_first_matching_pick() -> None:
     stack, _ = owner.questions_of(DIALOG)
     verdict = owner.Verdict(owner.Kind.PRODUCT, ("Python, Flask", "TypeScript, Node, SQLite"), "")
     assert owner.answer(stack, verdict).text == "Python, Flask"
 
 
-def test_a_product_answer_in_the_owners_own_words_is_kept_as_free_text():
+def test_a_product_answer_in_the_owners_own_words_is_kept_as_free_text() -> None:
     question = owner.Question("Purpose", "What is it?", (owner.Option("A web app"),))
     verdict = owner.Verdict(owner.Kind.PRODUCT, ("A read-later list for me.",), "")
     answer = owner.answer(question, verdict)
@@ -92,19 +94,21 @@ def test_a_product_answer_in_the_owners_own_words_is_kept_as_free_text():
     assert not answer.took_recommended
 
 
-def test_a_default_able_question_with_no_recommendation_and_no_match_takes_the_first_option():
+def test_a_default_able_question_with_no_recommendation_and_no_match_takes_the_first_option() -> (
+    None
+):
     question = owner.Question("Seam", "Which seam?", (owner.Option("A"), owner.Option("B")))
     verdict = owner.Verdict(owner.Kind.DEFAULT_ABLE, ("whatever",), "")
     assert owner.answer(question, verdict).text == "A"
 
 
-def test_a_question_with_no_options_and_no_pick_is_told_to_go_ahead():
+def test_a_question_with_no_options_and_no_pick_is_told_to_go_ahead() -> None:
     question = owner.Question("Go", "Shall I?", ())
     verdict = owner.Verdict(owner.Kind.DEFAULT_ABLE, (), "")
     assert owner.answer(question, verdict).text == owner.GO_AHEAD
 
 
-def test_a_verdict_parses_from_structured_output_or_from_text_around_json():
+def test_a_verdict_parses_from_structured_output_or_from_text_around_json() -> None:
     structured = owner.parse_verdict({"class": "product", "answer": ["Tags"], "reason": "r"})
     assert structured == owner.Verdict(owner.Kind.PRODUCT, ("Tags",), "r")
     text = 'Sure: {"class": "default-able", "answer": "Yes", "reason": "tech"} done'
@@ -121,33 +125,35 @@ def test_a_verdict_parses_from_structured_output_or_from_text_around_json():
         (["a list"], TypeError),
     ],
 )
-def test_a_reply_that_is_not_a_verdict_is_refused(raw, error):
+def test_a_reply_that_is_not_a_verdict_is_refused(raw: object, error: type[Exception]) -> None:
     with pytest.raises(error):
         owner.parse_verdict(raw)
 
 
-def test_a_turn_that_asks_nothing_needs_no_reply():
+def test_a_turn_that_asks_nothing_needs_no_reply() -> None:
     reply = owner.parse_reply(
         {"needs_reply": False, "class": "product", "reply": "", "reason": "x"}
     )
     assert not reply.needs_reply
 
 
-def test_a_default_able_turn_question_is_answered_with_go_ahead_whatever_the_model_wrote():
+def test_a_default_able_turn_question_is_answered_with_go_ahead_whatever_the_model_wrote() -> None:
     raw = {"needs_reply": True, "class": "default-able", "reply": "use Postgres", "reason": "r"}
     reply = owner.parse_reply(raw)
     assert reply.needs_reply
     assert reply.text == owner.GO_AHEAD
 
 
-def test_a_product_turn_question_is_answered_in_the_owners_words_and_an_empty_one_is_no_reply():
+def test_a_product_turn_question_is_answered_in_the_owners_words_and_an_empty_one_is_no_reply() -> (
+    None
+):
     raw = {"needs_reply": True, "class": "product", "reply": " Keep one item. ", "reason": "r"}
     assert owner.parse_reply(raw).text == "Keep one item."
     empty = {"needs_reply": True, "class": "product", "reply": "", "reason": "r"}
     assert not owner.parse_reply(empty).needs_reply
 
 
-def test_a_life_event_proposal_becomes_a_question_and_other_also_lines_do_not():
+def test_a_life_event_proposal_becomes_a_question_and_other_also_lines_do_not() -> None:
     line = (
         "`Dockerfile` is a sign that the project is `deployed` (people reach it): if it is,"
         " type `/ratchet:safeguard deployed`"
@@ -158,7 +164,7 @@ def test_a_life_event_proposal_becomes_a_question_and_other_also_lines_do_not():
     assert owner.life_event_question("the Ratchet plugin in use is 0.12.0, newer") is None
 
 
-def test_the_prompts_carry_the_persona_the_options_and_the_turns_tail():
+def test_the_prompts_carry_the_persona_the_options_and_the_turns_tail() -> None:
     persona = load("read-later")
     assert persona.idea in owner.system_prompt(persona)
     assert "Local only" in owner.system_prompt(persona)
@@ -173,7 +179,7 @@ def test_the_prompts_carry_the_persona_the_options_and_the_turns_tail():
     assert len(prompt) < 7_000
 
 
-def test_a_pick_that_quotes_a_label_and_its_description_names_the_longest_such_label():
+def test_a_pick_that_quotes_a_label_and_its_description_names_the_longest_such_label() -> None:
     question = owner.Question(
         "Defaults",
         "Accept the defaults?",

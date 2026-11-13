@@ -29,24 +29,28 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Self
 
 import claude_agent_sdk as sdk
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookContext,
     HookMatcher,
     PermissionResultAllow,
     PermissionResultDeny,
     ResultMessage,
     SystemMessage,
     TaskNotificationMessage,
+    ToolPermissionContext,
     query,
 )
 
 from first_hour import appcheck, gates, owner, reduce, safety, steps, transcript
-from first_hour.persona import Persona
+
+if TYPE_CHECKING:
+    from first_hour.persona import Persona
 
 SETTLE_S = 20.0
 IDLE_S = 30 * 60.0
@@ -92,6 +96,7 @@ class Config:
 
     @property
     def app(self) -> Path:
+        """The owner's project directory."""
         return self.root / "app"
 
 
@@ -123,6 +128,7 @@ def jsonable(value: object) -> object:
 
 
 def run_git(app: Path, *args: str) -> str | None:
+    """Git's output in ``app``, or ``None`` when git fails."""
     done = subprocess.run(
         ["git", "-C", str(app), *args], capture_output=True, text=True, check=False
     )
@@ -138,14 +144,17 @@ class Log:
     step: str = "setup"
 
     def elapsed(self) -> float:
+        """Seconds since the run started."""
         return time.monotonic() - self.t0
 
     def emit(self, kind: str, **fields: object) -> None:
+        """Append one event to the log."""
         event = {"s": round(self.elapsed(), 1), "step": self.step, "kind": kind, **fields}
         with (self.root / "events.jsonl").open("a", encoding="utf-8") as out:
             out.write(json.dumps(event, default=str) + "\n")
 
     def message(self, message: object) -> None:
+        """Keep one SDK message whole, and log the events it carries."""
         name = type(message).__name__
         body = jsonable(message)
         assert isinstance(body, dict)  # noqa: S101
@@ -172,6 +181,7 @@ class Owner:
     """The scripted owner: a small model in character, and the rule applied to its verdict."""
 
     def __init__(self, config: Config, log: Log) -> None:
+        """An owner for this run."""
         self.config = config
         self.log = log
         self.cwd = config.root / "owner"
@@ -204,6 +214,7 @@ class Owner:
         return found
 
     async def answer(self, question: owner.Question, channel: owner.Channel) -> owner.Answer:
+        """Answer one question in character, logged with its class."""
         prompt = owner.question_prompt(question)
         verdict = None
         for _ in range(2):
@@ -219,6 +230,7 @@ class Owner:
         return reply
 
     async def read_turn(self, text: str) -> owner.Reply:
+        """Whether a turn's last message asks the owner something."""
         for _ in range(2):
             try:
                 return owner.parse_reply(
@@ -226,13 +238,19 @@ class Owner:
                 )
             except (ValueError, TypeError) as error:
                 self.log.emit("owner-error", error=str(error), question="turn end")
-        return owner.Reply(False, owner.Kind.DEFAULT_ABLE, "", "the owner model gave no reading")
+        return owner.Reply(
+            needs_reply=False,
+            kind=owner.Kind.DEFAULT_ABLE,
+            text="",
+            reason="the owner model gave no reading",
+        )
 
 
 class Session:
     """The product session: one Claude Code session the owner types into."""
 
     def __init__(self, config: Config, log: Log, owner_: Owner) -> None:
+        """The session's options."""
         self.config = config
         self.log = log
         self.owner = owner_
@@ -262,12 +280,14 @@ class Session:
         )
         self.pump: asyncio.Task[None] | None = None
 
-    async def __aenter__(self) -> Session:
+    async def __aenter__(self) -> Self:
+        """Connect, and start reading the session's messages."""
         await self.client.connect()
         self.pump = asyncio.create_task(self._pump())
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
+        """Stop reading and disconnect."""
         if self.pump is not None:
             self.pump.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -282,8 +302,9 @@ class Session:
         await self.queue.put(None)
 
     async def can_use_tool(
-        self, tool_name: str, tool_input: dict[str, Any], context: Any
+        self, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
     ) -> PermissionResultAllow | PermissionResultDeny:
+        """Answer a prompt as the owner; answer a question dialog."""
         if tool_name == "AskUserQuestion":
             answers = {}
             for question in owner.questions_of(tool_input):
@@ -311,7 +332,10 @@ class Session:
             return PermissionResultDeny(message=f"The owner declined: this {refused}.")
         return PermissionResultAllow()
 
-    async def refuse(self, data: dict[str, Any], _id: str | None, _ctx: Any) -> dict[str, Any]:
+    async def refuse(
+        self, data: dict[str, Any], _id: str | None, _ctx: HookContext
+    ) -> dict[str, Any]:
+        """Refuse a Bash command the harness never allows."""
         command = str((data.get("tool_input") or {}).get("command", ""))
         why = safety.refusal(command)
         if why is None:
@@ -397,13 +421,16 @@ class Driver:
 
     @property
     def app(self) -> Path:
+        """The owner's project directory."""
         return self.config.app
 
     @property
     def deadline(self) -> float:
+        """When the wall-clock budget runs out, on the monotonic clock."""
         return self.log.t0 + self.config.budget.minutes * 60
 
     def route(self) -> steps.Instruction:
+        """The route's instruction for the checkout now."""
         script = self.config.plugin / "scripts/route.py"
         done = subprocess.run(
             [sys.executable, str(script), "--root", str(self.app), "--json"],
@@ -415,6 +442,7 @@ class Driver:
         return steps.Instruction.parse(json.loads(done.stdout))
 
     def state(self) -> str:
+        """The checkout's state: HEAD, the tree and the stash."""
         head = run_git(self.app, "rev-parse", "HEAD") or "no-head"
         status = run_git(self.app, "status", "--porcelain") or ""
         stashes = run_git(self.app, "stash", "list") or ""
@@ -422,11 +450,13 @@ class Driver:
         return f"{head[:12]}:{digest}"
 
     def default_branch(self) -> str | None:
+        """The default branch, once one exists."""
         return next(
             (b for b in ("main", "master") if run_git(self.app, "rev-parse", "--verify", b)), None
         )
 
     def merges(self) -> list[str]:
+        """The merge commits on the default branch's first-parent line."""
         branch = self.default_branch()
         if branch is None:
             return []
@@ -444,7 +474,8 @@ class Driver:
             if reply.text.startswith("Yes"):
                 return steps.Move(steps.Action.TYPE, f"/ratchet:safeguard {event}")
             script = self.config.plugin / "scripts/route.py"
-            subprocess.run(
+            await asyncio.to_thread(
+                subprocess.run,
                 [sys.executable, str(script), "--root", str(self.app), "--decline", event],
                 capture_output=True,
                 check=False,
@@ -499,6 +530,7 @@ class Driver:
             )
 
     def shell(self, command: str) -> tuple[str, int]:
+        """Run one command line in the project as the owner would."""
         done = subprocess.run(  # noqa: S602
             command,
             shell=True,
@@ -578,6 +610,7 @@ class Driver:
                 self.log.emit("usable")
 
     async def step(self, move: steps.Move) -> None:
+        """Do one move, then measure what it merged."""
         before = self.merges()
         self.pasted = []
         started = time.monotonic()
@@ -585,18 +618,20 @@ class Driver:
             "step", action=move.action.value, text=move.text, commands=list(move.commands)
         )
         if move.action is steps.Action.PASTE:
-            self.paste(move.commands, "route")
+            await asyncio.to_thread(self.paste, move.commands, "route")
         else:
             if move.action is steps.Action.ASK:
                 self.log.emit("ask", text=move.text)
             await self.converse(move.text)
         self.log.emit("step-end", wall_s=round(time.monotonic() - started, 1))
-        self.after(move, before)
+        await asyncio.to_thread(self.after, move, before)
 
     def spent(self) -> float:
+        """Dollars spent so far, product session and owner model."""
         return self.session.usd + self.owner.usd
 
     async def loop(self) -> tuple[steps.Stop, str]:
+        """Follow the route until a stop condition holds."""
         while True:
             instruction = self.route()
             self.log.emit(

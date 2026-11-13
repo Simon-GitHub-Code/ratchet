@@ -12,10 +12,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
-from collections.abc import Iterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from first_hour import appcheck, gates, transcript
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
 
 Event = dict[str, object]
 CLASSES = {"product": "product", "technical": "default-able", "UNSCRIPTED": "default-able"}

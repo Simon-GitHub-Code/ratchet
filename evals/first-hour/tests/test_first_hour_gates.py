@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from first_hour import gates, safety
 from first_hour.gates import Gate, Status
 
@@ -18,7 +20,7 @@ parallel: red
 """
 
 
-def test_each_gate_reads_as_green_red_or_waiting_for_its_trigger():
+def test_each_gate_reads_as_green_red_or_waiting_for_its_trigger() -> None:
     assert gates.parse(RUN) == [
         Gate("lint", Status.GREEN),
         Gate("imports", Status.LATER, "code:layer"),
@@ -27,11 +29,11 @@ def test_each_gate_reads_as_green_red_or_waiting_for_its_trigger():
     assert gates.red(RUN) == ["bite-all"]
 
 
-def test_output_with_no_runner_lines_has_no_gates():
+def test_output_with_no_runner_lines_has_no_gates() -> None:
     assert gates.parse("later: code:layer\nmerge: owner\n") == []
 
 
-def test_commands_that_reach_a_remote_or_change_the_users_plugins_are_refused():
+def test_commands_that_reach_a_remote_or_change_the_users_plugins_are_refused() -> None:
     for command in (
         "git add . && git push origin main",
         "git remote add origin git@github.com:me/app.git",
@@ -46,7 +48,7 @@ def test_commands_that_reach_a_remote_or_change_the_users_plugins_are_refused():
         assert safety.refusal(command), command
 
 
-def test_reading_forge_tools_and_user_files_is_not_refused():
+def test_reading_forge_tools_and_user_files_is_not_refused() -> None:
     for command in (
         "git init -b main && claude plugin list; gh auth status; command -v glab",
         "cat ~/.claude/settings.json",
@@ -56,6 +58,6 @@ def test_reading_forge_tools_and_user_files_is_not_refused():
         assert safety.refusal(command) is None, command
 
 
-def test_a_write_outside_the_run_directory_is_outside(tmp_path):
+def test_a_write_outside_the_run_directory_is_outside(tmp_path: Path) -> None:
     assert not safety.outside(str(tmp_path / "app" / "x.ts"), tmp_path)
     assert safety.outside("/etc/passwd", tmp_path)

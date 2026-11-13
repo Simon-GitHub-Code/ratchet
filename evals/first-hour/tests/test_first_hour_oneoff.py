@@ -1,27 +1,31 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
 
 from first_hour import appcheck, oneoff, reduce
 
-DEEP_RED = "==> bite-all <==\nparallel: bite-all: red (exit 1) in 2s\n==> perf <==\nlater: life:x\nparallel: perf: green in 0.1s\n"
+DEEP_RED = (
+    "==> bite-all <==\nparallel: bite-all: red (exit 1) in 2s\n"
+    "==> perf <==\nlater: life:x\nparallel: perf: green in 0.1s\n"
+)
 DEEP_GREEN = "parallel: bite-all: green in 2s\n"
 
 
-def lines(path, items):
+def lines(path: Path, items: list[dict[str, object]]) -> None:
     path.write_text("".join(json.dumps(i) + "\n" for i in items), encoding="utf-8")
 
 
-def stamp(path, clock):
+def stamp(path: Path, clock: str) -> None:
     """Give ``path`` the mtime of ``clock`` (UTC) on the day of the timeline file."""
-    day = os.stat(path.parent / "timeline.jsonl").st_mtime // 86400 * 86400
+    day = (path.parent / "timeline.jsonl").stat().st_mtime // 86400 * 86400
     hours, minutes, seconds = (int(p) for p in clock.split(":"))
     moment = day + hours * 3600 + minutes * 60 + seconds
     os.utime(path, (moment, moment))
 
 
-def logs(tmp_path, app_readme=None):
+def logs(tmp_path: Path, app_readme: str | None = None) -> Path:
     root = tmp_path / "dogfood"
     log = root / "logs"
     log.mkdir(parents=True)
@@ -112,7 +116,10 @@ def logs(tmp_path, app_readme=None):
             },
         ],
     )
-    merge = 'merge.py "adopt"\nmerge: owner\nnext: the owner types `git switch main && git merge --no-ff adopt-ratchet`, then `just check-deep`\n'
+    merge = (
+        'merge.py "adopt"\nmerge: owner\nnext: the owner types'
+        " `git switch main && git merge --no-ff adopt-ratchet`, then `just check-deep`\n"
+    )
     (log / "04-owner-merge-adopt.txt").write_text(merge, encoding="utf-8")
     (log / "04-owner-check-deep.txt").write_text(DEEP_RED, encoding="utf-8")
     (log / "04b-check-deep-rerun1.txt").write_text(DEEP_GREEN, encoding="utf-8")
@@ -129,7 +136,7 @@ def logs(tmp_path, app_readme=None):
     return log
 
 
-def test_the_hand_driven_runs_logs_reduce_like_a_driven_run(tmp_path):
+def test_the_hand_driven_runs_logs_reduce_like_a_driven_run(tmp_path: Path) -> None:
     out = tmp_path / "events.jsonl"
     oneoff.convert(logs(tmp_path, app_readme=""), out)
     m = reduce.reduce(reduce.read(out))
@@ -160,7 +167,9 @@ def test_the_hand_driven_runs_logs_reduce_like_a_driven_run(tmp_path):
     ("readme", "finding"),
     [("```\nnode dist/server.js\n```\n", "not started by the adapter"), (None, None)],
 )
-def test_the_app_is_read_from_the_runs_checkout_when_there_is_one(tmp_path, readme, finding):
+def test_the_app_is_read_from_the_runs_checkout_when_there_is_one(
+    tmp_path: Path, readme: str | None, finding: str | None
+) -> None:
     events = oneoff.events(logs(tmp_path, app_readme=readme))
     apps = [e for e in events if e["kind"] == "app"]
     assert [a["finding"] for a in apps] == ([finding] if finding else [])

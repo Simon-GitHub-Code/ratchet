@@ -3,6 +3,7 @@ import signal
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -21,7 +22,8 @@ SERVER = textwrap.dedent(
     ITEMS = []
     FORM = (
         '<form action="/items" method="{method}"><input type="hidden" name="csrf" value="t">'
-        '<input type="checkbox" name="flag"><input name="link" type="url"><textarea></textarea></form>'
+        '<input type="checkbox" name="flag"><input name="link" type="url">'
+        '<textarea></textarea></form>'
     )
 
     class App(BaseHTTPRequestHandler):
@@ -30,7 +32,8 @@ SERVER = textwrap.dedent(
 
         def page(self, status=200):
             bare = '<input name="q"><form action="/s"><input type="hidden" name="x"></form>'
-            body = bare if MODE == "no-form" else FORM.format(method="get" if MODE == "get" else "post")
+            method = "get" if MODE == "get" else "post"
+            body = bare if MODE == "no-form" else FORM.format(method=method)
             body += "".join(f"<li>{i}</li>" for i in ITEMS)
             self.send_response(status)
             self.send_header("Content-Type", "text/html")
@@ -73,22 +76,22 @@ SERVER = textwrap.dedent(
 )
 
 
-def app(tmp_path, readme):
+def app(tmp_path: Path, readme: str | None) -> Path:
     (tmp_path / "server.py").write_text(SERVER, encoding="utf-8")
     (tmp_path / "README.md").write_text(readme, encoding="utf-8")
     return tmp_path
 
 
-def run_readme(mode, extra=""):
+def run_readme(mode: str, extra: str = "") -> str:
     return f"# App\n\n```bash\n$ python3 server.py {mode} {extra}\n```\n"
 
 
-def check(root, timeout=20.0):
+def check(root: Path, timeout: float = 20.0) -> appcheck.Result:
     return appcheck.check(root, PIECE, root / "app.log", timeout=timeout)
 
 
 @pytest.mark.parametrize("mode", ["post", "get"])
-def test_an_app_that_saves_the_link_passes_the_slice(tmp_path, mode):
+def test_an_app_that_saves_the_link_passes_the_slice(tmp_path: Path, mode: str) -> None:
     result = check(app(tmp_path, run_readme(mode)))
     assert result.started
     assert result.page_ok
@@ -97,7 +100,7 @@ def test_an_app_that_saves_the_link_passes_the_slice(tmp_path, mode):
     assert result.event()["kind"] == "app"
 
 
-def test_an_app_that_ignores_port_is_found_by_the_url_it_prints(tmp_path):
+def test_an_app_that_ignores_port_is_found_by_the_url_it_prints(tmp_path: Path) -> None:
     result = check(app(tmp_path, run_readme("own-port", str(appcheck.free_port()))))
     assert result.slice_ok, result.finding
 
@@ -112,7 +115,9 @@ def test_an_app_that_ignores_port_is_found_by_the_url_it_prints(tmp_path):
         ("hangup", False, "request failed"),
     ],
 )
-def test_an_app_that_starts_but_fails_the_slice_says_why(tmp_path, mode, page_ok, finding):
+def test_an_app_that_starts_but_fails_the_slice_says_why(
+    tmp_path: Path, *, mode: str, page_ok: bool, finding: str
+) -> None:
     result = check(app(tmp_path, run_readme(mode)))
     assert result.started
     assert result.page_ok is page_ok
@@ -120,7 +125,7 @@ def test_an_app_that_starts_but_fails_the_slice_says_why(tmp_path, mode, page_ok
     assert finding in result.finding
 
 
-def test_an_app_that_will_not_stop_is_killed(monkeypatch):
+def test_an_app_that_will_not_stop_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(appcheck, "STOP_GRACE_S", 0.5)
     stubborn = (
         "import signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN);"
@@ -130,12 +135,12 @@ def test_an_app_that_will_not_stop_is_killed(monkeypatch):
         [sys.executable, "-c", stubborn], stdout=subprocess.PIPE, start_new_session=True
     )
     assert process.stdout.readline() == b"ready\n"
-    appcheck._stop(process)
+    appcheck.stop(process)
     process.stdout.close()
     assert process.returncode == -signal.SIGKILL
 
 
-def test_an_app_that_exits_or_never_listens_did_not_start(tmp_path):
+def test_an_app_that_exits_or_never_listens_did_not_start(tmp_path: Path) -> None:
     (tmp_path / "justfile").write_text("start:\n    exit 3\n", encoding="utf-8")
     result = check(tmp_path)
     assert result.start_command == "just start"
@@ -145,7 +150,7 @@ def test_an_app_that_exits_or_never_listens_did_not_start(tmp_path):
     assert "within 1s" in check(tmp_path, timeout=1).finding
 
 
-def test_a_repository_with_no_run_command_is_a_finding_not_a_crash(tmp_path):
+def test_a_repository_with_no_run_command_is_a_finding_not_a_crash(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text(
         "# App\n\n```\nnpm install\nnpm test\n```\nrun it\n", "utf-8"
     )
@@ -154,7 +159,9 @@ def test_a_repository_with_no_run_command_is_a_finding_not_a_crash(tmp_path):
     assert not result.started
 
 
-def test_the_start_command_comes_from_the_readme_then_the_justfile_then_package_json(tmp_path):
+def test_the_start_command_comes_from_the_readme_then_the_justfile_then_package_json(
+    tmp_path: Path,
+) -> None:
     assert appcheck.start_command(tmp_path) is None
     (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "x"}}), "utf-8")
     assert appcheck.start_command(tmp_path) is None
@@ -170,7 +177,7 @@ def test_the_start_command_comes_from_the_readme_then_the_justfile_then_package_
     assert appcheck.start_command(tmp_path) == appcheck.Start("pnpm start", "README.md")
 
 
-def test_a_package_json_that_is_not_json_or_has_no_scripts_names_nothing(tmp_path):
+def test_a_package_json_that_is_not_json_or_has_no_scripts_names_nothing(tmp_path: Path) -> None:
     (tmp_path / "package.json").write_text("{nope", "utf-8")
     assert appcheck.start_command(tmp_path) is None
     (tmp_path / "package.json").write_text("[]", "utf-8")

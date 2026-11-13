@@ -35,6 +35,7 @@ def _reduce(directory: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
+    """Run, reduce, or cross-check, as the subcommand says."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="drive one run")

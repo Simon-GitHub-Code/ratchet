@@ -1,18 +1,21 @@
 import json
+from pathlib import Path
 
 from first_hour import reduce, transcript
-from first_hour.persona import load
+from first_hour.persona import PERSONAS, load
 
 SESSION = "s-1"
 
 
-def message_events(s, step, type_name, msg):
+def message_events(  # noqa: PLR0917
+    s: float, step: str, type_name: str, msg: dict[str, object]
+) -> list[dict[str, object]]:
     return [{"s": s, "step": step, **e} for e in transcript.events(type_name, msg)]
 
 
-def recorded():
+def recorded() -> list[dict[str, object]]:
     """A short run as the driver records it: setup, an owner merge, a feature, a usable merge."""
-    ev = [
+    return [
         {"s": 0, "step": "setup", "kind": "run", "model": "opus", "plugin": {"commit": "abc"}},
         {"s": 1, "step": "01-init", "kind": "step", "action": "type", "text": "/ratchet:init"},
         *message_events(
@@ -163,7 +166,7 @@ def recorded():
             "UserMessage",
             {
                 "content": [
-                    "ToolResultBlock(content='Ratchet guard denied this tool call; no part of it ran.')",
+                    "ToolResultBlock(content='Ratchet guard denied this tool call; no part ran.')",
                     {
                         "_type": "ToolResultBlock",
                         "content": "parallel: triggers: red (exit 1) in 1.0s",
@@ -221,10 +224,9 @@ def recorded():
         {"s": 613, "step": "end", "kind": "integrity", "unchanged": True, "files": {}},
         {"s": 613, "step": "end", "kind": "something-new"},
     ]
-    return ev
 
 
-def test_a_recorded_run_reduces_to_its_measurements():
+def test_a_recorded_run_reduces_to_its_measurements() -> None:
     m = reduce.reduce(recorded())
     assert m["meta"]["plugin"] == {"commit": "abc"}
     assert m["meta"]["models_seen"] == ["m"]
@@ -261,7 +263,9 @@ def test_a_recorded_run_reduces_to_its_measurements():
     assert m["integrity"] == {"unchanged": True, "files": {}}
 
 
-def test_a_red_gate_with_no_rerun_says_so_and_a_run_with_nothing_reduces_to_empty_measures():
+def test_a_red_gate_with_no_rerun_says_so_and_a_run_with_nothing_reduces_to_empty_measures() -> (
+    None
+):
     run = [
         {
             "s": 0,
@@ -282,7 +286,7 @@ def test_a_red_gate_with_no_rerun_says_so_and_a_run_with_nothing_reduces_to_empt
     assert "| Red gates (red again on rerun) | none |" in table
 
 
-def test_the_table_names_the_measures_a_person_reads_first():
+def test_the_table_names_the_measures_a_person_reads_first() -> None:
     table = reduce.table(reduce.reduce(recorded()))
     assert "| Stopped | usable-merged at 10.2 min |" in table
     assert "| Minutes to first usable merged change | 10.2 |" in table
@@ -294,18 +298,18 @@ def test_the_table_names_the_measures_a_person_reads_first():
     assert "| Cost, product session (owner model) | $6.0 ($0.25) |" in table
 
 
-def test_an_event_log_reads_back_line_by_line(tmp_path):
+def test_an_event_log_reads_back_line_by_line(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text("\n".join(json.dumps(e) for e in recorded()[:3]) + "\n\n", encoding="utf-8")
     assert list(reduce.read(path)) == recorded()[:3]
 
 
-def test_a_cost_the_cli_did_not_report_counts_as_nothing():
+def test_a_cost_the_cli_did_not_report_counts_as_nothing() -> None:
     run = [{"s": 0, "kind": "result", "session": "x", "cost_usd": None}]
     assert reduce.reduce(run)["cost_usd"]["session"] == 0.0
 
 
-def test_an_answer_that_quotes_the_recommended_label_counts_as_taken():
+def test_an_answer_that_quotes_the_recommended_label_counts_as_taken() -> None:
     run = [
         {
             "s": 0,
@@ -319,10 +323,8 @@ def test_an_answer_that_quotes_the_recommended_label_counts_as_taken():
     assert reduce.reduce(run)["questions"]["took_recommended"] == 1
 
 
-def test_the_shipped_persona_loads_from_its_stem_or_its_path():
+def test_the_shipped_persona_loads_from_its_stem_or_its_path() -> None:
     persona = load("read-later")
     assert persona.slice.kind == "html-form"
     assert persona.slice.expect in persona.slice.value
-    from first_hour.persona import PERSONAS
-
     assert load(str(PERSONAS / "read-later.toml")) == persona

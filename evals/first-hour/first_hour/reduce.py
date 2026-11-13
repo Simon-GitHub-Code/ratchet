@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from first_hour import owner
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
+    from pathlib import Path
 
 Event = dict[str, object]
 
@@ -220,7 +223,7 @@ def _red_gates(gates: list[Event]) -> list[dict[str, object]]:
     for run in gates:
         if run.get("attempt") == 2:  # noqa: PLR2004
             reruns[(run.get("command"), run.get("of"))] = _names(run, "red")
-    found = []
+    found: list[dict[str, object]] = []
     for run in gates:
         if run.get("attempt") != 1:
             continue
@@ -237,13 +240,13 @@ def _red_gates(gates: list[Event]) -> list[dict[str, object]]:
     return found
 
 
-def _names(run: Event, status: str) -> set[str]:
+def _listed(run: Event) -> list[dict[str, object]]:
     listed = run.get("gates")
-    return {
-        str(g.get("name"))
-        for g in (listed if isinstance(listed, list) else [])
-        if isinstance(g, dict) and g.get("status") == status
-    }
+    return [g for g in (listed if isinstance(listed, list) else []) if isinstance(g, dict)]
+
+
+def _names(run: Event, status: str) -> set[str]:
+    return {str(g.get("name")) for g in _listed(run) if g.get("status") == status}
 
 
 def _gate_coverage(gates: list[Event]) -> dict[str, object]:
@@ -251,8 +254,8 @@ def _gate_coverage(gates: list[Event]) -> dict[str, object]:
     runs = [g for g in gates if g.get("attempt") == 1 and isinstance(g.get("gates"), list)]
     if not runs:
         return {"ran": [], "later": {}, "command": None}
-    widest = max(runs, key=lambda g: len(g["gates"]))  # type: ignore[arg-type]
-    listed = [g for g in widest["gates"] if isinstance(g, dict)]  # type: ignore[union-attr]
+    widest = max(runs, key=lambda g: len(_listed(g)))
+    listed = _listed(widest)
     return {
         "command": widest.get("command"),
         "minute": _minute(widest),
@@ -376,9 +379,7 @@ def table(metrics: dict[str, object]) -> str:
         if _at(metrics, "app.checked")
         else "not checked"
     )
-    prompts = int(_at(metrics, "prompts.permission") or 0) + int(
-        _at(metrics, "prompts.unknown") or 0
-    )
+    prompts = _num(_at(metrics, "prompts.permission")) + _num(_at(metrics, "prompts.unknown"))
     rows = [
         ("Stopped", f"{at('stop.reason')} at {at('stop.minute')} min"),
         ("Minutes to first merged change", at("minutes.to_first_merge")),
@@ -394,7 +395,7 @@ def table(metrics: dict[str, object]) -> str:
             f"{at('questions.recommended_offered')} / {at('questions.took_recommended')}",
         ),
         ("Guard approval prompts", at("prompts.guard")),
-        ("Other permission prompts", str(prompts)),
+        ("Other permission prompts", str(int(prompts))),
         ("Guard denials the agent met", at("guard_denials")),
         ("Shell commands the owner pasted", at("pastes.count")),
         ("Things the owner asked the assistant to do", at("asks")),

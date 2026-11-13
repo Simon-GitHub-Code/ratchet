@@ -9,9 +9,12 @@ non-engineer asks the assistant to do for them.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 class Action(StrEnum):
@@ -79,7 +82,10 @@ RUNNERS = (
 )
 TICKED = re.compile(r"`([^`]+)`")
 NEXT_LINE = re.compile(r"^next:\s*(.*)$", re.MULTILINE)
-ASK = "I was told the next step is: {command}. I don't know how to do that myself; please do it for me."
+ASK = (
+    "I was told the next step is: {command}. I don't know how to do that myself; please do it"
+    " for me."
+)
 
 
 def is_command(text: str) -> bool:
@@ -173,16 +179,15 @@ def stop_reason(
     The same instruction twice on an unchanged checkout is a step that made no progress; the
     same instruction ``budget.repeats`` times is a loop even when something changed between.
     """
-    if usable:
-        return Stop.USABLE
-    if elapsed_s >= budget.minutes * 60:
-        return Stop.WALL_CLOCK
-    if cost_usd >= budget.usd:
-        return Stop.COST
-    if len(history) >= 2 and history[-1] == history[-2]:  # noqa: PLR2004
-        return Stop.REPEAT
-    if history and sum(s.command == history[-1].command for s in history) >= budget.repeats:
-        return Stop.REPEAT
-    if budget.steps is not None and len(history) > budget.steps:
-        return Stop.MAX_STEPS
-    return None
+    stalled = len(history) > 1 and history[-1] == history[-2]
+    looped = bool(history) and sum(s.command == history[-1].command for s in history) >= (
+        budget.repeats
+    )
+    checks = (
+        (usable, Stop.USABLE),
+        (elapsed_s >= budget.minutes * 60, Stop.WALL_CLOCK),
+        (cost_usd >= budget.usd, Stop.COST),
+        (stalled or looped, Stop.REPEAT),
+        (budget.steps is not None and len(history) > budget.steps, Stop.MAX_STEPS),
+    )
+    return next((stop for hit, stop in checks if hit), None)
