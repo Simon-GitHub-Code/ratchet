@@ -32,16 +32,23 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def entry(ident: str, method: str, path: str, status: int, error: str | None = None) -> ar.Entry:
-    """The log's line for ``ident``, whose stored exchange is in ``EXCHANGES``."""
-    stored = EXCHANGES[ident]
-    return ar.Entry(ident, method, path, status, sha(stored.sent), sha(stored.answer), error)
+def entry(
+    ident: str,
+    line: str,
+    *,
+    error: str | None = None,
+    stored: dict[str, ar.Exchange] = EXCHANGES,
+) -> ar.Entry:
+    """The log's line for ``ident``, ``line`` as ``GET / 200``, whose exchange is in ``stored``."""
+    method, path, status = line.split()
+    sent, answer = stored[ident].sent, stored[ident].answer
+    return ar.Entry(ident, method, path, int(status), sha(sent), sha(answer), error)
 
 
 LOG = {
-    IDS[0]: entry(IDS[0], "GET", "/", 200),
-    IDS[1]: entry(IDS[1], "POST", "/items", 303),
-    IDS[2]: entry(IDS[2], "GET", "/", 200),
+    IDS[0]: entry(IDS[0], "GET / 200"),
+    IDS[1]: entry(IDS[1], "POST /items 303"),
+    IDS[2]: entry(IDS[2], "GET / 200"),
 }
 FACTS = ar.Facts(
     session=SESSION,
@@ -88,22 +95,27 @@ def test_the_ticket_promises_are_its_checklist_lines_with_whitespace_collapsed()
 # route that repeats its body. Neither shows anything of the product.
 GONE = "There is nothing left to read."
 SENT = "which the request itself sent, so it shows nothing of the product"
-EXCHANGES["abcd1234-4"] = ar.Exchange(
-    b"GET /search?q=There+is+nothing+left+to+read. HTTP/1.1\r\n\r\n",
-    b"HTTP/1.1 404 Not Found\r\n\r\nNo page for There is nothing left to read.",
-)
-EXCHANGES["abcd1234-5"] = ar.Exchange(
-    b"POST /echo HTTP/1.1\r\nContent-Length: 30\r\n\r\nThere is nothing left to read.",
-    b"HTTP/1.1 200 OK\r\n\r\nPOST There is nothing left to read.",
-)
-ECHOES: dict[str, object] = {
-    "log": {
-        **LOG,
-        "abcd1234-4": entry("abcd1234-4", "GET", "/search", 404),
-        "abcd1234-5": entry("abcd1234-5", "POST", "/echo", 200),
-    },
-    "exchanges": EXCHANGES,
+ECHO_EXCHANGES = EXCHANGES | {
+    "abcd1234-4": ar.Exchange(
+        b"GET /search?q=There+is+nothing+left+to+read. HTTP/1.1\r\n\r\n",
+        b"HTTP/1.1 404 Not Found\r\n\r\nNo page for There is nothing left to read.",
+    ),
+    "abcd1234-5": ar.Exchange(
+        b"POST /echo HTTP/1.1\r\nContent-Length: 30\r\n\r\nThere is nothing left to read.",
+        b"HTTP/1.1 200 OK\r\n\r\nPOST There is nothing left to read.",
+    ),
 }
+
+
+def echo_log(error: str | None = None) -> dict[str, ar.Entry]:
+    """The log with both echoes; ``error`` says how the second broke, when it did."""
+    return LOG | {
+        "abcd1234-4": entry("abcd1234-4", "GET /search 404", stored=ECHO_EXCHANGES),
+        "abcd1234-5": entry("abcd1234-5", "POST /echo 200", error=error, stored=ECHO_EXCHANGES),
+    }
+
+
+ECHOES: dict[str, object] = {"log": echo_log(), "exchanges": ECHO_EXCHANGES}
 ECHOED = {
     "query": {"request": "abcd1234-4", "method": "GET", "path": "/search", "status": 404},
     "body": {"request": "abcd1234-5", "method": "POST", "path": "/echo", "status": 200},
@@ -115,9 +127,8 @@ for cited in ECHOED.values():
 def test_a_finding_may_show_an_echo_or_a_request_that_broke() -> None:
     raw = good()
     finding(raw)["requests"] = list(ECHOED.values())
-    broke = entry("abcd1234-5", "POST", "/echo", 200, "the answer broke off: Reset")
-    facts = ECHOES | {"log": {**ECHOES["log"], "abcd1234-5": broke}}  # type: ignore[dict-item]
-    assert judged(raw, **facts) == []
+    broke = echo_log("the answer broke off: Reset")
+    assert judged(raw, log=broke, exchanges=ECHO_EXCHANGES) == []
 
 
 Mutate = Callable[[dict[str, object]], object]
@@ -330,7 +341,7 @@ REFUSED: list[tuple[str, Mutate, dict[str, object], str]] = [
     (
         "a pass on a request that broke",
         lambda _: None,
-        {"log": {**LOG, IDS[2]: entry(IDS[2], "GET", "/", 200, "the answer broke off: Reset")}},
+        {"log": {**LOG, IDS[2]: entry(IDS[2], "GET / 200", error="the answer broke off: Reset")}},
         (
             "criterion C1 passes on request abcd1234-3, which did not complete: the answer broke"
             " off: Reset"

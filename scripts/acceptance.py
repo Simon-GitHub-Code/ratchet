@@ -64,7 +64,6 @@ import argparse
 import contextlib
 import datetime as dt
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -678,16 +677,21 @@ def screenshots(directory: Path, cited: list[str]) -> frozenset[str]:
     return frozenset(good)
 
 
-def answers(
+def exchanges(
     directory: Path, log: dict[str, acceptance_record.Entry], cited: set[str]
-) -> dict[str, bytes]:
-    """The stored answers of the cited requests whose probe still matches the log."""
+) -> dict[str, acceptance_record.Exchange]:
+    """The stored exchanges of the cited requests whose probes both still match the log."""
+
+    def probe(name: str) -> bytes:
+        path = directory / "probes" / name
+        return path.read_bytes() if path.is_file() else b""
+
     found = {}
     for ident in cited & set(log):
-        probe = directory / "probes" / f"{ident}.response"
-        data = probe.read_bytes() if probe.is_file() else b""
-        if hashlib.sha256(data).hexdigest() == log[ident].response:
-            found[ident] = data
+        sent, answer = probe(f"{ident}.request"), probe(f"{ident}.response")
+        digests = (acceptance_record.sha256(sent), acceptance_record.sha256(answer))
+        if digests == (log[ident].request, log[ident].response):
+            found[ident] = acceptance_record.Exchange(sent, answer)
     return found
 
 
@@ -733,7 +737,7 @@ def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None
         web_ui=isinstance(types, list) and "web-ui" in types,
         promises=tuple(acceptance_record.promises(ticket)),
         log=log,
-        answers=answers(directory, log, {c.request for item in every for c in item.requests}),
+        exchanges=exchanges(directory, log, {c.request for item in every for c in item.requests}),
         screenshots=screenshots(directory, [p for item in every for p in item.screenshots]),
         code=code_paths(root, ticket),
         served=served,

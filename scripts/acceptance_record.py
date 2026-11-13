@@ -27,10 +27,13 @@ A record is accepted only when every rule below holds; each one broken is a sent
 this session and this commit. Every checklist line of the ticket has exactly one criterion, with
 its text. A ``pass`` cites a request this session logged, as the method, path and status the log
 holds, and every text it says the answer showed is in the stored answer; for a ``web-ui`` it also
-cites a screenshot. A ``pass`` is kept by a check or says why it cannot be. A ``fail`` and every
-finding carry steps to reproduce; a blocker or major finding cites what it saw. Verdicts and
-severities come from their closed sets. No text names a file of the product's code, since the
-tester judges by use and never by reading. The log matches its seal.
+cites a screenshot. A ``pass`` cites no request that broke, and no text its request sent itself,
+as a page that repeats its query does: that shows the request, not the product. Text sent in an
+earlier request and shown by a later one passes, since saving something and then seeing it is
+how most of a product is tried. A ``pass`` is kept by a check or says why it cannot be. A
+``fail`` and every finding carry steps to reproduce; a blocker or major finding cites what it
+saw. Verdicts and severities come from their closed sets. No text names a file of the
+product's code, since the tester judges by use and never by reading. The log matches its seal.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import urllib.parse
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -69,13 +73,27 @@ def promises(ticket: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Entry:
-    """One line of ``requests.jsonl``: a request the tester made through the proxy."""
+    """One line of ``requests.jsonl``: a request the tester made through the proxy.
+
+    ``request`` and ``response`` are the digests of the stored probes; ``error`` says how the
+    exchange broke, when it did.
+    """
 
     id: str
     method: str
     path: str
     status: int
+    request: str
     response: str
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class Exchange:
+    """A cited request and its answer as the proxy stored them, each matching the log's digest."""
+
+    sent: bytes
+    answer: bytes
 
 
 def read_log(data: bytes) -> tuple[dict[str, Entry], list[str]]:
@@ -85,10 +103,17 @@ def read_log(data: bytes) -> tuple[dict[str, Entry], list[str]]:
     for number, line in enumerate(data.splitlines(), 1):
         try:
             raw = json.loads(line)
+            error = raw.get("error")
             entry = Entry(
-                raw["id"], raw["method"], raw["path"], int(raw["status"]), raw["responseSha256"]
+                raw["id"],
+                raw["method"],
+                raw["path"],
+                int(raw["status"]),
+                raw["requestSha256"],
+                raw["responseSha256"],
+                None if error is None else str(error),
             )
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError, AttributeError):
             problems.append(f"line {number} of the request log is not a logged request")
             continue
         entries[entry.id] = entry
@@ -357,8 +382,8 @@ def parse_record(raw: object) -> tuple[Record | None, list[str]]:
 class Facts:
     """What the record is held to, none of it written by the tester.
 
-    ``answers`` holds the stored answer of each cited request whose probe matches the log;
-    ``screenshots`` the cited paths that are PNG files inside the tester's directory;
+    ``exchanges`` holds the stored request and answer of each cited request whose probes both
+    match the log; ``screenshots`` the cited paths that are PNG files inside the tester's directory;
     ``code`` the repository paths of the product's files; ``served`` whether the product ever
     answered in this session.
     """
@@ -368,7 +393,7 @@ class Facts:
     web_ui: bool
     promises: tuple[str, ...]
     log: dict[str, Entry]
-    answers: dict[str, bytes]
+    exchanges: dict[str, Exchange]
     screenshots: frozenset[str]
     code: tuple[str, ...]
     served: bool
@@ -391,14 +416,36 @@ def citation_problems(where: str, cited: Citation, facts: Facts) -> list[str]:
         return [f"{where} cites request {cited.request} as {said}, but the log has {logged}"]
     if not cited.contains:
         return []
-    answer = facts.answers.get(cited.request)
-    if answer is None:
-        return [f"{where} cites request {cited.request}, whose stored answer was changed or lost"]
-    body = answer.split(b"\r\n\r\n", 1)[-1]
+    exchange = facts.exchanges.get(cited.request)
+    if exchange is None:
+        said = "whose stored request or answer was changed or lost"
+        return [f"{where} cites request {cited.request}, {said}"]
+    body = exchange.answer.split(b"\r\n\r\n", 1)[-1]
     return [
         f"{where} says request {cited.request} showed {text!r}, but its answer does not"
         for text in cited.contains
         if text.encode() not in body
+    ]
+
+
+def echoed(text: str, sent: bytes) -> bool:
+    """Whether ``text`` is in the request as sent, or in it once its form encoding is undone."""
+    raw = sent.decode("utf-8", "replace")
+    return text in raw or text in urllib.parse.unquote_plus(raw)
+
+
+def shown_problems(where: str, cited: Citation, facts: Facts) -> list[str]:
+    """Why a pass cannot rest on ``cited``: it broke, or what it showed is what it sent."""
+    entry, exchange = facts.log.get(cited.request), facts.exchanges.get(cited.request)
+    if entry is not None and entry.error is not None:
+        return [f"{where} passes on request {cited.request}, which did not complete: {entry.error}"]
+    if exchange is None:
+        return []
+    return [
+        f"{where} says request {cited.request} showed {text!r}, which the request itself sent,"
+        " so it shows nothing of the product"
+        for text in cited.contains
+        if echoed(text, exchange.sent)
     ]
 
 
@@ -434,6 +481,7 @@ def pass_problems(item: Criterion, facts: Facts, kept: set[str]) -> list[str]:
         problems.append(f"{where} passes, but the product never answered in this session")
     elif not item.requests:
         problems.append(f"{where} passes without citing a request this session logged")
+    problems += [line for cited in item.requests for line in shown_problems(where, cited, facts)]
     if facts.web_ui and not item.screenshots:
         problems.append(f"{where} passes on a web-ui without a screenshot")
     if item.id not in kept and not item.unkept:
