@@ -636,11 +636,17 @@ def still_served(directory: Path) -> bool:
         return False
 
 
-def code_paths(root: Path) -> tuple[str, ...]:
-    """Repository paths of the product's files a tester has no business naming."""
-    listed = git(root, "ls-files", "-z").split("\0")
+def code_paths(root: Path, ticket: str) -> tuple[str, ...]:
+    """The paths of the files the work tree holds that a tester has no business naming.
+
+    Every file the served tree is made of, tracked or not, top-level or not, but a README and
+    the paths the ticket itself names, which the tester was given.
+    """
+    listed = git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
     return tuple(
-        path for path in listed if "/" in path and not Path(path).name.upper().startswith("README")
+        path
+        for path in dict.fromkeys(listed.split("\0"))
+        if path and path not in ticket and not Path(path).name.upper().startswith("README")
     )
 
 
@@ -705,17 +711,16 @@ def judged(root: Path, directory: Path) -> tuple[acceptance_record.Record | None
     types, tree = session.get("types"), directory.parent.name
     if session.get("tree") != tree:
         problems.append(f"the session served tree {session.get('tree')}, but is filed under {tree}")
+    ticket = (directory / "ticket.md").read_text(encoding="utf-8")
     facts = acceptance_record.Facts(
         session=str(session.get("session")),
         tree=tree,
         web_ui=isinstance(types, list) and "web-ui" in types,
-        promises=tuple(
-            acceptance_record.promises((directory / "ticket.md").read_text(encoding="utf-8"))
-        ),
+        promises=tuple(acceptance_record.promises(ticket)),
         log=log,
         answers=answers(directory, log, {c.request for item in every for c in item.requests}),
         screenshots=screenshots(directory, [p for item in every for p in item.screenshots]),
-        code=code_paths(root),
+        code=code_paths(root, ticket),
         served=served,
     )
     problems += acceptance_record.judge(record, facts)
