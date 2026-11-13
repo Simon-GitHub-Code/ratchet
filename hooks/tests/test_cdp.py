@@ -49,7 +49,7 @@ def test_a_script_that_throws_is_the_pages_error_not_the_browsers(
     ("url", "said"),
     [
         ("http://unreachable/", "did not open: net::ERR_NAME_NOT_RESOLVED"),
-        ("http://stuck/", "did not finish loading within 2s"),
+        ("http://stuck/", "did not finish loading within 0.5s"),
         ("http://crash/", "the browser closed while it was asked Page.loadEventFired"),
     ],
 )
@@ -57,9 +57,10 @@ def test_a_page_that_does_not_open_is_a_browser_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, url: str, said: str
 ) -> None:
     browsers.fake(tmp_path, monkeypatch)
-    monkeypatch.setattr(cdp, "ANSWER", 2.0)
-    with tab(tmp_path) as page, pytest.raises(cdp.BrowserError, match=re.escape(said)):  # type: ignore[attr-defined]
-        page.open(url)
+    with tab(tmp_path) as page:  # type: ignore[attr-defined]
+        monkeypatch.setattr(cdp, "ANSWER", 0.5)
+        with pytest.raises(cdp.BrowserError, match=re.escape(said)):
+            page.open(url)
     assert products.processes_naming(str(tmp_path)) == []
 
 
@@ -67,11 +68,12 @@ def test_a_click_whose_page_never_loads_is_a_browser_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     browsers.fake(tmp_path, monkeypatch)
-    monkeypatch.setattr(cdp, "ANSWER", 2.0)
     stall = "(text => true)('Stall')"
     with tab(tmp_path) as page:  # type: ignore[attr-defined]
+        monkeypatch.setattr(cdp, "ANSWER", 0.5)
         page.act(stall, 0.1)
-        with pytest.raises(cdp.BrowserError, match="the page did not finish loading within 2s"):
+        said = "the page did not finish loading within 0.5s"
+        with pytest.raises(cdp.BrowserError, match=re.escape(said)):
             page.act(stall, 0.1)
 
 
@@ -84,7 +86,6 @@ def test_a_click_whose_page_never_loads_is_a_browser_error(
             375,
             "the browser closed while it was asked Target.createTarget; the stand-in browser gives",
         ),
-        ("mute", 375, "the browser did not answer Target.createTarget in time; it printed nothing"),
         ("deaf", 375, "the browser closed while it was asked Page.enable"),
     ],
 )
@@ -92,8 +93,18 @@ def test_a_browser_that_fails_says_how(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, mode: str, width: int, said: str
 ) -> None:
     browsers.fake(tmp_path, monkeypatch, mode)
-    monkeypatch.setattr(cdp, "ANSWER", 2.0)
     with pytest.raises(cdp.BrowserError, match=re.escape(said)), tab(tmp_path, width):
+        pass
+    assert products.processes_naming(str(tmp_path)) == []
+
+
+def test_a_browser_that_never_answers_is_given_up_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    browsers.fake(tmp_path, monkeypatch, "mute")
+    monkeypatch.setattr(cdp, "ANSWER", 0.5)
+    said = "the browser did not answer Target.createTarget in time; it printed nothing"
+    with pytest.raises(cdp.BrowserError, match=re.escape(said)), tab(tmp_path):
         pass
     assert products.processes_naming(str(tmp_path)) == []
 
