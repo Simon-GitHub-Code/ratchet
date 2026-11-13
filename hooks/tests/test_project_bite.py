@@ -531,16 +531,19 @@ def test_after_an_interrupt_the_gate_it_stopped_runs_no_other_bite_and_prints_no
     # Why: a stopped lane still walked its gate's other bites, restoring the copy after each and
     # printing a verdict for it, for seconds after the stop with hundreds of bites.
     started = tmp_path / "started"
-    registry = "".join(bite("slow", f"bite {n}") for n in range(4))
+    registry = "".join(bite("slow", f"bite {n}") for n in range(1000))
     root = project(tmp_path / "repo", {"slow": f"touch {started}; sleep 30"}, registry)
+    sent: list[float] = []
 
     def interrupt() -> None:
         while not started.exists():
             time.sleep(0.01)
+        sent.append(time.monotonic())
         signal.pthread_kill(threading.main_thread().ident or 0, signal.SIGTERM)
 
     threading.Thread(target=interrupt, daemon=True).start()
     assert prove(root) == 128 + 15
+    assert time.monotonic() - sent[0] < STOPS_WITHIN
     assert capsys.readouterr().out == "bite: red: interrupted by signal 15\n"
 
 
@@ -1197,6 +1200,13 @@ def skips_an_absent_file(root: Path) -> None:
     (root / "src/skipped.txt").unlink()
 
 
+def deletes_a_tracked_ignored_file(root: Path) -> None:
+    # Why: the index tracks it, so git calls it not ignored there; restoring cleans by the
+    # snapshot, which never held it, and keeps it as a file an ignore rule matches.
+    tracks_an_ignored_file(root)
+    (root / "kept.secret").unlink()
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -1265,6 +1275,12 @@ def test_the_first_green_run_judges_the_copy_as_every_later_run_does(
             skips_an_absent_file,
             "THE FAULT WAS NOT PLANTED",
         ),
+        (
+            'write = { path = "kept.secret", content = "planted\\n" }',
+            "grep -l planted kept.secret && { echo L001; exit 1; }",
+            deletes_a_tracked_ignored_file,
+            "THE FAULT WAS NOT PLANTED",
+        ),
     ],
     ids=[
         "a replace in a tracked file an ignore rule matches",
@@ -1272,6 +1288,7 @@ def test_the_first_green_run_judges_the_copy_as_every_later_run_does(
         "a gate that writes the exclude file",
         "a file the index skips",
         "a file the index skips and the tree lacks",
+        "a tracked file an ignore rule matches, deleted from the tree",
     ],
 )
 def test_what_a_fault_or_its_run_changed_is_put_back_before_the_next_bite(
