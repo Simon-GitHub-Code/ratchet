@@ -407,6 +407,7 @@ class _Signals:
 
 
 _SIGNALS = _Signals()
+INTERRUPTS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 @contextlib.contextmanager
@@ -429,8 +430,7 @@ def interrupts_raise() -> Iterator[None]:
         _SIGNALS.fired = True
         raise Interrupted(signum)
 
-    names = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-    previous = [(name, signal.signal(name, handler)) for name in names]
+    previous = [(name, signal.signal(name, handler)) for name in INTERRUPTS]
     try:
         yield
     finally:
