@@ -160,35 +160,65 @@ def merge(root: Path, branch: str) -> int:
     return 0
 
 
+def on_branch(root: Path) -> str | None:
+    return gatelib.git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+
+
+def porcelain(root: Path, *args: str, given: str = "") -> subprocess.CompletedProcess[str]:
+    """``git args`` with the commit hooks running as they do on any commit; ``given`` on stdin."""
+    return subprocess.run(
+        ["git", "-C", str(root), *args], input=given, capture_output=True, text=True, check=False
+    )
+
+
 def commit_records(root: Path, default: str, paths: list[str]) -> str | Reason:
     """Commit ``paths`` on a new records branch and switch back to ``default``; the branch.
 
-    Why porcelain: the repository's commit hooks run on the commit, as on any other.
+    Anything short of a clean commit puts the index back as the owner left it, switches back
+    and deletes the branch, so the records stay uncommitted on the default branch. Why HEAD is
+    read rather than the exit code: a failing ``post-checkout`` hook fails a switch that happened.
     """
     branch = f"{RECORDS}{datetime.now(UTC):%Y%m%d-%H%M%S}"
-    if gatelib.git(root, "switch", "--quiet", "-c", branch) is None:
-        return Reason("refs", f"`{branch}` could not be made: it exists, or the work tree is busy")
-    body = "Records alone, landed by `merge.py --records` (ADR 0031):\n\n" + "".join(
-        f"- {path}\n" for path in paths
+    index = gatelib.git(root, "write-tree")
+    if index is None or tip(root, branch) is not None:
+        return Reason("refs", f"`{branch}` exists already, or the index holds a merge conflict")
+    porcelain(root, "switch", "--quiet", "-c", branch)
+    if on_branch(root) != branch:
+        return Reason("refs", f"`{branch}` could not be made and checked out")
+    message = (
+        f"{SUBJECT}\n\nRecords alone, landed by `merge.py --records` (ADR 0031):\n\n"
+        + "".join(f"- {path}\n" for path in paths)
     )
-    gatelib.git(root, "add", "--all", "--", *paths)
-    committed = subprocess.run(
-        ["git", "-C", str(root), "commit", "--quiet", "-m", SUBJECT, "-m", body],
-        capture_output=True,
-        text=True,
-        check=False,
+    added = porcelain(
+        root,
+        "add",
+        "--all",
+        "--pathspec-from-file=-",
+        "--pathspec-file-nul",
+        given="\0".join(paths),
     )
-    gatelib.git(root, "switch", "--quiet", default)
-    if committed.returncode == 0:
+    done = (
+        porcelain(root, "commit", "-q", "--file=-", given=message)
+        if not added.returncode
+        else added
+    )
+    committed = done.returncode == 0
+    left = merge_ready.uncommitted(root) if committed else []
+    if committed and not left:
+        porcelain(root, "switch", "--quiet", default)
         return branch
-    gatelib.git(root, "reset", "--quiet", "--", *paths)
+    if committed:
+        porcelain(root, "reset", "--quiet", "--soft", "HEAD~1")
+    porcelain(root, "switch", "--quiet", default)
+    gatelib.git(root, "read-tree", index)
     gatelib.git(root, "branch", "--quiet", "-D", branch)
-    said = (committed.stdout + committed.stderr).strip().splitlines()[-HOOK_LINES:]
-    return Reason(
-        "gates",
-        "the commit hooks refused the records, which stay uncommitted on the default branch: "
-        + " / ".join(said),
-    )
+    if left:
+        said = "the commit hooks changed " + ", ".join(left) + " as they ran"
+    else:
+        said = "the commit hooks refused them: " + " / ".join(
+            (done.stdout + done.stderr).strip().splitlines()[-HOOK_LINES:]
+        )
+    return Reason("gates", f"the records stay uncommitted on the default branch, since {said}")
 
 
 def land_records(root: Path) -> int:
@@ -214,7 +244,7 @@ def land_records(root: Path) -> int:
         return 2
     branch = commit_records(root, default, paths)
     if isinstance(branch, Reason):
-        print(merge_ready.render([branch]), end="")
+        print(f"records: {branch}")
         return 1
     print(f"records: {len(paths)} path(s) committed on `{branch}`", flush=True)
     code = merge(root, branch)

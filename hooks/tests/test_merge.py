@@ -240,7 +240,7 @@ def test_the_adoption_lands_on_its_own_tier_2_and_not_on_check(
 ) -> None:
     repository(tmp_path, {"README.md": "# A\n"})
     branch(tmp_path, "adopt-ratchet")
-    write(tmp_path, "guards/manifest.toml", BASE["guards/manifest.toml"])
+    write(tmp_path, "guards/manifest.toml", merge_ready.TEMPLATE.read_text(encoding="utf-8"))
     write(tmp_path, "docs/process/binding.md", binding(check="false", deep=deep))
     commit(tmp_path, "chore(method): adopt")
     capsys.readouterr()
@@ -339,37 +339,76 @@ def test_records_land_from_the_default_branch_and_without_a_forge(
     assert record_branches(root) == []
 
 
-def test_records_a_commit_hook_refuses_stay_uncommitted(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    ("hook", "said"),
+    [
+        ("echo prose: red on Thing; exit 1", "the commit hooks refused them: prose: red on Thing"),
+        (f"echo formatted >> {SPEC}", f"the commit hooks changed {SPEC} as they ran"),
+    ],
+    ids=["a hook that refuses", "a hook that rewrites a record"],
+)
+def test_records_the_commit_hooks_do_not_take_stay_as_the_owner_left_them(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, hook: str, said: str
 ) -> None:
-    root = on_main(tmp_path, {SPEC: "# Thing\n"})
-    hook_script(root / ".git/hooks", "pre-commit", "echo prose: red on Thing; exit 1")
+    # Why: the owner may have staged one version of a record and kept editing another; neither
+    # is theirs to lose because a hook said no.
+    root = on_main(tmp_path, {SPEC: "# Staged\n"})
+    git(root, "add", SPEC)
+    write(root, SPEC, "# Edited\n")
+    staged = git(root, "ls-files", "--stage", SPEC)
+    hook_script(root / ".git/hooks", "pre-commit", hook)
     was = git(root, "rev-parse", "main")
     capsys.readouterr()
     assert records(root) == 1
     assert capsys.readouterr().out == (
-        "merge: owner\ngates: the commit hooks refused the records, which stay uncommitted on the"
-        " default branch: prose: red on Thing\n"
+        f"records: gates: the records stay uncommitted on the default branch, since {said}\n"
     )
     assert git(root, "rev-parse", "main") == was
-    assert git(root, "status", "--porcelain", "--untracked-files=all") == f"?? {SPEC}"
+    assert git(root, "ls-files", "--stage", SPEC) == staged
+    assert (root / SPEC).read_text(encoding="utf-8").startswith("# Edited\n")
     assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "main"
     assert record_branches(root) == []
 
 
-def test_a_records_branch_that_exists_already_is_not_reused(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+def test_a_failing_checkout_hook_does_not_stop_records_landing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = on_main(tmp_path, {SPEC: "# Thing\n"})
+    on_records = 'case "$(git symbolic-ref --quiet --short HEAD)" in records/*) exit 1;; esac'
+    hook_script(root / ".git/hooks", "post-checkout", on_records)
+    assert records(root) == 0
+    assert "merge: agent\nmerged: `records/" in capsys.readouterr().out
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert git(root, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize(
+    ("ref", "said"),
+    [
+        ("records/20261113-031415", "refs: `records/20261113-031415` exists already"),
+        ("records", "refs: `records/20261113-031415` could not be made and checked out"),
+    ],
+    ids=["the same name", "a branch its name would sit under"],
+)
+def test_a_records_branch_that_cannot_be_made_changes_nothing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    ref: str,
+    said: str,
 ) -> None:
     root = on_main(tmp_path, {SPEC: "# Thing\n"})
     stopped = datetime(2026, 11, 13, 3, 14, 15, tzinfo=UTC)
     monkeypatch.setattr(
         merge, "datetime", type("Clock", (), {"now": staticmethod(lambda _: stopped)})
     )
-    git(root, "branch", "records/20261113-031415")
+    git(root, "branch", ref)
     capsys.readouterr()
     assert records(root) == 1
-    assert "refs: `records/20261113-031415` could not be made" in capsys.readouterr().out
+    assert said in capsys.readouterr().out
     assert git(root, "status", "--porcelain", "--untracked-files=all") == f"?? {SPEC}"
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "main"
 
 
 @pytest.mark.parametrize("argv", [["merge"], ["merge", "feature/4-thing", "--records"]])
