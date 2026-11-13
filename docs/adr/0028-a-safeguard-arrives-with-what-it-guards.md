@@ -58,3 +58,5 @@ This is wrong if safeguards arrive too late to be cheap, or the triggers become 
 - **Keep ADR 0012's every row from the first commit.** Rejected by the owner's principle. Rows already bound in an adopted repository stay bound: the ratchet does not loosen, and nothing here unbinds a gate.
 
 Supersedes, in part: ADR 0012's "from the first commit" and its walking skeleton at adoption, and ADR 0020's red gate with nothing to run, before its trigger fires. The rest of both stands.
+
+Superseded in part by ADR 0030: the free arrival is per change, not per file. A change that takes a kind from no instances at the merge base to any number, in any number of files, is green for it and names the rows it made owed; the change-size ceiling, not a file count, bounds what one change brings. A later change that adds another instance while a row is still owed is red, and the rest of this decision stands.
