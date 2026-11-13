@@ -471,6 +471,7 @@ def test_a_workflow_without_the_plugin_variable_gains_the_flags_and_no_variable(
 
 def test_a_marker_above_every_job_belongs_to_no_job() -> None:
     assert conformance.job_of(["jobs:", "  # bind: toolchain setup"], 2) == "?"
+    assert conformance.job_of(["name: x", "  # bind: toolchain setup"], 2) == "?"
 
 
 def test_the_owner_hears_how_many_fixes_need_his_merge() -> None:
