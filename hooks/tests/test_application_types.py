@@ -192,6 +192,10 @@ def test_the_shipped_catalogue_gives_every_question_a_trigger_it_can_fire() -> N
     assert {"deployed", "irreplaceable-data", "depended-on"} == set(SHIPPED.events)
     assert "outbound-call" in SHIPPED.kinds
     assert "migrations/**" in SHIPPED.events["irreplaceable-data"].signs
+    # Why: with no signs the route could never propose `depended-on`, and ADR 0028's refuter
+    # (a project people rely on is asked its depended-on questions) could not be tried.
+    assert "CONTRIBUTING.md" in SHIPPED.events["depended-on"].signs
+    assert "README.md" not in SHIPPED.events["depended-on"].signs
 
 
 def test_a_trigger_the_catalogue_cannot_fire_is_named() -> None:

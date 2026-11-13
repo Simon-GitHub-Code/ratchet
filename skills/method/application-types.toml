@@ -59,7 +59,9 @@ signs = ["migrations/**", "**/migrations/**", "prisma/schema.prisma", "alembic.i
 
 [events.depended-on]
 meaning = "people outside the project rely on it: users, customers, other teams"
-signs = []
+# Why: files a maintainer writes for strangers (how to contribute, report a flaw, behave, file an
+# issue, fund the work). A README or a licence is no sign: a private project has them too.
+signs = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".github/ISSUE_TEMPLATE/**", ".github/FUNDING.yml"]
 
 # One [[question]] per question this file says something about. A question it does not list
 # applies to all six types, judges no collection and is asked always.

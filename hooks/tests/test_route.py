@@ -596,3 +596,11 @@ def test_a_compound_owed_row_is_said_by_its_code_kind(tmp_path: Path) -> None:
         "`outbound-call` has arrived (1 instance) and owes survives failing dependencies"
     )
     assert "the first instance is free" in step.why
+
+
+def test_a_file_written_for_outside_contributors_is_a_sign_of_depended_on(tmp_path: Path) -> None:
+    root = owing(tmp_path, **{"CONTRIBUTING.md": "# How\n", "README.md": "# A\n"})
+    [line] = route.event_proposals(root)
+    assert line.startswith("`CONTRIBUTING.md` is a sign that the project is `depended-on`")
+    assert f"type `{route.SAFEGUARD} depended-on`" in line
+    assert route.event_proposals(owing(tmp_path / "plain", **{"README.md": "# A\n"})) == []
