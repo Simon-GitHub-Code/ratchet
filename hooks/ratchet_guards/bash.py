@@ -708,9 +708,20 @@ class _Checker:
         it sets ``HOME``) leaves it unknown too, and also where the target as written leads.
         """
         # Why: `HOME=/x cd` and `CDPATH=/x cd y` read their own assignments.
-        lookups = context.exported | _assigned(_assignments(words)[0]).keys()
+        assigned = _assigned(_assignments(words)[0])
+        lookups = context.exported | assigned.keys()
         words = _mover(words)
         readings = _resolved(words[-1], values) if len(words) > 1 else ["~"]
+        # Why: `~` in `HOME=/x cd ~` is expanded before the assignment; a bare `cd` reads it.
+        bare = len(words) == 1 and _HOME in assigned
+        homes = {_literal(assigned[_HOME])} if bare else values.get(_HOME, frozenset())
+        readings += [
+            str(PurePosixPath(home, word[2:]))
+            for word in readings
+            if word == "~" or word.startswith("~/")
+            for home in homes
+            if home
+        ]
         stack = _name(words[0]) == _POPD or (_name(words[0]) == _PUSHD and len(words) == 1)
         places: list[Context] = []
         for word in readings:
