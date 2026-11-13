@@ -1640,7 +1640,9 @@ def fill_placeholders(root: Path) -> None:
     """Stand in for adopt on a template copy: bind every group and row adopt would have bound."""
     path = root / "guards/manifest.toml"
     path.write_text(UNBOUND_GROUP.sub('paths = [\n    "bound/**",\n]', path.read_text()))
-    settings_rules.write(root)
+    settings = root / settings_rules.SETTINGS
+    want = settings_rules.regenerated(settings_rules.read_manifest(root) or {})
+    settings.write_text(want(settings_rules.settings_text(root)), encoding="utf-8")
     binding = root / "docs/process/binding.md"
     binding.write_text(fill_binding(binding.read_text()))
     registry = root / project_bite.REGISTRY

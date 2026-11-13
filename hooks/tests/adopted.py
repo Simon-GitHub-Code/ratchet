@@ -116,7 +116,9 @@ def half_done() -> Path:
     atexit.register(shutil.rmtree, scratch, ignore_errors=True)
     root = scratch / "repo"
     shutil.copytree(adopted("0.9.2"), root, symlinks=True)
-    settings_rules.write(root)
+    want = settings_rules.regenerated(settings_rules.read_manifest(root) or {})
+    settings = root / settings_rules.SETTINGS
+    settings.write_text(want(settings_rules.settings_text(root)), encoding="utf-8")
     git(root, "commit", "-q", "-am", "chore(method): regenerate the permission rules")
     return root
 
