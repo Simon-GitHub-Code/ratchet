@@ -8,7 +8,7 @@ This repository's binding of the Ratchet method (`ratchet:method`; `skills/metho
 
 - Ratchet plugin: <X.Y.Z> at <ratchet-sha>
 
-The plugin version has this one home. Every workflow checks the plugin out at this commit. A local tier is red when the plugin it runs from is older than this pin, or another commit of the same version, and says on every run when it is newer (`plugin-pin`). To upgrade, run the plugin's `scripts/upgrade.py`, make the edits it names, and change this line and every workflow `ref` to the new commit in one change.
+The plugin version has this one home. Every workflow checks the plugin out at this commit. A local tier is red when the plugin it runs from is older than this pin, or another commit of the same version, and says on every run when it is newer (`plugin-pin`). To upgrade, run the plugin's `scripts/upgrade.py --apply`: it changes this line, every workflow `ref` and the permission rules together, adds what the new version's templates hold, and lists the rest for an agent or the owner. The upgrade is one change.
 
 ## Forge
 
@@ -20,7 +20,7 @@ The plugin version has this one home. Every workflow checks the plugin out at th
 
 ## Entry points
 
-Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. `tier0-tree` is tier 0 less the history gate, which the pre-commit hook runs; `hooks-installed` is red while a commit would not run tier 0, and `hooks-install` installs the repository's own hooks and asks it again; `settings` writes the permission rules from the manifest; `bite-one <gate>` shows one gate's bites while its recipe is written. The method's skills and hooks call every entry point below by name, and the conformance gate requires each. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
+Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. `tier0-tree` is tier 0 less the history gate, which the pre-commit hook runs; `hooks-installed` is red while a commit would not run tier 0, and `hooks-install` installs the repository's own hooks and asks it again; `settings` writes the permission rules from the manifest; `bite-one <gate>` shows one gate's bites while its recipe is written. The method's skills and hooks call every entry point of the first table below by name, and the conformance gate requires each. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
 
 | Entry point | Command |
 | --- | --- |
@@ -53,6 +53,13 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | bite-one | `just bite-one` |
 | triggers | `just triggers` |
 
+The second table's entry points are conveniences for the roles and the owner, which no gate requires or runs: `test-files <file>...` runs the tests named, or every test, with the runner the Tests section names, bound or not; `start` runs the deliverable for a person and prints where to open it.
+
+| Convenience | Command |
+| --- | --- |
+| test-files | `just test-files` |
+| start | `just start` |
+
 ## Gates
 
 - Application types: <one or more of `service`, `web-ui`, `app`, `cli`, `job`, `library`>
@@ -60,7 +67,7 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 
 One row per question the method asks. The application types decide which rows apply (`skills/method/application-types.toml` in the `ratchet` plugin); they never decide the tool. A row that applies names the tool for this stack, or `none` with the reason and the ADR that accepts the gap: green, and a standing criticism of the binding. A row that does not apply says `none: not a <type>`, naming a type the question is asked of, and needs no ADR. A row is never dropped, and an empty Tool cell is an unfinished binding: the conformance gate is red on both.
 
-Every question also has a trigger in the same file (ADR 0028): `always`, `code:<kind>`, `life:<event>`, or those two joined by ` and `. Until the trigger has fired, the Tool cell says `later: <trigger>`, copied from the catalogue exactly (`later: code:outbound-call`, `later: life:deployed`, or a compound such as `later: life:deployed and code:stored-format`, which fires when every part has), and the row judges nothing, needs no bite and has a recipe that prints the same words and exits 0. Adoption writes `later:` for every row whose trigger has not fired in this repository, and binds only the rest. The first file of a kind of code is free: the `triggers` gate notes it and the route makes binding the owed rows the next step (`/ratchet:safeguard`); another instance added while a row is still `later:` is red. A row that is bound stays bound: nothing here unbinds a gate.
+Every question also has a trigger in the same file (ADR 0028): `always`, `code:<kind>`, `life:<event>`, or those two joined by ` and `. Until the trigger has fired, the Tool cell says `later: <trigger>`, copied from the catalogue exactly (`later: code:outbound-call`, `later: life:deployed`, or a compound such as `later: life:deployed and code:stored-format`, which fires when every part has), and the row judges nothing, needs no bite and has a recipe that prints the same words and exits 0. Adoption writes `later:` for every row whose trigger has not fired in this repository, and binds only the rest. The change that brings a kind of code is free, however many files it touches (ADR 0030): the `triggers` gate notes it and the route makes binding the owed rows the next step (`/ratchet:safeguard`); another instance added while a row is still `later:` is red. A row that is bound stays bound: nothing here unbinds a gate.
 
 `Life events` lists the events the owner has declared, from `deployed`, `irreplaceable-data` and `depended-on` (`none` until then). A declared event owes its rows in the same way and is never red. The route proposes an event when it sees a sign of it; only the owner declares one.
 
@@ -136,7 +143,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 
 ## Triggers
 
-Where each `code:<kind>` trigger of the Gates table finds its instances in this stack (ADR 0028). One row per kind that a question asked of this repository's application types names; `skills/method/application-types.toml` in the `ratchet` plugin lists the kinds and what each means. `Paths` are comma-separated globs over tracked files. Without a `Pattern` each matching file is one instance; with one, each matching line is, and a literal `|` in it is written `\|`. A repository that never has the kind writes `none: <reason>`. The `triggers` gate counts instances at the merge base and at head, reads this table as the merge base holds it, and holds the rule that the first file is free and a second, added while a row it owes is still `later:`, is red.
+Where each `code:<kind>` trigger of the Gates table finds its instances in this stack (ADR 0028). One row per kind that a question asked of this repository's application types names; `skills/method/application-types.toml` in the `ratchet` plugin lists the kinds and what each means. `Paths` are comma-separated globs over tracked files. Without a `Pattern` each matching file is one instance; with one, each matching line is, and a literal `|` in it is written `\|`. A repository that never has the kind writes `none: <reason>`. The `triggers` gate counts instances at the merge base and at head, reads this table as the merge base holds it, and holds the rule that the change that brings a kind is free, in any number of files, and a later one that adds another instance while a row it owes is still `later:` is red.
 
 | Kind | Paths | Pattern |
 | --- | --- | --- |
@@ -145,6 +152,10 @@ Where each `code:<kind>` trigger of the Gates table finds its instances in this 
 ## Absolute paths
 
 <The paths held at 100% line and branch coverage with no exclusion: the gate tools always, plus whatever the owner declares pure.>
+
+## Tests
+
+<The test frameworks and directories every role writes tests with, chosen and installed at adoption so the first feature has nothing to install: the test runner and its configuration file; the property-testing library, or `built in` where the runner has one; where unit and property tests live and how their files are named. The `unit, property and fitness tests` row stays `later: code:source` until the first module of logic arrives: no gate runs these tests until then, each role runs its own with `just test-files <file>...`, and `/ratchet:safeguard` binds the row to what this section names.>
 
 ## Critique tests
 

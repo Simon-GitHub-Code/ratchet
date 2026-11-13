@@ -186,6 +186,79 @@ def test_a_patch_and_a_new_file_are_changes_git_sees(
     assert capsys.readouterr().out.count(": bites\n") == 2
 
 
+def test_a_replace_keeps_biting_after_an_unrelated_edit_breaks_the_same_patch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: observed in a dogfood run, 2026-11-13: a package added to package.json broke both
+    # context patches of the pins gate, and the owner was stopped to repair them.
+    lines = "".join(f"line {n}\n" for n in range(8))
+    patch = "--- a/src/code.txt\n+++ b/src/code.txt\n@@ -1,4 +1,4 @@\n line 0\n-line 1\n+planted\n"
+    patch += " line 2\n line 3\n"
+    registry = bite(
+        "lint",
+        "by replace",
+        'replace = { path = "src/code.txt", old = "line 1\\n", new = "planted\\n" }',
+    ) + bite("lint", "by patch", 'patch = "quality/bites/p.patch"')
+    write(tmp_path / "repo", "quality/bites/p.patch", patch)
+    root = project(tmp_path / "repo", {"lint": LINT}, registry)
+    write(root, "src/code.txt", lines)
+    commit(root, "feat(core): eight lines")
+    assert prove(root) == 0
+    assert capsys.readouterr().out.count(": bites\n") == 2
+    write(root, "src/code.txt", lines.replace("line 2\n", "line 2\nan unrelated line\n"))
+    commit(root, "feat(core): an unrelated line")
+    assert prove(root) == 1
+    out = capsys.readouterr().out
+    assert "bite: lint: by replace: bites\n" in out
+    assert "bite: lint: by patch: THE FAULT WAS NOT PLANTED\n  git apply" in out
+
+
+def test_a_replace_may_change_several_places_and_leaves_the_tree_as_it_was(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fault = (
+        'replace = [{ path = "src/code.txt", old = "clean", new = "plan" },'
+        ' { path = "src/code.txt", old = "plan\\n", new = "planted\\n" }]'
+    )
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "two steps", fault))
+    before = state(root)
+    assert prove(root) == 0
+    assert "bite: lint: two steps: bites" in capsys.readouterr().out
+    assert state(root) == before
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ('path = "src/code.txt", old = "absent", new = "x"', "src/code.txt no longer holds"),
+        ('path = "gate", old = "planted", new = "x"', "in more than one place; lengthen"),
+        ('path = "src", old = "clean", new = "x"', "src is not a file git sees"),
+        ('path = "nowhere.txt", old = "clean", new = "x"', "nowhere.txt is not a file git"),
+        ('path = "ignored/x.txt", old = "clean", new = "x"', "ignored/x.txt is not a file git"),
+        ('path = "dir-link/x.txt", old = "clean", new = "x"', "dir-link/x.txt is not a file git"),
+        ('path = ".git/config", old = "bare", new = "x"', ".git/config is not a file git sees"),
+        ('path = "file-link", old = "clean", new = "x"', "leaves the copy through a symbolic link"),
+    ],
+)
+def test_a_replace_that_no_longer_applies_is_red_and_says_why(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], case: tuple[str, str]
+) -> None:
+    swap, says = case
+    outside = tmp_path / "outside.txt"
+    outside.write_text("clean\n", encoding="utf-8")
+    root = project(
+        tmp_path / "repo", {"lint": LINT}, bite("lint", "gone", f"replace = {{ {swap} }}")
+    )
+    (root / "file-link").symlink_to(outside)
+    (root / "dir-link").symlink_to("ignored", target_is_directory=True)
+    commit(root, "feat(core): a link out of the repository and one to what git ignores")
+    assert prove(root) == 1
+    out = capsys.readouterr().out
+    assert "bite: lint: gone: THE FAULT WAS NOT PLANTED\n" in out
+    assert says in out
+    assert outside.read_text(encoding="utf-8") == "clean\n"
+
+
 def test_a_committed_fault_is_in_history_for_one_run_only(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -565,6 +638,18 @@ def test_the_gates_table_is_read_row_by_row_and_a_tool_the_repository_chose_is_b
             "'content' is a list of non-empty strings",
         ),
         (bite("lint", "x", 'write = { path = "", content = "x" }'), "'path' is a non-empty string"),
+        (bite("lint", "x", 'replace = "a.txt"'), "'replace' is { path = ..., old = ..., new = ."),
+        (bite("lint", "x", 'replace = [{ path = "a" }]'), "'replace' is { path = ..., old = ."),
+        (bite("lint", "x", "replace = []"), "bite 1 (lint): 'replace' names no text"),
+        (
+            bite("lint", "x", 'replace = { path = "../a", old = "b", new = "c" }'),
+            "'replace' names a path inside the repository",
+        ),
+        (
+            bite("lint", "x", 'replace = { path = "a", old = "", new = "c" }'),
+            "'old' is a non-empty string",
+        ),
+        (bite("lint", "x", 'replace = { path = "a", old = "b", new = 3 }'), "'new' is a string"),
     ],
 )
 def test_a_registry_that_is_malformed_says_where(registry: str, problem: str) -> None:
@@ -632,8 +717,16 @@ def test_conformance_hears_of_every_gap_in_the_registry(tmp_path: Path) -> None:
         ),
     ]
     (root / "quality/bites.toml").unlink()
-    assert project_bite.failures(root) == [
-        "quality/bites.toml: missing; every gate bound to a tool needs a [[bite]]"
+    absent = project_bite.failures(root)
+    assert absent[0] == "quality/bites.toml: missing; every gate bound to a tool needs a [[bite]]"
+    assert absent[1:] == [
+        f"quality/bites.toml: gate '{gate}' ({question}) is bound to a tool and no [[bite]]"
+        " plants a fault for it"
+        for gate, question in (
+            ("lint", "lint"),
+            ("tests", "unit, property and fitness tests"),
+            ("perf", "performance budget"),
+        )
     ]
     (root / "docs/process/binding.md").unlink()
     assert project_bite.failures(root) == [

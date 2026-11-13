@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Bind what is owed
 
-Load the `ratchet:method` skill first. A question is asked once its trigger fires (ADR 0028): the first file of a kind of code is free, and a second, added while a row it fires is still `later:`, is red. The route names `/ratchet:safeguard` when a row is owed. This skill binds those rows, so the owner's next change is never the one that stalls.
+Load the `ratchet:method` skill first. A question is asked once its trigger fires (ADR 0028): the change that brings a kind of code is free, however many files it touches (ADR 0030), and a later one that adds another instance while a row it fires is still `later:` is red. The route names `/ratchet:safeguard` when a row is owed. This skill binds those rows, so the owner's next change is never the one that stalls.
 
 `/ratchet:safeguard` binds every owed row. `/ratchet:safeguard <event>` (`deployed`, `irreplaceable-data` or `depended-on`) declares that life event first, then binds what it owes with the rest.
 
@@ -23,7 +23,7 @@ One question, through the question tool, for every row at once: accept the propo
 3. **Ask the one question**, then act on it with no further question. A named tool that cannot answer its row: bind your proposal and say why in the hand-over.
 
 4. **Bind each row.** Read [what a recipe must get right](../method/tiers.md#what-a-recipe-must-get-right) first. For each row, in this order:
-   - Install the tool through the package manager, and add what it writes to `.gitignore`.
+   - Install the tool through the package manager, and add what it writes to `.gitignore`. A tool adoption provisioned, such as the test runner the binding's Tests section names, is already installed: bind its row by writing that runner into the recipe (`{{test_runner}}` with its shard flags), and install nothing.
    - Replace the recipe's `@echo "later: <trigger>"` body in the `justfile` with the real command. A gate with nothing to run is red, and the trigger fired, so what it judges has a member.
    - Change the row's Tool cell in `docs/process/binding.md` from `later: <trigger>` to the tool, and fill its threshold source. A row whose Telemetry or Feature flags section was one line says how it is met now.
    - Add its `[[bite]]` to `quality/bites.toml`: the smallest fault the gate exists to catch and the words it prints for it, a second bite that empties a collection, and a `proof = "<name>"` bite where the question requires one. Run `just bite-one <gate>` and see it red with the fault and green without. A verdict other than `bites` is a defect of the recipe or the fault: fix it, never loosen `expect`.

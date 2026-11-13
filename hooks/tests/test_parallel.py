@@ -186,8 +186,31 @@ def test_the_closing_lines_name_the_slowest_gate(capsys: pytest.CaptureFixture[s
     ]
     assert parallel.closing(scheduler, 10.0) == []
     assert capsys.readouterr().out == (
-        "parallel: 2 of 2 gates finished in 10.0s (9.7s of gate time); slowest: slow gate 9.5s\n"
+        "parallel: 2 of 2 gates finished in 10.0s (9.7s of gate time): 2 judged and green;"
+        " slowest: slow gate 9.5s\n"
     )
+
+
+def test_a_gate_that_says_later_or_none_is_counted_apart_from_the_judged_ones(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    later, none, green, red = (
+        gate(SAY, "later: code:source", ""),
+        gate(SAY, "none: not a service", ""),
+        gate(SAY, "later: code:source", "and then judged something"),
+        gate("print('later: code:source'); raise SystemExit(2)"),
+    )
+    assert run("--", later, none, green, red) == 1
+    out = capsys.readouterr().out
+    assert f"parallel: {later}: judged nothing (later: code:source) in " in out
+    assert f"parallel: {none}: judged nothing (none: not a service) in " in out
+    assert f"parallel: {green}: green in " in out
+    assert f"parallel: {red}: red (exit 2) in " in out
+    assert (
+        "(gate time): 1 judged and green, 1 red, 1 not asked yet (later: each one's line names"
+        " what it waits for), 1 not applicable (none); slowest: "
+    ) in re.sub(r"\(\d+\.\ds of gate time\)", "(gate time)", out)
+    assert out.endswith(f"{red}: red (exit 2)\nparallel: red\n")
 
 
 def test_fail_fast_stops_the_running_and_names_what_never_started(

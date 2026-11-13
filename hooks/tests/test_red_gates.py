@@ -89,6 +89,25 @@ def test_a_red_gate_that_printed_nothing_is_still_named(tmp_path: Path) -> None:
     )
 
 
+def test_a_gate_that_judged_nothing_is_not_red_and_leaves_the_red_ones_whole(
+    tmp_path: Path,
+) -> None:
+    log = (
+        Tier(tmp_path)
+        .add("first", 3, "the first red gate")
+        .add("waits", 0, "later: code:source")
+        .add("second", 4, "the second red gate")
+        .log()
+    )
+    assert "judged nothing (later: code:source)" in log
+    report = red_gates.report(log)
+    assert report is not None
+    assert report.count("==>") == 2
+    assert "the first red gate\nparallel: " in report
+    assert "the second red gate\nparallel: " in report
+    assert "later:" not in report
+
+
 def test_a_header_before_the_previous_gate_belongs_to_another_gate() -> None:
     log = "==> a <==\nsaid a\nparallel: a: green in 1.0s\nparallel: a: red (exit 1) in 1.0s\n"
     assert red_gates.report(log) == "==> a <==\nparallel: a: red (exit 1) in 1.0s"
