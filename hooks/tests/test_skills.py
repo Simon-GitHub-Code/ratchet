@@ -229,6 +229,46 @@ def test_the_conjecture_asks_every_open_fork_and_cites_what_it_built() -> None:
     assert "correct the criterion to follow their words" in conjecture
 
 
+def table_problems(table: str) -> list[str]:
+    """Each row of a *What you asked for* table that slips a choice past the owner."""
+    problems: list[str] = []
+    for line in table.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) != 3 or cells[0] in ("You said", "---"):
+            continue
+        said, became = cells[0], re.match(r"\*\*([a-z ]+)\*\*", cells[1])
+        kind = became.group(1) if became else ""
+        if said.startswith("(left open)"):
+            problems.append(f"{said}: a fork left open is asked, never written as {kind}")
+        elif said.startswith("(not asked)") and kind not in ("assumed", "added"):
+            problems.append(f"{said}: nothing the owner said can be {kind}")
+        elif kind == "added" and not said.startswith("(not asked)"):
+            problems.append(f"{said}: an addition is something the owner never mentioned")
+    return problems
+
+
+def test_the_conjecture_table_never_slips_a_product_choice_in_as_added() -> None:
+    # Why: in three of three sampled runs the table wrote "(left open)" under the owner's column
+    # and **added** under the outcome; one made a product choice (Undo after re-pasting the same
+    # address is refused) without the owner. The skill's own example must hold the rule.
+    verifier = (
+        "| (left open) a double click | **added**: changes nothing | stories 14, 20 |\n"
+        "| (left open) Undo after re-pasting the same address | **added**: refused | Notes |\n"
+    )
+    assert len(table_problems(verifier)) == 2
+    conjecture = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
+    example = conjecture.split("```markdown\n| You said | Became | Where |\n", 1)[1]
+    example = example.split("```", 1)[0]
+    assert table_problems(example) == []
+    kinds = set(re.findall(r"\| \*\*([a-z ]+)\*\*", example))
+    assert kinds == {"built", "assumed", "added", "left out"}
+    assert "(not asked)" in example
+    text = " ".join(conjecture.split())
+    assert "A `(left open)` row is never marked **added** or **assumed**" in text
+    assert "the table you write holds none" in text
+    assert "An addition that changes what the user sees, keeps or can do is not **added**" in text
+
+
 def test_adopt_asks_a_repository_with_code_whether_others_reach_it() -> None:
     # Why: ADR 0028. The route's sign patterns miss a deploy job in release.yml and a production
     # address in .env.example, so a deployed project with neither was asked nothing.
