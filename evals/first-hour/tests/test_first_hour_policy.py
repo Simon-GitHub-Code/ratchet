@@ -57,6 +57,12 @@ def test_a_tool_not_on_the_list_is_denied_whatever_its_input(tool: str) -> None:
     assert tool in decision.why
 
 
+def test_the_result_tool_of_an_agent_with_a_schema_is_allowed() -> None:
+    """A workflow agent with a `schema` returns through `StructuredOutput`; the run refused it."""
+    result = {"ok": True, "number": 1, "failures": []}
+    assert policy.decide("StructuredOutput", result, SCOPE) == policy.ALLOW
+
+
 def test_every_tool_the_cli_is_told_to_refuse_is_off_the_list() -> None:
     assert not set(policy.DENIED_TOOLS) & set(policy.TOOLS)
 
