@@ -543,3 +543,177 @@ def test_a_repository_whose_runner_is_not_just_is_not_read_for_recipes(repo: Pat
     remove(JUSTFILE)(repo)
     assert [line.split(":")[0] for line in red(repo)] == [BINDING]
     assert conformance.definition(TEMPLATE_JUSTFILE, "no-such-recipe") == ()
+
+
+LATER = "| rolls back safely | later: code:stored-format |"
+GATE = "docs/process/binding.md"
+
+
+def waiting(root: Path, question: str, trigger: str) -> None:
+    """Rebind a Gates row to ``later: <trigger>``, whatever its Tool cell said."""
+    path = root / BINDING
+    text = path.read_text(encoding="utf-8")
+    cell = rf"^(\| {re.escape(question)} \|)[^|]*\|"
+    bound = re.sub(cell, rf"\1 later: {trigger} |", text, flags=re.MULTILINE)
+    assert bound != text, question
+    path.write_text(bound, encoding="utf-8")
+
+
+def test_a_row_may_wait_for_its_trigger_and_needs_no_bite_until_it_is_bound(repo: Path) -> None:
+    # Why: ADR 0028. The pristine binding bound `rolls back safely` to `later:` and planted no
+    # bite for it; binding it to a tool without one is red.
+    assert LATER in (repo / BINDING).read_text(encoding="utf-8")
+    assert red(repo) == []
+    replace(BINDING, LATER, "| rolls back safely | a tool |")(repo)
+    assert red(repo) == [
+        (
+            "quality/bites.toml: gate 'rollback' (rolls back safely) is bound to a tool and no"
+            " [[bite]] plants a fault for it"
+        )
+    ]
+
+
+def test_a_later_row_with_the_wrong_trigger_names_the_right_one(repo: Path) -> None:
+    replace(BINDING, LATER, "| rolls back safely | later: life:deployed |")(repo)
+    assert red(repo) == [
+        (
+            f"{GATE}: gate 'rolls back safely' says `later: life:deployed`, but its trigger is"
+            " `code:stored-format`: write `later: code:stored-format`"
+        )
+    ]
+
+
+def test_a_gate_that_waits_is_not_an_answered_gate_for_the_runner() -> None:
+    binding = (
+        "# Binding\n\n## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| a | a tool | 1 | | `just a` |\n| b | later: code:listener | 1 | | `just b` |\n"
+        "| c | none: no | 1 | | `just c` |\n"
+    )
+    assert conformance.answered_gates(binding) == {"a"}
+
+
+def test_the_telemetry_section_is_asked_while_one_of_its_rows_is_bound(repo: Path) -> None:
+    heading = "## Telemetry"
+    replace(BINDING, heading, "## Spans")(repo)
+    assert red(repo) == [f"{GATE}: has no '{heading}' section, or it is empty"]
+    waiting(repo, "telemetry arrives", "life:deployed")
+    assert red(repo) == [f"{GATE}: has no '{heading}' section, or it is empty"]
+    waiting(repo, "telemetry emitted", "code:entry-point")
+    assert red(repo) == []
+
+
+def test_both_sections_may_go_while_all_their_rows_wait(repo: Path) -> None:
+    rows = {
+        "telemetry emitted": "code:entry-point",
+        "telemetry arrives": "life:deployed",
+        "changed flags off and on": "code:flag",
+        "no flag past its removal date": "code:flag",
+    }
+    for row, trigger in rows.items():
+        waiting(repo, row, trigger)
+    replace(BINDING, "## Telemetry", "## Spans")(repo)
+    replace(BINDING, "## Feature flags", "## Toggles")(repo)
+    assert red(repo) == []
+
+
+def test_the_life_events_line_is_asked_for_and_names_only_known_events(repo: Path) -> None:
+    line = "- Life events: none\n"
+    replace(BINDING, line, "")(repo)
+    [found] = conformance.findings(repo)
+    assert found.path == BINDING
+    assert found.problem.startswith("has no '- Life events:' line; add it beside")
+    assert found.add == ("- Life events: none",)
+    replace(BINDING, "- Application types: cli\n", f"- Application types: cli\n{line}")(repo)
+    replace(BINDING, line, "- Life events: deployed, `irreplaceable-data`\n")(repo)
+    assert red(repo) == []
+    replace(BINDING, "deployed,", "famous,")(repo)
+    assert red(repo) == [
+        (
+            f"{GATE}: '- Life events:' names 'famous'; the events are"
+            " deployed, irreplaceable-data, depended-on"
+        )
+    ]
+
+
+def test_the_triggers_table_is_asked_for_with_the_template_s_text(repo: Path) -> None:
+    replace(BINDING, "## Triggers\n", "## Hunches\n")(repo)
+    [found] = conformance.findings(repo)
+    assert found.problem.startswith("has no '## Triggers' section; add the template's")
+    assert found.add[0] == "## Triggers"
+    assert "| Kind | Paths | Pattern |" in found.add
+
+
+def test_the_triggers_table_needs_a_row_per_kind_a_question_of_the_types_names(
+    repo: Path,
+) -> None:
+    assert "| listener |" not in (repo / BINDING).read_text(encoding="utf-8")
+    assert red(repo) == [], "a command line tool is never asked about listeners"
+    replace(BINDING, "| config-read | none: the self-test has none | |\n", "")(repo)
+    [line] = red(repo)
+    assert line.startswith(f"{GATE}: the Triggers table has no row for kind 'config-read', which")
+    assert "(a read of a setting from the environment or a configuration file)" in line
+    assert line.endswith("write its Paths, or `none: <reason>`")
+
+
+def test_a_triggers_row_with_an_unknown_kind_or_a_bad_pattern_is_red(repo: Path) -> None:
+    none = "| flag | none: the self-test has none | |"
+    replace(BINDING, none, "| flag | none: no | |\n| gizmo | x | |")(repo)
+    [line] = red(repo)
+    assert line.startswith(f"{GATE}: the Triggers table names kind 'gizmo', which the catalogue")
+    replace(BINDING, "| gizmo | x | |", "| gizmo | x | ( |")(repo)
+    [line] = red(repo)
+    assert line.startswith(f"{GATE}: Triggers row 'gizmo' has a Pattern that is not a regex")
+
+
+def test_a_dropped_row_of_the_catalogue_prints_the_template_row_to_add(repo: Path) -> None:
+    row = "| backup restores | a tool | weekly | | `just restore-drill` |\n"
+    replace(BINDING, row, "")(repo)
+    found = conformance.findings(repo)[0]
+    assert found.problem == (
+        "the Gates table has no 'backup restores' row; a row is bound or none, never dropped;"
+        " add the template's row, bound or `later: <trigger>`"
+    )
+    assert found.add == ("| backup restores | | weekly | | `just restore-drill` |",)
+
+
+def test_every_question_of_the_catalogue_has_a_row_in_the_template_binding() -> None:
+    for question in conformance.application_types.load().questions:
+        assert conformance.template_gate_row(question).startswith(f"| {question} |")
+
+
+def record(name: str, text: str) -> Mutate:
+    return write(f"docs/incidents/{name}.md", text)
+
+
+def test_an_incident_record_names_a_bite_the_registry_holds(repo: Path) -> None:
+    assert red(repo) == [], "no incident, nothing to hold"
+    record("2026-01-01-outage", "# Outage\n\nbite: lint/a fault\n")(repo)
+    assert red(repo) == []
+    record("2026-01-02-slow", "# Slow\n\n- bite: `fmt-check/a fault`\n- bite: lint/a fault\n")(repo)
+    assert red(repo) == []
+    record("2026-01-03-none", "# None\n\nIt broke.\n")(repo)
+    record("2026-01-04-gone", "# Gone\n\nbite: lint/never planted\n")(repo)
+    assert red(repo) == [
+        (
+            "docs/incidents/2026-01-03-none.md: names no bite; add a line `bite: <gate>/<name>`"
+            " for a [[bite]] of quality/bites.toml that reproduces it"
+        ),
+        (
+            "docs/incidents/2026-01-04-gone.md: names bite 'lint/never planted', which"
+            " quality/bites.toml does not hold"
+        ),
+    ]
+
+
+def test_the_incidents_gate_judges_the_records_alone(
+    repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remove("GLOSSARY.md")(repo)
+    assert conformance.main(["conformance.py", "--incidents", str(repo)]) == 0
+    assert capsys.readouterr().out == "incidents: green (0 failures)\n"
+    record("2026-01-03-none", "# None\n")(repo)
+    assert conformance.main(["conformance.py", "--incidents", str(repo)]) == 1
+    assert capsys.readouterr().out.splitlines()[-1] == "incidents: red (1 failures)"
+    monkeypatch.chdir(repo)
+    assert conformance.main(["conformance.py", "--incidents"]) == 1
