@@ -26,7 +26,7 @@ disable-model-invocation: true
    | "Treat as one" | **built**, corrected: the spec had counted only identical addresses as the same | Story 13a, `## Answers` |
    | "Refuse it and leave the list as it is" | **built**: Undo after pasting a saved address again is refused | Story 14, `## Answers` |
    | "articles I found on my phone" | **left out**: saving from the phone waits for a later ticket | Out of Scope |
-   | (not asked) newest saved at the top | **assumed**: changing it later is a small change of its own and nothing you saved changes; say "oldest first" | Story 4 |
+   | (not asked) newest saved at the top | **assumed**: changing it later is a small ticket of its own, and nothing you saved changes; say "oldest first" | Story 4 |
    | (not asked) a title's markup shown as plain text | **added**: a hostile page cannot run anything in your list | Story 8 |
    ```
 

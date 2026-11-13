@@ -14,7 +14,7 @@ Load the `ratchet:method` skill first. A question is asked once its trigger fire
 
 Nothing (ADR 0034). The tools are yours to choose, as are how a recipe is written, where a check lives and what its fault plants.
 
-- **Assume** `safeguard.tools`: the tool step 2 chooses for each row, looked up now, with the one you passed over. The hand-over lists it under **Assumed** in plain words, with what changing it later costs, such as `Checks for leaked passwords: gitleaks, current and fast. Changing later: a decision record, the check rewired and shown to work again, and one protected file you approve. Say "use another" to switch.`
+- **Assume** `safeguard.tools`: the tool step 2 chooses for each row, looked up now, with the one you passed over. The hand-over lists it under **Assumed** in plain words, with what changing it later costs (what changes, roughly how much work, and whether anything built is redone), such as ``Security checks on new code: Semgrep, current and it reads this language; CodeQL was the other choice. Changing later: a change of its own that an agent makes while you are away (the tool swapped, its settings written, the check rewired and shown to catch a planted mistake again, a decision record). It touches protected files: the list of checks, the list of planted mistakes, the tool's settings and their saved copy, the record of which tool runs each check, and the package list and its lock file where the tool is installed through them. You approve the files it edits directly, swap the old settings file for the new one on the protected list, run `just settings`, and the merge is yours. Nothing built is redone; the code changes only where the new tool objects to it. Say "use another" to switch.``
 
 ## Steps
 
