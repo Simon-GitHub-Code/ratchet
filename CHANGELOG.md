@@ -1,16 +1,5 @@
 # Changelog
 
-## Unreleased
-
-The graceful-stop gate is no longer red on a service that stops correctly. It was red on Ratchet's own CI, and on a busy host on 268 to 669 of 1500 runs of a correct draining service (none now), for two reasons. A server stops by closing its listener, and the kernel resets every connection still waiting on it to be accepted: the service never took those, but the smoke counted each as a dropped request. And the signal was timed from the command's start, so a runner slow to start the smoke signalled before a request was sent, and the smoke was red under its floor.
-
-### Graceful stop
-
-- `with_service.py --graceful` holds the service's listeners across the stop. Just before the signal it takes a copy of each TCP listener of the service's process group (`pidfd_getfd`), which keeps it open after the service closes it. Once no process of the service holds a listener, the gate accepts each connection still waiting there, writes its ports to `RATCHET_STOPPING`, and only then resets it. A new module, `scripts/listeners.py`, does this.
-- `load_smoke.py --until-stopped` does not count a reset after the signal that the gate wrote down, and says how many it left out. Every other reset after the signal is a request the service accepted and dropped, and is red, whenever the request started. A refused connect after the signal is expected as before. The client's port is known from the moment its connect starts, so a reset that lands before the connect returns is matched too.
-- Where the gate cannot take the copy (not Linux 5.6 or later, ptrace forbidden, a listener shut down rather than closed), every reset after the signal counts, as before, and the smoke says why on the line before its verdict.
-- `--signal-after` counts from when the command creates `RATCHET_SENDING`, which `load_smoke.py --until-stopped` does once its workers start, not from the command's start. A command that has not started sending within `--timeout` is red, and the service is not signalled.
-
 ## 0.11.0
 
 A safeguard arrives with the first thing it guards, and the first one is free (ADR 0028). The method is for hobby and solo projects first, and it must never stop the owner in the middle of an idea. Telemetry, flags, security, load and the new reliability questions are no longer asked of every repository from the first commit. Each question carries a trigger, and is asked once that trigger fires.
