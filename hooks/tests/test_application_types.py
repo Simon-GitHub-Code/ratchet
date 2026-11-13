@@ -84,7 +84,6 @@ def test_a_missing_line_an_empty_one_and_an_unknown_type_are_red() -> None:
 
 
 def test_a_missing_or_unknown_types_line_hides_no_row_that_does_not_need_it() -> None:
-    # Why: the report is whole in one pass; only a `none` cell waits to learn what applies.
     dropped = [
         f"the Gates table has no '{question}' row; a row is bound or none, never dropped"
         for question in ("a11y", "load", "tests")

@@ -122,10 +122,7 @@ class Catalogue:
         )
 
     def owed_by(self, event: str) -> tuple[str, ...]:
-        """The questions whose trigger names ``event``, in the catalogue's order (ADR 0028).
-
-        A question that joins the event to a kind of code is in the list: it waits for the kind too.
-        """
+        """The questions whose trigger names ``event``, in the catalogue's order (ADR 0028)."""
         return tuple(
             question
             for question, trigger in self.triggers.items()
@@ -153,11 +150,7 @@ class Catalogue:
     def row_problem(
         self, row: tuple[str, str], kinds: AbstractSet[str] | None, adrs: AbstractSet[int]
     ) -> str | None:
-        """What is wrong with one Gates row for a repository of these types.
-
-        ``kinds`` is ``None`` when the binding declares none that the catalogue has: a ``none``
-        cell is then judged once they are.
-        """
+        """What is wrong with one Gates row for a repository of these types."""
         question, tool = row
         if not tool:
             return f"gate '{question}' names no tool: an empty Tool cell is an unfinished binding"
@@ -208,11 +201,7 @@ class Catalogue:
     def failures(
         self, binding: str, rows: Sequence[tuple[str, str]], adrs: AbstractSet[int]
     ) -> Iterator[str]:
-        """What a binding's types line and Gates rows get wrong; ``rows`` are (question, tool).
-
-        Why: a rule that waits for another to be met hides what it would then ask. Only a ``none``
-        cell needs the types, to say whether the row applies, so everything else is asked now.
-        """
+        """What a binding's types line and Gates rows get wrong; ``rows`` are (question, tool)."""
         problem = self.types_problem(binding)
         if problem:
             yield problem

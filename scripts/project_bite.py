@@ -105,6 +105,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
 REGISTRY = Path("quality/bites.toml")
+MISSING = "missing; every gate bound to a tool needs a [[bite]]"
 PATCHES = "quality/bites/"
 # Why: a path in one of these defines what a gate runs or judges. A threshold or a register entry
 # is what a gate compares against, and `ratchet-lowered` and the snapshots judge those.
@@ -434,13 +435,7 @@ def inspect(root: Path) -> tuple[list[Row], Registry, list[str], list[str]]:
     """The binding's rows, the registry, what is wrong in it, and each gate it leaves unproven."""
     rows = gate_rows(gatelib.read_text(root / gatelib.BINDING) or "")
     source = gatelib.read_text(root / REGISTRY)
-    # Why: a registry that is not there holds no bite, so every bound gate lacks one, and the
-    # report says so now instead of after the registry is created.
-    registry, problems = (
-        read_registry(source)
-        if source is not None
-        else (Registry(), ["missing; every gate bound to a tool needs a [[bite]]"])
-    )
+    registry, problems = read_registry(source) if source is not None else (Registry(), [MISSING])
     problems += misplaced(root, rows, registry.bites)
     gaps = list(unproven(rows, registry.bites, application_types.load()))
     return rows, registry, problems, gaps

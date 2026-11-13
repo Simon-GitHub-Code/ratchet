@@ -330,3 +330,12 @@ def test_created_gives_the_text_to_an_absent_file_and_leaves_any_other_alone(
     assert want(None) == text
     assert want(current) == current
     assert want(want(None)) == want(None)
+
+
+@given(text=st.text(), current=st.one_of(st.none(), st.text()))
+def test_chained_wants_apply_in_order_and_an_empty_chain_changes_nothing(
+    text: str, current: str | None
+) -> None:
+    assert gatelib.chained()(current) == (current or "")
+    both = gatelib.chained(gatelib.created(text), lambda made: f"{made}!")
+    assert both(current) == f"{text if current is None else current}!"

@@ -15,9 +15,10 @@ import tempfile
 import tomllib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import application_types
+import gatelib
 import hooks_installed
 import justfile_text
 import markdown_text
@@ -88,7 +89,6 @@ WEEKLY_SHAPE = (
     ("schedule:", "runs the weekly gates on a schedule"),
     ("issues: write", "may open the issue a finding gets"),
 )
-DOOR_KINDS = ("change", "rewrite", "removal")
 DOOR_MEANINGS = {
     "change": "a path whose every change is final, such as a migration or infrastructure code",
     "rewrite": "a file the default branch holds that is never rewritten, such as a golden fixture",
@@ -127,7 +127,8 @@ OPERABILITY_SECTIONS = {
 }
 INCIDENTS = Path("docs/incidents")
 INCIDENT_BITE = re.compile(r"^[-*\s]*bite:\s*`?(.+?)`?\s*$", re.IGNORECASE | re.MULTILINE)
-TRIGGERS_PATH = "docs/process/binding.md"
+BINDING_PATH = str(gatelib.BINDING)
+ENTRY_POINTS_SECTION = "## Entry points"
 FLAG_REGISTRY = Path("flags.toml")
 FIRST_CELL = re.compile(r"^\|\s*([^|]+?)\s*\|", re.MULTILINE)
 WORKFLOWS = Path(".github/workflows")
@@ -140,6 +141,7 @@ ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
 GLOSSARY_PLACEHOLDER = "<project>"
 PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
+PIN_RECIPE = "plugin-pin"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
@@ -179,7 +181,8 @@ MIN_REASON = 10
 MIN_REGISTER_REASON = 20
 TEMPLATES = Path(__file__).resolve().parents[1] / "skills"
 ADOPT_TEMPLATES = TEMPLATES / "adopt/templates"
-AGENTS_TEMPLATE = TEMPLATES / "init/templates/AGENTS.md"
+INIT_TEMPLATES = TEMPLATES / "init/templates"
+AGENTS_TEMPLATE = INIT_TEMPLATES / "AGENTS.md"
 ASKING = "## Asking the owner"
 RUNS_JUST = re.compile(r"^just\s+@?([A-Za-z_][\w-]*)")
 INCLUDES = re.compile(r"^(?:import|mod)\b", re.MULTILINE)
@@ -195,7 +198,7 @@ class Auto:
     """A fix the upgrade makes itself: one line for the report, and the text it makes of a file."""
 
     does: str
-    want: Callable[[str | None], str]
+    want: gatelib.Want
 
 
 @dataclass(frozen=True)
@@ -220,14 +223,17 @@ Fix = Auto | Agent | Owner
 
 @dataclass(frozen=True)
 class Finding:
-    """One thing the repository lacks: the file, what is wrong, and who fixes it.
-
-    The conformance gate prints the first two on one line; ``upgrade.py`` prints the fix too.
-    """
+    """One thing the repository lacks: the file, what is wrong, and who fixes it."""
 
     path: str
     problem: str
     fix: Fix
+
+    def __post_init__(self) -> None:
+        """Refuse an auto fix under ``guards/``: the manifest says who may edit those paths."""
+        if isinstance(self.fix, Auto) and PurePosixPath(self.path).parts[:1] == ("guards",):
+            message = f"{self.path}: an upgrade never writes under guards/ by itself"
+            raise ValueError(message)
 
     def __str__(self) -> str:
         """The one line the conformance gate prints."""
@@ -251,12 +257,68 @@ def owner(
     return Finding(path, problem, Owner(ask, evidence, then))
 
 
+def edit(  # noqa: PLR0913, PLR0917 # -- a finding is its path, problem and fix, and the edit is three more
+    path: str,
+    problem: str,
+    does: str,
+    want: gatelib.Want,
+    current: str | None,
+    solved: Callable[[str], bool],
+    *,
+    otherwise: Fix,
+) -> Finding:
+    """A finding the upgrade fixes when ``want`` turns ``current`` into a text that ``solved``."""
+    after = want(current)
+    fixes = (current is None or after != current) and solved(after)
+    return Finding(path, problem, Auto(does, want) if fixes else otherwise)
+
+
 def read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
+def template_file(path: str) -> str:
+    """A file of the adopt templates, or of the init templates when adopt has none."""
+    return read(ADOPT_TEMPLATES / path) or read(INIT_TEMPLATES / path) or ""
+
+
+def headings(text: str) -> tuple[str, ...]:
+    """The ``## `` headings of a Markdown text, in order."""
+    return tuple(line.rstrip() for line in text.splitlines() if line.startswith("## "))
+
+
+def whole_file(path: str, problem: str, template: str | None = None) -> Finding:
+    """A file missing that the template supplies whole, under ``template`` or its own path."""
+    want = gatelib.created(template_file(template or path))
+    return edit(
+        path, problem, "add the template's file", want, None, lambda _: True, otherwise=Agent()
+    )
+
+
+def kept_directory(path: str) -> Finding:
+    """A directory the method keeps, which the template supplies as an empty ``.gitkeep``."""
+    return whole_file(f"{path}/.gitkeep", f"the directory {path} is missing")
+
+
+def missing_section(
+    path: str, problem: str, heading: str, *, text: str, template_text: str
+) -> Finding:
+    """A ``## `` section the template has and the file lacks: the upgrade adds it verbatim."""
+    block = heading + markdown_text.section(template_text, heading).rstrip()
+    want = markdown_text.with_section(heading, block, headings(template_text))
+    return edit(
+        path,
+        problem,
+        f"add the template's '{heading}' section",
+        want,
+        text,
+        lambda after: heading in headings(after),
+        otherwise=Agent(start=(heading, *block.splitlines()[1:])),
+    )
+
+
 def template_definition(name: str) -> tuple[str, ...]:
-    return justfile_text.definition(read(ADOPT_TEMPLATES / "justfile") or "", name)
+    return justfile_text.definition(template_file("justfile"), name)
 
 
 def check_agent_instructions(root: Path) -> Iterable[Finding]:
@@ -269,16 +331,9 @@ def check_agent_instructions(root: Path) -> Iterable[Finding]:
     elif "ratchet:method" not in text:
         yield agent("AGENTS.md: does not tell agents to load the ratchet:method skill")
     elif ASKING not in text:
-        yield Finding(
-            name,
-            f"has no '{ASKING}' section; copy it from the template AGENTS.md",
-            Agent(
-                start=(
-                    ASKING,
-                    "",
-                    markdown_text.section(read(AGENTS_TEMPLATE) or "", ASKING).strip(),
-                )
-            ),
+        problem = f"has no '{ASKING}' section; copy it from the template AGENTS.md"
+        yield missing_section(
+            name, problem, ASKING, text=text, template_text=read(AGENTS_TEMPLATE) or ""
         )
 
 
@@ -348,72 +403,113 @@ def check_adr(number: int, path: Path, rel: Path) -> Iterable[Finding]:
         yield agent(f"{rel}: ADR 0001 records adopting the Ratchet method")
 
 
+def template_binding() -> str:
+    return template_file(BINDING_PATH)
+
+
 def template_rows() -> dict[str, tuple[str, str]]:
-    """The template binding's Entry points rows by name: the row as written, and its command."""
-    body = markdown_text.section(
-        read(ADOPT_TEMPLATES / "docs/process/binding.md") or "", "## Entry points"
-    )
+    """The template binding's Entry points rows by name, in its order: the row and its command."""
+    body = markdown_text.section(template_binding(), ENTRY_POINTS_SECTION)
     return {
         match.group(1): (line, match.group(2))
         for line in body.splitlines()
-        if (match := markdown_text.TABLE_ROW.match(line))
+        if (match := markdown_text.TABLE_ROW.match(line)) and match.group(1) in ENTRY_POINTS
     }
 
 
 def template_gate_row(question: str) -> str:
     """The template binding's Gates row for a question (a test holds that it has one)."""
-    body = markdown_text.section(
-        read(ADOPT_TEMPLATES / "docs/process/binding.md") or "", "## Gates"
-    )
+    body = markdown_text.section(template_binding(), "## Gates")
     prefix = f"| {question} |"
     return next(line for line in body.splitlines() if line.startswith(prefix))
 
 
 def template_block(heading: str) -> tuple[str, ...]:
     """A section of the template binding, heading included, for the upgrade report to copy."""
-    text = read(ADOPT_TEMPLATES / "docs/process/binding.md") or ""
-    return (heading, *markdown_text.section(text, heading).rstrip().splitlines())
+    return (heading, *markdown_text.section(template_binding(), heading).rstrip().splitlines())
+
+
+def entry_points(text: str) -> dict[str, str]:
+    """The Entry points table of a binding: each entry point and its command."""
+    return dict(markdown_text.table_cells(markdown_text.section(text, ENTRY_POINTS_SECTION)))
+
+
+def entry_row(name: str, rows: dict[str, tuple[str, str]], text: str, *, on_just: bool) -> Finding:
+    """A missing Entry points row, which the upgrade adds when the runner is ``just``."""
+    row = rows[name][0]
+    problem = (
+        f"the Entry points table has no row for '{name}'; add the template's row {row},"
+        " with your runner's command"
+    )
+    if not on_just:
+        return Finding(BINDING_PATH, problem, Agent(start=(row,)))
+    return edit(
+        BINDING_PATH,
+        problem,
+        f"add the template's row for '{name}'",
+        markdown_text.with_row(ENTRY_POINTS_SECTION, row, tuple(rows)),
+        text,
+        lambda made: name in entry_points(made),
+        otherwise=Agent(start=(row,)),
+    )
+
+
+def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
+    """A recipe an entry point runs and the justfile lacks, copied when it stands on its own."""
+    text = template_file("justfile")
+    start = justfile_text.definition(text, recipe)
+    problem = (
+        f"has no `{recipe}` recipe, which the binding's entry point '{name}' runs; copy it from"
+        " the template justfile"
+    )
+    reasons = justfile_text.unmet(text, justfile, recipe)
+    if reasons:
+        return Finding(
+            "justfile",
+            f"{problem}; it cannot be copied as it stands: {'; '.join(reasons)}",
+            Agent(start=start),
+        )
+    return edit(
+        "justfile",
+        problem,
+        f"copy the template's `{recipe}` recipe",
+        justfile_text.with_recipe(text, recipe),
+        justfile,
+        lambda made: justfile_text.defines_recipe(made, recipe),
+        otherwise=Agent(start=start),
+    )
 
 
 def check_entry_points(root: Path, text: str) -> Iterable[Finding]:
     """Every entry point has a row naming its command, and a ``just`` command has its recipe."""
-    commands = dict(markdown_text.table_cells(markdown_text.section(text, "## Entry points")))
+    commands = entry_points(text)
     rows = template_rows()
+    on_just = all(command.strip("`").split()[:1] == ["just"] for command in commands.values())
     justfile = read(root / "justfile")
     for name in ENTRY_POINTS:
         command = commands.get(name)
         if command is None:
-            row, command = rows[name]
-            yield Finding(
-                "docs/process/binding.md",
-                f"the Entry points table has no row for '{name}'; add the template's row {row},"
-                " with your runner's command",
-                Agent(start=(row,)),
-            )
+            command = rows[name][1]
+            yield entry_row(name, rows, text, on_just=on_just)
         elif not command or "<" in command:
-            yield agent(f"docs/process/binding.md: entry point '{name}' names no command")
+            yield agent(f"{BINDING_PATH}: entry point '{name}' names no command")
             continue
         recipe = RUNS_JUST.match(command.strip("`"))
         if justfile is None or INCLUDES.search(justfile) or recipe is None:
             continue
         if not justfile_text.defines_recipe(justfile, recipe.group(1)):
-            yield Finding(
-                "justfile",
-                f"has no `{recipe.group(1)}` recipe, which the binding's entry point '{name}'"
-                " runs; copy it from the template justfile",
-                Agent(start=template_definition(recipe.group(1))),
-            )
+            yield missing_recipe(justfile, recipe.group(1), name)
 
 
 def check_binding(root: Path) -> Iterable[Finding]:
-    text = read(root / "docs/process/binding.md")
+    text = read(root / BINDING_PATH)
     if text is None:
-        yield agent("docs/process/binding.md: missing")
+        yield agent(f"{BINDING_PATH}: missing")
         return
     yield from check_entry_points(root, text)
     gates = markdown_text.section(text, "## Gates")
     if not gates:
-        yield agent("docs/process/binding.md: has no '## Gates' section")
+        yield agent(f"{BINDING_PATH}: has no '## Gates' section")
         return
     # Why: ADR 0017. The types decide which rows apply; a row that applies is bound or an
     # accepted gap, and one that does not may say which type the repository is not.
@@ -430,22 +526,20 @@ def check_binding(root: Path) -> Iterable[Finding]:
         question = dropped.get(failure)
         if question is not None:
             yield Finding(
-                "docs/process/binding.md",
+                BINDING_PATH,
                 f"{failure}; add the template's row, bound or `later: <trigger>`",
                 Agent(start=(template_gate_row(question),), then=bite_follows(question)),
             )
         elif failure == typing:
-            yield agent(f"docs/process/binding.md: {failure}", then=triggers_follow(catalogue))
+            yield agent(f"{BINDING_PATH}: {failure}", then=triggers_follow(catalogue))
         else:
-            yield agent(f"docs/process/binding.md: {failure}")
+            yield agent(f"{BINDING_PATH}: {failure}")
 
 
 def bite_follows(question: str) -> tuple[str, ...]:
     """What binding a Gates row asks next: a bite of the gate it names, unless it waits."""
     gate = next(
-        row.gate
-        for row in project_bite.gate_rows(read(ADOPT_TEMPLATES / "docs/process/binding.md") or "")
-        if row.question == question
+        row.gate for row in project_bite.gate_rows(template_binding()) if row.question == question
     )
     needs = (
         f"binding '{question}' to a tool needs a [[bite]] for gate '{gate}' in"
@@ -490,7 +584,7 @@ def declared_events(root: Path, text: str) -> Iterable[Finding]:
     match = application_types.EVENTS.search(text)
     if match is None:
         yield Finding(
-            TRIGGERS_PATH,
+            BINDING_PATH,
             "has no '- Life events:' line; add it beside '- Application types:'. Without it every"
             " event counts as declared; `none` turns off the owner's review of one-way doors and"
             " unflagged surface and the critic, so a project that is live writes its events"
@@ -502,7 +596,7 @@ def declared_events(root: Path, text: str) -> Iterable[Finding]:
     for name in sorted(application_types.life_events(text)):
         if name not in known:
             yield agent(
-                f"{TRIGGERS_PATH}: '- Life events:' names '{name}'; the events are"
+                f"{BINDING_PATH}: '- Life events:' names '{name}'; the events are"
                 f" {', '.join(known)}"
             )
 
@@ -513,14 +607,14 @@ def check_triggers(root: Path) -> Iterable[Finding]:
     Why: ADR 0028. The ``triggers`` gate counts instances with this table, so every kind a question
     asked of the repository's types names must have a row, or the trigger could never fire.
     """
-    text = read(root / TRIGGERS_PATH)
+    text = read(root / BINDING_PATH)
     if text is None:
         return
     yield from declared_events(root, text)
     catalogue = application_types.load()
     if triggers.SECTION.strip() not in text:
         yield Finding(
-            TRIGGERS_PATH,
+            BINDING_PATH,
             "has no '## Triggers' section; add the template's, one row per kind of code a question"
             " asked of these types names (ADR 0028)",
             Agent(start=template_block("## Triggers")),
@@ -528,17 +622,17 @@ def check_triggers(root: Path) -> Iterable[Finding]:
         return
     kinds, problems = triggers.parse(text)
     for problem in problems:
-        yield agent(f"{TRIGGERS_PATH}: {problem}")
+        yield agent(f"{BINDING_PATH}: {problem}")
     for name in kinds:
         if name not in catalogue.kinds:
             yield agent(
-                f"{TRIGGERS_PATH}: the Triggers table names kind '{name}', which the catalogue"
+                f"{BINDING_PATH}: the Triggers table names kind '{name}', which the catalogue"
                 f" lacks; the kinds are {', '.join(catalogue.kinds)}"
             )
     types = set(application_types.declared(text) or [])
     for name in sorted(catalogue.kinds_asked(types) - set(kinds)):
         yield agent(
-            f"{TRIGGERS_PATH}: the Triggers table has no row for kind '{name}', which a question"
+            f"{BINDING_PATH}: the Triggers table has no row for kind '{name}', which a question"
             f" asked of these types is triggered by ({catalogue.kinds[name]});"
             " write its Paths, or `none: <reason>`"
         )
@@ -550,31 +644,30 @@ def later(tool: str) -> bool:
 
 
 def check_operability(root: Path) -> Iterable[Finding]:
-    text = read(root / "docs/process/binding.md") or ""
+    text = read(root / BINDING_PATH) or ""
     asked = set(FIRST_CELL.findall(markdown_text.section(text, "## Gates")))
-    catalogued = application_types.load().questions
+    types_check_asks = application_types.load().questions
     for question in OPERABILITY_QUESTIONS:
-        # Why: the types check asks every question the catalogue holds, once.
-        if text and question not in asked and question not in catalogued:
-            yield agent(f"docs/process/binding.md: the Gates table has no '{question}' row")
+        if text and question not in asked and question not in types_check_asks:
+            yield agent(f"{BINDING_PATH}: the Gates table has no '{question}' row")
     waiting = {row.question for row in project_bite.gate_rows(text) if later(row.tool)}
     for heading, questions in OPERABILITY_SECTIONS.items():
         if text and not waiting >= set(questions) and markdown_text.empty_body(text, heading):
-            yield agent(f"docs/process/binding.md: has no '{heading}' section, or it is empty")
+            yield agent(f"{BINDING_PATH}: has no '{heading}' section, or it is empty")
     if not (root / FLAG_REGISTRY).is_file():
-        yield agent(f"{FLAG_REGISTRY}: missing; an empty file declares no flags")
+        yield whole_file(str(FLAG_REGISTRY), "missing; an empty file declares no flags")
 
 
 def pr_template_path(root: Path) -> str:
-    text = read(root / "docs/process/binding.md") or ""
+    text = read(root / BINDING_PATH) or ""
     match = PR_TEMPLATE_LINE.search(text)
     return match.group(1) if match else DEFAULT_PR_TEMPLATE
 
 
 def check_speed(root: Path) -> Iterable[Finding]:
-    text = read(root / "docs/process/binding.md") or ""
+    text = read(root / BINDING_PATH) or ""
     if text and SPEED_SECTION not in text:
-        yield agent(f"docs/process/binding.md: has no '{SPEED_SECTION}' section (ceilings, shards)")
+        yield agent(f"{BINDING_PATH}: has no '{SPEED_SECTION}' section (ceilings, shards)")
     elif text:
         yield from check_speed_parts(markdown_text.section(text, SPEED_SECTION))
     workflows = root / WORKFLOWS
@@ -602,13 +695,11 @@ def check_speed_parts(body: str) -> Iterable[Finding]:
         value = stated.get(part, "")
         if part == "Shards" and not SHARD_COUNT.fullmatch(value):
             yield agent(
-                "docs/process/binding.md: the Speed section needs '- Shards: N', a whole "
+                f"{BINDING_PATH}: the Speed section needs '- Shards: N', a whole "
                 "number alone on its line, 1 on day one; CI reads it"
             )
         elif not value or value.startswith("<"):
-            yield agent(
-                f"docs/process/binding.md: the Speed section does not say how '{part}' is met"
-            )
+            yield agent(f"{BINDING_PATH}: the Speed section does not say how '{part}' is met")
 
 
 def check_manifest(root: Path) -> Iterable[Finding]:
@@ -654,12 +745,12 @@ def check_doors(root: Path) -> Iterable[Finding]:
     if doors is None:
         return
     kinds = {door.get("on", "change") for door in doors}
-    for kind in DOOR_KINDS:
+    for kind, meaning in DOOR_MEANINGS.items():
         if kind not in kinds:
             yield owner(
                 f"guards/manifest.toml: no [[door]] with on = '{kind}'; the merge judge reads"
                 " the one-way doors from it",
-                f"Does this repository have a door of kind '{kind}', {DOOR_MEANINGS[kind]}? Add a"
+                f"Does this repository have a door of kind '{kind}', {meaning}? Add a"
                 f" [[door]] with on = '{kind}' and its paths, or `none = \"<the reason>\"`.",
             )
     for door in doors:
@@ -685,7 +776,7 @@ def forge_workflow(
         return
     text = read(root / WORKFLOWS / name)
     if text is None:
-        yield agent(f"{WORKFLOWS / name}: missing; {unmet}")
+        yield whole_file(str(WORKFLOWS / name), f"missing; {unmet}")
         return
     for marker, meaning in shape:
         if marker not in text:
@@ -706,17 +797,21 @@ def check_weekly_workflow(root: Path) -> Iterable[Finding]:
 
 def check_plugin_pin(root: Path) -> Iterable[Finding]:
     """The plugin version has one home, the binding; the workflows and the justfile follow it."""
-    binding = read(root / "docs/process/binding.md")
+    binding = read(root / BINDING_PATH)
     if binding is None:
         return
     pin = plugin_pin.pinned(binding)
     if pin is None:
         line = plugin_pin.line_for(plugin_pin.PLUGIN)
-        yield Finding(
-            "docs/process/binding.md",
+        yield edit(
+            BINDING_PATH,
             "no '- Ratchet plugin: <version> at <commit>' line; add under '## Runner', for the"
             f" plugin in use: {line}",
-            Agent(start=(line,)),
+            "add the pin line for the plugin in use",
+            plugin_pin.with_pin(line),
+            binding,
+            lambda made: plugin_pin.pinned(made) is not None,
+            otherwise=Agent(start=(line,)),
         )
     yield from check_pin_recipe(root)
     if pin is None:
@@ -730,18 +825,19 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
                 "nothing holds it to the commit the binding pins"
             )
         for ref in sorted(refs - {pin.commit}):
-            yield agent(
-                f"{WORKFLOWS / name}: checks the plugin out at '{ref}', not the commit the "
-                f"binding pins ({pin.commit})"
+            yield edit(
+                str(WORKFLOWS / name),
+                f"checks the plugin out at '{ref}', not the commit the binding pins ({pin.commit})",
+                f"set the plugin `ref` to the pinned {pin.commit[:12]}",
+                plugin_pin.with_refs(pin.commit),
+                text,
+                lambda made: plugin_pin.refs(made) <= {pin.commit},
+                otherwise=Agent(),
             )
 
 
 def check_toolchain(root: Path) -> Iterable[Finding]:
-    """A workflow whose toolchain setup is still the template's placeholder.
-
-    Why: a job that builds the project fails at its first step without a toolchain, and the
-    template's own workflows, copied in by an upgrade, say nothing about it.
-    """
+    """A workflow whose toolchain setup is still the template's placeholder."""
     for path in sorted((root / WORKFLOWS).glob("*.yml")):
         template = read(ADOPT_TEMPLATES / ".github/workflows" / path.name)
         if template is None:
@@ -769,14 +865,35 @@ def after_marker(lines: list[str]) -> dict[int, str]:
 
 def check_pin_recipe(root: Path) -> Iterable[Finding]:
     justfile = read(root / "justfile")
-    if justfile is not None and "plugin_pin.py" not in justfile:
-        yield Finding(
-            "justfile",
-            "no tier runs plugin_pin.py, so a local run can use a plugin other than the one the"
-            " binding pins; copy `plugin-pin` from the template justfile, as the first dependency"
-            " of each tier",
-            Agent(start=template_definition("plugin-pin")),
-        )
+    if justfile is None or "plugin_pin.py" in justfile:
+        return
+    text = template_file("justfile")
+    problem = (
+        "no tier runs plugin_pin.py, so a local run can use a plugin other than the one the"
+        " binding pins; copy `plugin-pin` from the template justfile, as the first dependency"
+        " of each tier"
+    )
+    start = template_definition(PIN_RECIPE)
+    reasons = justfile_text.unmet(text, justfile, PIN_RECIPE)
+    if reasons or justfile_text.defines_recipe(justfile, PIN_RECIPE):
+        yield Finding("justfile", problem, Agent(start=start, then=reasons))
+        return
+    wants = [
+        justfile_text.with_recipe(text, PIN_RECIPE),
+        *(
+            justfile_text.with_first_dependency(recipe, PIN_RECIPE)
+            for recipe in justfile_text.first_dependents(text, PIN_RECIPE)
+        ),
+    ]
+    yield edit(
+        "justfile",
+        problem,
+        f"copy the template's `{PIN_RECIPE}` recipe and run it first in each tier",
+        gatelib.chained(*wants),
+        justfile,
+        lambda made: "plugin_pin.py" in made,
+        otherwise=Agent(start=start),
+    )
 
 
 def answered_gates(binding: str) -> set[str]:
@@ -789,11 +906,7 @@ def answered_gates(binding: str) -> set[str]:
 
 
 def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
-    """A tier list the tier workflows read, which the justfile does not define.
-
-    Why: the template's workflows read the lists, so one that exists gets them whether or not it
-    reads them yet; asking only when it did hid four items until the workflow was replaced.
-    """
+    """A tier list the tier workflows read, which the justfile does not define."""
     for workflow, lists in TIER_LISTS.items():
         if not (root / WORKFLOWS / workflow).is_file():
             continue
@@ -807,6 +920,39 @@ def check_tier_lists(root: Path, justfile: str) -> Iterable[Finding]:
                 )
 
 
+def asks_hooks(ratchet: str) -> bool:
+    """Whether the ``ratchet`` recipe asks if a commit would run tier 0."""
+    return "hooks-installed" in ratchet or "hooks_installed.py" in ratchet
+
+
+def ratchet_asks(justfile: str) -> Finding:
+    """The ``ratchet`` recipe that does not ask first: the template's first line is added."""
+    text = template_file("justfile")
+    start = template_definition("ratchet")
+    problem = (
+        "the `ratchet` recipe raises the thresholds without asking whether a commit would run"
+        " tier 0; make `just hooks-installed` its first line, as the template's is"
+    )
+    first = next(line for line in start if line[:1].isspace()).strip()
+    stands = justfile_text.defines_recipe(justfile, "hooks-installed")
+    reasons = () if stands else justfile_text.unmet(text, justfile, "hooks-installed")
+    if reasons:
+        return Finding("justfile", problem, Agent(start=start, then=reasons))
+    want = gatelib.chained(
+        justfile_text.with_recipe(text, "hooks-installed"),
+        justfile_text.with_first_line("ratchet", first),
+    )
+    return edit(
+        "justfile",
+        problem,
+        "ask `hooks-installed` first in the `ratchet` recipe, as the template does",
+        want,
+        justfile,
+        lambda made: asks_hooks("\n".join(justfile_text.definition(made, "ratchet"))),
+        otherwise=Agent(start=start),
+    )
+
+
 def check_runner(root: Path) -> Iterable[Finding]:
     """What the template justfile's tiers rely on, read only where a justfile is the runner."""
     justfile = read(root / "justfile")
@@ -814,7 +960,7 @@ def check_runner(root: Path) -> Iterable[Finding]:
         return
     yield from check_tier_lists(root, justfile)
     code = justfile_text.code_of(justfile)
-    gates = answered_gates(read(root / "docs/process/binding.md") or "")
+    gates = answered_gates(read(root / BINDING_PATH) or "")
     if gates & OVER_THE_CHANGE and "changed.py" not in code:
         yield Finding(
             "justfile",
@@ -825,13 +971,8 @@ def check_runner(root: Path) -> Iterable[Finding]:
             Agent(start=template_definition("changed")),
         )
     ratchet = "\n".join(justfile_text.definition(justfile, "ratchet"))
-    if ratchet and "hooks-installed" not in ratchet and "hooks_installed.py" not in ratchet:
-        yield Finding(
-            "justfile",
-            "the `ratchet` recipe raises the thresholds without asking whether a commit would run"
-            " tier 0; make `just hooks-installed` its first line, as the template's is",
-            Agent(start=template_definition("ratchet")),
-        )
+    if ratchet and not asks_hooks(ratchet):
+        yield ratchet_asks(justfile)
     if "--jobs" in code and "RATCHET_JOBS" not in code:
         yield Finding(
             "justfile",
@@ -886,7 +1027,7 @@ def check_other_hooks(name: str, text: str, install: str | None) -> Iterable[Fin
         yield agent(f"{name}: {WHOLE_TIER0}")
     if install is None:
         yield agent(
-            "docs/process/binding.md: the `- Commit hooks:` line names no command after "
+            f"{BINDING_PATH}: the `- Commit hooks:` line names no command after "
             "', installed by', so a red `hooks-installed` cannot say what the owner runs"
         )
 
@@ -911,10 +1052,45 @@ def check_commit_hooks(root: Path) -> Iterable[Finding]:
         )
 
 
+def settings_finding(
+    found: settings_rules.Drift, manifest: dict[str, object], text: str | None
+) -> Finding:
+    """One line of settings drift: the plugin regenerates its rules, the project's are asked."""
+    if found.fault is settings_rules.Fault.OWN:
+        rule = found.line.split("'")[1]
+        return owner(
+            found.line,
+            f"Is `{rule}` a rule you chose to keep? No version of the plugin generates it, so"
+            " every regeneration keeps it and this check stays red while it is there. Remove it"
+            f" from {settings_rules.SETTINGS}, or add the path it guards to a group of"
+            f" {settings_rules.MANIFEST} so that the plugin generates it.",
+        )
+    if found.fault is settings_rules.Fault.MANIFEST:
+        return agent(found.line)
+    path, _, problem = found.line.partition(": ")
+    broken = settings_rules.parse_settings(text) is None
+    return edit(
+        path,
+        problem,
+        "regenerate the permission rules from the manifest, keeping the project's own",
+        settings_rules.regenerated(manifest),
+        text,
+        lambda made: (
+            found
+            not in settings_rules.drifts_of(manifest, settings_rules.parse_settings(made) or {})
+        ),
+        otherwise=Agent(
+            then=(f"{path} is not a JSON object, so it is left as it is",) if broken else ()
+        ),
+    )
+
+
 def check_settings(root: Path) -> Iterable[Finding]:
     if (root / settings_rules.MANIFEST).is_file():
-        for line in settings_rules.drift(root):
-            yield agent(line)
+        manifest = settings_rules.read_manifest(root) or {}
+        text = settings_rules.settings_text(root)
+        for found in settings_rules.drifts(root):
+            yield settings_finding(found, manifest, text)
 
 
 def check_quality(root: Path) -> Iterable[Finding]:
@@ -953,7 +1129,11 @@ def check_register(data: dict[str, object]) -> Iterable[Finding]:
 def check_bites(root: Path) -> Iterable[Finding]:
     # Why: ADR 0020. The method ships no tool, so the repository shows each gate it bound going
     # red on a planted fault; a gate with no bite, or a collection never shown empty, is unproven.
-    return (agent(line) for line in project_bite.failures(root))
+    for line in project_bite.failures(root):
+        if line == f"{project_bite.REGISTRY}: {project_bite.MISSING}":
+            yield whole_file(str(project_bite.REGISTRY), project_bite.MISSING)
+        else:
+            yield agent(line)
 
 
 def check_incidents(root: Path) -> Iterable[Finding]:
@@ -984,7 +1164,7 @@ def check_incidents(root: Path) -> Iterable[Finding]:
 def check_disputes(root: Path) -> Iterable[Finding]:
     directory = root / "docs/disputes"
     if not directory.is_dir():
-        yield agent("docs/disputes: missing")
+        yield kept_directory("docs/disputes")
         return
     for _, path in numbered_files(directory):
         text = path.read_text(encoding="utf-8")
@@ -1000,18 +1180,23 @@ def check_features(root: Path) -> Iterable[Finding]:
     # Why: the pipeline's spec role writes docs/features/<slug>/spec.md; the directory is the
     # method's. The feature's input is a tracker ticket, which the feature preflight checks.
     if not (root / "docs/features").is_dir():
-        yield agent("docs/features: missing")
+        yield kept_directory("docs/features")
 
 
 def check_pr_template(root: Path) -> Iterable[Finding]:
     relative = pr_template_path(root)
     text = read(root / relative)
+    wanted = template_file(DEFAULT_PR_TEMPLATE)
     if text is None:
-        yield agent(f"{relative}: missing (the binding names the pull request template)")
+        yield whole_file(
+            relative, "missing (the binding names the pull request template)", DEFAULT_PR_TEMPLATE
+        )
         return
     for heading in PR_SECTIONS:
         if not re.search(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE):
-            yield agent(f"{relative}: has no '{heading}' section")
+            yield missing_section(
+                relative, f"has no '{heading}' section", heading, text=text, template_text=wanted
+            )
 
 
 # Why: the pin comes first, since an upgrade reads the plugin's commit from it.
@@ -1052,10 +1237,12 @@ def failures(root: Path) -> list[str]:
 
 
 def run(root: Path) -> int:
-    found = failures(root)
-    for line in found:
-        print(line)
-    print(f"conformance: {'red' if found else 'green'} ({len(found)} failures)")
+    found = findings(root)
+    for finding in found:
+        print(finding)
+    autos = sum(isinstance(finding.fix, Auto) for finding in found)
+    fixer = f"; `upgrade.py --apply` makes {autos} of them" if autos else ""
+    print(f"conformance: {'red' if found else 'green'} ({len(found)} failures{fixer})")
     return 1 if found else 0
 
 
@@ -1082,7 +1269,7 @@ def mutations() -> list[Mutation]:
 
 def trigger_mutations() -> list[Mutation]:
     """The `later:` cells, the Life events line, the Triggers table and the incident records."""
-    binding = "docs/process/binding.md"
+    binding = BINDING_PATH
     later = "| rolls back safely | later: life:deployed and code:stored-format |"
 
     def incident(text: str) -> Callable[[Path], None]:
@@ -1137,19 +1324,19 @@ def upgrade_mutations() -> list[Mutation]:
         ("AGENTS.md without the Asking the owner section", rewrite("AGENTS.md", ASKING, "## Ask")),
         (
             "binding without the tier0-tree row",
-            rewrite("docs/process/binding.md", "| tier0-tree | `just tier0-tree` |\n", ""),
+            rewrite(BINDING_PATH, "| tier0-tree | `just tier0-tree` |\n", ""),
         ),
         (
             "binding without a row the catalogue gained",
             rewrite(
-                "docs/process/binding.md",
+                BINDING_PATH,
                 "| backup restores | a tool | weekly | | `just restore-drill` |\n",
                 "",
             ),
         ),
         (
             "binding without the triggers entry point",
-            rewrite("docs/process/binding.md", "| triggers | `just triggers` |\n", ""),
+            rewrite(BINDING_PATH, "| triggers | `just triggers` |\n", ""),
         ),
         ("justfile without a recipe the binding names", rewrite("justfile", "bite-one gate:", "")),
         (
@@ -1184,50 +1371,31 @@ def upgrade_mutations() -> list[Mutation]:
 
 
 def artefact_mutations() -> list[Mutation]:
-    def strip_stanza(root: Path) -> None:
-        path = root / "AGENTS.md"
-        path.write_text(path.read_text().replace("ratchet:method", "nothing"))
-
-    def drop_entry_point(root: Path) -> None:
-        path = root / "docs/process/binding.md"
-        path.write_text(path.read_text().replace("| conformance |", "| conform |"))
-
-    def drop_pr_section(root: Path) -> None:
-        path = root / DEFAULT_PR_TEMPLATE
-        path.write_text(path.read_text().replace("## Guard paths", "## Guards"))
-
-    def ci_with_the_plugin_at_a_placeholder(root: Path) -> None:
-        path = root / WORKFLOWS / "ci.yml"
-        path.write_text(path.read_text().replace("0" * 40, PLUGIN_CHECKOUT_PLACEHOLDER, 1))
-
-    def glossary_naming_the_placeholder(root: Path) -> None:
-        path = root / "GLOSSARY.md"
-        path.write_text(path.read_text().replace("the project", GLOSSARY_PLACEHOLDER, 1))
-
+    ci = str(WORKFLOWS / "ci.yml")
     return [
-        ("AGENTS.md without the method stanza", strip_stanza),
-        ("binding without the conformance entry point", drop_entry_point),
-        ("pull-request template missing a section", drop_pr_section),
+        ("AGENTS.md without the method stanza", rewrite("AGENTS.md", "ratchet:method", "nothing")),
+        (
+            "binding without the conformance entry point",
+            rewrite(BINDING_PATH, "| conformance |", "| conform |"),
+        ),
+        (
+            "pull-request template missing a section",
+            rewrite(DEFAULT_PR_TEMPLATE, "## Guard paths", "## Guards"),
+        ),
         (
             "CI workflow checking the plugin out at a placeholder",
-            ci_with_the_plugin_at_a_placeholder,
+            rewrite(ci, "0" * 40, PLUGIN_CHECKOUT_PLACEHOLDER, count=1),
         ),
-        ("glossary still naming <project>", glossary_naming_the_placeholder),
+        (
+            "glossary still naming <project>",
+            rewrite("GLOSSARY.md", "the project", GLOSSARY_PLACEHOLDER, count=1),
+        ),
     ]
 
 
 def rebind(old: str, new: str) -> Callable[[Path], None]:
     """A mutation that rewrites one piece of the binding."""
-
-    def mutate(root: Path) -> None:
-        path = root / "docs/process/binding.md"
-        text = path.read_text()
-        if old not in text:
-            message = f"the self-test's binding has no {old!r} to mutate"
-            raise SystemExit(message)
-        path.write_text(text.replace(old, new))
-
-    return mutate
+    return rewrite(BINDING_PATH, old, new)
 
 
 def type_mutations() -> list[Mutation]:
@@ -1265,17 +1433,8 @@ def type_mutations() -> list[Mutation]:
 
 
 def reregister(old: str, new: str) -> Callable[[Path], None]:
-    """A mutation that rewrites one piece of the bite registry."""
-
-    def mutate(root: Path) -> None:
-        path = root / project_bite.REGISTRY
-        text = path.read_text()
-        if old not in text:
-            message = f"the self-test's registry has no {old!r} to mutate"
-            raise SystemExit(message)
-        path.write_text(text.replace(old, new, 1))
-
-    return mutate
+    """A mutation that rewrites the first piece of the bite registry that matches."""
+    return rewrite(str(project_bite.REGISTRY), old, new, count=1)
 
 
 def bite_mutations() -> list[Mutation]:
@@ -1305,18 +1464,6 @@ def bite_mutations() -> list[Mutation]:
 
 
 def speed_mutations() -> list[Mutation]:
-    def ci_without_concurrency(root: Path) -> None:
-        path = root / WORKFLOWS / "ci.yml"
-        path.write_text(path.read_text().replace("concurrency:", "serial:"))
-
-    def ci_without_cache(root: Path) -> None:
-        path = root / WORKFLOWS / "deep.yml"
-        path.write_text(path.read_text().replace("cache", "store"))
-
-    def ci_without_a_shard_matrix(root: Path) -> None:
-        path = root / WORKFLOWS / "ci.yml"
-        path.write_text(path.read_text().replace(SHARD_MATRIX, "matrix.part"))
-
     stated = "stated for this stack"
     ci, deep = str(WORKFLOWS / "ci.yml"), str(WORKFLOWS / "deep.yml")
     return [
@@ -1329,46 +1476,30 @@ def speed_mutations() -> list[Mutation]:
             rebind(f"- Parallel: {stated}", "- Parallel: <how>"),
         ),
         ("Speed section with no shard count", rebind("- Shards: 1", "- Shards: a few")),
-        ("CI workflow without concurrency control", ci_without_concurrency),
-        ("CI workflow without a cache", ci_without_cache),
-        ("CI workflow without a shard matrix", ci_without_a_shard_matrix),
+        ("CI workflow without concurrency control", rewrite(ci, "concurrency:", "serial:")),
+        ("CI workflow without a cache", rewrite(deep, "cache", "store")),
+        ("CI workflow without a shard matrix", rewrite(ci, SHARD_MATRIX, "matrix.part")),
     ]
 
 
 def operability_mutations() -> list[Mutation]:
-    def drop_row(root: Path) -> None:
-        path = root / "docs/process/binding.md"
-        path.write_text(path.read_text().replace("| telemetry emitted |", "| tracing |"))
-
-    def drop_section(root: Path) -> None:
-        path = root / "docs/process/binding.md"
-        path.write_text(path.read_text().replace("## Feature flags", "## Toggles"))
-
     def drop_flag_registry(root: Path) -> None:
         (root / FLAG_REGISTRY).unlink()
 
     return [
-        ("binding without the telemetry row", drop_row),
-        ("binding without a Feature flags section", drop_section),
+        (
+            "binding without the telemetry row",
+            rebind("| telemetry emitted |", "| tracing |"),
+        ),
+        ("binding without a Feature flags section", rebind("## Feature flags", "## Toggles")),
         ("repository without the flag registry", drop_flag_registry),
     ]
 
 
 def hook_mutations() -> list[Mutation]:
-    def hooks_without_commit_msg(root: Path) -> None:
-        path = root / COMMIT_HOOKS
-        path.write_text(path.read_text().replace("stages: [commit-msg]", "stages: [pre-push]"))
-
-    def hooks_running_the_whole_tier(root: Path) -> None:
-        path = root / COMMIT_HOOKS
-        path.write_text(path.read_text().replace("entry: just pre-commit", "entry: just tier0"))
-
-    def recipes_that_cannot_answer_the_probe(root: Path) -> None:
-        path = root / "justfile"
-        path.write_text(path.read_text().replace(hooks_installed.PROBE_ENV, "NO_PROBE"))
-
-    binding, named = "docs/process/binding.md", f"- Commit hooks: `{COMMIT_HOOKS}`"
-    renamed = rewrite(binding, named, "- Commit hooks: `lefthook.yml`, installed by `lefthook`")
+    hooks = str(COMMIT_HOOKS)
+    named = f"- Commit hooks: `{COMMIT_HOOKS}`"
+    renamed = rebind(named, "- Commit hooks: `lefthook.yml`, installed by `lefthook`")
 
     def another_mechanism_with_one_hook(root: Path) -> None:
         renamed(root)
@@ -1377,44 +1508,46 @@ def hook_mutations() -> list[Mutation]:
     return [
         ("binding naming commit hooks that are not there", renamed),
         ("another hook mechanism without the commit-msg hook", another_mechanism_with_one_hook),
-        ("commit hooks without the commit-msg stage", hooks_without_commit_msg),
-        ("commit hooks running the whole tier0", hooks_running_the_whole_tier),
-        ("hook recipes that cannot answer the probe", recipes_that_cannot_answer_the_probe),
+        (
+            "commit hooks without the commit-msg stage",
+            rewrite(hooks, "stages: [commit-msg]", "stages: [pre-push]"),
+        ),
+        (
+            "commit hooks running the whole tier0",
+            rewrite(hooks, "entry: just pre-commit", "entry: just tier0"),
+        ),
+        (
+            "hook recipes that cannot answer the probe",
+            rewrite("justfile", hooks_installed.PROBE_ENV, "NO_PROBE"),
+        ),
     ]
 
 
 def guard_mutations() -> list[Mutation]:
-    def unlock_harness(root: Path) -> None:
-        path = root / "guards/manifest.toml"
-        path.write_text(path.read_text().replace('edit = "deny"', 'edit = "ask"'))
-
-    def unbound_group(root: Path) -> None:
-        path = root / "guards/manifest.toml"
-        path.write_text(path.read_text().replace('paths = [\n    "quality/**",\n]', "paths = []"))
-
-    def settings_with_a_foreign_deny(root: Path) -> None:
-        path = root / settings_rules.SETTINGS
-        path.write_text(
-            path.read_text().replace(
-                '"Bash(gh label edit:*)",',
-                '"Bash(gh label edit:*)",\n      "Bash(gh label create:*)",',
-            )
-        )
-
-    def settings_missing_a_rule(root: Path) -> None:
-        path = root / settings_rules.SETTINGS
-        path.write_text(path.read_text().replace('      "Edit(/GLOSSARY-MAP.md)",\n', ""))
-
+    manifest, settings = "guards/manifest.toml", str(settings_rules.SETTINGS)
+    denied = '"Bash(gh label edit:*)",'
     return [
-        ("manifest with the harness unlocked", unlock_harness),
-        ("manifest with a group still unbound", unbound_group),
-        ("settings denying what the hook allows", settings_with_a_foreign_deny),
-        ("settings missing a manifest rule", settings_missing_a_rule),
+        (
+            "manifest with the harness unlocked",
+            rewrite(manifest, 'edit = "deny"', 'edit = "ask"'),
+        ),
+        (
+            "manifest with a group still unbound",
+            rewrite(manifest, 'paths = [\n    "quality/**",\n]', "paths = []"),
+        ),
+        (
+            "settings denying what the hook allows",
+            rewrite(settings, denied, denied + '\n      "Bash(gh label create:*)",'),
+        ),
+        (
+            "settings missing a manifest rule",
+            rewrite(settings, '      "Edit(/GLOSSARY-MAP.md)",\n', ""),
+        ),
     ]
 
 
-def rewrite(name: str, old: str, new: str) -> Callable[[Path], None]:
-    """A mutation that rewrites one piece of a template file, and refuses when it is gone."""
+def rewrite(name: str, old: str, new: str, *, count: int = -1) -> Callable[[Path], None]:
+    """A mutation that rewrites ``count`` pieces of a template file, and refuses when it is gone."""
 
     def mutate(root: Path) -> None:
         path = root / name
@@ -1422,7 +1555,7 @@ def rewrite(name: str, old: str, new: str) -> Callable[[Path], None]:
         if old not in text:
             message = f"the self-test's {name} has no {old!r} to mutate"
             raise SystemExit(message)
-        path.write_text(text.replace(old, new))
+        path.write_text(text.replace(old, new, count))
 
     return mutate
 
@@ -1453,7 +1586,7 @@ def merge_mutations() -> list[Mutation]:
         ),
         (
             "binding without the merge entry point",
-            rewrite("docs/process/binding.md", "| merge | `just merge` |\n", ""),
+            rewrite(BINDING_PATH, "| merge | `just merge` |\n", ""),
         ),
     ]
 
@@ -1474,13 +1607,13 @@ def weekly_mutations() -> list[Mutation]:
         ("weekly workflow whose toolchain was never set up", unset_toolchain),
         (
             "binding without the weekly entry point",
-            rewrite("docs/process/binding.md", "| weekly | `just weekly` |\n", ""),
+            rewrite(BINDING_PATH, "| weekly | `just weekly` |\n", ""),
         ),
     ]
 
 
 def pin_mutations() -> list[Mutation]:
-    binding, pinned = "docs/process/binding.md", "0" * 40
+    binding, pinned = BINDING_PATH, "0" * 40
     return [
         (
             "binding with the plugin pin unfilled",
@@ -1590,7 +1723,7 @@ def fill_placeholders(root: Path) -> None:
     path = root / "guards/manifest.toml"
     path.write_text(UNBOUND_GROUP.sub('paths = [\n    "bound/**",\n]', path.read_text()))
     settings_rules.regenerate(root)
-    binding = root / "docs/process/binding.md"
+    binding = root / BINDING_PATH
     binding.write_text(fill_binding(binding.read_text()))
     registry = root / project_bite.REGISTRY
     registry.write_text(registry.read_text() + fill_registry(binding.read_text()))

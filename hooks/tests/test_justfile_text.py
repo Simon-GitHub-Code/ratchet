@@ -351,16 +351,14 @@ def test_a_recipe_is_unmet_for_each_name_the_project_lacks_and_each_placeholder(
     assert unmet(UNMET_TEMPLATE, project, "fine") == ()
     assert unmet(UNMET_TEMPLATE, project, "fuzz") == ()
     assert unmet(UNMET_TEMPLATE, "", "fine") == (
-        "it names `ratchet_plugin`, which the justfile does not define",
+        "it needs `ratchet_plugin`, which the justfile does not define",
     )
     assert unmet(UNMET_TEMPLATE, project, "calls") == (
         "it computes `a + b`",
         'it calls `env_var("HOME")`',
     )
     assert unmet(UNMET_TEMPLATE, project, "needs") == (
-        "it names `notify`, which the justfile does not define",
-        "it names `other-recipe`, which the justfile does not define",
-        "it names `third`, which the justfile does not define",
+        "it needs `notify`, `other-recipe` and `third`, which the justfile does not define",
     )
     assert unmet(UNMET_TEMPLATE, project, "binds") == ("a `bind:` placeholder is in it",)
     assert unmet(UNMET_TEMPLATE, project, "boot") == ("the template has no recipe `boot`",)
@@ -427,28 +425,18 @@ def test_the_templates_recipes_a_released_justfile_can_be_given(release: str) ->
 def test_the_recipes_that_name_what_the_project_lacks_say_which(release: str) -> None:
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
     old = old_template(release)
-    named = "it names `{}`, which the justfile does not define".format
+    lacks = "it needs {}, which the justfile does not define".format
     assert justfile_text.unmet(template, old, "tier0-tree") == (
-        named("parallel"),
-        named("plugin-pin"),
-        named("serial0"),
-        named("tier0_tree_gates"),
+        lacks("`parallel`, `plugin-pin`, `serial0` and `tier0_tree_gates`"),
     )
     assert justfile_text.unmet(template, old, "check-fast") == (
-        named("parallel"),
-        named("plugin-pin"),
-        named("serial0"),
-        named("serial1"),
-        named("tier0_gates"),
-        named("tier1_gates"),
+        lacks("`parallel`, `plugin-pin`, `serial0`, `serial1`, `tier0_gates` and `tier1_gates`"),
     )
     assert justfile_text.unmet(template, old, "weekly") == (
-        named("parallel"),
-        named("plugin-pin"),
-        named("weekly_gates"),
+        lacks("`parallel`, `plugin-pin` and `weekly_gates`"),
     )
     assert justfile_text.unmet(template, old, "fmt-check") == ("a `bind:` placeholder is in it",)
-    assert justfile_text.unmet(template, old, "smoke") == (named("booted"),)
+    assert justfile_text.unmet(template, old, "smoke") == (lacks("`booted`"),)
 
 
 @pytest.mark.parametrize("release", sorted(adopted.RELEASES))
@@ -499,3 +487,8 @@ def test_a_project_justfile_edited_in_both_ways_still_loads(indent: str, tmp_pat
     assert done.returncode == 0, done.stderr
     assert "tier0: plugin-pin pre-commit" in project
     assert f"pre-commit:\n{indent}just plugin-pin\n{indent}echo" in project
+
+
+def test_the_recipes_that_run_a_dependency_first_are_found_in_the_template() -> None:
+    assert justfile_text.first_dependents(TEMPLATE, "plugin-pin") == ("tier0", "weekly")
+    assert justfile_text.first_dependents(TEMPLATE, "tier0") == ()

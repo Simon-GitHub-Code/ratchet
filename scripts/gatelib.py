@@ -34,16 +34,16 @@ BINDING = Path("docs/process/binding.md")
 # Why: `with_service.py` exports the URL it waited on, so a command run inside it can tell the
 # readiness route from the routes a user requests.
 READY_ENV = "RATCHET_READY"
-
-# Why: an edit the upgrade makes to one file: the text the file holds now (``None``: absent) to
-# the text it must hold. It reads nothing else, never drops a line it did not write and, applied
-# twice, changes nothing the second time.
-Want = Callable[[str | None], str]
 # Why: a path that exists only once ``with_service.py --graceful`` has sent the stop signal.
 STOPPING_ENV = "RATCHET_STOPPING"
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
+
+# Why: an edit the upgrade makes to one file: the text the file holds now (``None``: absent) to
+# the text it must hold. It reads nothing else, never drops a line it did not write and, applied
+# twice, changes nothing the second time.
+Want = Callable[[str | None], str]
 
 
 def git(root: Path, *args: str) -> str | None:
@@ -162,6 +162,18 @@ def read_text(path: Path) -> str | None:
     if b"\0" in data[:8000]:
         return None
     return data.decode("utf-8", errors="replace")
+
+
+def chained(*wants: Want) -> Want:
+    """The want that applies each of ``wants`` to the text the one before it made."""
+
+    def want(current: str | None) -> str:
+        text = current
+        for step in wants:
+            text = step(text)
+        return text or ""
+
+    return want
 
 
 def created(text: str) -> Want:

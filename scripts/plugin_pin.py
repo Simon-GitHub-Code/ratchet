@@ -32,10 +32,6 @@ from unless ``--plugin`` names another.
   workflow ``ref`` in one change. The binding and the workflows are guard paths, so the owner
   sees an upgrade.
 
-A file this plugin writes is read by the plugin CI runs. ``write_refusal`` therefore stops
-``settings_rules.py --write`` while the plugin in use is not the one CI pins, or while the pin and
-the workflows name more than one commit: a plugin CI does not run may judge, and never writes.
-
 Exit status: 0 green, 1 red.
 """
 
@@ -139,11 +135,7 @@ def with_refs(commit: str) -> gatelib.Want:
 
 
 def with_pin(line: str) -> gatelib.Want:
-    """The want that makes ``line`` the binding's pin line: replaced where it stands, else added.
-
-    A binding without the line gets it after the first paragraph under ``## Runner``, where the
-    template puts it, and one without that heading gets a ``## Runner`` section at its end.
-    """
+    """The want that makes ``line`` the binding's pin line: replaced where it stands, else added."""
 
     def pin(text: str | None) -> str:
         text = text or ""
@@ -176,17 +168,11 @@ def ci_commits(root: Path) -> set[str]:
 
 
 def write_refusal(root: Path, plugin: Path) -> str | None:
-    """Why ``plugin`` must not write a file CI reads, or ``None`` when it may.
-
-    CI checks the plugin out at the pin and at each workflow ``ref``, and judges the file a
-    script wrote with that plugin. A repository naming no commit is free to write. One naming
-    more than one is an upgrade half done, and the plugin in use is the one CI runs only when it
-    is that commit, or a copy with no history of the pinned version.
-    """
+    """Why ``plugin`` must not write a file CI reads, or ``None`` when it may."""
     commits = ci_commits(root)
     if not commits:
         return None
-    used, home = commit_of(plugin), f"python3 {plugin / 'scripts/upgrade.py'} --apply"
+    used = commit_of(plugin)
     pin = pinned(gatelib.read_text(root / gatelib.BINDING))
     if commits == {used} or (
         len(commits) == 1 and used is None and pin and version_of(plugin) == pin.version
@@ -197,15 +183,21 @@ def write_refusal(root: Path, plugin: Path) -> str | None:
         return (
             f"the pin and the workflows name {len(commits)} plugin commits ({named}), so an"
             " upgrade is half done and a file written now would suit one of them only. Finish it"
-            f" with `{home}`, or point RATCHET_PLUGIN at a checkout of the commit CI should run"
+            f" with `{upgrade_command(plugin)}`, or point RATCHET_PLUGIN at a checkout of the"
+            " commit CI should run"
         )
     (commit,) = commits
     return (
         f"CI runs the plugin at {commit[:12]} and this one is {in_use(plugin)}, so a file it"
         " writes may be one CI rejects. Run it from a checkout of that commit, by pointing"
         " RATCHET_PLUGIN at it, or move the pin, the workflow refs and this file together with"
-        f" `{home}`"
+        f" `{upgrade_command(plugin)}`"
     )
+
+
+def upgrade_command(plugin: Path) -> str:
+    """The command that moves a repository to ``plugin``: the pin, the workflow refs, the rules."""
+    return f"python3 {plugin / 'scripts/upgrade.py'} --apply"
 
 
 def in_use(plugin: Path) -> str:
@@ -240,7 +232,7 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
     version, commit = version_of(plugin), commit_of(plugin)
     used = in_use(plugin)
     home = gatelib.BINDING
-    apply = f"python3 {plugin / 'scripts/upgrade.py'} --apply"
+    apply = upgrade_command(plugin)
     standing = relation(pin, plugin)
     if pin is None:
         absent = f"{home}: no `- Ratchet plugin: <version> at <commit>` line"

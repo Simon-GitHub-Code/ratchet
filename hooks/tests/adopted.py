@@ -1,10 +1,4 @@
-"""Adopted repositories as an earlier plugin's adopt templates left them, built from its history.
-
-Each is the init and adopt templates at a release commit with the placeholders filled as adoption
-filled them, the permission rules written by that release's own ``settings_rules.py``, and two
-pieces of the project's own: a setup step in ``deep.yml`` and a command in the ``bite`` recipe,
-which an upgrade must keep. Nothing here comes from a real project.
-"""
+"""Adopted repositories as an earlier plugin's adopt templates left them, built from its history."""
 
 import atexit
 import functools
@@ -107,11 +101,7 @@ def adopted(version: str) -> Path:
 
 @functools.cache
 def half_done() -> Path:
-    """A 0.9.2 adoption whose permission rules a newer plugin rewrote: the pin did not move.
-
-    Its workflows still check the plugin out at the 0.9.2 commit, so CI runs 0.9.2's
-    ``settings-check`` against rules only a newer plugin writes, and main is red.
-    """
+    """A 0.9.2 adoption whose permission rules a newer plugin rewrote: the pin did not move."""
     scratch = Path(tempfile.mkdtemp(prefix="ratchet-half-done-"))
     atexit.register(shutil.rmtree, scratch, ignore_errors=True)
     root = scratch / "repo"

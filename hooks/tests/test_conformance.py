@@ -294,7 +294,10 @@ def test_claude_md_stands_in_for_agents_md_and_a_glossary_map_for_the_glossary(
             write("quality/mutation-register.toml", "survivor = 3\n"),
             "quality/mutation-register.toml: 'survivor' is not an array of tables",
         ),
-        (remove("docs/disputes"), "docs/disputes: missing"),
+        (
+            remove("docs/disputes"),
+            "docs/disputes/.gitkeep: the directory docs/disputes is missing",
+        ),
         (
             write("docs/disputes/0001-gate.md", "- Status: maybe\n"),
             "docs/disputes/0001-gate.md: needs '- Status: open|upheld|rejected'",
@@ -433,10 +436,8 @@ def test_an_entry_point_whose_recipe_is_missing_names_the_recipe_to_copy(repo: P
         )
     ]
     [finding] = conformance.findings(repo)
-    assert start(finding)[-2:] == (
-        "hooks-install:",
-        '    python3 "{{ratchet_plugin}}/scripts/hooks_install.py"',
-    )
+    assert isinstance(finding.fix, conformance.Auto)
+    assert finding.fix.does == "copy the template's `hooks-install` recipe"
     replace(JUSTFILE, "set shell", 'import "more.just"\n\nset shell')(repo)
     assert red(repo) == [], "a justfile that imports another is not read for recipes"
 
@@ -566,8 +567,6 @@ def test_a_tier_list_may_be_empty_or_exported(repo: Path) -> None:
 
 
 def test_a_tier_list_is_asked_wherever_a_tier_workflow_exists(repo: Path) -> None:
-    # Why: the template's workflows read the lists, so an upgrade that replaces an old workflow
-    # must find them already asked for; asking only of one that read them hid four items.
     names = ("tier1_gates", "tier1_sharded", "tier2_gates", "tier2_sharded")
     for name in names:
         without_variable(repo, name)
@@ -756,7 +755,6 @@ def test_a_missing_types_line_names_the_triggers_each_type_will_ask(repo: Path) 
 
 
 def test_nothing_hides_a_gates_row_behind_the_types_line(tmp_path: Path) -> None:
-    # Why: an upgrade reports once, so the rows 0.11 asks of an 0.8 adoption show before its types.
     root = adopted.copy(adopted.adopted("0.8.2"), tmp_path / "repo")
 
     def gates() -> list[str]:
@@ -790,8 +788,6 @@ WEEKLY = ".github/workflows/weekly.yml"
 def test_a_workflow_with_the_toolchain_placeholder_in_front_of_the_template_s_step_is_red(
     repo: Path,
 ) -> None:
-    # Why: an upgrade copies the template's workflow in, and a job with no toolchain fails at its
-    # first step with nothing in the report.
     replace(WEEKLY, conformance.TOOLCHAIN_STEP, conformance.TOOLCHAIN_PLACEHOLDER)(repo)
     [found] = conformance.findings(repo)
     assert found.path == WEEKLY

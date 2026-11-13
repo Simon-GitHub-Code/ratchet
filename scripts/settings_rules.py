@@ -22,8 +22,7 @@ Usage: ``settings_rules.py [--root DIR] [--check | --write]``. ``--check`` (the 
 one line per rule missing from or foreign to the lists and exits 1 on any. ``--write`` regenerates
 the two lists and keeps every other key and every rule of the project's own. It refuses while the
 manifest cannot be mirrored, while ``settings.json`` is not a JSON object, and while the plugin in
-use is not the one CI runs (``plugin_pin.write_refusal``): the file is read by CI's plugin, which
-rejects rules only a newer plugin writes. ``upgrade.py --apply`` moves the pin with the rules.
+use is not the one CI runs (``plugin_pin.write_refusal``).
 """
 
 from __future__ import annotations
@@ -32,8 +31,9 @@ import argparse
 import json
 import sys
 import tomllib
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import plugin_pin
 
@@ -172,32 +172,60 @@ def listed(settings: dict[str, object], key: str) -> list[str]:
     return [v for v in values if isinstance(v, str)] if isinstance(values, list) else []
 
 
-def drift(root: Path) -> list[str]:
-    """One line per manifest fault, missing rule or foreign rule; empty when settings mirror."""
+class Fault(Enum):
+    """What kind of drift a line reports, which says who may settle it."""
+
+    MANIFEST = "manifest"
+    MISSING = "missing"
+    MISPLACED = "misplaced"
+    OWN = "own"
+
+
+class Drift(NamedTuple):
+    """One line ``--check`` prints, and the kind of fault it is."""
+
+    line: str
+    fault: Fault
+
+
+def drifts(root: Path) -> list[Drift]:
+    """Each manifest fault, missing rule and foreign rule, with its kind; empty when they mirror."""
     manifest = read_manifest(root)
     if manifest is None:
-        return [f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"]
+        line = f"{MANIFEST}: missing or not TOML, so no permission rule can be derived"
+        return [Drift(line, Fault.MANIFEST)]
+    return drifts_of(manifest, read_settings(root))
+
+
+def drifts_of(manifest: dict[str, object], settings: dict[str, object]) -> list[Drift]:
+    """The drift of ``settings`` from what ``manifest`` asks for."""
     (deny, ask), problems = rules(manifest)
-    settings = read_settings(root)
+    found = [Drift(problem, Fault.MANIFEST) for problem in problems]
     for key, expected in (("deny", deny), ("ask", ask)):
         actual = listed(settings, key)
-        problems.extend(
-            f"{SETTINGS}: '{r}' is missing from {key}" for r in expected if r not in actual
+        found.extend(
+            Drift(f"{SETTINGS}: '{r}' is missing from {key}", Fault.MISSING)
+            for r in expected
+            if r not in actual
         )
-        problems.extend(
-            f"{SETTINGS}: '{r}' in {key} mirrors no manifest pattern"
+        found.extend(
+            Drift(
+                f"{SETTINGS}: '{r}' in {key} mirrors no manifest pattern",
+                Fault.MISPLACED if plugin_writes(r, manifest) else Fault.OWN,
+            )
             for r in actual
             if r not in expected
         )
-    return problems
+    return found
 
 
-def generated(rule: str, manifest: dict[str, object]) -> bool:
-    """Whether some version of the plugin writes ``rule`` for this manifest, in either list.
+def drift(root: Path) -> list[str]:
+    """One line per manifest fault, missing rule or foreign rule; empty when settings mirror."""
+    return [found.line for found in drifts(root)]
 
-    An ``Edit`` rule counts for any pattern of any group, whatever the group's ``edit`` is now:
-    an earlier mapping put it in the other list, or gave an append group an ``ask``.
-    """
+
+def plugin_writes(rule: str, manifest: dict[str, object]) -> bool:
+    """Whether some version of the plugin writes ``rule`` for this manifest, in either list."""
     groups = manifest.get("group")
     patterns = {
         edit_rule(pattern)
@@ -215,16 +243,12 @@ def own_rules(settings: dict[str, object], manifest: dict[str, object]) -> list[
         (key, rule)
         for key in ("deny", "ask")
         for rule in listed(settings, key)
-        if not generated(rule, manifest)
+        if not plugin_writes(rule, manifest)
     ]
 
 
 def regenerated(manifest: dict[str, object]) -> gatelib.Want:
-    """The want over ``settings.json`` text, which leaves text that is not a JSON object as it is.
-
-    It holds the plugin's deny and ask lists, the project's own rules after them in the list they
-    stood in, and every other key as it was.
-    """
+    """The want over ``settings.json`` text, which leaves text that is not a JSON object alone."""
     (deny, ask), _ = rules(manifest)
     ours = {"deny": deny, "ask": ask}
 

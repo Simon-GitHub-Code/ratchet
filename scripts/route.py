@@ -644,8 +644,8 @@ def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
     return [
         (
             f"the Ratchet plugin in use is {plugin_pin.version_of(plugin)}, newer than the"
-            f" {pin.version} the binding pins: run `python3 {plugin / 'scripts/upgrade.py'}"
-            " --apply`, which moves the pin, the workflow refs and the permission rules together"
+            f" {pin.version} the binding pins: run `{plugin_pin.upgrade_command(plugin)}`, which"
+            " moves the pin, the workflow refs and the permission rules together"
         )
     ]
 

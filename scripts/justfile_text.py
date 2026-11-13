@@ -1,17 +1,8 @@
 """A justfile, read and edited as text: which of the template's recipes a project may be given.
 
-``unmet`` says why a recipe of the template cannot be copied as it stands, and nothing when it
-can. ``with_recipe``, ``with_first_dependency`` and ``with_first_line`` return a ``gatelib.Want``.
-Each obeys the laws every want does. It is idempotent. It keeps every line of the file, and the
-one line it changes (a recipe's head) only gains a dependency. It reads nothing but its argument.
-Two recipes copied in either order give the same text, because a copy goes at the end of the
-file less the recipes the template puts after it, never where a text anchor happens to be.
-
-An edit the text cannot take exactly leaves it unchanged: a recipe with no body, a body that
-starts with a shebang line (anything before ``#!`` breaks the script), a recipe the file does not
-have. Variables are never copied. A justfile is indented with tabs or with spaces: the line added
-follows its recipe's body, and a copied recipe keeps the template's own indentation, which
-``just`` needs to be one style only within a recipe.
+``just`` runs a recipe as one script only when its body starts with ``#!``, so a line added
+before a shebang line breaks the script. ``just`` needs one indentation style within a recipe,
+so a line added follows its recipe's body and a copied recipe keeps the template's own.
 """
 
 from __future__ import annotations
@@ -44,7 +35,7 @@ def definition(text: str, name: str) -> tuple[str, ...]:
     """The recipe or variable ``name`` of a justfile: its comment, its head and its body."""
     lines = text.splitlines()
     for index, line in enumerate(lines):
-        head = re.match(r"@?([A-Za-z_][\w-]*)", line)
+        head = HEAD_NAME.match(line)
         if head is None or head.group(1) != name:
             continue
         start = index
@@ -81,11 +72,7 @@ class Head:
 
 @dataclass(frozen=True)
 class Block:
-    """A top-level definition: the comment and attribute lines above it, its head, its body.
-
-    ``start`` is the first of its lines and ``end`` is one past the last. ``parsed`` is ``None``
-    for a variable, a setting or an import: anything whose head has no recipe colon.
-    """
+    """A top-level definition: the comment and attribute lines above it, its head, its body."""
 
     name: str
     start: int
@@ -189,12 +176,7 @@ def template_recipe(template: str, name: str) -> tuple[list[str], Block, Head] |
 
 
 def unmet(template: str, project: str, name: str) -> tuple[str, ...]:
-    """Why the template's recipe ``name`` cannot be copied as it stands; empty when it can.
-
-    A recipe is the plugin's when no line of it says ``bind:`` and every variable, dependency and
-    ``just`` call in it is a parameter of its own or already defined by the project's justfile.
-    A function call or an expression inside ``{{ }}`` is a reason: it is not guessed at.
-    """
+    """Why the template's recipe ``name`` cannot be copied as it stands; empty when it can."""
     found = template_recipe(template, name)
     if found is None:
         return (f"the template has no recipe `{name}`",)
@@ -205,11 +187,15 @@ def unmet(template: str, project: str, name: str) -> tuple[str, ...]:
     named = {*parsed.before, *parsed.after, *JUST_CALL.findall(body)}
     named |= {e for e in interpolated if BARE_NAME.fullmatch(e)}
     reasons = [f"a `{BINDS}` placeholder is in it"] if BINDS in code else []
-    reasons += [
-        f"it names `{word}`, which the justfile does not define"
+    lacking = [
+        f"`{word}`"
         for word in sorted(named - set(parsed.params))
         if not (defines_recipe(project, word) or defines_variable(project, word))
     ]
+    if lacking:
+        *head, last = lacking
+        listed = f"{', '.join(head)} and {last}" if head else last
+        reasons.append(f"it needs {listed}, which the justfile does not define")
     reasons += [
         f"it {'calls' if '(' in e else 'computes'} `{e}`"
         for e in sorted(set(interpolated))
@@ -218,13 +204,17 @@ def unmet(template: str, project: str, name: str) -> tuple[str, ...]:
     return tuple(reasons)
 
 
-def with_recipe(template: str, name: str) -> Want:
-    """The want of a justfile that has the template's recipe ``name``, its comment above it.
+def first_dependents(template: str, name: str) -> tuple[str, ...]:
+    """The recipes of the template that run ``name`` before their other dependencies."""
+    return tuple(
+        block.name
+        for block in blocks(template.split("\n"))
+        if block.parsed is not None and block.parsed.before[:1] == (name,)
+    )
 
-    A file that defines ``name`` already, as a recipe or a variable, is never touched. The copy
-    goes at the end of the file, but before the definitions at the end that the template puts
-    after it, and one blank line stands on each side.
-    """
+
+def with_recipe(template: str, name: str) -> Want:
+    """The want of a justfile that has the template's recipe ``name``, its comment above it."""
     found = template_recipe(template, name)
     if found is None:
         message = f"the template has no recipe {name!r}"
@@ -256,11 +246,7 @@ def with_recipe(template: str, name: str) -> Want:
 
 
 def with_first_dependency(recipe: str, dependency_name: str) -> Want:
-    """The want of a justfile whose recipe runs ``dependency_name`` before its other dependencies.
-
-    One already among the dependencies that run before the recipe stays where it is. The ones
-    after ``&&`` run afterwards, so they do not count. The head gains the name and nothing else.
-    """
+    """The want of a justfile whose recipe runs ``dependency_name`` first among its dependencies."""
 
     def want(current: str | None) -> str:
         text = current or ""
@@ -284,10 +270,7 @@ def with_first_dependency(recipe: str, dependency_name: str) -> Want:
 
 
 def with_first_line(recipe: str, line: str) -> Want:
-    """The want of a justfile whose recipe starts its body with ``line``, as indented as the body.
-
-    A recipe with no body, or one that starts with a shebang line, is left as it is.
-    """
+    """The want of a justfile whose recipe starts its body with ``line``, indented as the body."""
 
     def want(current: str | None) -> str:
         text = current or ""

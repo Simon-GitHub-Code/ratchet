@@ -217,15 +217,15 @@ GENERATED = [*settings_rules.rules(PARSED)[0][0], *settings_rules.rules(PARSED)[
 def test_a_rule_is_generated_when_some_version_writes_it_in_either_list(
     *, rule: str, expected: bool
 ) -> None:
-    assert settings_rules.generated(rule, PARSED) is expected
+    assert settings_rules.plugin_writes(rule, PARSED) is expected
 
 
 def test_a_manifest_with_no_usable_group_generates_only_the_command_rules() -> None:
     odd = {"group": [1, {"name": "n"}, {"name": "m", "paths": ["a", 2]}]}
-    assert settings_rules.generated("Edit(/a)", odd)
-    assert not settings_rules.generated("Edit(/2)", odd)
-    assert settings_rules.generated("Bash(gh pr merge:*)", {})
-    assert not settings_rules.generated("Edit(/a)", {"group": "x"})
+    assert settings_rules.plugin_writes("Edit(/a)", odd)
+    assert not settings_rules.plugin_writes("Edit(/2)", odd)
+    assert settings_rules.plugin_writes("Bash(gh pr merge:*)", {})
+    assert not settings_rules.plugin_writes("Edit(/a)", {"group": "x"})
 
 
 def test_own_rules_are_those_no_version_generates_with_their_list() -> None:
@@ -449,3 +449,24 @@ def test_an_adoption_at_an_older_plugin_refuses_the_current_one_and_stays_as_it_
     assert out.startswith(".claude/settings.json: not written, CI runs the plugin at ")
     assert out.endswith("settings-check: red\n")
     assert (root / ".claude/settings.json").read_bytes() == before
+
+
+def test_each_drift_says_whether_it_is_missing_misplaced_the_projects_own_or_the_manifests(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path)
+    write(root)
+    path = root / ".claude/settings.json"
+    settings = json.loads(path.read_text())
+    settings["permissions"]["ask"].remove("Edit(/GLOSSARY-MAP.md)")
+    settings["permissions"]["deny"].append("Bash(gh label create:*)")
+    settings["permissions"]["deny"].append("Bash(gh pr merge:*)")
+    path.write_text(json.dumps(settings))
+    fault = settings_rules.Fault
+    assert [(found.fault, found.line.split("'")[1]) for found in settings_rules.drifts(root)] == [
+        (fault.OWN, "Bash(gh label create:*)"),
+        (fault.MISPLACED, "Bash(gh pr merge:*)"),
+        (fault.MISSING, "Edit(/GLOSSARY-MAP.md)"),
+    ]
+    assert settings_rules.drifts(tmp_path / "none")[0].fault is fault.MANIFEST
+    assert [found.line for found in settings_rules.drifts(root)] == settings_rules.drift(root)
