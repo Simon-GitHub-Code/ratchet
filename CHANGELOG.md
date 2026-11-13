@@ -4,6 +4,8 @@
 
 A ticket that fits the change-size ceiling is no longer parked as too large before the critic exists (ADR 0040). Until the binding declares `depended-on` the early size stop is the ceiling itself; with the critic it stays at two thirds.
 
+The route no longer loops a non-engineer on a parked ticket or a half-finished adoption. It reads the drain's note of why a ticket is held and names the step that releases that kind of hold (a size block names the split, never a bare `/ratchet:feature`), and a binding with no plugin pin names `/ratchet:adopt` to resume, ahead of the hooks install.
+
 An adopted JavaScript project merges through `just merge` with nothing installed by hand (ADR 0039).
 
 - The template `justfile` has an `install` recipe, run by every tier right after `plugin-pin`. A stack whose tools come from npm, pnpm, yarn or bun binds it to the frozen install of the lockfile, and each recipe that runs one of those tools depends on it, so a fresh checkout works as CI does.

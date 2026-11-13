@@ -612,9 +612,9 @@ def test_what_the_review_opens_is_open_without_a_critic() -> None:
     assert result["verdictRecord"]["unresolved"] == ["loses the order"]
 
 
-def test_without_the_critic_a_change_may_fill_the_ceiling_the_review_adds_nothing_counted() -> None:
-    # Why: an eval run's first ticket came back blocked at 1,067 lines of a 1,500 ceiling "with the
-    # review still to come", though no critic ran and the review's records are not counted (ADR 0040).
+def test_without_the_critic_a_change_may_fill_the_whole_ceiling() -> None:
+    # Why: an eval run's first ticket came back blocked at 1,067 lines of a 1,500 ceiling, "with
+    # the review still to come", though no critic ran and the review's records are not counted.
     answers = {"implement": IMPLEMENTED, "review": REVIEW}
     spec = {**SPECIFIED, "changeSize": {"lines": 1067, "ceiling": 1500}}
     built = {**IMPLEMENTED, "changeSize": {"lines": 1500, "ceiling": 1500}}
@@ -624,7 +624,9 @@ def test_without_the_critic_a_change_may_fill_the_ceiling_the_review_adds_nothin
     assert "over two thirds" not in ran["prompts"]["spec"]
     old = {**PREFLIGHT, "critic": True, "critic_reason": "others rely on it"}
     ran = _run({"ref": "4"}, preflight=old, spec=spec)
-    assert ran["result"]["tooLarge"]["stage"] == "the spec", "with the critic two thirds still holds"
+    assert ran["result"]["tooLarge"]["stage"] == "the spec", (
+        "with the critic two thirds still holds"
+    )
     assert "two thirds of the ceiling the run stops" in ran["prompts"]["spec"]
 
 
@@ -638,7 +640,10 @@ def test_the_critics_share_of_the_size_is_not_counted_when_it_does_not_run() -> 
     assert "return criticLines: 0" in ran["prompts"]["spec"]
     heavy = {**SPECIFIED, "changeSize": {"lines": 1501, "ceiling": 1500}}
     ran = _run({"ref": "4"}, preflight=YOUNG, spec=heavy)
-    assert "over the change-size ceiling of 1500, and the review" in ran["result"]["verdictForcedBy"][0]
+    assert (
+        "over the change-size ceiling of 1500, and the review"
+        in ran["result"]["verdictForcedBy"][0]
+    )
     full = {**over, "implementationLines": 800}
     ran = _run({"ref": "4"}, preflight=YOUNG, spec={**sized, "changeEstimate": full})
     assert "no critic, records 50" in ran["result"]["verdictForcedBy"][0]

@@ -64,8 +64,8 @@ import feature_preflight as preflight
 import gatelib
 import merge
 import merge_ready
+import queue_notes
 import route
-import triggers
 
 # Why: the additive-record check the hook and the judge share lives under hooks/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -96,7 +96,7 @@ WAITS, PARKED = "waits", "parked"
 # Why: `<branch>: blocked run` is the stash the route reads as a held ticket.
 STASHED = {MERGED: "merged", WAITS: "unapproved", PARKED: "blocked"}
 INTERRUPTED = "interrupted"
-QUEUE = "queue"
+QUEUE = queue_notes.QUEUE
 QUEUE_HOME = "ratchet-queue"
 OWNER_ONLY = 0o700
 OTHERS_WRITE = 0o022
@@ -166,27 +166,6 @@ def now() -> datetime:
 def key(ref: str) -> str:
     """A ticket's ref as two spellings of it compare: ``#4`` is ``4``."""
     return ref.lstrip("#")
-
-
-def digest(ticket: preflight.Ticket) -> str:
-    return hashlib.sha256(ticket.body.encode()).hexdigest()
-
-
-def loaded(text: str | None) -> dict[str, object]:
-    """``text`` as a JSON object, or an empty one when it is not."""
-    try:
-        data: object = json.loads(text or "")
-    except ValueError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def texts(value: object) -> list[str]:
-    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
-
-
-def tables(value: object) -> list[dict[str, object]]:
-    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 # --- the work trees --------------------------------------------------------------------------
@@ -278,24 +257,11 @@ def discard(root: Path, tree: Path, label: str) -> bool:
 # --- the notes -------------------------------------------------------------------------------
 
 
-def note_path(root: Path, branch: str) -> Path:
-    return gatelib.state_dir(root) / QUEUE / "tickets" / f"{branch.replace('/', '-')}.json"
-
-
-def read_note(root: Path, branch: str) -> dict[str, object]:
-    return loaded(gatelib.read_text(note_path(root, branch)))
-
-
-def write_note(path: Path, note: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(note, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
 def question(item: object) -> str:
     """One open question of the spec role as a reason: its options, and why the first."""
     if not isinstance(item, dict):
         return f"open question: {item}"
-    options = "; ".join(texts(item.get("options")))
+    options = "; ".join(queue_notes.texts(item.get("options")))
     return (
         f"open question ({item.get('kind')}): {item.get('question')}"
         f" Options, the recommended first: {options}. Why the first: {item.get('recommendation')}"
@@ -304,16 +270,16 @@ def question(item: object) -> str:
 
 def reasons_of(result: dict[str, object]) -> list[str]:
     """Why a pipeline's result is not an approval, in the result's own words."""
-    failures = tables(gatelib.table(result, "preflight").get("failures"))
+    failures = queue_notes.tables(gatelib.table(result, "preflight").get("failures"))
     found = [f"{f.get('check')}: {f.get('detail')} -> {f.get('produce')}" for f in failures]
     asked = result.get("openQuestions")
     found += [question(item) for item in (asked if isinstance(asked, list) else [])]
-    edits = tables(result.get("guardEdits"))
+    edits = queue_notes.tables(result.get("guardEdits"))
     found += [f"guard edit: {edit.get('path')}: {edit.get('edit')}" for edit in edits]
-    found += texts(result.get("verdictForcedBy"))
-    unresolved = texts(gatelib.table(result, "verdictRecord").get("unresolved"))
+    found += queue_notes.texts(result.get("verdictForcedBy"))
+    unresolved = queue_notes.texts(gatelib.table(result, "verdictRecord").get("unresolved"))
     found += [f"unresolved: {title}" for title in unresolved]
-    disputes = tables(result.get("disputes"))
+    disputes = queue_notes.tables(result.get("disputes"))
     found += [f"dispute: {d.get('path')}: {d.get('recommendation')}" for d in disputes]
     return found + [
         f"safeguard owed: `{kind}` gained an instance while a row it fires is still `later:`;"
@@ -347,7 +313,11 @@ def change_of(root: Path, base: str, branch: str) -> merge_ready.Change | None:
 def assumptions(change: merge_ready.Change | None) -> list[dict[str, object]]:
     """The assumptions the branch's verdict record lists: what the merge judge read."""
     found = [path for path in (change.paths if change else ()) if merge_ready.RECORD.match(path)]
-    return tables(loaded(change.after(found[0])).get("assumptions")) if change and found else []
+    return (
+        queue_notes.tables(queue_notes.loaded(change.after(found[0])).get("assumptions"))
+        if change and found
+        else []
+    )
 
 
 def additions(change: merge_ready.Change | None) -> list[str]:
@@ -370,7 +340,7 @@ def additions(change: merge_ready.Change | None) -> list[str]:
 def timings(tree: Path) -> dict[str, object]:
     """The seconds each gate last took in ``tree``, from the report its runner appends to."""
     lines = (gatelib.read_text(tree / gatelib.STATE / "timing.jsonl") or "").splitlines()
-    rows = [loaded(line) for line in lines]
+    rows = [queue_notes.loaded(line) for line in lines]
     return {str(row["key"]): row["seconds"] for row in rows if "key" in row and "seconds" in row}
 
 
@@ -420,20 +390,11 @@ def classify(ticket: preflight.Ticket, drain: Drain, seen: Seen) -> Entry:
         return replace(entry, state=BUILT)
     if tree in seen.trees:
         return replace(entry, state=BUILDING)
-    note = read_note(drain.root, branch)
-    held = note.get("hold") is True and note.get("digest") == digest(ticket)
-    if held and not safeguarded(drain.root, note):
-        return replace(entry, state=HELD, why=tuple(texts(note.get("reasons"))))
+    note = queue_notes.read_note(drain.root, branch)
+    held = note.get("hold") is True and note.get("digest") == queue_notes.digest(ticket)
+    if held and not queue_notes.safeguarded(drain.root, note):
+        return replace(entry, state=HELD, why=tuple(queue_notes.texts(note.get("reasons"))))
     return pending(entry, ticket, drain=drain, seen=seen)
-
-
-def safeguarded(root: Path, note: dict[str, object]) -> bool:
-    """Whether a ticket held for an owed safeguard is free: none of those kinds is owed now.
-
-    Why: the ticket's text need not change for it to build; binding the safeguard is the change.
-    """
-    owes = set(texts(note.get("owes")))
-    return bool(owes) and not owes & {row.name for row in triggers.owed(root)}
 
 
 def settled(entries: list[Entry]) -> list[Entry]:
@@ -554,7 +515,9 @@ def open_ticket(drain: Drain, ref: str) -> int:
         discard(drain.root, tree, f"{entry.branch}: {INTERRUPTED} run")
         return 1
     opened = now().isoformat(timespec="seconds")
-    write_note(note_path(drain.root, entry.branch), {**asdict(entry), "opened": opened})
+    queue_notes.write_note(
+        queue_notes.note_path(drain.root, entry.branch), {**asdict(entry), "opened": opened}
+    )
     print(json.dumps({**asdict(entry), "state": BUILDING, "base": drafted.base}, indent=2))
     return 0
 
@@ -597,14 +560,14 @@ def close(
     *,
     outcome: str,
     reasons: list[str],
-    owes: list[str] | None = None,
+    result: dict[str, object] | None = None,
 ) -> None:
     """Remove the ticket's work tree and write its note: the outcome and what the report prints."""
     branch = route.own_branch(ticket)
     tree = tree_of(root, branch)
     change = change_of(root, merge_ready.default_ref(root), branch)
     note = {
-        **read_note(root, branch),
+        **queue_notes.read_note(root, branch),
         "ref": ticket.ref,
         "title": ticket.title,
         "branch": branch,
@@ -614,13 +577,14 @@ def close(
         "additions": additions(change),
         "gates": timings(tree),
         "closed": now().isoformat(timespec="seconds"),
-        "digest": digest(ticket),
+        "digest": queue_notes.digest(ticket),
         "hold": outcome != MERGED,
-        "owes": owes or [],
+        "owes": owed_kinds(result or {}),
+        "holds": queue_notes.holds_of(result or {}),
         "reported": False,
     }
     discard(root, tree, f"{branch}: {STASHED[outcome]} run")
-    write_note(note_path(root, branch), note)
+    queue_notes.write_note(queue_notes.note_path(root, branch), note)
     print(f"closed: {ticket.ref}: {outcome}")
 
 
@@ -706,7 +670,7 @@ def section(title: str, rows: list[str]) -> list[str]:
 def listed(note: dict[str, object]) -> list[str]:
     """A ticket's line and, under it, each reason as it was given."""
     head = f"- `{note.get('ref')}` {note.get('title')} (`{note.get('branch')}`)"
-    return [head, *(f"  - {reason}" for reason in texts(note.get("reasons")))]
+    return [head, *(f"  - {reason}" for reason in queue_notes.texts(note.get("reasons")))]
 
 
 def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -> str:
@@ -735,9 +699,13 @@ def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -
         f"- `{note.get('ref')}`: {a.get('question')} Assumed: {a.get('assumed')}"
         f" Refuter: {a.get('refuter')}"
         for note in notes
-        for a in tables(note.get("assumptions"))
+        for a in queue_notes.tables(note.get("assumptions"))
     ]
-    added = [f"- `{n.get('ref')}`: {text}" for n in notes for text in texts(n.get("additions"))]
+    added = [
+        f"- `{n.get('ref')}`: {text}"
+        for n in notes
+        for text in queue_notes.texts(n.get("additions"))
+    ]
     return "\n".join(
         [
             f"# Queue drain, {stamp:%Y-%m-%d %H:%M}",
@@ -757,7 +725,7 @@ def report(drain: Drain) -> int:
     """Write the report of every ticket closed since the last one, and print it."""
     directory = gatelib.state_dir(drain.root) / QUEUE
     paths = sorted((directory / "tickets").glob("*.json"))
-    notes = {path: loaded(gatelib.read_text(path)) for path in paths}
+    notes = {path: queue_notes.loaded(gatelib.read_text(path)) for path in paths}
     fresh = {path: note for path, note in notes.items() if note.get("reported") is False}
     closed = {key(str(note.get("ref"))) for note in fresh.values()}
     idle = [e for e in plan(drain).tickets if key(e.ref) not in closed and e.state != BUILDING]
@@ -767,7 +735,7 @@ def report(drain: Drain) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
     for path, note in fresh.items():
-        write_note(path, {**note, "reported": True})
+        queue_notes.write_note(path, {**note, "reported": True})
     print(text)
     print(f"report: {target}")
     return 0
@@ -794,9 +762,15 @@ def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
         return update(drain, ticket)
     if options.action == "land":
         return land(drain, ticket)
-    result = loaded(gatelib.read_text(options.result) if options.result else None)
+    result = queue_notes.loaded(gatelib.read_text(options.result) if options.result else None)
     reasons = [*options.reason, *reasons_of(result)]
-    close(drain.root, ticket, outcome=options.outcome, reasons=reasons, owes=owed_kinds(result))
+    close(
+        drain.root,
+        ticket,
+        outcome=options.outcome,
+        reasons=reasons,
+        result=result,
+    )
     return 0
 
 
