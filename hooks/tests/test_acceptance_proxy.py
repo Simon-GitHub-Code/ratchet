@@ -318,9 +318,9 @@ def test_a_request_the_proxy_cannot_read_is_refused_by_it_and_counted_unlogged(
     with products.serving(tmp_path) as upstream, proxied(tmp_path, upstream, monkeypatch) as url:
         host, port = url.split("//")[1].rstrip("/").split(":")
         with socket.create_connection((host, int(port)), timeout=30) as raw:
-            raw.sendall(b"GET / HTTP/9\r\n\r\n")
+            raw.sendall(b"GET / HTTP/1.1\r\nX: " + b"a" * 65534)  # a header longer than it reads
             answer = b"".join(iter(lambda: raw.recv(65536), b""))
-    assert answer.startswith(b"HTTP/1.1 400 ")
+    assert answer.startswith(b"HTTP/1.1 431 ")
     seal = json.loads((tmp_path / "session" / "seal.json").read_text(encoding="utf-8"))
     assert (seal["requests"], seal["unlogged"]) == (0, 1)
 
