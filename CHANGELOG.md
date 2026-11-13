@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.1
+
+### Guard
+
+- A `cd` inside a subshell (`( … )`), in a pipeline stage before the last or in a background job no longer moves the commands after it, as the shell does not. A `cd` in a `{ … }` group or a `case` branch still does. The operator after a subshell is read, so `(true) || cd /tmp && rm …` is judged where the shell stands. `env -C`, `sudo -D`, `uv --directory` and `poetry -C` run their command in that directory, and the guard judges it there too.
+- The ask after a `cd` the guard cannot resolve names the file, says that in a project Ratchet guards it is the owner's, and says what approving and denying each do.
+- The agent-ready label is asked about only on a ticket, a file at `.scratch/<feature>/issues/<name>.md`, the place the route and the preflight read one, read in any case, through `..` and links. A change description or a spec that names the label no longer asks. A command that writes `.scratch`, a feature's directory or its `issues` and names the label still asks.
+
+### Gates
+
+- `guard-diff` reads a pnpm 11 or later lockfile, whose boot document (the pnpm that runs and the config dependencies) comes before the project's. Each document is compared on its own, so a pnpm rolled back in the boot document is refused even when the project locks a newer one. `transitivePeerDependencies` is read as the list pnpm writes; a list anywhere else is refused.
+
 ## 0.11.0
 
 A safeguard arrives with the first thing it guards, and the first one is free (ADR 0028). The method is for hobby and solo projects first, and it must never stop the owner in the middle of an idea. Telemetry, flags, security, load and the new reliability questions are no longer asked of every repository from the first commit. Each question carries a trigger, and is asked once that trigger fires.
