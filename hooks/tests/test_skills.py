@@ -27,6 +27,17 @@ def test_adopt_asks_two_dialogs_and_chooses_tools_itself() -> None:
     assert "the `bite-all` entry point plants each fault of `quality/bites.toml`" in ADOPT
 
 
+def test_adopt_leaves_the_permission_rules_to_step_8() -> None:
+    # Why: issue 20. Claude Code applies .claude/settings.json the moment it exists, so a copy at
+    # step 2 locked guards/** before step 8 filled the manifest. The file is written last.
+    step_2 = ADOPT.split("2. **Copy the templates.**", 1)[1].split("\n3. ", 1)[0]
+    step_8 = ADOPT.split("8. **Fill the manifest", 1)[1].split("\n9. ", 1)[0]
+    assert "skipping `.claude/settings.json`" in step_2
+    assert "creates `.claude/settings.json`" in step_8
+    assert "path rules from the manifest on the default branch" in step_8
+    assert "permission rules come from the work tree's" in step_8
+
+
 def test_the_fork_test_has_one_wording_the_spec_role_and_the_conjecture_skill_share() -> None:
     # Why: the conjecture skill asked the owner what the pipeline's Spec role would have assumed,
     # because only the role's prompt held the examples. A prompt cannot follow a link, so the
