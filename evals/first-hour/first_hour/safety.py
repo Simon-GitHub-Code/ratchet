@@ -58,10 +58,19 @@ def refusal(command: str) -> str | None:
     return None
 
 
-def outside(path: str, root: Path) -> bool:
-    """Whether a file a tool writes lies outside the run's directory."""
-    try:
-        Path(path).resolve().relative_to(root.resolve())
-    except ValueError:
-        return True
-    return False
+def _under(path: Path, parent: Path) -> bool:
+    return path == parent or parent in path.parents
+
+
+def forbidden_write(path: str, *, root: Path, protected: tuple[Path, ...]) -> bool:
+    """Whether the owner declines a write: one into a protected tree, outside the run directory.
+
+    Why not every write outside the run directory: the product puts its own work trees under
+    the temp location (the drain's ``/tmp/ratchet-queue-<uid>``), and an owner answering
+    Claude Code's "outside allowed working directories" prompt there says yes. The protected
+    trees are the user's home and the plugin checkout under test.
+    """
+    target = Path(path).resolve()
+    if _under(target, root.resolve()):
+        return False
+    return any(_under(target, p.resolve()) for p in protected)

@@ -317,8 +317,13 @@ class Session:
         if tool_name == "Bash":
             refused = safety.refusal(str(tool_input.get("command", "")))
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
-        if tool_name in WRITE_TOOLS and path and safety.outside(str(path), self.config.root):
-            refused = "writes outside the run directory"
+        protected = (Path.home(), self.config.plugin)
+        if (
+            tool_name in WRITE_TOOLS
+            and path
+            and safety.forbidden_write(str(path), root=self.config.root, protected=protected)
+        ):
+            refused = "writes into the home directory or the plugin checkout"
         self.log.emit(
             "prompt",
             tool=tool_name,
@@ -701,8 +706,16 @@ def _fingerprints() -> dict[str, str | None]:
     }
 
 
-def _reap(root: Path) -> int:
-    """Stop every process still running inside the run directory; how many there were."""
+def _trees(app: Path) -> list[Path]:
+    """The project's work trees, the product's own under the temp location among them."""
+    listed = run_git(app, "worktree", "list", "--porcelain") or ""
+    return [
+        Path(line.split(" ", 1)[1]) for line in listed.splitlines() if line.startswith("worktree ")
+    ]
+
+
+def _reap(roots: list[Path]) -> int:
+    """Stop every process still running inside the run's directories; how many there were."""
     reaped = 0
     for proc in Path("/proc").iterdir():
         if not proc.name.isdigit() or int(proc.name) == os.getpid():
@@ -711,7 +724,7 @@ def _reap(root: Path) -> int:
             cwd = (proc / "cwd").resolve()
         except OSError:
             continue
-        if cwd == root or root in cwd.parents:
+        if any(cwd == root or root in cwd.parents for root in roots):
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.kill(int(proc.name), signal.SIGTERM)
                 reaped += 1
@@ -760,7 +773,12 @@ async def drive(config: Config) -> dict[str, object]:
         if not driver.usable:
             driver.app_check("final")
     after = _fingerprints()
-    log.emit("integrity", unchanged=before == after, files=after, reaped=_reap(config.root))
+    log.emit(
+        "integrity",
+        unchanged=before == after,
+        files=after,
+        reaped=_reap([config.root, *_trees(config.app)]),
+    )
     metrics = reduce.reduce(reduce.read(config.root / "events.jsonl"))
     (config.root / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", "utf-8")
     (config.root / "table.md").write_text(reduce.table(metrics), "utf-8")

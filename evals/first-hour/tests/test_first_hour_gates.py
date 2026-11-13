@@ -58,6 +58,15 @@ def test_reading_forge_tools_and_user_files_is_not_refused() -> None:
         assert safety.refusal(command) is None, command
 
 
-def test_a_write_outside_the_run_directory_is_outside(tmp_path: Path) -> None:
-    assert not safety.outside(str(tmp_path / "app" / "x.ts"), tmp_path)
-    assert safety.outside("/etc/passwd", tmp_path)
+def test_the_owner_declines_writes_into_a_protected_tree_but_not_the_products_work_trees(
+    tmp_path: Path,
+) -> None:
+    home, root = tmp_path / "home", tmp_path / "home" / "run"
+
+    def forbidden(path: Path) -> bool:
+        return safety.forbidden_write(str(path), root=root, protected=(home,))
+
+    assert not forbidden(root / "app" / "x.ts")
+    assert not forbidden(tmp_path / "ratchet-queue-1001" / "app-1" / "x.ts")
+    assert forbidden(home / ".claude" / "settings.json")
+    assert forbidden(home)
