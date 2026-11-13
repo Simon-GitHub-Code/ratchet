@@ -250,20 +250,42 @@ def closed_port() -> str:
     return f"http://127.0.0.1:{gatelib.free_port()}/gone"
 
 
-def test_until_stopped_needs_the_marker_with_service_exports(
-    monkeypatch: pytest.MonkeyPatch,
+def until_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """The stop marker and the sending path, exported as ``with_service.py --graceful`` does."""
+    marker, sending = tmp_path / "stopping", tmp_path / "sending"
+    monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
+    monkeypatch.setenv(gatelib.SENDING_ENV, str(sending))
+    return marker, sending
+
+
+@pytest.mark.parametrize("missing", [gatelib.STOPPING_ENV, gatelib.SENDING_ENV])
+def test_until_stopped_needs_both_paths_with_service_exports(
+    missing: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv(gatelib.STOPPING_ENV, raising=False)
+    until_stopped(tmp_path, monkeypatch)
+    monkeypatch.delenv(missing)
     with pytest.raises(SystemExit) as exit_:
         load_smoke.main(["load_smoke.py", "--until-stopped", "--url", closed_port()])
     assert exit_.value.code == 2
 
 
+def test_the_smoke_says_it_is_sending_so_the_signal_can_wait_for_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, sending = until_stopped(tmp_path, monkeypatch)
+    with servers.server(handle) as url:
+        plain = smoke("--url", f"{url}/ok", *SHORT, capsys=capsys)
+        assert plain[0] == 0
+        assert not sending.exists(), "only --until-stopped runs inside the graceful check"
+        code, _ = smoke("--until-stopped", "--url", f"{url}/ok", *SHORT, capsys=capsys)
+    assert code == 0
+    assert sending.exists()
+
+
 def test_a_refusal_after_the_signal_is_expected_and_before_it_is_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    marker = tmp_path / "stopping"
-    monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
+    marker, _ = until_stopped(tmp_path, monkeypatch)
     args = ["--until-stopped", "--url", closed_port(), "--min-requests", "0", "--seconds", "0.3"]
     before = smoke(*args, capsys=capsys)
     marker.touch()
@@ -303,9 +325,8 @@ def test_a_refusal_raced_against_the_signal_is_closed_but_a_reset_is_not(
 def test_an_error_status_or_a_timeout_after_the_signal_is_still_red(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    marker = tmp_path / "stopping"
+    marker, _ = until_stopped(tmp_path, monkeypatch)
     marker.touch()
-    monkeypatch.setenv(gatelib.STOPPING_ENV, str(marker))
     with servers.server(handle) as url:
         code, out = smoke("--until-stopped", "--url", f"{url}/boom", *SHORT, capsys=capsys)
     assert code == 1

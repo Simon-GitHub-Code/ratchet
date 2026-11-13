@@ -313,6 +313,9 @@ STOPPING = (
     "import os, sys\n"
     "open(sys.argv[1], 'w').write(str(os.path.exists(os.environ['RATCHET_STOPPING'])))"
 )
+SENDS_THEN_WAITS = (
+    "import os, time\nopen(os.environ['RATCHET_SENDING'], 'w').close()\ntime.sleep(1)"
+)
 
 
 def graceful(
@@ -390,6 +393,20 @@ def test_the_marker_exists_only_from_the_signal_and_a_command_that_ends_first_is
     assert code == 1
 
 
+def test_a_command_that_never_starts_sending_is_red_and_the_service_is_not_signalled(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Why: --timeout bounds the boot as well, so it leaves a loaded runner time to boot.
+    code, out = run(
+        *("--boot", f"MODE=drain exec {python(STOPS)}", "--ready", READY, "--timeout", "2"),
+        *("--graceful", "2", "--", sys.executable, "-c", "import time; time.sleep(3)"),
+        capsys=capsys,
+    )
+    assert "the command did not start sending within 2s: the signal waits until it " in out
+    assert f"creates ${gatelib.SENDING_ENV}, as load_smoke.py --until-stopped does" in out
+    assert code == 1
+
+
 def test_a_service_killed_by_the_signal_is_told_to_exec(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -397,7 +414,7 @@ def test_a_service_killed_by_the_signal_is_told_to_exec(
     shell_first = f"{boot} & wait"
     code, out = run(
         *("--boot", shell_first, "--ready", READY, "--graceful", "2", "--signal-after", "0.3"),
-        *("--", sys.executable, "-c", "import time; time.sleep(1)"),
+        *("--", sys.executable, "-c", SENDS_THEN_WAITS),
         capsys=capsys,
     )
     assert "was ended by signal 15, so boot with `exec`" in out, out

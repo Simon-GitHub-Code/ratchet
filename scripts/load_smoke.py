@@ -36,13 +36,15 @@ answers" probe. It is judged on errors only, as everywhere, and sends the same f
 overlapping requests, so point it at a route that is safe to repeat.
 
 ``--until-stopped`` is for ``with_service.py --graceful``, which stops the service partway
-through the run and exports ``RATCHET_STOPPING``, a path that exists from the signal on. The line
+through the run. The smoke creates the path ``RATCHET_SENDING`` once its workers start, and the
+signal comes ``--signal-after`` seconds later; ``RATCHET_STOPPING`` is a path that exists from
+the signal on. The line
 is drawn by when a request started. One that started before the signal is in flight and must
 complete: a reset, a timeout, a 5xx or a wrong status is an error as always. One that started
 after it meets a service that has closed its listener, so a refused or reset connection is
 expected, not counted, and ends that worker; a timeout or an error status after the signal is still
-red. Without the flag a refused connection is always an error. The flag is red without
-``RATCHET_STOPPING``, since it could not tell the two apart.
+red. Without the flag a refused connection is always an error. The flag is red without the two
+paths, since it could neither say it is sending nor tell the two apart.
 
 It ends within ``--seconds`` plus ``--timeout``: ten seconds at the defaults, even when the
 service hangs. Each request opens a new connection, which is what a burst of clients does.
@@ -245,14 +247,19 @@ def main(argv: list[str]) -> int:
     options = parser.parse_args(argv[1:])
     if options.concurrency < 1 or options.seconds <= 0 or options.timeout <= 0:
         parser.error("--concurrency, --seconds and --timeout must be positive")
-    stopping = os.environ.get(gatelib.STOPPING_ENV)
-    if options.until_stopped and not stopping:
+    stopping, sending = (
+        os.environ.get(name) for name in (gatelib.STOPPING_ENV, gatelib.SENDING_ENV)
+    )
+    if options.until_stopped and not (stopping and sending):
         parser.error(
-            f"--until-stopped needs {gatelib.STOPPING_ENV}, set by with_service.py --graceful"
+            f"--until-stopped needs {gatelib.STOPPING_ENV} and {gatelib.SENDING_ENV}, set by "
+            "with_service.py --graceful"
         )
     targets = targets_of(parser, options)
     if isinstance(targets, str):
         return gatelib.report("load-smoke", [targets])
+    if options.until_stopped and sending:
+        Path(sending).touch()  # Why: the workers start now, and the signal waits for them.
     latencies, errors = hammer(
         targets,
         options.concurrency,

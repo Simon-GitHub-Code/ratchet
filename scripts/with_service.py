@@ -46,9 +46,13 @@ typically the load smoke run with ``--until-stopped``. While the command runs, p
 the gate sends SIGTERM to the service process alone, not its group, as an orchestrator does on a
 deploy. Green needs the service to exit with code 0 within SECONDS of the signal and the command
 to still succeed, so the requests in flight when the signal came were finished. "Partway" is a
-fixed delay, ``--signal-after`` (1 s by default), counted from when the command starts: it does
-not depend on how fast the service answers, so a slow runner and a fast one signal at the same
-point. A command that ends before the signal is red, since nothing was in flight. The service
+fixed delay, ``--signal-after`` (1 s by default), counted from when the command says it is
+sending: it creates the path the gate exports as ``RATCHET_SENDING``, as ``load_smoke.py
+--until-stopped`` does once its workers start. The delay does not depend on how fast the service
+answers, so a slow runner and a fast one signal at the same point, and a runner slow to start the
+command still signals with requests in flight. A command that has not started sending within
+``--timeout`` seconds is red, and so is one that ends before the signal, since nothing was in
+flight. The service
 process is the boot command's own process, so boot with ``exec`` (``exec ./server``) or the shell
 takes the signal and the server never sees it; an exit by signal is red and says so. Before the
 signal the gate exports ``RATCHET_STOPPING``, a path that exists only from the signal on, which
@@ -88,6 +92,7 @@ from urllib.parse import urlsplit
 import gatelib
 
 POLL = 0.1
+SENDING_POLL = 0.01
 TAIL = 30
 # An exited service shows its first lines as well: the cause is usually the first thing it
 # said, and a long start-up can push it out of the tail.
@@ -160,21 +165,41 @@ def start(
     )
 
 
+def sends_within(sending: Path, within: float, ended: threading.Event) -> bool:
+    """Whether the command creates ``sending`` within ``within`` seconds, before it ends."""
+    deadline = time.monotonic() + within
+    while not sending.exists():
+        if ended.wait(SENDING_POLL) or time.monotonic() >= deadline:
+            return False
+    return True
+
+
 def signal_midway(
     process: subprocess.Popen[bytes],
     options: argparse.Namespace,
     marker: Path,
     *,
+    sending: Path,
     ended: threading.Event,
 ) -> list[str]:
-    """SIGTERM the service ``--signal-after`` seconds in; what was wrong with how it stopped.
+    """SIGTERM the service ``--signal-after`` seconds into the sending; what was wrong with it.
 
     Why a fixed delay and not "after N requests": the gate cannot see the requests, a count
     would hang on a service too slow to reach it, and a delay signals at the same point of the
-    command on every runner. ``ended`` is set when the command finishes first.
+    command on every runner. Why from ``sending`` and not from the command's start: a runner
+    slow to start the command would signal before a request was sent. ``ended`` is set when the
+    command finishes first.
     """
     after = options.signal_after
-    if ended.wait(after):
+    if not sends_within(sending, options.timeout, ended) and not ended.is_set():
+        return [
+            (
+                f"the command did not start sending within {options.timeout:g}s: the signal "
+                f"waits until it creates ${gatelib.SENDING_ENV}, as load_smoke.py "
+                "--until-stopped does"
+            )
+        ]
+    if ended.is_set() or ended.wait(after):
         return [f"the command ended before the {after:g}s signal: nothing was in flight"]
     if process.poll() is not None:
         return [f"the service exited with code {process.returncode} before it was signalled"]
@@ -205,11 +230,13 @@ def run_signalled(
 ) -> tuple[int, list[str]]:
     """Run ``command`` and stop the service partway; the command's code and every problem."""
     with tempfile.TemporaryDirectory() as scratch:
-        marker = Path(scratch) / "stopping"
-        env[gatelib.STOPPING_ENV] = str(marker)
+        marker, sending = Path(scratch) / "stopping", Path(scratch) / "sending"
+        env[gatelib.STOPPING_ENV], env[gatelib.SENDING_ENV] = str(marker), str(sending)
         ended, found = threading.Event(), []
         watcher = threading.Thread(
-            target=lambda: found.extend(signal_midway(process, options, marker, ended=ended))
+            target=lambda: found.extend(
+                signal_midway(process, options, marker, sending=sending, ended=ended)
+            )
         )
         watcher.start()
         try:
@@ -289,7 +316,12 @@ def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(prog="with_service.py", usage="%(prog)s [options] [-- cmd...]")
     parser.add_argument("--boot", required=True, help="shell command that starts the service")
     parser.add_argument("--ready", required=True, help="URL that answers below 400 when ready")
-    parser.add_argument("--timeout", type=float, default=30.0, help="seconds to wait for ready")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="seconds to wait for ready, and with --graceful for the command to start sending",
+    )
     parser.add_argument("--env", action="append", type=pair, default=[], metavar="K=V")
     parser.add_argument(
         "--graceful", type=float, metavar="S", help="SIGTERM mid-command; exit 0 in S"

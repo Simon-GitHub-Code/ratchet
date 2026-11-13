@@ -35,6 +35,9 @@ BINDING = Path("docs/process/binding.md")
 READY_ENV = "RATCHET_READY"
 # Why: a path that exists only once ``with_service.py --graceful`` has sent the stop signal.
 STOPPING_ENV = "RATCHET_STOPPING"
+# Why: a path the command creates once it is sending requests; ``with_service.py --graceful``
+# counts ``--signal-after`` from then, so a command slow to start still has requests in flight.
+SENDING_ENV = "RATCHET_SENDING"
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
