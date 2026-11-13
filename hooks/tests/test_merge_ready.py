@@ -1074,8 +1074,10 @@ PLAIN_RECORD = (
 )
 BUT = f"{PLAIN_RECORD}; its paths are records, but "
 GIVES = "gives a ticket the agent-ready label `{label}`, which is the owner's act"
-EDITS_AGREED = (
-    "changes what the owner agreed to build, where only what is appended to it lands without them"
+FROZEN = "is a ticket the owner agreed to build, and only they change it"
+INHERITED = (
+    "is what .scratch/thing/issues/01-a.md inherits its approach from, a ticket the owner agreed to"
+    " build"
 )
 STALE = (
     "changed on the default branch after the change forked, so the merge holds text the judge did"
@@ -1096,12 +1098,11 @@ def tracked(tmp_path: Path) -> Path:
     "files",
     [
         {".scratch/other/spec.md": "# Other\n\nStatus: needs-triage\n", CHANGES: "## Summary\n"},
-        {SPEC: "# Thing\n\nStatus: ready-for-agent\n\n## Conjecture\n\nIt works; or not.\n"},
+        {".scratch/other/spec.md": "# Other\n\n## Conjecture\n\nIt works; or not.\n"},
         {".scratch/thing/issues/02-b.md": "# 02: B\n\nStatus: needs-triage\n"},
-        {TICKET: AGREED + "\n## Conjecture\n\nIt works.\n\n## Answers\n\nQ: a? A: b.\n"},
         {"GLOSSARY.md": GLOSSARY + "\n**Order**:\nWhat a customer places.\n", CHANGES: "## S\n"},
     ],
-    ids=["a spec", "its conjecture", "a ticket", "answers on an agreed one", "a term"],
+    ids=["a spec", "its conjecture", "a ticket", "a term"],
 )
 def test_records_alone_are_asked_no_verdict_record(
     tracked: Path, files: dict[str, str | None]
@@ -1134,15 +1135,17 @@ def test_records_alone_are_asked_no_verdict_record(
         ),
         (
             {TICKET: AGREED.replace("saves a link", "mines coins")},
-            [f"{BUT}{TICKET} {EDITS_AGREED}"],
+            [f"{BUT}{TICKET} {FROZEN}"],
         ),
         ({SPEC: None}, [f"{BUT}{SPEC} deletes a record"]),
         (
             {"docs/adr/0001-plain.md": ADR.replace("Because.", "Because I said so.")},
             [
                 f"guard: docs/adr/0001-plain.md (records): {REWRITTEN_ADR}",
-                'record: docs/adr/0001-plain.md records a decision: "We keep it plain". Yours to'
-                " agree.",
+                (
+                    'record: docs/adr/0001-plain.md records a decision: "We keep it plain".'
+                    " Yours to agree."
+                ),
             ],
         ),
         ({}, [PLAIN_RECORD]),
@@ -1243,15 +1246,16 @@ def test_a_record_with_a_twin_in_another_case_is_the_owners(tmp_path: Path) -> N
 def test_the_spec_an_agreed_ticket_inherits_from_is_agreed_too(
     tmp_path: Path, *, ticket: str, spec: str, edited: str
 ) -> None:
-    # Why: the ticket takes its conjecture from the spec, so rewriting the spec rewrites what the
-    # owner agreed to build; appending to it is how the conjecture arrives.
+    # Why: the ticket takes its conjecture from the spec, so any text there is what the owner
+    # agreed to build, an appended section as much as a rewritten one.
     repository(tmp_path, {**BASE, TICKET: ticket, spec: "# Thing\n\n## Conjecture\n\nA.\n"})
     branch(tmp_path, "records-thing")
+    inherited = f"{BUT}{edited} " + INHERITED
     change(tmp_path, {edited: "# Thing\n\n## Conjecture\n\nB.\n"}, record=False)
-    assert judged(tmp_path) == [f"{BUT}{edited} {EDITS_AGREED}"]
+    assert judged(tmp_path) == [inherited]
     git(tmp_path, "reset", "-q", "--hard", "HEAD~1")
     change(tmp_path, {edited: "# Thing\n\n## Conjecture\n\nA.\n\n## Answers\n"}, record=False)
-    assert judged(tmp_path) == []
+    assert judged(tmp_path) == [inherited]
 
 
 def test_a_spec_no_agreed_ticket_inherits_from_is_still_being_written(tmp_path: Path) -> None:
@@ -1269,7 +1273,7 @@ def test_a_spec_no_agreed_ticket_inherits_from_is_still_being_written(tmp_path: 
     ("path", "text", "why"),
     [
         (TICKET, AGREED.replace("saves a link", "mines coins"), STALE),
-        (SPEC, "# Coins\n\nIt mines them.\n", EDITS_AGREED),
+        (SPEC, "# Coins\n\nIt mines them.\n", INHERITED),
     ],
     ids=["the ticket the tip labelled", "the spec of a ticket the tip labelled"],
 )
@@ -1310,9 +1314,7 @@ def test_an_agreed_ticket_pointed_at_another_spec_is_the_owners(tracked: Path) -
         {other: "# Other\n", TICKET: AGREED + "\nParent: ../../other/spec.md\n"},
         record=False,
     )
-    assert judged(tracked) == [
-        f"{BUT}{TICKET} points a ticket the owner agreed to build at another spec"
-    ]
+    assert judged(tracked) == [f"{BUT}{other} {INHERITED}; {TICKET} {FROZEN}"]
 
 
 def test_more_than_three_refusals_are_counted(tracked: Path) -> None:
@@ -1388,6 +1390,15 @@ def test_closing_the_blocker_of_a_labelled_ticket_is_the_owners(tmp_path: Path) 
     branch(tmp_path, "records-thing")
     change(tmp_path, {first: "# 01: A\n\nStatus: done\n"}, record=False)
     assert judged(tmp_path) == [f"{BUT}{first} {WAITS_ON.format(ticket=second)}"]
+
+
+def test_a_ticket_no_one_agreed_to_takes_its_conjecture_and_answers(tmp_path: Path) -> None:
+    path = ".scratch/thing/issues/02-b.md"
+    repository(tmp_path, {**BASE, TICKET: AGREED, path: "# 02: B\n\nStatus: needs-info\n"})
+    branch(tmp_path, "records-thing")
+    appended = "\n## Conjecture\n\nIt works.\n\n## Answers\n\nQ: a? A: b.\n"
+    change(tmp_path, {path: "# 02: B\n\nStatus: needs-info\n" + appended}, record=False)
+    assert judged(tmp_path) == []
 
 
 def test_no_ticket_is_closed_by_records_alone(tracked: Path) -> None:

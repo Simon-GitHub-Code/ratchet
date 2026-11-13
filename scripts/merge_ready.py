@@ -57,10 +57,10 @@ Usage: ``merge_ready.py [--root DIR] [--base REF] [--head REF] [--target BRANCH]
 from __future__ import annotations
 
 import argparse
+import contextlib
 import functools
 import json
 import os
-import posixpath
 import re
 import subprocess
 import sys
@@ -92,7 +92,7 @@ from ratchet_guards.manifest import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Iterator
 
 AGENT = "merge: agent"
 OWNER = "merge: owner"
@@ -689,26 +689,15 @@ def carries(text: str, labels: tuple[str, ...]) -> bool:
     return any(label.casefold() in text.casefold() for label in labels)
 
 
-def parent_spec(path: str, text: str) -> str | None:
-    """The tracker file a local ticket inherits its conjecture from, as the preflight finds it."""
-    named = preflight.local_ticket(path, text).parent
-    if named is None:
-        folder = PurePosixPath(path).parent
-        named = (folder.parent / "spec.md").as_posix() if folder.name == "issues" else None
-    return posixpath.normpath(named) if named and named.endswith(".md") else None
-
-
 @functools.cache
-def agreed(change: Change) -> frozenset[str]:
-    """The labelled tickets and the specs they inherit from, at the merge base or the tip.
+def labelled(change: Change) -> frozenset[str]:
+    """The tickets that carry the agent-ready label at the merge base or at the tip.
 
-    Why: the label is the owner's agreement to build a ticket as it stands (ADR 0008), and the
-    spec it names as parent, or the ``spec.md`` beside its ``issues/``, gives it the approach.
-    A spec no labelled ticket inherits from is still being written, its conjecture among it.
-    The tip counts too: a ticket labelled there after the change forked is agreed in the merge.
+    Why: the label is the owner's agreement to build a ticket as it stands (ADR 0008). The tip
+    counts too: a ticket labelled there after the change forked is agreed in the merge.
     """
     labels = spellings(change)
-    found: set[str] = set()
+    found = set()
     for ref in (change.fork, change.base):
         listed = git(
             change.root, "ls-tree", "-r", "--name-only", "-z", ref, "--", TRACKER_DIRECTORY
@@ -717,31 +706,76 @@ def agreed(change: Change) -> frozenset[str]:
             ticket = matches(path, TRACKER) and matches(path.casefold(), TICKETS)
             text = git(change.root, "show", f"{ref}:{path}") if ticket else None
             if text is not None and carries(text, labels):
-                spec = parent_spec(path, text)
-                found.update([path, spec] if spec else [path])
+                found.add(path)
     return frozenset(found)
+
+
+@contextlib.contextmanager
+def tracker_names(change: Change, ref: str) -> Iterator[Path]:
+    """A directory with an empty file for each path ``ref`` holds under ``.scratch/``.
+
+    Why: the preflight finds a ticket's spec and blockers by the names beside it, so the judge
+    lends it the names a commit holds and asks it, rather than finding them a second way.
+    """
+    listed = git(change.root, "ls-tree", "-r", "--name-only", "-z", ref, "--", TRACKER_DIRECTORY)
+    with tempfile.TemporaryDirectory() as scratch:
+        for path in filter(None, (listed or "").split("\0")):
+            target = Path(scratch, path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.touch()
+        yield Path(scratch)
+
+
+@functools.cache
+def build_inputs(change: Change) -> tuple[dict[str, str], dict[str, str]]:
+    """What each labelled ticket reads to decide what it builds, each with the ticket reading it.
+
+    The first is read whole: the ticket and the spec it inherits from. The second for its
+    ``Status:`` line: a ticket it is blocked by. ``preflight.reads`` names both, at the merge
+    base, the tip and the head, so a file the change makes one of them counts too.
+    """
+    whole: dict[str, str] = {}
+    status: dict[str, str] = {}
+    for ref in (change.fork, change.base, change.head):
+        with tracker_names(change, ref) as names:
+            for ticket in sorted(labelled(change)):
+                text = git(change.root, "show", f"{ref}:{ticket}")
+                read, waited = preflight.reads(preflight.local_ticket(ticket, text or ""), names)
+                for path in read:
+                    whole.setdefault(path, ticket)
+                for path in waited:
+                    status.setdefault(path, ticket)
+    return whole, status
 
 
 def unreadable(change: Change, path: str) -> str | None:
     return "is not text the judge can read" if change.after(path) is None else None
 
 
-def agreed_edit(change: Change, path: str) -> str | None:
-    """Why the change of an agreed file is the owner's: it does more than append to it."""
-    before, after = change.before(path) or "", change.after(path) or ""
-    if path in agreed(change) and not after.startswith(before):
-        return (
-            "changes what the owner agreed to build, where only what is appended to it lands"
-            " without them"
-        )
+def open_ticket(path: str, text: str | None) -> bool:
+    """Whether a ticket is open as the preflight reads it; a missing one blocks as an open one."""
+    return text is None or preflight.local_ticket(path, text).is_open
+
+
+def agreement(change: Change, path: str) -> str | None:
+    """Why a change of what a labelled ticket reads is the owner's: what it builds, or when."""
+    whole, status = build_inputs(change)
+    if path in whole:
+        ticket = whole[path]
+        if ticket == path:
+            return "is a ticket the owner agreed to build, and only they change it"
+        return f"is what {ticket} inherits its approach from, a ticket the owner agreed to build"
+    if path in status and open_ticket(path, change.before(path)) != open_ticket(
+        path, change.after(path)
+    ):
+        return f"changes whether {status[path]} may start, a ticket the owner agreed to build"
     return None
 
 
-def reparented(change: Change, path: str) -> str | None:
-    """Why an agreed ticket's change is the owner's: it points the ticket at another spec."""
-    before, after = change.before(path) or "", change.after(path) or ""
-    if path in agreed(change) and parent_spec(path, before) != parent_spec(path, after):
-        return "points a ticket the owner agreed to build at another spec"
+def closes(change: Change, path: str) -> str | None:
+    """Why a ticket's change is the owner's: it closes the ticket, and no build of it merged."""
+    if open_ticket(path, change.before(path)) and not open_ticket(path, change.after(path) or ""):
+        return "closes a ticket, which only the merge of its build does"
     return None
 
 
@@ -772,18 +806,9 @@ def namesake(change: Change, path: str) -> str | None:
     return None
 
 
-def tracker_refusal(change: Change, path: str) -> str | None:
-    return agreed_edit(change, path)
-
-
 def ticket_refusal(change: Change, path: str) -> str | None:
-    """Why a ticket's change is the owner's: the label, an agreed one changed, a borrowed number."""
-    return (
-        label_given(change, path)
-        or agreed_edit(change, path)
-        or reparented(change, path)
-        or namesake(change, path)
-    )
+    """Why a ticket's change is the owner's: the label given, a borrowed number, a close."""
+    return label_given(change, path) or namesake(change, path) or closes(change, path)
 
 
 def nothing(_change: Change, _path: str) -> None:
@@ -819,9 +844,9 @@ RECORDS = (
     # to-tickets, one file per ticket numbered from 01 (the local tracker of mattpocock-skills)
     RecordKind(re.compile(rf"\.scratch/{SLUG}/issues/\d+-{SLUG}\.md"), ticket_refusal),
     # to-spec; /ratchet:conjecture writes the conjecture into it
-    RecordKind(re.compile(rf"\.scratch/{SLUG}/spec\.md"), tracker_refusal),
+    RecordKind(re.compile(rf"\.scratch/{SLUG}/spec\.md"), nothing),
     # the change description with no forge: adopt, the feature skill and the route name it
-    RecordKind(re.compile(rf"\.scratch/changes/{CHANGE_NAME}\.md"), tracker_refusal),
+    RecordKind(re.compile(rf"\.scratch/changes/{CHANGE_NAME}\.md"), nothing),
     # a term or an `_Avoid_` item that domain-modeling adds (ADR 0014)
     RecordKind(re.compile(r"GLOSSARY\.md"), not_an_addition, appended=True),
     # a decision record domain-modeling writes: the owner's to agree, so --records can land it
@@ -872,7 +897,12 @@ def refusal(change: Change, path: str, *, kind: RecordKind, sides: tuple[str, st
             "changed on the default branch after the change forked, so the merge holds text the"
             " judge did not read; bring the change up to date"
         )
-    return twin(change, path) or unreadable(change, path) or kind.refuses(change, path)
+    return (
+        twin(change, path)
+        or unreadable(change, path)
+        or agreement(change, path)
+        or kind.refuses(change, path)
+    )
 
 
 def decision(change: Change, path: str) -> Reason:
