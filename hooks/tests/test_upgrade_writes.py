@@ -531,7 +531,7 @@ def test_the_owner_is_told_an_agent_adds_a_door_on_a_branch_and_he_decides_at_th
     assert "on a branch, and you decide at that merge" in conformance.NO_DOOR
 
 
-def test_the_owner_hears_how_many_fixes_wait_for_his_merge_and_that_one_change_carries_them() -> None:
+def test_the_owner_hears_that_one_change_carries_the_fixes_and_he_merges_once() -> None:
     assert "guard path" not in upgrade.owing_words(3, approved=0)
     said = upgrade.owing_words(3, approved=2)
     assert " 2 are in guard paths: an agent can make all the fixes in one change" in said
