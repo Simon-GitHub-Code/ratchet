@@ -26,14 +26,20 @@ The stages, in order; the first that does not hold is the answer:
    agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
    away, ``/pstack:poteto-mode`` when they stay). With more than one ticket ready the build is
-   the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0023).
+   the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0023). Before any of
+   these, a safeguard the repository owes (``triggers.owed``: a kind of code has arrived, or a
+   life event is declared, and a row it fires is still ``later:``) is ``/ratchet:safeguard``,
+   with the step it would otherwise name offered as the alternative (ADR 0028).
 
 After the three lines come the ``also:`` lines, when there are any: the upgrade, when the plugin
-in use is newer than the one the binding pins (ADR 0027), and each question the owner has
-answered with the recommendation three times running, offered as a standing answer
-(``questions.py``, ADR 0022). They are proposals and change nothing.
+in use is newer than the one the binding pins (ADR 0027); each question the owner has answered
+with the recommendation three times running, offered as a standing answer (``questions.py``, ADR
+0022); and each life event the tree shows a sign of and the binding does not declare. They are
+proposals and change nothing. ``--decline EVENT`` records that the owner said no to an event, in
+``.ratchet/events.tsv``, so it is not proposed again until a sign of it appears that was not
+there when they said no.
 
-Usage: ``route.py [--root DIR] [--offline] [--json]``.
+Usage: ``route.py [--root DIR] [--offline] [--json] [--decline EVENT]``.
 """
 
 from __future__ import annotations
@@ -45,11 +51,13 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import application_types
 import feature_preflight as preflight
 import gatelib
 import hooks_installed
 import plugin_pin
 import questions
+import triggers
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
 STANZA = "ratchet:method"
@@ -82,6 +90,10 @@ PULL_REQUEST = (
 WAIT = "nothing: the merge job merges it once `ci` is green, or comments why the merge is yours"
 MERGE_FALLBACK = "the binding's `merge` entry point"
 NEXT = "/ratchet:next"
+SAFEGUARD = "/ratchet:safeguard"
+EVENTS_LOG = "events.tsv"
+EVENTS_HEADER = "date\tevent\tsign\tanswer"
+DECLINED = "declined"
 CHANGES = ".scratch/changes"
 BLOCKED_RUN = ": blocked run"
 
@@ -529,9 +541,113 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
     if not checkout.on_default:
         return pull_request_step(checkout, gh)
     missing = records_missing(root)
-    if missing:
-        return Step(GRILL, missing, f"{SPEC}, then {TICKETS}", "records")
-    return ticket_step(root, gh, checkout)
+    step = (
+        Step(GRILL, missing, f"{SPEC}, then {TICKETS}", "records")
+        if missing
+        else ticket_step(root, gh, checkout)
+    )
+    return safeguard_step(root, step) or step
+
+
+# --- safeguards and life events (ADR 0028) ---------------------------------------------------
+
+
+def safeguard_step(root: Path, instead: Step) -> Step | None:
+    """``/ratchet:safeguard`` when the repository owes a row, offering ``instead`` beside it.
+
+    Why: it comes before any build, since the next change that adds an instance of an owed kind
+    is red; it never hides the build, since the owner may be mid-idea and the first one is free.
+    """
+    owing = triggers.owed(root)
+    if not owing:
+        return None
+    arrived: dict[str, list[triggers.Owed]] = {}
+    for row in owing:
+        arrived.setdefault(row.trigger, []).append(row)
+    said = []
+    for trigger, rows in arrived.items():
+        questions_owed = ", ".join(row.question for row in rows)
+        if trigger.startswith(application_types.CODE):
+            count = rows[0].count
+            said.append(
+                f"`{rows[0].name}` has arrived ({count} instance{'s' * (count != 1)})"
+                f" and owes {questions_owed}"
+            )
+        else:
+            said.append(f"the declared life event `{rows[0].name}` owes {questions_owed}")
+    code = any(row.trigger.startswith(application_types.CODE) for row in owing)
+    cost = (
+        "the first instance is free, a second waits for this"
+        if code
+        else "a declared event is never red"
+    )
+    return Step(
+        SAFEGUARD,
+        f"{'; '.join(said)}. Or carry on with {instead.command}: {cost}",
+        instead.command,
+        "safeguard",
+    )
+
+
+def declined_signs(root: Path) -> set[tuple[str, str]]:
+    """The (event, sign) pairs the owner said no to, from ``.ratchet/events.tsv``."""
+    rows = (gatelib.read_text(root / gatelib.STATE / EVENTS_LOG) or "").splitlines()[1:]
+    cells = [row.split("\t") for row in rows]
+    return {(c[1], c[2]) for c in cells if len(c) == len(EVENTS_HEADER.split("\t"))}
+
+
+def signs_seen(root: Path) -> dict[str, dict[str, str]]:
+    """Per undeclared life event, each sign glob the tree matches and the first path it matched."""
+    binding = gatelib.read_text(root / BINDING)
+    if binding is None:
+        return {}
+    declared = application_types.life_events(binding)
+    paths = gatelib.tracked_paths(root)
+    seen: dict[str, dict[str, str]] = {}
+    for name, event in application_types.load().events.items():
+        if name in declared:
+            continue
+        for sign in event.signs:
+            match = next((path for path in paths if gatelib.matches(path, [sign])), None)
+            if match is not None:
+                seen.setdefault(name, {})[sign] = match
+    return seen
+
+
+def event_proposals(root: Path) -> list[str]:
+    """One sentence per undeclared life event the tree shows a sign of that was not declined.
+
+    Why: a sign is evidence of intent, not of users, so the owner declares the event; a sign
+    already declined is not raised again, so an owner who said no is not asked at every turn.
+    """
+    declined = declined_signs(root)
+    events = application_types.load().events
+    lines = []
+    for name, signs in signs_seen(root).items():
+        fresh = [path for sign, path in signs.items() if (name, sign) not in declined]
+        if fresh:
+            lines.append(
+                f"`{fresh[0]}` is a sign that the project is `{name}` ({events[name].meaning}):"
+                f" if it is, type `{SAFEGUARD} {name}`; if not yet, say so and it is not proposed"
+                " again until a new sign of it appears"
+            )
+    return lines
+
+
+def decline(root: Path, event: str) -> int:
+    """Record that the owner said no to ``event`` for every sign of it the tree now shows."""
+    signs = signs_seen(root).get(event, {})
+    if not signs:
+        print(f"route: no sign of `{event}` is proposed, so there is nothing to decline")
+        return 2
+    log = gatelib.state_dir(root) / EVENTS_LOG
+    if not log.is_file():
+        log.write_text(EVENTS_HEADER + "\n", encoding="utf-8")
+    with log.open("a", encoding="utf-8") as lines:
+        for sign in signs:
+            lines.write(f"{questions.today()}\t{event}\t{sign}\t{DECLINED}\n")
+    print(f"route: `{event}` is not proposed again until a new sign of it appears")
+    return 0
 
 
 def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
@@ -557,10 +673,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", default=".")
     parser.add_argument("--offline", action="store_true", help="read no tracker")
     parser.add_argument("--json", action="store_true", dest="as_json")
+    parser.add_argument("--decline", metavar="EVENT", help="the owner said no to this event")
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
+    if options.decline:
+        return decline(root, options.decline)
     step = decide(root, None if options.offline else preflight.run_gh)
-    also = pin_proposals(root) + questions.proposals(root)
+    also = pin_proposals(root) + questions.proposals(root) + event_proposals(root)
     if options.as_json:
         print(json.dumps({**asdict(step), "also": also}, indent=2))
     else:

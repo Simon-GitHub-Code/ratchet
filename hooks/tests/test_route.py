@@ -499,3 +499,84 @@ def test_a_plugin_newer_than_the_pin_is_offered_as_the_upgrade(tmp_path: Path, c
     write(root, "docs/process/binding.md", BINDING)
     assert route.main(["route", "--root", str(root), "--offline"]) == 0
     assert len(capsys.readouterr().out.splitlines()) == 3
+
+
+OWES = (
+    "- Application types: service\n- Life events: {events}\n\n## Gates\n\n"
+    "| Question | Tool | Tier | Threshold source | Entry point |\n| --- | --- | --- | --- | --- |\n"
+    "| survives failing dependencies | later: code:outbound-call | 1 | | `just faults` |\n"
+    "| backup restores | later: life:irreplaceable-data | weekly | | `just restore` |\n\n"
+    "## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n"
+    "| outbound-call | `src/**/*.py` | `requests\\.get\\(` |\n"
+)
+
+
+def owing(tmp_path: Path, events: str = "none", **files: str) -> Path:
+    binding = BINDING + OWES.format(events=events)
+    return repository(tmp_path, {**ADOPTED, "docs/process/binding.md": binding, **files})
+
+
+def test_an_owed_safeguard_comes_first_and_offers_the_build_beside_it(tmp_path: Path) -> None:
+    # Why: ADR 0028. The next change that adds a second call is red, so binding comes first; the
+    # owner may be mid-idea, so the step they would otherwise take is named as the alternative.
+    root = owing(tmp_path)
+    assert route.decide(root, None).command == route.SPEC
+    write(root, "src/a.py", "import requests\nrequests.get('http://x')\n")
+    commit(root, "feat: the first outbound call")
+    step = route.decide(root, None)
+    assert step == route.Step(
+        route.SAFEGUARD,
+        "`outbound-call` has arrived (1 instance) and owes survives failing dependencies."
+        f" Or carry on with {route.SPEC}: the first instance is free, a second waits for this",
+        route.SPEC,
+        "safeguard",
+    )
+    write(root, "src/b.py", "requests.get('a')\nrequests.get('b')\n")
+    commit(root, "feat: two more")
+    assert "(3 instances)" in route.decide(root, None).why
+
+
+def test_a_declared_event_owes_its_rows_and_is_never_red(tmp_path: Path) -> None:
+    root = owing(tmp_path, events="irreplaceable-data", **{"GLOSSARY.md": "# <project>\n"})
+    step = route.decide(root, None)
+    assert step.command == route.SAFEGUARD
+    assert step.why == (
+        "the declared life event `irreplaceable-data` owes backup restores."
+        f" Or carry on with {route.GRILL}: a declared event is never red"
+    )
+    assert step.then == route.GRILL
+
+
+def test_a_sign_of_an_undeclared_event_is_proposed_until_the_owner_declines_it(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = owing(tmp_path, **{"fly.toml": "app = 'a'\n"})
+    assert route.event_proposals(root) == [
+        (
+            "`fly.toml` is a sign that the project is `deployed` (it runs somewhere people other"
+            f" than the owner can reach): if it is, type `{route.SAFEGUARD} deployed`; if not yet,"
+            " say so and it is not proposed again until a new sign of it appears"
+        )
+    ]
+    assert route.main(["route", "--root", str(root), "--offline", "--decline", "deployed"]) == 0
+    assert "not proposed again" in capsys.readouterr().out
+    assert route.event_proposals(root) == []
+    write(root, "deploy/app.yaml", "kind: x\n")
+    assert route.event_proposals(root)[0].startswith("`deploy/app.yaml` is a sign")
+    assert route.main(["route", "--root", str(root), "--offline", "--decline", "deployed"]) == 0
+    capsys.readouterr()
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    assert not any(line.startswith("also:") for line in capsys.readouterr().out.splitlines())
+
+
+def test_a_declared_event_and_an_unadopted_tree_propose_nothing(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = owing(tmp_path, events="deployed", **{"fly.toml": "app = 'a'\n"})
+    assert route.event_proposals(root) == []
+    assert route.main(["route", "--root", str(root), "--decline", "deployed"]) == 2
+    assert "nothing to decline" in capsys.readouterr().out
+    loose = repository(tmp_path / "loose", {"fly.toml": "app = 'a'\n"})
+    assert route.event_proposals(loose) == []
+    write(root, ".ratchet/events.tsv", "date\tevent\tsign\tanswer\nshort row\n")
+    assert route.declined_signs(root) == set()

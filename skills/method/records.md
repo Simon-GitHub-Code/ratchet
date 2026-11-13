@@ -92,7 +92,7 @@ The template and lifecycle are in [guards.md](guards.md).
 
 What went wrong for real, and the gate that now catches it. An incident nobody turned into a gate happens again. The question `incidents tighten a gate` is on the floor, so it holds from the first commit and judges nothing until the first record exists (ADR 0028).
 
-An agent writes it. When the owner reports an incident (something broke for them or for a user, data was lost, a deploy went wrong) the route proposes one, and the agent writes it with them under the next free number. It is blameless: it names what the system allowed, never who did it.
+An agent writes it. When the owner reports an incident (something broke for them or for a user, data was lost, a deploy went wrong) the agent they told proposes one and writes it with them under the next free number. It is blameless: it names what the system allowed, never who did it.
 
 ```markdown
 # NNNN: <one-line title>
