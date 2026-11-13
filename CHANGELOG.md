@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+An upgrade is one command (ADR 0029). `scripts/upgrade.py --apply` makes every change the plugin can derive from its templates and the repository's own binding, and the report it then prints is the rest of the upgrade, each item marked for an agent or for the owner. An upgrade changes guard paths, so the merge judge leaves the change to the owner: the owner's one act is the merge.
+
+### `upgrade.py --apply`
+
+- Every conformance finding names who fixes it: `auto` (the script), `agent` (needs judgement; printed with what to do and the template text to start from) or `owner` (a product or risk call; printed as a question with what the repository shows and what each answer leads to). The finding type has no default for it, so a check without one does not type-check. The kind belongs to the finding: a missing recipe is `auto` when it is entirely the plugin's and `agent` when it needs a list only the project can write.
+- `--apply` moves the binding's pin line to the plugin in use and writes the `auto` items: every workflow `ref` that checks the plugin out, at the pin's commit; the permission rules the plugin generates in `.claude/settings.json`; the Entry points rows the binding lacks, when every row runs `just`; each missing recipe that is entirely the plugin's and whose variables and dependencies the `justfile` already defines, at the end of the file; `plugin-pin` before each tier and `hooks-installed` before `ratchet`; the `## Asking the owner` section of `AGENTS.md`; a missing `flags.toml` or `quality/bites.toml`; the missing sections of the change template; the `.gitkeep` of `docs/disputes` and `docs/features`; and `merge.yml` and `weekly.yml` where a forge lacks them.
+- The dry run is the apply, on a copy. `upgrade.py` copies what git sees to a temporary directory, moves the pin there and runs every `auto` edit until none is left, then prints the plan. `--apply` writes the result to the repository, each file whole through a rename and the binding last. A run stopped at any write, rerun, ends where one whole run ends, and a second run changes nothing. The pin, the refs and the permission rules are written by one run, so CI is never between two versions.
+- It never loosens and never guesses. It adds what is missing and replaces only what the plugin owns: the pin line, the refs and the generated permission rules. A permission rule no version of the plugin writes is kept and becomes a question for the owner. A workflow or recipe that holds the project's own lines is left alone and becomes an `agent` item. Nothing under `guards/` is written. New Gates rows, the application types and the Triggers table are `agent` items; `- Life events:` and the one-way doors are questions for the owner.
+- It refuses, and writes nothing, when the plugin in use is older than the pin, when the order cannot be told, when the plugin carries no commit to pin, when the repository is not an adopted git work tree, or when a file it would write leads out of the repository through a link. A rule that does not converge on the copy is a bug in the plugin: exit 3, and nothing written.
+- Exit status: 0 when nothing is left to write or to do, 1 while edits are unwritten or `agent` or `owner` items remain, 2 on a refusal, 3 on a plugin bug. `--plugin` is gone: the plugin is the one the script runs from, so the pin and the templates it copies are always the same version.
+
+### The report is the whole upgrade
+
+- A binding without `- Application types:` still lists the Gates rows it lacks, a repository without `quality/bites.toml` still lists each gate that needs a bite, and the tier-list variables are asked for wherever `ci.yml` or `deep.yml` exists, not only once it reads them. The questions the application-types catalogue asks are no longer asked a second time by the operability check.
+- A `# bind: toolchain setup` line with nothing bound under it is a conformance finding, so a created `weekly.yml` cannot fail its first run unreported.
+- What only an answer can show is named in that answer's item: the Triggers rows each application type asks for, the rows each life event makes owed, and the bite a newly bound gate needs.
+- After `--apply` the report names only `agent` and `owner` items, the same ones the dry run named.
+- `just conformance` says how many of its findings `upgrade.py --apply` makes.
+
+### The permission rules follow the pin
+
+- `just settings` (`settings_rules.py --write`) refuses under a plugin other than the one CI runs: the binding's pin and the commit the workflows check out. Two commits between them, a half-done upgrade, refuse too. Rules written by a newer plugin are certain to be red in CI on the pinned commit, which is how a repository's main went red mid-upgrade. The refusal names `upgrade.py --apply`, which moves the pin, the refs and the rules together, and `RATCHET_PLUGIN` set to a checkout of the pin.
+- `--write` keeps a rule no version of the plugin writes, where it used to drop it. `--check` still reports it.
+
+### Upgrading
+
+- From any earlier adoption: update the plugin, then run `python3 <plugin>/scripts/upgrade.py` in the repository to see the plan, and `--apply` to write it. Do the `agent` items it prints, answer the `owner` questions, run `--apply` again (an answer can make more of it decidable), and open one change. The steps under the earlier "Upgrading" sections say what changed between those versions; `upgrade.py` makes or lists each one that a gate checks.
+
 ## 0.11.0
 
 A safeguard arrives with the first thing it guards, and the first one is free (ADR 0028). The method is for hobby and solo projects first, and it must never stop the owner in the middle of an idea. Telemetry, flags, security, load and the new reliability questions are no longer asked of every repository from the first commit. Each question carries a trigger, and is asked once that trigger fires.
