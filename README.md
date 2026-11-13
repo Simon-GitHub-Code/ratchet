@@ -40,7 +40,7 @@ Every repository on the method keeps all eleven. `skills/method/SKILL.md` states
 
 1. **One set of entry points.** The binding's table is the only list of gates, each row with the trigger that asks it, CI runs the same entry points, and a gate once asked is red with nothing to run.
 2. **Three tiers, two aggregates.** Tier 0 on every commit, tier 1 on every pull request, tier 2 on the default branch and nightly; `check` and `check-deep`.
-3. **The ratchet.** Thresholds only rise, checked against the merge base; each gate's effective configuration is snapshotted; mutation testing gates on zero unexplained survivors.
+3. **The ratchet.** Thresholds only rise, checked against the merge base; each gate config the guard manifest lists is snapshotted, and one it does not list is neither guarded nor recorded; mutation testing gates on zero unexplained survivors.
 4. **Guards.** The files that define, run or record a gate are guard paths, enforced by the harness, which the model cannot override.
 5. **Disputes.** An agent that believes a gate is wrong writes a dispute and stops on that gate; the owner decides.
 6. **Records.** A design brief, a glossary whose _Avoid_ lists are banned identifiers, one ADR per lasting decision with its refutation criterion, a brief per feature.
@@ -83,7 +83,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/markers.py` | 0 | did the count of TODO, FIXME, HACK and XXX markers rise? |
 | `scripts/suppressions.py` | 0 | did any kind of suppression rise, or a focus marker appear? |
 | `scripts/prose.py` | 0 | do the documents and comments keep to the glossary? |
-| `scripts/snapshots.py` | 0 | does each gate's recorded configuration match the one in force? |
+| `scripts/snapshots.py` | 0 | does each gate config the guard manifest lists match its recorded copy? |
 | `scripts/lowered.py` | 0 | was a threshold lowered, or a ceiling raised? |
 | `scripts/flags.py` | 0 and 2 | is every feature flag declared once, owned and off when new; with `--expired`, is one past its removal date? `--temporary` lists the flags a gate that requests routes boots with on |
 | `scripts/pins.py` | 0 | is every action pinned by commit, every image by digest, every workflow least-privileged? |
