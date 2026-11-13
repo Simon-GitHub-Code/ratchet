@@ -189,6 +189,39 @@ def test_a_process_that_exits_while_the_gate_looks_is_not_hiding() -> None:
     assert listeners.hiding(running.process.pid) is None
 
 
+# Why: a process that closes many sockets as it exits stays a while between letting go of its
+# memory and becoming a zombie.
+EXITS_SLOWLY = (
+    "import socket, time\nheld = [socket.socket() for _ in range(2000)]\ntime.sleep(0.05)"
+)
+
+
+def test_a_process_that_is_exiting_is_not_hiding() -> None:
+    # Why: from the moment an exiting process lets go of its memory, and before it is a zombie,
+    # the kernel refuses to list its open files as it does a hidden process's. A worker of the
+    # service that exits as the gate looks once made the gate give up on the listener it held.
+    refused = said = 0
+    for _ in range(20):  # until a child is caught in that moment
+        child = subprocess.Popen([sys.executable, "-c", EXITS_SLOWLY])  # noqa: S603 # -- no shell
+        while True:
+            try:
+                state = listeners.parse(listeners.read(f"/proc/{child.pid}/stat"))[1]
+            except OSError:
+                break
+            if state in listeners.ZOMBIE:
+                break
+            try:
+                os.listdir(f"/proc/{child.pid}/fd")  # noqa: PTH208 # -- as the gate lists them
+            except PermissionError:
+                refused += 1
+                said += listeners.hiding(child.pid) is not None
+        child.wait()
+        if refused:
+            break
+    assert refused, "no child was caught exiting"
+    assert said == 0, f"{said} of {refused} refusals were taken for a hidden process"
+
+
 @pytest.mark.parametrize("shape", ["hidden", "hidden-worker"])
 def test_a_process_of_the_service_the_gate_may_not_look_into_leaves_it_holding_nothing(
     shape: str,
