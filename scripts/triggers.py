@@ -24,11 +24,13 @@ A trigger may join parts with `` and `` (``life:deployed and code:stored-format`
 every part has. Such a row belongs to its code kind: a second instance of that kind while the row
 is owed is red, and the event alone never is.
 
-A row is **owed** when its trigger has fired and it is still ``later:``. The first file that brings
-a kind is free: the change that brings it prints a note and nothing more, however many instances
-that one file holds; instances in a second file, in the same change, are red. A later change that
-adds another instance while a row it owes is still ``later:`` is red, and says to run
-``/ratchet:safeguard``, which chooses the tool, writes the recipe and the fault and binds the row.
+A row is **owed** when its trigger has fired and it is still ``later:``. The change that brings a
+kind is free: it takes the count from none at the merge base to any number, in any number of
+files, and prints a note naming the rows it made owed (ADR 0030); the change-size ceiling bounds
+how much one change brings once the repository records one; with none, nothing does yet. A
+later change that adds another instance while a row it owes is
+still ``later:`` is red, and says to run ``/ratchet:safeguard``, which chooses the tool, writes
+the recipe and the fault and binds the row.
 A change that binds the row itself is green. A declared life event owes its rows too, and is never
 red: the route puts binding them first.
 
@@ -227,11 +229,6 @@ def owed(root: Path) -> list[Owed]:
     )
 
 
-def file_of(label: str, kind: Kind) -> str:
-    """The file an instance is in: a pattern kind's instances are ``path:line``."""
-    return label if kind.pattern is None else label.rsplit(":", 1)[0]
-
-
 def listing(labels: Sequence[str]) -> str:
     """A few instances, then how many more."""
     more = len(labels) - SHOWN
@@ -266,22 +263,14 @@ def judge(root: Path, base: str) -> tuple[list[str], list[str]]:
         before_count, now = len(at_base[kind]), len(at_head[kind])
         if not rows or now <= before_count:
             continue
-        added = [label for label in at_head[kind] if label not in set(at_base[kind])]
-        files = sorted({file_of(label, kinds[kind]) for label in added})
-        if before_count == 0 and len(files) <= 1:
+        if before_count == 0:
             notes.append(
                 f"triggers: note: '{kind}' has arrived ({listing(at_head[kind])}) and owes"
-                f" {names(rows)}; this first file is free. Run /ratchet:safeguard next to bind"
-                " them before another is added (ADR 0028)"
+                f" {names(rows)}; the change that brings a kind is free. Run /ratchet:safeguard"
+                " next to bind them before another is added (ADR 0030)"
             )
             continue
-        if before_count == 0:
-            problems.append(
-                f"triggers: '{kind}' arrives in {len(files)} files ({', '.join(files)}); the first"
-                f" file that brings the kind is free, not several. These rows are still `later:`:"
-                f" {names(rows)}. Run /ratchet:safeguard to bind them before adding more (ADR 0028)"
-            )
-            continue
+        added = [label for label in at_head[kind] if label not in set(at_base[kind])]
         problems.append(
             f"triggers: '{kind}' gained {len(added)} instance(s) ({listing(added)}) while the"
             f" base already held {before_count} and these rows are still `later:`:"

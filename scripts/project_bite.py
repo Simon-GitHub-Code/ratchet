@@ -28,16 +28,27 @@ The registry::
     expect = "no benchmark"
 
     [[bite]]
+    gate = "pins"
+    name = "a floating range"
+    replace = { path = "package.json", old = '"vitest": "5.1.0"', new = '"vitest": "^5.1.0"' }
+    expect = "floating range"
+
+    [[bite]]
     gate = "telemetry"
     name = "a route registered past the seam"
     proof = "outside-the-seam"           # the named proof this question requires
     patch = "quality/bites/route-past-the-seam.patch"
     expect = "emits no span"
 
-A fault is exactly one of ``write`` (create or replace a file), ``patch`` (a diff under
-``quality/bites/``, applied with ``git apply``) and ``remove`` (delete every file a glob
-matches). ``args`` are appended to the gate's command, and ``commit = true`` commits the fault in
-the copy first, for a gate that reads history or the index.
+A fault is exactly one of ``write`` (create or replace a file), ``replace`` (in a file that
+exists, the one place ``old`` stands becomes ``new``; a list of them for several places),
+``patch`` (a diff under ``quality/bites/``, applied with ``git apply``) and ``remove`` (delete
+every file a glob matches). A ``replace`` keeps applying while the lines around ``old`` change,
+where a patch's context lines break on the first unrelated edit beside them. A fault that no
+longer applies (a patch that does not apply, ``old`` standing nowhere or in two places) is
+``THE FAULT WAS NOT PLANTED``, which is red. ``args`` are appended to the gate's command, and
+``commit = true`` commits the fault in the copy first, for a gate that reads history or the
+index.
 
 For each gate the script runs the gate in the copy and requires green, then per bite plants the
 fault, runs the gate, and requires red with ``expect`` in its output more often than in the green
@@ -107,6 +118,7 @@ if TYPE_CHECKING:
 REGISTRY = Path("quality/bites.toml")
 MISSING = "missing; every gate bound to a tool needs a [[bite]]"
 PATCHES = "quality/bites/"
+KINDS = ("write", "patch", "remove", "replace")
 # Why: a path in one of these defines what a gate runs or judges. A threshold or a register entry
 # is what a gate compares against, and `ratchet-lowered` and the snapshots judge those.
 GATE_GROUPS = ("tool-config", "gate-commands", "fitness", "gate-tools", "formal")
@@ -250,7 +262,54 @@ class Remove:
                 directory.rmdir()
 
 
-Fault = Write | Patch | Remove
+@dataclass(frozen=True)
+class Swap:
+    """In one file, the one place ``old`` stands becomes ``new``."""
+
+    path: str
+    old: str
+    new: str
+
+
+@dataclass(frozen=True)
+class Replace:
+    """Exact text replaced in files that exist: a fault that holds while the lines around change."""
+
+    swaps: tuple[Swap, ...]
+
+    def plant(self, copy: Path) -> None:
+        """Replace each text; ``Unprovable`` when one stands nowhere or in more than one place."""
+        for swap in self.swaps:
+            target = copy / swap.path
+            if not within(copy, target):
+                message = f"{swap.path} leaves the copy through a symbolic link"
+                raise Unprovable(message)
+            # Why: restoring the copy puts back only what git sees, so a fault in an ignored file,
+            # reached directly or through a link, would stay planted for the next bite.
+            resolved = target.resolve().relative_to(copy.resolve()).as_posix()
+            if resolved not in visible(copy):
+                message = (
+                    f"{swap.path} is not a file git sees, and restoring the copy undoes only those"
+                )
+                raise Unprovable(message)
+            content, old = target.read_bytes(), swap.old.encode()
+            first = content.find(old)
+            if first == -1:
+                message = (
+                    f"{swap.path} no longer holds the text the fault replaces; write 'old' as the"
+                    f" file has it now: {swap.old!r}"
+                )
+                raise Unprovable(message)
+            if content.find(old, first + 1) != -1:
+                message = (
+                    f"{swap.path} holds the text the fault replaces in more than one place;"
+                    f" lengthen 'old' until it names one: {swap.old!r}"
+                )
+                raise Unprovable(message)
+            target.write_bytes(content[:first] + swap.new.encode() + content[first + len(old) :])
+
+
+Fault = Write | Patch | Remove | Replace
 
 
 @dataclass(frozen=True)
@@ -309,11 +368,31 @@ def text(table: dict[str, object], key: str) -> str:
     return value
 
 
-def read_fault(table: dict[str, object]) -> Fault:
-    kinds = [kind for kind in ("write", "patch", "remove") if kind in table]
-    if len(kinds) != 1:
-        message = "a bite plants exactly one fault: one of 'write', 'patch' and 'remove'"
+def read_swap(swap: object) -> Swap:
+    """One ``{ path, old, new }`` of a ``replace`` fault."""
+    if not isinstance(swap, dict) or set(swap) != {"path", "old", "new"}:
+        message = "'replace' is { path = ..., old = ..., new = ... }, or a list of them"
         raise ValueError(message)
+    if not inside(text(swap, "path")):
+        message = "'replace' names a path inside the repository"
+        raise ValueError(message)
+    if not isinstance(swap["new"], str):
+        message = "'new' is a string"
+        raise ValueError(message)  # noqa: TRY004 # -- one kind for all that is wrong in a bite
+    return Swap(swap["path"], text(swap, "old"), swap["new"])
+
+
+def read_fault(table: dict[str, object]) -> Fault:
+    kinds = [kind for kind in KINDS if kind in table]
+    if len(kinds) != 1:
+        message = "a bite plants exactly one fault: one of 'write', 'patch', 'remove' and 'replace'"
+        raise ValueError(message)
+    if kinds == ["replace"]:
+        swaps = table["replace"]
+        if swaps == []:
+            message = "'replace' names no text"
+            raise ValueError(message)
+        return Replace(tuple(map(read_swap, swaps if isinstance(swaps, list) else [swaps])))
     if kinds == ["remove"]:
         patterns = strings(table, "remove")
         if not patterns:
@@ -341,10 +420,7 @@ def read_fault(table: dict[str, object]) -> Fault:
 
 def read_bite(table: dict[str, object]) -> Bite:
     """One ``[[bite]]`` table as a ``Bite``; ``ValueError`` says what is wrong with it."""
-    unknown = sorted(
-        set(table)
-        - {"gate", "name", "expect", "write", "patch", "remove", "args", "commit", "proof"}
-    )
+    unknown = sorted(set(table) - {"gate", "name", "expect", "args", "commit", "proof", *KINDS})
     if unknown:
         message = f"unknown key '{unknown[0]}'"
         raise ValueError(message)
