@@ -80,6 +80,8 @@ THRESHOLDS = (
     '[python.coverage.core]\npaths = ["src/**"]\nabsolute = true\n\n'
     "[ceilings.change]\nfiles = 1\nlines = 2\n"
 )
+# Why: the preflight reads a local ticket only where the guard keeps its label.
+TICKET_PATH = ".scratch/thing/issues/01-add-the-thing.md"
 TICKET = (
     "# 01: Add the thing\n\n**Status:** `ready-for-agent`\n\n## What to build\n\nThe thing.\n\n"
     "## Conjecture\n\nOne function in src/a.py; the refuter is a failing call with two operands."
@@ -157,7 +159,7 @@ def scratch(root: Path) -> None:
     write(root, "mutants.jsonl", RECORDS.format(status="killed"))
     write(root, REGISTER_PATH, "# Mutation register\n")
     stryker_report(root, "Killed")
-    write(root, "tickets/01-add-the-thing.md", TICKET)
+    write(root, TICKET_PATH, TICKET)
     write(root, "flags.toml", "# No flags yet.\n")
     write(root, "surface.txt", "f(a, b)\n")
     write(root, "docs/process/binding.md", BINDING)
@@ -283,12 +285,12 @@ def timed_out_entry(root: Path) -> None:
 
 
 def no_conjecture(root: Path) -> None:
-    write(root, "tickets/01-add-the-thing.md", TICKET.replace("## Conjecture", "## Notes"))
+    write(root, TICKET_PATH, TICKET.replace("## Conjecture", "## Notes"))
     commit(root, "docs(tickets): drop the conjecture")
 
 
 def not_agent_ready(root: Path) -> None:
-    write(root, "tickets/01-add-the-thing.md", TICKET.replace("ready-for-agent", "needs-info"))
+    write(root, TICKET_PATH, TICKET.replace("ready-for-agent", "needs-info"))
     commit(root, "docs(tickets): back to triage")
 
 
@@ -476,7 +478,7 @@ def behind_an_open_blocker(root: Path) -> None:
 MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
 STRYKER = ["--tool", "stryker"]
 ANY_TOOL = ["--tool", "any-tool", "--mutants", "mutants.jsonl"]
-TICKET_REF = ["tickets/01-add-the-thing.md"]
+TICKET_REF = [TICKET_PATH]
 ADDITIVE = ["--fail-unless-additive"]
 GATE_READS_RED = "import pathlib, sys; sys.exit(pathlib.Path('red').is_file())"
 PARALLEL = [
