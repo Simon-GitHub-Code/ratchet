@@ -283,6 +283,8 @@ def test_open_makes_the_work_tree_outside_the_repository_and_the_plan_sees_it(
     assert drain.plan(offline(root, 1)).start == (), "one is building, and the cap is one"
     build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
     assert states(root)[BRANCH_A] == "built"
+    assert drain.plan(offline(root, 1)).start == (), "built, but still settled in its tree"
+    assert run(root, "close", ALPHA, "--outcome", "waits") == 0
     assert drain.plan(offline(root, 1)).start == (GAMMA,)
 
 
