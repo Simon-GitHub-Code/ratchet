@@ -264,6 +264,8 @@ class Ending:
     """Whether a run stopped too large names the parts to split the ticket into."""
     error: str = ""
     """The agent the script's error names, or ``REFUSED`` for one it raises on a bad input."""
+    resume: bool = False
+    """Whether the script's error tells the orchestrator to resume the run."""
     objections: frozenset[Objection] = frozenset()
     rounds: int = 0
     unresolved: bool = False
@@ -466,7 +468,8 @@ def answered(state: State, action: Action) -> State:
     assert action.role is not None
     ran = replace(state, agents=state.agents + 1, phase=action.phase)
     if action.answer in FAILED or action.answer in MALFORMED:
-        return _ended(ran, Ending(Outcome.ERROR, error=action.fails_as))
+        died = action.answer in FAILED
+        return _ended(ran, Ending(Outcome.ERROR, error=action.fails_as, resume=died))
     return STEPS[action.role](ran, action)
 
 
@@ -607,6 +610,20 @@ def reported(_: State, name: str, after: State) -> bool:
     return ending is not None and ending.outcome in {Outcome.BLOCKED, Outcome.REQUEST_CHANGES}
 
 
+def resumable(_: State, name: str, after: State) -> bool:
+    """An agent that dies ends the run in the script's error, which names that agent and says to resume the run, with no verdict and no result."""  # noqa: E501
+    action = named(name)
+    if action.answer not in FAILED:
+        return True
+    ending = after.ending
+    return (
+        ending is not None
+        and ending.outcome is Outcome.ERROR
+        and ending.error == action.fails_as
+        and ending.resume
+    )
+
+
 def judged_again(_: State, name: str, after: State) -> bool:
     """Judging a rebased branch again always ends on a second review, and only that review's own approval approves the branch."""  # noqa: E501
     action = named(name)
@@ -674,6 +691,7 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "6. the fix loop ends, and what it leaves owed is in the result": loop_ends,
     "7. the run never commits, pushes or opens a pull request": unpublished,
     "8. a failed or malformed answer ends in a result that says so": reported,
+    "8a. a dead agent ends the run in an error that says to resume it": resumable,
     "9. a rebased branch is approved only by its own second review": judged_again,
     "10. a run that stops too large names its parts and is unbuilt": split,
     "11. a promise the run kept from the ticket is in its assumptions": assumed,

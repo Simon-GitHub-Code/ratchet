@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import functools
 from collections import deque
+from typing import TYPE_CHECKING
 
 from tests import pipeline_model as model
 from tests import pipeline_world as world
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 (
     EVIDENCED,
@@ -22,6 +26,7 @@ from tests import pipeline_world as world
     LOOP_ENDS,
     UNPUBLISHED,
     REPORTED,
+    RESUMABLE,
     JUDGED_AGAIN,
     SPLIT,
     ASSUMED,
@@ -51,7 +56,11 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     CEILINGED: RECONCILED_OVER,
     LOOP_ENDS: None,
     UNPUBLISHED: None,
+    # 8 breaks on a dead agent, because the script raises and returns no result. 8a holds. It is
+    # ADR 0023 decision 2: "One run per ticket also keeps its own run to resume, so a ticket that
+    # dies is run again alone." The script's error says to resume the run.
     REPORTED: DIES_FIRST,
+    RESUMABLE: None,
     JUDGED_AGAIN: None,
     SPLIT: MEASURED_OVER,
     ASSUMED: None,
@@ -162,7 +171,12 @@ def described(
     return "\n".join([*lines, f"real:  {real.calls}", f"  {real.ending}"])
 
 
-def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers() -> None:
+Case = tuple[list[model.Action], model.Ending | None, world.Played]
+
+
+@functools.cache
+def played() -> tuple[list[Case], world.Batch]:
+    """Every run of the model with the ending it expects, and what the real workflow did on it."""
     cases = [(actions, state.ending) for actions, state in runs()]
     # Why: a local ticket file changes what the roles that read the ticket are told to run, so the
     # longest build and the longest rejudge run once more reading one.
@@ -171,18 +185,38 @@ def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers
         for start in (model.Start.BUILD, model.Start.REJUDGE_CONFLICT)
     ]
     batch = world.play([actions for actions, _ in cases], [actions for actions, _ in local])
+    together = zip([*cases, *local], batch.played, strict=True)
+    return [(actions, ending, real) for (actions, ending), real in together], batch
+
+
+def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers() -> None:
+    cases, batch = played()
     differ = [
         (actions, ending, real)
-        for (actions, ending), real in zip([*cases, *local], batch.played, strict=True)
+        for actions, ending, real in cases
         if real.calls != world.expected_calls(actions) or real.ending != ending
     ]
     shortest = described(*min(differ, key=lambda run: len(run[0]))) if differ else ""
-    assert not differ, (
-        f"{len(differ)} of {len(batch.played)} runs differ; the shortest:\n{shortest}"
-    )
+    assert not differ, f"{len(differ)} of {len(cases)} runs differ; the shortest:\n{shortest}"
     assert set(batch.effects) == set(model.Role), "every agent's prompt was read"
     for role, commands in batch.effects.items():
         assert commands <= model.COMMANDS[role], (role, sorted(commands - model.COMMANDS[role]))
+
+
+def ending_on(test: Callable[[model.Action], bool]) -> list[tuple[model.Action, world.Played]]:
+    """Each real run whose last answer passes ``test``, with that answer."""
+    return [(actions[-1], real) for actions, _, real in played()[0] if test(actions[-1])]
+
+
+def test_on_the_real_workflow_every_dead_agent_ends_in_an_error_that_says_to_resume() -> None:
+    dead = ending_on(lambda last: last.answer in model.FAILED)
+    assert {last.role for last, _ in dead} == set(model.Role)
+    for last, real in dead:
+        assert "result" not in real.raw, last.name
+        error = real.raw["error"]
+        assert error["name"] == "Error", last.name
+        assert error["message"].startswith(f"{last.fails_as} agent returned no result"), error
+        assert world.RESUME in error["message"], error
 
 
 @functools.cache
@@ -218,7 +252,7 @@ def test_a_change_a_fix_round_or_a_reconcile_takes_over_the_ceiling_is_approved(
 
 
 def test_a_change_measured_over_a_ceiling_stops_with_no_parts_named() -> None:
-    played = replays()["measured over"]
-    assert played.calls == (("preflight", "Preflight"), ("spec", "Spec"))
-    too = played.raw["result"]["tooLarge"]
+    real = replays()["measured over"]
+    assert real.calls == (("preflight", "Preflight"), ("spec", "Spec"))
+    too = real.raw["result"]["tooLarge"]
     assert too == {"kind": "product", "stage": "the spec", "parts": 0}

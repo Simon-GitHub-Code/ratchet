@@ -287,6 +287,7 @@ FORCED = {
 }
 STAGES = {"the spec": Role.SPEC, "the implementation": Role.IMPLEMENT}
 DIED = re.compile(r"^(.+) agent returned no result")
+RESUME = "resume the run"
 
 
 def objection(reason: str) -> Objection:
@@ -322,7 +323,8 @@ def stopped(result: dict[str, Any]) -> Ending:
 def ending(raw: dict[str, Any]) -> Ending:
     """How a real run ended, as the model tells it."""
     if "error" in raw:
-        return Ending(Outcome.ERROR, error=failure(raw["error"]))
+        error = raw["error"]
+        return Ending(Outcome.ERROR, error=failure(error), resume=RESUME in error["message"])
     result = raw["result"]
     outcome = Outcome(result["verdict"])
     if outcome is Outcome.BLOCKED:
