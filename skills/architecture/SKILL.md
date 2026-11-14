@@ -1,14 +1,21 @@
 ---
 name: architecture
-description: "Choose, record and declare how an adopted repository is built: propose two or three whole systems (keep what is here first), from which the owner picks one, with the tools that check it, in a single round; write the architecture decision record and the binding's Architecture section, and open one change. The route names it when an upgrade left the architecture owed; the owner types it again to revisit the choice."
+description: "Choose, record and declare how an adopted repository is built, or review it again when its shape changes. Choosing: propose two or three whole systems (keep what is here first), from which the owner picks one, with the tools that check it, in a single round; write the architecture decision record and the binding's Architecture section, and open one change. The route names it when an upgrade left the architecture owed; the owner types it again to revisit the choice. Reviewing: when a kind of code that reopens the architecture has arrived for the first time, or such a life event is declared, read the decision and the declared parts against the code, record that the decision holds, or the way to change it the owner picks from two or three, as a superseding decision with the parts updated so the gates hold."
 disable-model-invocation: true
 ---
 
-# Choose the architecture
+# The architecture
 
-Load the `ratchet:method` skill first, then read its [architecture.md](../method/architecture.md): it says what an option states, how fit is judged, what the record holds and what the binding declares (ADR 0049). Adoption does this at its step 3 on a new repository. This skill does it for a repository adopted before that, which the route sends here while `quality/owed.toml` lists an `architecture` entry, and for an owner who wants to revisit the choice.
+Load the `ratchet:method` skill first, then read its [architecture.md](../method/architecture.md): it says what an option states, how fit is judged, what the record holds and what the binding declares (ADR 0049). This skill does one of two things.
 
-## What the owner is asked
+- **Review** it, when the project's shape has changed (ADR 0052). Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call: when it lists an owed review, and the owner did not ask to revisit the choice, follow [Review the architecture](#review-the-architecture).
+- **Choose** it, for a repository adopted before the architecture was asked, which the route sends here while `quality/owed.toml` lists an `architecture` entry, and for an owner who wants to revisit the choice: follow [Choose the architecture](#choose-the-architecture). Adoption does this at its step 3 on a new repository.
+
+When both are owed, review first: the review reads what is here as the decision and its record states it in full, and the choice follows as its own change.
+
+## Choose the architecture
+
+### What the owner is asked when choosing
 
 The architecture and its tools, in one round, recommendation first, in plain words with no method term. On a repository with code the first option is "keep what is here", described from the code; another is offered only when the code shows a reason, and a rewrite never by default.
 
@@ -17,7 +24,7 @@ The architecture and its tools, in one round, recommendation first, in plain wor
 
 A choice the owner's words already make is not asked. Everything else is assumed and listed under **Assumed** at the end.
 
-## Steps
+### Steps to choose
 
 1. **Check the ground.** On the default branch with a clean tree, make the branch `chore/architecture`. Read the binding, `AGENTS.md` (its `## Layers` section, if any), `docs/adr/` (an earlier architecture record, if any) and the tree: what it is written in, how it starts, where it keeps data, what its parts are and how they depend on each other, and which tool each bound gate runs. Done when you can describe what is here as an option.
 
@@ -30,3 +37,39 @@ A choice the owner's words already make is not asked. Everything else is assumed
 5. **Settle the ledger and open the change.** Delete each `[[owed]]` entry of `quality/owed.toml` whose `rule` is `architecture`, with the Edit tool: `conformance` is red on an entry whose finding is gone, and a ledger only shrinks between upgrades, so dropping them loosens nothing. Run `conformance` again; it is green on them. Commit with the subject `chore(method): record the architecture`, push and open the pull request with every template section filled, the options and the answers under its summary. With no forge, write the change description at `.scratch/changes/chore/architecture.md` and run `just merge chore/architecture`. A new record and the binding are guard paths, so the merge is the owner's, and the judge says so. A chosen system other than what is here is not built in this change: name the tickets it needs (moving each part, replacing each tool as *Overturning an assumption* in the records page says) for `/mattpocock-skills:to-spec`.
 
 6. **Hand over.** Under **You chose**, the system and the tools, one plain line each with what changing it later costs, or "I took my recommendation, as you left it to me". Then the **Assumed** block for anything else you chose, and the number of questions the owner answered. The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
+
+## Review the architecture
+
+The architecture the owner chose is right for the project it saw. Some arrivals change the project's shape: the first stored data, the first process that keeps running, the first system it calls that it does not run, the first screen, the first work a clock starts, the first time more than one person acts in it, the first time parts run at once; and the life events `deployed`, `irreplaceable-data` and `depended-on`. The catalogue's `[architecture]` table in [application-types.toml](../method/application-types.toml) names each trigger and the question its arrival reopens (ADR 0052).
+
+When one fires, a review is **owed**, as a safeguard is (ADR 0028, ADR 0048): the change that brought the kind was free, and a later change that adds another instance of it is red until a decision record that names the trigger is on the default branch. A declared event is never red. The route names `/ratchet:architecture` before `/ratchet:safeguard`, since the review decides where the new kind lives and so where its safeguards go.
+
+### What the owner is asked when reviewing
+
+At most one message, and only when the review finds that the architecture should change.
+
+- **Assume** `architecture.holds`: the existing decision still fits the new shape. Record it (step 4) and list it under **Assumed** in the hand-over: what arrived, why the decision holds, what changing it later costs, and what the owner can say to reopen it.
+- When it does not fit, put the ways to change it to the owner in one message, every trigger this review covers in it, so the owner can accept the recommendation at once:
+
+  **Ask** `architecture.change`: "<what the project now does that the way it is built did not plan for, and two or three ways forward, each with what someone using it would notice, what it costs, and how hard it is to undo, the recommended one first>" All in one call of the harness's question tool where it takes them, or one message with them numbered.
+
+  Each option is a whole way of building it, as [architecture.md](../method/architecture.md) says an option is, told in the owner's words: what the user notices (speed, what is kept and where, what happens when something is down, who can reach it), what it costs to run, and what undoing it later means (what is rewritten, roughly how much work, and whether anything a user keeps is at risk). No method term and no tool name: the agent chooses tools afterwards, as an assumption. The answer is taken as given.
+
+### Steps to review
+
+1. **Check the ground.** On the default branch with a clean tree, make the branch `docs/architecture-<what>`, where `<what>` is the kinds or the events in a word or two. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call. It lists each owed review: its trigger, the kind or event, how many instances, and what the arrival reopens. Nothing owed: say so, print the route and stop. Done when you hold the list.
+
+2. **Read what was decided.** The architecture decision record: the ADR the binding's `## Architecture` section names on its `- Decision:` line (ADR 0049), and every ADR that superseded it or reviewed it since, which name their trigger on a `- Architecture review:` line. Where the binding has no such section (a repository adopted before the architecture was asked), the ADRs that decided how it is built (the stack, where it runs, where its data lives, how its parts talk), `AGENTS.md` and the binding are the decision as it stands, and your record states it in full. Then the declared parts, inner to outer with what each may depend on (the binding's `## Architecture` table, or `AGENTS.md`'s `## Layers` where that table is not there yet), and the design brief: who uses the product, where, and what is out of scope. Done when you can say the decision in three sentences and name each part's job.
+
+3. **Read the code as it now is.** `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --count` lists the instances of each kind. For each owed trigger, open every instance and say which part it sits in, what it reaches and what reaches it. Use `mattpocock-skills:codebase-design` on the boundary the new kind sits at. For an event, read what the event changes for the people it brings: who reaches the project and from where, what must survive, which surfaces are now promises. Answer the question the catalogue gives the trigger, from the code and the records. Done when each reopened question has an answer with the files that show it.
+
+4. **Decide: holds or changes.** The decision **holds** when every new instance sits in a part whose job covers it, the declared direction still describes every dependency, and the answer to each reopened question follows from the existing decision (the stored data is read and written by the one part the decision gives that job; the outside system is reached through one part that decides what happens when it fails). It **changes** when the new kind has no part whose job covers it, when covering it would break the direction, or when what the product now needs (others reaching it, data that cannot be recreated, people relying on it) contradicts where it runs, where its data lives or how its parts talk.
+
+   - **Holds.** Write the review under the next free number in `docs/adr/`: the title states that the decision holds as a sentence, `- Outcome: holds`, a `## Decision` that names the decision it confirms and says, per trigger, why it covers the arrival, with the files that show it, and a `## Refutation criterion`: what would show it no longer holds and when to look (the next arrival of the kind outside its part, a failure of the outside system that reaches the user, a second store).
+   - **Changes.** Prepare two or three whole options, each with its trade-offs, what it costs to run, its reversal cost and the parts it would declare, and the one you recommend and why. Ask `architecture.change` as *What the owner is asked when reviewing* says, one message. Then write the superseding record as [architecture.md](../method/architecture.md) says the record is written, with `- Outcome: changes`, a `## Decision` with the option chosen, its `- Chosen by:` line and the owner's answer in his words, a `## Considered options` section with every option, its trade-offs and its reversal cost, one list item each, a `## Reversal cost` and a `## Refutation criterion`. Name the decision it supersedes in its text; the earlier record's status becomes `superseded` with `superseded-by:` in the same change, and the guard asks the owner for that edit, which is his merge in any case. Point the binding's `- Decision:` line at it, and update the declared parts to the chosen option: a part added for the new kind, what it may depend on, and the `dependency direction` gate's config, so that the code as it now stands passes. Code that has to move to fit is listed in the record as the first work under the new decision; this change moves none of it.
+
+   Either way the record names every trigger it covers on one line, `- Architecture review:` followed by the keys separated by commas, such as `` `code:stored-format`, `life:deployed` ``, and the day it was decided on another, `- Decided: YYYY-MM-DD`. The `triggers` gate counts it only with those lines, the `- Outcome:` line, a `## Decision` and a `## Refutation criterion` that say something, and, when it changes the architecture, two or more options under `## Considered options`. Done when `triggers.py --reviews` prints `[]`.
+
+5. **Prove it and open the change.** Run `conformance` and `check`; both green. A changed part that the `dependency direction` gate finds broken is fixed in the parts you declared, never by loosening the gate. Commit with the subject `docs(adr): architecture review for <what>` (at most 72 characters), push and open the pull request with every template section filled: under Criticism, what in the code the decision does not yet explain. With no forge, write the change description at `.scratch/changes/<branch>.md` and run `just merge <branch>`. The change brings an ADR, so the merge judge leaves the merge to the owner, and says so. The review counts once it is on the default branch: a record written in the change that adds another instance does not.
+
+6. **Hand over.** In plain words: what arrived, what the review found, and what now holds: the decision kept, or the option the owner chose and what follows from it. A decision that holds goes under **Assumed**, one line per trigger: what you concluded and why in a clause, what changing it later costs, and that saying "rethink how it is built for <the thing that arrived>" reopens it. No method term. The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are; when safeguards are owed it names `/ratchet:safeguard` next.

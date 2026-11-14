@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gatelib
+import markdown_text
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -71,10 +72,15 @@ def code_kinds(trigger: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Event:
-    """A life event: what it means and the globs whose presence makes the route propose it."""
+    """A life event: what it means and the globs whose presence makes the route propose it.
+
+    ``signs`` are the shipped globs; ``in_binding`` says the stack decides the rest, in the
+    binding's ``## Life event signs`` table (ADR 0050).
+    """
 
     meaning: str
     signs: tuple[str, ...]
+    in_binding: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,6 +90,7 @@ class Catalogue:
     ``proofs`` maps a question to the named proofs it requires, and ``meanings`` a proof to the
     fault it plants. ``triggers`` maps every question to when it is asked (ADR 0028), ``kinds`` a
     kind of code to what marks it, and ``events`` a life event to its meaning and signs.
+    ``architecture`` maps each trigger that reopens the architecture to what it reopens (ADR 0052).
     """
 
     types: Mapping[str, str]
@@ -95,6 +102,7 @@ class Catalogue:
     kinds: Mapping[str, str] = field(default_factory=dict)
     events: Mapping[str, Event] = field(default_factory=dict)
     directed: frozenset[str] = frozenset()
+    architecture: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def questions(self) -> frozenset[str]:
@@ -139,6 +147,17 @@ class Catalogue:
             if self.asked_of(question) & types
             for kind in code_kinds(self.trigger_of(question))
         )
+
+    def kinds_required(self, types: AbstractSet[str]) -> frozenset[str]:
+        """The kinds the Triggers table must find: those asked, and each reopening the architecture.
+
+        Why: ADR 0052. A kind that reopens the architecture is counted whatever the types, or its
+        arrival could never owe the review.
+        """
+        if not types:
+            return frozenset()
+        reopen = (code_kinds(trigger) for trigger in self.architecture)
+        return self.kinds_asked(types) | frozenset(kind for kinds in reopen for kind in kinds)
 
     def asked_of(self, question: str) -> frozenset[str]:
         """The types a question is asked of: every type unless the catalogue narrows it."""
@@ -240,9 +259,12 @@ def parsed(text: str) -> Catalogue:
         directed=frozenset(q["name"] for q in questions if q.get("directives")),
         kinds=dict(data.get("kinds", {})),
         events={
-            name: Event(event["meaning"], tuple(event["signs"]))
+            name: Event(
+                event["meaning"], tuple(event.get("signs", ())), bool(event.get("in-binding"))
+            )
             for name, event in data.get("events", {}).items()
         },
+        architecture=dict(data.get("architecture", {})),
     )
 
 
@@ -266,18 +288,76 @@ def life_events(binding: str) -> frozenset[str]:
     return frozenset(name for name in named if name and name != "none")
 
 
+SIGNS_SECTION = "## Life event signs"
+SIGNS_COLUMNS = ("Event", "Paths")
+MIN_REASON_LENGTH = 10
+
+
+@dataclass(frozen=True)
+class Signs:
+    """A binding's ``## Life event signs`` table: the globs that mark each event, and its faults."""
+
+    globs: Mapping[str, tuple[str, ...]]
+    problems: tuple[str, ...]
+
+
+def signs_in(binding: str | None) -> Signs | None:
+    """The binding's life event signs table, or ``None`` when the section is missing.
+
+    A row is the event and its Paths: globs in backticks, or ``none: <reason>``. Every event of
+    the catalogue that ``in-binding`` names needs a row, and a row names no other event.
+    """
+    if binding is None or not markdown_text.has_section(binding, SIGNS_SECTION):
+        return None
+    events = load().events
+    needed = [name for name, event in events.items() if event.in_binding]
+    tables = [t for t in markdown_text.tables(binding, SIGNS_SECTION) if t.header == SIGNS_COLUMNS]
+    if not tables:
+        columns = " | ".join(SIGNS_COLUMNS)
+        return Signs({}, (f"the section lacks its table with the columns {columns}",))
+    globs: dict[str, tuple[str, ...]] = {}
+    problems: list[str] = []
+    for label, cell in tables[0].rows:
+        name = label.strip("` ")
+        plain = cell.strip("` ")
+        if name.startswith("<") or cell.startswith("<"):
+            problems.append("the table still has the template's placeholder row")
+        elif name not in needed:
+            known = ", ".join(needed)
+            problems.append(f"the row '{name}' is no event whose signs the binding holds: {known}")
+        elif name in globs:
+            problems.append(f"the event '{name}' is listed twice")
+        elif plain.lower().startswith("none:"):
+            if len(plain[len("none:") :].strip()) < MIN_REASON_LENGTH:
+                problems.append(f"'{name}' says none with no reason: say why no file marks it")
+            globs[name] = ()
+        elif listed := [g.strip() for item in markdown_text.ticked(cell) for g in item.split(",")]:
+            globs[name] = tuple(glob for glob in listed if glob)
+        else:
+            problems.append(
+                f"'{name}' names no globs: write them in backticks, or `none: <reason>`"
+            )
+    problems += [f"the event '{name}' has no row" for name in needed if name not in globs]
+    return Signs(globs, tuple(problems))
+
+
 def signs_seen(root: Path) -> dict[str, dict[str, str]]:
-    """Per undeclared life event, each sign glob the tree matches and the first path it matched."""
+    """Per undeclared life event, each sign glob the tree matches and the first path it matched.
+
+    The signs are the catalogue's shipped ones and the binding's table (ADR 0050). A sign only
+    proposes an event to its owner, who declares it, so the work tree's table is read.
+    """
     binding = gatelib.read_text(root / gatelib.BINDING)
     if binding is None:
         return {}
     declared = life_events(binding)
+    table = signs_in(binding)
     paths = gatelib.tracked_paths(root)
     seen: dict[str, dict[str, str]] = {}
     for name, event in load().events.items():
         if name in declared:
             continue
-        for sign in event.signs:
+        for sign in (*event.signs, *(table.globs.get(name, ()) if table else ())):
             match = next((path for path in paths if gatelib.matches(path, [sign])), None)
             if match is not None:
                 seen.setdefault(name, {})[sign] = match

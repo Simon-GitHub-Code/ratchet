@@ -133,6 +133,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | method conformance | `ratchet` plugin `scripts/conformance.py` | 1 | | `just conformance` |
 | incidents tighten a gate | `ratchet` plugin `scripts/conformance.py` | 1 | `docs/incidents/` against `quality/bites.toml` | `just incidents` |
 | safeguards bound before more instances | `ratchet` plugin `scripts/triggers.py` | 1 | the Triggers section below, as the merge base holds it | `just triggers` |
+| architecture reviewed when its shape changes | `ratchet` plugin `scripts/triggers.py` | 1 | the Triggers section below and `docs/adr/`, as the merge base holds them | `just triggers` |
 | full mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 2 | `quality/mutation-register.toml` | `just mutation` |
 | deep interface conformance | | 2 | | `just api-deep` |
 | symbolic checking | | 2 | | `just symbolic` |
@@ -155,11 +156,20 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 
 ## Triggers
 
-Where each `code:<kind>` trigger of the Gates table finds its instances in this stack (ADR 0028). One row per kind that a question asked of this repository's application types names; `skills/method/application-types.toml` in the `ratchet` plugin lists the kinds and what each means. `Paths` are comma-separated globs over tracked files. Without a `Pattern` each matching file is one instance; with one, each matching line is, and a literal `|` in it is written `\|`. A repository that never has the kind writes `none: <reason>`. The `triggers` gate counts instances at the merge base and at head, reads this table as the merge base holds it, and holds the rule that the change that brings a kind is free, in any number of files, and a later one that adds another instance while a row it owes is still `later:` is red.
+Where each `code:<kind>` trigger of the Gates table finds its instances in this stack (ADR 0028). One row per kind that a question asked of this repository's application types names, and one per kind whose arrival reopens the architecture, whatever the types (ADR 0052); `skills/method/application-types.toml` in the `ratchet` plugin lists the kinds and what each means. `Paths` are comma-separated globs over tracked files. Without a `Pattern` each matching file is one instance; with one, each matching line is, and a literal `|` in it is written `\|`. A repository that never has the kind writes `none: <reason>`. The `triggers` gate counts instances at the merge base and at head, reads this table as the merge base holds it, and holds the rule that the change that brings a kind is free, in any number of files, and a later one that adds another instance while a row it owes is still `later:`, or while the architecture review its arrival reopened has not landed as a decision record, is red.
 
 | Kind | Paths | Pattern |
 | --- | --- | --- |
 | <kind> | <globs of the tracked files that hold one, or `none: <reason>`> | <optional regex> |
+
+## Life event signs
+
+Which files of this project show that a life event has happened or is about to (ADR 0050), so the route can propose the event to its owner. The method knows no stack, so name this one's from what you know of the tools it chose: what a place that runs the project, or a store that keeps its records, leaves in a tree. `Paths` are comma-separated globs over tracked files, each in backticks, or `none: <reason>` when no file of this project marks the event. A sign only proposes; the owner declares the event on the `- Life events:` line. The `depended-on` event's signs are the method's own and need no row. Revisit the rows when the architecture or its tools change (`/ratchet:architecture`).
+
+| Event | Paths |
+| --- | --- |
+| deployed | <globs of the tracked files that show where it runs, or `none: <reason>`> |
+| irreplaceable-data | <globs of the tracked files that show where its records are kept, or `none: <reason>`> |
 
 ## Install
 
@@ -190,6 +200,14 @@ What `guard-diff` and the merge judge read to tell a change that only adds or ra
 - `locked`: one resolved version of a package in a lockfile. `scope` names the inventory it belongs to (one name when the file has only one), `version` is as the file writes it, `order` is dot-separated non-negative integers that make the versions of one name sort the way its registry sorts them (a pre-release below its release), `origin` is `registry`, `direct` for a version fetched by other means, or `local` for a path inside the project, `source` is where it comes from and `integrity` the value that identifies its contents (a lockfile that holds none for a `registry` or `direct` version cannot be judged, and goes to the owner), empty only for `local`. `sides` is `many` when several versions of the name can be installed beside each other in the scope, and `one` when only one runs.
 - `rest`: one line for each file given, with a digest of everything in it that can change what installs, less the dependency tables, the resolved packages and the package's own version: its settings, overrides, patches and the like. Two files with the same digest differ only in what the other records show.
 - Print every record of every file under `<dir>`. Write names as the registry compares them, so two spellings of one name are one name.
+
+## Image pins
+
+Which files of this project name a container image to build from or run, and how a line of one writes it, so the `pins` gate can hold each image to a digest (ADR 0050). The method knows no container tool: name this stack's files and write the pattern from what you know of the format. `Files` are comma-separated globs over tracked files, each in backticks. `Reference` is one regular expression in backticks (Python's `re`; a literal `|` in it is written `\|`) that each line of those files is searched with: group 1 is the image reference, which must carry a digest (`@<algorithm>:<hex>`), and an optional group 2 is a name the line gives to a stage that later lines may build from. Write the pattern so a line that names no external image does not match. A project that names no image in a file of its own writes one row, `none: <reason>`, in `Files`. The gate reads this section at the merge base, so a change cannot narrow what it checks; until it is filled no such file is read. Workflow files are always read.
+
+| Files | Reference |
+| --- | --- |
+| <`globs` of the files that name an image, or `none: <reason>`> | <`regex`> |
 
 ## Suppressions
 

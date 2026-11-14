@@ -9,6 +9,7 @@ import pytest
 
 import drain
 import hooks_installed
+import owed
 import queue_notes
 import route
 import triggers
@@ -486,7 +487,8 @@ def test_a_path_the_drain_recorded_as_the_cause_releases_a_blocked_run(tmp_path:
     blocked(root)
     result = {"guardEdits": [{"path": "package.json", "edit": "a dependency"}]}
     queue_notes.write_note(
-        queue_notes.note_path(root, "feature/2-b"), {"causes": queue_notes.causes_of(result)}
+        queue_notes.note_path(root, "feature/2-b"),
+        {"causes": queue_notes.causes_of(result), "base": queue_notes.tip(root)},
     )
     write(root, "unrelated.txt", "x\n")
     commit(root, "build: something else")
@@ -521,10 +523,35 @@ def test_a_forge_ticket_is_released_by_the_text_the_drain_compares(
     blocked(root, route.own_branch(ticket[0]))
     queue_notes.write_note(
         queue_notes.note_path(root, route.own_branch(ticket[0])),
-        {"digest": queue_notes.digest(ticket[0])},
+        {"digest": queue_notes.digest(ticket[0]), "base": queue_notes.tip(root)},
     )
     text = FORGE_TEXT + ("\n## Answers\n\nQ: a? A: b.\n" if answered else "")
     assert route.decide(root, FakeGh(issues=issues((5, "Five", text)))).stage == stage
+
+
+@pytest.mark.parametrize("base", [None, "before"])
+def test_a_note_older_than_the_blocked_run_does_not_release_it(
+    tmp_path: Path, base: str | None
+) -> None:
+    # Why: the route model's long run found it. The drain parked the ticket, the owner changed
+    # it, and a feature run then blocked on it: the note's digest differs from the ticket, yet
+    # the run blocked after that edit, so the edit answers nothing it asked.
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: HELD_TEXT})
+    ticket = route.preflight.local_ticket(HELD, HELD_TEXT)
+    note: dict[str, object] = {
+        "digest": queue_notes.digest(ticket),
+        "hold": True,
+        "outcome": "parked",
+    }
+    if base is not None:
+        note["base"] = queue_notes.tip(root)
+    queue_notes.write_note(queue_notes.note_path(root, "feature/2-b"), note)
+    write(root, HELD, HELD_TEXT + "\nNarrowed: the first half only\n")
+    commit(root, "docs(tracker): narrow the ticket")
+    blocked(root)
+    step = route.decide(root, None)
+    assert step.stage == "blocked-run"
+    assert "feature/2-b: blocked run" in step.command
 
 
 def test_only_a_blocked_run_holds_a_ticket(tmp_path: Path) -> None:
@@ -781,8 +808,14 @@ OWES = (
 )
 
 
+SIGNS = (
+    "\n## Life event signs\n\n| Event | Paths |\n| --- | --- |\n"
+    "| deployed | `launch.cfg, deploy/**` |\n| irreplaceable-data | none: nothing marks it here |\n"
+)
+
+
 def owing(tmp_path: Path, events: str = "none", **files: str) -> Path:
-    binding = BINDING + OWES.format(events=events)
+    binding = BINDING + OWES.format(events=events) + SIGNS
     return repository(tmp_path, {**ADOPTED, "docs/process/binding.md": binding, **files})
 
 
@@ -842,10 +875,10 @@ def test_a_declared_event_owes_its_rows_and_is_never_red(tmp_path: Path) -> None
 def test_a_sign_of_an_undeclared_event_is_proposed_until_the_owner_declines_it(
     tmp_path: Path, capsys: Out
 ) -> None:
-    root = owing(tmp_path, **{"fly.toml": "app = 'a'\n"})
+    root = owing(tmp_path, **{"launch.cfg": "app = 'a'\n"})
     assert route.event_proposals(root) == [
         (
-            "`fly.toml` is a sign that the project is `deployed` (it runs somewhere people other"
+            "`launch.cfg` is a sign that the project is `deployed` (it runs somewhere people other"
             f" than the owner can reach): if it is, type `{route.SAFEGUARD} deployed`; if not yet,"
             " say so and it is not proposed again until a new sign of it appears"
         )
@@ -864,11 +897,11 @@ def test_a_sign_of_an_undeclared_event_is_proposed_until_the_owner_declines_it(
 def test_a_declared_event_and_an_unadopted_tree_propose_nothing(
     tmp_path: Path, capsys: Out
 ) -> None:
-    root = owing(tmp_path, events="deployed", **{"fly.toml": "app = 'a'\n"})
+    root = owing(tmp_path, events="deployed", **{"launch.cfg": "app = 'a'\n"})
     assert route.event_proposals(root) == []
     assert route.main(["route", "--root", str(root), "--decline", "deployed"]) == 2
     assert "nothing to decline" in capsys.readouterr().out
-    loose = repository(tmp_path / "loose", {"fly.toml": "app = 'a'\n"})
+    loose = repository(tmp_path / "loose", {"launch.cfg": "app = 'a'\n"})
     assert route.event_proposals(loose) == []
     write(root, ".ratchet/events.tsv", "date\tevent\tsign\tanswer\nshort row\n")
     assert route.declined_signs(root) == set()
@@ -1075,3 +1108,24 @@ def test_a_repository_with_no_default_branch_commit_has_no_tip(tmp_path: Path) -
     git(tmp_path, "init", "-q")
     assert queue_notes.tip(tmp_path) is None
     assert not queue_notes.caused(tmp_path, {"causes": ["a"], "base": "b"})
+
+
+def test_rows_an_upgrade_left_owed_for_an_agent_come_first_and_ask_the_owner_nothing(
+    tmp_path: Path,
+) -> None:
+    root = owing(tmp_path)
+    assert route.fill_step(root) is None
+    write(
+        root,
+        "quality/owed.toml",
+        owed.render([owed.Entry("docs/process/binding.md", "pins", "has no section", "0.12.0")]),
+    )
+    commit(root, "chore: the upgrade")
+    step = route.decide(root, None)
+    assert (step.command, step.stage) == (route.FILL, "fill")
+    assert "nothing asks you" in step.why
+    assert "pins" in step.why
+    # Why: a safeguard owed beside them waits; the rows are one agent step and come first.
+    write(root, "src/a.py", "import requests\nrequests.get('http://x')\n")
+    commit(root, "feat: the first outbound call")
+    assert route.decide(root, None).command == route.FILL

@@ -115,7 +115,6 @@ SUPPRESSIONS = (
     "| Question | Kinds |\n| --- | --- |\n| lint | `bite-silence` |\n"
 )
 HOOK = '#!/bin/sh\n[ -n "$RATCHET_HOOK_PROBE" ] && echo {name} > "$RATCHET_HOOK_PROBE"\nexit 0\n'
-RESULTS = "    a.x_f__mutmut_1: killed\n    a.x_f__mutmut_2: {status}\n"
 RECORDS = (
     '{{"file": "src/a.py", "mutator": "operator", "replacement": "-", "status": "{status}",'
     ' "start": [2, 14], "end": [2, 15]}}\n'
@@ -124,8 +123,6 @@ LCOV = "SF:src/a.py\nDA:1,1\nDA:2,{hits}\nend_of_record\n"
 IN_LCOV = ["--report", "coverage.info"]
 REGISTER_PATH = "quality/mutation-register.toml"
 REGISTER = "# Mutation register\n\n{entry}\n"
-STRYKER_REPORT = "reports/mutation/mutation.json"
-TS = "export function f(a: number) {\n  return a > 0 && a < 9;\n}\n"
 REPORT = (
     '<?xml version="1.0"?><coverage><sources><source>{root}</source></sources><packages>'
     '<package><classes><class filename="src/a.py"><lines>'
@@ -160,10 +157,8 @@ def scratch(root: Path) -> None:
     write(root, WORKFLOW, PINNED)
     write(root, "coverage.xml", REPORT.format(root=root, hits=1, cond=100, total=1))
     write(root, "coverage.info", LCOV.format(hits=1))
-    write(root, "mutants.txt", RESULTS.format(status="killed"))
     write(root, "mutants.jsonl", RECORDS.format(status="killed"))
     write(root, REGISTER_PATH, "# Mutation register\n")
-    stryker_report(root, "Killed")
     write(root, TICKET_PATH, TICKET)
     write(root, "flags.toml", "# No flags yet.\n")
     write(root, "surface.txt", "f(a, b)\n")
@@ -214,10 +209,6 @@ def add_suppression(root: Path) -> None:
 
 
 def survivor(root: Path) -> None:
-    write(root, "mutants.txt", RESULTS.format(status="survived"))
-
-
-def survivor_of_any_tool(root: Path) -> None:
     write(root, "mutants.jsonl", RECORDS.format(status="survived"))
 
 
@@ -234,59 +225,54 @@ def entry(tool: str, identity: str, function_hash: str) -> str:
 
 
 def stale_entry(root: Path) -> None:
-    function_hash = mutation_survivors.python_function_hash(root, "a", "x_f")
-    write(
-        root,
-        REGISTER_PATH,
-        REGISTER.format(entry=entry("mutmut", "a.x_f__mutmut_1", function_hash)),
-    )
+    identity = "src/a.py:operator:-@1:20-1:25"
+    digest = mutation_survivors.unit_hash(["def f(a, b):", "    return a + b"], 2)
+    write(root, REGISTER_PATH, REGISTER.format(entry=entry(TOOL, identity, digest)))
 
 
-def stryker_report(root: Path, *statuses: str) -> list[mutation_survivors.Mutant]:
-    """The json report with one mutant per status, all of one mutator and replacement."""
-    mutants = [
-        {
-            "id": str(n),
-            "mutatorName": "ConditionalExpression",
-            "replacement": "true",
-            "status": status,
-            "location": {
-                "start": {"line": 2, "column": 10 * n},
-                "end": {"line": 2, "column": 10 * n + 5},
-            },
-        }
+def records(root: Path, *statuses: str) -> list[mutation_survivors.Mutant]:
+    """The neutral records with one mutant per status, all of one mutator and replacement."""
+    lines = [
+        json.dumps(
+            {
+                "file": "src/a.py",
+                "mutator": "operator",
+                "replacement": "-",
+                "status": status,
+                "start": [2, 10 * n],
+                "end": [2, 10 * n + 5],
+            }
+        )
         for n, status in enumerate(statuses, 1)
     ]
-    report: dict[str, object] = {
-        "files": {"src/a.ts": {"language": "typescript", "source": TS, "mutants": mutants}}
-    }
-    write(root, STRYKER_REPORT, json.dumps(report))
-    return mutation_survivors.stryker_mutants(report)
+    text = "\n".join(lines) + "\n"
+    write(root, "mutants.jsonl", text)
+    return mutation_survivors.neutral_mutants(text, root)[0]
 
 
-def register_stryker(root: Path, *identities: tuple[str, str]) -> None:
+def register_survivors(root: Path, *identities: tuple[str, str]) -> None:
     write(
         root,
         REGISTER_PATH,
-        REGISTER.format(entry="\n".join(entry("stryker", *pair) for pair in identities)),
+        REGISTER.format(entry="\n".join(entry(TOOL, *pair) for pair in identities)),
     )
 
 
 def twin_survivors(root: Path) -> None:
-    first, _ = stryker_report(root, "Survived", "Survived")
-    register_stryker(root, (first.identity, first.function_hash))
+    first, _ = records(root, "survived", "survived")
+    register_survivors(root, (first.identity, first.function_hash))
 
 
 def entry_without_position(root: Path) -> None:
-    (only,) = stryker_report(root, "Survived")
+    (only,) = records(root, "survived")
     old = mutation_survivors.POSITION.sub("", only.identity)
-    register_stryker(root, (old, only.function_hash))
+    register_survivors(root, (old, only.function_hash))
 
 
 def timed_out_entry(root: Path) -> None:
-    (only,) = stryker_report(root, "Survived")
-    register_stryker(root, (only.identity, only.function_hash))
-    stryker_report(root, "Timeout")
+    (only,) = records(root, "survived")
+    register_survivors(root, (only.identity, only.function_hash))
+    records(root, "timeout")
 
 
 def no_conjecture(root: Path) -> None:
@@ -402,6 +388,27 @@ def triggers_gate(argv: list[str]) -> int:
     return triggers.main([*argv, "--base", "HEAD"])
 
 
+REVIEW_ROW = (
+    "| architecture reviewed when its shape changes | `ratchet` plugin `scripts/triggers.py` | 1"
+    " | | `just triggers` |\n"
+)
+
+
+def review_gate(argv: list[str]) -> int:
+    """The triggers gate where the first outbound call arrived after the reviews started.
+
+    Why: ADR 0052. The call reopens the architecture and no record reviews it, so a second one is
+    red; the binding that asks the review lands first, so the call is not reviewed by adoption.
+    """
+    root = Path(argv[2])
+    if not (root / "src/client.py").is_file():
+        write(root, "docs/process/binding.md", BINDING + REVIEW_ROW + TRIGGERS_TABLE + SUPPRESSIONS)
+        commit(root, "chore(method): ask the architecture review")
+        write(root, "src/client.py", OUTBOUND_CALL)
+        commit(root, "feat(core): the first outbound call")
+    return triggers.main([*argv, "--base", "HEAD"])
+
+
 def second_outbound_call(root: Path) -> None:
     write(root, "src/other.py", OUTBOUND_CALL)
 
@@ -480,9 +487,8 @@ def behind_an_open_blocker(root: Path) -> None:
     commit(root, "docs(tracker): a blocker the owner has not agreed")
 
 
-MUTMUT = ["--tool", "mutmut", "--results", "mutants.txt"]
-STRYKER = ["--tool", "stryker"]
-ANY_TOOL = ["--tool", "any-tool", "--mutants", "mutants.jsonl"]
+TOOL = "any-tool"
+ANY_TOOL = ["--tool", TOOL, "--mutants", "mutants.jsonl"]
 TICKET_REF = [TICKET_PATH]
 ADDITIVE = ["--fail-unless-additive"]
 GATE_READS_RED = "import pathlib, sys; sys.exit(pathlib.Path('red').is_file())"
@@ -502,27 +508,26 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("commits", commits.main, bad_subject, []),
     ("coverage", coverage_groups.main, uncovered, []),
     ("coverage: an LCOV report", coverage_groups.main, uncovered_in_lcov, IN_LCOV),
-    ("mutation: a survivor", mutation_survivors.main, survivor, MUTMUT),
-    ("mutation: a stale entry", mutation_survivors.main, stale_entry, MUTMUT),
-    ("mutation: a survivor of any tool", mutation_survivors.main, survivor_of_any_tool, ANY_TOOL),
+    ("mutation: a survivor", mutation_survivors.main, survivor, ANY_TOOL),
+    ("mutation: a stale entry", mutation_survivors.main, stale_entry, ANY_TOOL),
     (
         "mutation: no mutant was tested",
         mutation_survivors.main,
         nothing_but_unviable_mutants,
         ANY_TOOL,
     ),
-    ("mutation: two survivors, one entry", mutation_survivors.main, twin_survivors, STRYKER),
+    ("mutation: two survivors, one entry", mutation_survivors.main, twin_survivors, ANY_TOOL),
     (
         "mutation: an entry without a position",
         mutation_survivors.main,
         entry_without_position,
-        STRYKER,
+        ANY_TOOL,
     ),
     (
         "mutation: a registered survivor that timed out",
         mutation_survivors.main,
         timed_out_entry,
-        STRYKER,
+        ANY_TOOL,
     ),
     ("ratchet-lowered", lowered.main, lowered_threshold, []),
     ("feature-preflight: no conjecture", feature_preflight.main, no_conjecture, TICKET_REF),
@@ -539,6 +544,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("project-bite: a gate green on nothing to run", project_bite.main, tests_green_on_nothing, []),
     ("project-bite: a bound gate with no bite", project_bite.main, bite_dropped, []),
     ("triggers: a second instance of an owed kind", triggers_gate, second_outbound_call, []),
+    ("triggers: a second instance while a review is owed", review_gate, second_outbound_call, []),
     ("incidents: a record that names no bite", incidents_gate, incident_without_a_bite, []),
     ("merge-ready: a guard path changed", merge_judge, change_config, []),
     ("merge-ready: a flag on by default", merge_judge, flag_born_on, []),

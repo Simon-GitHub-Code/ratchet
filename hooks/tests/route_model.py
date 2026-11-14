@@ -104,6 +104,8 @@ class Advice(StrEnum):
     COMMIT = "commit"
     MERGE = "merge"
     MERGE_RECORDS = "merge-records"
+    FILL = "fill"
+    REVIEW = "review"
     SAFEGUARD = "safeguard"
     GRILL = "grill"
     TRIAGE = "triage"
@@ -148,7 +150,11 @@ class ActionName(StrEnum):
     OWNER_LANDS_GUARD_EDITS = "OwnerLandsGuardEdits"
     OWNER_CHANGES_TICKET = "OwnerChangesTicket"
     OWNER_RESOLVES_TICKET = "OwnerResolvesTicket"
+    UPGRADE_LEAVES_ROWS_TO_FILL = "UpgradeLeavesRowsToFill"
+    AGENT_FILLS_ROWS = "AgentFillsRows"
     KIND_OF_CODE_ARRIVES = "KindOfCodeArrives"
+    KIND_THAT_REOPENS_THE_ARCHITECTURE_ARRIVES = "KindThatReopensTheArchitectureArrives"
+    AGENT_LANDS_THE_REVIEW = "AgentLandsTheReview"
     AGENT_BINDS_SAFEGUARD = "AgentBindsSafeguard"
     SOMEONE_EDITS_CODE = "SomeoneEditsCode"
     AGENT_COMMITS_ON_A_BRANCH = "AgentCommitsOnABranch"
@@ -173,7 +179,9 @@ class World:
 
     ``parked``: a ``records/<time>`` branch waits unmerged. ``foundation``: the glossary and the
     design brief are written. ``inherits``: the tickets were split from a spec that states its
-    conjecture, so none needs one of its own. ``owes``: a safeguard is owed.
+    conjecture, so none needs one of its own. ``owes``: a safeguard is owed. ``reviews``: an
+    architecture review is owed (ADR 0052). ``fills``: an upgrade left rows an agent writes from
+    the repository alone (ADR 0050).
     """
 
     setup: Setup = Setup.BARE
@@ -186,6 +194,8 @@ class World:
     tickets: Slots = (Ticket.NONE, Ticket.NONE)
     inherits: bool = False
     owes: bool = False
+    reviews: bool = False
+    fills: bool = False
 
 
 def adopted(world: World) -> bool:
@@ -213,6 +223,8 @@ def rest(world: World) -> bool:
         calm(world)
         and world.spec is Spec.NONE
         and not world.owes
+        and not world.reviews
+        and not world.fills
         and all(ticket in CLOSED for ticket in world.tickets)
     )
 
@@ -280,8 +292,9 @@ def _no_ticket(world: World) -> bool:
     return not labelled(world)
 
 
-# The order is the order ``route.decide`` asks: setup, an unfinished change, the records, the
-# safeguard, then the tickets. The last rule holds for any world, so the chain is total.
+# The order is the order ``route.decide`` asks: setup, an unfinished change, the records, the rows
+# an upgrade left for an agent to fill, the architecture review, the safeguard, then the tickets.
+# The last rule holds for any world, so the chain is total.
 CHAIN: Final = (
     Rule(Advice.INIT, lambda w: w.setup in {Setup.BARE, Setup.STARTED}),
     Rule(Advice.TRACKER, lambda w: w.setup is Setup.NAMED),
@@ -292,6 +305,8 @@ CHAIN: Final = (
     Rule(Advice.COMMIT, lambda w: w.tree is not Tree.CLEAN),
     Rule(Advice.MERGE, lambda w: w.head is Head.WORK),
     Rule(Advice.MERGE_RECORDS, lambda w: w.parked),
+    Rule(Advice.FILL, lambda w: w.fills),
+    Rule(Advice.REVIEW, lambda w: w.reviews),
     Rule(Advice.SAFEGUARD, lambda w: w.owes),
     Rule(Advice.GRILL, lambda w: not w.foundation),
     Rule(Advice.TRIAGE, lambda w: _no_ticket(w) and triage_waits(w)),
@@ -317,13 +332,14 @@ def advice(world: World) -> Advice:
 
 
 def beneath(world: World) -> str:
-    """The advice once nothing is unfinished in the checkout and no safeguard is owed.
+    """The advice once nothing is unfinished in the checkout and nothing is owed.
 
     A ticket built on its branch is ``building``: its merge is what the checkout shows.
     """
     if Ticket.BUILT in world.tickets:
         return "building"
-    return advice(replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False, owes=False))
+    clean = replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False)
+    return advice(replace(clean, owes=False, reviews=False, fills=False))
 
 
 @dataclass(frozen=True)
@@ -488,12 +504,20 @@ class Move:
     head: Head | None = None
 
 
+def runnable(world: World, slot: int) -> bool:
+    """Whether a feature run or the drain may start on the ticket in ``slot``.
+
+    Why: ADR 0050. The feature preflight and the drain refuse while rows an agent fills are owed.
+    """
+    return unblocked(world, slot) and not world.fills
+
+
 def moves(world: World, move: Move) -> Iterator[World]:
     """Each way a calm ``world`` takes one ticket through ``move``."""
     if not calm(world):
         return
     for slot, ticket in enumerate(world.tickets):
-        if ticket in move.before and (unblocked(world, slot) or not move.needs_free):
+        if ticket in move.before and (not move.needs_free or runnable(world, slot)):
             moved = with_ticket(world, slot, move.after)
             yield replace(moved, tree=move.tree or moved.tree, head=move.head or moved.head)
 
@@ -559,7 +583,11 @@ def _drain_parks_ticket(world: World) -> Iterator[World]:
 @action(ActionName.DRAIN_PARKS_FOR_A_SAFEGUARD)
 def _drain_parks_for_a_safeguard(world: World) -> Iterator[World]:
     """The drain merges the first ticket, which brings a new kind, and parks the second on it."""
-    if calm(world) and not world.owes and world.tickets == (Ticket.STATED, Ticket.STATED):
+    if (
+        calm(world)
+        and not (world.owes or world.fills)
+        and world.tickets == (Ticket.STATED, Ticket.STATED)
+    ):
         yield replace(world, tickets=(Ticket.MERGED, Ticket.OWED), owes=True)
 
 
@@ -585,10 +613,40 @@ per_ticket(
 )
 
 
+@action(ActionName.UPGRADE_LEAVES_ROWS_TO_FILL)
+def _upgrade_leaves_rows_to_fill(world: World) -> Iterator[World]:
+    if rest(world) and world.tickets == (Ticket.RESOLVED, Ticket.RESOLVED):
+        yield replace(world, fills=True)
+
+
+@action(ActionName.AGENT_FILLS_ROWS, Advice.FILL)
+def _agent_fills_rows(world: World) -> Iterator[World]:
+    if calm(world) and world.fills:
+        yield replace(world, fills=False)
+
+
 @action(ActionName.KIND_OF_CODE_ARRIVES)
 def _kind_of_code_arrives(world: World) -> Iterator[World]:
     if rest(world) and Ticket.RESOLVED in world.tickets:
         yield replace(world, owes=True)
+
+
+@action(ActionName.KIND_THAT_REOPENS_THE_ARCHITECTURE_ARRIVES)
+def _kind_that_reopens_the_architecture_arrives(world: World) -> Iterator[World]:
+    """The first instance of a kind that reopens the architecture and owes no row of its own.
+
+    Why no row: a kind that owes both is a state with both owed, which takes the graph past what
+    a chart can draw; ``test_architecture_review`` holds the order there, the review and then the
+    safeguard.
+    """
+    if rest(world) and Ticket.RESOLVED in world.tickets:
+        yield replace(world, reviews=True)
+
+
+@action(ActionName.AGENT_LANDS_THE_REVIEW, Advice.REVIEW)
+def _agent_lands_the_review(world: World) -> Iterator[World]:
+    if calm(world) and world.reviews:
+        yield replace(world, reviews=False)
 
 
 @action(ActionName.AGENT_BINDS_SAFEGUARD, Advice.SAFEGUARD)
