@@ -359,18 +359,78 @@ def test_update_leaves_a_conflicting_branch_as_it_was_and_names_the_paths(
     assert git(tree, "rev-parse", "--abbrev-ref", "HEAD") == BRANCH_A, "no rebase is in progress"
 
 
-def test_update_refuses_to_move_a_judged_or_a_pushed_branch(tmp_path: Path, capsys: Out) -> None:
+def test_update_brings_a_judged_branch_up_to_date_and_drops_the_record_it_outdated(
+    tmp_path: Path, capsys: Out
+) -> None:
     root = project(tmp_path)
     run(root, "open", ALPHA)
     tree = build(root, BRANCH_A, {"src/b.py": "B = 1\n"}, record=approval("alpha"))
     moved(root)
     capsys.readouterr()
-    assert run(root, "update", ALPHA) == 1
-    assert "its last commit is a verdict record" in capsys.readouterr().out
-    git(tree, "reset", "-q", "--hard", "HEAD~1")
+    assert run(root, "update", ALPHA) == 0
+    assert json.loads(capsys.readouterr().out) == {"moved": True, "conflicts": []}
+    assert git(tree, "merge-base", "main", "HEAD") == git(root, "rev-parse", "main")
+    assert not (tree / "docs/features/alpha/verdict.json").exists(), "the review is of another tree"
+    assert (tree / "src/b.py").is_file()
+
+
+def test_update_refuses_to_move_a_pushed_branch(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    moved(root)
     git(root, "update-ref", "refs/remotes/origin/feature/1-alpha", BRANCH_A)
+    capsys.readouterr()
     assert run(root, "update", ALPHA) == 1
     assert "the branch is pushed" in capsys.readouterr().out
+
+
+def test_update_makes_a_work_tree_for_a_built_branch_an_earlier_drain_left(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"}, record=approval("alpha"))
+    git(root, "worktree", "remove", "--force", str(drain.tree_of(root, BRANCH_A)))
+    capsys.readouterr()
+    assert run(root, "update", ALPHA) == 0
+    assert json.loads(capsys.readouterr().out) == {"moved": False, "conflicts": []}
+    moved(root)
+    assert run(root, "update", ALPHA) == 0
+    assert json.loads(capsys.readouterr().out) == {"moved": True, "conflicts": []}
+    assert git(root, "merge-base", "main", BRANCH_A) == git(root, "rev-parse", "main")
+    assert drain.tree_of(root, BRANCH_A) in drain.worktrees(root)
+
+
+def test_a_built_branch_behind_the_default_branch_does_not_land_on_its_old_review(
+    tmp_path: Path, capsys: Out
+) -> None:
+    """Another ticket moved main after this one was approved: the verdict is of another tree."""
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    run(root, "open", GAMMA)
+    done = {ALPHA: ticket(1, "Alpha", status="resolved")}
+    build(
+        root,
+        BRANCH_A,
+        {"src/b.py": "from a import A\nB = A + 1\n", **done},
+        record=approval("alpha"),
+    )
+    git(root, "worktree", "remove", "--force", str(drain.tree_of(root, BRANCH_A)))
+    build(
+        root,
+        BRANCH_C,
+        {"src/a.py": "A = 'now a string'\n", GAMMA: ticket(3, "Gamma", status="resolved")},
+        record=approval("gamma"),
+    )
+    assert run(root, "land", GAMMA) == 0
+    base = git(root, "rev-parse", "main")
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert (entry.state, entry.why) == ("built", (drain.BEHIND,))
+    capsys.readouterr()
+    assert run(root, "land", ALPHA) == 1
+    assert "behind: the branch does not hold the tip of `main`" in capsys.readouterr().out
+    assert git(root, "rev-parse", "main") == base, "nothing landed"
 
 
 # --- landing and closing ---------------------------------------------------------------------
@@ -425,8 +485,8 @@ def test_land_leaves_the_branch_to_the_owner_with_the_judges_reasons(
     ]
     assert not tree.exists()
     assert git(root, "rev-parse", "--verify", BRANCH_A), "the branch stays for the owner"
-    assert states(root)[BRANCH_A] == "built", (
-        "a later drain asks the judge again, and builds nothing"
+    assert states(root)[BRANCH_A] == "held", (
+        "a ticket left to the owner is held until its text changes, not landed again"
     )
 
 
@@ -640,6 +700,11 @@ def test_the_report_says_what_merged_what_waits_and_every_assumption(
         "",
         "- `.scratch/f/issues/05-eps.md` Eps (`feature/5-eps`)",
         (
+            "  - behind: the branch does not hold the tip of `main` ("
+            + git(root, "rev-parse", "main")[:12]
+            + "), so its gates ran on a merge with an older one; bring it up to date and they rerun"
+        ),
+        (
             "  - record: no verdict record (docs/features/<slug>/verdict.json) is part of the"
             " change, so it is not the product of the pipeline"
         ),
@@ -651,6 +716,14 @@ def test_the_report_says_what_merged_what_waits_and_every_assumption(
         "",
         "## Not built",
         "",
+        f"- `{BETA}` Beta: refused",
+        (
+            "  - blocked: waits on .scratch/f/issues/05-eps.md, which this drain cannot merge"
+            " (held): behind: the branch does not hold the tip of `main` ("
+            + git(root, "rev-parse", "main")[:12]
+            + "), so its gates ran on a merge with an older one; bring it up to date and they"
+            " rerun"
+        ),
         "- `.scratch/f/issues/04-delta.md` Delta: refused",
         (
             "  - conjecture: .scratch/f/issues/04-delta.md has no `## Conjecture` section and names"
@@ -658,8 +731,6 @@ def test_the_report_says_what_merged_what_waits_and_every_assumption(
             " `/ratchet:conjecture <ticket>` drafts it (the approach, the observation that would"
             " refute it, the alternatives and the criticism that kills each)"
         ),
-        f"- `{BETA}` Beta: waiting",
-        "  - waits on .scratch/f/issues/05-eps.md",
         "",
         "## Assumptions",
         "",
@@ -682,7 +753,7 @@ def test_the_report_says_what_merged_what_waits_and_every_assumption(
     again = capsys.readouterr().out
     assert "## Merged\n\n- none\n" in again, "a ticket is reported once"
     assert f"## Parked\n\n- `{GAMMA}` Gamma (`{BRANCH_C}`)\n  - open question: which?\n" in again
-    assert "- `.scratch/f/issues/05-eps.md` Eps: built\n" in again
+    assert "- `.scratch/f/issues/05-eps.md` Eps (`feature/5-eps`)\n" in again, "left to the owner"
 
 
 def test_the_report_leaves_out_a_ticket_still_building_and_times_what_it_can(
@@ -904,3 +975,55 @@ def test_a_ticket_red_on_an_owed_safeguard_is_held_until_the_safeguard_is_bound(
     write(root, "docs/process/binding.md", binding(MERGE) + bound)
     commit(root, "chore(method): safeguard outbound calls")
     assert states(root)[BRANCH_C] == "buildable", "nothing is owed, so the hold is over"
+
+
+def test_a_ticket_parked_after_it_has_commits_is_held_until_its_text_changes(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    reason = "open question (direction): A or B?"
+    run(root, "close", ALPHA, "--outcome", "parked", "--reason", reason)
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert (entry.state, entry.why) == ("held", (reason,))
+    write(root, ALPHA, ticket(1, "Alpha") + "\n## Answers\n\nA or B? A.\n")
+    commit(root, "docs(tracker): the owner's answer")
+    assert states(root)[BRANCH_A] == "built", "the answer changed the ticket: it is judged again"
+    capsys.readouterr()
+
+
+def test_a_dependent_of_a_ticket_left_to_the_owner_says_what_it_waits_on(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    assert run(root, "land", ALPHA) == 1
+    by = {e.ref: e for e in drain.plan(offline(root)).tickets}
+    assert by[ALPHA].state == "held"
+    assert by[BETA].state == "refused"
+    (why,) = by[BETA].why
+    assert why.startswith(
+        f"blocked: waits on {drain.key(ALPHA)}, which this drain cannot merge (held): record:"
+    )
+    capsys.readouterr()
+
+
+def test_update_says_why_it_cannot_make_the_work_tree_of_a_built_branch(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    git(root, "worktree", "remove", "--force", str(drain.tree_of(root, BRANCH_A)))
+    moved(root)
+    git(root, "worktree", "add", "--quiet", str(tmp_path / "elsewhere"), BRANCH_A)
+    capsys.readouterr()
+    assert run(root, "update", ALPHA) == 1
+    assert "no work tree of `feature/1-alpha` could be made" in capsys.readouterr().out
+    git(root, "worktree", "remove", "--force", str(tmp_path / "elsewhere"))
+    answers = iter([None, "a directory became another user's"])
+    monkeypatch.setattr(drain, "foreign", lambda _root: next(answers))
+    assert run(root, "update", ALPHA) == 1
+    assert "became another user's" in capsys.readouterr().out
