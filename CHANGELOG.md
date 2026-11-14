@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+The change-size ceiling counts product code, not tests (ADR 0045). Tests were 85% of the lines counted on recent changes, so the ceiling mostly limited them. `[ceilings.change]` is now `product_files = 25`, `product_lines = 1000` and a loose `test_lines = 3000` that only stops a runaway, and the early stops follow: product code has no margin for what is still to come, tests keep two thirds of their ceiling while the critic runs.
+
+- Which paths are tests is the binding's `## Test paths` section, written at adoption by the project's agent: the plugin names no stack. Until it is filled every changed line counts as product, as before, and conformance names the missing section.
+- An existing repository's `files` and `lines` become `product_files` and `product_lines` at the same values, by `upgrade.py --apply`; the lowered gate reads the move and refuses a higher value. `test_lines` is new, and the one loosening, which the upgrade says plainly.
+
 The drain's recovery reads a kill inside one file's write, and tells two drains under one process apart (ADR 0023). A fast-forward killed while git wrote a file puts that part-written file back, and keeps only what the owner had changed or left untracked before it began. `clean --all` prints the drain's token, and the drain's later commands stamp its lease, so a second drain started under the same long-lived process is refused while the first is active.
 
 The plugin names no language, package manager or stack tool in its gates, and the binding holds each stack fact (ADR 0042, ADR 0043, ADR 0044).

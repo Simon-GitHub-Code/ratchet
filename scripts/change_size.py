@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""The change-size gate: a change stays within the files and lines ceiling.
+"""The change-size gate: a change stays within the product files and lines ceiling.
 
 Measures the files and the added-plus-deleted lines changed against the merge base, untracked
 files included, and compares them with ``[ceilings.change]`` in ``quality/thresholds.toml``
-(``files`` and ``lines``; ceilings only fall, which the lowered gate enforces). Without a
-recorded ceiling the gate is green and says so; ``--set --files N --lines N`` records one.
+(ceilings only fall, which the lowered gate enforces). ADR 0045: the ceiling bounds the product
+code a change brings (``product_files``, ``product_lines``), and test lines have a ceiling of
+their own (``test_lines``) that only stops a runaway, because the method asks for many tests and
+the critic adds more. Which paths are tests is the merge base binding's ``## Test paths``
+section: ``- Tests:`` and globs in backticks, or ``none: <reason>``. The plugin names no stack, so
+without it every changed line counts as product, as before, and the gate says how to write it.
+The older keys ``files`` and ``lines`` are read as the product
+ceilings until the upgrade moves them. Without a recorded ceiling the gate is green and says so;
+``--set --product-files N --product-lines N --test-lines N`` records them.
 
 The adoption change is large by construction: it lands the templates, the binding and the
 records in one commit. When every commit in the range is ``chore(method): adopt``, the gate
@@ -21,7 +28,8 @@ descriptions), and the disputes under ``docs/disputes/``, which are written to t
 reviewed as code. The pipeline writes them after the review, so counting them turned a change the
 review saw green red at the merge.
 
-Usage: ``change_size.py [--root DIR] [--base REF] [--set --files N --lines N]``.
+Usage: ``change_size.py [--root DIR] [--base REF] [--set --product-files N --product-lines N
+--test-lines N]``.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import gatelib
@@ -45,6 +54,43 @@ RECORDS = [
     "docs/disputes/**/*.md",
     ".scratch/**/*.md",
 ]
+SECTION = "## Test paths"
+LABEL = "Tests"
+BULLET = re.compile(r"^- ([^:\n]+):[ \t]*(.*?)[ \t]*$")
+TICKED = re.compile(r"`([^`\n]+)`")
+NONE_PREFIX = "none:"
+MIN_REASON = 10
+KEYS = ("product_files", "product_lines", "test_lines")
+# Why: before ADR 0045 the ceiling counted every changed line, tests included, under these keys.
+LEGACY = {"product_files": "files", "product_lines": "lines"}
+NO_ROW = (
+    "change-size: the binding has no filled `## Test paths` section, so every changed line counts"
+    " as product; write the globs of this repository's test files there, or `none: <reason>`"
+)
+
+
+@dataclass(frozen=True)
+class Size:
+    """What a change weighs: the product files and lines, and the test files and lines."""
+
+    product_files: int = 0
+    product_lines: int = 0
+    test_files: int = 0
+    test_lines: int = 0
+
+
+@dataclass(frozen=True)
+class Ceilings:
+    """The recorded ceilings; ``None`` where none is recorded."""
+
+    product_files: int | None = None
+    product_lines: int | None = None
+    test_lines: int | None = None
+
+    def recorded(self) -> bool:
+        """Whether any ceiling is recorded."""
+        found = (self.product_files, self.product_lines, self.test_lines)
+        return any(value is not None for value in found)
 
 
 def not_counted(path: str, contract: dependencies.Contract | None = None) -> bool:
@@ -55,6 +101,44 @@ def not_counted(path: str, contract: dependencies.Contract | None = None) -> boo
     requires. ``pins`` still fails a lockfile that drifts from its manifest.
     """
     return gatelib.matches(path, RECORDS) or (contract is not None and contract.is_lockfile(path))
+
+
+def test_paths(binding: str | None) -> tuple[list[str] | None, list[str]]:
+    """The globs of the binding's ``## Test paths`` section and what keeps it from being read.
+
+    The globs are ``[]`` for ``none: <reason>`` and ``None`` when the section is missing or
+    unfilled: then nothing is known to be a test, and every changed line counts as product.
+    """
+    lines = (binding or "").split("\n")
+    start = next((i for i, line in enumerate(lines) if line.rstrip() == SECTION), None)
+    if start is None:
+        return None, [f"has no '{SECTION}' section"]
+    value = ""
+    for line in lines[start + 1 :]:
+        if line.startswith("## "):
+            break
+        if (match := BULLET.match(line)) and match.group(1).strip() == LABEL:
+            value = match.group(2)
+            break
+    plain = value.strip("` ")
+    if not value or value.startswith("<"):
+        return None, [f"'- {LABEL}:' is still the template's: name globs, or `none: <reason>`"]
+    if plain.lower().startswith(NONE_PREFIX):
+        if len(plain[len(NONE_PREFIX) :].strip()) < MIN_REASON:
+            return None, [f"'- {LABEL}: none:' needs the reason this stack has no tests"]
+        return [], []
+    found = [item.strip() for item in TICKED.findall(value) if item.strip()]
+    if not found:
+        return None, [f"'- {LABEL}:' names its globs in backticks, or says `none: <reason>`"]
+    return found, []
+
+
+def test_globs(root: Path, base: str) -> list[str] | None:
+    """The test globs of the merge base's binding, or ``None`` when it names none.
+
+    Why: as the lockfiles, read at the merge base, so a change cannot widen what it exempts.
+    """
+    return test_paths(gatelib.show(root, base, str(gatelib.BINDING)))[0]
 
 
 def _changes(root: Path, base: str) -> list[tuple[str, str, str, str | None]]:
@@ -78,52 +162,67 @@ def _changes(root: Path, base: str) -> list[tuple[str, str, str, str | None]]:
     return found
 
 
-def measure(root: Path, base: str) -> tuple[int, int]:
-    """Changed files and changed lines (added plus deleted) since ``base``."""
-    files, lines = 0, 0
+def measure(root: Path, base: str) -> Size:
+    """Changed files and lines (added plus deleted) since ``base``, product and test apart."""
+    tests = test_globs(root, base) or []
+    product, test = [0, 0], [0, 0]
     contract = dependencies.parse(gatelib.show(root, base, str(gatelib.BINDING)))
 
     def skipped(path: str) -> bool:
         return not_counted(path, contract)
 
+    def add(path: str, lines: int) -> None:
+        kind = test if gatelib.matches(path, tests) else product
+        kind[0] += 1
+        kind[1] += lines
+
     for added, deleted, path, old in _changes(root, base):
         if skipped(path) and (old is None or skipped(old)):
             continue
-        files += 1
-        lines += (int(added) if added != "-" else 0) + (int(deleted) if deleted != "-" else 0)
+        add(path, (int(added) if added != "-" else 0) + (int(deleted) if deleted != "-" else 0))
     untracked = gatelib.git(root, "ls-files", "--others", "--exclude-standard", "-z", ":/") or ""
     for path in (p for p in untracked.split("\0") if p and not skipped(p)):
         text = gatelib.read_text(root / path)
-        files += 1
-        lines += len(text.splitlines()) if text is not None else 0
-    return files, lines
+        add(path, len(text.splitlines()) if text is not None else 0)
+    return Size(product[0], product[1], test[0], test[1])
 
 
 def _limit(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
-def ceilings(root: Path) -> tuple[int | None, int | None]:
+def _entry(table: dict[str, object], key: str) -> int | None:
+    """The ceiling under ``key``, else under its older name."""
+    return _limit(table[key]) if key in table else _limit(table.get(LEGACY.get(key, "")))
+
+
+def ceilings(root: Path) -> Ceilings:
     table = gatelib.table(gatelib.thresholds(root), "ceilings", "change")
-    return _limit(table.get("files")), _limit(table.get("lines"))
+    return Ceilings(*(_entry(table, key) for key in KEYS))
 
 
 def malformed(root: Path) -> list[str]:
-    """Each ``files`` or ``lines`` ceiling that is present but not a non-negative integer."""
+    """Each ceiling that is present but not a non-negative integer."""
     table = gatelib.table(gatelib.thresholds(root), "ceilings", "change")
     return [
         f"ceilings.change.{name}: {table[name]!r} is not a non-negative integer"
-        for name in ("files", "lines")
+        for name in (*KEYS, *LEGACY.values())
         if name in table and _limit(table[name]) is None
     ]
 
 
-def over(measured: tuple[int, int], limits: tuple[int | None, int | None]) -> list[str]:
-    problems = []
-    for name, value, limit in zip(("files", "lines"), measured, limits, strict=True):
-        if limit is not None and value > limit:
-            problems.append(f"{name}: {value} changed, ceiling {limit}")
-    return problems
+def over(size: Size, limits: Ceilings) -> list[str]:
+    """Each ceiling the change passes."""
+    measured = (
+        ("product files", size.product_files, limits.product_files),
+        ("product lines", size.product_lines, limits.product_lines),
+        ("test lines", size.test_lines, limits.test_lines),
+    )
+    return [
+        f"{name}: {value} changed, ceiling {limit}"
+        for name, value, limit in measured
+        if limit is not None and value > limit
+    ]
 
 
 def is_adoption(root: Path, base: str) -> bool:
@@ -149,22 +248,43 @@ def exemption(root: Path, base: str) -> str | None:
     return None
 
 
-def with_ceilings(text: str, files: int, lines: int) -> str:
-    """The thresholds text with ``[ceilings.change]`` set to ``files`` and ``lines``."""
-    body = f"{CEILINGS_TABLE}\nfiles = {files}\nlines = {lines}\n"
+def with_ceilings(text: str, ceilings: tuple[int, int, int]) -> str:
+    files, lines, tests = ceilings
+    """The thresholds text with ``[ceilings.change]`` set to the three ceilings."""
+    body = (
+        f"{CEILINGS_TABLE}\nproduct_files = {files}\nproduct_lines = {lines}\n"
+        f"test_lines = {tests}\n"
+    )
     pattern = re.compile(r"^\[ceilings\.change\]\n(?:[^\[\n][^\n]*\n|\n)*", re.MULTILINE)
     if pattern.search(text):
         return pattern.sub(body + "\n", text).rstrip("\n") + "\n"
     return (text.rstrip("\n") + "\n\n" + body) if text.strip() else body
 
 
-def record(root: Path, files: int, lines: int) -> int:
+def record(root: Path, ceilings: tuple[int, int, int]) -> int:
+    files, lines, tests = ceilings
     path = root / gatelib.THRESHOLDS
     path.parent.mkdir(parents=True, exist_ok=True)
     current = path.read_text(encoding="utf-8") if path.is_file() else ""
-    path.write_text(with_ceilings(current, files, lines), encoding="utf-8")
-    print(f"change-size: ceiling recorded, {files} files and {lines} lines")
+    path.write_text(with_ceilings(current, ceilings), encoding="utf-8")
+    print(
+        f"change-size: ceilings recorded, {files} product files, {lines} product lines,"
+        f" {tests} test lines"
+    )
     return 0
+
+
+def describe(size: Size, limits: Ceilings) -> str:
+    """The line the pipeline's agents read: each count beside its ceiling."""
+
+    def of(limit: int | None) -> str:
+        return "no ceiling" if limit is None else f"ceiling {limit}"
+
+    return (
+        f"change-size: {size.product_files} product files ({of(limits.product_files)}),"
+        f" {size.product_lines} product lines ({of(limits.product_lines)}),"
+        f" {size.test_lines} test lines ({of(limits.test_lines)}) changed"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -172,30 +292,37 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", default=".")
     parser.add_argument("--base")
     parser.add_argument("--set", action="store_true")
-    parser.add_argument("--files", type=int)
-    parser.add_argument("--lines", type=int)
+    parser.add_argument("--product-files", type=int)
+    parser.add_argument("--product-lines", type=int)
+    parser.add_argument("--test-lines", type=int)
     options = parser.parse_args(argv[1:])
     root = Path(options.root).resolve()
     if options.set:
-        if options.files is None or options.lines is None:
-            parser.error("--set needs --files N and --lines N")
-        return record(root, options.files, options.lines)
+        given = (options.product_files, options.product_lines, options.test_lines)
+        if any(value is None for value in given):
+            parser.error("--set needs --product-files N, --product-lines N and --test-lines N")
+        return record(root, (given[0], given[1], given[2]))
     if problems := malformed(root):
         return gatelib.report("change-size", problems)
     base = gatelib.base_commit(root, options.base)
     if base is None:
         print("change-size: no base commit yet")
         return 0
-    files, lines = measure(root, base)
+    size = measure(root, base)
     limits = ceilings(root)
-    print(f"change-size: {files} files, {lines} lines changed")
-    if limits == (None, None):
-        print("change-size: no ceiling recorded; `--set --files N --lines N` records one")
+    print(describe(size, limits))
+    if test_globs(root, base) is None:
+        print(NO_ROW)
+    if not limits.recorded():
+        print(
+            "change-size: no ceiling recorded; `--set --product-files N --product-lines N"
+            " --test-lines N` records them"
+        )
         return 0
     if reason := exemption(root, base):
         print(f"change-size: {reason}")
         return 0
-    return gatelib.report("change-size", over((files, lines), limits), base)
+    return gatelib.report("change-size", over(size, limits), base)
 
 
 if __name__ == "__main__":

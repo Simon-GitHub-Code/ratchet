@@ -185,22 +185,27 @@ function checkOutputField(ownTestsOnly) {
 // ---------------------------------------------------------------------------
 // Schemas
 // ---------------------------------------------------------------------------
-// Why: a change must leave room under the binding's change-size ceiling for what the later
-// stages add. On the first tickets built this way the critic's tests were two fifths of the
-// change and the spec's tests most of the rest, so a change that is already over two thirds of
-// the ceiling cannot end green, and each stage it still runs is paid for nothing. That holds
-// only while the critic runs (ADR 0028). Without it what is still to come is the review, whose
-// verdict record and findings the change-size gate does not count, so the room left is all of
-// the ceiling (ADR 0040).
+// Why: ADR 0045. The change-size ceiling bounds the product code a change brings, and test lines
+// have a ceiling of their own that only stops a runaway: the method asks for many tests, and they
+// were 85% of the lines counted on recent changes. Product code has no later stage that adds to
+// it (the review writes none, the fix loop a few lines), so its room is all of its ceiling. The
+// critic's tests are still to come while it runs (ADR 0028), about two fifths of the spec's own,
+// so the tests keep the margin of two thirds of their ceiling until then and all of it without
+// the critic (ADRs 0040 and 0045).
 const CHANGE_SIZE_FIELD = {
   changeSize: {
     type: 'object',
-    description: 'The two numbers the binding\'s change-size entry point prints for the working tree as you leave it; omit when the binding binds no such gate',
-    properties: { lines: { type: 'integer' }, ceiling: { type: 'integer' } },
+    description: 'What the binding\'s change-size entry point prints for the working tree as you leave it: the product lines and the ceiling beside them, the test lines and theirs; omit when the binding binds no such gate',
+    properties: {
+      lines: { type: 'integer', description: 'The product lines changed' },
+      ceiling: { type: 'integer', description: 'The product lines ceiling' },
+      testLines: { type: 'integer', description: 'The test lines changed' },
+      testCeiling: { type: 'integer', description: 'The test lines ceiling' },
+    },
     required: ['lines', 'ceiling'],
   },
 }
-const CHANGE_SIZE_RULE = 'Run the binding\'s change-size entry point last and return the lines changed and the ceiling it prints as `changeSize`; omit it when the binding binds no such gate.'
+const CHANGE_SIZE_RULE = 'Run the binding\'s change-size entry point last and return what it prints as `changeSize`: `lines` and `ceiling` are its product lines and the ceiling beside them, `testLines` and `testCeiling` its test lines and theirs (leave the last two out when it prints no test ceiling); omit `changeSize` when the binding binds no such gate.'
 // Why: ADR 0028. A red `triggers` gate says a second instance of a kind arrived while its
 // safeguards are still owed. Quieting it in the binding, the justfile or quality/ would be the
 // implementer loosening the judge; binding the rows is /ratchet:safeguard's, run by the owner. The
@@ -211,10 +216,10 @@ const OWED_RED = /triggers: '[^']+' gained \d+ instance/
 const ROOM_NUMERATOR = 2
 const ROOM_DENOMINATOR = 3
 
-// The share of the ceiling a change may fill before the stages still to come would push it over,
-// as [numerator, denominator]: two thirds while the critic and its fixes are to come, all of it
-// when only the review is.
-function roomShare(critic) {
+// The share of the test ceiling a change may fill before the stages still to come would push it
+// over, as [numerator, denominator]: two thirds while the critic's tests are to come, all of it
+// when they are not. Product code has no such margin: nothing still to come adds much of it.
+function testRoomShare(critic) {
   return critic ? [ROOM_NUMERATOR, ROOM_DENOMINATOR] : [1, 1]
 }
 
@@ -225,14 +230,14 @@ function roomShare(critic) {
 const ESTIMATE_FIELD = {
   changeEstimate: {
     type: 'object',
-    description: 'What the whole change will weigh against the change-size ceiling, estimated before you return; omit when the binding binds no change-size gate',
+    description: 'What the whole change will weigh against the change-size ceilings, product and tests apart, estimated before you return; omit when the binding binds no change-size gate',
     properties: {
-      implementationLines: { type: 'integer', description: 'Lines the implementation will add or change, by the seams the tests exercise' },
-      criticLines: { type: 'integer', description: 'Lines the critic\'s tests will add: about two fifths of the lines of your own tests, more for a user interface or an endpoint' },
-      recordLines: { type: 'integer', description: 'Lines of dispute records, ADRs and glossary entries the change is likely to add; 0 when none' },
+      implementationLines: { type: 'integer', description: 'Product lines the implementation will add or change, by the seams the tests exercise' },
+      criticLines: { type: 'integer', description: 'Test lines the critic\'s tests will add: about two fifths of the lines of your own tests, more for a user interface or an endpoint' },
+      recordLines: { type: 'integer', description: 'Lines of ADRs and glossary entries the change is likely to add, which count as product; 0 when none' },
       proposedSplit: {
         type: 'array',
-        description: 'When the sum of these three and the lines already measured would pass the ceiling: two or more tickets that each fit, with the acceptance criteria each carries; empty when the change fits',
+        description: 'When the product lines (implementation and records, plus those already measured) would pass the product ceiling, or your tests plus the critic\'s the test ceiling: two or more tickets that each fit, with the acceptance criteria each carries; empty when the change fits',
         items: {
           type: 'object',
           properties: {
@@ -802,15 +807,17 @@ Your tasks, in order:
    test plan, so the reviewer sees what each test refuted.
 4. Run \`tier0\` and your new tests, and capture the tail. Tier 0 is expected green and the
    new tests red. Do not run \`check\`: the implementer runs it once the code exists.
-5. ${CHANGE_SIZE_RULE} The tests you wrote are most of what the change will
-   weigh: when they alone pass ${CRITIC ? 'two thirds of' : ''} the ceiling the run stops here, and the owner
-   splits the ticket. Write the tests the criteria need, never fewer to fit.
-6. Estimate the whole change against that ceiling and return it as \`changeEstimate\`: the
-   lines already measured (spec, tests, fixtures), plus the implementation, ${criticEstimate(CRITIC)}
-   plus any dispute records and ADRs. Be honest and not
-   hopeful: the fix agent cannot cut a change down by revising code. When the sum passes the
-   ceiling, put the split in \`proposedSplit\`: two or more tickets, each of which fits, each
-   with the acceptance criteria it carries. The run then stops for the owner, who files them.
+5. ${CHANGE_SIZE_RULE} Tests are counted apart from product code, under a ceiling of their own:
+   when the tests you wrote alone pass ${CRITIC ? 'two thirds of' : ''} the test ceiling the run stops here, and the
+   ticket is split. Write the tests the criteria need, never fewer to fit.
+6. Estimate the whole change against the two ceilings and return it as \`changeEstimate\`. The
+   product side is the implementation plus any ADRs and glossary entries (\`implementationLines\`,
+   \`recordLines\`): it is held to the product ceiling, as is the product code already measured.
+   The test side is the tests already measured (spec, fixtures), ${criticEstimate(CRITIC)}
+   held to the test ceiling. Be honest and not hopeful: the fix agent cannot cut a change down by
+   revising code. When either side passes its ceiling, put the split in \`proposedSplit\`: two or
+   more tickets, each of which fits both, each with the acceptance criteria it carries. The run
+   then stops, and the orchestrator files the parts as tickets itself.
 
 An undecided point is the owner's in two cases, and yours in every other.
 
@@ -1236,39 +1243,68 @@ exits 0; otherwise \`request_changes\`. The script re-derives the verdict from y
 // ---------------------------------------------------------------------------
 // Helpers (pure)
 // ---------------------------------------------------------------------------
-// The stop for a change with no room left under the ceiling, or null. \`stage\` is the role
-// that just returned.
+// The stop for a change with no room left under a ceiling, or null. `stage` is the role that just
+// returned. The product lines may fill their ceiling; the test lines two thirds of theirs while the
+// critic's tests are still to come.
 function noRoom(stage, size, critic = true) {
   const lines = size && size.lines
   const ceiling = size && size.ceiling
-  if (!Number.isInteger(lines) || !Number.isInteger(ceiling) || ceiling <= 0) return null
-  const [numerator, denominator] = roomShare(critic)
-  if (lines * denominator <= ceiling * numerator) return null
+  if (Number.isInteger(lines) && Number.isInteger(ceiling) && ceiling > 0 && lines > ceiling) {
+    return {
+      kind: 'product',
+      stage,
+      lines,
+      ceiling,
+      reason: `too large: ${lines} product lines after ${stage}, over the change-size ceiling of ${ceiling} (tests are counted apart)`,
+    }
+  }
+  const tests = size && size.testLines
+  const testCeiling = size && size.testCeiling
+  if (!Number.isInteger(tests) || !Number.isInteger(testCeiling) || testCeiling <= 0) return null
+  const [numerator, denominator] = testRoomShare(critic)
+  if (tests * denominator <= testCeiling * numerator) return null
   return {
+    kind: 'tests',
     stage,
-    lines,
-    ceiling,
+    lines: tests,
+    ceiling: testCeiling,
     reason: critic
-      ? `too large: ${lines} lines after ${stage}, over two thirds of the change-size ceiling of ${ceiling}, with the critic's tests and the fixes still to come`
-      : `too large: ${lines} lines after ${stage}, over the change-size ceiling of ${ceiling}, and the review that is still to come adds nothing the gate counts`,
+      ? `too large: ${tests} test lines after ${stage}, over two thirds of the test ceiling of ${testCeiling}, with the critic's tests still to come`
+      : `too large: ${tests} test lines after ${stage}, over the test ceiling of ${testCeiling}`,
   }
 }
 
-// The stop for a ticket whose whole change cannot fit under the ceiling, or null. The lines
-// already measured are the spec's own; the estimate adds what the later stages will.
+// The stop for a ticket whose whole change cannot fit under the ceilings, or null. What was
+// already measured is the spec's own; the estimate adds what the later stages will, product code
+// against the product ceiling and tests (the critic's included) against the test ceiling.
 function cannotFit(size, estimate, critic = true) {
+  if (!estimate) return null
   const lines = size && size.lines
   const ceiling = size && size.ceiling
-  if (!estimate || !Number.isInteger(lines) || !Number.isInteger(ceiling) || ceiling <= 0) return null
+  const product = (Number.isInteger(lines) ? lines : 0) + (estimate.implementationLines || 0) + (estimate.recordLines || 0)
+  if (Number.isInteger(ceiling) && ceiling > 0 && product > ceiling) {
+    return {
+      kind: 'product',
+      stage: 'the spec',
+      lines: product,
+      ceiling,
+      proposedSplit: estimate.proposedSplit || [],
+      reason: `too large: the spec estimates ${product} product lines for the whole change (already measured ${lines || 0}, implementation ${estimate.implementationLines || 0}, records ${estimate.recordLines || 0}), over the change-size ceiling of ${ceiling} (tests are counted apart)`,
+    }
+  }
+  const tests = size && size.testLines
+  const testCeiling = size && size.testCeiling
+  if (!Number.isInteger(testCeiling) || testCeiling <= 0) return null
   const criticLines = critic ? estimate.criticLines || 0 : 0
-  const total = lines + (estimate.implementationLines || 0) + criticLines + (estimate.recordLines || 0)
-  if (total <= ceiling) return null
+  const total = (Number.isInteger(tests) ? tests : 0) + criticLines
+  if (total <= testCeiling) return null
   return {
+    kind: 'tests',
     stage: 'the spec',
     lines: total,
-    ceiling,
+    ceiling: testCeiling,
     proposedSplit: estimate.proposedSplit || [],
-    reason: `too large: the spec estimates ${total} lines for the whole change (spec and tests ${lines}, implementation ${estimate.implementationLines || 0}, ${critic ? `the critic's tests ${criticLines}` : 'no critic'}, records ${estimate.recordLines || 0}), over the change-size ceiling of ${ceiling}`,
+    reason: `too large: the spec estimates ${total} test lines for the whole change (spec and tests ${tests || 0}, ${critic ? `the critic's tests ${criticLines}` : 'no critic'}), over the test ceiling of ${testCeiling}`,
   }
 }
 

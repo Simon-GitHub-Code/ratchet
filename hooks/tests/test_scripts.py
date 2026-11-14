@@ -373,3 +373,24 @@ def test_an_adr_naming_a_number_does_not_pass_a_boolean_flip(tmp_path: Path) -> 
     assert lowered.main(["lowered", "--root", str(root)]) == 0, "each is named in its own kind"
     write(root, "quality/thresholds.toml", "[g]\nx = false\ny = 0\n")
     assert lowered.main(["lowered", "--root", str(root)]) == 0
+
+
+def test_the_change_ceiling_moves_to_its_product_keys_without_loosening(tmp_path: Path) -> None:
+    # Why: ADR 0045. The old keys are removed and the new ones written; the move is judged by the
+    # value, so a project cannot drop `lines` and write a larger `product_lines`.
+    old = "[ceilings.change]\nfiles = 40\nlines = 1500\n"
+    root = repository(tmp_path, {"quality/thresholds.toml": old})
+    commit(root, "feat(core): second")
+    branch(root)
+
+    def moved(files: int, lines: int, tests: int = 3000) -> int:
+        body = f"[ceilings.change]\nproduct_files = {files}\nproduct_lines = {lines}\n"
+        write(root, "quality/thresholds.toml", body + f"test_lines = {tests}\n")
+        return lowered.main(["lowered", "--root", str(root)])
+
+    assert moved(40, 1500) == 0, "the same values under the new names"
+    assert moved(25, 1000) == 0, "lower is the ratchet working"
+    assert moved(40, 1501) == 1, "a higher product ceiling is a raised ceiling"
+    assert moved(41, 1500) == 1
+    write(root, "quality/thresholds.toml", "[ceilings.change]\ntest_lines = 3000\n")
+    assert lowered.main(["lowered", "--root", str(root)]) == 1, "the old keys cannot just go"

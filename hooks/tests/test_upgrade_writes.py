@@ -112,8 +112,11 @@ def test_a_speed_section_that_lists_nothing_gains_the_shard_count_below_its_text
 
 
 THRESHOLDS = "quality/thresholds.toml"
-LIVE_CEILING = "[ceilings.change]\nfiles = 40\nlines = 1500\n"
-COMMENTED_CEILING = "# [ceilings.change]\n# files = 40\n# lines = 1500\n"
+LIVE_CEILING = "[ceilings.change]\nproduct_files = 25\nproduct_lines = 1000\ntest_lines = 3000\n"
+COMMENTED_CEILING = (
+    "# [ceilings.change]\n# product_files = 25\n# product_lines = 1000\n# test_lines = 3000\n"
+)
+OLDER_CEILING = "[ceilings.change]\nfiles = 40\nlines = 1500\n"
 
 
 def test_a_binding_without_a_tests_section_gains_the_templates_beside_its_neighbours(
@@ -150,8 +153,35 @@ def test_a_thresholds_file_with_no_change_ceiling_gains_the_method_s_below_its_t
 
 
 def test_a_change_ceiling_the_project_set_is_left_as_it_is(repo: Path) -> None:
-    replace(THRESHOLDS, LIVE_CEILING, "[ceilings.change]\nfiles = 10\nlines = 300\n")(repo)
+    own = "[ceilings.change]\nproduct_files = 10\nproduct_lines = 300\ntest_lines = 900\n"
+    replace(THRESHOLDS, LIVE_CEILING, own)(repo)
     assert not any("ceilings.change" in f.problem for f in conformance.findings(repo))
+
+
+def test_the_older_change_ceiling_moves_to_product_keys_at_the_same_values(repo: Path) -> None:
+    # Why: ADR 0045. The values carry over unchanged, so the move loosens nothing and the lowered
+    # gate reads it as the same ceiling; only the tests get a ceiling of their own.
+    replace(THRESHOLDS, LIVE_CEILING, "[ceilings.change]\nfiles = 12\nlines = 700\n")(repo)
+    [found] = [f for f in conformance.findings(repo) if "ceilings.change" in f.problem]
+    assert isinstance(found.fix, conformance.Auto)
+    assert settle(repo) == []
+    assert "[ceilings.change]\nproduct_files = 12\nproduct_lines = 700\ntest_lines = 3000\n" in (
+        text(repo, THRESHOLDS)
+    )
+
+
+def test_a_binding_without_test_paths_gains_the_templates_section(repo: Path) -> None:
+    replace(BINDING, "\n## Test paths\n", "\n## Tested at\n")(repo)
+    assert any("has no '## Test paths' section" in f.problem for f in conformance.findings(repo))
+    left = settle(repo)
+    assert any("'- Tests:' is still the template's" in f.problem for f in left), (
+        "which paths are tests is the project's to say, so the upgrade leaves it to an agent"
+    )
+
+
+def test_a_test_paths_section_that_says_none_with_no_reason_is_red(repo: Path) -> None:
+    replace(BINDING, "- Tests: `tests/**`", "- Tests: none: no")(repo)
+    assert any("needs the reason" in f.problem for f in conformance.findings(repo))
 
 
 def test_a_thresholds_file_the_ceiling_cannot_be_added_to_is_not_rewritten() -> None:
