@@ -11,6 +11,10 @@ the reasons are the judge's, it prints the owner's merge command and the tier 2 
 after it.
 The work tree is removed either way.
 
+A branch that does not hold the tip of the default branch is the owner's with the ``behind``
+reason, as on a forge: its verdict was given on another tree, so it is brought up to date and
+judged again first (``drain.py update``, then the pipeline's ``rejudge``).
+
 ``check`` runs in a fresh work tree, as it does in CI, so its recipes install what they need.
 
 The adoption, the change that brings the manifest to a default branch with none, is judged by
@@ -122,7 +126,11 @@ def attempt(root: Path, tree: Path, *, default: str, branch: str) -> tuple[list[
     message = f"Merge branch '{branch}'"
     if gatelib.git(tree, "merge", "--no-ff", "--quiet", "-m", message, head) is None:
         return [Reason("conflict", f"`{branch}` does not merge into `{default}` cleanly")], ""
-    reasons = merge_ready.judge(root, f"{HEADS}{default}", head)
+    # Why: the verdict was given on the tree the branch was judged on; one that does not hold the
+    # tip of the default branch lands a tree no review saw (ADR 0023), so it is brought up to date
+    # and judged again, as the forge's judge asks.
+    asked = merge_ready.Asked(current=True)
+    reasons = merge_ready.judge(root, f"{HEADS}{default}", head, asked=asked)
     if reasons:
         return reasons, ""
     merged = gatelib.git(tree, "rev-parse", "HEAD") or ""
