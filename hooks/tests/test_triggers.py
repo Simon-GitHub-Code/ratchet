@@ -417,3 +417,35 @@ def test_a_kind_bound_after_its_return_takes_instances(tmp_path: Path) -> None:
     text = (root / "docs/process/binding.md").read_text(encoding="utf-8")
     write(root, "docs/process/binding.md", text.replace("later: code:outbound-call", "a timeout"))
     assert run(root) == 0
+
+
+def rebind(root: Path, old: str, new: str) -> None:
+    path = "docs/process/binding.md"
+    write(root, path, (root / path).read_text(encoding="utf-8").replace(old, new))
+
+
+def test_a_row_bound_while_the_kind_is_gone_takes_it_back_green(tmp_path: Path) -> None:
+    root = project(tmp_path, {"src/a.py": CALL}, LATER_CALL)
+    (root / "src/a.py").unlink()
+    land(root, "refactor(core): no calls")
+    rebind(root, "later: code:outbound-call", "a timeout")
+    land(root, "feat(core): bind the row")
+    write(root, "src/a.py", CALL)
+    write(root, "src/b.py", CALL)
+    assert run(root) == 0
+
+
+def test_a_row_dropped_and_put_back_later_does_not_make_the_return_an_arrival(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, {"src/a.py": CALL}, LATER_CALL)
+    (root / "src/a.py").unlink()
+    land(root, "refactor(core): no calls")
+    rebind(root, LATER_CALL + "\n", "")
+    land(root, "chore(core): drop the row")
+    rebind(root, "| format |", LATER_CALL + "\n| format |")
+    land(root, "chore(core): put the row back")
+    capsys.readouterr()
+    write(root, "src/a.py", CALL)
+    assert run(root) == 1
+    assert "returning, not arriving" in capsys.readouterr().out
