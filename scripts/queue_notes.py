@@ -92,6 +92,21 @@ def holds_of(result: dict[str, object]) -> list[str]:
     return found + ([GUARD] if result.get("guardEdits") else [])
 
 
+def causes_of(result: dict[str, object]) -> list[str]:
+    """The repo paths a blocked run named as its cause: guard paths it needed, disputes it filed.
+
+    Why: the route releases a blocked run only when one of these changes on the default branch.
+    """
+    edits = [edit.get("path") for edit in tables(result.get("guardEdits"))]
+    filed = [dispute.get("path") for dispute in tables(result.get("disputes"))]
+    return list(dict.fromkeys(path for path in [*edits, *filed] if isinstance(path, str) and path))
+
+
+def causes(root: Path, branch: str) -> list[str]:
+    """The paths the note for ``branch`` recorded as the cause; none if unrecorded."""
+    return texts(read_note(root, branch).get("causes"))
+
+
 @dataclass(frozen=True)
 class Hold:
     """A parked ticket the drain still holds: why, and which kinds of release it needs."""

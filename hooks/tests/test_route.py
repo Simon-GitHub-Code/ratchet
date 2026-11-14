@@ -377,7 +377,7 @@ def test_a_ticket_waiting_on_an_open_blocker_is_not_built(tmp_path: Path) -> Non
     assert route.decide(root, None).command == route.SPEC
 
 
-def test_a_ticket_whose_feature_run_blocked_waits_for_the_default_branch_to_move(
+def test_a_ticket_whose_feature_run_blocked_waits_for_its_answer(
     tmp_path: Path,
 ) -> None:
     ticket = ".scratch/f/issues/02-b.md"
@@ -393,8 +393,11 @@ def test_a_ticket_whose_feature_run_blocked_waits_for_the_default_branch_to_move
     assert "stash `feature/2-b: blocked run`" in held.command
     assert held.then.startswith(f"{route.FEATURE} {ticket}")
     write(root, "package.json", "{}\n")
-    commit(root, "build: the guard edit the run named")
-    assert route.decide(root, None).command == f"{route.FEATURE} {ticket}", "main moved on"
+    commit(root, "build: a move that answers nothing")
+    assert route.decide(root, None).stage == "blocked-run"
+    write(root, ticket, files[ticket] + "\n## Answers\n\nQ: a? A: b.\n")
+    commit(root, "docs(tracker): answer the run")
+    assert route.decide(root, None).command == f"{route.FEATURE} {ticket}", "the ticket changed"
 
 
 HELD = ".scratch/f/issues/02-b.md"
@@ -408,10 +411,10 @@ HELD_TEXT = "# 02: B\n\nStatus: ready-for-agent" + CONJECTURE
         (".scratch/g/issues/01-a.md", "# 01: A\n\nStatus: needs-triage\n", False),
         ("GLOSSARY.md", ADOPTED["GLOSSARY.md"] + "\n**Order**: what a customer places.\n", False),
         (HELD, HELD_TEXT + "\n## Answers\n\nQ: a? A: b.\n", True),
-        (".scratch/f/spec.md", "# F\n\nThe owner's answer.\n", True),
-        ("docs/adr/0002-x.md", "# X\n", True),
+        (".scratch/f/spec.md", "# F\n\nThe owner's answer.\n", False),
+        ("docs/adr/0002-x.md", "# X\n", False),
     ],
-    ids=["a spec", "a ticket", "a term", "the answers", "its spec", "a decision"],
+    ids=["a spec", "a ticket", "a term", "the answers", "another spec", "a decision"],
 )
 def test_records_an_agent_lands_do_not_release_a_blocked_run(
     tmp_path: Path, path: str, text: str, *, released: bool
@@ -430,6 +433,78 @@ def test_records_an_agent_lands_do_not_release_a_blocked_run(
     assert (step.stage, step.command) == (
         ("build", f"{route.FEATURE} {HELD}") if released else ("blocked-run", step.command)
     )
+
+
+def blocked(root: Path, branch_name: str = "feature/2-b") -> None:
+    git(root, "switch", "-q", "-c", branch_name)
+    write(root, "docs/features/b/spec.md", "draft\n")
+    git(root, "stash", "push", "-q", "-u", "-m", f"{branch_name}: blocked run")
+    git(root, "switch", "-q", "main")
+
+
+def test_agreeing_another_ticket_does_not_release_a_blocked_run(tmp_path: Path) -> None:
+    # Why: the run's questions were about its own ticket; a change that answers none of them
+    # offered the same build again.
+    first, other = ".scratch/f/issues/01-a.md", ".scratch/f/issues/02-b.md"
+    files = {
+        **ADOPTED,
+        "guards/manifest.toml": MANIFEST,
+        first: "# 01: A\n\nStatus: ready-for-agent" + CONJECTURE,
+        other: "# 02: B\n\nBlocked by: 01\n\nStatus: needs-triage\n",
+    }
+    root = repository(tmp_path, files)
+    blocked(root, "feature/1-a")
+    assert route.decide(root, None).stage == "blocked-run"
+    write(root, other, "# 02: B\n\nBlocked by: 01\n\nStatus: ready-for-agent" + CONJECTURE)
+    commit(root, "docs(tracker): agree ticket 02")
+    assert route.decide(root, None).stage == "blocked-run"
+
+
+def test_an_unrelated_binding_edit_does_not_release_a_blocked_run(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: HELD_TEXT})
+    blocked(root)
+    binding = (root / "docs/process/binding.md").read_text(encoding="utf-8")
+    write(root, "docs/process/binding.md", binding + "\n- Note: an unrelated line\n")
+    commit(root, "docs(process): an unrelated binding edit")
+    assert route.decide(root, None).stage == "blocked-run"
+
+
+def test_the_spec_a_ticket_inherits_releases_its_blocked_run(tmp_path: Path) -> None:
+    text = "# 02: B\n\nParent: spec.md\n\nStatus: ready-for-agent" + CONJECTURE
+    spec = ".scratch/f/issues/spec.md"
+    files = {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: text, spec: "# F\n"}
+    root = repository(tmp_path, files)
+    blocked(root)
+    assert route.decide(root, None).stage == "blocked-run"
+    write(root, spec, "# F\n\nThe owner's answer.\n")
+    commit(root, "docs(spec): answer the run")
+    assert route.decide(root, None).command == f"{route.FEATURE} {HELD}"
+
+
+def test_a_path_the_drain_recorded_as_the_cause_releases_a_blocked_run(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: HELD_TEXT})
+    blocked(root)
+    result = {"guardEdits": [{"path": "package.json", "edit": "a dependency"}]}
+    queue_notes.write_note(
+        queue_notes.note_path(root, "feature/2-b"), {"causes": queue_notes.causes_of(result)}
+    )
+    assert queue_notes.causes(root, "feature/2-b") == ["package.json"]
+    write(root, "unrelated.txt", "x\n")
+    commit(root, "build: something else")
+    assert route.decide(root, None).stage == "blocked-run"
+    write(root, "package.json", "{}\n")
+    commit(root, "build: the guard edit the run named")
+    assert route.decide(root, None).command == f"{route.FEATURE} {HELD}"
+
+
+def test_a_run_that_named_no_path_is_released_only_by_dropping_its_stash(tmp_path: Path) -> None:
+    # Why: a forge ticket has no file and a run with no note no cause; an empty list of paths
+    # must not read as "the whole tree".
+    root = repository(tmp_path, {**ADOPTED, HELD: HELD_TEXT})
+    blocked(root)
+    write(root, "package.json", "{}\n")
+    commit(root, "build: a move")
+    assert not route.answered(root, "main", "stash@{0}", asked=[])
 
 
 def test_only_a_blocked_run_holds_a_ticket(tmp_path: Path) -> None:
