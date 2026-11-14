@@ -1,4 +1,9 @@
-"""One pipeline run's rules, on every run its model allows."""
+"""One pipeline run's rules: on every run its model allows, then on the real workflow.
+
+The answers are finite and the workflow is deterministic given them, so nothing here samples: every
+sequence of abstract answers up to the fix loop's bound runs on the model and on the real
+``workflows/pipeline.js``, all of them in one node process.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,7 @@ import functools
 from collections import deque
 
 from tests import pipeline_model as model
+from tests import pipeline_world as world
 
 (
     EVIDENCED,
@@ -54,6 +60,20 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     NEVER_CRASHES: None,
     LOST: None,
 }
+# Why: rule 5's break and its twin in the fix loop, carried on to a review, so the real workflow
+# shows the approval they end in.
+FIXED_OVER_AND_APPROVED = [
+    "the orchestrator starts a build",
+    "preflight is green for a project that is depended-on",
+    "spec fits",
+    "ticket-check finds no gap",
+    "implement is green",
+    "critique finds a major it does not see fixed",
+    "fix-1 measures product code over its ceiling",
+    "critique-1 finds nothing",
+    "review approves",
+]
+RECONCILED_OVER_AND_APPROVED = [*RECONCILED_OVER, "review-again approves"]
 
 
 @functools.cache
@@ -109,3 +129,93 @@ def test_every_answer_of_every_agent_is_given_on_some_run() -> None:
     for role, answers in model.ANSWERS.items():
         for answer in answers:
             assert (role, answer) in given, (role, answer)
+
+
+def runs() -> list[tuple[list[model.Action], model.State]]:
+    """Every run from the start to an end, with the state it ends in."""
+    done: list[tuple[list[model.Action], model.State]] = []
+    stack: list[tuple[list[model.Action], model.State]] = [([], model.INITIAL)]
+    while stack:
+        actions, state = stack.pop()
+        if state.ending is not None:
+            done.append((actions, state))
+        stack.extend(
+            (([*actions, model.NAMED[name]], after) for name, after in adjacency().get(state, []))
+        )
+    return done
+
+
+def walked(names: list[str]) -> list[model.Action]:
+    """The actions a named run takes, each checked to be open where the run takes it."""
+    state, actions = model.INITIAL, []
+    for name in names:
+        action, state = next(move for move in model.moves(state) if move[0].name == name)
+        actions.append(action)
+    return actions
+
+
+def described(
+    actions: list[model.Action], expected: model.Ending | None, real: world.Played
+) -> str:
+    lines = ["run:", *(f"  {action.name}" for action in actions)]
+    lines += [f"model: {world.expected_calls(actions)}", f"  {expected}"]
+    return "\n".join([*lines, f"real:  {real.calls}", f"  {real.ending}"])
+
+
+def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers() -> None:
+    cases = [(actions, state.ending) for actions, state in runs()]
+    # Why: a local ticket file changes what the roles that read the ticket are told to run, so the
+    # longest build and the longest rejudge run once more reading one.
+    local = [
+        max((case for case in cases if case[0][0].answer is start), key=lambda case: len(case[0]))
+        for start in (model.Start.BUILD, model.Start.REJUDGE_CONFLICT)
+    ]
+    batch = world.play([actions for actions, _ in cases], [actions for actions, _ in local])
+    differ = [
+        described(actions, ending, real)
+        for (actions, ending), real in zip([*cases, *local], batch.played, strict=True)
+        if real.calls != world.expected_calls(actions) or real.ending != ending
+    ]
+    assert not differ, f"{len(differ)} of {len(batch.played)} runs differ; the first:\n{differ[0]}"
+    assert set(batch.effects) == set(model.Role), "every agent's prompt was read"
+    for role, commands in batch.effects.items():
+        assert commands <= model.COMMANDS[role], (role, sorted(commands - model.COMMANDS[role]))
+
+
+@functools.cache
+def replays() -> dict[str, world.Played]:
+    named = {
+        "dies": DIES_FIRST,
+        "fixed over": FIXED_OVER_AND_APPROVED,
+        "reconciled over": RECONCILED_OVER_AND_APPROVED,
+        "measured over": MEASURED_OVER,
+    }
+    batch = world.play([walked(names) for names in named.values()])
+    return dict(zip(named, batch.played, strict=True))
+
+
+def test_an_agent_that_dies_ends_the_run_in_an_error_and_no_result() -> None:
+    died = replays()["dies"]
+    assert died.calls == (("preflight", "Preflight"),)
+    assert "result" not in died.raw
+    assert died.raw["error"] == {
+        "name": "Error",
+        "message": "preflight agent returned no result (skipped or died); resume the run to retry",
+    }
+
+
+def test_a_change_a_fix_round_or_a_reconcile_takes_over_the_ceiling_is_approved() -> None:
+    measured = world.BUILDS[model.Build.PRODUCT_OVER]
+    assert isinstance(measured, dict)
+    assert measured["changeSize"]["lines"] > measured["changeSize"]["ceiling"]
+    assert measured["checkPasses"] is True
+    for name in ("fixed over", "reconciled over"):
+        result = replays()[name].raw["result"]
+        assert (result["verdict"], result["forcedBy"], result["tooLarge"]) == ("approve", [], None)
+
+
+def test_a_change_measured_over_a_ceiling_stops_with_no_parts_named() -> None:
+    played = replays()["measured over"]
+    assert played.calls == (("preflight", "Preflight"), ("spec", "Spec"))
+    too = played.raw["result"]["tooLarge"]
+    assert too == {"kind": "product", "stage": "the spec", "parts": 0}
