@@ -225,8 +225,13 @@ def start(root: Path, *argv: str, **env: str) -> subprocess.Popen[str]:
     )
 
 
-def two_opens(tmp_path: Path, *, paused: float, wait: str) -> tuple[Path, list[object]]:
-    """Two ``open`` processes of one ticket: the first stops after it read the plan."""
+def two_opens(tmp_path: Path, *, wait: str, outlast: bool) -> tuple[Path, list[object]]:
+    """Two ``open`` processes of one ticket: the first stops after it read the plan.
+
+    Why: no step is timed. The first goes on once the second says it waits for the lock, or,
+    with ``outlast``, once the second has given up, so a slow start on a busy machine changes
+    nothing.
+    """
     root = project(tmp_path)
     gate = tmp_path / "gate"
     gate.mkdir()
@@ -234,18 +239,23 @@ def two_opens(tmp_path: Path, *, paused: float, wait: str) -> tuple[Path, list[o
     while not (gate / "paused").exists():
         assert first.poll() is None, first.stdout.read() if first.stdout else ""
         time.sleep(0.02)
-    second = start(root, "open", ALPHA, DRV_LOCK_WAIT=wait)
-    time.sleep(0.5)
-    waiting = second.poll() is None
-    time.sleep(paused - 0.5)
+    second = start(root, "open", ALPHA, DRV_LOCK_WAIT=wait, DRV_WAITING=str(gate / "waiting"))
+    while not (gate / "waiting").exists():
+        assert second.poll() is None, second.stdout.read() if second.stdout else ""
+        time.sleep(0.02)
+    waiting = first.poll() is None
+    out2 = None
+    if outlast:
+        out2, _ = second.communicate(timeout=60)
     (gate / "go").touch()
     out1, _ = first.communicate(timeout=60)
-    out2, _ = second.communicate(timeout=60)
+    if out2 is None:
+        out2, _ = second.communicate(timeout=60)
     return root, [first.returncode, second.returncode, waiting, out1, out2]
 
 
 def test_a_second_open_of_the_ticket_waits_and_is_then_not_started(tmp_path: Path) -> None:
-    root, (rc1, rc2, waiting, _out1, out2) = two_opens(tmp_path, paused=1.5, wait="30")
+    root, (rc1, rc2, waiting, _out1, out2) = two_opens(tmp_path, wait="30", outlast=False)
     tree = drain.tree_of(root, BRANCH_A)
     assert (rc1, rc2, waiting) == (0, 1, True), "the second waited while the first ran"
     assert "is not started: it is building" in str(out2)
@@ -254,7 +264,7 @@ def test_a_second_open_of_the_ticket_waits_and_is_then_not_started(tmp_path: Pat
 
 
 def test_a_second_open_is_refused_when_its_wait_runs_out(tmp_path: Path) -> None:
-    root, (rc1, rc2, waiting, _out1, out2) = two_opens(tmp_path, paused=2.5, wait="1")
+    root, (rc1, rc2, waiting, _out1, out2) = two_opens(tmp_path, wait="1", outlast=True)
     assert (rc1, rc2, waiting) == (0, 1, True)
     assert "another drain command is running on this repository" in str(out2)
     assert drain.tree_of(root, BRANCH_A) in drain.worktrees(root)
