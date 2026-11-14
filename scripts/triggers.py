@@ -25,12 +25,13 @@ every part has. Such a row belongs to its code kind: a second instance of that k
 is owed is red, and the event alone never is.
 
 A row is **owed** when its trigger has fired and it is still ``later:``. The change that brings a
-kind is free: it takes the count from none at the merge base to any number, in any number of
-files, and prints a note naming the rows it made owed (ADR 0030); the change-size ceiling bounds
-how much one change brings once the repository records one; with none, nothing does yet. A
-later change that adds another instance while a row it owes is
-still ``later:`` is red, and says to run ``/ratchet:safeguard``, which chooses the tool, writes
-the recipe and the fault and binds the row.
+kind is free, once: it takes the count from none at the merge base to any number, in any number
+of files, when no commit on the default line up to the base ever held an instance (ADR 0048; a kind
+that went back to none and returns is owed, and adding to it is red), and prints a note naming the
+rows it made owed (ADR 0030); the change-size ceiling bounds how much one change brings once the
+repository records one; with none, nothing does yet. A later change that adds another instance
+while a row it owes is still ``later:`` is red, and says to run ``/ratchet:safeguard``,
+which chooses the tool, writes the recipe and the fault and binds the row.
 A change that binds the row itself is green. A declared life event owes its rows too, and is never
 red: the route puts binding them first.
 
@@ -182,6 +183,27 @@ def instances(
     return found
 
 
+def held_before(root: Path, base: str, kind: Kind) -> str | None:
+    """The newest commit on the default line up to ``base`` that held an instance of ``kind``.
+
+    Why: ADR 0048. An arrival is free once; a kind that went back to none and returns is owed.
+    One first-parent ``git log`` of names, newest first, tries only commits that touched a path
+    the kind finds, and stops at the first hit. A kind with no history reads as never held, so a
+    shallow clone makes every arrival free: CI must fetch full history for this gate.
+    """
+    listed = gatelib.git(
+        root, "log", "-m", "--first-parent", "--name-only", "--format=%x00%H", base
+    )
+    for block in (listed or "").split("\0")[1:]:
+        commit, _, names_text = block.partition("\n")
+        if (
+            any(kind.finds(path) for path in names_text.split("\n") if path)
+            and instances(root, commit, {kind.name: kind})[kind.name]
+        ):
+            return commit
+    return None
+
+
 def later_trigger(tool: str) -> str | None:
     """The trigger a ``later: <trigger>`` Tool cell names; ``None`` for any other cell."""
     match = application_types.LATER.match(tool)
@@ -263,7 +285,8 @@ def judge(root: Path, base: str) -> tuple[list[str], list[str]]:
         before_count, now = len(at_base[kind]), len(at_head[kind])
         if not rows or now <= before_count:
             continue
-        if before_count == 0:
+        earlier = held_before(root, base, kinds[kind]) if before_count == 0 else None
+        if before_count == 0 and earlier is None:
             notes.append(
                 f"triggers: note: '{kind}' has arrived ({listing(at_head[kind])}) and owes"
                 f" {names(rows)}; the change that brings a kind is free. Run /ratchet:safeguard"
@@ -271,10 +294,16 @@ def judge(root: Path, base: str) -> tuple[list[str], list[str]]:
             )
             continue
         added = [label for label in at_head[kind] if label not in set(at_base[kind])]
+        held = (
+            f"the base already held {before_count}"
+            if earlier is None
+            else f"the base holds none but {earlier[:9]} did, so it is returning, not arriving,"
+        )
+        adr = "0028" if earlier is None else "0048"
         problems.append(
-            f"triggers: '{kind}' gained {len(added)} instance(s) ({listing(added)}) while the"
-            f" base already held {before_count} and these rows are still `later:`:"
-            f" {names(rows)}. Run /ratchet:safeguard to bind them before adding more (ADR 0028)"
+            f"triggers: '{kind}' gained {len(added)} instance(s) ({listing(added)}) while"
+            f" {held} and these rows are still `later:`: {names(rows)}."
+            f" Run /ratchet:safeguard to bind them before adding more (ADR {adr})"
         )
     for event in sorted(
         {row.name for row in owing if not application_types.code_kinds(row.trigger)}
