@@ -242,6 +242,28 @@ def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers
         assert commands <= model.COMMANDS[role], (role, sorted(commands - model.COMMANDS[role]))
 
 
+def told(actions: list[model.Action]) -> tuple[tuple[str, int], ...]:
+    """Each fix round of a run with the rounds the model's loop has where the round runs."""
+    rounds, state = [], model.INITIAL
+    for action in actions:
+        if action.role is None:
+            state = model.STARTS[action.answer]
+            continue
+        if action.role is model.Role.FIX:
+            rounds.append((action.label, model.fix_rounds(state)))
+        state = model.answered(state, action)
+    return tuple(rounds)
+
+
+def test_on_the_real_workflow_each_fix_agent_is_told_the_rounds_its_loop_has() -> None:
+    # Why: the fix agent reads its round count to know whether another round follows, so a young
+    # project's fixer told of two rounds would leave to a round that never runs what one can close.
+    cases = played()[0]
+    assert any(real.told for _, _, real in cases)
+    for actions, _, real in cases:
+        assert real.told == told(actions), (real.told, [action.name for action in actions])
+
+
 def ending_on(test: Callable[[model.Action], bool]) -> list[tuple[model.Action, world.Played]]:
     """Each real run whose last answer passes ``test``, with that answer."""
     return [(actions[-1], real) for actions, _, real in played()[0] if test(actions[-1])]
