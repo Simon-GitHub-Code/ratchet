@@ -47,8 +47,13 @@ const LEASE = {
   DrainPyReport: "drain.py report",
   DrainPyReportDrainWithItsToken: "drain.py report --drain with its token",
   DrainPyClean: "drain.py clean",
-  DrainPyLandAUpToTheMergeMergePyLands: "drain.py land a, up to the merge merge.py lands",
+  DrainPyUpdateA: "drain.py update a",
+  DrainPyCloseOutcomeParkedA: "drain.py close --outcome parked a",
+  DrainPyLandAUpToTheMergePyItRuns: "drain.py land a, up to the merge.py it runs",
+  ItsMergePyLandsTheMerge: "its merge.py lands the merge",
   DrainPyLandATheCloseAfterTheMerge: "drain.py land a, the close after the merge",
+  AKillStopsItsLandAndItsMergePyBeforeTheMerge:
+    "a kill stops its land and its merge.py before the merge",
   AKillStopsItsLandAfterTheMergeBeforeTheClose:
     "a kill stops its land after the merge, before the close",
   StopsItsSessionStillOpen: "stops, its session still open",

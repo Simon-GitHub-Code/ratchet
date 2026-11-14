@@ -27,13 +27,16 @@ from tests.test_drain import (
     BRANCH_A,
     BRANCH_C,
     GAMMA,
+    HALVES,
     SCRIPTS,
+    WHOLE,
     Out,
     approval,
     binding,
     build,
     note,
     offline,
+    plan_file,
     project,
     run,
     scratch,  # noqa: F401 # -- an autouse fixture of the drain's tests
@@ -1662,3 +1665,65 @@ def test_a_close_and_an_open_that_keeps_a_note_drop_the_mark(tmp_path: Path) -> 
     kept = note(root, BRANCH_A)
     assert kept["outcome"] == "parked"
     assert "rebasing" not in kept
+
+
+def refused_for_a_landing(command: str) -> str:
+    return (
+        f"{command}: a landing of `{BRANCH_A}` is running in another command; nothing was done;"
+        " wait for it to end, then run plan: the landing records the ticket's outcome itself\n"
+    )
+
+
+@pytest.mark.parametrize("outcome", ["waits", "parked", "merged"])
+def test_a_close_is_refused_while_a_landing_of_the_ticket_holds_its_lock(
+    tmp_path: Path, capsys: Out, outcome: str
+) -> None:
+    root = project(tmp_path)
+    tree = judged(root)
+    with drain.landing_path(root, BRANCH_A).open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        capsys.readouterr()
+        assert run(root, "close", ALPHA, "--outcome", outcome, "--reason", "x") == 3
+        assert capsys.readouterr().out == refused_for_a_landing("close")
+        assert "outcome" not in note(root, BRANCH_A)
+        assert tree in drain.worktrees(root)
+    assert run(root, "close", ALPHA, "--outcome", outcome) == 0
+    assert note(root, BRANCH_A)["outcome"] == outcome
+
+
+def test_an_update_is_refused_while_a_landing_holds_its_lock_and_works_after(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    tree = judged(root)
+    head = git(tree, "rev-parse", "HEAD")
+    write(root, "src/c.py", "C = 1\n")
+    commit(root, "feat: main moves")
+    with drain.landing_path(root, BRANCH_A).open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        capsys.readouterr()
+        assert run(root, "update", ALPHA) == 3
+        assert capsys.readouterr().out == refused_for_a_landing("update")
+        assert git(tree, "rev-parse", "HEAD") == head, "the branch was not rebased"
+        assert "outcome" not in note(root, BRANCH_A)
+    assert run(root, "update", ALPHA) == 0
+    assert git(tree, "rev-parse", "HEAD") != head
+
+
+def test_a_split_is_refused_while_a_landing_holds_its_lock_and_files_nothing(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    tree = judged(root, resolved=False)
+    plan = plan_file(tmp_path, HALVES)
+    before = sorted(path.name for path in (root / ALPHA).parent.iterdir())
+    with drain.landing_path(root, BRANCH_A).open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        capsys.readouterr()
+        assert run(root, "split", ALPHA, "--plan", str(plan)) == 3
+        assert capsys.readouterr().out == refused_for_a_landing("split")
+        assert sorted(path.name for path in (root / ALPHA).parent.iterdir()) == before
+        assert "outcome" not in note(root, BRANCH_A)
+        assert tree in drain.worktrees(root)
+    assert run(root, "split", ALPHA, "--plan", str(plan)) == 0
+    assert note(root, BRANCH_A)["outcome"] == "split"
