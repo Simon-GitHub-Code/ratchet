@@ -1,13 +1,23 @@
-"""The queue drain's rules, on every state of its model."""
+"""The queue drain's rules: on every state of its model, then on real repositories."""
 
 from __future__ import annotations
 
 import functools
+import shutil
+import tempfile
+from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, Phase, settings
+from hypothesis import strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
 
+import drain
 from tests import drain_model as model
-from tests.drain_model import Kind
+from tests.drain_model import Kind, Name
+from tests.drain_world import BRANCH, DRAFT, World
+from tests.repos import git
+from tests.test_drain import scratch  # noqa: F401 # -- an autouse fixture of the drain's tests
 
 CAP, KEPT, JUDGED, NOT_STALE, ONCE, HELD, REFUSED, NO_TREE = model.RULES
 
@@ -15,7 +25,8 @@ OPEN_A = ["drain.py open a", "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
 PARK_A = "drain.py close --outcome parked a"
 # Why: a rule the code does not keep is pinned here by the shortest path from the initial state
-# to a step that breaks it, so the break is a recorded fact and not a red test.
+# to a step that breaks it, so the break is a recorded fact and not a red test; each pinned path
+# is replayed below on a real repository.
 COUNTEREXAMPLES: dict[str, list[str] | None] = {
     CAP: [*OPEN_A, PARK_A, "drain.py open c", "the owner edits ticket a", "drain.py update a"],
     KEPT: None,
@@ -71,3 +82,176 @@ def test_every_kind_of_action_is_reachable() -> None:
     _, taken = search()
     for kind in Kind:
         assert any(name.startswith(kind.value) for name in taken), kind
+
+
+class Play:
+    """The model and a real repository taking the same actions, compared after each one."""
+
+    def __init__(self, directory: Path) -> None:
+        self.world = World(directory)
+        self.state = model.INITIAL
+        self.path: list[str] = []
+
+    def says(self, what: str) -> str:
+        lines = [what, "path:", *(f"  {name}" for name in self.path)]
+        return "\n".join([*lines, f"the last command printed:\n{self.world.printed}"])
+
+    def named(self, name: str, *, compare: bool = True) -> str:
+        """Take the action the model calls ``name``; what the command printed."""
+        move = next((move for move in model.moves(self.state) if move[0].name == name), None)
+        assert move is not None, self.says(f"no action is called {name!r} here")
+        self.take(*move, compare=compare)
+        return self.world.printed
+
+    def take(self, action: model.Action, after: model.State, *, compare: bool = True) -> None:
+        self.state = after
+        self.path.append(action.name)
+        self.world.printed = ""
+        self.world.perform(action)
+        if compare:
+            self.agree()
+
+    def agree(self) -> None:
+        """Assert the repository is what the model says it is now."""
+        seen = self.world.seen(self.state)
+        statuses = model.classify(self.state)
+        assert seen.statuses == statuses, self.says(f"the plan says {seen.statuses}")
+        assert seen.start == model.start(self.state), self.says(f"the plan starts {seen.start}")
+        for name, real, kept in zip(Name, seen.tickets, self.state.tickets, strict=True):
+            assert real == kept, self.says(f"ticket {name.value} is {real}\nnot {kept}")
+
+
+# Why: the families an action is drawn from, a family as often as it is listed. A landing runs
+# merge.py in a process of its own, several times the cost of any other step.
+WEIGHTED = [
+    Kind.OPEN,
+    Kind.OPEN,
+    Kind.COMMIT,
+    Kind.COMMIT,
+    Kind.RECORD,
+    Kind.RECORD,
+    Kind.CLOSE,
+    Kind.UPDATE,
+    Kind.LAND,
+    Kind.CLEAN_ALL,
+    Kind.REPORT,
+    Kind.EDIT,
+    Kind.WORK,
+    Kind.LOCK,
+    Kind.UNLOCK,
+    Kind.CLEAN,
+]
+
+
+class DrainOnARepository(RuleBasedStateMachine):
+    """Random actions on the model and on a real repository together."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scratch = Path(tempfile.mkdtemp(prefix="drain-model-"))
+        self.play = Play(self.scratch)
+
+    @rule(data=st.data())
+    def act(self, data: st.DataObject) -> None:
+        moves = model.moves(self.play.state)
+        open_to = {action.kind for action, _ in moves}
+        chosen = data.draw(st.sampled_from([kind for kind in WEIGHTED if kind in open_to]))
+        action, after = data.draw(
+            st.sampled_from([move for move in moves if move[0].kind is chosen]), label="action"
+        )
+        self.play.take(action, after)
+
+    def teardown(self) -> None:
+        shutil.rmtree(self.scratch, ignore_errors=True)
+
+
+def test_the_real_drain_agrees_with_the_model_on_every_step() -> None:
+    # Why: every shrink replays git and merge.py; a red run reports its path unshrunk, and the
+    # exhaustive tests above give each rule's shortest break.
+    run_state_machine_as_test(
+        DrainOnARepository,
+        settings=settings(
+            max_examples=2,
+            stateful_step_count=8,
+            derandomize=True,
+            deadline=None,
+            phases=[Phase.explicit, Phase.reuse, Phase.generate],
+            suppress_health_check=[HealthCheck.too_slow],
+        ),
+    )
+
+
+def plan_of(play: Play) -> dict[str, drain.Entry]:
+    drafted = drain.plan(drain.Drain(play.world.root, None, model.CAP))
+    return {entry.branch: entry for entry in drafted.tickets}
+
+
+# Why: each history below replays a pinned path, and the steps of the past defects on the way,
+# comparing with the model at its end; the stateful run compares every step.
+
+
+def test_a_tree_made_again_by_update_takes_the_cap_past_what_open_allows(tmp_path: Path) -> None:
+    play = Play(tmp_path)
+    for name in OPEN_A:
+        play.named(name, compare=False)
+    refused = play.named("drain.py open c", compare=False)
+    assert refused.endswith("1 tickets are building: the cap\n"), "a built tree holds its place"
+    play.named(PARK_A, compare=False)
+    entries = plan_of(play)
+    assert entries[BRANCH[Name.A]].state == "held", "a ticket parked after it has commits"
+    assert entries[BRANCH[Name.B]].state == "refused", "its dependent is refused, not waiting"
+    for name in (COUNTEREXAMPLES[CAP] or [])[3:]:
+        printed = play.named(name, compare=False)
+    play.agree()
+    assert play.path[:2] + play.path[3:] == COUNTEREXAMPLES[CAP], "the pinned path, one refusal in"
+    assert printed == '{"moved": true, "conflicts": []}\n'
+    trees = drain.worktrees(play.world.root)
+    assert trees == {play.world.tree(Name.A), play.world.tree(Name.C)}
+    assert len(trees) > model.CAP
+
+
+def test_a_branch_judged_on_an_older_tip_does_not_land_and_is_retried(tmp_path: Path) -> None:
+    play = Play(tmp_path)
+    for name in [*JUDGED_A, "the owner edits ticket c"]:
+        play.named(name, compare=False)
+    stale = play.named("drain.py land a", compare=False)
+    assert "merge: owner\nbehind: the branch does not hold the tip of `main`" in stale
+    play.agree()
+    assert play.state.of(Name.A).note == model.Note(
+        model.Outcome.CLOSED, hold=False, text=0, attempts=1
+    ), "behind alone is a reason the drain resolves itself"
+
+
+def test_land_merges_a_held_ticket_and_a_close_after_it_unsays_the_merge(tmp_path: Path) -> None:
+    # Why: rule 6's pinned path, then rule 5's last step; rule 5's own pinned path closes the
+    # merged ticket straight after the landing, which reads the same way.
+    play = Play(tmp_path)
+    for name in [*JUDGED_A, PARK_A]:
+        play.named(name, compare=False)
+    assert plan_of(play)[BRANCH[Name.A]].state == "held", "a ticket parked after it has commits"
+    landed = play.named("drain.py land a", compare=False)
+    assert play.path == COUNTEREXAMPLES[HELD]
+    assert "merge: agent\nmerged: `feature/1-alpha` into `main`" in landed
+    play.named(PARK_A, compare=False)
+    play.agree()
+    note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    assert (note["outcome"], note["reported"]) == ("parked", False)
+    play.world.command("report")
+    merged, parked = play.world.printed.split("## Parked")
+    assert "Alpha" not in merged.split("## Merged")[1]
+    assert "Alpha" in parked.split("## Not built")[0]
+
+
+def test_clean_all_leaves_a_tree_whose_work_git_cannot_stash_and_keeps_the_work(
+    tmp_path: Path,
+) -> None:
+    play = Play(tmp_path)
+    for name in COUNTEREXAMPLES[NO_TREE] or []:
+        printed = play.named(name, compare=False)
+    play.agree()
+    tree = play.world.tree(Name.C)
+    assert printed.startswith(f"left: {tree}: the drain that made it was interrupted, and git")
+    assert (tree / DRAFT).read_text(encoding="utf-8") == "half done\n"
+    play.named("the owner removes the stale index lock of c", compare=False)
+    assert play.named("drain.py clean --all").startswith(f"removed: {tree}")
+    assert git(play.world.root, "show", f"stash@{{0}}^3:{DRAFT}") == "half done"
