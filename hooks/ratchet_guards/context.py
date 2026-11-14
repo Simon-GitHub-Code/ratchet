@@ -35,6 +35,10 @@ class RepoState(Protocol):
         """Whether a remote-tracking branch already contains ``HEAD``."""
         ...
 
+    def default_file(self, root: Path, relative: str) -> str | None:
+        """The file as the default branch's tip holds it, or ``None`` when it holds none."""
+        ...
+
     def full_name(self, cwd: Path, name: str) -> str | None:
         """The full name of the ref git reads ``name`` as in ``cwd``, when it is exactly one."""
         ...
