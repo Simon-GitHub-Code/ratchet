@@ -962,6 +962,27 @@ def test_a_held_ticket_is_released_by_changing_its_text(tmp_path: Path) -> None:
     assert route.decide(root, None).command == f"{route.FEATURE} {HELD}"
 
 
+GUARD_BLOCK = {"verdict": "blocked", "guardEdits": [{"path": "guards/x", "edit": "y"}]}
+
+
+def test_a_ticket_parked_for_guard_edits_is_released_when_they_land_and_not_before(
+    tmp_path: Path,
+) -> None:
+    root = held_root(tmp_path)
+    parked(root, GUARD_BLOCK, stash=False)
+    before = route.decide(root, None)
+    assert "land the guard edits" in before.command
+    write(root, "unrelated.txt", "x\n")
+    commit(root, "chore: an unrelated change")
+    assert route.decide(root, None).command == before.command
+    assert [e.state for e in drain.plan(drain.Drain(root, None)).tickets] == ["held"]
+    write(root, "guards/x", "the edit\n")
+    commit(root, "chore(method): the guard edit the run named")
+    assert route.decide(root, None).command == f"{route.FEATURE} {HELD}"
+    states = [e.state for e in drain.plan(drain.Drain(root, None)).tickets]
+    assert states == ["buildable"]
+
+
 @pytest.mark.parametrize(
     ("result", "named", "absent"),
     [
@@ -1025,3 +1046,9 @@ def test_an_adoption_that_stopped_is_resumed_before_the_hooks_are_installed(
     write(root, "docs/process/binding.md", BINDING)
     commit(root, "chore(method): adopt, the pin")
     assert route.decide(root, None).stage == "hooks"
+
+
+def test_a_repository_with_no_default_branch_commit_has_no_tip(tmp_path: Path) -> None:
+    git(tmp_path, "init", "-q")
+    assert queue_notes.tip(tmp_path) is None
+    assert not queue_notes.caused(tmp_path, {"causes": ["a"], "base": "b"})
