@@ -8,6 +8,7 @@ A model here is a small state machine that says what one part of the plugin shou
 | The threshold ratchet: what the default branch can hold | [ratchet.md](ratchet.md) | `hooks/tests/ratchet_model.py` | `hooks/tests/test_ratchet_model.py` |
 | The safeguard a project owes as it grows | [safeguard.md](safeguard.md) | `hooks/tests/safeguard_model.py` | `hooks/tests/test_safeguard_model.py` |
 | One pipeline run: what the workflow does with any answer | [pipeline.md](pipeline.md) | `hooks/tests/pipeline_model.py` | `hooks/tests/test_pipeline_model.py` |
+| The queue drain and its merge: what an interrupted drain leaves, and one drain at a time | [drain.md](drain.md) | `hooks/tests/drain_model.py` | `hooks/tests/test_drain_model.py` |
 
 ## What a model holds
 

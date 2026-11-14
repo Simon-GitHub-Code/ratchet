@@ -18,10 +18,10 @@ Stay in the turn until every workflow you start has returned: in a headless sess
 
 2. **The branch.** Green: `git switch <branch>` when `git rev-parse --verify --quiet <branch>` finds it, else `git switch -c <branch> <base>`. Run the preflight again with `--branch <branch>`; it must stay green.
 
-3. **The pipeline.** Call the Workflow tool (`name: "ratchet:pipeline"` where the harness lists plugin workflows by name):
+3. **The pipeline.** Call the Workflow tool by the workflow's name, `ratchet:pipeline`, here and in every Workflow call below. A harness that lists no plugin workflow by name takes `scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"` instead, once you have read that file: a fresh install refuses a script path the session has not read.
 
    ```
-   scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"
+   name: "ratchet:pipeline"
    args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
    ```
 
@@ -56,7 +56,7 @@ Stay in the turn until every workflow you start has returned: in a headless sess
 3. **Start the pipelines.** For each ticket in `start`, `D open <ticket> --root .`: exit 0 prints its `branch`, `worktree` and `base`; exit 1 means the plan does not start it. Then call the Workflow tool once per ticket opened, every call in one message so the runs are concurrent:
 
    ```
-   scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"
+   name: "ratchet:pipeline"
    args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
    ```
 
@@ -72,7 +72,7 @@ Stay in the turn until every workflow you start has returned: in a headless sess
    4. **Judge it again.** After a rebase or a conflict the first review no longer describes the change:
 
       ```
-      scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"
+      name: "ratchet:pipeline"
       args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "rejudge": { "slug": "<slug>", "specPath": "<specPath>", "conflicts": [<the conflicts>], "checkRed": <true when check was red>, "dependencies": <the first result's dependencies>, "assumptions": <the first result's assumptions>, "settled": <the first result's settled> } }
       ```
 
