@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
 
 The plugin's state machines are written down as models, and the real code is held to them. The route, one pipeline run, the queue drain and the merge, the safeguard a project owes, and the threshold ratchet each have a model under `hooks/tests`: every state it can reach, and the rules each state and step must keep. The tests prove every rule on every state, and play the real scripts against the model, so a change that breaks a rule is red. Each model has a page with its charts under `docs/model`: `route.md`, `pipeline.md`, `drain.md`, `safeguard.md` and `ratchet.md`. Most of the fixes below were found this way.
 
