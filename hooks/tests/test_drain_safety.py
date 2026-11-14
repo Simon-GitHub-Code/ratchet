@@ -882,6 +882,36 @@ def test_a_close_after_the_landing_does_not_unsay_the_merge(tmp_path: Path, caps
     assert "## Merged\n\n- none" not in report
 
 
+def test_a_close_as_merged_after_the_landing_says_it_is_closed_and_changes_nothing(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    judged(root)
+    assert run(root, "land", ALPHA) == 0
+    merged = note(root, BRANCH_A)
+    capsys.readouterr()
+    assert run(root, "close", ALPHA, "--outcome", "merged") == 0
+    assert capsys.readouterr().out == f"closed: {ALPHA}: merged\n"
+    assert note(root, BRANCH_A) == merged
+
+
+def test_clean_all_says_when_the_tree_of_a_recorded_merge_stays(
+    tmp_path: Path, capsys: Out
+) -> None:
+    killer = tmp_path / "killing_merge.py"
+    killer.write_text(KILLER.format(scripts=str(SCRIPTS)), encoding="utf-8")
+    root = project(tmp_path, **{"docs/process/binding.md": binding(f"{sys.executable} {killer}")})
+    tree = judged(root)
+    assert run(root, "land", ALPHA) == 2
+    git(root, "worktree", "remove", "--force", str(tree))
+    tree.mkdir(parents=True)
+    (tree / "left.txt").write_text("not git's\n", encoding="utf-8")
+    capsys.readouterr()
+    assert run(root, "clean", "--all") == 0
+    assert f"kept: the work tree stays at {tree}" in capsys.readouterr().out
+    assert note(root, BRANCH_A)["outcome"] == "merged"
+
+
 def test_an_update_killed_after_its_rebase_and_a_clean_all_drops_the_record_on_the_rerun(
     tmp_path: Path,
 ) -> None:
