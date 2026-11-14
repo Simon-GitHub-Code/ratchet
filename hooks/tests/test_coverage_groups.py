@@ -326,7 +326,11 @@ def test_the_kinds_that_silence_the_question_are_the_bindings_to_say(
     assert coverage_groups.exclusion_patterns(root) is None
     full = report(root).read_text().replace('condition-coverage="50% (1/2)"', "")
     (root / "coverage.xml").write_text(full)
-    write(root, "quality/thresholds.toml", THRESHOLDS.replace("line = 50.0", "line = 50.0\nbranch = 50.0"))
+    write(
+        root,
+        "quality/thresholds.toml",
+        THRESHOLDS.replace("line = 50.0", "line = 50.0\nbranch = 50.0"),
+    )
     assert coverage_groups.problems(root, [root / "coverage.xml"]) == []
     assert "no exclusion is searched for on absolute paths" in capsys.readouterr().out
 

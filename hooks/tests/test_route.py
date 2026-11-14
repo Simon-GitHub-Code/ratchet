@@ -781,8 +781,14 @@ OWES = (
 )
 
 
+SIGNS = (
+    "\n## Life event signs\n\n| Event | Paths |\n| --- | --- |\n"
+    "| deployed | `launch.cfg, deploy/**` |\n| irreplaceable-data | none: nothing marks it here |\n"
+)
+
+
 def owing(tmp_path: Path, events: str = "none", **files: str) -> Path:
-    binding = BINDING + OWES.format(events=events)
+    binding = BINDING + OWES.format(events=events) + SIGNS
     return repository(tmp_path, {**ADOPTED, "docs/process/binding.md": binding, **files})
 
 
@@ -842,10 +848,10 @@ def test_a_declared_event_owes_its_rows_and_is_never_red(tmp_path: Path) -> None
 def test_a_sign_of_an_undeclared_event_is_proposed_until_the_owner_declines_it(
     tmp_path: Path, capsys: Out
 ) -> None:
-    root = owing(tmp_path, **{"fly.toml": "app = 'a'\n"})
+    root = owing(tmp_path, **{"launch.cfg": "app = 'a'\n"})
     assert route.event_proposals(root) == [
         (
-            "`fly.toml` is a sign that the project is `deployed` (it runs somewhere people other"
+            "`launch.cfg` is a sign that the project is `deployed` (it runs somewhere people other"
             f" than the owner can reach): if it is, type `{route.SAFEGUARD} deployed`; if not yet,"
             " say so and it is not proposed again until a new sign of it appears"
         )
@@ -864,11 +870,11 @@ def test_a_sign_of_an_undeclared_event_is_proposed_until_the_owner_declines_it(
 def test_a_declared_event_and_an_unadopted_tree_propose_nothing(
     tmp_path: Path, capsys: Out
 ) -> None:
-    root = owing(tmp_path, events="deployed", **{"fly.toml": "app = 'a'\n"})
+    root = owing(tmp_path, events="deployed", **{"launch.cfg": "app = 'a'\n"})
     assert route.event_proposals(root) == []
     assert route.main(["route", "--root", str(root), "--decline", "deployed"]) == 2
     assert "nothing to decline" in capsys.readouterr().out
-    loose = repository(tmp_path / "loose", {"fly.toml": "app = 'a'\n"})
+    loose = repository(tmp_path / "loose", {"launch.cfg": "app = 'a'\n"})
     assert route.event_proposals(loose) == []
     write(root, ".ratchet/events.tsv", "date\tevent\tsign\tanswer\nshort row\n")
     assert route.declined_signs(root) == set()

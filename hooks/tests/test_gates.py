@@ -655,3 +655,10 @@ def test_a_test_paths_section_without_its_bullet_is_unfilled(binding: str) -> No
     globs, problems = change_size.test_paths(binding)
     assert globs is None
     assert any("still the template's" in problem for problem in problems)
+
+
+def test_prose_reads_the_comments_of_any_text_file_and_skips_a_binary_one(tmp_path: Path) -> None:
+    files = {"GLOSSARY.md": GLOSSARY, "a.zzz": "x = 1  # the client pays\n", "p.zzz": "client\n"}
+    root = repository(tmp_path, files)
+    (root / "b.bin").write_bytes(b"\x00 # client")
+    assert prose.problems(root) == ["a.zzz:1: 'client' is on the Avoid list of 'Customer'"]

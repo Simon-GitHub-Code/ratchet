@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The last stack knowledge leaves the plugin's code and pages for the binding (ADR 0050).
+
+- The signs of `deployed` and `irreplaceable-data` are the binding's `## Life event signs` table; the pins gate reads the files that name an image from `## Image pins`; the coverage gate's exclusions are the Suppressions kinds that silence its question; the prose gate scans the comments of every tracked text file, with no extension list.
+- The mutation gate reads one format, one JSON line per mutant (`--tool NAME --mutants FILE`). Its readers of two tools' reports are gone; the project's mutation recipe converts its tool's report. A recipe that still passes a report is a `conformance` finding.
+- An upgrade owes each missing section (ADR 0037); until one is filled the route proposes no such event, the pins gate reads no image file and the coverage gate searches no exclusion, and each says so.
+
 The architecture and the tools are asked at adoption, recorded and declared (ADR 0049). The adopting agent drafts two or three whole systems (what it is written in, where it runs, where its data is kept, how its parts talk, its parts, its trade-offs and what changing it later costs), with the tools that would check each, and the owner picks in the same round as the product questions, recommendation first; "you decide" takes the recommendation and the record says so. A repository with code is offered "keep what is here" first, and a rewrite never by default.
 
 - The choice is a decision record with `## Decision` and its `- Chosen by:` line, at least two alternatives under `## Considered options`, `## Reversal cost` and `## Refutation criterion`. The binding's new `## Architecture` section names it and declares the parts, `| Part | Path | May depend on |`, which replaces the `## Layers` section of `AGENTS.md`.
