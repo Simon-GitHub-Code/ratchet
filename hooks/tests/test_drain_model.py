@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
+import os
 import shutil
 import signal
 import tempfile
@@ -1307,6 +1309,45 @@ def test_a_second_land_while_a_killed_lands_merge_runs_runs_a_second_merge_and_o
     assert lease_note(two_drains)["outcome"] == "merged"
     reported = two_drains.named(path[-1])
     assert listed_under(reported, "Merged").count("Alpha") == 1
+
+
+LEFT = "left"
+"""The file the check that leaves a process behind writes that process's pid to."""
+
+
+@pytest.mark.parametrize(
+    "ends", [[MERGES, CLOSES], [ORPHANED, ORPHAN_MERGES]], ids=["land-ends", "land-killed-alone"]
+)
+def test_a_process_the_merges_check_leaves_running_does_not_keep_the_landing_seen(
+    tmp_path: Path, ends: list[str]
+) -> None:
+    left = tmp_path / LEFT
+    play = LeasePlay(tmp_path, f"sh -c 'sleep 600 >/dev/null 2>&1 & echo $! >> {left}'")
+    try:
+        for said in [APART, *D1_STARTS, LANDS, *ends]:
+            play.named(said)
+        pids = [int(pid) for pid in left.read_text(encoding="utf-8").split()]
+        assert [running(pid) for pid in pids] == [True], "the check left a process running"
+        root = play.world.world.root
+        assert not drain.landing_running(root, BRANCH[Name.A]), "no landing is seen"
+        if ends[-1] == CLOSES:
+            updated = play.world.command(model.Drain.ONE, "update", REF[Name.A])
+            assert (play.world.world.code, updated) == (
+                1,
+                f"update: {REF[Name.A]} is merged and is not rebased\n",
+            )
+        else:
+            parked = play.world.command(
+                model.Drain.ONE, *play.world.world.argv(Kind.CLOSE, REF[Name.A])
+            )
+            assert (play.world.world.code, parked) == (2, RECORDED + UNSAID)
+        reported = play.named("drain 1: drain.py report --drain with its token")
+        assert listed_under(reported, "Merged").count("Alpha") == 1
+    finally:
+        play.world.close()
+        for pid in left.read_text(encoding="utf-8").split() if left.exists() else []:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid), signal.SIGKILL)
 
 
 def test_a_stopped_drain_blocks_the_next_until_its_session_ends(two_drains: LeasePlay) -> None:
