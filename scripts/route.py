@@ -23,10 +23,11 @@ The stages, in order; the first that does not hold is the answer:
    ``merge`` entry point's ``--records``, which an agent runs, or a pull request on a forge);
    with no forge, a ``records/<time>`` branch checked out is a ``--records`` run that stopped,
    and the same command finishes it;
-7. on a working branch: the pull request is open, else open it, and its merge job merges what
-   the merge judge passes (ADR 0021); with no forge (no ``origin``) the binding's ``merge``
-   entry point judges the branch, runs ``check`` on the merge result and merges it, or says
-   why the merge is the owner's;
+7. on a working branch already merged into the default branch (its HEAD is in it, as after a
+   hand merge with no forge): ``git switch`` to the default branch; else the pull request is
+   open, else open it, and its merge job merges what the merge judge passes (ADR 0021); with no
+   forge (no ``origin``) the binding's ``merge`` entry point judges the branch, runs ``check``
+   on the merge result and merges it, or says why the merge is the owner's;
 8. on the default branch: a ``records/<time>`` branch not yet merged, which the merge judge is
    asked about (the owner's merge command with its first reason, or the ``merge`` entry point
    for an agent when it passes); the glossary and design brief (``grill-with-docs``), then an
@@ -575,6 +576,31 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
 # --- the route -------------------------------------------------------------------------------
 
 
+def switch_step(checkout: Checkout) -> Step | None:
+    """On a working branch already in the default branch: switch to it; else ``None``.
+
+    Why: a merge the owner ran by hand moves the default branch by ``git update-ref`` and leaves
+    the checkout where it was, and without this the route names the same merge again. A squash
+    merge on a forge leaves HEAD out of the default branch, so the pull request's state decides it.
+    """
+    default, root = checkout.default_branch, checkout.root
+    if gatelib.git(root, "merge-base", "--is-ancestor", "HEAD", default) is None:
+        return None
+    # A branch cut from the default tip and not yet built on equals it; with a forge that is a
+    # branch about to get its pull request, and with none a fast-forward merge looks the same.
+    if (
+        checkout.forge
+        and gatelib.git(root, "merge-base", "--is-ancestor", default, "HEAD") is not None
+    ):
+        return None
+    return Step(
+        f"git switch {default}",
+        f"branch `{checkout.branch}` is merged into `{default}`",
+        NEXT,
+        "switch",
+    )
+
+
 def pull_request_step(checkout: Checkout, gh: preflight.Runner | None) -> Step:
     """On a working branch with a clean tree: wait for the review, or open the pull request."""
     if not checkout.forge:
@@ -781,7 +807,7 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
     if checkout.dirty:
         return dirty_step(checkout)
     if not checkout.on_default:
-        return pull_request_step(checkout, gh)
+        return switch_step(checkout) or pull_request_step(checkout, gh)
     waiting = records_waiting(checkout) or fill_step(root)
     if waiting is not None:
         return waiting
