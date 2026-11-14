@@ -8,9 +8,13 @@ merge result against the tip, and the default branch moves to it only when the m
 the gate is green.
 
 ``judge`` is the gate as ``scripts/triggers.py`` documents it, with ADR 0048: a kind arrives free
-once, and one that went back to none and returns is owed. ``RULES`` are promises about whole
-histories. The tests check each on every reachable state and step of ``graph()``, and check
-``judge``, ``merge`` and ``owed`` against the real gate on real repositories.
+once, and one that went back to none and returns is owed. With ADR 0052 the kind is also one whose
+arrival reopens the architecture: once the binding asks for the review, another instance is red
+until a decision record citing the kind lands, unless the kind was already held when the binding
+first asked. The event is not one that reopens it, so it owes rows alone. ``RULES`` are promises
+about whole histories. The tests check each on every reachable state and step of ``graph()``, and
+check ``judge``, ``merge``, ``owed`` and ``reviews_owed`` against the real gate on real
+repositories.
 
 Some rules hold only with the merge judge behind the gate. The binding is a guard path
 (``docs/process/**``, the template manifest's ``decisions`` group), so a change to it lands only
@@ -33,8 +37,8 @@ if TYPE_CHECKING:
 
 Field = TypeVar("Field")
 # Why: two instances are several, and a third id lets a branch move one of them. The model with
-# four ids, three instances and every change free to wait on the open branch has 60,099 states and
-# gives every rule the verdict this one gives; this one is small enough for every test run.
+# four ids, three instances and every change free to wait on the open branch has 123,597 states
+# and gives every rule the verdict this one gives; this one is small enough for every test run.
 IDS = 3
 WIDEST = 2
 
@@ -61,6 +65,18 @@ class Event(enum.StrEnum):
     DECLARED = "declared"
 
 
+class Start(enum.StrEnum):
+    """Whether the binding has asked for the architecture review, and what it found then.
+
+    The reviews start at the first commit of the default branch whose binding has the review's
+    row. A kind held at or before it was there when the architecture was chosen, so it owes none.
+    """
+
+    NONE = "not asked"
+    FRESH = "asked before the kind"
+    HELD = "asked with the kind held"
+
+
 class Debt(enum.StrEnum):
     """A row that can be owed: the kind's, or the event's."""
 
@@ -69,21 +85,27 @@ class Debt(enum.StrEnum):
 
 
 class Tree(NamedTuple):
-    """What one commit holds that the gate reads: the kind's instances and the binding."""
+    """What one commit holds that the gate reads: the kind's instances, the binding, the review.
+
+    ``review`` is the binding's architecture review row, ``BOUND`` to the plugin's gate or
+    ``ABSENT``; ``reviewed`` is whether a decision record citing the kind is held.
+    """
 
     instances: frozenset[int] = frozenset()
     row: Row = Row.LATER
     table: Table = Table.FINDS
     event: Event = Event.UNDECLARED
     event_row: Row = Row.LATER
+    review: Row = Row.ABSENT
+    reviewed: bool = False
 
     def found(self, table: Table) -> frozenset[int]:
         """The instances a Triggers row as ``table`` says finds."""
         return self.instances if table is Table.FINDS else frozenset()
 
     @property
-    def binding(self) -> tuple[Row, Table, Event, Row]:
-        return (self.row, self.table, self.event, self.event_row)
+    def binding(self) -> tuple[Row, Table, Event, Row, Row]:
+        return (self.row, self.table, self.event, self.event_row, self.review)
 
 
 class Change(enum.StrEnum):
@@ -101,27 +123,35 @@ class Change(enum.StrEnum):
     RETARGET = "point the Triggers row elsewhere"
     DECLARE = "declare the event"
     BIND_EVENT = "bind the event's row"
+    ASK_REVIEW = "ask for the architecture review"
+    REVIEW = "land the architecture review"
+    ADD_REVIEWED = "add one instance with its review"
 
 
 # Why: these changes land at once and never wait on an open branch. The event is never red and
-# its lines merge apart from the kind's; the others change the binding, which only the owner
-# merges. Letting them wait, and the event change while a branch is open, takes 3,372 states to
-# 27,501 and changes no rule's verdict.
+# its lines merge apart from the kind's; the others change the binding or add a decision record,
+# which only the owner merges, and a record beside an instance is judged at the tip as on a
+# branch. Letting them wait, and letting the event's and the review's changes land while a branch
+# is open, takes 8,994 states to 62,300 and changes no rule's verdict.
 EVENT_CHANGES = frozenset({Change.DECLARE, Change.BIND_EVENT})
 BINDING_CHANGES = frozenset({Change.UNBIND, Change.DROP, Change.RESTORE, Change.RETARGET})
-LANDED_AT_ONCE = EVENT_CHANGES | BINDING_CHANGES
+REVIEW_CHANGES = frozenset({Change.ASK_REVIEW, Change.REVIEW, Change.ADD_REVIEWED})
+LANDED_AT_ONCE = EVENT_CHANGES | BINDING_CHANGES | REVIEW_CHANGES
+NO_BRANCH_OPEN = EVENT_CHANGES | REVIEW_CHANGES
 
 
 class Branch(NamedTuple):
     """The open branch: the tip it forked from, its change, what it holds, and the fork's past.
 
-    ``held`` is whether any commit of the default branch up to the fork held an instance.
+    ``held`` is whether any commit of the default branch up to the fork held an instance;
+    ``start`` is where the reviews stood at the fork.
     """
 
     fork: Tree
     change: Change
     head: Tree
     held: bool
+    start: Start = Start.NONE
 
 
 class State(NamedTuple):
@@ -129,13 +159,15 @@ class State(NamedTuple):
 
     ``allowance`` is how many instances the kind had when its row came to be owed, kept while the
     row is ``later:``. No commit holds it; rule 5 is about it. ``held`` is whether any commit of
-    the default branch up to its tip held an instance, which the gate reads from the log.
+    the default branch up to its tip held an instance, which the gate reads from the log, and
+    ``start`` is where the reviews stood when they started, which it reads from the log too.
     """
 
     main: Tree
     allowance: int | None
     branch: Branch | None
     held: bool = False
+    start: Start = Start.NONE
 
 
 INITIAL = State(Tree(), None, None)
@@ -143,31 +175,48 @@ INITIAL = State(Tree(), None, None)
 
 @dataclass(frozen=True)
 class Verdict:
-    """The gate's answer on one change: red, and the two notes it may print."""
+    """The gate's answer on one change: red, and the three notes it may print."""
 
     red: bool
     arrived: bool
     event_owes: bool
+    reopens: bool = False
 
 
 @functools.cache
-def judge(base: Tree, head: Tree, held: bool) -> Verdict:  # noqa: FBT001
+def judge(
+    base: Tree,
+    head: Tree,
+    held: bool,  # noqa: FBT001
+    *,
+    start: Start = Start.NONE,
+) -> Verdict:
     """The triggers gate on the change from ``base`` to ``head``.
 
-    The rows, the Triggers table and the events are read at ``base``; a row bound at ``head`` is
-    owed no longer. The kind is red when its count rose while its row is owed, unless it rose
-    from none and no commit of the default branch up to ``base`` held an instance (``held``).
+    The rows, the Triggers table, the events, the review row and its records are read at
+    ``base``; a row bound at ``head`` is owed no longer, and a record ``head`` brings counts not.
+    The kind is red when its count rose while its row or its review is owed, unless it rose from
+    none and no commit of the default branch up to ``base`` held an instance (``held``). The
+    review is owed while the base asks for it, holds no record, and the kind came after ``start``.
     """
     before, now = base.found(base.table), head.found(base.table)
+    rose = len(now) > len(before)
     owes = base.row is Row.LATER and bool(now) and head.row is not Row.BOUND
-    grew = owes and len(now) > len(before)
+    grew = owes and rose
+    reviewing = base.review is Row.BOUND and not base.reviewed and rose
     event = (
         base.event is Event.DECLARED
         and base.event_row is Row.LATER
         and head.event_row is not Row.BOUND
     )
     first = not before and not held
-    return Verdict(red=grew and not first, arrived=grew and first, event_owes=event)
+    unreviewed = reviewing and not first and start is not Start.HELD
+    return Verdict(
+        red=(grew and not first) or unreviewed,
+        arrived=grew and first,
+        event_owes=event,
+        reopens=reviewing and first,
+    )
 
 
 def owed(tree: Tree) -> dict[Debt, int]:
@@ -182,6 +231,19 @@ def owed(tree: Tree) -> dict[Debt, int]:
 
 def owes_kind(tree: Tree) -> bool:
     return Debt.KIND in owed(tree)
+
+
+def reviews_owed(state: State) -> int | None:
+    """The kind's count when the default branch owes its review, as ``triggers.reviews_owed``."""
+    main = state.main
+    found = main.found(main.table)
+    asked = main.review is Row.BOUND and not main.reviewed
+    return len(found) if asked and found and state.start is not Start.HELD else None
+
+
+def review_owed(tree: Tree, start: Start) -> bool:
+    """Whether a change to ``tree`` that raises the count is judged against an owed review."""
+    return tree.review is Row.BOUND and not tree.reviewed and start is not Start.HELD
 
 
 def three_way(fork: Field, ours: Field, theirs: Field) -> tuple[Field] | None:
@@ -204,10 +266,12 @@ def merge(fork: Tree, tip: Tree, head: Tree) -> Tree | None:
     fields = [
         three_way(*sides) for sides in zip(fork.binding, tip.binding, head.binding, strict=True)
     ]
-    if any(field is None for field in fields):
+    reviewed = three_way(fork.reviewed, tip.reviewed, head.reviewed)
+    if any(field is None for field in fields) or reviewed is None:
         return None
-    row, table, event, event_row = (field[0] for field in fields if field is not None)
-    return Tree((tip.instances - removed) | added, row, table, event, event_row)
+    row, table, event, event_row, review = (field[0] for field in fields if field is not None)
+    instances = (tip.instances - removed) | added
+    return Tree(instances, row, table, event, event_row, review, reviewed[0])
 
 
 @dataclass(frozen=True)
@@ -222,6 +286,8 @@ class Landing:
     branch_green: bool
     tip_held: bool = False
     fork_held: bool = False
+    tip_start: Start = Start.NONE
+    fork_start: Start = Start.NONE
 
     @property
     def touches_binding(self) -> bool:
@@ -237,15 +303,23 @@ class Landing:
         return len(self.merged.found(table)) > len(self.tip.found(table))
 
 
-def attempt(tip: Tree, fork: Tree, head: Tree, *, tip_held: bool, fork_held: bool) -> Landing:
+def attempt(
+    tip: Tree,
+    fork: Tree,
+    head: Tree,
+    *,
+    held: tuple[bool, bool],
+    start: tuple[Start, Start],
+) -> Landing:
     """``merge.attempt`` of a branch forked at ``fork`` holding ``head`` into ``tip``.
 
-    ``tip_held`` and ``fork_held`` say whether the default branch up to each ever held an instance.
+    ``held`` says whether the default branch up to the tip and up to the fork ever held an
+    instance, and ``start`` where the reviews stood at each.
     """
     merged = merge(fork, tip, head)
-    green = merged is not None and not judge(tip, merged, tip_held).red
-    on_branch = not judge(fork, head, fork_held).red
-    return Landing(tip, fork, head, merged, green, on_branch, tip_held, fork_held)
+    green = merged is not None and not judge(tip, merged, held[0], start=start[0]).red
+    on_branch = not judge(fork, head, held[1], start=start[1]).red
+    return Landing(tip, fork, head, merged, green, on_branch, *held, *start)
 
 
 def allowance_after(allowance: int | None, tree: Tree) -> int | None:
@@ -275,25 +349,36 @@ def places(state: State) -> dict[int, int]:
     return bits
 
 
+def settled(state: State) -> bool:
+    """Whether the review can never be owed again: its record is held, or it began held."""
+    return state.start is Start.HELD or (state.start is Start.FRESH and state.main.reviewed)
+
+
 def canonical(state: State) -> State:
     """``state`` with its instances numbered by where they are, so an id carries no history.
 
     Two instances the same trees hold are interchangeable, so numbering them in the order of
-    the trees that hold them makes one state of every way to name them.
+    the trees that hold them makes one state of every way to name them. Once the review is
+    settled the gate never reads its record or its start again, so every settled state is
+    numbered as one that began held and holds no record.
     """
     bits = places(state)
     order = sorted(bits, key=lambda n: (bits[n], n))
-    if order == list(range(len(order))):
-        return state
     names = {old: new for new, old in enumerate(order)}
+    calm = settled(state)
+    if order == list(range(len(order))) and not calm:
+        return state
 
     def renamed(tree: Tree) -> Tree:
-        return tree._replace(instances=frozenset(names[n] for n in tree.instances))
+        instances = frozenset(names[n] for n in tree.instances)
+        return tree._replace(instances=instances, reviewed=tree.reviewed and not calm)
 
     branch = state.branch
     if branch is not None:
         branch = branch._replace(fork=renamed(branch.fork), head=renamed(branch.head))
-    return State(renamed(state.main), state.allowance, branch, state.held)
+        branch = branch._replace(start=Start.HELD) if calm else branch
+    start = Start.HELD if calm else state.start
+    return state._replace(main=renamed(state.main), branch=branch, start=start)
 
 
 def fresh(state: State, count: int) -> frozenset[int] | None:
@@ -332,9 +417,32 @@ def heads(state: State, change: Change) -> Iterator[Tree]:
         if held_now:
             yield tip._replace(instances=frozenset())
     else:
-        edited = binding_edit(tip, change)
+        edited = edit(state, change, new)
         if edited is not None:
             yield edited
+
+
+def edit(state: State, change: Change, new: frozenset[int] | None) -> Tree | None:
+    """The tip with ``change`` made to its binding or its records, or ``None`` when it cannot be."""
+    if change is Change.REVIEW:
+        return record(state, frozenset())
+    if change is Change.ADD_REVIEWED:
+        return record(state, new)
+    return binding_edit(state.main, change)
+
+
+def record(state: State, new: frozenset[int] | None) -> Tree | None:
+    """The tip with the review's record landed beside ``new`` instances; ``None`` when it cannot.
+
+    Why: a record matters only while the review is owed; one landed after it settled is one the
+    gate never reads.
+    """
+    tip = state.main
+    if state.start is not Start.FRESH or tip.reviewed or new is None:
+        return None
+    if len(tip.instances | new) > WIDEST:
+        return None
+    return tip._replace(instances=tip.instances | new, reviewed=True)
 
 
 def binding_edit(tip: Tree, change: Change) -> Tree | None:
@@ -350,6 +458,7 @@ def binding_edit(tip: Tree, change: Change) -> Tree | None:
             tip.event is Event.DECLARED and tip.event_row is Row.LATER,
             {"event_row": Row.BOUND},
         ),
+        Change.ASK_REVIEW: (tip.review is Row.ABSENT, {"review": Row.BOUND}),
     }
     possible, fields = edits[change]
     return tip._replace(**fields) if possible else None
@@ -387,7 +496,10 @@ def landed(state: State, result: Landing) -> State:
         return state
     held = state.held or bool(result.merged.instances)
     allowance = allowance_after(state.allowance, result.merged)
-    return State(result.merged, allowance, state.branch, held)
+    start = state.start
+    if start is Start.NONE and result.merged.review is Row.BOUND:
+        start = Start.HELD if held else Start.FRESH
+    return State(result.merged, allowance, state.branch, held, start)
 
 
 def outcomes(step: Step, state: State) -> Iterator[tuple[State, Landing | None]]:
@@ -399,7 +511,11 @@ def outcomes(step: Step, state: State) -> Iterator[tuple[State, Landing | None]]
     branch = state.branch
     if step.verb is Verb.LAND and branch is not None:
         result = attempt(
-            state.main, branch.fork, branch.head, tip_held=state.held, fork_held=branch.held
+            state.main,
+            branch.fork,
+            branch.head,
+            held=(state.held, branch.held),
+            start=(state.start, branch.start),
         )
         after = landed(state, result)
         yield (after._replace(branch=None) if result.landed else after), result
@@ -408,12 +524,17 @@ def outcomes(step: Step, state: State) -> Iterator[tuple[State, Landing | None]]
     elif step.verb is Verb.FORK and branch is None and forks(state.main):
         assert step.change is not None
         for head in heads(state, step.change):
-            yield state._replace(branch=Branch(state.main, step.change, head, state.held)), None
-    elif step.verb is Verb.LAND_AT_ONCE and (branch is None or step.change not in EVENT_CHANGES):
+            branch = Branch(state.main, step.change, head, state.held, state.start)
+            yield state._replace(branch=branch), None
+    elif step.verb is Verb.LAND_AT_ONCE and (branch is None or step.change not in NO_BRANCH_OPEN):
         assert step.change is not None
         for head in heads(state, step.change):
             result = attempt(
-                state.main, state.main, head, tip_held=state.held, fork_held=state.held
+                state.main,
+                state.main,
+                head,
+                held=(state.held, state.held),
+                start=(state.start, state.start),
             )
             yield landed(state, result), result
 
@@ -557,9 +678,11 @@ def owed_count_does_not_rise(result: Landing) -> bool:
 
 
 def bound_takes_instances(result: Landing) -> bool:
-    """Once the row is bound, a change that only adds instances is green."""
+    """Once the row is bound and no review is owed, a change that only adds instances is green."""
     tip, merged = result.tip, result.merged
     if tip.row is not Row.BOUND or merged is None or merged.binding != tip.binding:
+        return True
+    if review_owed(tip, result.tip_start) and (tip.instances or result.tip_held):
         return True
     return result.landed or not merged.instances > tip.instances
 
@@ -578,10 +701,37 @@ def only_binding_leaves_owed_guarded(result: Landing) -> bool:
 
 
 def event_is_never_red(result: Landing) -> bool:
-    """A declared event owes its rows and is never red: only the rise of a kind whose row is unbound is."""  # noqa: E501
+    """A declared event is never red: only the rise of a kind whose row or review is owed is."""
     if result.merged is None or result.landed:
         return True
-    return result.tip.row is Row.LATER and result.count_rose
+    owes = result.tip.row is Row.LATER or review_owed(result.tip, result.tip_start)
+    return owes and result.count_rose
+
+
+def review_owed_takes_no_new_instance(result: Landing) -> bool:
+    """While the architecture review is owed, a change that raises the kind's count is red."""
+    tip, merged = result.tip, result.merged
+    if not result.landed or merged is None or not review_owed(tip, result.tip_start):
+        return True
+    arriving = not tip.found(tip.table) and not result.tip_held
+    return arriving or not result.count_rose
+
+
+def reviewed_kind_is_judged_by_its_row(result: Landing) -> bool:
+    """Once the review is held, or the kind was there when it was first asked, rows alone judge."""
+    tip = result.tip
+    if result.merged is None or tip.review is not Row.BOUND:
+        return True
+    if not tip.reviewed and result.tip_start is not Start.HELD:
+        return True
+    rows = judge(tip._replace(review=Row.ABSENT), result.merged, result.tip_held)
+    return result.landed is not rows.red
+
+
+def a_review_is_owed_only_after_its_arrival(state: State) -> bool:
+    """No kind owes a review before the binding asks for it, nor one held when it first asked."""
+    owing = reviews_owed(state) is not None
+    return not owing or (state.main.review is Row.BOUND and state.start is Start.FRESH)
 
 
 def owed_never_grows_unbound(state: State) -> bool:
@@ -636,6 +786,13 @@ RULES: dict[str, Rule] = {
         "step", step_check=only_binding_leaves_owed_guarded
     ),
     "event is never red": Rule("step", step_check=event_is_never_red),
+    "review owed takes no new instance": Rule("step", step_check=review_owed_takes_no_new_instance),
+    "reviewed kind is judged by its row": Rule(
+        "step", step_check=reviewed_kind_is_judged_by_its_row
+    ),
+    "a review is owed only after its arrival": Rule(
+        "state", state_check=a_review_is_owed_only_after_its_arrival
+    ),
     "owed never grows unbound": Rule("state", state_check=owed_never_grows_unbound),
     "owed never grows unbound, with the guard": Rule(
         "state", state_check=owed_never_grows_unbound_guarded

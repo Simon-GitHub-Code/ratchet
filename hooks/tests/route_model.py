@@ -104,6 +104,7 @@ class Advice(StrEnum):
     COMMIT = "commit"
     MERGE = "merge"
     MERGE_RECORDS = "merge-records"
+    REVIEW = "review"
     SAFEGUARD = "safeguard"
     GRILL = "grill"
     TRIAGE = "triage"
@@ -149,6 +150,8 @@ class ActionName(StrEnum):
     OWNER_CHANGES_TICKET = "OwnerChangesTicket"
     OWNER_RESOLVES_TICKET = "OwnerResolvesTicket"
     KIND_OF_CODE_ARRIVES = "KindOfCodeArrives"
+    KIND_THAT_REOPENS_THE_ARCHITECTURE_ARRIVES = "KindThatReopensTheArchitectureArrives"
+    AGENT_LANDS_THE_REVIEW = "AgentLandsTheReview"
     AGENT_BINDS_SAFEGUARD = "AgentBindsSafeguard"
     SOMEONE_EDITS_CODE = "SomeoneEditsCode"
     AGENT_COMMITS_ON_A_BRANCH = "AgentCommitsOnABranch"
@@ -173,7 +176,8 @@ class World:
 
     ``parked``: a ``records/<time>`` branch waits unmerged. ``foundation``: the glossary and the
     design brief are written. ``inherits``: the tickets were split from a spec that states its
-    conjecture, so none needs one of its own. ``owes``: a safeguard is owed.
+    conjecture, so none needs one of its own. ``owes``: a safeguard is owed. ``reviews``: an
+    architecture review is owed (ADR 0052).
     """
 
     setup: Setup = Setup.BARE
@@ -186,6 +190,7 @@ class World:
     tickets: Slots = (Ticket.NONE, Ticket.NONE)
     inherits: bool = False
     owes: bool = False
+    reviews: bool = False
 
 
 def adopted(world: World) -> bool:
@@ -213,6 +218,7 @@ def rest(world: World) -> bool:
         calm(world)
         and world.spec is Spec.NONE
         and not world.owes
+        and not world.reviews
         and all(ticket in CLOSED for ticket in world.tickets)
     )
 
@@ -281,7 +287,8 @@ def _no_ticket(world: World) -> bool:
 
 
 # The order is the order ``route.decide`` asks: setup, an unfinished change, the records, the
-# safeguard, then the tickets. The last rule holds for any world, so the chain is total.
+# architecture review, the safeguard, then the tickets. The last rule holds for any world, so the
+# chain is total.
 CHAIN: Final = (
     Rule(Advice.INIT, lambda w: w.setup in {Setup.BARE, Setup.STARTED}),
     Rule(Advice.TRACKER, lambda w: w.setup is Setup.NAMED),
@@ -292,6 +299,7 @@ CHAIN: Final = (
     Rule(Advice.COMMIT, lambda w: w.tree is not Tree.CLEAN),
     Rule(Advice.MERGE, lambda w: w.head is Head.WORK),
     Rule(Advice.MERGE_RECORDS, lambda w: w.parked),
+    Rule(Advice.REVIEW, lambda w: w.reviews),
     Rule(Advice.SAFEGUARD, lambda w: w.owes),
     Rule(Advice.GRILL, lambda w: not w.foundation),
     Rule(Advice.TRIAGE, lambda w: _no_ticket(w) and triage_waits(w)),
@@ -317,13 +325,14 @@ def advice(world: World) -> Advice:
 
 
 def beneath(world: World) -> str:
-    """The advice once nothing is unfinished in the checkout and no safeguard is owed.
+    """The advice once nothing is unfinished in the checkout and nothing is owed.
 
     A ticket built on its branch is ``building``: its merge is what the checkout shows.
     """
     if Ticket.BUILT in world.tickets:
         return "building"
-    return advice(replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False, owes=False))
+    clean = replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False)
+    return advice(replace(clean, owes=False, reviews=False))
 
 
 @dataclass(frozen=True)
@@ -589,6 +598,24 @@ per_ticket(
 def _kind_of_code_arrives(world: World) -> Iterator[World]:
     if rest(world) and Ticket.RESOLVED in world.tickets:
         yield replace(world, owes=True)
+
+
+@action(ActionName.KIND_THAT_REOPENS_THE_ARCHITECTURE_ARRIVES)
+def _kind_that_reopens_the_architecture_arrives(world: World) -> Iterator[World]:
+    """The first instance of a kind that reopens the architecture and owes no row of its own.
+
+    Why no row: a kind that owes both is a state with both owed, which takes the graph past what
+    a chart can draw; ``test_architecture_review`` holds the order there, the review and then the
+    safeguard.
+    """
+    if rest(world) and Ticket.RESOLVED in world.tickets:
+        yield replace(world, reviews=True)
+
+
+@action(ActionName.AGENT_LANDS_THE_REVIEW, Advice.REVIEW)
+def _agent_lands_the_review(world: World) -> Iterator[World]:
+    if calm(world) and world.reviews:
+        yield replace(world, reviews=False)
 
 
 @action(ActionName.AGENT_BINDS_SAFEGUARD, Advice.SAFEGUARD)
