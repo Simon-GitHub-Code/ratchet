@@ -16,7 +16,15 @@ const AGENT = {
   reconcile: "The reconcile: finish the rebase, check green",
   "review-again": "The review, once more",
 };
-export const agent = (v) => AGENT[v.waits];
+// Why: before the project is depended-on the review hands its blockers to one fix pass, and a
+// second review judges what the pass left.
+export const PASS = "The fix pass on the review's blockers";
+export const SECOND_REVIEW = "The review, after the fix pass";
+export const agent = (v) => {
+  if (v.critic !== "waits") return AGENT[v.waits];
+  if (v.waits === "fix") return PASS;
+  return v.waits === "review" && v.rounds > 0 ? SECOND_REVIEW : AGENT[v.waits];
+};
 
 const STOP = {
   "no ticket was passed": "Stopped: no ticket, or the ticket is not ready",
@@ -60,6 +68,8 @@ export const answer = (from, to) => {
     "critique fix": "it finds a major it does not see fixed [fewer than two rounds run]",
     "critique review": "it finds nothing, or two rounds are spent",
     "fix critique": "the round is done",
+    "review fix": "it finds a blocker in the change [nobody depends on the project yet]",
+    "fix review": "the pass is done",
     "reconcile review-again": "the rebase is finished",
   };
   return ANSWER[`${from.waits} ${to.waits}`];
