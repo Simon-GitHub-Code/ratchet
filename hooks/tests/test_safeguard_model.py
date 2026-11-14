@@ -1,4 +1,12 @@
-"""The safeguard a project owes as it grows: the promises the model keeps, on every step."""
+"""The safeguard a project owes as it grows: the model's promises, and the real gate against it."""
+
+import shutil
+import tempfile
+from pathlib import Path
+
+from hypothesis import settings
+from hypothesis import strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, rule
 
 from tests.safeguard_model import (
     ACTIONS,
@@ -9,6 +17,7 @@ from tests.safeguard_model import (
     Landing,
     Row,
     State,
+    allowance_after,
     canonical,
     counterexample,
     graph,
@@ -16,6 +25,7 @@ from tests.safeguard_model import (
     outcomes,
     owed,
 )
+from tests.safeguard_world import Attempt, Run, World
 
 # The owner's seven rules, as the model finds them. A path is the shortest run that breaks the
 # rule; ``None`` says it holds on every reachable state and landing.
@@ -127,3 +137,73 @@ def test_a_declared_event_owes_its_row_and_a_red_landing_is_the_kind_s_alone() -
     assert judge(arrival.tip, arrival.merged or arrival.tip).event_owes
     assert not second.landed
     assert owed(state.main) == {Debt.KIND: 1, Debt.EVENT: 0}
+
+
+class SafeguardMachine(RuleBasedStateMachine):
+    """Random actions taken on the model and on a real repository at once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.directory = Path(tempfile.mkdtemp(prefix="ratchet-safeguard-"))
+        self.world = World.create(self.directory / "repo")
+        self.state = INITIAL
+        self.history = INITIAL
+        self.path: list[str] = []
+        self.holding = [name for name, path in FOUND.items() if path is None]
+
+    def teardown(self) -> None:
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def explain(self, *runs: Run | None) -> str:
+        printed = "\n".join(run.out for run in runs if run is not None)
+        steps = "\n".join(f"  {name}" for name in self.path)
+        return f"actions:\n{steps}\nmodel: {canonical(self.state)}\ngate printed:\n{printed}"
+
+    @rule(data=st.data())
+    def act(self, data: st.DataObject) -> None:
+        enabled = [name for name in STEPS if next(outcomes(STEPS[name], self.state), None)]
+        verb = data.draw(st.sampled_from(list(dict.fromkeys(STEPS[name].verb for name in enabled))))
+        name = data.draw(st.sampled_from([n for n in enabled if STEPS[n].verb is verb]))
+        distinct = {
+            canonical(after): (after, result) for after, result in outcomes(STEPS[name], self.state)
+        }
+        after, result = data.draw(st.sampled_from(list(distinct.values())))
+        self.path.append(name)
+        seen = self.world.take(STEPS[name], self.state, after=after, result=result)
+        if seen is not None:
+            assert result is not None
+            self.compare(seen, result)
+        self.state = after
+
+    def compare(self, seen: Attempt, expected: Landing) -> None:
+        said = self.explain(seen.branch_run, seen.merge_run)
+        assert seen.landing == expected, f"seen:  {seen.landing}\nmodel: {expected}\n{said}"
+        on_branch = judge(expected.fork, expected.head)
+        assert (seen.branch_run.arrived, seen.branch_run.event_owes) == (
+            on_branch.arrived,
+            on_branch.event_owes,
+        ), said
+        if expected.merged is not None:
+            assert seen.merge_run is not None, said
+            on_merge = judge(expected.tip, expected.merged)
+            assert (seen.merge_run.arrived, seen.merge_run.event_owes) == (
+                on_merge.arrived,
+                on_merge.event_owes,
+            ), said
+        for name in self.holding:
+            check = RULES[name].step_check
+            assert check is None or check(seen.landing), f"{name}\n{said}"
+        if not expected.landed or expected.merged is None:
+            return
+        main = self.world.tree()
+        assert self.world.owed() == owed(expected.merged), said
+        self.history = State(main, allowance_after(self.history.allowance, main), None)
+        for name in self.holding:
+            check = RULES[name].state_check
+            assert check is None or check(self.history), f"{name}\n{said}"
+
+
+SafeguardMachine.TestCase.settings = settings(
+    max_examples=4, stateful_step_count=15, derandomize=True, deadline=None
+)
+TestTheRealGateAgainstTheModel = SafeguardMachine.TestCase
