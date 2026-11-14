@@ -93,6 +93,31 @@ FIXED_OVER = [
     "critique finds a major it does not see fixed",
     "fix-1 measures product code over its ceiling",
 ]
+# Why: one fix pass for every project. Before the critic runs, the review's blocking issues take
+# the pass, and a second review decides: its approval approves, anything else parks.
+REVIEWED_YOUNG = [
+    "the orchestrator starts a build",
+    "preflight is green for a project nobody depends on",
+    "spec fits",
+    "ticket-check finds no gap",
+    "implement is green",
+    "review requests changes with a blocker of its own",
+]
+YOUNG_PASS = [*REVIEWED_YOUNG, "fix-1 is green", "review-1 approves"]
+YOUNG_PARKED = [
+    *REVIEWED_YOUNG,
+    "fix-1 is green",
+    "review-1 requests changes with a blocker of its own",
+]
+YOUNG_FIXED_OVER = [*REVIEWED_YOUNG, "fix-1 measures product code over its ceiling"]
+# Why: the pass keys on the review's blocking issues, not its verdict. The workflow's first version
+# asked the verdict first and parked this run with no pass.
+YOUNG_APPROVED_ISSUE = [
+    *REVIEWED_YOUNG[:-1],
+    "review approves with a blocker of its own open",
+    "fix-1 is green",
+    "review-1 approves",
+]
 
 
 @functools.cache
@@ -217,6 +242,28 @@ def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers
         assert commands <= model.COMMANDS[role], (role, sorted(commands - model.COMMANDS[role]))
 
 
+def told(actions: list[model.Action]) -> tuple[tuple[str, int], ...]:
+    """Each fix round of a run with the rounds the model's loop has where the round runs."""
+    rounds, state = [], model.INITIAL
+    for action in actions:
+        if action.role is None:
+            state = model.STARTS[action.answer]
+            continue
+        if action.role is model.Role.FIX:
+            rounds.append((action.label, model.fix_rounds(state)))
+        state = model.answered(state, action)
+    return tuple(rounds)
+
+
+def test_on_the_real_workflow_each_fix_agent_is_told_the_rounds_its_loop_has() -> None:
+    # Why: the fix agent reads its round count to know whether another round follows, so a young
+    # project's fixer told of two rounds would leave to a round that never runs what one can close.
+    cases = played()[0]
+    assert any(real.told for _, _, real in cases)
+    for actions, _, real in cases:
+        assert real.told == told(actions), (real.told, [action.name for action in actions])
+
+
 def ending_on(test: Callable[[model.Action], bool]) -> list[tuple[model.Action, world.Played]]:
     """Each real run whose last answer passes ``test``, with that answer."""
     return [(actions[-1], real) for actions, _, real in played()[0] if test(actions[-1])]
@@ -274,6 +321,10 @@ def replays() -> dict[str, world.Played]:
     named = {
         "dies": DIES_FIRST,
         "fixed over": FIXED_OVER,
+        "young pass": YOUNG_PASS,
+        "young parked": YOUNG_PARKED,
+        "young fixed over": YOUNG_FIXED_OVER,
+        "young approved issue": YOUNG_APPROVED_ISSUE,
         "reconciled over": RECONCILED_OVER,
         "measured over": MEASURED_OVER,
     }
@@ -296,6 +347,7 @@ def test_a_change_a_fix_round_or_a_reconcile_takes_over_the_ceiling_stops_as_too
     # these two ended in an approval on an agent's green answer.
     for name, stage, calls in (
         ("fixed over", "fix round 1", ("fix-1", "Fix")),
+        ("young fixed over", "fix round 1", ("fix-1", "Fix")),
         ("reconciled over", "the reconcile", ("reconcile", "Reconcile")),
     ):
         real = replays()[name]
@@ -310,3 +362,26 @@ def test_a_change_measured_over_a_ceiling_stops_with_no_parts_named() -> None:
     assert real.calls == (("preflight", "Preflight"), ("spec", "Spec"))
     too = real.raw["result"]["tooLarge"]
     assert (too["kind"], too["stage"], too["parts"]) == ("product", "the spec", 0)
+
+
+def test_a_project_nobody_depends_on_spends_one_fix_pass_and_a_second_review_decides() -> None:
+    passed = (("review", "Review"), ("fix-1", "Fix"), ("review-1", "Review"))
+    for name, verdict, forced in (
+        ("young pass", "approve", []),
+        ("young parked", "request_changes", ["1 blocker/major review issue(s)"]),
+    ):
+        real = replays()[name]
+        assert real.calls[-3:] == passed, (name, real.calls)
+        result = real.raw["result"]
+        assert (result["verdict"], result["forcedBy"], result["iterations"]) == (
+            verdict,
+            forced,
+            1,
+        ), name
+
+
+def test_a_review_that_approves_with_a_blocker_of_its_own_takes_the_fix_pass() -> None:
+    real = replays()["young approved issue"]
+    assert real.calls[-3:] == (("review", "Review"), ("fix-1", "Fix"), ("review-1", "Review"))
+    result = real.raw["result"]
+    assert (result["verdict"], result["forcedBy"], result["iterations"]) == ("approve", [], 1)
