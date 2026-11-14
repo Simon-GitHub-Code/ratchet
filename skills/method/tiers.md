@@ -185,7 +185,7 @@ Each group says why its questions wait for that trigger and no later. A row's ap
 | `code:concurrency`: threads, shared memory, unsafe code, a lock | race and memory detectors (2) | A detector run over one lock finds its race; over forty, the races are already in the design. |
 | `code:doc-example`: a code example in the documentation | documentation examples run (1) | Nothing to run before there is an example. |
 | `code:flag`: a flag in `flags.toml` | changed flags off and on (1), no flag past its removal date (2) | The flag seam and its override are written for the first flag and serve every later one. |
-| `code:layer`: a layer declared in `AGENTS.md` | dependency direction (0) | A direction needs two layers to point between. |
+| `code:layer`: a part declared in the binding's Architecture section | dependency direction (0) | Every project declares its parts at adoption (ADR 0049), so the direction is held from the first feature. |
 | `code:formal-model`: a model or proof the project keeps | symbolic checking (2), formal verification (2) | Asked of the model the project chose to write, from the day it exists. |
 | `life:deployed` | end to end (2), reproducible build (2), dynamic security scan (2), active security scan (2), telemetry arrives (2), production answers (weekly and after a deploy) | They judge what other people meet. Before anyone else can reach it there is nothing to attack, nothing to watch arrive and nothing to redeploy or roll back. Running the merge base's build on the head's data, and a flow suite, cost the same whenever they are added. |
 | `life:irreplaceable-data` | backup restores (weekly) | A restore drill before there is data worth restoring tests nothing. |

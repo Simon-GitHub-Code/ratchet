@@ -44,7 +44,7 @@ dependency = "a third-party package the deliverable ships with"
 concurrency = "threads, shared memory, unsafe code or a lock"
 doc-example = "a code example in the documentation"
 flag = "a feature flag in flags.toml"
-layer = "a declared layer in AGENTS.md"
+layer = "a declared part in the binding's Architecture section"
 formal-model = "a formal model or proof the project keeps"
 
 # The events in a project's life a trigger can name, and the signs the route reads to propose one.

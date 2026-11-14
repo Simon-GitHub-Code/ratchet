@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 import application_types
+import architecture
 import change_size
 import gatelib
 import hooks_installed
@@ -709,6 +710,43 @@ def check_binding(root: Path) -> Iterable[Finding]:
             yield agent(f"{BINDING_PATH}: {failure}", then=triggers_follow(catalogue))
         else:
             yield agent(f"{BINDING_PATH}: {failure}")
+
+
+def check_architecture(root: Path) -> Iterable[Finding]:
+    """The binding's Architecture section and the decision record it names (ADR 0049).
+
+    Why: the owner chooses the architecture and its tools at adoption, and the gates and the
+    review hold the parts it declares. A choice with no record, no alternatives, no reversal cost
+    or no parts is one nobody can judge later, so each is red; the check reads structure only.
+    """
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    if not markdown_text.has_section(text, architecture.SECTION):
+        problem = (
+            f"has no '{architecture.SECTION}' section, which names the architecture decision"
+            " record and declares the parts (ADR 0049)"
+        )
+        yield missing_section(
+            BINDING_PATH, problem, architecture.SECTION, template_text=template_binding()
+        )
+        return
+    declared = architecture.declared(text)
+    for problem in declared.problems:
+        yield agent(f"{BINDING_PATH}: {problem}")
+    if declared.record is None:
+        return
+    parts = PurePosixPath(declared.record).parts
+    inside = parts[:2] == ("docs", "adr") and ".." not in parts
+    record = read(root / declared.record) if inside else None
+    if record is None:
+        yield agent(
+            f"{BINDING_PATH}: the architecture decision record {declared.record} is not a record"
+            " under docs/adr/; write it as the method's architecture page says"
+        )
+        return
+    for problem in architecture.record_problems(record):
+        yield agent(f"{declared.record}: {problem}")
 
 
 @dataclass(frozen=True)
@@ -2113,6 +2151,7 @@ CHECKS: tuple[Check, ...] = (
     check_brief,
     check_adrs,
     check_binding,
+    check_architecture,
     check_triggers,
     check_dependencies,
     check_suppressions,
@@ -2279,6 +2318,37 @@ def mutations() -> list[Mutation]:
         *trigger_mutations(),
         *upgrade_mutations(),
         *owed_mutations(),
+        *architecture_mutations(),
+    ]
+
+
+def architecture_mutations() -> list[Mutation]:
+    """The binding's Architecture section and the decision record it names (ADR 0049)."""
+
+    def record_edit(old: str, new: str) -> Callable[[Path], None]:
+        def mutate(root: Path) -> None:
+            path = root / SELF_TEST_RECORD
+            path.write_text(path.read_text().replace(old, new))
+
+        return mutate
+
+    def no_record(root: Path) -> None:
+        (root / SELF_TEST_RECORD).unlink()
+
+    return [
+        ("architecture section removed", rebind("## Architecture\n", "## Architect\n")),
+        ("architecture record missing", no_record),
+        ("architecture parts removed", rebind(SELF_TEST_PARTS, "")),
+        (
+            "architecture part depends on an undeclared one",
+            rebind("`src/cli/**` | rules |", "`src/cli/**` | ghost |"),
+        ),
+        ("architecture record has one alternative", record_edit("- **One file**", "**One file**")),
+        ("architecture record says not who chose", record_edit("- Chosen by: the owner", "")),
+        (
+            "architecture record has no reversal cost",
+            record_edit(architecture.REVERSAL_SECTION, "## Reversal"),
+        ),
     ]
 
 
@@ -2826,10 +2896,10 @@ def owed_mutations() -> list[Mutation]:
 
 def record_mutations() -> list[Mutation]:
     def adr_without_refuter(root: Path) -> None:
-        (root / "docs/adr/0002-plain.md").write_text("# We keep it plain\n\nBecause.\n")
+        (root / "docs/adr/0003-plain.md").write_text("# We keep it plain\n\nBecause.\n")
 
     def adr_with_an_empty_refuter(root: Path) -> None:
-        (root / "docs/adr/0002-empty.md").write_text(
+        (root / "docs/adr/0003-empty.md").write_text(
             f"# We keep it empty\n\nBecause.\n\n{REFUTATION_SECTION}\nNone.\n"
         )
 
@@ -2838,7 +2908,7 @@ def record_mutations() -> list[Mutation]:
         (root / "docs/features").rmdir()
 
     def gap_adrs(root: Path) -> None:
-        (root / "docs/adr/0003-gap.md").write_text(f"# A gap\n\n{REFUTATION_SECTION}\nNone.\n")
+        (root / "docs/adr/0004-gap.md").write_text(f"# A gap\n\n{REFUTATION_SECTION}\nNone.\n")
 
     def bad_dispute(root: Path) -> None:
         (root / "docs/disputes/0001-bad.md").write_text("# 0001: bad\n\n- Status: maybe\n")
@@ -2874,6 +2944,32 @@ REGISTRIES_PLACEHOLDER = re.compile(r"^- Registries: <[^\n]*>$", re.MULTILINE)
 SUPPRESSION_KIND_PLACEHOLDER = re.compile(r"^\| <suppression kind> \|[^\n]*$", re.MULTILINE)
 SUPPRESSION_QUESTION_PLACEHOLDER = re.compile(r"^\| <question> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_KIND = "self-test-silence"
+DECISION_PLACEHOLDER = re.compile(r"^- Decision: <[^\n]*>$", re.MULTILINE)
+PARTS_PLACEHOLDER = re.compile(r"^\| <part> \|[^\n]*$", re.MULTILINE)
+SELF_TEST_RECORD = "docs/adr/0002-the-tool-is-one-command-over-its-rules.md"
+SELF_TEST_PARTS = "| rules | `src/rules/**` | nothing |\n| command | `src/cli/**` | rules |"
+SELF_TEST_ARCHITECTURE = f"""\
+# The tool is one command over a module of rules
+
+{architecture.DECISION_SECTION}
+
+A command line tool: a module of rules that does no I/O, and the command around it.
+
+- Chosen by: the owner
+
+{architecture.OPTIONS_SECTION}
+
+- **A service**: set aside before asking. Nobody but the owner calls it.
+- **One file**: offered. The rules could not be tested without the command.
+
+{architecture.REVERSAL_SECTION}
+
+The rules move as they are; the command is rewritten, about a day, and nothing else is redone.
+
+{REFUTATION_SECTION}
+
+Wrong if a change to the rules keeps needing a change to the command.
+"""
 
 
 def fill_binding(text: str) -> str:
@@ -2881,6 +2977,8 @@ def fill_binding(text: str) -> str:
     text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40}")
     text = TYPES_PLACEHOLDER.sub("- Application types: cli", text)
     text = TEST_PATHS_PLACEHOLDER.sub("- Tests: `tests/**`", text)
+    text = DECISION_PLACEHOLDER.sub(f"- Decision: `{SELF_TEST_RECORD}`", text)
+    text = PARTS_PLACEHOLDER.sub(SELF_TEST_PARTS, text)
     text = text.replace("| contract drift | |", "| contract drift | none: not a service |")
     # Why: ADR 0028. One row waits on its trigger and so needs no bite; the rest are bound.
     text = text.replace(
@@ -2942,6 +3040,7 @@ def fill_placeholders(root: Path) -> None:
     binding.write_text(fill_binding(binding.read_text()))
     registry = root / project_bite.REGISTRY
     registry.write_text(registry.read_text() + fill_registry(binding.read_text()))
+    (root / SELF_TEST_RECORD).write_text(SELF_TEST_ARCHITECTURE)
     pinned = {PLUGIN_CHECKOUT_PLACEHOLDER: "0" * 40, TOOLCHAIN_PLACEHOLDER: TOOLCHAIN_STEP}
     fills = {
         "GLOSSARY.md": {GLOSSARY_PLACEHOLDER: "the project"},

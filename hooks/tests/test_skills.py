@@ -20,7 +20,11 @@ def test_adopt_asks_its_product_questions_first_and_chooses_tools_itself() -> No
     # minutes, and the tools are the agent's; a tool the plugin ships is a regression.
     step_3 = ADOPT.split("3. **Recognise the repository.**", 1)[1].split("\n4. ", 1)[0]
     assert "nothing after this step asks the owner anything" in step_3
-    assert "**Assume** `adopt.tools`" in ADOPT
+    # Why: ADR 0049. The architecture and its tools are asked in the same round, not assumed.
+    assert "**Assume** `adopt.tools`" not in ADOPT
+    assert "**Ask** `architecture.system`" in ADOPT
+    assert "**Ask** `architecture.tools`" in ADOPT
+    assert "**Assume** `init.stack`" not in INIT
     assert "interactive" not in ADOPT
     assert not (SKILLS / "adopt/presets").exists()
     assert "preset" not in ADOPT
@@ -516,7 +520,8 @@ def test_every_cost_line_the_owner_reads_says_what_is_redone() -> None:
     for page in ("adopt", "safeguard"):
         for part in SWITCHES_A_TOOL:
             assert any(part in span for span in examples[page]), (page, part)
-    assert any("no step yet" in span for span in examples["init"])
+    # Why: ADR 0049. Init no longer assumes the stack; adoption puts it to the owner.
+    assert any("adoption then offers ways to build it" in span for span in examples["init"])
     records = flat("method/records.md")
     route = records.split("## Overturning an assumption", 1)[1].split(" ## ", 1)[0]
     assert "its lockfile" in route
