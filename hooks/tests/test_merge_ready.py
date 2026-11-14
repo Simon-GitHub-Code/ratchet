@@ -1453,7 +1453,7 @@ def test_more_than_three_refusals_are_counted(tracked: Path) -> None:
     assert reason.endswith("; and 2 more")
 
 
-# --- a ticket edit that changes only its links is the agent's (ADR 0056) -----------------------
+# --- a ticket edit that changes only its links is the agent's (ADR 0057) -----------------------
 
 WITH_LINKS = (
     "# 01: A\n\nStatus: ready-for-agent\nParent: ../spec.md\nBlocked by: 02-b.md\n\n"

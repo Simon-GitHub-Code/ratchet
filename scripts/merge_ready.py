@@ -32,7 +32,7 @@ only for ``agent``. The owner merges when any of these holds:
   the agent-ready label, take another's number, be one a labelled ticket's ``Blocked by`` line can
   name, or be closed. A labelled ticket, the spec it inherits from and the status of a ticket it
   waits on do not change (``feature_preflight.reads`` names them), but a labelled ticket may have
-  its ``Parent:`` and ``Blocked by:`` lines rewritten to name the same files (ADR 0056). An ADR
+  its ``Parent:`` and ``Blocked by:`` lines rewritten to name the same files (ADR 0057). An ADR
   is a decision the owner agrees to: the reason names its title.
 - ``file``: a guard, door or record path is a symbolic link or a submodule, at the merge base
   or at the head. Git shows a link's target as its text, which is not what a gate reads there.
@@ -874,7 +874,7 @@ def resolved(change: Change, ticket: str, ref: str) -> str | None:
 def link_only(change: Change, path: str) -> bool:
     """Whether a ticket's change is to its link lines alone, each link still naming one file.
 
-    Why: ADR 0056. A path fix in a ``Parent:`` or ``Blocked by:`` line changes nothing the
+    Why: ADR 0057. A path fix in a ``Parent:`` or ``Blocked by:`` line changes nothing the
     ticket builds. Every changed line is such a line, with the same words around the same number
     of ``.md`` refs, and each ref that changed names, from the ticket, the same regular file in
     the head's tree as the one before. The ticket must be at both ends, as text. Anything
