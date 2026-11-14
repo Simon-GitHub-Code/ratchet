@@ -27,7 +27,9 @@ a ref an agent creates, renames or deletes does not change it. Moving the main w
 to another branch, or detaching it, adds a later entry and cannot change the first: were the anchor
 the current branch, an agent could commit a weakened manifest on a branch of its own and switch the
 main work tree to it. A branch that no longer exists is skipped for the next. A reflog is a file
-the owner's machine keeps; ADR 0041 records what removing it costs.
+git expires, so this anchor covers only the window before the conformance gate is first run: it
+is red while the default branch is found this way, until the owner adds the remote or names the
+branch ``main`` or ``master`` (ADR 0041, ``anchored_on_reflog``).
 """
 
 import subprocess

@@ -15,9 +15,11 @@ Two moves of `HEAD` leave no `checkout` line, so they are refused on a default b
 
 **Renaming the default branch no longer switches the guards off.** `git branch -m main gone` left no branch the guard recognised; the reflog and the main work tree's branch still lead to `gone`. The `refmoves` refusal of that rename stays as it was.
 
-## Known residue
+## The reflog covers only the window before conformance is first run
 
-The reflog is a file. The refusals above cover the git commands that move `HEAD` unrecorded or erase the log. They do not cover a write to the reflog or to the work tree's `HEAD` file by a tool that is not git, nor a log git itself expires (`gc.reflogExpire`, 90 days by default; the oldest surviving line then still names the default as long as the main work tree has moved between branches since). While the reflog is lost, the fallback reads the branch the main work tree is on, and the weakened-manifest route above is open again. Adding a remote, so that `origin/HEAD` names the branch, ends all of this; so does a branch called `main` or `master`. Until then the guard in such a repository is as strong as the reflog. Making conformance red when the default branch is found only through the reflog is the next step and is not taken here.
+The reflog is a file, and git forgets it (`gc.reflogExpire`, 90 days by default). The refusals above cover the git commands that move `HEAD` unrecorded or erase the log. They do not cover a write to the reflog or to the work tree's `HEAD` file by a tool that is not git, nor the expiry. Once the log is lost the fallback reads the branch the main work tree is on, and the weakened-manifest route above is open again.
+
+So the reflog anchor is a bridge and not a place to stay. **Conformance is red while the default branch is found only through the reflog** (`check_default_branch`, raised for the owner with `ratchet_guards.committed.anchored_on_reflog`). Its repair line asks for one step: add the forge remote, or name the default branch `main` or `master`. The guards then read the branch from git's own refs, which no log expiry touches. Until the owner takes it, the guards in such a repository are as strong as the reflog and no stronger: the anchor covers the window between the repository adopting the method and the first conformance run, which every merge and every upgrade runs.
 
 ## Refutation criterion
 
