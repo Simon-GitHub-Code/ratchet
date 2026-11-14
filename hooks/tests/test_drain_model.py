@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import functools
 import shutil
+import signal
 import tempfile
+import time
 from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -18,7 +20,7 @@ import drain
 from tests import drain_model as model
 from tests import model_tla
 from tests.drain_model import Branch, Kind, Merge, Name, Step
-from tests.drain_world import BRANCH, DRAFT, REF, LeaseWorld, World, digest
+from tests.drain_world import BRANCH, DRAFT, LANDING_WAIT, REF, LeaseWorld, World, digest
 from tests.repos import git
 from tests.support import PLUGIN_ROOT
 from tests.test_drain import (
@@ -803,6 +805,76 @@ def test_a_take_over_leaves_a_live_landing_and_takes_its_tree_once_the_landing_i
     taken = two_drains.named(path[6])
     assert f"{RECORDED}removed: {tree}: its branch is merged\n" in taken
     assert "Alpha" in listed_under(two_drains.named("drain 2: drain.py report"), "Merged")
+
+
+def read_back(play: LeasePlay) -> tuple[object, ...]:
+    """The lease, the note, the default tip and the work trees, as the world reads them now."""
+    root = play.world.world.root
+    note = drain.queue_notes.read_note(root, BRANCH[Name.A])
+    return play.world.seen(play.lease), note, git(root, "rev-parse", "main"), drain.worktrees(root)
+
+
+# Why: the lease model's landings all merge, and none of its steps is a second `land`. These two
+# replays take its steps up to a real landing in flight, then do what the model cannot.
+
+
+def test_a_second_land_while_one_is_in_flight_is_refused_and_the_merge_printed_once(
+    two_drains: LeasePlay,
+) -> None:
+    path = [APART, *D1_STARTS, LANDS, CLOSES, "drain 1: drain.py report --drain with its token"]
+    assert {name for at in range(1, len(path) + 1) for name in lease_broken_by(path[:at])} == set()
+    for said in path[:4]:
+        two_drains.named(said)
+    before = read_back(two_drains)
+    refused = (
+        f"land: a landing of `{BRANCH[Name.A]}` is already running in another command; run land"
+        " again once it ends\n"
+    )
+    # Why: drain 1 again is its agent whose shell timed out on the first `land`.
+    for which in model.Drain:
+        start = time.monotonic()
+        printed = two_drains.world.command(which, "land", REF[Name.A])
+        took = time.monotonic() - start
+        assert read_back(two_drains) == before, f"{which}: the second land changed nothing"
+        assert (two_drains.world.world.code, printed) == (2, refused), which
+        assert took < LANDING_WAIT / 2, f"{which}: it does not wait for the landing to end"
+    closed = two_drains.named(path[4])
+    assert closed.count(f"merged: `{BRANCH[Name.A]}` into `main`") == 1
+    assert closed.endswith(f"closed: {REF[Name.A]}: merged\n"), "the first landing records it"
+    merged = listed_under(two_drains.named(path[5]), "Merged")
+    assert merged.count("Alpha") == 1, "the next report prints the merge once"
+
+
+def test_clean_all_under_a_live_landing_keeps_the_tree_and_mark_a_killed_close_left(
+    two_drains: LeasePlay,
+) -> None:
+    for said in TAKEN_UNDER_ONE[:3]:
+        two_drains.named(said)
+    lease_world, world = two_drains.world, two_drains.world.world
+    note_of_a = functools.partial(drain.queue_notes.read_note, world.root, BRANCH[Name.A])
+    world.by_hand(Kind.COMMIT, Name.A)
+    world.by_hand(Kind.RECORD, Name.A)
+    world.by_hand(Kind.EDIT, Name.C)
+    assert lease_world.land_killed_at_discard() == -signal.SIGKILL
+    tree, marked = world.tree(Name.A), note_of_a()
+    assert (marked["outcome"], marked["attempts"], marked["discarding"]) == ("waits", 1, True), (
+        "merge.py refused it as behind, and the kill came between the note and the discard"
+    )
+    assert tree in drain.worktrees(world.root)
+    lease_world.land_held(model.Drain.ONE)
+    cleaned = lease_world.command(model.Drain.TWO, "clean", "--all")
+    assert tree in drain.worktrees(world.root), "the live landing keeps its tree"
+    assert note_of_a() == marked, "and its note keeps the mark"
+    assert world.code == 0
+    assert f"kept: {tree}: `{BRANCH[Name.A]}` has a landing running\n" in cleaned
+    lease_world.close_the_landing()
+    assert world.code == 1
+    assert "merge: owner\nbehind: the branch does not hold the tip of `main`" in world.printed
+    assert world.printed.endswith(f"closed: {REF[Name.A]}: waits\n")
+    assert tree not in drain.worktrees(world.root), "the landing's own close removes the tree"
+    note = note_of_a()
+    assert (note["outcome"], note["hold"], "discarding" in note) == ("waits", False, False)
+    assert note["attempts"] == 1, "the run the kill cut off is the same refusal, counted once"
 
 
 def decision(before: model.Lease, said: str) -> tuple[object, ...]:
