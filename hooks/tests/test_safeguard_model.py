@@ -4,6 +4,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule
@@ -137,6 +138,25 @@ def test_a_declared_event_owes_its_row_and_a_red_landing_is_the_kind_s_alone() -
     assert judge(arrival.tip, arrival.merged or arrival.tip).event_owes
     assert not second.landed
     assert owed(state.main) == {Debt.KIND: 1, Debt.EVENT: 0}
+
+
+@pytest.mark.parametrize("name", [name for name, path in FOUND.items() if path is not None])
+def test_each_run_that_breaks_a_rule_lands_the_same_way_on_a_real_repository(
+    name: str, tmp_path: Path
+) -> None:
+    # Why: the random run below may never take a pinned run, and a break the model alone shows
+    # could be the model's mistake. Here the real gate lands every step of it as the model says.
+    world = World.create(tmp_path / "repo")
+    state = INITIAL
+    for action in FOUND[name] or ():
+        after, result = next(outcomes(STEPS[action], state))
+        seen = world.take(STEPS[action], state, after=after, result=result)
+        assert seen is not None, action
+        said = f"{action}\n{seen.branch_run.out}\n{seen.merge_run.out if seen.merge_run else ''}"
+        assert seen.landing == result, said
+        assert seen.landing.landed, said
+        state = after
+    assert world.owed() == owed(state.main)
 
 
 class SafeguardMachine(RuleBasedStateMachine):
