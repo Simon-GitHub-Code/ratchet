@@ -2,8 +2,9 @@
 
 ``drain.py close`` writes ``.ratchet/queue/tickets/<branch>.json``: the outcome, the reasons, the
 digest of the ticket's text it was run on, and the kinds of hold. A parked ticket stays held until
-its text changes (or, for an owed safeguard, until the safeguard is bound), and ``route.py`` reads
-the same note, so the step it names is the one that releases the hold the drain keeps.
+its text changes, a path its run named as the cause changes on the default branch, or (for an owed
+safeguard) the safeguard is bound; ``released`` is that one rule, and ``route.py`` reads the same
+note through it, so the step it names is the one that releases the hold the drain keeps.
 """
 
 from __future__ import annotations
@@ -55,6 +56,27 @@ def edited(note: dict[str, object], ticket: preflight.Ticket) -> bool:
     holds a parked ticket until it is true, and the route releases a blocked run when it is.
     """
     return note.get("digest") != digest(ticket)
+
+
+def tip(root: Path) -> str | None:
+    """The commit the default branch is at now, or ``None`` when no candidate names one."""
+    for ref in gatelib.default_branches(root):
+        found = gatelib.git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        if found:
+            return found
+    return None
+
+
+def caused(root: Path, note: dict[str, object]) -> bool:
+    """Whether a path the run named as its cause changed on the default branch since the hold.
+
+    Why: landing the guard edits a parked run asked for is the answer it waits on; the note keeps
+    the default branch's commit at that time (``base``) so the change can be read from git.
+    """
+    paths, base, now = texts(note.get("causes")), note.get("base"), tip(root)
+    if not paths or not isinstance(base, str) or now is None:
+        return False
+    return bool(gatelib.git(root, "diff", "--name-only", base, now, "--", *paths))
 
 
 def loaded(text: str | None) -> dict[str, object]:
@@ -130,11 +152,17 @@ def split_into(root: Path, branch: str, ticket: preflight.Ticket) -> list[str] |
     return texts(note.get("children"))
 
 
+def released(root: Path, note: dict[str, object], ticket: preflight.Ticket) -> bool:
+    """The one rule that frees a held ticket: its text changed, a cause landed, or it is bound.
+
+    Why: the drain's plan and the route both ask this, so neither keeps a hold the other lifted.
+    """
+    return edited(note, ticket) or caused(root, note) or safeguarded(root, note)
+
+
 def held(root: Path, branch: str, ticket: preflight.Ticket) -> Hold | None:
-    """The drain's hold on ``ticket``; ``None`` once its text changed or its safeguard is bound."""
+    """The drain's hold on ``ticket``; ``None`` once ``released`` says it is free."""
     note = read_note(root, branch)
-    if note.get("hold") is not True or edited(note, ticket):
-        return None
-    if safeguarded(root, note):
+    if note.get("hold") is not True or released(root, note, ticket):
         return None
     return Hold(texts(note.get("reasons")), texts(note.get("holds")), texts(note.get("owes")))
