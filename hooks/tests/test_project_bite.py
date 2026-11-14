@@ -1,7 +1,9 @@
 """``project_bite.py``: every gate a repository bound goes red on its planted fault."""
 
 import contextlib
+import json
 import os
+import shlex
 import signal
 import tempfile
 import threading
@@ -1439,6 +1441,43 @@ def test_a_directory_swapped_once_the_walk_holds_it_still_takes_the_fault(
     prove(root)
     assert fingerprint(root) == before
     assert "bite: lint: swapped: " in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "ln -s {root}/src src",
+        "ln -s ../../../../../../../../../../../../../../.. src",
+        "ln -s hop src && ln -s {root}/src hop",
+    ],
+    ids=["absolute", "relative", "chain"],
+)
+def test_a_setup_that_leaves_a_link_leading_out_of_the_copy_is_unsafe_and_red(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], link: str
+) -> None:
+    # Why: the snapshot taken mid-swap, replayed with no timing: setup ends with src a link out.
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
+    setup = f"mv src aside && {link.format(root=root)}"
+    (root / "quality/bites.toml").write_text(
+        f"setup = [{json.dumps('sh -c ' + shlex.quote(setup))}]\n" + bite("lint", "f"),
+        encoding="utf-8",
+    )
+    commit(root, "registry")
+    before = fingerprint(root)
+    assert prove(root) == 1
+    assert fingerprint(root) == before
+    out = capsys.readouterr().out
+    assert "setup left " in out
+    assert "leads outside the scratch copy" in out
+
+
+def test_a_setup_link_that_stays_inside_the_copy_is_not_refused(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
+    (root / "quality/bites.toml").write_text(
+        'setup = ["ln -s src alias"]\n' + bite("lint", "f"), encoding="utf-8"
+    )
+    commit(root, "registry")
+    assert prove(root) == 1  # the fault is not caught by the gate: red, but not for the link
 
 
 def test_a_process_setup_left_swapping_a_directory_for_a_link_never_changes_the_real_tree(

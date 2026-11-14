@@ -97,7 +97,8 @@ fault and nothing else.
 The real work tree is never written by the script's own writes. A fault, and the index and
 exclude file that restoring puts back, are read and written only through descriptors of the
 copy's own directories, opened one name at a time from the copy as it stood before setup ran,
-never through a link. So a process setup left running that swaps a directory of the copy for a
+never through a link. A symbolic link in the snapshot that leads outside the copy, taken after
+setup or restored, is refused as unsafe (red, naming the link). So a process setup left running that swaps a directory of the copy for a
 link to the real tree makes the fault ``THE FAULT WAS NOT PLANTED`` and cannot steer such a write
 out of the copy. The rest of restoring is git's (``checkout-index``, ``clean``): git checks each
 path for a link before it writes there, and then writes by path. Setup code runs as the user, and
@@ -955,6 +956,8 @@ class Copy:
         self.tree.write(EXCLUDE, self.exclude)
         git_in(self.path, "checkout-index", "--all", "--force", index=snapshot)
         git_in(self.path, "clean", "-ffdq", index=snapshot)
+        # Why: defence in depth; the snapshot was checked, and what it now writes is checked again.
+        contained(self.path, self.head)
 
     def run(self, command: Sequence[str]) -> tuple[int, str]:
         """What the gate does to the copy as it now stands; then the copy as it stood."""
@@ -1072,6 +1075,38 @@ def snapshot(copy: Path) -> None:
             index=copy / SNAPSHOT,
             stdin="\0".join(tracked),
         )
+    contained(copy, git_in(copy, "rev-parse", "HEAD"))
+
+
+def contained(copy: Path, head: str) -> None:
+    """Refuse a link in the snapshot that resolves outside the copy; ``Unprovable`` names it.
+
+    A link to the real tree, restored, lets a later path operation in the copy write there. A
+    link is judged by where it ends, absolute or relative, through every link on the way. A link
+    the commit already holds, unchanged, is the repository's own (faults through it are refused
+    by ``owned``); one setup made or changed is not.
+    """
+
+    def links(*args: str, index: Path | None = None) -> dict[str, str]:
+        listed = git_in(copy, "ls-files" if index else "ls-tree", "-z", *args, index=index)
+        found = {}
+        for line in listed.split("\0"):
+            head_part, _, path = line.partition("\t")
+            fields = head_part.split()
+            if fields and fields[0] == "120000" and path:
+                found[path] = fields[2] if index is None else fields[1]
+        return found
+
+    committed = links("-r", head)
+    base = os.path.realpath(copy)
+    for path, oid in links("--stage", index=copy / SNAPSHOT).items():
+        end = os.path.realpath(copy / path)
+        if committed.get(path) != oid and end != base and not end.startswith(base + os.sep):
+            message = (
+                f"setup left {path}, a symbolic link that leads outside the scratch copy"
+                " (to the real tree or elsewhere); a later write through it would land there"
+            )
+            raise Unprovable(message)
 
 
 Task = tuple[Row, list[Bite]]
