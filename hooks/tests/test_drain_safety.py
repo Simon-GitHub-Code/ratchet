@@ -124,7 +124,7 @@ def test_nothing_is_ended_while_the_work_cannot_be_saved(tmp_path: Path) -> None
     (gitdir(tree) / "index.lock").write_text("")
     service = servers.sleeper(tree)
     try:
-        assert run(root, "clean", "--all") == 0
+        assert run(root, "clean", "--all", "--take-over") == 0
         assert service.poll() is None, "the program of a tree that stays is left running"
     finally:
         service.kill()
@@ -640,6 +640,36 @@ def test_a_fast_forward_is_left_while_a_git_command_still_runs_in_the_tree(tmp_p
         running.wait()
     assert merge.recover(root)
     assert not (root / "src/added.py").exists()
+
+
+def test_a_command_is_refused_while_a_cut_off_fast_forward_cannot_be_put_back(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, old, _new = half_landed(tmp_path)
+    running = subprocess.Popen(
+        ["git", "cat-file", "--batch"],  # noqa: S607
+        cwd=root,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+    )
+    line = f"merge: a git command still runs in {root}; run this again once it ends\n"
+    try:
+        capsys.readouterr()
+        assert run(root, "close", ALPHA, "--outcome", "parked") == 2
+        assert capsys.readouterr().out == line
+        assert note(root, BRANCH_A) == {}, "no ticket was read and no note written"
+        assert run(root, "land", ALPHA) == 2
+        assert capsys.readouterr().out == line
+        assert drain.main(["drain", "plan", "--root", str(root), "--offline"]) == 2
+        seen = capsys.readouterr()
+        assert (seen.out, seen.err) == ("", line)
+        assert git(root, "rev-parse", "main") == old
+    finally:
+        running.kill()
+        assert running.stdin is not None
+        running.stdin.close()
+        running.wait()
+    assert run(root, "plan") == 0, "once it ends, the next command puts the work tree back"
 
 
 def test_a_merge_cannot_land_while_another_is_landing(tmp_path: Path) -> None:
@@ -1280,6 +1310,151 @@ def test_another_drains_clean_leaves_a_merge_whose_tree_is_gone_unrecorded(
     finally:
         first.kill()
         first.wait()
+
+
+def test_a_ticket_parked_while_its_fast_forward_is_cut_off_stays_held(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    judged(root)
+    old = git(root, "rev-parse", "main")
+    new = git(root, "rev-parse", BRANCH_A)
+    write(root, ALPHA, ticket(1, "Alpha", status="resolved"))
+    (gitdir(root) / merge.LANDING).write_text(
+        json.dumps({"default": "main", "old": old, "new": new, "holder": str(root)}),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "the owner decides") == 0
+    assert "a run that stopped was moving `main`" in capsys.readouterr().out
+    assert run(root, "land", ALPHA) == 2
+    assert "is held and is not landed" in capsys.readouterr().out
+    assert run(root, "land", ALPHA) == 2, "the owner edited nothing, so the hold stands"
+    assert "is held and is not landed" in capsys.readouterr().out
+    assert git(root, "rev-parse", "main") == old, "nothing landed"
+
+
+def test_plan_prints_what_it_recovered_on_stderr_and_keeps_its_json(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, _old, _new = half_landed(tmp_path)
+    capsys.readouterr()
+    assert drain.main(["drain", "plan", "--root", str(root), "--offline"]) == 0
+    seen = capsys.readouterr()
+    assert "a run that stopped was moving `main`" in seen.err
+    assert json.loads(seen.out)["blocked"] == []
+
+
+def test_a_report_leaves_the_lease_while_a_program_of_the_drain_still_runs(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "clean", "--all") == 0
+    token = capsys.readouterr().err.split("drain: ")[1].split()[0]
+    assert run(root, "open", ALPHA) == 0
+    tree = drain.tree_of(root, BRANCH_A)
+    service = servers.sleeper(tree)
+    try:
+        assert run(root, "report", "--drain", token) == 0
+        assert run(root, "clean", "--all") == 2, "the first drain's program still runs in its tree"
+        assert service.poll() is None
+        assert tree in drain.worktrees(root)
+    finally:
+        service.kill()
+        service.wait()
+
+
+def test_clean_all_is_refused_for_a_program_in_a_tree_even_with_no_lease(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    tree = drain.tree_of(root, BRANCH_A)
+    service = servers.sleeper(tree)
+    try:
+        capsys.readouterr()
+        assert run(root, "clean", "--all") == 2
+        assert "another drain is running on this repository" in capsys.readouterr().out
+        assert service.poll() is None
+    finally:
+        service.kill()
+        service.wait()
+
+
+WAITING_MERGE = """\
+import pathlib
+import subprocess
+import sys
+import time
+
+done = subprocess.run([sys.executable, {merge!r}, sys.argv[1]], check=False)
+pathlib.Path({started!r}).touch()
+while not pathlib.Path({go!r}).exists():
+    time.sleep(0.05)
+sys.exit(done.returncode)
+"""
+
+
+def test_a_landing_in_flight_keeps_its_tree_and_note_from_a_report_and_a_clean(
+    tmp_path: Path, capsys: Out
+) -> None:
+    gate = tmp_path / "gate"
+    gate.mkdir()
+    script = tmp_path / "waiting_merge.py"
+    script.write_text(
+        WAITING_MERGE.format(
+            merge=str(SCRIPTS / "merge.py"), started=str(gate / "started"), go=str(gate / "go")
+        ),
+        encoding="utf-8",
+    )
+    root = project(tmp_path, **{"docs/process/binding.md": binding(f"{sys.executable} {script}")})
+    tree = judged(root)
+    landing = start(root, "land", ALPHA)
+    try:
+        deadline = time.monotonic() + 60
+        while not (gate / "started").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert (gate / "started").exists(), "the merge landed and now waits"
+        assert BRANCH_A in drain.route.merged_features(root, "main")
+        capsys.readouterr()
+        assert run(root, "report") == 0
+        assert f"report: a landing of `{BRANCH_A}` is running" in capsys.readouterr().out
+        assert run(root, "clean") == 0
+        out = capsys.readouterr().out
+        assert f"kept: {tree}: `{BRANCH_A}` has a landing running" in out
+        assert run(root, "clean", "--all") == 0
+        assert f"kept: {tree}: `{BRANCH_A}` has a landing running" in capsys.readouterr().out
+        assert "outcome" not in note(root, BRANCH_A)
+        assert tree in drain.worktrees(root)
+    finally:
+        (gate / "go").touch()
+    out, _ = landing.communicate(timeout=60)
+    assert landing.returncode == 0, out
+    assert note(root, BRANCH_A)["outcome"] == "merged"
+    assert not tree.exists()
+    capsys.readouterr()
+    assert run(root, "report") == 0
+    assert "Alpha" in capsys.readouterr().out.split("## Waits for you")[0]
+    assert run(root, "report") == 0
+    assert "## Merged\n\n- none" in capsys.readouterr().out
+
+
+def test_a_sweep_removes_an_empty_scratch_directory_a_killed_merge_left(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    home = Path(os.environ["TMPDIR"])
+    old = home / f"{merge.SCRATCH}old"
+    fresh = home / f"{merge.SCRATCH}fresh"
+    full = home / f"{merge.SCRATCH}full"
+    for directory in (old, fresh, full):
+        directory.mkdir()
+    (full / "file").write_text("x", encoding="utf-8")
+    for directory in (old, full):
+        os.utime(directory, (0, 0))
+    lines = merge.sweep(root)
+    assert lines == [f"merge: removed the empty directory {old} that a run which stopped left"]
+    assert not old.exists()
+    assert fresh.is_dir()
+    assert full.is_dir()
 
 
 def test_an_update_killed_after_its_rebase_and_a_clean_all_drops_the_record_on_the_rerun(
