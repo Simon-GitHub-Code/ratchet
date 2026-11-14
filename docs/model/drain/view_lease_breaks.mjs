@@ -11,7 +11,6 @@ export const state = (v) => {
   const open = v.tree !== "none" ? `, drain ${v.tree}'s tree open${v.running ? " with a program running" : ""}` : "";
   const merging = v.merge === "none" ? "merge.py runs" : "land waits to close";
   const tree = v.landing !== "none" ? `, drain ${v.landing}'s ${merging}${v.tree === "none" ? ", its tree gone" : ""}` : open;
-  const held = v.held ? ", the ticket held" : "";
-  return `${mode}, ${lease}${stopped}${tree}${held}`;
+  return `${mode}, ${lease}${stopped}${tree}`;
 };
 export const step = c.leaseNamed;
