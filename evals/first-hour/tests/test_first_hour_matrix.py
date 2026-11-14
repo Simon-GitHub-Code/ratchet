@@ -177,16 +177,25 @@ def test_a_process_runs_to_its_exit_code() -> None:
     assert matrix.launch_process([sys.executable, "-c", "raise SystemExit(4)"]) == 4
 
 
+def wait_for(marker: Path) -> None:
+    """Wait until the child has written marker: its signal handler is then in place."""
+    deadline = time.monotonic() + 60
+    while not marker.exists():
+        assert time.monotonic() < deadline, f"the child never wrote {marker.name}"
+        time.sleep(0.01)
+
+
 def test_an_interrupt_goes_on_to_the_child_which_gets_time_to_finish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     done = tmp_path / "done"
+    armed = tmp_path / "armed"
     script = (
         "import signal, sys, time, pathlib\n"
         "def stop(*a):\n"
         f"    pathlib.Path({str(done)!r}).write_text('x'); sys.exit(0)\n"
         "signal.signal(signal.SIGINT, stop)\n"
-        "print('ready', flush=True)\n"
+        f"pathlib.Path({str(armed)!r}).write_text('x')\n"
         "time.sleep(60)\n"
     )
     ready = tmp_path / "ready.py"
@@ -196,7 +205,7 @@ def test_an_interrupt_goes_on_to_the_child_which_gets_time_to_finish(
     class Watch(real):  # type: ignore[type-arg, misc]
         def wait(self, timeout: float | None = None) -> int:
             if timeout is None and not done.exists():
-                time.sleep(0.5)  # let the child install its handler
+                wait_for(armed)
                 raise KeyboardInterrupt
             return super().wait(timeout=timeout)
 
@@ -207,10 +216,14 @@ def test_an_interrupt_goes_on_to_the_child_which_gets_time_to_finish(
 
 
 def test_an_interrupted_child_that_will_not_stop_is_terminated(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(matrix, "STOP_WAIT_S", 0.5)
-    stubborn = "import signal, time; signal.signal(signal.SIGINT, signal.SIG_IGN); time.sleep(60)"
+    armed = tmp_path / "armed"
+    stubborn = (
+        "import signal, time, pathlib; signal.signal(signal.SIGINT, signal.SIG_IGN); "
+        f"pathlib.Path({str(armed)!r}).write_text('x'); time.sleep(60)"
+    )
     real = subprocess.Popen
 
     class Watch(real):  # type: ignore[type-arg, misc]
@@ -221,7 +234,7 @@ def test_an_interrupted_child_that_will_not_stop_is_terminated(
             Watch.child = self
             if timeout is None and not Watch.raised:
                 Watch.raised = True
-                time.sleep(0.5)
+                wait_for(armed)
                 raise KeyboardInterrupt
             return super().wait(timeout=timeout)
 
