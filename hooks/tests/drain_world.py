@@ -19,6 +19,8 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -76,7 +78,7 @@ KILL_AT = "DRAIN_MODEL_KILL_AT"
 # fast-forward it leaves what git does when killed there: files of the merge in the work tree,
 # the first written part-way, and the lock on the index.
 MERGE_KILLER = """\
-import os, signal, subprocess, sys
+import os, signal, subprocess, sys, time
 from pathlib import Path
 
 sys.path.insert(0, {scripts!r})
@@ -84,6 +86,7 @@ import gatelib
 import merge
 
 AT = os.environ.get({kill_at!r})
+HOLD = os.environ.get({hold_at!r})
 
 
 def die(*_args, **_kwargs):
@@ -112,12 +115,22 @@ if AT == "check":
     merge.run_check = die
 elif AT == "fast-forward":
     gatelib.git = cut_off
-raise SystemExit(merge.main(sys.argv))
+code = merge.main(sys.argv)
+if HOLD:
+    (Path(HOLD) / "landed").touch()
+    while not (Path(HOLD) / "go").exists():
+        time.sleep(0.02)
+raise SystemExit(code)
 """
 MERGE_KILLS = {
     Kind.KILL_BEFORE_FAST_FORWARD: "check",
     Kind.KILL_MID_FAST_FORWARD: "fast-forward",
 }
+# Why: with this set to a directory, the merge, once done, waits for a file `go` there before it
+# exits, so the `land` that runs it is held between its merge and its close, its landing lock held.
+HOLD_AT = "DRAIN_MODEL_HOLD_AT"
+LANDING_WAIT = 60  # seconds a held landing is given to finish its merge, or its close
+DRIVER = Path(__file__).with_name("drain_driver.py")
 
 
 def digest(text: str) -> str:
@@ -145,7 +158,9 @@ class World:
     def __init__(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         killer = directory / "merge_killer.py"
-        killer.write_text(MERGE_KILLER.format(scripts=str(SCRIPTS), kill_at=KILL_AT))
+        killer.write_text(
+            MERGE_KILLER.format(scripts=str(SCRIPTS), kill_at=KILL_AT, hold_at=HOLD_AT)
+        )
         merging = binding(f"{sys.executable} {killer}")
         self.root = repository(directory / "repo", {**FILES, "docs/process/binding.md": merging})
         self.token = ""
@@ -401,16 +416,18 @@ class LeaseWorld:
 
     A drain's command runs in this process as its session would run it: ``drain.ancestry`` names
     the session's process above the command, so the real ``drain.rival`` reads real processes.
-    A ``land`` is cut where it holds no lock: ``drain.close``, its last call, is held back until
-    the step that runs it, under the drain lock as ``land`` runs it.
+    A ``land`` runs in a process of its own and is held where it holds no drain lock: its merge
+    is done and has not exited, so the other drain's commands meet a live landing and its lock.
     """
 
     def __init__(self, directory: Path) -> None:
+        self.directory = directory
         self.world = World(directory)
         self.sessions: dict[Drain, subprocess.Popen[bytes]] = {}
         self.program: subprocess.Popen[bytes] | None = None
         self.tokens: dict[Drain, str] = {}
-        self.closing: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        # The drain whose `land` is held, its process, and the directory its merge waits on.
+        self.landing: tuple[Drain, subprocess.Popen[str], Path] | None = None
 
     def chain(self, which: Drain) -> list[str]:
         session = self.sessions[which]
@@ -423,27 +440,42 @@ class LeaseWorld:
         return self.world.printed
 
     def land(self, which: Drain) -> None:
-        """The agent's commits and its verdict record, then ``land`` up to its close."""
+        """The agent's commits and its verdict record, then ``land`` up to the end of its merge."""
         self.world.by_hand(Kind.COMMIT, Name.A)
         self.world.by_hand(Kind.RECORD, Name.A)
+        gate = Path(tempfile.mkdtemp(prefix="landing-", dir=self.directory))
+        root = str(self.world.root)
+        with (gate / "printed").open("w", encoding="utf-8") as printed:
+            process = subprocess.Popen(  # noqa: S603 # -- this interpreter, no shell
+                [sys.executable, str(DRIVER), "land", REF[Name.A], "--root", root, "--offline"],
+                stdout=printed,
+                stderr=subprocess.STDOUT,
+                cwd=root,
+                env={**os.environ, HOLD_AT: str(gate)},
+            )
+        self.landing = (which, process, gate)
+        deadline = time.monotonic() + LANDING_WAIT
+        while not (gate / "landed").exists() and process.poll() is None:
+            assert time.monotonic() < deadline, "the landing's merge did not finish"
+            time.sleep(0.02)
 
-        def held_back(*args: object, **kwargs: object) -> None:
-            self.closing.append((args, kwargs))
+    def close_the_landing(self) -> None:
+        """What ``land`` does once its merge has exited: its close, under the drain lock."""
+        assert self.landing is not None
+        _, process, gate = self.landing
+        (gate / "go").touch()
+        self.world.code = process.wait(timeout=LANDING_WAIT)
+        self.world.printed = (gate / "printed").read_text(encoding="utf-8")
+        self.landing = None
 
-        with mock.patch.object(drain, "close", held_back):
-            self.command(which, "land", REF[Name.A])
-
-    def close_the_landing(self, which: Drain) -> None:
-        """What ``land`` does once ``merge.py`` is done: its close, under the drain lock."""
-        args, kwargs = self.closing.pop()
-        out = io.StringIO()
-        with (
-            mock.patch.object(drain, "ancestry", return_value=self.chain(which)),
-            contextlib.redirect_stdout(out),
-            drain.exclusive(self.world.root),
-        ):
-            drain.close(*args, **kwargs)
-        self.world.printed = out.getvalue()
+    def kill_the_landing(self) -> None:
+        """SIGKILL to the ``land`` held; its merge, left with no parent, is let go to exit."""
+        assert self.landing is not None
+        _, process, gate = self.landing
+        process.kill()
+        process.wait()
+        (gate / "go").touch()
+        self.landing = None
 
     def perform(self, said: str) -> None:
         """Do what the lease step ``said`` names."""
@@ -485,9 +517,9 @@ class LeaseWorld:
         if step is Step.LAND:
             self.land(which)
         elif step is Step.LAND_REST:
-            self.close_the_landing(which)
+            self.close_the_landing()
         elif step is Step.LAND_KILLED:
-            self.closing.pop()
+            self.kill_the_landing()
         elif step is Step.DRAFT:
             write(tree, DRAFT, "half done\n")
         elif step is Step.PROGRAM:
@@ -495,6 +527,9 @@ class LeaseWorld:
         elif step is Step.DIE:
             self.sessions[which].kill()
             self.sessions[which].wait()
+            # Why: a landing is a command of its session, and ends with it.
+            if self.landing is not None and self.sessions[self.landing[0]].poll() is not None:
+                self.kill_the_landing()
 
     def seen(self, ghost: Lease) -> Lease:
         """The repository and the processes read back; ``ghost`` gives what no file holds."""
@@ -513,6 +548,10 @@ class LeaseWorld:
             if note.get("reported") is False
             else Merge.PRINTED
         )
+        # Why: the landing the model names must hold its lock. It is read here and not by
+        # `drain.landing_running`, so a fault in that reading is not a fault in this one too.
+        with drain.merge.locked(drain.landing_path(self.world.root, BRANCH[Name.A])) as free:
+            live = self.landing is not None and free is None
         return ghost._replace(
             holder=holder,
             alive=(
@@ -524,12 +563,16 @@ class LeaseWorld:
             draft=made and bool(git(tree, "status", "--porcelain")),
             running=self.program is not None and self.program.poll() is None,
             stashed=bool(git(self.world.root, "stash", "list")),
+            landing=self.landing[0] if self.landing is not None and live else None,
             merge=merge,
         )
 
     def close(self) -> None:
-        """End every process this world started."""
-        for process in [*self.sessions.values(), *([self.program] if self.program else [])]:
+        """End every process this world started, then let every merge held go."""
+        held = [self.landing[1]] if self.landing else []
+        for process in [*self.sessions.values(), *([self.program] if self.program else []), *held]:
             if process.poll() is None:
                 process.kill()
             process.wait()
+        for gate in self.directory.glob("landing-*"):
+            (gate / "go").touch()
