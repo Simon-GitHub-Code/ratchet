@@ -81,7 +81,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | --- | --- | --- |
 | `scripts/commits.py` | 0 | does every commit subject follow the convention? |
 | `scripts/markers.py` | 0 | did the count of TODO, FIXME, HACK and XXX markers rise? |
-| `scripts/suppressions.py` | 0 | did any kind of suppression rise, or a focus marker appear? |
+| `scripts/suppressions.py` | 0 | did any kind of suppression the binding lists rise, or a marker it forbids appear? |
 | `scripts/prose.py` | 0 | do the documents and comments keep to the glossary? |
 | `scripts/snapshots.py` | 0 | does each gate config the guard manifest lists match its recorded copy? |
 | `scripts/lowered.py` | 0 | was a threshold lowered, or a ceiling raised? |
@@ -89,7 +89,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/pins.py` | 0 | is every action pinned by commit, every image by digest, every workflow least-privileged? |
 | `scripts/coverage_groups.py` | 1 | is each coverage group at its ratchet, and each absolute path at 100%? Fed by the suite's Cobertura or LCOV report |
 | `scripts/mutation_survivors.py` | 1 and 2 | is every surviving mutant registered, and no entry stale? Fed by any mutation tool: one JSON line per mutant, or the reports of mutmut and Stryker as they are |
-| `scripts/change_size.py` | 1 | is the change within its files and lines ceiling? (records, generated lockfiles and their snapshots are not counted; a moved file counts by its changed lines) |
+| `scripts/change_size.py` | 1 | is the change within its files and lines ceiling? (records, the lockfiles the binding's Dependencies section names and their snapshots are not counted; a moved file counts by its changed lines) |
 | `ratchet_guards.diff` | 1 | which guard paths changed? |
 | `scripts/settings_rules.py` | 1 | do the permission rules hold the fixed denies, and ask nothing? `--write` (the `settings` entry point) writes them, and refuses under a plugin other than the one CI runs, whose check would reject what it wrote |
 | `scripts/conformance.py` | 1 | does the repository still carry the method: its records, its binding, its application types, its Speed section, its CI shape? `--self-test` shows it bites |
