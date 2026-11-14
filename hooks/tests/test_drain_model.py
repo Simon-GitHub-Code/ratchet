@@ -551,6 +551,8 @@ def test_a_close_after_a_cut_off_fast_forward_puts_it_back_first_and_holds_the_t
     PRINTED_ONCE,
     LANDING_SPARED,
     RECORD_KEPT,
+    LANDING_UNTOUCHED,
+    HOLD_KEPT,
 ) = model.LEASE_RULES
 APART = "each drain runs in a session of its own"
 UNDER_ONE = "one long-lived process runs both drains"
@@ -558,11 +560,14 @@ D1_STARTS = ["drain 1: drain.py clean --all", "drain 1: drain.py open a"]
 TAKEN_UNDER_ONE = [UNDER_ONE, *D1_STARTS, "drain 2: drain.py clean --all"]
 REPORTED_AWAY = [APART, *D1_STARTS, "drain 2: drain.py report", "drain 2: drain.py clean --all"]
 PROGRAM = "drain 1: its agent starts a program built in its tree"
-LANDS = "drain 1: drain.py land a, up to the merge merge.py lands"
+LANDS = "drain 1: drain.py land a, up to the merge.py it runs"
+MERGES = "drain 1: its merge.py lands the merge"
 CLOSES = "drain 1: drain.py land a, the close after the merge"
+PARKS = "drain.py close --outcome parked a"
 REPORTED_UNDER_ONE = [UNDER_ONE, *D1_STARTS, "drain 2: drain.py report"]
 TAKEN_OVER = [APART, *D1_STARTS, LANDS, "drain 2: drain.py clean --all --take-over"]
-TAKEN_OVER += ["drain 1: a kill stops its land after the merge, before the close"]
+TAKEN_OVER += ["drain 1: a kill stops its land and its merge.py before the merge"]
+PARKED_IN_FLIGHT = [APART, *D1_STARTS, LANDS, f"drain 1: {PARKS}"]
 STOPPED = [
     APART,
     "drain 1: drain.py clean --all",
@@ -578,7 +583,7 @@ LEASE_COUNTEREXAMPLES: dict[str, list[str] | None] = {
     # the docstring accepts: "a landing that drain runs keeps its tree while it runs, and the next
     # `clean --all` takes the tree once that landing has ended, its work all committed". The
     # take-over leaves the tree of the first drain's live landing; once that landing is killed,
-    # the drain that took over takes the tree on its next `clean --all` and records the merge.
+    # here before its merge, the drain that took over takes the tree on its next `clean --all`.
     TOLD_APART: [*TAKEN_OVER, "drain 2: drain.py clean --all"],
     # Why: 9b breaks where the docstring accepts it: "A drain is alive while a process of its own
     # is", so one that stopped with its session open blocks the next until the owner says
@@ -590,8 +595,20 @@ LEASE_COUNTEREXAMPLES: dict[str, list[str] | None] = {
     # whose drain it ends. In sessions of their own it ends only its own drain's lease.
     OWN_LEASE: [UNDER_ONE, D1_STARTS[0], "drain 2: drain.py report"],
     PRINTED_ONCE: None,
-    LANDING_SPARED: None,
+    # Why: a defect. The docstring promises only that "`report` and `clean`, of any drain, leave
+    # that ticket's note and tree alone while it runs"; `close` does not read the landing lock, so
+    # the other drain's close as parked discards the tree of a landing whose merge still runs.
+    LANDING_SPARED: [*PARKED_IN_FLIGHT[:-1], f"drain 2: {PARKS}"],
     RECORD_KEPT: None,
+    # Why: a defect, 9f's general form. `close`, and `update` once the merge has landed, write the
+    # note and discard the tree of a live landing, whichever drain's agent types them; nothing in
+    # the docstring allows it.
+    LANDING_UNTOUCHED: PARKED_IN_FLIGHT,
+    # Why: a defect, rule 6a on the lease graph. The landing looked for a hold before its merge
+    # began, not after; `merge.py` reads no note, so it lands the ticket the close held, and the
+    # landing's close then writes merged over the hold. `land` says why it refuses a held ticket:
+    # "a parked run's commits are not a review's approval".
+    HOLD_KEPT: [*PARKED_IN_FLIGHT, MERGES],
 }
 
 
@@ -742,24 +759,24 @@ def test_under_one_process_a_program_refuses_clean_all_once_a_report_ended_the_l
 def test_another_drains_report_and_clean_leave_a_live_landing_alone_and_it_is_printed_once(
     two_drains: LeasePlay,
 ) -> None:
-    path = [APART, *D1_STARTS, LANDS, "drain 2: drain.py report", "drain 2: drain.py clean"]
+    path = [APART, *D1_STARTS, LANDS, MERGES, "drain 2: drain.py report", "drain 2: drain.py clean"]
     path += [CLOSES, "drain 1: drain.py report --drain with its token"]
     assert {name for at in range(1, len(path) + 1) for name in lease_broken_by(path[:at])} == set()
-    for said in path[:4]:
+    for said in path[:5]:
         two_drains.named(said)
     session = two_drains.world.sessions[model.Drain.ONE].pid
     tree = two_drains.world.world.tree(Name.A)
-    reported = two_drains.named(path[4])
+    reported = two_drains.named(path[5])
     assert reported.endswith(
         f"another drain is running (process {session}); {drain.LANDING_MAY_RUN},"
         " so a merge no note says is left alone\n"
     )
     assert "Alpha" not in listed_under(reported, "Merged")
-    cleaned = two_drains.named(path[5])
+    cleaned = two_drains.named(path[6])
     assert f"clean: {drain.LANDING_MAY_RUN} (process {session})" in cleaned
     assert f"kept: {tree}: `{BRANCH[Name.A]}` has a landing running" in cleaned
-    assert two_drains.named(path[6]).endswith(f"closed: {REF[Name.A]}: merged\n")
-    own = two_drains.named(path[7])
+    assert two_drains.named(path[7]).endswith(f"closed: {REF[Name.A]}: merged\n")
+    own = two_drains.named(path[8])
     assert "Alpha" in listed_under(own, "Merged")
     assert "lease stays" not in own
 
@@ -767,27 +784,27 @@ def test_another_drains_report_and_clean_leave_a_live_landing_alone_and_it_is_pr
 def test_one_process_running_both_drains_leaves_a_live_landing_alone_and_it_is_printed_once(
     two_drains: LeasePlay,
 ) -> None:
-    path = [*TAKEN_UNDER_ONE[:3], LANDS, TAKEN_UNDER_ONE[3], "drain 2: drain.py clean"]
+    path = [*TAKEN_UNDER_ONE[:3], LANDS, MERGES, TAKEN_UNDER_ONE[3], "drain 2: drain.py clean"]
     path += ["drain 2: drain.py report", CLOSES, "drain 1: drain.py report --drain with its token"]
     path.append("drain 2: drain.py report --drain with its token")
     assert {name for at in range(1, len(path) + 1) for name in lease_broken_by(path[:at])} == set()
-    for said in path[:4]:
+    for said in path[:5]:
         two_drains.named(said)
     tree = two_drains.world.world.tree(Name.A)
     kept = f"kept: {tree}: `{BRANCH[Name.A]}` has a landing running\n"
-    assert kept in two_drains.named(path[4]), "the second drain's clean --all keeps the tree"
-    assert kept in two_drains.named(path[5])
-    reported = two_drains.named(path[6])
+    assert kept in two_drains.named(path[5]), "the second drain's clean --all keeps the tree"
+    assert kept in two_drains.named(path[6])
+    reported = two_drains.named(path[7])
     assert reported.startswith(
         f"report: a landing of `{BRANCH[Name.A]}` is running in another command, so it is left"
         " alone\n"
     )
     assert "Alpha" not in listed_under(reported, "Merged")
-    closed = two_drains.named(path[7])
+    closed = two_drains.named(path[8])
     assert f"merged: `{BRANCH[Name.A]}` into `main`" in closed
     assert closed.endswith(f"closed: {REF[Name.A]}: merged\n"), "the landing records its merge"
-    assert "Alpha" in listed_under(two_drains.named(path[8]), "Merged")
-    assert "Alpha" not in two_drains.named(path[9]), "the merge is printed once"
+    assert "Alpha" in listed_under(two_drains.named(path[9]), "Merged")
+    assert "Alpha" not in two_drains.named(path[10]), "the merge is printed once"
 
 
 def test_a_take_over_leaves_a_live_landing_and_takes_its_tree_once_the_landing_is_killed(
@@ -803,8 +820,9 @@ def test_a_take_over_leaves_a_live_landing_and_takes_its_tree_once_the_landing_i
     two_drains.named(path[5])
     assert tree.exists(), "the killed landing leaves its tree"
     taken = two_drains.named(path[6])
-    assert f"{RECORDED}removed: {tree}: its branch is merged\n" in taken
-    assert "Alpha" in listed_under(two_drains.named("drain 2: drain.py report"), "Merged")
+    assert f"removed: {tree}: the drain that made it was interrupted\n" in taken
+    assert "recorded:" not in taken, "the kill came before the merge, so none is recorded"
+    assert "Alpha" not in listed_under(two_drains.named("drain 2: drain.py report"), "Merged")
 
 
 def read_back(play: LeasePlay) -> tuple[object, ...]:
@@ -814,35 +832,132 @@ def read_back(play: LeasePlay) -> tuple[object, ...]:
     return play.world.seen(play.lease), note, git(root, "rev-parse", "main"), drain.worktrees(root)
 
 
-# Why: the lease model's landings all merge, and none of its steps is a second `land`. These two
-# replays take its steps up to a real landing in flight, then do what the model cannot.
+def lease_note(play: LeasePlay) -> dict[str, object]:
+    return drain.queue_notes.read_note(play.world.world.root, BRANCH[Name.A])
 
 
 def test_a_second_land_while_one_is_in_flight_is_refused_and_the_merge_printed_once(
     two_drains: LeasePlay,
 ) -> None:
-    path = [APART, *D1_STARTS, LANDS, CLOSES, "drain 1: drain.py report --drain with its token"]
+    # Why: drain 1 again is its agent whose shell timed out on the first `land`.
+    again = [f"{which.value}: {Step.LAND.value}" for which in model.Drain]
+    path = [APART, *D1_STARTS, LANDS, *again, MERGES, *again, CLOSES]
+    path.append("drain 1: drain.py report --drain with its token")
     assert {name for at in range(1, len(path) + 1) for name in lease_broken_by(path[:at])} == set()
-    for said in path[:4]:
-        two_drains.named(said)
-    before = read_back(two_drains)
     refused = (
         f"land: a landing of `{BRANCH[Name.A]}` is already running in another command; run land"
         " again once it ends\n"
     )
-    # Why: drain 1 again is its agent whose shell timed out on the first `land`.
-    for which in model.Drain:
+    for said in path[:-2]:
+        alive = two_drains.lease.landing is not None
+        before = read_back(two_drains) if alive else None
         start = time.monotonic()
-        printed = two_drains.world.command(which, "land", REF[Name.A])
-        took = time.monotonic() - start
-        assert read_back(two_drains) == before, f"{which}: the second land changed nothing"
-        assert (two_drains.world.world.code, printed) == (2, refused), which
-        assert took < LANDING_WAIT / 2, f"{which}: it does not wait for the landing to end"
-    closed = two_drains.named(path[4])
+        printed = two_drains.named(said)
+        if alive and said in again:
+            took = time.monotonic() - start
+            assert read_back(two_drains) == before, f"{said}: the second land changed nothing"
+            assert (two_drains.world.world.code, printed) == (2, refused), said
+            assert took < LANDING_WAIT / 2, f"{said}: it does not wait for the landing to end"
+    closed = two_drains.named(path[-2])
     assert closed.count(f"merged: `{BRANCH[Name.A]}` into `main`") == 1
     assert closed.endswith(f"closed: {REF[Name.A]}: merged\n"), "the first landing records it"
-    merged = listed_under(two_drains.named(path[5]), "Merged")
+    merged = listed_under(two_drains.named(path[-1]), "Merged")
     assert merged.count("Alpha") == 1, "the next report prints the merge once"
+
+
+def test_a_close_as_parked_while_the_merge_runs_holds_the_ticket_and_the_landing_merges_it(
+    two_drains: LeasePlay,
+) -> None:
+    path = [*(LEASE_COUNTEREXAMPLES[HOLD_KEPT] or []), CLOSES, "drain 2: drain.py report"]
+    assert lease_broken_by(PARKED_IN_FLIGHT) == {LANDING_UNTOUCHED}
+    assert lease_broken_by(path[:6]) == {HOLD_KEPT}
+    world = two_drains.world.world
+    for said in path[:4]:
+        two_drains.named(said)
+    tree, before = world.tree(Name.A), git(world.root, "rev-parse", "main")
+    assert two_drains.named(path[4]) == f"closed: {REF[Name.A]}: parked\n"
+    held = lease_note(two_drains)
+    assert (held["outcome"], held["hold"]) == ("parked", True), "the note holds the ticket"
+    assert not tree.exists(), "the close discarded the tree of the live landing"
+    assert two_drains.named(path[5]) == ""
+    assert git(world.root, "rev-parse", "main^1") == before, "merge.py landed the held ticket"
+    assert lease_note(two_drains) == held
+    closed = two_drains.named(path[6])
+    assert f"merged: `{BRANCH[Name.A]}` into `main`" in closed
+    assert closed.endswith(f"closed: {REF[Name.A]}: merged\n"), "no hold is looked for again"
+    merged = lease_note(two_drains)
+    assert (merged["outcome"], merged["hold"]) == ("merged", False), "merged over the hold"
+    reported = two_drains.named(path[7])
+    assert "Alpha" in listed_under(reported, "Merged")
+    assert "Alpha" not in listed_under(reported, "Parked")
+
+
+def test_another_drains_close_as_parked_while_the_merge_runs_is_reported_and_then_merged(
+    two_drains: LeasePlay,
+) -> None:
+    pinned = LEASE_COUNTEREXAMPLES[LANDING_SPARED] or []
+    assert lease_broken_by(pinned) == {LANDING_SPARED, LANDING_UNTOUCHED}
+    path = [*pinned, "drain 2: drain.py report", MERGES, CLOSES]
+    path.append("drain 1: drain.py report --drain with its token")
+    for said in path[:4]:
+        two_drains.named(said)
+    tree = two_drains.world.world.tree(Name.A)
+    assert two_drains.named(path[4]) == f"closed: {REF[Name.A]}: parked\n"
+    assert not tree.exists(), "the other drain's close discarded the tree of the live landing"
+    assert "Alpha" in listed_under(two_drains.named(path[5]), "Parked")
+    two_drains.named(path[6])
+    assert two_drains.named(path[7]).endswith(f"closed: {REF[Name.A]}: merged\n")
+    reported = two_drains.named(path[8])
+    assert "Alpha" in listed_under(reported, "Merged"), "the ticket reported parked has merged"
+
+
+def test_an_update_after_the_merge_records_it_and_discards_the_tree_of_the_live_landing(
+    two_drains: LeasePlay,
+) -> None:
+    path = [*TAKEN_UNDER_ONE[:3], LANDS, MERGES, "drain 2: drain.py update a"]
+    assert lease_broken_by(path) == {LANDING_SPARED, LANDING_UNTOUCHED}
+    path += [f"drain 1: {PARKS}", CLOSES, "drain 1: drain.py report --drain with its token"]
+    for said in path[:5]:
+        two_drains.named(said)
+    tree = two_drains.world.world.tree(Name.A)
+    updated = two_drains.named(path[5])
+    stopped = "the merge landed, and the run that landed it stopped before it said so"
+    assert updated == f"{RECORDED}update: {REF[Name.A]} is merged and is not rebased\n"
+    assert not tree.exists(), "the update discarded the tree of the live landing"
+    recorded = lease_note(two_drains)
+    assert (recorded["outcome"], recorded["reasons"]) == ("merged", [stopped])
+    assert two_drains.named(path[6]) == UNSAID, "the close is refused, and changes nothing"
+    assert two_drains.named(path[7]).endswith(f"closed: {REF[Name.A]}: merged\n")
+    assert lease_note(two_drains) == recorded, "the landing's close keeps the note and its reason"
+    assert listed_under(two_drains.named(path[8]), "Merged").count("Alpha") == 1
+
+
+# Why: the lease graph has no mark of a close cut off before its discard, and its default branch
+# moves only by the merge. These replays take its steps up to a real landing in flight, then do
+# what the model cannot.
+
+
+def test_an_update_while_the_merge_runs_rebases_the_branch_and_the_landing_holds_it_for_the_owner(
+    two_drains: LeasePlay,
+) -> None:
+    for said in [APART, *D1_STARTS]:
+        two_drains.named(said)
+    lease_world, world = two_drains.world, two_drains.world.world
+    world.by_hand(Kind.EDIT, Name.C)
+    lease_world.land(model.Drain.ONE)
+    assert lease_world.command(model.Drain.ONE, "update", REF[Name.A]) == (
+        '{"moved": true, "conflicts": []}\n'
+    ), "the branch is rebased under the live landing, its verdict record dropped"
+    lease_world.merge_the_landing()
+    lease_world.close_the_landing()
+    assert world.code == 1
+    assert "merge: owner\nrecord: no verdict record" in world.printed
+    note = lease_note(two_drains)
+    assert (note["outcome"], note["hold"]) == ("waits", True), (
+        "held for the owner; with no update the merge refuses it as behind, which the drain retries"
+    )
+    drafted = drain.plan(drain.Drain(world.root, None, model.CAP))
+    assert [entry.state for entry in drafted.tickets if entry.branch == BRANCH[Name.A]] == ["held"]
 
 
 def test_clean_all_under_a_live_landing_keeps_the_tree_and_mark_a_killed_close_left(
@@ -877,14 +992,32 @@ def test_clean_all_under_a_live_landing_keeps_the_tree_and_mark_a_killed_close_l
     assert note["attempts"] == 1, "the run the kill cut off is the same refusal, counted once"
 
 
-def decision(before: model.Lease, said: str) -> tuple[object, ...]:
-    """The branch of ``drain.lease`` or ``drain.other_drain`` a step takes, whether a ``clean --all`` takes another drain's tree, and whether a merge no note says is recorded or left alone; any other step is its own."""  # noqa: E501
-    drain_, step = model.LEASE_STEPS.get(said, (None, None))
+TICKET_STEPS = frozenset({Step.OPEN, Step.UPDATE, Step.PARK, Step.LAND})
+
+
+def landing_decision(
+    before: model.Lease, drain_: model.Drain | None, step: Step | None
+) -> tuple[object, ...] | None:
+    """What a command on the ticket meets in a live landing, how the landing closes, and whether a session's end ends it before its merge or after; ``None`` for any other step."""  # noqa: E501
+    if step in TICKET_STEPS and before.landing is not None:
+        # Why: what the command reads, whether the merge landed and whether a note says so. Not
+        # whose agent typed it, which none of these commands reads, nor the tree, which only its
+        # discard does.
+        noted = before.merge in {Merge.SAID, Merge.PRINTED}
+        return (step.value, before.merge is Merge.NONE, noted)
     if step is Step.LAND_REST:
-        return (step.value, before.merge is Merge.UNSAID)
+        return (step.value, before.merge is Merge.UNSAID, before.held)
     if step is Step.DIE:
         ends = before.landing is drain_ or (bool(before.shared) and before.landing is not None)
-        return (step.value, ends)
+        return (step.value, ends, ends and before.merge is Merge.NONE)
+    return None
+
+
+def decision(before: model.Lease, said: str) -> tuple[object, ...]:
+    """The branch of ``drain.lease`` or ``drain.other_drain`` a step takes, whether a ``clean --all`` takes another drain's tree, whether a merge no note says is recorded or left alone, and what a step meets in a live landing; any other step is its own."""  # noqa: E501
+    drain_, step = model.LEASE_STEPS.get(said, (None, None))
+    if (found := landing_decision(before, drain_, step)) is not None:
+        return found
     if step not in model.CLEANS | model.REPORTS | {Step.CLEAN}:
         return (said.rpartition(": ")[2],)
     holder = before.holder
@@ -958,8 +1091,9 @@ def lease_tour() -> list[list[str]]:
 
 
 def test_two_real_drains_agree_with_the_lease_model_on_every_decision(tmp_path: Path) -> None:
-    # Why: every step of the lease graph is some 3,900 commands on real repositories. Each decision
-    # the code makes on a lease, for each kind of step, is a few dozen, chained into a few walks.
+    # Why: every step of the lease graph is some 16,000 commands on real repositories, and each
+    # landing a process. Each decision the code makes, for each kind of step, is under a hundred,
+    # chained into a few walks; a walk lands one merge at most, so a landing ends most walks.
     for at, walk in enumerate(lease_tour()):
         play = LeasePlay(tmp_path / str(at))
         try:
