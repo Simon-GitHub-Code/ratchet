@@ -37,7 +37,7 @@ Each step is the orchestrator's start, or the answer of the agent the run waits 
 
 | Agent | Its answers |
 | --- | --- |
-| the orchestrator | starts a build; starts with no ticket; judges a rebased branch again; judges a branch whose rebase conflicted again; judges a branch again without the first run's slug |
+| the orchestrator | starts a build; starts with no ticket; judges a rebased branch again; judges a branch whose rebase conflicted again; judges a branch again without the first run's slug or spec path |
 | `preflight` | dies; is red; is green with no slug; is green for a project nobody depends on; is green for a project that is depended-on |
 | `spec`, and `spec-amend` once the ticket check finds a gap | dies; asks the owner a question; needs a guard path changed; measures product code over its ceiling; measures tests over their ceiling; measures tests over two thirds of their ceiling; estimates the change cannot fit and proposes parts; fits; fits with tests that fail for the wrong reason |
 | `ticket-check`, and `ticket-recheck` after the amend | dies; finds no gap; finds a gap |
@@ -46,7 +46,7 @@ Each step is the orchestrator's start, or the answer of the agent the run waits 
 | `fix-1`, `fix-2` and `reconcile` | dies; is green; is red; measures product code over its ceiling |
 | `review`, and `review-again` | dies; approves; requests changes; approves on a red check; approves with a blocker of its own open; approves a change that drops a promise of the ticket; approves a guard path change nothing covers |
 
-Tests over two thirds of their ceiling stop the run only while the critic's tests are still to come (ADR 0040). After the build those tests are in, so one answer over a ceiling stands for every answer a fix round or the reconcile can give over one (ADR 0055). The orchestrator's last start is played with a slug and no spec path. The script refuses either one missing with the same error.
+Tests over two thirds of their ceiling stop the run only while the critic's tests are still to come (ADR 0040). After the build those tests are in, so one answer over a ceiling stands for every answer a fix round or the reconcile can give over one (ADR 0055). The start without the slug or spec path is played with a slug and no spec path. The script refuses either one missing with the same error.
 
 ## Rules
 
@@ -101,9 +101,9 @@ All of them run on `workflows/pipeline.js` itself in one node process, in a cont
 
 ## Charts
 
-The rules were checked on `Pipeline.tla`, SHA-256 `8e456612837ae658cb5926c1a90de9ccf7f5583ea8ef2379357f6d6725666f63`. TLC reached 1,032 states. Run again with only the rules that hold, it counts 1,173 states generated: the start and 1,172 steps. Sixteen rules hold, two break, each by the run above. A run that has ended has no step out, so the module tells TLC that is no deadlock.
+The rules were checked on `Pipeline.tla`, SHA-256 `5f746305125e64887323cbff96f8ebff3ec793c30971a07cd16868a1e91b6aeb`. TLC reached 1,032 states. Run again with only the rules that hold, it counts 1,173 states generated: the start and 1,172 steps. Sixteen rules hold, two break, each by the run above. A run that has ended has no step out, so the module tells TLC that is no deadlock.
 
-That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `babc0d071943eda8a484a48c4bcdd586d5602f14ff34c8815ff94b5873d9549e`: the same graph seen through the stage a run is at. That is the agent it waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 72 states and 141 steps. A box groups states, and an arrow from a box leaves every state in it.
+That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `5fde479d1971e7783f7936687151a9966377b87f2d8f7dc15485a9730de76ccc`: the same graph seen through the stage a run is at. That is the agent it waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 72 states and 141 steps. A box groups states, and an arrow from a box leaves every state in it.
 
 ### A first build
 
