@@ -94,6 +94,7 @@ An upgrade is one command, and what it cannot settle is owed, not red (ADR 0029,
 - Between upgrades the list only shrinks. A new or changed entry is red unless the same change moves the pin to a newer version and the merge base was red on that finding. A change that only drops entries passes the merge judge without the owner.
 - The upgrade asks the owner nothing. Each call that is the owner's keeps a default that loosens nothing, stated in plain words, and the upgrade never writes `- Life events: none`.
 - An upgrade no longer reports nothing red for a mutation recipe from before ADR 0050 that hands the output of `mutation_survivors.py --changed` to its tool unfiltered. That list now holds every changed file, so the recipe failed on the first change with no code in it. `conformance` names such a recipe red, never owed, and reads a recipe that starts with a shebang as one script.
+- The sections an upgrade adds are written with their tables padded, so a project whose format check pads tables is not red right after the upgrade.
 
 Records land without the owner, and so does the adoption (ADR 0031). The merge judge asks no verdict of a change made only of records: a ticket, a spec, a change description, a glossary addition or an ADR. The owner still merges a ticket change that gives the agent-ready label, takes another's number or closes a ticket, any change to a labelled ticket or the spec it inherits from, and any ADR. `AGENTS.md`, `CLAUDE.md` and the other agent-instruction files stay the owner's at any depth. `just merge --records` lands the records a skill left on the default branch through a branch of their own, and the route never tells an agent to commit on the default branch. The adoption is judged by the manifest it brings, which must guard at least what the template does.
 
@@ -141,6 +142,7 @@ Smaller fixes.
 - With `--over report`, `budget.py` raises a run over its ceiling as a warning annotation, as well as printing it.
 - `conformance` and the upgrade read each justfile once, so an upgrade plan is several times faster.
 - `/ratchet:feature` starts the pipeline workflow by its name. On a fresh install the harness refused the script path the skill gave, because the session had not read that file; the path stays as the fallback for a harness that lists no workflow by name.
+- The binding template's Install sentence writes its example in a double-backtick span, so a markdown formatter no longer rewrites the sentence and drops its spaces.
 
 ## 0.11.0
 
