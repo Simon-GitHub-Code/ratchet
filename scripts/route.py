@@ -892,10 +892,13 @@ def safeguard_step(root: Path, instead: Step) -> Step | None:
         if code
         else "a declared event is never red"
     )
+    # Why: ``then:`` names the step the route names once the rows are bound; an architecture an
+    # upgrade left owed comes before the work, so it is that step when it is owed.
+    then = (architecture_step(root, instead) or instead).command
     return Step(
         SAFEGUARD,
         f"{'; '.join(said)}. Or carry on with {instead.command}: {cost}",
-        instead.command,
+        then,
         "safeguard",
     )
 
