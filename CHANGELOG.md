@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+The drain's recovery reads a kill inside one file's write, and tells two drains under one process apart (ADR 0023). A fast-forward killed while git wrote a file puts that part-written file back, and keeps only what the owner had changed or left untracked before it began. `clean --all` prints the drain's token, and the drain's later commands stamp its lease, so a second drain started under the same long-lived process is refused while the first is active.
+
 The plugin names no language, package manager or stack tool in its gates, and the binding holds each stack fact (ADR 0042, ADR 0043, ADR 0044).
 
 - Three binding sections carry what the gates used to list: `## Install` (whether an install comes first, its lockfile and the recipes that need it), `## Dependencies` (manifest and lockfile globs, accepted registries, and a `just dependencies <dir>` entry point that prints records the plugin compares) and `## Suppressions` (the directive kinds the bound tools read). `conformance` is red when a needed row is missing or malformed, and when a manifest or lockfile the section declares is in no `guards/manifest.toml` group.

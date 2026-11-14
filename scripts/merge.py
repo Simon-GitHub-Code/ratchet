@@ -14,7 +14,9 @@ holds a lock the kernel frees when the run dies, so a work tree nobody holds is 
 The fast-forward of a checked-out default branch writes its intent first, under a lock of the
 same kind; a run killed in it leaves files of the merge in the work tree and a lock on its
 index, and the next run puts back only those files, as the default branch had them, and removes
-that lock. A file somebody changed since is left, and said.
+that lock. A path the fast-forward was writing which matches neither blob is git's part-written
+file, and goes back too; one the owner had changed or left untracked before it began (the
+intent lists them) is left, and said.
 
 A branch that does not hold the tip of the default branch is the owner's with the ``behind``
 reason, as on a forge: its verdict was given on another tree, so it is brought up to date and
@@ -75,7 +77,7 @@ NEXT = "next: "
 RECORDS = "records/"
 SUBJECT = "docs(records): land what the owner's conversation wrote"
 HOOK_LINES = 5
-INTENT_BYTES = 4096
+INTENT_BYTES = 1 << 20
 SCRATCH = "ratchet-merge-"
 # Why: a lock the kernel holds for an open file is freed when its holder dies, however it dies.
 HELD = ".lock"
@@ -161,7 +163,14 @@ def land(root: Path, default: str, *, old: str, new: str) -> Reason | None:
         with locked(state_dir(root) / LANDING) as descriptor:
             if descriptor is None:
                 return Reason("moved", f"another merge is moving `{default}` now")
-            intent = {"default": default, "old": old, "new": new, "holder": str(holder)}
+            owned = sorted({path for _, path, _, _ in blobs(root, old, new)} & dirty_paths(holder))
+            intent = {
+                "default": default,
+                "old": old,
+                "new": new,
+                "holder": str(holder),
+                "owned": owned,
+            }
             os.ftruncate(descriptor, 0)
             os.write(descriptor, json.dumps(intent).encode())
             os.fsync(descriptor)
@@ -213,15 +222,30 @@ def hashed(tree: Path, paths: list[str]) -> dict[str, str]:
     return dict(zip(plain, done.stdout.split(), strict=False)) if done.returncode == 0 else {}
 
 
-def roll_back(root: Path, holder: Path, *, old: str, new: str) -> list[str]:
+def dirty_paths(tree: Path) -> set[str]:
+    """The paths ``tree`` holds changed, staged, deleted or untracked."""
+    listed = (
+        gatelib.git(
+            tree, "ls-files", "-z", "--modified", "--deleted", "--others", "--exclude-standard"
+        ),
+        gatelib.git(tree, "diff", "-z", "--name-only", "--cached"),
+    )
+    return {path for text in listed for path in (text or "").split("\0") if path}
+
+
+def roll_back(root: Path, holder: Path, *, old: str, new: str, owned: frozenset[str]) -> list[str]:
     """Put the work tree of ``holder`` back at ``old``, touching only what ``new`` changed.
 
-    A path is put back only when the work tree holds the blob ``old`` or ``new`` has there, or
-    nothing: anything else was written by somebody since, and stays. The lines say what stays.
+    A path is put back when the work tree holds the blob ``old`` or ``new`` has there, or
+    nothing. One that holds neither was written part-way by the killed fast-forward, and is put
+    back too, unless it was in ``owned``: changed or untracked before the fast-forward began,
+    so the owner's. Those stay, and the lines say so.
     """
     changes = blobs(root, old, new)
     held = hashed(holder, [path for _, path, _, _ in changes])
-    stays = [p for _, p, was, now in changes if p in held and held[p] not in {was, now}]
+    stays = [
+        p for _, p, was, now in changes if p in held and held[p] not in {was, now} and p in owned
+    ]
     restore = [p for status, p, _, _ in changes if status != "A" and p not in stays]
     added = [p for status, p, _, _ in changes if status == "A" and p not in stays]
     pathspecs = ("--pathspec-from-file=-", "--pathspec-file-nul")
@@ -236,6 +260,10 @@ def roll_back(root: Path, holder: Path, *, old: str, new: str) -> list[str]:
         with contextlib.suppress(OSError):
             os.removedirs((holder / path).parent)
     return [f"merge: {path} was changed since, and stays as it is" for path in stays]
+
+
+def texts(value: object) -> list[str]:
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
 def intent_of(data: bytes) -> dict[str, object]:
@@ -271,7 +299,8 @@ def recover_landing(root: Path) -> list[str]:
             lines.append(
                 f"merge: a run that stopped was moving `{default}`; its work tree is put back"
             )
-            lines += roll_back(root, holder, old=old, new=new)
+            owned = frozenset(texts(intent.get("owned")))
+            lines += roll_back(root, holder, old=old, new=new, owned=owned)
         os.ftruncate(descriptor, 0)
     return lines
 
