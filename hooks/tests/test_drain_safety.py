@@ -7,7 +7,6 @@ a real repository, and a kill is a real SIGKILL or the state one leaves.
 
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -714,66 +713,42 @@ def test_a_process_that_cannot_be_read_is_not_a_git_in_the_tree(tmp_path: Path) 
 
 
 BIG = "bulk/a_big.bin"
-BIG_BYTES = 96 * 2**20
+CONTENT = b"0123456789abcdef" * 256
 
 
 class MergeKilledError(Exception):
     """The merge run was killed."""
 
 
-def killed_in_a_write(root: Path, monkeypatch: pytest.MonkeyPatch) -> int | None:
-    """Run ``merge.land`` with its fast-forward SIGKILLed while git writes ``BIG``.
-
-    The size ``BIG`` has on disk at the kill, or ``None`` when git was not caught inside the write.
-    """
-    old, new = git(root, "rev-parse", "main"), git(root, "rev-parse", "big")
+@pytest.mark.parametrize("written", [0, 100])
+def test_a_fast_forward_killed_inside_one_files_write_is_put_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, written: int
+) -> None:
+    """The state a kill leaves: the intent is on disk, ``BIG`` is cut short, the index is locked."""
+    root = project(tmp_path)
+    git(root, "switch", "-q", "-c", "big")
+    (root / BIG).parent.mkdir()
+    (root / BIG).write_bytes(CONTENT)
+    write(root, "src/b.py", "B = 1\n")
+    new = commit(root, "feat(core): the merge result")
+    git(root, "switch", "-q", "main")
+    write(root, "owner.txt", "the owner's untracked notes\n")
+    old = git(root, "rev-parse", "main")
     real = gatelib.git
 
-    def kill_the_fast_forward(where: Path, *args: str) -> str | None:
+    def die_in_the_write(where: Path, *args: str) -> str | None:
         if args[:2] != ("merge", "--ff-only"):
             return real(where, *args)
-        proc = subprocess.Popen(["git", "-C", str(where), *args])  # noqa: S603, S607
-        while proc.poll() is None and not (where / BIG).exists():
-            time.sleep(0.0002)
-        proc.send_signal(signal.SIGKILL)
-        proc.wait()
+        (where / BIG).parent.mkdir(exist_ok=True)
+        (where / BIG).write_bytes(CONTENT[:written])
+        (gitdir(where) / "index.lock").write_text("")
         raise MergeKilledError
 
-    monkeypatch.setattr(gatelib, "git", kill_the_fast_forward)
-    try:
-        with pytest.raises(MergeKilledError):
-            merge.land(root, "main", old=old, new=new)
-    finally:
-        monkeypatch.setattr(gatelib, "git", real)
-    size = (root / BIG).stat().st_size if (root / BIG).exists() else None
-    return (
-        size
-        if size is not None and size < BIG_BYTES and git(root, "rev-parse", "main") == old
-        else None
-    )
-
-
-def test_a_fast_forward_killed_inside_one_files_write_is_put_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    for attempt in range(8):
-        attempt_dir = tmp_path / f"try{attempt}"
-        attempt_dir.mkdir()
-        root = project(attempt_dir)
-        git(root, "switch", "-q", "-c", "big")
-        (root / BIG).parent.mkdir()
-        (root / BIG).write_bytes(b"0123456789abcdef" * (BIG_BYTES // 16))
-        write(root, "src/b.py", "B = 1\n")
-        commit(root, "feat(core): the merge result")
-        git(root, "switch", "-q", "main")
-        write(root, "owner.txt", "the owner's untracked notes\n")
-        old = git(root, "rev-parse", "main")
-        if killed_in_a_write(root, monkeypatch) is not None:
-            break
-        shutil.rmtree(attempt_dir)
-    else:
-        pytest.fail("git was never caught inside the write of a file")
-    assert (gitdir(root) / "index.lock").exists()
+    monkeypatch.setattr(gatelib, "git", die_in_the_write)
+    with pytest.raises(MergeKilledError):
+        merge.land(root, "main", old=old, new=new)
+    monkeypatch.setattr(gatelib, "git", real)
+    assert (root / BIG).stat().st_size == written
     lines = merge.recover(root)
     assert lines[0].startswith("merge: a run that stopped was moving `main`")
     assert not any("stays as it is" in line for line in lines), lines
