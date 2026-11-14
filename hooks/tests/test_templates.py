@@ -467,7 +467,7 @@ def test_the_plugins_own_ci_reports_a_ceiling_on_a_pull_request_as_the_template_
     over = "  OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}\n"
     assert over in WORKFLOWS["ci.yml"]
     assert over in own
-    # Why: one wrapped command in the gates job and one in the sharded job, each held to its ceiling.
+    # Why: one wrapped command in the gates job, one in the sharded job; each held to its ceiling.
     assert own.count('budget.py "${{ matrix.gate }}" --over "$OVER" --report') == 2
     assert own.count("budget.py") == 2
 
