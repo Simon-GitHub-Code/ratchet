@@ -98,11 +98,12 @@ The real work tree is never written by the script's own writes. A fault, and the
 exclude file that restoring puts back, are read and written only through descriptors of the
 copy's own directories, opened one name at a time from the copy as it stood before setup ran,
 never through a link. A symbolic link in the snapshot that leads outside the copy, taken after
-setup or restored, is refused as unsafe (red, naming the link). So a process setup left running that swaps a directory of the copy for a
-link to the real tree makes the fault ``THE FAULT WAS NOT PLANTED`` and cannot steer such a write
-out of the copy. The rest of restoring is git's (``checkout-index``, ``clean``): git checks each
-path for a link before it writes there, and then writes by path. Setup code runs as the user, and
-nothing here stops it writing the real tree itself.
+setup or restored, is refused as unsafe (red, naming the link). So a process setup left running
+that swaps a directory of the copy for a link to the real tree makes the fault ``THE FAULT WAS NOT
+PLANTED`` and cannot steer such a write out of the copy. The rest of restoring is git's
+(``checkout-index``, ``clean``): git checks each path for a link before it writes there, and then
+writes by path. Setup code runs as the user, and nothing here stops it writing the real tree
+itself.
 
 What is ignored is not copied, on purpose: a virtualenv or a build cache holds the absolute paths
 of the tree it was built in, and a gate run through one would judge the real tree. ``setup``
