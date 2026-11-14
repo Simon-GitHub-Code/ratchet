@@ -47,7 +47,8 @@ REVIEW_ROW = (
     f"| {triggers.REVIEW_QUESTION} | `ratchet` plugin `scripts/triggers.py` | 1 | |"
     " `just triggers` |\n"
 )
-RECORD = "docs/adr/0001-architecture-review.md"
+RECORD = "docs/adr/0002-architecture-review.md"
+EARLY = "docs/adr/0001-architecture-review.md"
 REVIEWED = (
     f"# The architecture holds\n\n- Architecture review: `code:{KIND}`\n- Outcome: holds\n"
     "- Decided: 2026-11-14\n\n## Decision\n\nThe calls go through one part.\n\n"
@@ -171,9 +172,15 @@ class World:
         if tree.binding != before.binding:
             write(self.root, BINDING, binding(tree))
             self.log.append(f"write {BINDING}: {', '.join(f.value for f in tree.binding)}")
-        if tree.reviewed and not before.reviewed:
-            write(self.root, RECORD, REVIEWED)
-            self.log.append(f"write {RECORD}")
+        # Why two files: a record that landed before the kind first arrived and one that landed
+        # after are different files, and the gate counts only the second.
+        for held, was, path in (
+            (tree.early, before.early, EARLY),
+            (tree.reviewed, before.reviewed, RECORD),
+        ):
+            if held and not was:
+                write(self.root, path, REVIEWED)
+                self.log.append(f"write {path}")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", subject)
 
@@ -183,7 +190,12 @@ class World:
         listed = [f"src/{path.name}" for path in (self.root / "src").glob("*")]
         instances = frozenset(names[path] for path in listed)
         text = (self.root / BINDING).read_text(encoding="utf-8")
-        return Tree(instances, *read_binding(text), reviewed=(self.root / RECORD).exists())
+        return Tree(
+            instances,
+            *read_binding(text),
+            reviewed=(self.root / RECORD).exists(),
+            early=(self.root / EARLY).exists(),
+        )
 
     def owed(self) -> dict[Debt, int]:
         """What ``triggers.owed`` says the default branch's work tree owes, by debt."""

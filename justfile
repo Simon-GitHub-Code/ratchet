@@ -19,7 +19,7 @@ tier1_gates := "test test-floor conformance-self-test lowered-smoke bite"
 # How many jobs CI splits each of `test` and `test-floor` across: the one number, read by the
 # workflow. A gate's ceiling is the wall clock of one job, so it holds per shard. `conftest.py` runs
 # `SHARD` of `SHARDS`; a local run sets neither and is shard 1 of 1, the whole suite.
-test_shards := "4"
+test_shards := "6"
 shard := env_var_or_default("SHARD", "1")
 shards := env_var_or_default("SHARDS", "1")
 parallel := "python3 scripts/parallel.py --runner '" + just_executable() + "' --report .ratchet/timing.jsonl"

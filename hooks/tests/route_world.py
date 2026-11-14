@@ -8,6 +8,13 @@ writes its note through ``drain.close``. ``scripts/merge.py`` is not run: its tw
 written with git. An owner's edit of a ticket is committed on the default branch at once, as the
 model has it. ``classify`` reads a real ``route.Step`` back as the model's advice label.
 
+``/ratchet:adopt`` writes the architecture decision record and the binding's ``## Architecture``
+section, as the adoption has since ADR 0049; an adoption by a plugin from before it writes
+neither. An upgrade runs the plugin's own code for the ``architecture`` check: it makes the edit
+the check offers and writes down in ``quality/owed.toml`` what the check still finds, which is
+nothing where the architecture is recorded. ``/ratchet:architecture`` writes the record and the
+parts, settles the ledger, and leaves its branch for the owner to merge.
+
 A spec and its tickets live under ``.scratch/f<n>/``, where ``n`` counts the specs written, and
 each ticket's title names ``n``, so the branch ``feature/<number>-<slug>`` is new for every spec
 and a branch merged for an earlier spec never matches a later ticket.
@@ -22,15 +29,20 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Final
 
 import application_types
+import architecture
+import conformance
 import drain
 import feature_preflight as preflight
+import gatelib
+import markdown_text
 import merge
 import owed
 import queue_notes
 import route
 import triggers
+import upgrade
 from tests.repos import branch, git, install_hooks, repository, snapshot, write
-from tests.route_model import ActionName, Advice, Head, Setup, Ticket, Tree, World
+from tests.route_model import ActionName, Advice, Architecture, Head, Setup, Ticket, Tree, World
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,7 +58,7 @@ MANIFEST = (
     'paths = ["docs/adr/**", "GLOSSARY.md"]\n\n'
     '[[group]]\nname = "decisions"\nreason = "The owner\'s."\npaths = ["docs/process/**"]\n'
 )
-PIN = f"- Ratchet plugin: 999.0.0 at {'0' * 40}\n"
+PIN = "- Ratchet plugin: {version} at " + "0" * 40 + "\n"
 UNPINNED = "- Ratchet plugin: <X.Y.Z> at <ratchet-sha>\n"
 BINDING = (
     "# Binding\n\n{pin}- Default branch: `main`\n- Life events: none\n\n"
@@ -54,8 +66,22 @@ BINDING = (
     "| merge | `just merge` |\n\n"
     "## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
     "| --- | --- | --- | --- | --- |\n{gates}\n"
-    "## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n{triggers}"
+    "## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n{triggers}{architecture}"
 )
+ARCHITECTURE_RECORD = (
+    "# The architecture\n\n## Decision\n\nOne service, its rules apart from its web layer.\n\n"
+    "- Chosen by: the owner\n\n## Considered options\n\n"
+    "- **Two services.** Offered; not chosen: one team deploys it.\n"
+    "- **A rewrite.** Set aside: the code works.\n\n"
+    "## Reversal cost\n\nThe rules stay; the web layer is written again.\n\n"
+    "## Refutation criterion\n\nA second team needs to deploy on its own.\n"
+)
+ARCHITECTURE_SECTION = (
+    "\n" + architecture.SECTION + "\n\n- Decision: `{record}`\n\n| Part | Path | May depend on |\n"
+    "| --- | --- | --- |\n| rules | `src/rules/**` | nothing |\n| web | `src/**` | rules |\n"
+)
+ARCHITECTURE_BRANCH = "chore/architecture"
+FILLED: Final = owed.Entry("docs/process/binding.md", "pins", "has no section", "")
 REVIEW_ROW = (
     f"| {triggers.REVIEW_QUESTION} | `ratchet` plugin `scripts/triggers.py` | 1 | |"
     " `just triggers` |\n"
@@ -109,7 +135,7 @@ class Repo:
     reopened: list[str] = field(default_factory=list)
     reviewed: int = 0
     upgrades: int = 0
-    unfilled: bool = False
+    architecture: str = ""
 
     @classmethod
     def start(cls, parent: Path) -> Repo:
@@ -136,7 +162,9 @@ class Repo:
     def binding(self, *, pinned: bool = True) -> str:
         """The binding: each safeguard row owed (``later:``) or bound to a tool, and the review's.
 
-        The review's row is there from the adoption, so the reviews start with it (ADR 0052).
+        The review's row is there from the adoption, so the reviews start with it (ADR 0052). The
+        pin names the plugin of the last upgrade, and ``architecture`` is the binding's
+        ``## Architecture`` section, empty while it has none.
         """
         gates = "".join(
             f"| q{n} | {tool or f'later: code:kind{n}'} | 1 | | `just q{n}` |\n"
@@ -146,21 +174,32 @@ class Repo:
             f"| kind{n} | `src/kind{n}.py` | |\n" for n, _tool in enumerate(self.tools, 1)
         ) + "".join(f"| {kind} | `src/{kind}.py` | |\n" for kind in self.reopened)
         return BINDING.format(
-            pin=PIN if pinned else UNPINNED, gates=gates + REVIEW_ROW, triggers=rows
+            pin=PIN.format(version=self.version()) if pinned else UNPINNED,
+            gates=gates + REVIEW_ROW,
+            triggers=rows,
+            architecture=self.architecture,
         )
 
-    def write_ledger(self) -> None:
-        """The owed ledger: one row an agent fills while ``unfilled``, none after."""
-        entries = (
-            [
-                owed.Entry(
-                    "docs/process/binding.md", "pins", "has no section", f"999.{self.upgrades}.0"
-                )
-            ]
-            if self.unfilled
-            else []
-        )
-        write(self.root, str(owed.LEDGER), owed.render(entries))
+    def version(self) -> str:
+        """The plugin version the binding pins: one more minor version for each upgrade."""
+        return f"999.{self.upgrades}.0"
+
+    def next_record(self, slug: str) -> str:
+        """The path of a new decision record, under the next free number in ``docs/adr/``."""
+        number = len(list((self.root / "docs/adr").glob("*.md"))) + 1
+        return f"docs/adr/{number:04d}-{slug}.md"
+
+    def record_architecture(self) -> None:
+        """Write the architecture decision record and the binding's section that names it."""
+        record = self.next_record("the-architecture")
+        write(self.root, record, ARCHITECTURE_RECORD)
+        self.architecture = ARCHITECTURE_SECTION.format(record=record)
+        write(self.root, "docs/process/binding.md", self.binding())
+
+    def settle(self, done: Callable[[owed.Entry], bool]) -> None:
+        """Delete the ledger's entries ``done`` picks, as the step that settles them does."""
+        left = [entry for entry in owed.read(self.root).entries if not done(entry)]
+        write(self.root, str(owed.LEDGER), owed.render(left))
 
     def ticket_path(self, slot: int) -> str:
         """The local ticket in ``slot``: ``.scratch/f<n>/issues/NN-<letter><n>.md``."""
@@ -252,26 +291,33 @@ def on_adoption_branch(repo: Repo) -> None:
         branch(repo.root, ADOPTION)
 
 
-def adoption(repo: Repo, *, pinned: bool) -> None:
+def adoption(repo: Repo, change: Change, *, pinned: bool) -> None:
+    """The binding, the manifest and the glossary's template; the architecture, where asked."""
     write(repo.root, "docs/process/binding.md", repo.binding(pinned=pinned))
     write(repo.root, "guards/manifest.toml", MANIFEST)
     write(repo.root, "GLOSSARY.md", PLACEHOLDER)
+    if change.after.architecture is Architecture.RECORDED:
+        repo.record_architecture()
 
 
-@does(ActionName.OWNER_ADOPTS)
-def _owner_adopts(repo: Repo, _change: Change) -> None:
+def adopt(repo: Repo, change: Change) -> None:
+    """A whole adoption, committed on its branch and merged."""
     on_adoption_branch(repo)
-    adoption(repo, pinned=True)
+    adoption(repo, change, pinned=True)
     snapshot(repo.root, "chore(method): adopt")
     git(repo.root, "switch", "-q", "main")
     git(repo.root, "merge", "-q", "--no-ff", "--no-edit", ADOPTION)
+
+
+DO[ActionName.OWNER_ADOPTS] = adopt
+DO[ActionName.OLDER_PLUGIN_ADOPTS] = adopt
 
 
 @does(ActionName.ADOPTION_STOPS)
 def _adoption_stops(repo: Repo, change: Change) -> None:
     on_adoption_branch(repo)
     pinned = change.after.setup is Setup.BOUND
-    adoption(repo, pinned=pinned)
+    adoption(repo, change, pinned=pinned)
     if not pinned:
         snapshot(repo.root, "chore(method): adopt, the templates")
 
@@ -446,23 +492,50 @@ def _kind_that_reopens_the_architecture_arrives(repo: Repo, _change: Change) -> 
 def _agent_lands_the_review(repo: Repo, _change: Change) -> None:
     keys = ", ".join(f"`code:{kind}`" for kind in repo.reopened[repo.reviewed :])
     repo.reviewed = len(repo.reopened)
-    write(repo.root, f"docs/adr/{repo.reviewed:04d}-review.md", REVIEW.format(keys=keys))
+    write(repo.root, repo.next_record("review"), REVIEW.format(keys=keys))
     snapshot(repo.root, "docs(adr): architecture review")
 
 
 @does(ActionName.UPGRADE_LEAVES_ROWS_TO_FILL)
 def _upgrade_leaves_rows_to_fill(repo: Repo, _change: Change) -> None:
+    """What ``upgrade.py --apply`` leaves: the pin moved, a row to fill, the architecture owed.
+
+    The architecture's part is the plugin's own code: the edit the ``architecture`` check offers
+    is made as ``upgrade.pass_over`` makes it, and what the check still finds is written down
+    through ``owed.recorded``, as ``upgrade.owing`` writes it.
+    """
     repo.upgrades += 1
-    repo.unfilled = True
-    repo.write_ledger()
-    snapshot(repo.root, "chore: the upgrade")
+    write(repo.root, "docs/process/binding.md", repo.binding())
+    check = conformance.check_architecture
+    offered = [conformance.tried(repo.root, check, found) for found in check(repo.root)]
+    upgrade.pass_over(repo.root, offered, {})
+    text = gatelib.read_text(repo.root / route.BINDING) or ""
+    if markdown_text.has_section(text, architecture.SECTION):
+        body = markdown_text.section(text, architecture.SECTION).rstrip()
+        repo.architecture = f"\n{architecture.SECTION}{body}\n"
+    named = conformance.rule_of(check)
+    keys = [replace(found, rule=named).key() for found in check(repo.root)]
+    added = [replace(FILLED, since=repo.version())] + [
+        owed.Entry(path, rule, problem, repo.version()) for rule, path, problem in keys
+    ]
+    ledger = gatelib.read_text(repo.root / owed.LEDGER)
+    write(repo.root, str(owed.LEDGER), owed.recorded(added)(ledger))
+    snapshot(repo.root, f"chore(method): upgrade the plugin to {repo.version()}")
 
 
 @does(ActionName.AGENT_FILLS_ROWS)
 def _agent_fills_rows(repo: Repo, _change: Change) -> None:
-    repo.unfilled = False
-    repo.write_ledger()
+    repo.settle(lambda entry: entry.rule in owed.FILL_FIRST)
     snapshot(repo.root, "docs(process): fill the rows the upgrade left")
+
+
+@does(ActionName.OWNER_RECORDS_ARCHITECTURE)
+def _owner_records_architecture(repo: Repo, _change: Change) -> None:
+    """What ``/ratchet:architecture`` leaves with no forge: its branch, which the owner merges."""
+    git(repo.root, "switch", "-q", "-C", ARCHITECTURE_BRANCH)
+    repo.record_architecture()
+    repo.settle(lambda entry: entry.rule == route.ARCHITECTURE_RULE)
+    snapshot(repo.root, "chore(method): record the architecture")
 
 
 @does(ActionName.AGENT_BINDS_SAFEGUARD)
@@ -541,6 +614,7 @@ STAGES: Final = {
     "fill": Advice.FILL,
     "architecture-review": Advice.REVIEW,
     "safeguard": Advice.SAFEGUARD,
+    "architecture": Advice.ARCHITECTURE,
     "triage": Advice.TRIAGE,
     "resolve": Advice.RESOLVE,
     "blocked": Advice.BLOCKED,

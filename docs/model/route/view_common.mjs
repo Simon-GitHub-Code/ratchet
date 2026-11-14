@@ -1,4 +1,4 @@
-// The owner's words for the route's model, shared by the three charts of docs/model/route.md.
+// The owner's words for the route's model, shared by the four charts of docs/model/route.md.
 
 export const NEXT = {
   init: "Run /ratchet:init",
@@ -22,6 +22,7 @@ export const NEXT = {
   safeguard: "Bind the safeguard the drain waits on",
   fill: "Fill the rows the upgrade left",
   review: "Review the architecture",
+  architecture: "Record the architecture",
   resolve: "Mark the merged ticket resolved",
 };
 
@@ -39,6 +40,7 @@ const STEP = {
   InitStops: "init stops before its questions",
   OwnerSetsUpTracker: "you set up the tracker",
   OwnerAdopts: "you run /ratchet:adopt",
+  OlderPluginAdopts: "an older plugin's adoption",
   AdoptionStops: "the adoption stops part-way",
   AgentInstallsHooks: "an agent installs the hooks",
   OwnerGrills: "you write the glossary and brief",
@@ -65,6 +67,7 @@ const STEP = {
   KindThatReopensTheArchitectureArrives: "a kind that reopens the architecture arrives",
   AgentLandsTheReview: "an agent lands the architecture review",
   AgentBindsSafeguard: "an agent binds the safeguard",
+  OwnerRecordsArchitecture: "you run /ratchet:architecture",
   SomeoneEditsCode: "someone edits code",
   AgentCommitsOnABranch: "an agent commits on a branch",
   BranchMerges: "the branch merges",

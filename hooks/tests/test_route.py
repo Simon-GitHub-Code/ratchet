@@ -861,6 +861,20 @@ def test_an_owed_architecture_comes_next_and_offers_the_build_beside_it(tmp_path
     )
 
 
+def test_a_safeguard_names_an_owed_architecture_then(tmp_path: Path) -> None:
+    # Why: ``then:`` is the step the route names once the safeguard is bound; with an upgrade's
+    # architecture owed that is the architecture, not the work it offers beside both.
+    root = owing(tmp_path, **{"quality/owed.toml": ARCHITECTURE_OWED})
+    write(root, "src/a.py", "import requests\nrequests.get('http://x')\n")
+    commit(root, "feat: the first outbound call")
+    step = route.decide(root, None)
+    assert (step.command, step.then) == (route.SAFEGUARD, route.ARCHITECTURE)
+    assert step.why.endswith(
+        f"Or carry on with {route.SPEC}: the change that brought the kind was free,"
+        " one that adds another waits for this"
+    )
+
+
 def test_a_declared_event_owes_its_rows_and_is_never_red(tmp_path: Path) -> None:
     root = owing(tmp_path, events="irreplaceable-data", **{"GLOSSARY.md": "# <project>\n"})
     step = route.decide(root, None)
