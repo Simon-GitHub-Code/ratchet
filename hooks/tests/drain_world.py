@@ -118,7 +118,10 @@ elif AT == "fast-forward":
 code = merge.main(sys.argv)
 if HOLD:
     (Path(HOLD) / "landed").touch()
-    while not (Path(HOLD) / "go").exists():
+    # Why: a test run that is killed never writes `go`; the wait ends with its directory, or
+    # in time, so no process is left running on a machine other work shares.
+    until = time.monotonic() + {hold_for!r}
+    while Path(HOLD).is_dir() and not (Path(HOLD) / "go").exists() and time.monotonic() < until:
         time.sleep(0.02)
 raise SystemExit(code)
 """
@@ -159,7 +162,9 @@ class World:
         directory.mkdir(parents=True, exist_ok=True)
         killer = directory / "merge_killer.py"
         killer.write_text(
-            MERGE_KILLER.format(scripts=str(SCRIPTS), kill_at=KILL_AT, hold_at=HOLD_AT)
+            MERGE_KILLER.format(
+                scripts=str(SCRIPTS), kill_at=KILL_AT, hold_at=HOLD_AT, hold_for=2 * LANDING_WAIT
+            )
         )
         merging = binding(f"{sys.executable} {killer}")
         self.root = repository(directory / "repo", {**FILES, "docs/process/binding.md": merging})
