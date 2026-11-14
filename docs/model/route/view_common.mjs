@@ -20,6 +20,7 @@ export const NEXT = {
   "land-guard": "Land the guard edits the drain parked",
   "change-ticket": "Change the ticket the drain parked",
   safeguard: "Bind the safeguard the drain waits on",
+  fill: "Fill the rows the upgrade left",
   review: "Review the architecture",
   resolve: "Mark the merged ticket resolved",
 };
@@ -58,6 +59,8 @@ const STEP = {
   OwnerLandsGuardEdits: "you land the guard edits",
   OwnerChangesTicket: "you change the ticket",
   OwnerResolvesTicket: "you mark the ticket resolved",
+  UpgradeLeavesRowsToFill: "an upgrade leaves rows for an agent to fill",
+  AgentFillsRows: "an agent fills the rows",
   KindOfCodeArrives: "a new kind of code arrives",
   KindThatReopensTheArchitectureArrives: "a kind that reopens the architecture arrives",
   AgentLandsTheReview: "an agent lands the architecture review",

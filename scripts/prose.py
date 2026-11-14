@@ -3,9 +3,12 @@
 
 Reads every ``_Avoid_:`` line of ``GLOSSARY.md`` (the format is domain-modeling's: a bold term,
 a definition, then the synonyms to avoid) and scans the tracked documents (``.md``, ``.txt``,
-``.rst``, ``.adoc``) and the comment lines of source files for any of those words as a whole
-word, case-insensitively. The check cannot see meaning, so the whole word is banned; a line that
-must use one carries ``glossary: allow`` and the reason, which is a record a review can read.
+``.rst``, ``.adoc``) and the comment lines of every other tracked text file for any of those words
+as a whole word, case-insensitively. The plugin keeps no list of source file extensions, which
+would name the languages of a stack (ADR 0050): a file that is not a document is read for the
+text after a comment marker of any common syntax, and a binary file is skipped. The check cannot
+see meaning, so the whole word is banned; a line that must use one carries ``glossary: allow``
+and the reason, which is a record a review can read.
 The glossary files themselves are not scanned.
 
 Like the markers gate, it judges the change: a word fails a file only when its uses there rose
@@ -33,11 +36,6 @@ AVOID = re.compile(r"^_Avoid_:\s*(.+?)\s*$")
 ALLOW = "glossary: allow"
 DOCUMENTS = (".md", ".txt", ".rst", ".adoc")
 COMMENT = re.compile(r"(?:^|\s)(?:#|//|/\*|\*|--|<!--)\s*(.*)$")
-SOURCE = (
-    ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".rs", ".java", ".kt",
-    ".swift", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".rb", ".php", ".sh", ".bash", ".sql",
-    ".toml", ".yml", ".yaml", ".just", "justfile", "Dockerfile",
-)  # fmt: skip
 
 
 def avoided(glossary: str) -> dict[str, str]:
@@ -66,9 +64,8 @@ def is_document(path: str) -> bool:
     return path.endswith(DOCUMENTS) and not path.rsplit("/", 1)[-1].startswith("GLOSSARY")
 
 
-def is_source(path: str) -> bool:
-    name = path.rsplit("/", 1)[-1]
-    return name.endswith(SOURCE) and not name.startswith("GLOSSARY")
+def is_scanned(path: str) -> bool:
+    return not path.rsplit("/", 1)[-1].startswith("GLOSSARY")
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +125,7 @@ def problems(root: Path, base: str | None = None) -> list[str]:
     moved = renames(root, base) if base is not None else {}
     hits: list[Hit] = []
     for path in gatelib.tracked_paths(root):
-        if not (is_document(path) or is_source(path)):
+        if not is_scanned(path):
             continue
         text = gatelib.read_text(root / path)
         if text is None:

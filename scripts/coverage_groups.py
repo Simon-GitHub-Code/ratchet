@@ -15,7 +15,11 @@ the coverage groups in ``quality/thresholds.toml``::
 
 Every table two levels under ``<language>.coverage`` is a group; its ``paths`` are globs over
 repository-relative paths. An absolute group needs 100% lines and branches and may carry no
-coverage exclusion in its files (``NO_COVER`` below holds the directives it knows). A measured
+coverage exclusion in its files. The plugin names no tool's directive (ADR 0042, ADR 0050): the
+exclusions are the kinds the binding's ``## Suppressions`` section lists for the question
+``coverage, absolute and ratcheted``, read at the merge base so a change cannot loosen its own
+judge. Until that section says which kinds silence the question, no exclusion is searched for, and
+the gate says so; conformance names the missing row. A measured
 file that falls in no group fails: new code cannot land outside the rules. ``--write`` raises each
 group's recorded line and branch to the measured value and never lowers one.
 
@@ -36,18 +40,18 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import gatelib
+import suppressions
 
 FULL = 100.0
 CONDITION = re.compile(r"\((\d+)/(\d+)\)")
-EXCLUSION = re.compile(
-    r"pragma:\s*no\s*cover|(?:istanbul|c8|v8)\s+ignore|coverage:\s*ignore|#\[coverage\(off\)\]"
-)
+QUESTION = "coverage, absolute and ratcheted"
 EXCLUDED_FROM_SCAN = (".xml", ".toml", ".md", ".json", ".lock")
 
 
@@ -218,19 +222,42 @@ def tally_groups(found: list[Group], files: dict[str, Tally]) -> tuple[dict[str,
     return totals, orphans
 
 
-def exclusions(root: Path, files: list[str]) -> list[str]:
-    hits = []
-    for path in files:
-        if path.endswith(EXCLUDED_FROM_SCAN):
-            continue
-        text = gatelib.read_text(root / path)
-        for number, line in enumerate((text or "").splitlines(), 1):
-            if EXCLUSION.search(line):
-                hits.append(f"{path}:{number}: a coverage exclusion on an absolute path")
-    return hits
+def exclusion_patterns(root: Path) -> list[str] | None:
+    """The patterns of the kinds that silence the coverage question, or ``None`` when unsaid.
+
+    The merge base's Suppressions section judges when it says; the work tree's is read where the
+    base has none (the adoption, or the change that adds the section).
+    """
+    base = gatelib.base_commit(root)
+    for text in (
+        gatelib.show(root, base, str(gatelib.BINDING)) if base else None,
+        gatelib.read_text(root / gatelib.BINDING),
+    ):
+        spec = suppressions.parse(text)
+        if spec is not None and QUESTION in spec.silenced:
+            names = spec.silenced[QUESTION]
+            return [kind.pattern for kind in spec.kinds if kind.name in names]
+    return None
 
 
-def judge(group: Group, tally: Tally, root: Path) -> list[str]:
+def exclusions(root: Path, files: list[str], patterns: list[str]) -> list[str]:
+    """Each line of the files that one of the exclusion patterns matches, as ``path:line: ...``."""
+    scanned = [path for path in files if not path.endswith(EXCLUDED_FROM_SCAN)]
+    if not scanned or not patterns:
+        return []
+    wanted = [arg for pattern in patterns for arg in ("-e", pattern)]
+    found = subprocess.run(
+        ["git", "grep", "--no-index", "-I", "-n", "-E", *wanted, "--", *scanned],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=root,
+    )
+    hits = [line.split(":", 2)[:2] for line in found.stdout.splitlines()]
+    return [f"{path}:{number}: a coverage exclusion on an absolute path" for path, number in hits]
+
+
+def judge(group: Group, tally: Tally, root: Path, *, patterns: list[str] | None) -> list[str]:
     if not tally.measured:
         return []
     problems = []
@@ -245,8 +272,8 @@ def judge(group: Group, tally: Tally, root: Path) -> list[str]:
             problems.append(f"{group.key}: no {kind} threshold recorded; `--write` records {rate}%")
         elif rate < recorded:
             problems.append(f"{group.key}: {kind} coverage {rate}% below the ratchet {recorded}%")
-    if group.absolute:
-        problems += exclusions(root, tally.files)
+    if group.absolute and patterns is not None:
+        problems += exclusions(root, tally.files, patterns)
     return problems
 
 
@@ -301,6 +328,12 @@ def problems(root: Path, reports: list[Path], *, write_back: bool = False) -> li
         write(root, found, totals)
         found = groups(gatelib.thresholds(root))
     faults = [f"{path}: measured but in no coverage group" for path in orphans]
+    patterns = exclusion_patterns(root)
+    if patterns is None and any(group.absolute for group in found):
+        print(
+            "coverage: no exclusion is searched for on absolute paths: the binding's Suppressions"
+            f" section says no kinds silence '{QUESTION}' (ADR 0050)"
+        )
     for group in found:
         tally = totals[group.key]
         if tally.measured:
@@ -309,7 +342,7 @@ def problems(root: Path, reports: list[Path], *, write_back: bool = False) -> li
             # Why: an unmeasured group is not 100%; scoring it so would ratchet it to a value
             # the next report, from another stack's suite, could never reach.
             print(f"{group.key}: not measured; no file in the report falls in it")
-        faults += judge(group, tally, root)
+        faults += judge(group, tally, root, patterns=patterns)
     return faults
 
 

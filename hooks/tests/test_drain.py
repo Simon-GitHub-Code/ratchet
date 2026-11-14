@@ -18,6 +18,7 @@ import pytest
 import drain
 import hooks_installed
 import merge_ready
+import owed
 import queue_notes
 from tests import servers
 from tests.repos import commit, git, repository, write
@@ -183,6 +184,15 @@ def test_a_checkout_that_is_not_fit_starts_nothing(
         ("buildable", ("not started, the checkout is not fit: " + unfit.blocked[0],)),
         ("waiting", ()),
     ]
+    monkeypatch.setattr(hooks_installed, "check", lambda _root: None)
+    ledger = [owed.Entry("docs/process/binding.md", "pins", "has no section", "0.12.0")]
+    write(root, "quality/owed.toml", owed.render(ledger))
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "chore: the upgrade")
+    filling = drain.plan(offline(root))
+    assert filling.start == ()
+    assert filling.blocked[0].startswith("fill: 1 owed items an agent writes")
+    assert filling.blocked[0].endswith("-> /ratchet:fill")
 
 
 def test_the_preflight_refuses_a_ticket_and_says_what_produces_the_piece(tmp_path: Path) -> None:
