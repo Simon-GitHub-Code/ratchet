@@ -44,7 +44,7 @@ jobs:
         if: always()
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
   # Why: the long gates run as one job per shard, and the count is `test_shards` in the justfile,
-  # the one number. A gate's ceiling is the wall clock of one job, so `budget.py` holds each shard
+  # the one number. A gate's ceiling is the wall clock of one job, so the budget wrapper holds each shard
   # job to the ceiling of its gate: sharding is how the suite fits it, never how a ceiling rises.
   shape:
     runs-on: ubuntu-latest
