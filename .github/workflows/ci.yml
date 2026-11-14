@@ -11,6 +11,8 @@ concurrency:
 env:
   # Why: runners vary, so a ceiling reports on a pull request and blocks on the default branch.
   OVER: ${{ github.event_name == 'pull_request' && 'report' || 'block' }}
+  # Why: a ceiling in quality/thresholds.toml is the wall clock of one job. Each shard job of
+  # `test` and `test-floor` is held to its gate's ceiling, not the sum of its shards.
 jobs:
   gates:
     runs-on: ubuntu-latest
@@ -18,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [lint, types, parse-workflow, parse-adapters, test, test-floor, conformance-self-test, lowered-smoke, bite]
+        gate: [lint, types, parse-workflow, parse-adapters, conformance-self-test, lowered-smoke, bite]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
@@ -41,6 +43,88 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
+  # Why: the long gates run as one job per shard, and the count is `test_shards` in the justfile,
+  # the one number. A gate's ceiling is the wall clock of one job, so `budget.py` holds each shard
+  # job to the ceiling of its gate: sharding is how the suite fits it, never how a ceiling rises.
+  shape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      shards: ${{ steps.shards.outputs.list }}
+      count: ${{ steps.shards.outputs.count }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { sparse-checkout: justfile, sparse-checkout-cone-mode: false }
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - id: shards
+        run: |
+          count="$(just --evaluate test_shards)"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "list=[$(seq -s, 1 "$count")]" >> "$GITHUB_OUTPUT"
+  # Why: `test` runs under coverage and `test-floor` on Python 3.11; each shard job runs its slice
+  # (`conftest.py` reads SHARD and SHARDS). A `test` shard keeps its coverage data for `coverage`.
+  sharded:
+    needs: shape
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [test, test-floor]
+        shard: ${{ fromJSON(needs.shape.outputs.shards) }}
+    env:
+      SHARD: ${{ matrix.shard }}
+      SHARDS: ${{ needs.shape.outputs.count }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { fetch-depth: 0 }
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with: { enable-cache: true, cache-dependency-glob: uv.lock }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24 }
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .hypothesis
+          key: tools-${{ runner.os }}-${{ matrix.gate }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            tools-${{ runner.os }}-${{ matrix.gate }}-
+      - run: uv sync --frozen
+      - run: python3 scripts/budget.py "${{ matrix.gate }}" --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with: { name: "timing-${{ matrix.gate }}-${{ matrix.shard }}", path: .ratchet/timing.jsonl }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: matrix.gate == 'test'
+        with: { name: "coverage-${{ matrix.shard }}", path: "coverage-shard-${{ matrix.shard }}.data" }
+  # Why: no shard can reach every line alone, so the verdict is the whole suite's. This job
+  # combines the shards' coverage data and holds it to `fail_under = 100`; its red lists the lines
+  # no shard ran.
+  coverage:
+    needs: sharded
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with: { enable-cache: true, cache-dependency-glob: uv.lock }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with: { pattern: "coverage-*", path: coverage-shards, merge-multiple: true }
+      - run: uv sync --frozen
+      - run: just coverage-combine
+  # Why: a test that falls in no shard, or in two, makes a green run a lie about the suite.
+  shard-partition:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with: { enable-cache: true, cache-dependency-glob: uv.lock }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with: { node-version: 24 }
+      - run: just shard-check
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
