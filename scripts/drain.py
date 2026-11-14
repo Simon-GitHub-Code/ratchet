@@ -145,6 +145,8 @@ QUEUE_HOME = "ratchet-queue"
 OWNER_ONLY = 0o700
 OWNER_FILE = 0o600
 LANDING_TRIES, LANDING_POLL = 20, 0.05
+# Why: `update` uses 1 and 2 for its own answers, so a refusal for a live landing has its own code.
+LANDING_RUNNING = 3
 LANDING_MAY_RUN = "a landing may be in flight in another drain"
 LOCK, LEASE = "ratchet-drain.lock", "ratchet-drain.lease"
 LOCK_WAIT, LOCK_POLL = 30.0, 0.05
@@ -1459,10 +1461,26 @@ def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
             "(a number on the tracker or starting a local file's name, or a file path)"
         )
         return 2
-    if options.action == "update":
-        return update(drain, ticket)
+    return act_on(drain, ticket, options)
+
+
+def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) -> int:
+    """The action of ``on_ticket`` on a ticket that exists."""
     if options.action == "land":
         return land(drain, ticket)
+    # Why: a landing's own closes call `close` directly, so this guard is only for the commands of
+    # another process; it is not in `close`, where `landing_running` would see the landing's own
+    # lock as held. It runs under the drain lock, before `split` files anything.
+    branch = route.own_branch(ticket)
+    if landing_running(drain.root, branch):
+        print(
+            f"{options.action}: a landing of `{branch}` is running in another command; nothing was"
+            " done; wait for it to end, then run plan: the landing records the ticket's outcome"
+            " itself"
+        )
+        return LANDING_RUNNING
+    if options.action == "update":
+        return update(drain, ticket)
     if options.action == "split":
         return split_ticket(drain, ticket, options)
     result = queue_notes.loaded(gatelib.read_text(options.result) if options.result else None)
