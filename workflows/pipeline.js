@@ -653,7 +653,7 @@ function ticketHint() {
 // each reading.
 const PROMISE_READINGS = `List in \`ticketPromises\` every promise the ticket makes about what the product does or
    does not do: each checklist item and acceptance criterion, and each promise in its other
-   sections ("it has no client JavaScript", "the list survives a restart"), in the ticket's words,
+   sections ("it needs no account", "the list survives a restart"), in the ticket's words,
    one entry each, with the reading that fits:
    - \`covered\`: spec.md carries it as the ticket says it; name what carries it in \`criteria\`. A
      promise about what the product does is carried by a criterion, or by criteria it follows from,
@@ -893,7 +893,7 @@ agent runs \`impeccable document\` to write DESIGN.md after the merge. The owner
 guard edits first and re-runs; it costs one agent instead of a whole run that ends in
 disputes. A dependency the feature needs is not a guard edit: name it, with its reason, in the
 spec's placement section and in \`dependencies\`, and add it with the stack's package manager
-(\`uv add\`, \`cargo add\`, \`pnpm add\`) followed by \`snapshots\`. \`guard-diff\` still lists
+(its own command to add a dependency) followed by \`snapshots\`. \`guard-diff\` still lists
 the manifest, the lockfile and their snapshots, with a note of what changed; the script accepts
 them when every added package is one \`dependencies\` names. Changing or removing an existing
 dependency, or fetching one from git, a path or a URL, is a guard edit.

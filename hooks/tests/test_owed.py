@@ -644,3 +644,14 @@ def test_an_entry_never_excuses_what_another_gate_judges(rule: str, path: str) -
     key = (rule, path, "a finding")
     hits, _ = owed.excused([key], [owed.Entry(path, rule, "a finding", "0.12.0")])
     assert hits == [False]
+
+
+def test_the_entries_an_agent_fills_first_are_those_of_the_named_checks(tmp_path: Path) -> None:
+    entries = [
+        owed.Entry("docs/process/binding.md", "pins", "a", "0.12.0"),
+        owed.Entry("docs/process/binding.md", "architecture", "b", "0.12.0"),
+    ]
+    (tmp_path / "quality").mkdir()
+    (tmp_path / owed.LEDGER).write_text(owed.render(entries), encoding="utf-8")
+    assert [entry.rule for entry in owed.fill_first(tmp_path)] == ["pins"]
+    assert owed.main(["owed", "--root", str(tmp_path), "--fill-first"]) == 0

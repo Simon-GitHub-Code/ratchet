@@ -400,11 +400,14 @@ def test_the_life_events_question_shows_the_signs_the_tree_holds(tmp_path: Path)
         if path.is_file() and ".git" not in path.parts
     }
     files[BINDING] = files[BINDING].replace("- Life events: none\n", "")
-    files["fly.toml"] = "app = 'a'\n"
+    files[BINDING] = files[BINDING].replace(
+        "| deployed | none: the self-test has no such file |", "| deployed | `launch.cfg` |"
+    )
+    files["launch.cfg"] = "app = 'a'\n"
     root = repository(tmp_path / "repo", files)
     [event] = [f for f in conformance.findings(root) if "Life events" in f.problem]
     assert isinstance(event.fix, conformance.Owner)
-    assert event.fix.evidence == ("`fly.toml` matches `fly.toml`, a sign of `deployed`",)
+    assert event.fix.evidence == ("`launch.cfg` matches `launch.cfg`, a sign of `deployed`",)
 
 
 def test_a_self_test_mutation_refuses_a_template_it_no_longer_fits(repo: Path) -> None:

@@ -162,6 +162,15 @@ Where each `code:<kind>` trigger of the Gates table finds its instances in this 
 | --- | --- | --- |
 | <kind> | <globs of the tracked files that hold one, or `none: <reason>`> | <optional regex> |
 
+## Life event signs
+
+Which files of this project show that a life event has happened or is about to (ADR 0050), so the route can propose the event to its owner. The method knows no stack, so name this one's from what you know of the tools it chose: what a place that runs the project, or a store that keeps its records, leaves in a tree. `Paths` are comma-separated globs over tracked files, each in backticks, or `none: <reason>` when no file of this project marks the event. A sign only proposes; the owner declares the event on the `- Life events:` line. The `depended-on` event's signs are the method's own and need no row. Revisit the rows when the architecture or its tools change (`/ratchet:architecture`).
+
+| Event | Paths |
+| --- | --- |
+| deployed | <globs of the tracked files that show where it runs, or `none: <reason>`> |
+| irreplaceable-data | <globs of the tracked files that show where its records are kept, or `none: <reason>`> |
+
 ## Install
 
 Whether a fresh checkout must install the tools before a recipe runs one (ADR 0043). `merge` runs the gates in a new work tree and CI runs each in a new checkout, so a tool that is on disk only after an install is missing there unless a recipe installs it first. Say which case this stack is, from what you know of the tools you bound; the method names no package manager. Write `- Install: \`just install\``, with the lockfile it is frozen to and the recipes that run a tool it provides, or `- Install: none: <reason>` and delete the two lines below when the tools arrive on demand. The `install` recipe names the lockfile, installs exactly what it says, and does nothing once that is installed. Each recipe listed depends on `install`, and each tier runs it before its gates start.
@@ -191,6 +200,14 @@ What `guard-diff` and the merge judge read to tell a change that only adds or ra
 - `locked`: one resolved version of a package in a lockfile. `scope` names the inventory it belongs to (one name when the file has only one), `version` is as the file writes it, `order` is dot-separated non-negative integers that make the versions of one name sort the way its registry sorts them (a pre-release below its release), `origin` is `registry`, `direct` for a version fetched by other means, or `local` for a path inside the project, `source` is where it comes from and `integrity` the value that identifies its contents (a lockfile that holds none for a `registry` or `direct` version cannot be judged, and goes to the owner), empty only for `local`. `sides` is `many` when several versions of the name can be installed beside each other in the scope, and `one` when only one runs.
 - `rest`: one line for each file given, with a digest of everything in it that can change what installs, less the dependency tables, the resolved packages and the package's own version: its settings, overrides, patches and the like. Two files with the same digest differ only in what the other records show.
 - Print every record of every file under `<dir>`. Write names as the registry compares them, so two spellings of one name are one name.
+
+## Image pins
+
+Which files of this project name a container image to build from or run, and how a line of one writes it, so the `pins` gate can hold each image to a digest (ADR 0050). The method knows no container tool: name this stack's files and write the pattern from what you know of the format. `Files` are comma-separated globs over tracked files, each in backticks. `Reference` is one regular expression in backticks (Python's `re`; a literal `|` in it is written `\|`) that each line of those files is searched with: group 1 is the image reference, which must carry a digest (`@<algorithm>:<hex>`), and an optional group 2 is a name the line gives to a stage that later lines may build from. Write the pattern so a line that names no external image does not match. A project that names no image in a file of its own writes one row, `none: <reason>`, in `Files`. The gate reads this section at the merge base, so a change cannot narrow what it checks; until it is filled no such file is read. Workflow files are always read.
+
+| Files | Reference |
+| --- | --- |
+| <`globs` of the files that name an image, or `none: <reason>`> | <`regex`> |
 
 ## Suppressions
 

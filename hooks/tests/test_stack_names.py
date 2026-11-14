@@ -171,28 +171,10 @@ PATTERN = re.compile(
     r"(?<![\w.-])(" + "|".join(re.escape(name) for name in DENIED) + r")(?![\w-])", re.IGNORECASE
 )
 
-# Why each stays, by file: (the names, lower case, the reason).
+# Why each stays, by file: (the names, lower case, the reason). What the guard hook and its page
+# name stays on purpose and for good: their lists are a security boundary, and a project must not
+# be able to loosen them by writing its own row (ADR 0050). The rest moved into the binding.
 RESIDUE: dict[str, tuple[frozenset[str], str]] = {
-    "scripts/mutation_survivors.py": (
-        frozenset({"mutmut", "stryker", "cargo", "pyproject.toml"}),
-        "it reads two tools' reports as they are; the converters move to the project with an ADR",
-    ),
-    "scripts/bite.py": (
-        frozenset({"mutmut", "stryker", "typescript"}),
-        "the planted reports that prove the converters of mutation_survivors.py bite",
-    ),
-    "scripts/coverage_groups.py": (
-        frozenset({"istanbul", "c8"}),
-        "NO_COVER recognises the exclusion directives an absolute path may not carry",
-    ),
-    "scripts/pins.py": (
-        frozenset({"docker", "dockerfile"}),
-        "the pins gate reads container build files to hold each image to a digest",
-    ),
-    "scripts/prose.py": (
-        frozenset({"dockerfile"}),
-        "the extensions of the files whose identifiers the prose gate reads",
-    ),
     "scripts/parse-js.mjs": (
         frozenset({"javascript", "typescript"}),
         "the plugin's own workflow and adapters, which it compiles as their runtime does",
@@ -212,17 +194,6 @@ RESIDUE: dict[str, tuple[frozenset[str], str]] = {
     "skills/method/guards.md": (
         frozenset({"deno", "ruby", "bun"}),
         "it says which inline interpreters the guard hook reads, as the hook does",
-    ),
-    "skills/method/application-types.toml": (
-        frozenset(
-            {"fly.toml", "vercel", "netlify", "wrangler", "procfile", "railway", "k8s"}
-            | {"prisma", "alembic"}
-        ),
-        "the route's signs of a life event; moving them into the binding changes the route",
-    ),
-    "workflows/pipeline.js": (
-        frozenset({"cargo", "pnpm", "javascript"}),
-        "two prompt examples the design pass's owner rewrites in a change of its own",
     ),
 }
 
