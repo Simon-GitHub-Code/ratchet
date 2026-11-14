@@ -1123,6 +1123,105 @@ def test_land_says_when_it_records_a_merge(tmp_path: Path, capsys: Out) -> None:
     assert out.endswith(f"closed: {ALPHA}: merged\n")
 
 
+def killing_root(tmp_path: Path) -> Path:
+    """A root whose merge entry point lands the branch and is killed before the drain's note."""
+    killer = tmp_path / "killing_merge.py"
+    killer.write_text(KILLER.format(scripts=str(SCRIPTS)), encoding="utf-8")
+    return project(tmp_path, **{"docs/process/binding.md": binding(f"{sys.executable} {killer}")})
+
+
+def test_an_update_does_not_move_a_landed_branch_off_its_merge(tmp_path: Path, capsys: Out) -> None:
+    root = killing_root(tmp_path)
+    judged(root)
+    assert run(root, "land", ALPHA) == 2
+    capsys.readouterr()
+    assert run(root, "update", ALPHA) == 1
+    out = capsys.readouterr().out
+    assert f"recorded: {BRANCH_A}: merged" in out
+    assert f"update: {ALPHA} is merged and is not rebased" in out
+    assert BRANCH_A in drain.route.merged_features(root, "main"), "the merge still stands"
+    assert note(root, BRANCH_A)["outcome"] == "merged"
+    assert run(root, "land", ALPHA) == 0
+    assert capsys.readouterr().out.endswith(f"closed: {ALPHA}: merged\n")
+    assert note(root, BRANCH_A)["outcome"] == "merged"
+
+
+def test_an_update_of_a_landed_branch_whose_tree_stands_finishes_the_discard(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    tree = judged(root)
+    killed = start(root, "land", ALPHA, DRV_KILL_AT="discard")
+    killed.communicate(timeout=60)
+    assert tree.exists()
+    capsys.readouterr()
+    assert run(root, "update", ALPHA) == 1
+    assert "is merged and is not rebased" in capsys.readouterr().out
+    assert not tree.exists()
+
+
+def test_a_report_records_a_merge_no_note_says_and_lists_it_as_merged(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = killing_root(tmp_path)
+    run(root, "open", ALPHA)
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "needs a decision") == 0
+    owner_edits_ticket(root)
+    judged(root)
+    assert run(root, "land", ALPHA) == 2
+    capsys.readouterr()
+    assert run(root, "report") == 0
+    out = capsys.readouterr().out
+    assert f"recorded: {BRANCH_A}: merged" in out
+    assert "Alpha" in out.split("## Parked")[0].split("## Merged")[1]
+    assert "Alpha" not in out.split("## Parked")[1].split("## Not built")[0]
+    kept = note(root, BRANCH_A)
+    assert (kept["outcome"], kept["reported"]) == ("merged", True)
+
+
+def test_a_refused_landing_killed_after_its_discard_and_run_again_counts_one_retry(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    tree = judged(root)
+    owner_edits_ticket(root)
+    killed = start(root, "land", ALPHA, DRV_KILL_AT="discard")
+    killed.communicate(timeout=60)
+    git(root, "worktree", "remove", "--force", str(tree))
+    assert note(root, BRANCH_A)["attempts"] == 1
+    assert run(root, "land", ALPHA) == 1
+    assert note(root, BRANCH_A)["attempts"] == 1, "the rerun of a refusal is not a further one"
+    assert "discarding" not in note(root, BRANCH_A)
+
+
+def test_clean_all_drops_the_mark_of_a_close_whose_tree_is_gone(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    tree = judged(root)
+    owner_edits_ticket(root)
+    killed = start(root, "land", ALPHA, DRV_KILL_AT="discard")
+    killed.communicate(timeout=60)
+    git(root, "worktree", "remove", "--force", str(tree))
+    assert note(root, BRANCH_A)["discarding"] is True
+    assert run(root, "clean", "--all") == 0
+    assert "discarding" not in note(root, BRANCH_A)
+
+
+def test_an_update_refused_because_the_branch_is_pushed_leaves_no_mark_beside_its_tree(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    tree = judged(root)
+    owner_edits_ticket(root)
+    killed = start(root, "land", ALPHA, DRV_KILL_AT="discard")
+    killed.communicate(timeout=60)
+    git(root, "worktree", "remove", "--force", str(tree))
+    git(root, "update-ref", f"refs/remotes/origin/{BRANCH_A}", BRANCH_A)
+    assert note(root, BRANCH_A)["discarding"] is True
+    assert run(root, "update", ALPHA) == 1
+    assert tree.exists(), "the update revived the tree before it refused"
+    assert "discarding" not in note(root, BRANCH_A)
+
+
 def test_an_update_killed_after_its_rebase_and_a_clean_all_drops_the_record_on_the_rerun(
     tmp_path: Path,
 ) -> None:

@@ -841,6 +841,31 @@ def tree_for_update(
 
 
 def update(drain: Drain, ticket: preflight.Ticket) -> int:
+    """Bring the ticket's branch up to date, unless its merge landed: that is recorded instead."""
+    branch = route.own_branch(ticket)
+    if recorded_merge(drain.root, branch):
+        record_merge_aloud(drain.root, branch)
+    if queue_notes.read_note(drain.root, branch).get("outcome") == MERGED:
+        # Why: a branch whose merge landed is not rebased: that would move it off its merge, and
+        # the merge would no longer be seen as landed.
+        say_kept(finish_close(drain.root, branch))
+        print(f"update: {ticket.ref} is merged and is not rebased")
+        return 1
+    # Why: an update may revive a tree and then refuse without writing the note; the mark of a
+    # close that was cut off must not stand beside that tree.
+    drop_mark(drain.root, branch)
+    return rebase(drain, ticket)
+
+
+def drop_mark(root: Path, branch: str) -> None:
+    """Clear the ``discarding`` mark of a note, when it has one."""
+    note = queue_notes.read_note(root, branch)
+    if note.get("discarding"):
+        done = {k: v for k, v in note.items() if k != "discarding"}
+        queue_notes.write_note(queue_notes.note_path(root, branch), done)
+
+
+def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
     """Rebase the ticket's branch onto the default branch when that moved; never half-way.
 
     A run killed mid-rebase leaves the tree detached at the default branch with the rebase
@@ -931,10 +956,10 @@ def close(  # noqa: PLR0913 -- the note's parts
     retry = outcome == WAITS and queue_notes.mechanical(reasons)
     before = prior.get("attempts")
     same = prior.get("digest") == queue_notes.digest(ticket) and isinstance(before, int)
-    # Why: a note marked as being discarded, whose tree still stands, was written by a run that
-    # stopped before it removed that tree, and this run is that refusal again, not a further one.
-    # A mark whose tree is gone is of an older run.
-    counted = 0 if prior.get("discarding") and tree_of(root, branch) in worktrees(root) else 1
+    # Why: a note marked as being discarded was written by a run that stopped before it finished
+    # the close, and this run is that refusal again, not a further one. What starts a new run on
+    # the ticket (`open`, `update`, `clean --all`) drops the mark.
+    counted = 0 if prior.get("discarding") else 1
     attempts = (before if same and isinstance(before, int) else 0) + counted if retry else 0
     exhausted = retry and attempts >= queue_notes.RETRIES
     if exhausted:
@@ -1036,7 +1061,13 @@ def finish_close(root: Path, branch: str) -> list[str]:
     """
     note = queue_notes.read_note(root, branch)
     tree = tree_of(root, branch)
-    if not note.get("discarding") or tree not in worktrees(root):
+    if not note.get("discarding"):
+        return []
+    if tree not in worktrees(root):
+        # Why: the run was killed after the discard and before it cleared the mark; the mark
+        # stays only while a rerun of that close may come, and none is owed once something else
+        # runs on the ticket.
+        drop_mark(root, branch)
         return []
     kept = discard(root, tree, f"{branch}: {STASHED[str(note.get('outcome'))]} run")
     stays = [f"the work tree stays at {tree}: {kept}"] if kept else []
@@ -1154,6 +1185,7 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
     if everything:
         for branch in heads.splitlines():
             unmark(root, branch)
+            finish_close(root, branch)
     return 0
 
 
@@ -1268,6 +1300,12 @@ def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -
 
 def report(drain: Drain, token: str = "") -> int:
     """Write the report of every ticket closed since the last one, and print it."""
+    heads = gatelib.git(drain.root, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+    for branch in (heads or "").splitlines():
+        # Why: a merge no note says is reported as merged, not as the close `open` kept for the
+        # ticket; recording it writes the note a landing would have.
+        if recorded_merge(drain.root, branch):
+            record_merge_aloud(drain.root, branch)
     directory = gatelib.state_dir(drain.root) / QUEUE
     paths = sorted((directory / "tickets").glob("*.json"))
     notes = {path: queue_notes.loaded(gatelib.read_text(path)) for path in paths}
