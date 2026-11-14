@@ -120,6 +120,18 @@ BUILDS: dict[Said, object] = {
 REVIEWS: dict[Said, object] = {
     Review.APPROVES: REVIEW,
     Review.REFUSES: {**REVIEW, "verdict": "request_changes"},
+    Review.REFUSES_ISSUE: {**REVIEW, "verdict": "request_changes", "issues": [BLOCKER]},
+    Review.REFUSES_MINOR: {
+        **REVIEW,
+        "verdict": "request_changes",
+        "issues": [{**BLOCKER, "severity": "minor"}],
+    },
+    Review.REFUSES_DROPPED: {
+        **REVIEW,
+        "verdict": "request_changes",
+        "issues": [BLOCKER],
+        "ticketPromises": GAP["ticketPromises"],
+    },
     Review.APPROVES_RED: {**REVIEW, "checkPasses": False},
     Review.APPROVES_ISSUE: {**REVIEW, "issues": [BLOCKER]},
     Review.APPROVES_DROPPED: {**REVIEW, "ticketPromises": GAP["ticketPromises"]},

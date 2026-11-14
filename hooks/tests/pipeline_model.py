@@ -154,6 +154,9 @@ class Review(Enum):
     DIES = "dies"
     APPROVES = "approves"
     REFUSES = "requests changes"
+    REFUSES_ISSUE = "requests changes with a blocker of its own"
+    REFUSES_MINOR = "requests changes with only minor issues"
+    REFUSES_DROPPED = "requests changes with a blocker and a dropped promise of the ticket"
     APPROVES_RED = "approves on a red check"
     APPROVES_ISSUE = "approves with a blocker of its own open"
     APPROVES_DROPPED = "approves a change that drops a promise of the ticket"
@@ -231,11 +234,22 @@ class Objection(Enum):
 REVIEW_OBJECTIONS: dict[Said, frozenset[Objection]] = {
     Review.APPROVES: frozenset(),
     Review.REFUSES: frozenset(),
+    Review.REFUSES_ISSUE: frozenset({Objection.REVIEW_ISSUE}),
+    Review.REFUSES_MINOR: frozenset(),
+    Review.REFUSES_DROPPED: frozenset({Objection.REVIEW_ISSUE}),
     Review.APPROVES_RED: frozenset({Objection.REVIEW_RED}),
     Review.APPROVES_ISSUE: frozenset({Objection.REVIEW_ISSUE}),
     Review.APPROVES_DROPPED: frozenset({Objection.REVIEW_ISSUE}),
     Review.APPROVES_GUARD: frozenset({Objection.GUARD}),
 }
+# Why: the review's blocking issues in the change are what a fix pass can answer. A dropped promise
+# of the ticket is refused and goes to the next run (rule 15), not to a fix agent, even beside a
+# blocker, and minor issues alone are no blocking finding.
+FIXABLE = frozenset({Review.REFUSES_ISSUE, Review.APPROVES_ISSUE})
+DROPS = frozenset({Review.APPROVES_DROPPED, Review.REFUSES_DROPPED})
+REFUSALS = frozenset(
+    {Review.REFUSES, Review.REFUSES_ISSUE, Review.REFUSES_MINOR, Review.REFUSES_DROPPED}
+)
 # Why: the amend returns the whole spec as it now stands, a fix round's check is "the last
 # implement or fix", the re-critique re-checks every finding by title (pipeline.md, the loop), and
 # the second review of a project nobody depends on judges the change the fix pass left.
@@ -490,17 +504,17 @@ def _review(state: State, action: Action) -> State:
     """
     issue = Objection.REVIEW_ISSUE in REVIEW_OBJECTIONS[action.answer]
     state = replace(state, issue=issue)
-    if issue and state.critic is False and state.rounds < fix_rounds(state):
+    if action.answer in FIXABLE and state.critic is False and state.rounds < fix_rounds(state):
         return replace(state, awaiting=Role.FIX)
     objections = standing(state) | REVIEW_OBJECTIONS[action.answer]
-    approved = action.answer is not Review.REFUSES and not objections
+    approved = action.answer not in REFUSALS and not objections
     outcome = Outcome.APPROVE if approved else Outcome.REQUEST_CHANGES
     ending = Ending(
         outcome,
         objections=objections,
         rounds=state.rounds,
         unresolved=state.owed,
-        lost=action.answer is Review.APPROVES_DROPPED and not state.rejudge,
+        lost=action.answer in DROPS and not state.rejudge,
         kept=state.kept,
         record=outcome,
         rejudged=state.rejudge,
@@ -759,13 +773,16 @@ def assumed(_: State, __: str, after: State) -> bool:
     return ending.kept
 
 
-def critic_waits(before: State, name: str, _: State) -> bool:
+def critic_waits(before: State, name: str, after: State) -> bool:
     """The critic runs only once the project is depended-on, while the fix loop runs one round on the review's blocking issues before and up to two on the critic's findings after."""  # noqa: E501
-    role = named(name).role
-    if role is Role.CRITIQUE:
+    action = named(name)
+    if action.role is Role.CRITIQUE:
         return before.critic is True
-    if role is Role.FIX:
+    if action.role is Role.FIX:
         return before.owed if before.critic else before.critic is False and before.issue
+    passes = before.critic is False and before.rounds < fix_rounds(before)
+    if action.role is Role.REVIEW and passes and action.answer in FIXABLE:
+        return after.awaiting is Role.FIX
     return True
 
 
@@ -791,9 +808,13 @@ def never_crashes(_: State, name: str, after: State) -> bool:
 def lost(_: State, name: str, after: State) -> bool:
     """A change the review finds dropping a promise of the ticket is refused, and a first build returns what it lost for the next run."""  # noqa: E501
     ending = after.ending
-    if named(name).answer is not Review.APPROVES_DROPPED or ending is None:
+    if named(name).answer not in DROPS:
         return True
-    return ending.outcome is Outcome.REQUEST_CHANGES and ending.lost == (not after.rejudge)
+    return (
+        ending is not None
+        and ending.outcome is Outcome.REQUEST_CHANGES
+        and ending.lost == (not after.rejudge)
+    )
 
 
 RULES: dict[str, Callable[[State, str, State], bool]] = {
