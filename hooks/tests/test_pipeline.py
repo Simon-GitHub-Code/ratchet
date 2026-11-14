@@ -464,7 +464,8 @@ def test_a_fix_round_that_takes_the_product_code_over_its_ceiling_stops_the_run(
     # round ran on to a red check and a refused review instead of the drain's split.
     finding = {"severity": "major", "title": "no expiry", "testFails": True}
     kept = {**CRITIQUED, "findings": [finding], "testsAdded": ["tests/test_method.py"]}
-    answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW, "critique-1": CRITIQUED}
+    answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
+    answers |= {"critique-1": CRITIQUED}
     fits = {"lines": 1000, "ceiling": 1000, "testLines": 3000, "testCeiling": 3000}
     over = {"fix-1": {**IMPLEMENTED, "changeSize": OVER}}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers, **over)
