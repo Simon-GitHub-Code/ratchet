@@ -19,6 +19,7 @@ The queue drain finishes what a killed or concurrent command left, and no longer
 - `clean --all` leaves the work tree and the note of a live landing whose earlier close was cut off before it removed the tree.
 - `update`, `close` and `split` of a ticket refuse with exit 3 and change nothing while that ticket's landing runs. Before, a ticket parked during its merge could be merged without the owner.
 - A `--take-over` of a drain that is still alive is the owner's call. A landing that drain runs keeps its work tree while it runs, and the next `clean --all` takes it once the landing has ended.
+- The drain sees a landing while its `land` or the merge it started is alive. Each `land` holds a private lock the merge probes, and `merge.py` holds its own lock for its whole run, so a `land` killed alone no longer lets ticket commands, `clean` or a second `land` act under a live merge. `merge.py` never removes or creates the file `RATCHET_LANDING` names, and it refuses one outside the repository's git directory (ADR 0058).
 
 A gate's proof can no longer write into the real repository through a link. A setup left running could swap a directory of the scratch copy for a link into the real tree; the snapshot then held the link, and each restore wrote it back. `bite` now refuses any link that setup made or changed whose end lies outside the copy, and names it. It judges the link by its text in the snapshot, through every link on the way, not by the copy as it stands, and refuses a ring of links. A link the commit already holds is the repository's own and stays.
 
