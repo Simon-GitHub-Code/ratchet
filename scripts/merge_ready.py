@@ -855,6 +855,8 @@ def resolved(change: Change, ticket: str, ref: str) -> str | None:
     walked: list[str] = []
     parts = [*PurePosixPath(ticket).parent.parts, *ref.split("/")]
     for index, part in enumerate(parts):
+        if part in ("", "."):
+            continue
         if part == "..":
             if not walked:
                 return None
@@ -867,6 +869,13 @@ def resolved(change: Change, ticket: str, ref: str) -> str | None:
         if name != "/".join(walked) or mode.split(" ")[0] != want:
             return None
     return "/".join(walked)
+
+
+def one_file(change: Change, ticket: str, refs: tuple[str, str]) -> bool:
+    """Whether two refs of ``ticket`` are the same text or lead to one same regular file."""
+    before, after = refs
+    target = resolved(change, ticket, before)
+    return before == after or (target is not None and target == resolved(change, ticket, after))
 
 
 def link_only(change: Change, path: str) -> bool:
@@ -892,7 +901,11 @@ def link_only(change: Change, path: str) -> bool:
         )
         found = (LINK_REF.findall(was), LINK_REF.findall(now))
         same = LINK_REF.sub("\0", was) == LINK_REF.sub("\0", now) and len(found[0]) == len(found[1])
-        if not links or not same:
+        if (
+            not links
+            or not same
+            or not all(one_file(change, path, r) for r in zip(*found, strict=True))
+        ):
             return False
     return same_refs(change, path, (old, new))
 

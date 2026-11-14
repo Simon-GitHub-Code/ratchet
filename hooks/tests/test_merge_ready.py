@@ -1593,6 +1593,47 @@ def test_a_parent_section_in_place_of_a_line_is_the_owners(tmp_path: Path) -> No
     assert judged(repo) == [f"{BUT}{TICKET} {FROZEN}"]
 
 
+SKIPPED = [
+    pytest.param(
+        (
+            "Blocked by: 02-b.md",
+            "Blocked by: 02-b.md (approach in ../issues/../spec.md)",
+            ("../issues/../spec.md", "../../thing/spec.md"),
+        ),
+        id="a ref in parentheses",
+    ),
+    pytest.param(
+        (
+            "Parent: ../spec.md\n",
+            "Parent: ../spec.md\nParent: ../issues/../spec.md\n",
+            ("../issues/../spec.md", "../../thing/spec.md"),
+        ),
+        id="a second Parent line",
+    ),
+    pytest.param(
+        (
+            "Blocked by: 02-b.md\n",
+            "Blocked by: 02-b.md\nBlocked by: ../issues/02-b.md\n",
+            ("../issues/02-b.md", "./02-b.md"),
+        ),
+        id="a second Blocked by line",
+    ),
+]
+
+
+@pytest.mark.parametrize("shape", SKIPPED)
+@pytest.mark.parametrize("respelled", [False, True], ids=["elsewhere", "same"])
+def test_a_ref_the_preflight_does_not_read_is_held_to_the_same_file(
+    tmp_path: Path, shape: tuple[str, str, tuple[str, str]], *, respelled: bool
+) -> None:
+    was, became, (ref, same) = shape
+    ticket = WITH_LINKS.replace(was, became)
+    repo = linked_by(tmp_path, ticket)
+    target = same if respelled else "../../other/spec.md"
+    change(repo, {TICKET: ticket.replace(ref, target)}, record=False)
+    assert judged(repo) == ([] if respelled else [f"{BUT}{TICKET} {FROZEN}"])
+
+
 def test_a_ticket_the_change_renames_is_not_a_link_edit(linked: Path) -> None:
     moved = ".scratch/thing/issues/03-a.md"
     files = {TICKET: None, moved: WITH_LINKS.replace("../spec.md", "../../thing/spec.md")}

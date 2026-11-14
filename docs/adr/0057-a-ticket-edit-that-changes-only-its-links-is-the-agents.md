@@ -16,6 +16,8 @@ A skill rewrote the `Parent:` line of two agent-ready tickets from one path of t
 - On each changed line, the text around the `.md` refs is identical and the refs are as many. A link added or removed is another difference.
 - Each ref that changed names, from the folder of the ticket, one regular file in the head's tree, and the old and new refs name the same one. The judge walks the path component by component in the commit's tree, never the work tree. A missing file, a directory, an absolute path, a path that climbs out of the repository, and a symbolic link at any component make it uncertain, and uncertain is the owner's.
 
+Beside that, every `.md` ref on a changed link line is held to the same file, including a ref in parentheses and one on a second `Parent:` or `Blocked by:` line, which the preflight does not read.
+
 The judge does not trust its own pattern for how a line reads. It parses both texts with the preflight's `Ticket`, the parser the drain and the route use, and the edit passes only when `parent` and `blockers` give the same number of refs and each pair is either two numbers with the same text, or two paths that lead to the same regular file. A path read as a number on one side is the owner's.
 
 Every other rule of ADR 0031 still applies to the rest of the change. The spec the ticket inherits from, a ticket it is blocked by and every other path are judged by their own rules, and the label count, the number and the close rules still read the ticket. A link edit frees nothing but the ticket's own link lines. When it holds, the judge gives no reason for that ticket; the other reasons it prints are unchanged.
