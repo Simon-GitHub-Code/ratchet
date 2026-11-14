@@ -817,14 +817,17 @@ def exported_rule(rule: Rule) -> model_tla.Rule:
 
 
 class Kind(NamedTuple):
-    """What the default branch holds of the kind and the event, and the two histories."""
+    """What the default branch holds of the kind, the event and the review, and the histories."""
 
     instances: int
     row: str
     table: str
     event: str
     event_row: str
+    review: str
+    reviewed: bool
     held: bool
+    start: str
     allowance: int
     """As ``State.allowance``, with -1 for none."""
 
@@ -834,14 +837,23 @@ def kind(state: State) -> Kind:
     main = state.main
     allowance = -1 if state.allowance is None else state.allowance
     return Kind(
-        len(main.instances), main.row, main.table, main.event, main.event_row, state.held, allowance
+        len(main.instances),
+        main.row,
+        main.table,
+        main.event,
+        main.event_row,
+        main.review,
+        main.reviewed,
+        state.held,
+        state.start,
+        allowance,
     )
 
 
 def export() -> model_tla.Export:
-    """The reachable graph as a TLA+ module, with the thirteen rules.
+    """The reachable graph as a TLA+ module, with the sixteen rules.
 
-    Eleven rules are about a landing, so each is a ``model_tla.Step``, and the module holds a
+    Thirteen rules are about a landing, so each is a ``model_tla.Step``, and the module holds a
     state once for each set of them the step into it broke.
     """
     return model_tla.export(
