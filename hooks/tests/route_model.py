@@ -11,7 +11,7 @@ is red until its entry is deleted. ``docs/model/route.md`` is the page for the o
 
 Scope: no forge (no ``origin``), local tickets, offline. Two tickets, the second blocked by the
 first. One thing happens at a time: a spec or ticket action needs a clean default branch with
-nothing parked.
+nothing parked. One checkout: no other work tree holds the default branch.
 """
 
 from __future__ import annotations
@@ -42,10 +42,15 @@ class Setup(StrEnum):
 
 
 class Head(StrEnum):
-    """Where HEAD is: the default branch, a working branch, or a ``records/<time>`` branch."""
+    """Where HEAD is: the default branch, a working branch, or a ``records/<time>`` branch.
+
+    ``MERGED`` is a working branch the default branch already holds: a merge that landed and left
+    the checkout on it. Its commits are merged, so a new commit makes it a working branch again.
+    """
 
     MAIN = "main"
     WORK = "work"
+    MERGED = "merged"
     RECORDS = "records"
 
 
@@ -115,6 +120,7 @@ class Advice(StrEnum):
     FINISH_RECORDS = "finish-records"
     LAND_RECORDS = "land-records"
     COMMIT = "commit"
+    SWITCH = "switch"
     MERGE = "merge"
     MERGE_RECORDS = "merge-records"
     FILL = "fill"
@@ -175,6 +181,9 @@ class ActionName(StrEnum):
     SOMEONE_EDITS_CODE = "SomeoneEditsCode"
     AGENT_COMMITS_ON_A_BRANCH = "AgentCommitsOnABranch"
     BRANCH_MERGES = "BranchMerges"
+    MERGE_LEAVES_THE_BRANCH_CHECKED_OUT = "MergeLeavesTheBranchCheckedOut"
+    SOMEONE_CHECKS_OUT_A_MERGED_BRANCH = "SomeoneChecksOutAMergedBranch"
+    AGENT_SWITCHES_TO_THE_DEFAULT_BRANCH = "AgentSwitchesToTheDefaultBranch"
     AGENT_LANDS_RECORDS = "AgentLandsRecords"
     RECORDS_RUN_STOPS = "RecordsRunStops"
     OWNER_MERGES_RECORDS = "OwnerMergesRecords"
@@ -323,6 +332,7 @@ CHAIN: Final = (
     Rule(Advice.FINISH_RECORDS, lambda w: w.head is Head.RECORDS),
     Rule(Advice.LAND_RECORDS, lambda w: (w.head, w.tree) == (Head.MAIN, Tree.RECORDS)),
     Rule(Advice.COMMIT, lambda w: w.tree is not Tree.CLEAN),
+    Rule(Advice.SWITCH, lambda w: w.head is Head.MERGED),
     Rule(Advice.MERGE, lambda w: w.head is Head.WORK),
     Rule(Advice.MERGE_RECORDS, lambda w: w.parked),
     Rule(Advice.FILL, lambda w: w.fills),
@@ -553,6 +563,11 @@ def runnable(world: World, slot: int) -> bool:
     return unblocked(world, slot) and not world.fills
 
 
+def runnable_slots(world: World) -> list[int]:
+    """The slots of the tickets a feature run or the drain may start on."""
+    return [slot for slot in range(len(world.tickets)) if runnable(world, slot)]
+
+
 def moves(world: World, move: Move) -> Iterator[World]:
     """Each way a calm ``world`` takes one ticket through ``move``."""
     if not calm(world):
@@ -593,11 +608,22 @@ per_ticket(
     (Advice.BUILD,),
     Move(STATED, Ticket.BUILT, needs_free=True, head=Head.WORK),
 )
-per_ticket(
-    ActionName.BUILD_STOPS,
-    (),
-    Move(STATED, Ticket.BUILT, needs_free=True, head=Head.WORK, tree=Tree.CODE),
-)
+
+
+@action(ActionName.BUILD_STOPS)
+def _build_stops(world: World) -> Iterator[World]:
+    """The build stops with its code uncommitted, or on the branch it cut before it wrote any.
+
+    Why the second is a merged branch: a branch cut from the default branch's tip and holding no
+    commit of its own is in the default branch, and the route reads it so.
+    """
+    yield from moves(
+        world, Move(STATED, Ticket.BUILT, needs_free=True, head=Head.WORK, tree=Tree.CODE)
+    )
+    if calm(world) and any(world.tickets[slot] in STATED for slot in runnable_slots(world)):
+        yield replace(world, head=Head.MERGED)
+
+
 per_ticket(
     ActionName.FEATURE_RUN_BLOCKS,
     (),
@@ -712,9 +738,20 @@ def _owner_records_architecture(world: World) -> Iterator[World]:
         yield replace(world, architecture=Architecture.RECORDED, head=Head.WORK)
 
 
+def on_a_clean_branch(world: World, *heads: Head) -> bool:
+    """Whether the setup is done and a clean branch of ``heads`` is checked out."""
+    return adopted(world) and world.head in heads and world.tree is Tree.CLEAN
+
+
 @action(ActionName.SOMEONE_EDITS_CODE)
 def _someone_edits_code(world: World) -> Iterator[World]:
-    if rest(world) or (adopted(world) and (world.head, world.tree) == (Head.WORK, Tree.CLEAN)):
+    """An edit at rest, on a clean working branch, or on a merged branch checked out at rest.
+
+    Why a merged branch only at rest: what the route makes of its dirty tree does not depend on
+    the tickets or on what is owed, and each other state it is edited in adds a working branch.
+    """
+    at_rest = on_a_clean_branch(world, Head.MERGED) and rest(replace(world, head=Head.MAIN))
+    if rest(world) or on_a_clean_branch(world, Head.WORK) or at_rest:
         yield replace(world, tree=Tree.CODE)
 
 
@@ -724,11 +761,47 @@ def _agent_commits_on_a_branch(world: World) -> Iterator[World]:
         yield replace(world, tree=Tree.CLEAN, head=Head.WORK)
 
 
+def merged(world: World, head: Head) -> World:
+    """``world`` once its working branch is merged, the checkout left on ``head``."""
+    first, second = (Ticket.MERGED if t is Ticket.BUILT else t for t in world.tickets)
+    return replace(world, head=head, tickets=(first, second))
+
+
 @action(ActionName.BRANCH_MERGES, Advice.MERGE)
 def _branch_merges(world: World) -> Iterator[World]:
-    if adopted(world) and (world.head, world.tree) == (Head.WORK, Tree.CLEAN):
-        first, second = (Ticket.MERGED if t is Ticket.BUILT else t for t in world.tickets)
-        yield replace(world, head=Head.MAIN, tickets=(first, second))
+    """The merge entry point merges the branch and switches the checkout to the default branch.
+
+    Why it can be run on a branch already merged, and changes nothing there: the merge judge
+    refuses it, behind a merge commit that holds it, or with nothing of its own to judge.
+    """
+    if on_a_clean_branch(world, Head.WORK):
+        yield merged(world, Head.MAIN)
+    if on_a_clean_branch(world, Head.MERGED):
+        yield world
+
+
+@action(ActionName.MERGE_LEAVES_THE_BRANCH_CHECKED_OUT)
+def _merge_leaves_the_branch_checked_out(world: World) -> Iterator[World]:
+    """The default branch holds the branch, and the checkout is still on it.
+
+    It stands for a merge cut off after it moved the default branch and before it switched, a
+    merge that could not switch, and the owner's merge of the branch from another checkout.
+    """
+    if on_a_clean_branch(world, Head.WORK):
+        yield merged(world, Head.MERGED)
+
+
+@action(ActionName.SOMEONE_CHECKS_OUT_A_MERGED_BRANCH)
+def _someone_checks_out_a_merged_branch(world: World) -> Iterator[World]:
+    """A merge keeps the branch it merged, so it can be checked out again at rest."""
+    if rest(world):
+        yield replace(world, head=Head.MERGED)
+
+
+@action(ActionName.AGENT_SWITCHES_TO_THE_DEFAULT_BRANCH, Advice.SWITCH)
+def _agent_switches_to_the_default_branch(world: World) -> Iterator[World]:
+    if on_a_clean_branch(world, Head.MERGED):
+        yield replace(world, head=Head.MAIN)
 
 
 @action(ActionName.AGENT_LANDS_RECORDS, Advice.LAND_RECORDS, Advice.FINISH_RECORDS)
@@ -836,6 +909,23 @@ def lowers_rank(label: str) -> str:
     return f"[][(rank > 0 /\\\n{following(label)}) => rank' < rank]_vars"
 
 
+def changes_the_state(label: Callable[[World], Advice]) -> Callable[[World], bool]:
+    """Whether every way of taking the step ``label`` names in a world leads out of it.
+
+    Why a fact of each state: TLA+ cannot see a step that leaves every variable as it was.
+    """
+
+    def check(world: World) -> bool:
+        return world not in ACTIONS[ADVISED[label(world)]].successors(world)
+
+    return check
+
+
+def never_merges_a_merged_branch(label: str) -> str:
+    """TLA+ text: on a branch the default branch already holds, ``label`` is not its merge."""
+    return f'head = "{Head.MERGED}" => {label} # "{Advice.MERGE}"'
+
+
 def above_architecture_open(world: World) -> bool:
     """Whether anything the route names before an owed architecture is open in ``world``.
 
@@ -887,6 +977,23 @@ RULES: Final[dict[str, model_tla.Rule]] = {
     "FollowingRealAdviceLowersRank": model_tla.Property(
         "Each step the real route names gets nearer to having nothing left to finish.",
         lowers_rank("real_advice"),
+    ),
+    "AdviceChangesTheState": model_tla.Invariant(
+        "Taking the step the route names changes the state: its effect has not already happened.",
+        changes_the_state(advice),
+    ),
+    "RealAdviceChangesTheState": model_tla.Invariant(
+        "Taking the step the real route names changes the state: its effect has not already"
+        " happened.",
+        changes_the_state(real_advice),
+    ),
+    "AdviceNeverMergesAMergedBranch": model_tla.Invariant(
+        "The route never names the merge of a branch the default branch already holds.",
+        never_merges_a_merged_branch("advice"),
+    ),
+    "RealAdviceNeverMergesAMergedBranch": model_tla.Invariant(
+        "The real route never names the merge of a branch the default branch already holds.",
+        never_merges_a_merged_branch("real_advice"),
     ),
     "ArchitectureNamedExactlyWhenOwed": model_tla.Invariant(
         "The owed architecture is named exactly when the ledger owes it and nothing named before"
