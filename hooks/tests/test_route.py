@@ -487,7 +487,8 @@ def test_a_path_the_drain_recorded_as_the_cause_releases_a_blocked_run(tmp_path:
     blocked(root)
     result = {"guardEdits": [{"path": "package.json", "edit": "a dependency"}]}
     queue_notes.write_note(
-        queue_notes.note_path(root, "feature/2-b"), {"causes": queue_notes.causes_of(result)}
+        queue_notes.note_path(root, "feature/2-b"),
+        {"causes": queue_notes.causes_of(result), "base": queue_notes.tip(root)},
     )
     write(root, "unrelated.txt", "x\n")
     commit(root, "build: something else")
@@ -522,10 +523,35 @@ def test_a_forge_ticket_is_released_by_the_text_the_drain_compares(
     blocked(root, route.own_branch(ticket[0]))
     queue_notes.write_note(
         queue_notes.note_path(root, route.own_branch(ticket[0])),
-        {"digest": queue_notes.digest(ticket[0])},
+        {"digest": queue_notes.digest(ticket[0]), "base": queue_notes.tip(root)},
     )
     text = FORGE_TEXT + ("\n## Answers\n\nQ: a? A: b.\n" if answered else "")
     assert route.decide(root, FakeGh(issues=issues((5, "Five", text)))).stage == stage
+
+
+@pytest.mark.parametrize("base", [None, "before"])
+def test_a_note_older_than_the_blocked_run_does_not_release_it(
+    tmp_path: Path, base: str | None
+) -> None:
+    # Why: the route model's long run found it. The drain parked the ticket, the owner changed
+    # it, and a feature run then blocked on it: the note's digest differs from the ticket, yet
+    # the run blocked after that edit, so the edit answers nothing it asked.
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST, HELD: HELD_TEXT})
+    ticket = route.preflight.local_ticket(HELD, HELD_TEXT)
+    note: dict[str, object] = {
+        "digest": queue_notes.digest(ticket),
+        "hold": True,
+        "outcome": "parked",
+    }
+    if base is not None:
+        note["base"] = queue_notes.tip(root)
+    queue_notes.write_note(queue_notes.note_path(root, "feature/2-b"), note)
+    write(root, HELD, HELD_TEXT + "\nNarrowed: the first half only\n")
+    commit(root, "docs(tracker): narrow the ticket")
+    blocked(root)
+    step = route.decide(root, None)
+    assert step.stage == "blocked-run"
+    assert "feature/2-b: blocked run" in step.command
 
 
 def test_only_a_blocked_run_holds_a_ticket(tmp_path: Path) -> None:
@@ -1099,3 +1125,7 @@ def test_rows_an_upgrade_left_owed_for_an_agent_come_first_and_ask_the_owner_not
     assert (step.command, step.stage) == (route.FILL, "fill")
     assert "nothing asks you" in step.why
     assert "pins" in step.why
+    # Why: a safeguard owed beside them waits; the rows are one agent step and come first.
+    write(root, "src/a.py", "import requests\nrequests.get('http://x')\n")
+    commit(root, "feat: the first outbound call")
+    assert route.decide(root, None).command == route.FILL

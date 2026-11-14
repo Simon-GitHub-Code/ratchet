@@ -388,6 +388,27 @@ def triggers_gate(argv: list[str]) -> int:
     return triggers.main([*argv, "--base", "HEAD"])
 
 
+REVIEW_ROW = (
+    "| architecture reviewed when its shape changes | `ratchet` plugin `scripts/triggers.py` | 1"
+    " | | `just triggers` |\n"
+)
+
+
+def review_gate(argv: list[str]) -> int:
+    """The triggers gate where the first outbound call arrived after the reviews started.
+
+    Why: ADR 0052. The call reopens the architecture and no record reviews it, so a second one is
+    red; the binding that asks the review lands first, so the call is not reviewed by adoption.
+    """
+    root = Path(argv[2])
+    if not (root / "src/client.py").is_file():
+        write(root, "docs/process/binding.md", BINDING + REVIEW_ROW + TRIGGERS_TABLE + SUPPRESSIONS)
+        commit(root, "chore(method): ask the architecture review")
+        write(root, "src/client.py", OUTBOUND_CALL)
+        commit(root, "feat(core): the first outbound call")
+    return triggers.main([*argv, "--base", "HEAD"])
+
+
 def second_outbound_call(root: Path) -> None:
     write(root, "src/other.py", OUTBOUND_CALL)
 
@@ -523,6 +544,7 @@ SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("project-bite: a gate green on nothing to run", project_bite.main, tests_green_on_nothing, []),
     ("project-bite: a bound gate with no bite", project_bite.main, bite_dropped, []),
     ("triggers: a second instance of an owed kind", triggers_gate, second_outbound_call, []),
+    ("triggers: a second instance while a review is owed", review_gate, second_outbound_call, []),
     ("incidents: a record that names no bite", incidents_gate, incident_without_a_bite, []),
     ("merge-ready: a guard path changed", merge_judge, change_config, []),
     ("merge-ready: a flag on by default", merge_judge, flag_born_on, []),

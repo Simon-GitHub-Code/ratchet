@@ -38,9 +38,13 @@ The stages, in order; the first that does not hold is the answer:
    (``owed.fill_first``) are ``/ratchet:fill``, which asks the owner nothing (ADR 0050); then
    a safeguard the repository owes (``triggers.owed``: a kind of code has arrived, or a
    life event is declared, and a row it fires is still ``later:``) is ``/ratchet:safeguard``,
-   with the step it would otherwise name offered as the alternative (ADR 0028); after it, an
-   architecture an upgrade left owed (``quality/owed.toml`` entries of the ``architecture``
-   check) is ``/ratchet:architecture``, offered the same way (ADR 0049).
+   with the step it would otherwise name offered as the alternative (ADR 0028). Before that,
+   an architecture review the repository owes (``triggers.reviews_owed``: a kind that reopens
+   the architecture has arrived for the first time, or such a life event is declared, and no
+   decision record names it) is ``/ratchet:architecture``, with ``/ratchet:safeguard`` after it
+   when rows are owed too, since the review may move where the safeguards go (ADR 0052). After
+   the safeguard, an architecture an upgrade left owed (``quality/owed.toml`` entries of the
+   ``architecture`` check) is ``/ratchet:architecture``, offered the same way (ADR 0049).
 
 After the three lines come the ``also:`` lines, when there are any: the upgrade, when the plugin
 in use is newer than the one the binding pins (ADR 0027); each question the owner has answered
@@ -368,6 +372,8 @@ def blocked_runs(
         if not run.endswith(BLOCKED_RUN):
             continue
         ticket, note = by_branch.get(branch), queue_notes.read_note(root, branch)
+        if not of_this_run(root, default_branch, ref, note=note):
+            note = {}
         recorded = isinstance(note.get("digest"), str)
         if ticket is not None and recorded and queue_notes.edited(note, ticket):
             continue
@@ -375,6 +381,21 @@ def blocked_runs(
         if not answered(root, default_branch, ref, asked=asked):
             found.setdefault(branch, run)
     return found
+
+
+def of_this_run(root: Path, default_branch: str, stash: str, *, note: dict[str, object]) -> bool:
+    """Whether the drain's note is no older than the blocked run's stash.
+
+    Why: a note written before the run blocked records the ticket as it was then, so an edit
+    since would read as an answer to a run that blocked after it. The note counts only when its
+    ``base`` is the commit the stash forked from on the default branch, or one after it; a note
+    with no ``base`` never does, and the run is judged as if the drain had written none.
+    """
+    base = note.get("base")
+    if not isinstance(base, str):
+        return False
+    fork = gatelib.git(root, "merge-base", default_branch, stash) or default_branch
+    return gatelib.git(root, "merge-base", "--is-ancestor", fork, base) is not None
 
 
 def asked_paths(ticket: preflight.Ticket | None, causes: list[str], *, recorded: bool) -> list[str]:
@@ -445,6 +466,8 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
             f"change ticket {ref}: its hold was written before the drain kept the commit that"
             f" landing the guard edits on {default_branch} is read from, so landing frees nothing"
         )
+    if hold.reviews:
+        steps.append(f"run {ARCHITECTURE} for {', '.join(hold.reviews)}")
     if hold.owes:
         steps.append(f"run {SAFEGUARD} for {', '.join(hold.owes)}")
     return steps or [f"change ticket {ref} to meet what the drain parked it for"]
@@ -768,7 +791,12 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         if missing
         else ticket_step(root, gh, checkout)
     )
-    return safeguard_step(root, step) or architecture_step(root, step) or step
+    return (
+        review_step(root, step)
+        or safeguard_step(root, step)
+        or architecture_step(root, step)
+        or step
+    )
 
 
 def fill_step(root: Path) -> Step | None:
@@ -792,7 +820,46 @@ def fill_step(root: Path) -> Step | None:
     )
 
 
-# --- safeguards and life events (ADR 0028) ---------------------------------------------------
+# --- architecture reviews, safeguards and life events (ADR 0028, ADR 0052) -----------------
+
+
+def review_step(root: Path, instead: Step) -> Step | None:
+    """``/ratchet:architecture`` when the repository owes a review, before any safeguard.
+
+    Why: ADR 0052. The review decides where the new kind of code lives, and so where its
+    safeguards are bound; like a safeguard it never hides the build, since the change that
+    brought the kind was free and only the next one that adds another waits for the review.
+    """
+    owing = triggers.reviews_owed(root)
+    if not owing:
+        return None
+    reopening = application_types.load().architecture
+    said = []
+    for review in owing:
+        if application_types.code_kinds(review.trigger):
+            count = review.count
+            said.append(
+                f"`{review.name}` has arrived ({count} instance{'s' * (count != 1)}) and reopens"
+                f" the architecture: {reopening[review.trigger]}"
+            )
+        else:
+            said.append(
+                f"the declared life event `{review.name}` reopens the architecture:"
+                f" {reopening[review.trigger]}"
+            )
+    code = any(application_types.code_kinds(review.trigger) for review in owing)
+    cost = (
+        "the change that brought the kind was free, one that adds another waits for this"
+        if code
+        else "a declared event is never red"
+    )
+    then = (safeguard_step(root, instead) or architecture_step(root, instead) or instead).command
+    return Step(
+        ARCHITECTURE,
+        f"{'; '.join(said)}. Or carry on with {instead.command}: {cost}",
+        then,
+        "architecture-review",
+    )
 
 
 def safeguard_step(root: Path, instead: Step) -> Step | None:
