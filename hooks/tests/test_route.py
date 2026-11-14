@@ -1164,7 +1164,7 @@ def test_a_branch_merged_into_the_default_branch_is_left_by_a_switch_not_merged_
         step = route.decide(root, gh)
         assert (step.command, step.why, step.then, step.stage) == (
             "git switch main",
-            "branch `chore/adopt-ratchet` is merged into `main`",
+            "`main` holds every commit of branch `chore/adopt-ratchet`, so it has nothing to merge",
             "/ratchet:next",
             "switch",
         )
@@ -1187,6 +1187,19 @@ def test_a_branch_the_merge_entry_point_merged_is_not_merged_again(tmp_path: Pat
     assert merge.main(["merge", FEATURE, "--root", str(tmp_path)]) == 0
     assert git(tmp_path, "rev-parse", "--abbrev-ref", "HEAD") == "main"
     assert route.decide(tmp_path, None).command != f"`just merge {FEATURE}`"
+
+
+def test_a_branch_cut_from_the_default_tip_is_not_called_merged(tmp_path: Path) -> None:
+    # Why: `/ratchet:feature` cuts its branch before anything is written on it, and a run that
+    # stops there leaves it. Nothing on it is merged, and there is nothing to merge.
+    root = repository(tmp_path, ADOPTED)
+    branch(root, "feature/1-a")
+    step = route.decide(root, None)
+    assert (step.command, step.stage) == ("git switch main", "switch")
+    assert step.why == (
+        "`main` holds every commit of branch `feature/1-a`, so it has nothing to merge"
+    )
+    assert "merged" not in step.why
 
 
 def test_a_dirty_tree_on_a_merged_branch_is_finished_before_the_switch(tmp_path: Path) -> None:

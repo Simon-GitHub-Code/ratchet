@@ -588,7 +588,9 @@ def switch_step(checkout: Checkout) -> Step | None:
     if gatelib.git(root, "merge-base", "--is-ancestor", "HEAD", default) is None:
         return None
     # A branch cut from the default tip and not yet built on equals it; with a forge that is a
-    # branch about to get its pull request, and with none a fast-forward merge looks the same.
+    # branch about to get its pull request. With none a fast-forward merge looks the same, and the
+    # merge entry point run on either changes nothing, so the switch is named for both, with a
+    # reason true of both.
     if (
         checkout.forge
         and gatelib.git(root, "merge-base", "--is-ancestor", default, "HEAD") is not None
@@ -596,7 +598,7 @@ def switch_step(checkout: Checkout) -> Step | None:
         return None
     return Step(
         f"git switch {default}",
-        f"branch `{checkout.branch}` is merged into `{default}`",
+        f"`{default}` holds every commit of branch `{checkout.branch}`, so it has nothing to merge",
         NEXT,
         "switch",
     )
