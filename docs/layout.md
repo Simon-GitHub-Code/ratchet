@@ -18,7 +18,7 @@ A map of the repository. [The README](../README.md) says what the method is and 
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
 | `scripts/drain.py` | the queue behind `/ratchet:feature` with no ticket: the plan, the work trees it makes and removes, the rebase, the local merge and the report |
 | `scripts/questions.py` | one line per answer the owner gives a skill, and the proposal of a standing answer once the recommended option was taken three times running |
-| `workflows/pipeline.js` | the feature pipeline (preflight, spec, ticket check, implement, review, and the critic once the project is depended on) the feature skill runs, and the second review of a change brought up to date behind another merge |
+| `workflows/pipeline.js` | the feature pipeline (preflight, spec, ticket check, implement, review; one fix pass on a review blocker until the project is depended on, the critic and its fix loop after) the feature skill runs, and the second review of a change brought up to date behind another merge |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
 | `scripts/` | the gates that ship, in the table above |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |
