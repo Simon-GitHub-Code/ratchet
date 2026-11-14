@@ -82,6 +82,8 @@ A ticket that fits the change-size ceiling is no longer parked as too large befo
 
 The route no longer loops a non-engineer on a parked ticket or a half-finished adoption. It reads the drain's note of why a ticket is held and names the step that releases that kind of hold (a size block names the split, never a bare `/ratchet:feature`), and a binding with no plugin pin names `/ratchet:adopt` to resume, ahead of the hooks install. A held ticket or a blocked run is released only by a change to the ticket, by the cause its run recorded landing (the guard edits, a dispute), or, for a safeguard hold, by binding the safeguard. An unrelated change on the default branch no longer offers the same build again.
 
+- After `just merge` of the checked-out branch, the checkout is left on the default branch. For a branch the default branch already holds, the route names `git switch <default>`, not the same merge again.
+
 An adopted project whose tools need an install merges through `just merge` with nothing installed by hand (ADR 0039, ADR 0043).
 
 - The template `justfile` has an `install` recipe. Where the binding's `## Install` section says the stack needs one, the recipe installs exactly what the lockfile it names says, every recipe the section lists depends on it, and each tier runs it after `plugin-pin`, so a fresh checkout works as CI does.
