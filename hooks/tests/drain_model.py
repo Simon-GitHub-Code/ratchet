@@ -3,12 +3,12 @@
 Three tickets, ``a``, ``b`` and ``c``, where ``b`` is blocked by ``a``, under a cap of one. Each
 ticket is what ``drain.classify`` reads: its queue work tree, its branch, whether that branch holds
 the tip of the default branch, whether it is merged, the drain's note on it, its text and the
-stashes that hold its uncommitted work. The actions are the drain's commands in any order, what
-the agent does in a work tree, what the owner does, a stale index lock that git leaves, and a
-kill of ``update``, ``close`` or ``land`` between two of their effects. ``graph()`` is every
-reachable state and step, ``RULES`` what a reader of ADR 0023 and the feature skill expects to
-stay true over any history. Every rule is a predicate over a step: ``(before, action name,
-after)``.
+stashes that hold its uncommitted work, and what a killed ``merge.py`` left. The actions are the
+drain's commands in any order, what the agent does in a work tree, what the owner does, a stale
+index lock that git leaves, and a kill of ``update``, ``close``, ``land`` or the ``merge.py`` it
+runs between two of their effects. ``graph()`` is every reachable state and step, ``RULES`` what
+a reader of ADR 0023 and the feature skill expects to stay true over any history. Every rule is a
+predicate over a step: ``(before, action name, after)``.
 
 The transitions are the code's: a command does here what ``drain.py`` and ``merge.py`` do on a
 repository, refusals included, so a rule the code does not keep breaks here too. The merge judge
@@ -24,6 +24,7 @@ tree stands: the drain reads it only then, and drops it whenever it makes the tr
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 from collections import deque
 from dataclasses import dataclass
@@ -35,6 +36,8 @@ if TYPE_CHECKING:
 
 CAP = 1
 RETRIES = 3
+PART_WRITTEN = -1
+"""The text of a ticket's file while a fast-forward that changes it is cut off: none it ever had."""
 
 
 class Fact(Enum):
@@ -181,6 +184,14 @@ class State:
     tickets: tuple[Ticket, Ticket, Ticket]
     worked: bool = False
     """Whether the agent has left work uncommitted yet: it does so once in a history."""
+    scratch: bool = False
+    """Whether a ``merge.py`` that was killed left its scratch work tree."""
+    half: Name | None = None
+    """The ticket whose fast-forward of the default branch was cut off half-way.
+
+    Files of its merge are in the default branch's work tree, one part-written, its index is
+    locked and the landing intent is kept.
+    """
 
     @property
     def edited(self) -> bool:
@@ -193,13 +204,13 @@ class State:
     def with_ticket(self, name: Name, ticket: Ticket) -> State:
         tickets = list(self.tickets)
         tickets[INDEX[name]] = normal(ticket)
-        return State((tickets[0], tickets[1], tickets[2]), self.worked)
+        return State((tickets[0], tickets[1], tickets[2]), self.worked, self.scratch, self.half)
 
     def __hash__(self) -> int:
         # Why: the search hashes each state it reaches many times, and a state never changes.
         cached = self.__dict__.get("hashed")
         if cached is None:
-            cached = hash((self.tickets, self.worked))
+            cached = hash((self.tickets, self.worked, self.scratch, self.half))
             object.__setattr__(self, "hashed", cached)
         return cached
 
@@ -232,10 +243,15 @@ def held_by_note(ticket: Ticket) -> bool:
 
 @functools.cache
 def classify(state: State) -> dict[Name, Status]:
-    """Each ticket in the plan, as ``drain.classify`` and then ``drain.settled`` call it."""
+    """Each ticket in the plan, as ``drain.classify`` and then ``drain.settled`` call it.
+
+    The plan reads the tickets from the default branch's work tree. While a fast-forward is cut
+    off half-way that holds the merge's ticket file, so the ticket being landed reads as resolved.
+    """
     found: dict[Name, Status] = {}
+    resolved = {name for name, ticket in state.each() if ticket.merged or state.half is name}
     for name, ticket in state.each():
-        if ticket.merged:
+        if name in resolved:
             continue
         if held_by_note(ticket):
             found[name] = Status.HELD
@@ -243,7 +259,7 @@ def classify(state: State) -> dict[Name, Status]:
             found[name] = Status.BUILT
         elif ticket.tree is not Tree.NONE:
             found[name] = Status.BUILDING
-        elif name in BLOCKER and not state.of(BLOCKER[name]).merged:
+        elif name in BLOCKER and BLOCKER[name] not in resolved:
             found[name] = Status.WAITING
         else:
             found[name] = Status.BUILDABLE
@@ -259,7 +275,12 @@ def building(state: State) -> int:
 
 
 def start(state: State) -> tuple[Name, ...]:
-    """The tickets ``plan`` starts: the buildable, in order, up to the cap less those in a tree."""
+    """The tickets ``plan`` starts: the buildable, in order, up to the cap less those in a tree.
+
+    None while a fast-forward cut off half-way leaves the checkout unfit to build on.
+    """
+    if state.half is not None:
+        return ()
     statuses = classify(state)
     buildable = tuple(name for name in NAMES if statuses.get(name) is Status.BUILDABLE)
     return buildable[: max(0, CAP - building(state))]
@@ -286,6 +307,8 @@ class Kind(Fact):
     KILL_LAND_BEFORE_NOTE = "a kill before the note stops drain.py land"
     KILL_LAND_BEFORE_DISCARD = "a kill before the discard stops drain.py land"
     KILL_LAND_AFTER_DISCARD = "a kill after the discard stops drain.py land"
+    KILL_BEFORE_FAST_FORWARD = "a kill before the fast-forward stops merge.py in drain.py land"
+    KILL_MID_FAST_FORWARD = "a kill mid fast-forward stops merge.py in drain.py land"
 
 
 KILLS = {
@@ -296,6 +319,8 @@ KILLS = {
     Kind.KILL_LAND_BEFORE_NOTE: Kind.LAND,
     Kind.KILL_LAND_BEFORE_DISCARD: Kind.LAND,
     Kind.KILL_LAND_AFTER_DISCARD: Kind.LAND,
+    Kind.KILL_BEFORE_FAST_FORWARD: Kind.LAND,
+    Kind.KILL_MID_FAST_FORWARD: Kind.LAND,
 }
 
 
@@ -403,7 +428,8 @@ def _work(state: State, name: Name) -> State | None:
     ticket = state.of(name)
     if state.worked or ticket.merged or ticket.tree is not Tree.CLEAN:
         return None
-    return State(state.with_ticket(name, ticket._replace(tree=Tree.DIRTY)).tickets, worked=True)
+    dirtied = state.with_ticket(name, ticket._replace(tree=Tree.DIRTY))
+    return dataclasses.replace(dirtied, worked=True)
 
 
 def _commit(state: State, name: Name) -> State | None:
@@ -562,8 +588,16 @@ class Landing(NamedTuple):
     retry: bool
 
 
+def recovered(state: State) -> State:
+    """``merge.recover``: the scratch work tree swept, a fast-forward cut off half-way put back."""
+    if not state.scratch and state.half is None:
+        return state
+    return dataclasses.replace(state, scratch=False, half=None)
+
+
 def landing(state: State, name: Name) -> Landing | None:
-    """``land`` up to its close; ``None`` when it closes nothing."""
+    """``land`` up to its close, from what ``merge.recover`` puts back; ``None`` when it closes nothing."""  # noqa: E501
+    state = recovered(state)
     ticket = state.of(name)
     if unrecorded(ticket):
         return Landing(state, Outcome.MERGED, retry=False)
@@ -578,6 +612,7 @@ def landing(state: State, name: Name) -> Landing | None:
 
 
 def _land(state: State, name: Name) -> State:
+    state = recovered(state)
     ticket = state.of(name)
     if not unrecorded(ticket) and (says_merged(ticket) or held_by_note(ticket)):
         # Why: a merge recorded already is closed again, which finishes a cut-off discard, and a
@@ -593,7 +628,7 @@ def _land(state: State, name: Name) -> State:
 def _kill_land_before_note(state: State, name: Name) -> State | None:
     """The merge landed and nothing after it ran: no note says so and the tree is there."""
     run = landing(state, name)
-    if run is None or run.judged == state:
+    if run is None or run.judged == recovered(state):
         return None
     return run.judged
 
@@ -616,6 +651,22 @@ def _kill_land_after_discard(state: State, name: Name) -> State | None:
     return run.judged.with_ticket(name, ticket)
 
 
+def _kill_before_fast_forward(state: State, name: Name) -> State | None:
+    """``merge.py`` killed in ``check`` on the merge result: only a passed branch gets that far.
+
+    A kill earlier in ``merge.py`` leaves the same: its scratch work tree and nothing else.
+    """
+    run = landing(state, name)
+    if run is None or run.judged == recovered(state):
+        return None
+    return dataclasses.replace(recovered(state), scratch=True)
+
+
+def _kill_mid_fast_forward(state: State, name: Name) -> State | None:
+    started = _kill_before_fast_forward(state, name)
+    return None if started is None else dataclasses.replace(started, half=name)
+
+
 def _close(state: State, name: Name) -> State:
     ticket = state.of(name)
     if unrecorded(ticket):
@@ -630,10 +681,11 @@ def cleaned(state: State, *, everything: bool) -> State:
     """``drain.clean``: every tree of a merged branch removed, with ``everything`` every tree.
 
     A merge no note says is recorded first, a tree or not, and a close cut off before its discard
-    is finished before its tree goes. ``everything`` then clears the mark of a rebase that did not
-    finish (it was under way in the tree) or of a branch with no commit of its own:
-    ``drain.unmark``.
+    is finished before its tree goes, once ``merge.recover`` has put back what a killed
+    ``merge.py`` left. ``everything`` then clears the mark of a rebase that did not finish (it was
+    under way in the tree) or of a branch with no commit of its own: ``drain.unmark``.
     """
+    state = recovered(state)
     for name, ticket in state.each():
         settled = recorded(ticket) if unrecorded(ticket) else ticket
         if ticket.tree is not Tree.NONE and (ticket.on_merge or everything):
@@ -655,7 +707,8 @@ def _report(state: State) -> State:
 
 def _edit(state: State, name: Name) -> State | None:
     ticket = state.of(name)
-    if state.edited or ticket.merged:
+    # Why: git refuses the owner's commit while the cut-off fast-forward holds the index lock.
+    if state.edited or ticket.merged or state.half is not None:
         return None
     shifted = moved(state)
     return shifted.with_ticket(name, shifted.of(name)._replace(text=1))
@@ -675,6 +728,29 @@ def _unlock(state: State, name: Name) -> State | None:
     return state.with_ticket(name, ticket._replace(tree=Tree.DIRTY))
 
 
+def as_read(act: Callable[[State, Name], State | None]) -> Callable[[State, Name], State | None]:
+    """``act`` on the ticket as ``drain.py`` reads it: from the default branch's work tree, first.
+
+    ``land`` reads it before ``merge.recover`` runs, and ``close`` never runs it, so while a
+    fast-forward that changes the file is cut off they read the merge's text, part-written. A
+    note that says merged is never written again, so nothing reads the text it was written on.
+    """
+
+    def read(state: State, name: Name) -> State | None:
+        if state.half is not name:
+            return act(state, name)
+        text = state.of(name).text
+        after = act(state.with_ticket(name, state.of(name)._replace(text=PART_WRITTEN)), name)
+        if after is None:
+            return None
+        ticket = after.of(name)._replace(text=text)
+        if says_merged(ticket) and ticket.note is not None:
+            ticket = ticket._replace(note=ticket.note._replace(text=text))
+        return after.with_ticket(name, ticket)
+
+    return read
+
+
 # Why: where two paths to a state are as short, the search keeps the one whose actions come
 # first here; a landing runs merge.py, the dearest step to replay, so it comes last.
 ON_TICKET: dict[Kind, Callable[[State, Name], State | None]] = {
@@ -682,19 +758,21 @@ ON_TICKET: dict[Kind, Callable[[State, Name], State | None]] = {
     Kind.WORK: _work,
     Kind.COMMIT: _commit,
     Kind.RECORD: _record,
-    Kind.CLOSE: _close,
+    Kind.CLOSE: as_read(_close),
     Kind.UPDATE: _update,
     Kind.EDIT: _edit,
-    Kind.LAND: _land,
+    Kind.LAND: as_read(_land),
     Kind.LOCK: _lock,
     Kind.UNLOCK: _unlock,
     Kind.KILL_MID_REBASE: _kill_mid_rebase,
     Kind.KILL_AFTER_REBASE: _kill_after_rebase,
-    Kind.KILL_BEFORE_DISCARD: _kill_before_discard,
-    Kind.KILL_AFTER_STASH: _kill_after_stash,
-    Kind.KILL_LAND_BEFORE_NOTE: _kill_land_before_note,
-    Kind.KILL_LAND_BEFORE_DISCARD: _kill_land_before_discard,
-    Kind.KILL_LAND_AFTER_DISCARD: _kill_land_after_discard,
+    Kind.KILL_BEFORE_DISCARD: as_read(_kill_before_discard),
+    Kind.KILL_AFTER_STASH: as_read(_kill_after_stash),
+    Kind.KILL_LAND_BEFORE_NOTE: as_read(_kill_land_before_note),
+    Kind.KILL_LAND_BEFORE_DISCARD: as_read(_kill_land_before_discard),
+    Kind.KILL_LAND_AFTER_DISCARD: as_read(_kill_land_after_discard),
+    Kind.KILL_BEFORE_FAST_FORWARD: as_read(_kill_before_fast_forward),
+    Kind.KILL_MID_FAST_FORWARD: as_read(_kill_mid_fast_forward),
 }
 WHOLE: dict[Kind, Callable[[State], State]] = {
     Kind.CLEAN: lambda state: cleaned(state, everything=False),
@@ -727,6 +805,8 @@ PLAYS: dict[Kind, tuple[Name, ...]] = {
     Kind.KILL_LAND_BEFORE_NOTE: (Name.A,),
     Kind.KILL_LAND_BEFORE_DISCARD: (Name.A,),
     Kind.KILL_LAND_AFTER_DISCARD: (Name.A,),
+    Kind.KILL_BEFORE_FAST_FORWARD: (Name.A,),
+    Kind.KILL_MID_FAST_FORWARD: (Name.A,),
 }
 
 
@@ -849,6 +929,17 @@ def stays_held(before: State, _: str, after: State) -> bool:
     )
 
 
+def held_until_edited(before: State, _: str, after: State) -> bool:
+    """A ticket its note holds merges only once the owner has changed the text it was held on."""
+    for was, now in zip(before.tickets, after.tickets, strict=True):
+        note = was.note
+        if now.merged and not was.merged and note is not None and note.hold:
+            edited = note.text is not None and 0 <= note.text < was.text
+            if not edited:
+                return False
+    return True
+
+
 def refused(_: State, __: str, after: State) -> bool:
     """A ticket whose blocker waits on the owner is refused, never left waiting for it."""
     statuses = classify(after)
@@ -894,6 +985,7 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "4. a branch does not land on a review of an older base": not_stale,
     "5. a merge is recorded and reported exactly once": reported_once,
     "6. a held ticket stays held until its text changes": stays_held,
+    "6a. a ticket its note holds merges only once the owner edits it": held_until_edited,
     "7. a ticket whose blocker waits on the owner is refused": refused,
     "8. a killed command recovers by running again or by clean --all": recovers,
     "10. clean --all leaves no queue work tree": no_tree_left,

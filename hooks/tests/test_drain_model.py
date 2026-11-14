@@ -20,7 +20,7 @@ from tests.drain_world import BRANCH, DRAFT, REF, World
 from tests.repos import git
 from tests.test_drain import scratch  # noqa: F401 # -- an autouse fixture of the drain's tests
 
-CAP, KEPT, JUDGED, NOT_STALE, ONCE, HELD, REFUSED, RECOVERS, NO_TREE = model.RULES
+CAP, KEPT, JUDGED, NOT_STALE, ONCE, HELD, HELD_EDITED, REFUSED, RECOVERS, NO_TREE = model.RULES
 
 OPEN_A = ["drain.py open a", "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
@@ -35,6 +35,7 @@ LAND_LEFT = "a kill after the discard stops drain.py land a"
 MERGE_CUT = [*JUDGED_A, LAND_CUT]
 PARKED_THEN_LANDED = [PARK_A, EDIT_A, *JUDGED_A, LAND_KILLED[-1]]
 MARK_LEFT = ["drain.py open a", EDIT_A, "a kill mid-rebase stops drain.py update a"]
+CUT_OFF = "a kill mid fast-forward stops merge.py in drain.py land a"
 # Why: a rule the code does not keep is pinned here by the shortest path from the initial state
 # to a step that breaks it, so the break is a recorded fact and not a red test; each pinned path
 # is replayed below on a real repository.
@@ -47,6 +48,11 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     # ``PARKED_THEN_LANDED`` and a report, replayed below.
     ONCE: [*LAND_KILLED, "drain.py update a"],
     HELD: None,
+    # Why: a finding. `close` reads the ticket from the default branch's work tree, which a
+    # fast-forward cut off half-way left holding the merge's text, and writes its hold on that
+    # text; `land` reads it before it recovers. Once that text is put back the hold is released as
+    # if the owner had edited the ticket, and the next `land` merges it.
+    HELD_EDITED: [*JUDGED_A, CUT_OFF, PARK_A, "drain.py land a", "drain.py land a"],
     REFUSED: None,
     RECOVERS: [*JUDGED_A, EDIT_A, LAND_LEFT],
     NO_TREE: [
@@ -158,6 +164,8 @@ class Play:
         statuses = model.classify(self.state)
         assert seen.statuses == statuses, self.says(f"the plan says {seen.statuses}")
         assert seen.start == model.start(self.state), self.says(f"the plan starts {seen.start}")
+        merging = (seen.scratch, seen.half)
+        assert merging == (self.state.scratch, self.state.half), self.says(f"merge.py: {merging}")
         for name, real, kept in zip(Name, seen.tickets, self.state.tickets, strict=True):
             assert real == kept, self.says(f"ticket {name.value} is {real}\nnot {kept}")
 
@@ -556,3 +564,40 @@ def test_a_refused_landing_killed_after_its_discard_and_run_again_counts_its_ret
     )
     assert play.named("drain.py land a").endswith(f"closed: {REF[Name.A]}: waits\n")
     assert note_of(play)["attempts"] == 2, "merge.py refused it once a run, and the note says twice"
+
+
+def test_merge_py_killed_before_and_mid_fast_forward_is_put_back_by_the_next_command(
+    tmp_path: Path,
+) -> None:
+    before = "a kill before the fast-forward stops merge.py in drain.py land a"
+    play = replay(tmp_path, [*JUDGED_A, before])
+    assert play.world.printed.endswith("stopped (exit -9); run land again to finish it\n")
+    play.named(CUT_OFF)
+    root = play.world.root
+    assert play.world.printed.startswith("merge: removed the work tree "), "the first kill's"
+    assert git(root, "status", "--porcelain"), "files of the merge are in the default branch's tree"
+    assert drain.plan(drain.Drain(root, None, model.CAP)).blocked, "the checkout is not fit"
+    swept = play.named("drain.py clean --all")
+    assert "merge: a run that stopped was moving `main`; its work tree is put back\n" in swept
+    assert git(root, "status", "--porcelain") == ""
+    landed = play.named("drain.py land a")
+    assert landed.endswith(f"closed: {REF[Name.A]}: merged\n")
+    assert "Alpha" in listed_under(play.named("drain.py report"), "Merged")
+
+
+def test_a_ticket_parked_while_its_fast_forward_is_cut_off_is_landed_with_no_edit(
+    tmp_path: Path,
+) -> None:
+    path = COUNTEREXAMPLES[HELD_EDITED] or []
+    assert broken_by(path) == {HELD_EDITED}
+    play = replay(tmp_path, path[:-1])
+    assert "merge: a run that stopped was moving `main`; its work tree is put back\n" in (
+        play.world.printed
+    )
+    assert f"land: {REF[Name.A]} is held and is not landed: " in play.world.printed
+    assert plan_of(play)[BRANCH[Name.A]].state == "built", "the text put back releases the hold"
+    assert git(play.world.root, "log", "-1", "--format=%s", "main", "--", REF[Name.A]) == (
+        "feat(core): the clean state"
+    ), "and the owner never changed the ticket"
+    assert "merged: `feature/1-alpha` into `main`" in play.named(path[-1])
+    assert note_of(play)["outcome"] == "merged", "a ticket the drain parked has landed"
