@@ -64,6 +64,9 @@ class Search(NamedTuple):
     """Each rule's shortest break."""
     taken: frozenset[str]
     """Every action taken."""
+    cuts: dict[tuple[str, bool], list[str]]
+    """For each kind of kill, on a landed ticket or not, the shortest path to one that leaves
+    what neither the whole command nor none of it leaves."""
 
 
 @functools.cache
@@ -72,6 +75,7 @@ def search() -> Search:
     _, edges = model.graph()
     came: dict[model.State, tuple[model.State, str] | None] = {model.INITIAL: None}
     breaks: dict[str, list[str]] = {}
+    cuts: dict[tuple[str, bool], list[str]] = {}
 
     def path_to(said: str, at: tuple[model.State, str] | None) -> list[str]:
         path = [said]
@@ -84,8 +88,14 @@ def search() -> Search:
         for name, rule_holds in model.RULES.items():
             if name not in breaks and not rule_holds(before, said, after):
                 breaks[name] = path_to(said, came[before])
+        kill, _, last = said.rpartition(" ")
+        command, ticket = model.KILLED.get(kill), model.BY_VALUE.get(last)
+        if command is not None and ticket is not None:
+            cut = (kill, after.of(ticket).merged)
+            if cut not in cuts and after not in {before, command(before, ticket)}:
+                cuts[cut] = path_to(said, came[before])
         came.setdefault(after, (before, said))
-    return Search(breaks, frozenset(said for _, said, _ in edges))
+    return Search(breaks, frozenset(said for _, said, _ in edges), cuts)
 
 
 @pytest.mark.parametrize("name", list(model.RULES))
@@ -226,6 +236,21 @@ def test_the_real_drain_agrees_with_the_model_on_every_step() -> None:
             suppress_health_check=[HealthCheck.too_slow],
         ),
     )
+
+
+def test_the_real_drain_agrees_with_the_model_after_each_kind_of_kill(tmp_path: Path) -> None:
+    # Why: the stateful run above takes few steps and reaches few kills. Each kill is taken here
+    # where it first leaves a state of its own, on a landed ticket and on one not landed, then a
+    # report and the killed command run again: what rules 5 and 8 read after a kill.
+    cuts = search().cuts
+    # Why: with its tree gone a mark is read by nothing, so in the model's terms this kill
+    # leaves what the whole landing leaves; rule 8 still reads what land run again does.
+    assert {Kind(kill) for kill, _ in cuts} == set(model.KILLS) - {Kind.KILL_LAND_AFTER_DISCARD}
+    for at, path in enumerate(cuts.values()):
+        play = replay(tmp_path / str(at), path)
+        kill, _, name = path[-1].rpartition(" ")
+        play.named("drain.py report")
+        play.named(f"{model.KILLS[Kind(kill)].value} {name}")
 
 
 def plan_of(play: Play) -> dict[str, drain.Entry]:
