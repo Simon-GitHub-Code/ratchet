@@ -1187,6 +1187,48 @@ def check_mutation(root: Path) -> Iterable[Finding]:
                 return
 
 
+# Why: ADR 0050. `--changed` prints every changed file, for the recipe to filter, so a recipe
+# written when the script filtered by a tool's config hands a change of config files straight to
+# its tool, which exits 1 on non-code. The recipe is found by shape alone, no tool named: the
+# output is captured once from the script, no pipe follows it, and the variable is never
+# reassigned or piped on.
+CHANGED_CAPTURE = re.compile(
+    r"\b(?P<var>\w+)=[\"']?\$\((?P<body>[^()]*"
+    + re.escape(MUTATION_SCRIPT)
+    + r"[^()]*--changed[^()]*)\)"
+)
+
+
+def unfiltered_changed(line: str) -> bool:
+    """Whether ``line`` captures ``--changed`` output and uses it with no filter between."""
+    for found in CHANGED_CAPTURE.finditer(line):
+        after = line[found.end() :].replace("||", "")
+        reassigned = re.search(rf"\b{found['var']}=", after)
+        if "|" not in found["body"] and "|" not in after and not reassigned:
+            return True
+    return False
+
+
+def check_mutation_filter(root: Path) -> Iterable[Finding]:
+    """A recipe that hands ``--changed`` output to its tool without filtering the list.
+
+    Why: ADR 0050. A change of config files only gives the tool no code, and the tool fails. The
+    finding is never owed (``owed.NEVER``): the changed-code mutation gate is red on it now.
+    """
+    for path in justfile_paths(root):
+        for line in (read(path) or "").replace("\\\n", " ").splitlines():
+            if not line.lstrip().startswith("#") and unfiltered_changed(line):
+                name = path.relative_to(root).as_posix()
+                problem = (
+                    f"a recipe hands the output of {MUTATION_SCRIPT} --changed to its tool"
+                    " unfiltered, and that lists every changed file, so a change with no code in"
+                    " it fails the tool; filter the list in the recipe to the files the tool"
+                    " mutates, or move to the `--mutants` form (ADR 0050)"
+                )
+                yield agent(f"{name}: {problem}")
+                return
+
+
 def check_operability(root: Path) -> Iterable[Finding]:
     text = read(root / BINDING_PATH) or ""
     asked = set(FIRST_CELL.findall(markdown_text.section(text, "## Gates")))
@@ -2245,6 +2287,7 @@ CHECKS: tuple[Check, ...] = (
     check_signs,
     check_pins,
     check_mutation,
+    check_mutation_filter,
     check_operability,
     check_speed,
     check_manifest,
@@ -3024,7 +3067,17 @@ def mutation_gate_mutations() -> list[Mutation]:
         recipe = f"\nmutation-own:\n    python3 {script} --tool x --report r.json\n"
         (root / "justfile").write_text(text + recipe, encoding="utf-8")
 
-    return [("mutation recipe that passes a tool's own report", passing_a_report)]
+    def unfiltered(root: Path) -> None:
+        text = (root / "justfile").read_text(encoding="utf-8")
+        script = '"{{ratchet_plugin}}/scripts/mutation_survivors.py"'
+        capture = f'files="$(python3 {script} --tool x --changed)"; [ -z "$files" ] && exit 0'
+        recipe = f'\nmutation-own:\n    {capture}; x-tool run --mutate "$files"\n'
+        (root / "justfile").write_text(text + recipe, encoding="utf-8")
+
+    return [
+        ("mutation recipe that passes a tool's own report", passing_a_report),
+        ("mutation recipe that hands --changed output to its tool unfiltered", unfiltered),
+    ]
 
 
 def owed_mutations() -> list[Mutation]:
