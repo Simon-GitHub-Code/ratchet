@@ -917,6 +917,7 @@ def settle(
         "closed": now().isoformat(timespec="seconds"),
         "owes": owed_kinds(result or {}),
         "holds": queue_notes.holds_of(result or {}),
+        "causes": queue_notes.causes_of(result or {}),
         "reported": False,
     }
     queue_notes.write_note(queue_notes.note_path(root, branch), note)
