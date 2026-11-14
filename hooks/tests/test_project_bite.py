@@ -1471,13 +1471,19 @@ def test_a_setup_that_leaves_a_link_leading_out_of_the_copy_is_unsafe_and_red(
     assert "leads outside the scratch copy" in out
 
 
-def test_a_setup_link_that_stays_inside_the_copy_is_not_refused(tmp_path: Path) -> None:
-    root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
+def test_a_setup_link_that_stays_inside_the_copy_is_accepted_and_the_proof_goes_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Why: green end to end with a link present shows the link was accepted, not refused.
+    root = project(tmp_path / "repo", {"lint": LINT}, "")
     (root / "quality/bites.toml").write_text(
-        'setup = ["ln -s src alias"]\n' + bite("lint", "f"), encoding="utf-8"
+        'setup = ["ln -s src alias"]\n' + bite("lint", "a planted word"), encoding="utf-8"
     )
     commit(root, "registry")
-    assert prove(root) == 1  # the fault is not caught by the gate: red, but not for the link
+    assert prove(root) == 0
+    out = capsys.readouterr().out
+    assert "leads outside the scratch copy" not in out
+    assert "bite: green" in out
 
 
 def test_a_process_setup_left_swapping_a_directory_for_a_link_never_changes_the_real_tree(
