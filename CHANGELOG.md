@@ -2,14 +2,11 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 The change-size ceiling counts product code, not tests (ADR 0045). Tests were 85% of the lines counted on recent changes, so the ceiling mostly limited them. `[ceilings.change]` is now `product_files = 25`, `product_lines = 1000` and a loose `test_lines = 3000` that only stops a runaway, and the early stops follow: product code has no margin for what is still to come, tests keep two thirds of their ceiling while the critic runs.
 
 - Which paths are tests is the binding's `## Test paths` section, written at adoption by the project's agent: the plugin names no stack. Until it is filled every changed line counts as product, as before, and conformance names the missing section.
 - An existing repository's `files` and `lines` become `product_files` and `product_lines` at the same values, by `upgrade.py --apply`; the lowered gate reads the move and refuses a higher value. `test_lines` is new, and the one loosening, which the upgrade says plainly.
 
-=======
->>>>>>> origin/main
 A ticket that fits the change-size ceiling is no longer parked as too large before the critic exists (ADR 0040). Until the binding declares `depended-on` the early size stop is the ceiling itself; with the critic it stays at two thirds.
 
 The route no longer loops a non-engineer on a parked ticket or a half-finished adoption. It reads the drain's note of why a ticket is held and names the step that releases that kind of hold (a size block names the split, never a bare `/ratchet:feature`), and a binding with no plugin pin names `/ratchet:adopt` to resume, ahead of the hooks install.

@@ -648,7 +648,6 @@ def test_without_the_critic_a_change_may_fill_the_whole_ceiling() -> None:
     # Why: an eval run's first ticket came back blocked at 1,067 lines of a 1,500 ceiling, "with
     # the review still to come", though no critic ran and the review's records are not counted.
     answers = {"implement": IMPLEMENTED, "review": REVIEW}
-<<<<<<< HEAD
     spec = {
         **SPECIFIED,
         "changeSize": {"lines": 100, "ceiling": 1000, "testLines": 2500, "testCeiling": 3000},
@@ -657,10 +656,6 @@ def test_without_the_critic_a_change_may_fill_the_whole_ceiling() -> None:
         **IMPLEMENTED,
         "changeSize": {"lines": 100, "ceiling": 1000, "testLines": 3000, "testCeiling": 3000},
     }
-=======
-    spec = {**SPECIFIED, "changeSize": {"lines": 1067, "ceiling": 1500}}
-    built = {**IMPLEMENTED, "changeSize": {"lines": 1500, "ceiling": 1500}}
->>>>>>> origin/main
     ran = _run({"ref": "4"}, preflight=YOUNG, spec=spec, **{**answers, "implement": built})
     assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement", "review"]
     assert ran["result"]["verdict"] == "approve"
@@ -668,15 +663,9 @@ def test_without_the_critic_a_change_may_fill_the_whole_ceiling() -> None:
     old = {**PREFLIGHT, "critic": True, "critic_reason": "others rely on it"}
     ran = _run({"ref": "4"}, preflight=old, spec=spec)
     assert ran["result"]["tooLarge"]["stage"] == "the spec", (
-<<<<<<< HEAD
         "with the critic two thirds of the test ceiling still holds"
     )
     assert "two thirds of the test ceiling the run stops" in ran["prompts"]["spec"]
-=======
-        "with the critic two thirds still holds"
-    )
-    assert "two thirds of the ceiling the run stops" in ran["prompts"]["spec"]
->>>>>>> origin/main
 
 
 def test_the_critics_share_of_the_size_is_not_counted_when_it_does_not_run() -> None:
@@ -692,20 +681,10 @@ def test_the_critics_share_of_the_size_is_not_counted_when_it_does_not_run() -> 
     )
     assert "plus the critic's tests" not in ran["prompts"]["spec"]
     assert "return criticLines: 0" in ran["prompts"]["spec"]
-<<<<<<< HEAD
     heavy = {**SPECIFIED, "changeSize": {"lines": 1001, "ceiling": 1000}}
     ran = _run({"ref": "4"}, preflight=YOUNG, spec=heavy)
     assert "over the change-size ceiling of 1000" in ran["result"]["verdictForcedBy"][0]
     full = {**over, "implementationLines": 900}
-=======
-    heavy = {**SPECIFIED, "changeSize": {"lines": 1501, "ceiling": 1500}}
-    ran = _run({"ref": "4"}, preflight=YOUNG, spec=heavy)
-    assert (
-        "over the change-size ceiling of 1500, and the review"
-        in ran["result"]["verdictForcedBy"][0]
-    )
-    full = {**over, "implementationLines": 800}
->>>>>>> origin/main
     ran = _run({"ref": "4"}, preflight=YOUNG, spec={**sized, "changeEstimate": full})
     assert "no critic" not in ran["result"]["verdictForcedBy"][0], "a product stop names no critic"
     assert "records 50" in ran["result"]["verdictForcedBy"][0]
