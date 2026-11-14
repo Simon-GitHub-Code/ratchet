@@ -238,8 +238,11 @@ RULE_PARTS = (
     ),
     (
         "anything a later change reverses without loss to the user: order, wording, layout, timing,"
-        " limits, tools, and how it is built"
+        " limits, and, within the architecture the owner chose, tools and how it is built"
     ),
+    # Why: ADR 0049. The architecture and its tools are the one choice of how it is built that
+    # reaches the owner.
+    "/ratchet:architecture",
 )
 PLACES = ["init/templates/AGENTS.md", "method/SKILL.md", "method/records.md", "method/pipeline.md"]
 
@@ -530,13 +533,17 @@ def test_every_cost_line_the_owner_reads_says_what_is_redone() -> None:
 
 
 def test_the_cost_check_names_the_stack_and_the_tool_route_names_what_is_redone() -> None:
-    # Why: the verifier deleted the sentence that says a stack changed after adoption has no step
-    # yet, and the tool route's "Nothing built is redone", and every test stayed green. An agent
-    # checks a cost line against these before the owner reads it.
+    # Why: the verifier deleted the sentence that says what a stack changed after adoption costs,
+    # and the tool route's "Nothing built is redone", and every test stayed green. An agent
+    # checks a cost line against these before the owner reads it. Since ADR 0049 the change is
+    # recorded by `/ratchet:architecture`, and each tool is still replaced on its own.
     records = flat("method/records.md")
     assumed = records.split("Assume, and list under **Assumed**", 1)[1]
     assumed = assumed.split(" The pipeline's", 1)[0]
-    assert "a stack changed after adoption, which no step yet supports" in assumed
+    assert (
+        "a stack changed after adoption, which `/ratchet:architecture` records and whose tools are"
+        " then replaced one change per tool"
+    ) in assumed
     route = records.split("## Overturning an assumption", 1)[1].split(" ## ", 1)[0]
     tool = route.split("- *A tool*:", 1)[1].split(" - *", 1)[0]
     assert tool.endswith("Its merge is the owner's. Nothing built is redone.")
