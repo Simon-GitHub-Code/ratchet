@@ -1453,6 +1453,124 @@ def test_more_than_three_refusals_are_counted(tracked: Path) -> None:
     assert reason.endswith("; and 2 more")
 
 
+# --- a ticket edit that changes only its links is the agent's (ADR 0056) -----------------------
+
+WITH_LINKS = (
+    "# 01: A\n\nStatus: ready-for-agent\nParent: ../spec.md\nBlocked by: 02-b.md\n\n"
+    "- [ ] It saves a link.\n"
+)
+BLOCKER = ".scratch/thing/issues/02-b.md"
+ELSEWHERE = ".scratch/other/spec.md"
+
+
+@pytest.fixture
+def linked(tmp_path: Path) -> Path:
+    """A labelled ticket with ``Parent:`` and ``Blocked by:`` lines, and two symbolic links."""
+    repository(
+        tmp_path,
+        {
+            **BASE,
+            SPEC: "# Thing\n",
+            TICKET: WITH_LINKS,
+            BLOCKER: "# 02: B\n\nStatus: done\n",
+            ELSEWHERE: "# Other\n",
+        },
+    )
+    link(tmp_path, ".scratch/thing/alias.md", "spec.md")
+    link(tmp_path, ".scratch/thing/folder", "issues")
+    commit(tmp_path, "docs: links")
+    branch(tmp_path, "records-thing")
+    return tmp_path
+
+
+def edited(old: str, new: str) -> dict[str, str | None]:
+    return {TICKET: WITH_LINKS.replace(old, new)}
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        edited("Parent: ../spec.md", "Parent: ../../thing/spec.md"),
+        edited("Parent: ../spec.md", "Parent: ./../spec.md"),
+        edited("Blocked by: 02-b.md", "Blocked by: ../issues/./02-b.md"),
+    ],
+    ids=["parent", "parent with a dot", "blocked by"],
+)
+def test_a_link_rewritten_to_name_the_same_file_is_the_agents(
+    linked: Path, files: dict[str, str | None]
+) -> None:
+    change(linked, files, record=False)
+    assert judged(linked) == []
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        edited("Parent: ../spec.md", "Parent: ../../other/spec.md"),
+        edited("Blocked by: 02-b.md", "Blocked by: 02-b.md, 03-c.md"),
+        edited("Parent: ../spec.md\n", ""),
+        edited("\n- [ ] It saves", "\nParent: ../spec.md\n- [ ] It saves"),
+        {TICKET: WITH_LINKS.replace("../spec.md", "../../thing/spec.md").replace("link.", "link!")},
+        edited("Parent: ../spec.md", "Parent: ../missing.md"),
+        edited("Parent: ../spec.md", "Parent: ../../../../outside.md"),
+        edited("Parent: ../spec.md", "Parent: ../alias.md"),
+        edited("Parent: ../spec.md", "Parent: ../folder/../spec.md"),
+        edited("Blocked by: 02-b.md", "Blocked by: ../folder/02-b.md"),
+        edited("Parent: ../spec.md", "Parent: /thing/spec.md"),
+        edited("Parent: ../spec.md", "Parent: ../issues"),
+        edited("Parent: ../spec.md", "Parent: #3"),
+        edited("Parent: ../spec.md", "Parent: ../spec.md and ../spec.md"),
+        edited("Status: ready-for-agent", "Status: done"),
+        edited("# 01: A", "# 01: B"),
+    ],
+    ids=[
+        "a different spec",
+        "a link added",
+        "a link removed",
+        "a line added",
+        "a link and a character of criterion",
+        "a target that is missing",
+        "a target outside the repository",
+        "a symbolic link as target",
+        "a folder that is a link on the way",
+        "a link on the way, new",
+        "an absolute target",
+        "a folder as target",
+        "a number",
+        "a ref added to the line",
+        "the status",
+        "the title",
+    ],
+)
+def test_any_other_change_to_an_agreed_ticket_stays_the_owners(
+    linked: Path, files: dict[str, str | None]
+) -> None:
+    change(linked, files, record=False)
+    assert judged(linked) == [f"{BUT}{TICKET} {FROZEN}"]
+
+
+def test_a_ticket_the_change_renames_is_not_a_link_edit(linked: Path) -> None:
+    moved = ".scratch/thing/issues/03-a.md"
+    files = {TICKET: None, moved: WITH_LINKS.replace("../spec.md", "../../thing/spec.md")}
+    change(linked, files, record=False)
+    gives = GIVES.format(label="ready-for-agent")
+    assert judged(linked) == [f"{BUT}{TICKET} deletes a record; {moved} {gives}"]
+
+
+def test_a_ticket_that_is_not_there_to_read_is_no_link_edit(linked: Path) -> None:
+    change(linked, edited("Parent: ../spec.md", "Parent: ../../thing/spec.md"), record=False)
+    read = merge_ready.read(linked, "main", "HEAD")
+    assert isinstance(read, merge_ready.Change)
+    assert merge_ready.link_only(read, TICKET)
+    assert not merge_ready.link_only(read, ".scratch/thing/issues/09-none.md")
+
+
+def test_a_link_edit_does_not_free_the_spec_beside_it(linked: Path) -> None:
+    files = {**edited("Parent: ../spec.md", "Parent: ../../thing/spec.md"), SPEC: "# Thing!\n"}
+    change(linked, files, record=False)
+    assert judged(linked) == [f"{BUT}{SPEC} {INHERITED}"]
+
+
 # --- what the verifier of PR 42 broke (ADR 0031) -----------------------------------------------
 
 INSTRUCTS = "guard: {path} (instructions): an agent reads it as instructions, wherever it sits"

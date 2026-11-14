@@ -31,8 +31,9 @@ only for ``agent``. The owner merges when any of these holds:
   none, and no door holds any. The glossary takes only additions (ADR 0014). A ticket may not gain
   the agent-ready label, take another's number, be one a labelled ticket's ``Blocked by`` line can
   name, or be closed. A labelled ticket, the spec it inherits from and the status of a ticket it
-  waits on do not change (``feature_preflight.reads`` names them). An ADR is a decision the owner
-  agrees to: the reason names its title.
+  waits on do not change (``feature_preflight.reads`` names them), but a labelled ticket may have
+  its ``Parent:`` and ``Blocked by:`` lines rewritten to name the same files (ADR 0056). An ADR
+  is a decision the owner agrees to: the reason names its title.
 - ``file``: a guard, door or record path is a symbolic link or a submodule, at the merge base
   or at the head. Git shows a link's target as its text, which is not what a gate reads there.
 - ``target``, ``behind``, ``tier2``: the pull request targets another branch; the branch does not
@@ -760,6 +761,9 @@ def holders(manifest: Manifest, path: str) -> tuple[list[Group], list[Door]]:
     return groups, manifest.doors_of(path) + lower.doors_of(path.casefold())
 
 
+LINK_REF = re.compile(r"[^`\s,()\[\]]+\.md")
+
+
 def spellings(change: Change) -> tuple[str, ...]:
     """The agent-ready label as the default branch's triage-labels record and the role spell it."""
     spelled = label_for_role(change.tip(LABELS_RECORD.as_posix()) or "", READY_ROLE)
@@ -839,12 +843,74 @@ def open_ticket(path: str, text: str | None) -> bool:
     return text is None or preflight.local_ticket(path, text).is_open
 
 
+def resolved(change: Change, ticket: str, ref: str) -> str | None:
+    """The one regular file ``ref`` names from ``ticket`` in the head's tree, else ``None``.
+
+    Why: each component is read from the commit's tree, never the work tree, so a link on the
+    way, a missing file, a directory or a path that climbs out of the repository is no file.
+    The preflight reads a ref from the folder of the ticket, and so does this.
+    """
+    if ref.startswith("/"):
+        return None
+    walked: list[str] = []
+    parts = [*PurePosixPath(ticket).parent.parts, *ref.split("/")]
+    for index, part in enumerate(parts):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not walked:
+                return None
+            walked.pop()
+            continue
+        walked.append(part)
+        found = git(change.root, "ls-tree", "-z", change.head, "--", "/".join(walked)) or ""
+        mode, _, name = found.rstrip("\0").partition("\t")
+        want = "100644" if index == len(parts) - 1 else "040000"
+        if name != "/".join(walked) or mode.split(" ")[0] != want:
+            return None
+    return "/".join(walked)
+
+
+def link_only(change: Change, path: str) -> bool:
+    """Whether a ticket's change is to its link lines alone, each link still naming one file.
+
+    Why: ADR 0056. A path fix in a ``Parent:`` or ``Blocked by:`` line changes nothing the
+    ticket builds. Every changed line is such a line, with the same words around the same number
+    of ``.md`` refs, and each ref that changed names, from the ticket, the same regular file in
+    the head's tree as the one before. The ticket must be at both ends, as text. Anything
+    unread is the owner's.
+    """
+    old, new = change.before(path), change.after(path)
+    if old is None or new is None:
+        return False
+    lines = (old.splitlines(), new.splitlines())
+    if len(lines[0]) != len(lines[1]):
+        return False
+    for was, now in zip(*lines, strict=True):
+        if was == now:
+            continue
+        links = all(
+            preflight.PARENT_LINE.match(x) or preflight.BLOCKED_LINE.match(x) for x in (was, now)
+        )
+        found = (LINK_REF.findall(was), LINK_REF.findall(now))
+        same = LINK_REF.sub("\0", was) == LINK_REF.sub("\0", now) and len(found[0]) == len(found[1])
+        if not links or not same:
+            return False
+        for before, after in zip(*found, strict=True):
+            target = resolved(change, path, before)
+            if before != after and (target is None or target != resolved(change, path, after)):
+                return False
+    return True
+
+
 def agreement(change: Change, path: str) -> str | None:
     """Why a change of what a labelled ticket reads is the owner's: what it builds, or when."""
     whole, status = build_inputs(change)
     if path in whole:
         ticket = whole[path]
         if ticket == path:
+            if link_only(change, path):
+                return None
             return "is a ticket the owner agreed to build, and only they change it"
         return f"is what {ticket} inherits its approach from, a ticket the owner agreed to build"
     if path in status and not change.held(path):
