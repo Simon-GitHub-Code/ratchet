@@ -32,6 +32,7 @@ import project_bite
 import settings_rules
 import suppressions
 import triggers
+from ratchet_guards import committed
 
 # Why: the dependency contract lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -1205,6 +1206,24 @@ def check_manifest(root: Path) -> Iterable[Finding]:
         yield agent(f"guards/manifest.toml: '{pattern}' is in no group")
 
 
+def check_default_branch(root: Path) -> Iterable[Finding]:
+    """ADR 0041: the default branch is found from refs, not from the main work tree's reflog.
+
+    A repository with no remote and no ``main`` or ``master`` has its default branch read from
+    the reflog, which git expires; until the owner names the branch one of those ways, the guards
+    are as strong as that log.
+    """
+    if committed.anchored_on_reflog(root):
+        yield owner(
+            "guards/manifest.toml: the default branch is found only through the main work tree's"
+            " history of branch switches, which git forgets after about three months",
+            "Add the forge remote (then fetch it and set its head), or name the default branch"
+            " `main` or `master`? Either is a one-time step, and the guards then read the branch"
+            " from git's own refs.",
+            assumed="the guards keep reading the branch the main work tree was first on",
+        )
+
+
 def check_doors(root: Path) -> Iterable[Finding]:
     """ADR 0021: every kind of one-way door is bound, or says why the repository has none."""
     text = read(root / "guards/manifest.toml")
@@ -2054,6 +2073,7 @@ CHECKS: tuple[Check, ...] = (
     check_operability,
     check_speed,
     check_manifest,
+    check_default_branch,
     check_doors,
     check_merge_workflow,
     check_weekly_workflow,
