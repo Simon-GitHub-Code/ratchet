@@ -54,6 +54,15 @@ const LEASE = {
   DrainPyLandATheCloseAfterTheMerge: "drain.py land a, the close after the merge",
   AKillStopsItsLandAndItsMergePyBeforeTheMerge:
     "a kill stops its land and its merge.py before the merge",
+  AKillStopsItsLandAloneBeforeItsMergePyProbesIt:
+    "a kill stops its land alone before its merge.py probes it",
+  ItsMergePyMeetsTheMergeLockOfAMergeWhoseLandIsGoneAndBothStop:
+    "its merge.py meets the merge lock of a merge whose land is gone, and both stop",
+  AKillStopsItsLandAloneOnceItsMergePyHasProbedItTheMergePyRunningOn:
+    "a kill stops its land alone once its merge.py has probed it, the merge.py running on",
+  TheMergePyItsKilledLandStartedLandsTheMerge: "the merge.py its killed land started lands the merge",
+  TheMergePyItsKilledLandStartedEndsAndLandsNothing:
+    "the merge.py its killed land started ends and lands nothing",
   AKillStopsItsLandAfterTheMergeBeforeTheClose:
     "a kill stops its land after the merge, before the close",
   StopsItsSessionStillOpen: "stops, its session still open",
@@ -63,6 +72,8 @@ const LEASE_WHOLE = {
   EachDrainRunsInASessionOfItsOwn: "each drain runs in a session of its own",
   OneLongLivedProcessRunsBothDrains: "one long-lived process runs both drains",
   TheProgramBuiltInTheTreeEnds: "the program built in the tree ends",
+  TheMergePyOfALandKilledBeforeItsProbeFindsTheLandGoneAndStops:
+    "the merge.py of a land killed before its probe finds the land gone and stops",
 };
 
 export const named = (action) => MAIN[action];

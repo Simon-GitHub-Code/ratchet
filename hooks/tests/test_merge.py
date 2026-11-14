@@ -1,11 +1,14 @@
 """``merge.py``: the merge with no forge lands what the judge and ``check`` both pass, only that."""
 
+import fcntl
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+import drain
 import merge
 import merge_ready
 from merge_ready import Reason
@@ -586,3 +589,151 @@ def test_a_records_branch_that_cannot_be_made_changes_nothing(
 def test_a_branch_or_the_records_and_never_both(argv: list[str]) -> None:
     with pytest.raises(SystemExit):
         merge.main(argv)
+
+
+# --- the merge lock and the probe of the land that started a merge ----------------------------
+
+
+def test_a_merge_holds_its_lock_and_a_second_merge_of_the_branch_merges_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    was, head = tips(root)
+    monkeypatch.setattr(merge, "LOCK_TRIES", 1)
+    with merge.merge_lock_path(root, FEATURE).open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        capsys.readouterr()
+        assert run(root) == 2
+    assert capsys.readouterr().out == (
+        f"merge: a merge of `{FEATURE}` is already running; nothing was merged\n"
+    )
+    assert tips(root) == (was, head)
+    assert run(root) == 0, "the lock was freed with its holder"
+
+
+LAND_GONE = (
+    "merge: the land that started this merge has stopped; nothing was merged; run land again\n"
+)
+REFUSED = "merge: RATCHET_LANDING names no landing of this repository; nothing was merged\n"
+
+
+def private_path(root: Path, name: str = "x") -> Path:
+    return merge.private_lock_path(root, name)
+
+
+@pytest.mark.parametrize("state", ["missing", "free"])
+def test_a_merge_whose_land_is_gone_merges_nothing_and_leaves_the_private_lock_to_clean(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    state: str,
+) -> None:
+    root = project(tmp_path)
+    was, head = tips(root)
+    private = private_path(root)
+    if state == "free":
+        private.write_text("kept")
+    monkeypatch.setenv(merge.LANDING_VAR, str(private))
+    capsys.readouterr()
+    assert run(root) == 2
+    assert capsys.readouterr().out == LAND_GONE
+    assert tips(root) == (was, head)
+    assert private.exists() == (state == "free")
+    if state == "free":
+        assert private.read_text() == "kept"
+        monkeypatch.delenv(merge.LANDING_VAR, raising=False)
+        assert drain.main(["drain.py", "clean", "--root", str(root)]) == 0
+        assert not private.exists(), "the sweep of free private locks is the housekeeping"
+
+
+def test_a_merge_whose_land_is_alive_goes_on_and_leaves_the_private_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    private = private_path(root)
+    monkeypatch.setenv(merge.LANDING_VAR, str(private))
+    with private.open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert run(root) == 0
+    assert private.exists()
+    assert merge.LANDING_VAR not in os.environ, "what the merge runs does not inherit it"
+
+
+def refused_untouched(
+    root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, *, named: Path
+) -> None:
+    was, head = tips(root)
+    monkeypatch.setenv(merge.LANDING_VAR, str(named))
+    capsys.readouterr()
+    assert run(root) == 2
+    assert capsys.readouterr().out == REFUSED
+    assert tips(root) == (was, head)
+
+
+def test_a_variable_naming_a_file_outside_the_state_dir_removes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    outside = tmp_path / "precious"
+    outside.write_text("keep me")
+    refused_untouched(root, capsys, monkeypatch, named=outside)
+    assert outside.read_text() == "keep me"
+    prefixed = tmp_path / f"{merge.PRIVATE}x"
+    prefixed.write_text("keep me too")
+    refused_untouched(root, capsys, monkeypatch, named=prefixed)
+    assert prefixed.read_text() == "keep me too"
+
+
+def test_a_variable_naming_a_state_file_without_the_prefix_removes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    other = merge.state_dir(root) / "ratchet-other"
+    other.write_text("keep me")
+    refused_untouched(root, capsys, monkeypatch, named=other)
+    assert other.read_text() == "keep me"
+
+
+def test_a_variable_naming_a_symlink_in_the_state_dir_follows_and_removes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    target = tmp_path / "target"
+    target.write_text("keep me")
+    link = private_path(root)
+    link.symlink_to(target)
+    refused_untouched(root, capsys, monkeypatch, named=link)
+    assert link.is_symlink()
+    assert target.read_text() == "keep me"
+
+
+def test_a_variable_naming_a_directory_in_the_state_dir_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    folder = private_path(root)
+    folder.mkdir()
+    refused_untouched(root, capsys, monkeypatch, named=folder)
+    assert folder.is_dir()
+
+
+def test_a_lock_probe_creates_nothing_and_follows_no_symlink(tmp_path: Path) -> None:
+    gone = tmp_path / "gone"
+    assert not merge.lock_held(gone)
+    assert not gone.exists()
+    target = tmp_path / "target"
+    target.write_text("keep")
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    with target.open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert not merge.lock_held(link), "a symlink is not followed to the lock behind it"
+    assert target.read_text() == "keep"
+
+
+def test_records_take_no_merge_lock(tmp_path: Path) -> None:
+    root = on_main(tmp_path, {SPEC: "# Thing\n"})
+    assert records(root) == 0
+    assert not list(merge.state_dir(root).glob("ratchet-merge-lock-*"))
+    assert merge.merge_lock_path(root, FEATURE).name.startswith("ratchet-merge-lock-")

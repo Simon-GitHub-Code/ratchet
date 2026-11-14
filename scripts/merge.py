@@ -40,11 +40,23 @@ branch; the next run switches back, carrying what is uncommitted, and lands the 
 their commit. When git cannot switch back, it prints git's line and what to type before running
 again.
 
+A run holds a lock of the kernel's on its branch, its merge lock, from its first act to its end; it
+is skipped for ``--records``. Two merges of one branch never run at once: the second prints that a
+merge of the branch is already running, merges nothing and exits 2. A ``drain.py land`` names a
+file of its own in ``RATCHET_LANDING``, which it holds a lock on until its close. The merge, once it
+holds its lock, tries that file read-only: when it can take it, or the file is gone, the ``land``
+that started this merge has stopped, so the merge prints that, merges nothing and exits 2. It never
+removes, creates or changes the file the variable names: ``clean`` sweeps free private locks. A
+variable naming anything but a regular private lock file (prefix ``ratchet-landed-by-``) directly
+in the repository's state directory, a symlink included, is refused with one line, and nothing is
+merged (exit 2). A merge run by hand sets no variable and is not probed. Both locks die with their
+holders, so the drain sees a merge while its ``land`` or the merge itself is alive.
+
 With a remote named ``origin`` the script refuses: the pull request's merge job is the one that
 merges there, and a local merge could not be pushed.
 
 Usage: ``merge.py <branch> [--root DIR]`` or ``merge.py --records [--root DIR]``. Exit 0 merged,
-1 the owner merges, 2 nothing to judge.
+1 the owner merges, 2 nothing to judge (or the merge lock is held, or the ``land`` is gone).
 """
 
 from __future__ import annotations
@@ -52,10 +64,12 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -69,7 +83,7 @@ import merge_ready
 from merge_ready import Reason
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 HEADS = "refs/heads/"
 CHECK = "check"
@@ -85,6 +99,10 @@ HELD = ".lock"
 STALE_SCRATCH = 60  # seconds an empty scratch directory stands before a sweep removes it
 LANDING = "ratchet-landing"
 OWNER_FILE = 0o600
+# Why: the variable carries one path, the file whose lock the ``land`` that started the merge holds.
+LANDING_VAR = "RATCHET_LANDING"
+PRIVATE = "ratchet-landed-by-"
+LOCK_TRIES, LOCK_POLL = 20, 0.05
 # Why: these say the merge itself failed, which the owner's merge would meet too; every other
 # reason is the judge's, and the owner merging is what it asks for.
 NOT_THE_JUDGES = frozenset({"gates", "conflict", "moved", "refs"})
@@ -148,6 +166,76 @@ def locked(path: Path, *, create: bool = True) -> Iterator[int | None]:
             yield descriptor
     finally:
         os.close(descriptor)
+
+
+def branch_digest(branch: str) -> str:
+    """What names the lock files of ``branch``: the landing lock's, and the merge lock's."""
+    return hashlib.sha256(branch.encode()).hexdigest()[:16]
+
+
+def merge_lock_path(root: Path, branch: str) -> Path:
+    """The file whose lock a run of ``merge.py`` on ``branch`` holds for its whole run."""
+    return state_dir(root) / f"ratchet-merge-lock-{branch_digest(branch)}"
+
+
+@contextlib.contextmanager
+def locked_retrying(path: Path, tries: int, poll: float) -> Iterator[int | None]:
+    """``locked``, tried ``tries`` times ``poll`` seconds apart; ``None`` when it stays held.
+
+    Why: a probe of a lock holds it for microseconds, and a run that tried once at that moment
+    would stop for a run that is not there.
+    """
+    for _ in range(tries - 1):
+        with locked(path) as held:
+            if held is not None:
+                yield held
+                return
+        time.sleep(poll)
+    with locked(path) as held:
+        yield held
+
+
+def lock_held(path: Path) -> bool:
+    """Whether a process holds the lock of ``path``; a file that is not there is held by none.
+
+    The file is opened read-only, never created, and a symlink is not followed.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(descriptor)
+    return False
+
+
+def private_lock_path(root: Path, name: str) -> Path:
+    """The private lock file ``name`` of a ``land``: the one place such a file may be."""
+    return state_dir(root) / f"{PRIVATE}{name}"
+
+
+def landing_state(root: Path, named: str) -> str:
+    """What ``named`` in ``RATCHET_LANDING`` shows: ``alive``, ``gone`` or ``invalid``.
+
+    Only a regular file directly in the state directory with the private prefix is probed; any
+    other path, a symlink among them, is ``invalid`` and is not opened. Nothing is created,
+    changed or removed.
+    """
+    given = Path(named)
+    path = given.parent.resolve() / given.name
+    if path.parent != state_dir(root) or not path.name.startswith(PRIVATE):
+        return "invalid"
+    try:
+        shown = os.lstat(path)
+    except OSError:
+        return "gone"
+    if not stat.S_ISREG(shown.st_mode):
+        return "invalid"
+    return "alive" if lock_held(path) else "gone"
 
 
 def land(root: Path, default: str, *, old: str, new: str) -> Reason | None:
@@ -602,7 +690,27 @@ def main(argv: list[str]) -> int:
         return land_records(Path(top))
     # Why: the route names `merge <branch>` for a records branch a stopped run left unmerged.
     land = merge_records if options.branch.startswith(RECORDS) else merge
-    return land(Path(top), options.branch)
+    return locked_run(Path(top), options.branch, land)
+
+
+def locked_run(root: Path, branch: str, run: Callable[[Path, str], int]) -> int:
+    """``run`` under the merge lock of ``branch``, once its ``land`` is seen to be alive."""
+    landing = os.environ.pop(LANDING_VAR, None)
+    with locked_retrying(merge_lock_path(root, branch), LOCK_TRIES, LOCK_POLL) as held:
+        if held is None:
+            print(f"merge: a merge of `{branch}` is already running; nothing was merged")
+            return 2
+        state = "alive" if landing is None else landing_state(root, landing)
+        if state == "invalid":
+            print("merge: RATCHET_LANDING names no landing of this repository; nothing was merged")
+            return 2
+        if state == "gone":
+            print(
+                "merge: the land that started this merge has stopped; nothing was merged; run"
+                " land again"
+            )
+            return 2
+        return run(root, branch)
 
 
 if __name__ == "__main__":
