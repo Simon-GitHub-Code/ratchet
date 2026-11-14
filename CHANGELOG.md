@@ -17,6 +17,7 @@ The queue drain finishes what a killed or concurrent command left, and no longer
 - `merge.py` removes an empty scratch directory a killed run left, once it has stood a minute.
 - A second `land` of a ticket is refused while its landing is still running, and says to run it again once that one ends. It went on with no lock, and could record the merge and remove the work tree under the landing that was alive.
 - `clean --all` leaves the work tree and the note of a live landing whose earlier close was cut off before it removed the tree.
+- `update`, `close` and `split` of a ticket refuse with exit 3 and change nothing while that ticket's landing runs. Before, a ticket parked during its merge could be merged without the owner.
 - A `--take-over` of a drain that is still alive is the owner's call. A landing that drain runs keeps its work tree while it runs, and the next `clean --all` takes it once the landing has ended.
 
 A gate's proof can no longer write into the real repository through a link. A setup left running could swap a directory of the scratch copy for a link into the real tree; the snapshot then held the link, and each restore wrote it back. `bite` now refuses any link that setup made or changed whose end lies outside the copy, and names it. It judges the link by its text in the snapshot, through every link on the way, not by the copy as it stands, and refuses a ring of links. A link the commit already holds is the repository's own and stays.
