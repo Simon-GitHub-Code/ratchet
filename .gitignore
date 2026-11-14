@@ -9,3 +9,5 @@ __pycache__/
 .claude/worktrees/
 .coverage
 evals/results/
+.coverage.*
+coverage-shard*
