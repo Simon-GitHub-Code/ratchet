@@ -17,6 +17,8 @@ A model of `workflows/pipeline.js` found two paths that ended with the ticket pa
 
 **A run that errors is resumed once, then closed for a retry.** If the resumed run errors too, the drain closes the ticket with `--outcome waits` and a reason that starts `errored:`. `errored` is one of `queue_notes.MECHANICAL`, so the bounded retry of ADR 0023 applies: the ticket, which has no commits, is built again from the start by the next drain, and after `RETRIES` closes in a row (three) it is held for the owner with a reason that says the run kept erroring.
 
+**A guard hold with no base commit is released by the ticket.** Notes written before the drain kept the default branch's commit (`base`) cannot tell that the guard edits landed, so the route names a change to the ticket for them, not landing the edits. Falling back to the note's own commit time was rejected: the default branch moves on both sides of it, so the guess would free a ticket the guard still refuses or never free one it no longer does. The route model reads such a hold as `parked`.
+
 Decided 2026-11-14.
 
 ## Refutation criterion

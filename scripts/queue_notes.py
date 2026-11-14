@@ -144,6 +144,9 @@ class Hold:
     reasons: list[str]
     kinds: list[str]
     owes: list[str]
+    # Why: a note written before the drain kept the default branch's commit has no base, so
+    # landing the guard edits cannot release it; only a change to the ticket does.
+    based: bool = True
 
 
 def split_into(root: Path, branch: str, ticket: preflight.Ticket) -> list[str] | None:
@@ -167,4 +170,9 @@ def held(root: Path, branch: str, ticket: preflight.Ticket) -> Hold | None:
     note = read_note(root, branch)
     if note.get("hold") is not True or released(root, note, ticket):
         return None
-    return Hold(texts(note.get("reasons")), texts(note.get("holds")), texts(note.get("owes")))
+    return Hold(
+        texts(note.get("reasons")),
+        texts(note.get("holds")),
+        texts(note.get("owes")),
+        based=isinstance(note.get("base"), str),
+    )

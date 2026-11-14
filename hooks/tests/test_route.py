@@ -983,6 +983,29 @@ def test_a_ticket_parked_for_guard_edits_is_released_when_they_land_and_not_befo
     assert states == ["buildable"]
 
 
+def test_a_guard_hold_with_no_base_commit_is_released_by_the_ticket_and_not_by_landing(
+    tmp_path: Path,
+) -> None:
+    # Why: ADR 0055. A note written before the drain kept the default branch's commit cannot
+    # tell that the edits landed, so naming them as the step would leave the owner doing it for
+    # nothing. Its own commit time is no stand-in: the default branch moves either side of it.
+    root = held_root(tmp_path)
+    parked(root, GUARD_BLOCK, stash=False)
+    path = queue_notes.note_path(root, "feature/2-b")
+    note = queue_notes.loaded(path.read_text(encoding="utf-8"))
+    assert isinstance(note.pop("base"), str)
+    queue_notes.write_note(path, note)
+    step = route.decide(root, None)
+    assert step.command.startswith(f"change ticket {HELD}")
+    assert "land the guard edits the run" not in step.command
+    write(root, "guards/x", "the edit\n")
+    commit(root, "chore(method): the guard edit the run named")
+    assert route.decide(root, None).command == step.command, "landing the edits frees nothing"
+    write(root, HELD, HELD_TEXT + "\nSplit: the first half only.\n")
+    commit(root, "docs(tracker): change the ticket")
+    assert route.decide(root, None).command == f"{route.FEATURE} {HELD}"
+
+
 @pytest.mark.parametrize(
     ("result", "named", "absent"),
     [
