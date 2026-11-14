@@ -127,6 +127,12 @@ lowered-smoke:
 first-hour plugin dir *flags:
     uv run evals/first-hour/run.py run --plugin {{plugin}} --dir {{dir}} {{flags}}
 
+# The first-hour run once for each persona that states a stack, one
+# after another, and one table of them all in <dir>/matrix.md. About an hour or more a persona and
+# real money each, so no tier runs it.
+first-hour-matrix plugin dir *flags:
+    uv run evals/first-hour/run.py matrix --plugin {{plugin}} --dir {{dir}} {{flags}}
+
 # Time one gate against its ceiling in quality/thresholds.toml; CI wraps every matrix job in it.
 budget key *flags:
     python3 scripts/budget.py {{key}} --report .ratchet/timing.jsonl {{flags}} -- just {{key}}

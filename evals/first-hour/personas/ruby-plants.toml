@@ -1,0 +1,34 @@
+# A web owner who insists on Ruby.
+
+name = "ruby-plants"
+stack = "Ruby, a Rails web app"
+
+idea = "A list of my house plants: I type a plant's name on a page, it saves it, and the page lists my plants so I remember to water them."
+
+profile = """
+I am a hobbyist, not a software engineer, though I once built a small site in Ruby and loved it. I
+have an idea for a small web app for myself and I want an AI to build it while I watch and answer
+questions. I use a laptop and a phone. I can follow instructions and copy a command into a terminal
+when I am told exactly what to type, but I do not know git, testing, linters, databases or
+deployment, and I do not want to learn them.
+
+The app: a plant list. A page has a form where I type a plant's name and save it, and under it the
+list of my plants. Later I may add when each was last watered, but not now. It is only for me and runs
+on my own computer.
+
+Firm positions:
+- It must be written in Ruby, as a Rails app; that is the one thing I know how to read. If you
+  suggest another language, my answer is no.
+- The pages are made by the server, plain HTML with a form and a list, which works without any
+  JavaScript.
+- Local only. Nothing goes online: no GitHub, no remote repository, no hosting, no accounts.
+- It is for me alone, so no sign-in, no sharing, no other users.
+- Keep it small and plain. Saving a plant and seeing my list matter most; everything else can wait.
+- If I save the same plant twice, keep one.
+"""
+
+[slice]
+kind = "html-form"
+describe = "open the page, type a plant name into the form, save it, and see it in the list"
+value = "Fiddle leaf fig of the first hour"
+expect = "Fiddle leaf fig of the first hour"
