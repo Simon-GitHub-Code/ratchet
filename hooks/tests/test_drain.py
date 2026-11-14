@@ -1027,3 +1027,62 @@ def test_update_says_why_it_cannot_make_the_work_tree_of_a_built_branch(
     monkeypatch.setattr(drain, "foreign", lambda _root: next(answers))
     assert run(root, "update", ALPHA) == 1
     assert "became another user's" in capsys.readouterr().out
+
+
+def test_a_ticket_left_waiting_for_a_reason_the_drain_resolves_is_retried_not_held(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    run(root, "open", GAMMA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"}, record=approval("alpha"))
+    git(root, "worktree", "remove", "--force", str(drain.tree_of(root, BRANCH_A)))
+    build(
+        root,
+        BRANCH_C,
+        {"src/c.py": "C = 1\n", GAMMA: ticket(3, "Gamma", status="resolved")},
+        record=approval("gamma"),
+    )
+    assert run(root, "land", GAMMA) == 0
+    assert run(root, "land", ALPHA) == 1
+    kept = note(root, BRANCH_A)
+    assert (kept["outcome"], kept["hold"], kept["attempts"]) == ("waits", False, 1)
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert (entry.state, entry.why) == ("built", (drain.BEHIND,))
+    capsys.readouterr()
+
+
+def test_a_mechanical_reason_that_keeps_coming_back_becomes_the_owners(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    red = "gates: `just check` is red on the merge result (exit 1)"
+    for attempt in range(1, queue_notes.RETRIES):
+        drain.close(
+            root,
+            drain.preflight.fetch(ALPHA, root, offline(root).tracker),
+            outcome="waits",
+            reasons=[red],
+        )
+        assert note(root, BRANCH_A)["attempts"] == attempt
+        assert states(root)[BRANCH_A] == "built"
+    drain.close(
+        root,
+        drain.preflight.fetch(ALPHA, root, offline(root).tracker),
+        outcome="waits",
+        reasons=[red],
+    )
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert entry.state == "held"
+    assert entry.why[0].startswith(f"retried {queue_notes.RETRIES} times")
+    assert entry.why[1] == red
+    drain.close(
+        root,
+        drain.preflight.fetch(ALPHA, root, offline(root).tracker),
+        outcome="waits",
+        reasons=["record: no verdict"],
+    )
+    assert note(root, BRANCH_A)["attempts"] == 0
+    capsys.readouterr()

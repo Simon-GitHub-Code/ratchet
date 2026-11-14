@@ -11,7 +11,8 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   the judge is asked; when it is behind the default branch its ``why`` says it is brought up to
   date and judged again first), ``waiting`` (blocked only by tickets this drain can still merge),
   ``held`` (its last run parked or was not approved, and the ticket has not changed since; a hold
-  outranks commits on the branch, and a ticket waiting on a held one is refused naming it),
+  outranks commits on the branch, but a wait for a reason the drain resolves itself is
+  retried; a ticket waiting on a held one is refused naming it),
   ``merged`` (its branch is merged and the ticket is still open) and ``refused`` (the preflight
   is red, with what produces each missing piece). ``start`` names the buildable tickets to start
   now: at most ``--concurrency`` less those building, and none while the checkout is not fit.
@@ -400,8 +401,10 @@ def classify(ticket: preflight.Ticket, drain: Drain, seen: Seen) -> Entry:
     if hold is not None:
         return replace(entry, state=HELD, why=tuple(hold.reasons))
     if ahead(drain.root, seen.base, branch):
+        waited = queue_notes.read_note(drain.root, branch)
+        again = queue_notes.texts(waited.get("reasons")) if waited.get("outcome") == WAITS else []
         behind = (
-            ()
+            tuple(again)
             if gatelib.git(
                 drain.root, "merge-base", "--is-ancestor", seen.base, f"refs/heads/{branch}"
             )
@@ -611,8 +614,24 @@ def close(
     branch = route.own_branch(ticket)
     tree = tree_of(root, branch)
     change = change_of(root, merge_ready.default_ref(root), branch)
+    prior = queue_notes.read_note(root, branch)
+    # Why: reasons the drain resolves itself leave the ticket built to be retried, a few times in
+    # a row; after that, or for any other reason, the owner decides and the ticket is held.
+    retry = outcome == WAITS and queue_notes.mechanical(reasons)
+    before = prior.get("attempts")
+    same = prior.get("digest") == queue_notes.digest(ticket) and isinstance(before, int)
+    attempts = (before if same and isinstance(before, int) else 0) + 1 if retry else 0
+    exhausted = retry and attempts >= queue_notes.RETRIES
+    if exhausted:
+        reasons = [
+            (
+                f"retried {attempts} times and each left it waiting for the same kind of reason,"
+                " which the drain cannot resolve itself"
+            ),
+            *reasons,
+        ]
     note = {
-        **queue_notes.read_note(root, branch),
+        **prior,
         "ref": ticket.ref,
         "title": ticket.title,
         "branch": branch,
@@ -623,7 +642,8 @@ def close(
         "gates": timings(tree),
         "closed": now().isoformat(timespec="seconds"),
         "digest": queue_notes.digest(ticket),
-        "hold": outcome != MERGED,
+        "hold": outcome != MERGED and (exhausted or not retry),
+        "attempts": attempts,
         "owes": owed_kinds(result or {}),
         "holds": queue_notes.holds_of(result or {}),
         "reported": False,
