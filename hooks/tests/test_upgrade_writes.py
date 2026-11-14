@@ -578,3 +578,15 @@ def test_an_exported_tree_keeps_a_link_as_a_link(tmp_path: Path) -> None:
     gatelib.export(root, "HEAD", target)
     assert (target / "link.txt").is_symlink()
     assert (target / "link.txt").readlink() == Path("real.txt")
+
+
+def test_a_missing_architecture_section_is_written_with_its_table_padded(repo: Path) -> None:
+    replace(BINDING, "## Architecture\n", "## Hunches\n")(repo)
+    settle(repo)
+    written = markdown_text.table(text(repo, BINDING), "## Architecture")
+    assert written is not None
+    assert written.lines == (
+        "| Part   | Path                  | May depend on         |",
+        "| ------ | --------------------- | --------------------- |",
+        "| <part> | <`glob` of its files> | <parts, or `nothing`> |",
+    )
