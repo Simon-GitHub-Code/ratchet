@@ -205,3 +205,23 @@ def test_an_agent_cannot_move_the_default_ref_and_then_write_a_guard_path(
     if decision(root, "Bash", {"command": command}) == "":
         run(root, command)
     assert probe(root) == "deny"
+
+
+def test_the_switch_the_route_names_on_a_merged_branch_passes(tmp_path: Path) -> None:
+    """The route names ``git switch main`` for a clean branch ``main`` holds; the guard lets it be.
+
+    Why: a step the guard refused would leave the owner where the route found them, which is the
+    loop the switch was added to end.
+    """
+    root = tmp_path / "merged"
+    root.mkdir()
+    repository(root)
+    write(root, "guards/manifest.toml", MANIFEST_TEXT)
+    commit(root, "chore(guards): the manifest")
+    git(root, "switch", "-q", "-c", "feature/x")
+    commit(root, "feat(core): work")
+    git(root, "switch", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "-m", "merge feature/x", "feature/x")
+    git(root, "switch", "-q", "feature/x")
+    assert probe(root) == "deny"
+    assert decision(root, "Bash", {"command": "git switch main"}) == ""

@@ -9,11 +9,15 @@ import pytest
 
 import drain
 import hooks_installed
+import merge
+import merge_ready
 import owed
 import queue_notes
 import route
 import triggers
 from tests.repos import branch, commit, git, install_hooks, repository, write
+from tests.test_merge import FEATURE, binding
+from tests.test_merge_ready import BASE, VERDICT
 
 Out = pytest.CaptureFixture[str]
 REAL_CHECK = hooks_installed.check
@@ -1143,3 +1147,68 @@ def test_rows_an_upgrade_left_owed_for_an_agent_come_first_and_ask_the_owner_not
     write(root, "src/a.py", "import requests\nrequests.get('http://x')\n")
     commit(root, "feat: the first outbound call")
     assert route.decide(root, None).command == route.FILL
+
+
+def test_a_branch_merged_into_the_default_branch_is_left_by_a_switch_not_merged_again(
+    tmp_path: Path,
+) -> None:
+    # Why: a hand merge with no forge moves `main` by `update-ref` and leaves the checkout on the
+    # branch, so the route used to name the same merge for ever.
+    root = repository(tmp_path, ADOPTED)
+    branch(root, "chore/adopt-ratchet")
+    write(root, "notes.md", "x\n")
+    commit(root, "chore: adopt")
+    assert route.decide(root, None).command == "`just merge chore/adopt-ratchet`"
+    git(root, "update-ref", "refs/heads/main", "HEAD")
+    for gh in (None, FakeGh(pr=None)):
+        step = route.decide(root, gh)
+        assert (step.command, step.why, step.then, step.stage) == (
+            "git switch main",
+            "`main` holds every commit of branch `chore/adopt-ratchet`, so it has nothing to merge",
+            "/ratchet:next",
+            "switch",
+        )
+    git(root, "remote", "add", "origin", str(root))
+    assert route.decide(root, None).command == route.PULL_REQUEST
+
+
+def test_a_branch_the_merge_entry_point_merged_is_not_merged_again(tmp_path: Path) -> None:
+    # Why: the eval's owner ran the route's merge, stayed on the branch, and was told to run it
+    # again.
+    bound = binding().replace("# Binding\n", f"# Binding\n\n{PIN}\n- Default branch: `main`\n", 1)
+    adopted = {**BASE, **ADOPTED, "docs/process/binding.md": bound}
+    repository(tmp_path, adopted)
+    branch(tmp_path, FEATURE)
+    write(tmp_path, "b", "the branch's\n")
+    commit(tmp_path, "feat(thing): the change")
+    assert merge_ready.write_record(tmp_path, json.dumps(VERDICT)) == 0
+    commit(tmp_path, "docs(thing): the verdict record")
+    assert route.decide(tmp_path, None).command == f"`just merge {FEATURE}`"
+    assert merge.main(["merge", FEATURE, "--root", str(tmp_path)]) == 0
+    assert git(tmp_path, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert route.decide(tmp_path, None).command != f"`just merge {FEATURE}`"
+
+
+def test_a_branch_cut_from_the_default_tip_is_not_called_merged(tmp_path: Path) -> None:
+    # Why: `/ratchet:feature` cuts its branch before anything is written on it, and a run that
+    # stops there leaves it. Nothing on it is merged, and there is nothing to merge.
+    root = repository(tmp_path, ADOPTED)
+    branch(root, "feature/1-a")
+    step = route.decide(root, None)
+    assert (step.command, step.stage) == ("git switch main", "switch")
+    assert step.why == (
+        "`main` holds every commit of branch `feature/1-a`, so it has nothing to merge"
+    )
+    assert "merged" not in step.why
+
+
+def test_a_dirty_tree_on_a_merged_branch_is_finished_before_the_switch(tmp_path: Path) -> None:
+    root = repository(tmp_path, ADOPTED)
+    branch(root, "chore/adopt-ratchet")
+    write(root, "notes.md", "x\n")
+    commit(root, "chore: adopt")
+    git(root, "update-ref", "refs/heads/main", "HEAD")
+    write(root, "more.md", "y\n")
+    step = route.decide(root, None)
+    assert step.stage == "change"
+    assert step.why == "the working tree has uncommitted changes"

@@ -4,12 +4,15 @@
 and these tests hold it to every rule. ``real_advice`` is that with the named divergences applied:
 it may break a rule only where a divergence says, and the real ``route.decide`` must give it in
 every state. A sweep takes every step of the model on a real repository; a stateful test takes
-long runs of actions there; each divergence keeps a strict expected failure that passes the day
-the route is fixed. The exporter is held to a stable output, and the charts to the export.
+long runs of actions there; tests run the real merge entry point, which the sweep never does;
+each divergence keeps a strict expected failure that passes the day the route is fixed. The
+exporter is held to a stable output, and the charts to the export.
 """
 
 import itertools
+import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -35,14 +38,16 @@ from hypothesis.stateful import (
 
 import conformance
 import hooks_installed
+import merge_ready
 import owed
 import route
 from tests import model_tla
 from tests import route_model as model
 from tests import route_world as real
-from tests.repos import git
-from tests.route_model import ActionName, Advice, Architecture, Setup, Ticket, World
+from tests.repos import git, snapshot
+from tests.route_model import ActionName, Advice, Architecture, Head, Setup, Ticket, Tree, World
 from tests.support import PLUGIN_ROOT
+from tests.test_drain import approval
 
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
 CHARTS = PLUGIN_ROOT / "docs/model/route.md"
@@ -101,6 +106,20 @@ def rank_kept(label: Label) -> set[World]:
     }
 
 
+def stays(label: Label) -> set[World]:
+    """The states with a step that follows ``label`` and leaves the state as it was."""
+    return {
+        source
+        for source, name, target in model.graph().edges
+        if name is model.ADVISED[label(source)] and source == target
+    }
+
+
+def merges_a_merged_branch(label: Label) -> set[World]:
+    """The states where ``label`` names the merge of a branch the default branch already holds."""
+    return {s for s in model.graph().states if s.head is Head.MERGED and label(s) is Advice.MERGE}
+
+
 def owes_architecture(world: World) -> bool:
     return world.architecture is Architecture.OWED
 
@@ -152,6 +171,10 @@ CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "FollowingAdviceLowersRank": (rank_kept, model.advice),
     "RealAdviceCanBeFollowed": (cannot_be_followed, model.real_advice),
     "FollowingRealAdviceLowersRank": (rank_kept, model.real_advice),
+    "AdviceChangesTheState": (stays, model.advice),
+    "RealAdviceChangesTheState": (stays, model.real_advice),
+    "AdviceNeverMergesAMergedBranch": (merges_a_merged_branch, model.advice),
+    "RealAdviceNeverMergesAMergedBranch": (merges_a_merged_branch, model.real_advice),
     "ArchitectureNamedExactlyWhenOwed": (architecture_misnamed, model.advice),
     "OwedArchitectureNeverHidesTheWork": (work_hidden, model.advice),
     "OnlyAnUpgradeOwesTheArchitecture": (
@@ -752,6 +775,181 @@ def test_a_review_and_a_safeguard_owed_beside_the_architecture_come_before_it(
     assert said == [Advice.REVIEW, Advice.REVIEW, Advice.SAFEGUARD, Advice.ARCHITECTURE]
 
 
+ADOPTED = World(setup=Setup.BOUND, hooks=True, architecture=Architecture.RECORDED)
+BRANCHES = {
+    "the adoption's branch": (replace(ADOPTED, head=Head.WORK), ()),
+    "a working branch": (
+        replace(ADOPTED, foundation=True),
+        (ActionName.SOMEONE_EDITS_CODE, ActionName.AGENT_COMMITS_ON_A_BRANCH),
+    ),
+}
+TIER_2_NEXT = "next: true on `main`: tier 2 runs after every merge, and a red one comes first"
+
+
+def typed(repo: real.Repo, command: str) -> subprocess.CompletedProcess[str]:
+    """``command`` run in ``repo`` as an agent types it, with no shell."""
+    return subprocess.run(  # noqa: S603 # -- the binding's or the route's own command
+        shlex.split(command.removeprefix("`").removesuffix("`")),
+        cwd=repo.root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def unchanged(repo: real.Repo) -> tuple[str, str, str]:
+    """What a step that changes nothing leaves as it was: main's tip, HEAD, and the work tree."""
+    return git(repo.root, "rev-parse", "main"), repo.head(), git(repo.root, "status", "--short")
+
+
+@pytest.mark.parametrize("case", list(BRANCHES))
+def test_after_the_real_merge_the_route_never_names_that_merge_again(
+    tmp_path: Path, case: str
+) -> None:
+    """The binding's ``merge`` runs ``merge.py``; it merges a clean branch, and the route moves on.
+
+    Why the real entry point: the sweep writes its merges with git, so it cannot see a merge that
+    leaves the checkout on the branch it merged. The adoption's branch is judged by its own gates,
+    a working branch by its verdict record. The merge keeps the branch: checked out again, the
+    route names the switch, the merge run there changes nothing, as the model's merge does, and
+    the switch the route names goes back.
+    """
+    world, steps = BRANCHES[case]
+    repo = real.Repo.merging(tmp_path)
+    for source, name, target in path_to(world):
+        real.apply(repo, name, real.Change(source, target))
+    for name in steps:
+        (after,) = model.ACTIONS[name].successors(world)
+        real.apply(repo, name, real.Change(world, after))
+        world = after
+    if steps:
+        assert merge_ready.write_record(repo.root, json.dumps(approval("edit"))) == 0
+        snapshot(repo.root, "docs(edit): the verdict record")
+    branch, path = repo.head(), [case]
+    ask(repo, world, path)
+    ran = typed(repo, real.read(repo).command)
+    assert ran.returncode == 0, ran.stdout
+    step = real.read(repo)
+    assert real.classify(step) is not Advice.MERGE, disagreement(world, step, [*path, "merge"])
+    assert ran.stdout.splitlines()[-1] == TIER_2_NEXT, ran.stdout
+    assert repo.head() == "main", f"the merge left `{branch}` checked out:\n{ran.stdout}"
+    (merged,) = (
+        target
+        for target in model.ACTIONS[ActionName.BRANCH_MERGES].successors(world)
+        if target != world
+    )
+    ask(repo, merged, [*path, "merge"])
+    assert git(repo.root, "branch", "--list", branch), "the merge keeps the branch"
+    git(repo.root, "switch", "-q", branch)
+    again = replace(merged, head=Head.MERGED)
+    assert again in model.graph().states
+    path.append(f"switch to {branch}")
+    ask(repo, again, path)
+    was = unchanged(repo)
+    typed(repo, f"{repo.entries['merge']} {branch}")
+    assert unchanged(repo) == was, "a merge of a branch already merged changes nothing"
+    ask(repo, again, [*path, "merge it again"])
+    switched = typed(repo, real.read(repo).command)
+    assert switched.returncode == 0, switched.stderr
+    ask(repo, merged, [*path, "merge it again", "the switch the route names"])
+
+
+def on_a_working_branch(tmp_path: Path) -> tuple[real.Repo, World]:
+    """A repository at rest with a change committed on a branch, its verdict record last."""
+    world, steps = BRANCHES["a working branch"]
+    repo = real.Repo.merging(tmp_path)
+    for source, name, target in path_to(world):
+        real.apply(repo, name, real.Change(source, target))
+    for name in steps:
+        (after,) = model.ACTIONS[name].successors(world)
+        real.apply(repo, name, real.Change(world, after))
+        world = after
+    assert merge_ready.write_record(repo.root, json.dumps(approval("edit"))) == 0
+    snapshot(repo.root, "docs(edit): the verdict record")
+    return repo, world
+
+
+def default_elsewhere(repo: real.Repo) -> None:
+    git(repo.root, "worktree", "add", "-q", str(repo.root.parent / "main"), "main")
+
+
+def edit_left_uncommitted(repo: real.Repo) -> None:
+    (repo.root / "src/half.py").write_text("x = 1\n", encoding="utf-8")
+
+
+def merged_from_main(repo: real.Repo) -> None:
+    git(repo.root, "switch", "-q", "main")
+
+
+SWITCH_FIRST = "next: `git switch main`, then " + TIER_2_NEXT.removeprefix("next: ")
+LEFT = {
+    "a dirty tree": (edit_left_uncommitted, SWITCH_FIRST, Head.MERGED, Tree.CODE),
+    "the default branch in another work tree": (default_elsewhere, SWITCH_FIRST, Head.MERGED, None),
+    "the default branch checked out": (merged_from_main, TIER_2_NEXT, Head.MAIN, None),
+}
+
+
+@pytest.mark.parametrize("case", list(LEFT))
+def test_a_merge_that_does_not_switch_says_so_and_the_route_names_what_the_model_says(
+    tmp_path: Path, case: str
+) -> None:
+    """``merge.py`` switches only from the branch it merged, clean, the default branch free.
+
+    Otherwise it leaves HEAD where it was and its ``next:`` line says whether to switch. The route
+    then names what the model names where the merge left the checkout: the commit of a dirty
+    tree, the switch, or what comes after the merge.
+    """
+    before, said, head, tree = LEFT[case]
+    repo, world = on_a_working_branch(tmp_path)
+    branch = repo.head()
+    before(repo)
+    was = repo.head()
+    ran = typed(repo, f"{repo.entries['merge']} {branch}")
+    assert ran.returncode == 0, ran.stdout
+    assert ran.stdout.splitlines()[-1] == said, ran.stdout
+    assert repo.head() == was
+    landed = replace(world, head=head, tree=tree or world.tree)
+    assert landed in model.graph().states
+    ask(repo, landed, [case, f"merge {branch}"])
+
+
+@pytest.mark.xfail(strict=True, reason="the switch is refused while another work tree holds main")
+def test_the_switch_named_beside_another_checkout_of_the_default_branch_can_be_taken(
+    tmp_path: Path,
+) -> None:
+    """Out of the model's one checkout: the step the route names there cannot be taken.
+
+    Why it is kept: ``RealAdviceCanBeFollowed`` breaks here on a real repository, and the merge's
+    own ``next:`` line names the same refused switch. It turns red the day the route names a step
+    that can be taken there; then the expected failure goes.
+    """
+    repo, _ = on_a_working_branch(tmp_path)
+    branch = repo.head()
+    default_elsewhere(repo)
+    typed(repo, f"{repo.entries['merge']} {branch}")
+    switched = typed(repo, real.read(repo).command)
+    assert switched.returncode == 0, switched.stderr
+
+
+def test_a_build_stopped_on_the_branch_it_cut_is_left_and_built_again(tmp_path: Path) -> None:
+    """A branch cut from the default tip, nothing on it: the route switches back, then builds.
+
+    Why it is replayed apart from the sweep: following the route from there must not come back to
+    it. The stop is not a step the route names, so no rule of the advice breaks, and the build the
+    route names next commits on the branch.
+    """
+    stated = replace(ADOPTED, foundation=True, tickets=(Ticket.STATED, Ticket.TRIAGE))
+    repo = built(tmp_path, stated)
+    cut = replace(stated, head=Head.MERGED)
+    assert cut in model.ACTIONS[ActionName.BUILD_STOPS].successors(stated)
+    real.apply(repo, ActionName.BUILD_STOPS, real.Change(stated, cut))
+    assert git(repo.root, "rev-parse", "HEAD") == git(repo.root, "rev-parse", "main")
+    world, labels = follow(repo, cut, 0)
+    assert model.rest(world)
+    assert labels[:3] == [Advice.SWITCH, Advice.BUILD, Advice.MERGE]
+    assert labels.count(Advice.SWITCH) == 1
+
+
 def first_outcomes_meet() -> set[Advice]:
     """The advice met by following it, first outcome each time, to rest and through a feature."""
     world, met = World(), set()
@@ -769,6 +967,7 @@ def first_outcomes_meet() -> set[Advice]:
 # other than the first. The stateful test goes to these.
 DETOURS = [
     Advice.FINISH_RECORDS,
+    Advice.SWITCH,
     Advice.MERGE_RECORDS,
     Advice.FILL,
     Advice.REVIEW,
