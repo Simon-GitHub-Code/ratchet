@@ -434,21 +434,33 @@ def ask(repo: real.Repo, world: World, path: list[str]) -> None:
     """The route on ``repo`` names what the model says it names in ``world``.
 
     Where that is the owed architecture, the route also offers the step it would otherwise name,
-    and that step is the one the model gives beneath it.
+    and that step is the one the model gives beneath it. Where it is a safeguard, ``then:`` names
+    what the route names once the rows are bound, the owed architecture where there is one, and
+    the route still offers the work.
     """
     step = real.read(repo)
     assert real.classify(step) is model.real_advice(world), disagreement(world, step, path)
     if real.classify(step) is Advice.ARCHITECTURE:
-        instead = beside_the_architecture(repo)
+        instead = without(repo, "architecture_step")
         assert real.classify(instead) is model.beneath(world), disagreement(world, instead, path)
         assert step.then == instead.command, disagreement(world, step, path)
         assert f"Or carry on with {instead.command}:" in step.why, disagreement(world, step, path)
+    if real.classify(step) is Advice.SAFEGUARD:
+        after = without(repo, "safeguard_step")
+        owed = world.architecture is Architecture.OWED
+        assert (real.classify(after) is Advice.ARCHITECTURE) == owed, disagreement(
+            world, after, path
+        )
+        assert step.then == after.command, disagreement(world, step, path)
+        work = without(repo, "safeguard_step", "architecture_step")
+        assert f"Or carry on with {work.command}:" in step.why, disagreement(world, step, path)
 
 
-def beside_the_architecture(repo: real.Repo) -> route.Step:
-    """What the route names on ``repo`` once it no longer names the architecture owed there."""
+def without(repo: real.Repo, *steps: str) -> route.Step:
+    """What the route names on ``repo`` once it no longer names each of ``steps`` owed there."""
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(route, "architecture_step", lambda _root, _instead: None)
+        for name in steps:
+            patch.setattr(route, name, lambda _root, _instead: None)
         return real.read(repo)
 
 

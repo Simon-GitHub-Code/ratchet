@@ -143,6 +143,7 @@ The tests also check that:
 - each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold, or a guard hold with no base commit, waits for a change to the ticket;
 - on a real repository, the real route names what the model says after every one of the 2917 steps, each taken from its source state as the shortest path from an empty directory builds it;
 - where the real route names the owed architecture, its `then:` names the step it names once the architecture is no longer owed, and its `why:` offers carrying on with it; that step is the one the model gives beneath;
+- where the real route names a safeguard, its `then:` names the step it names once the rows are bound, which is the owed architecture exactly where the model owes one, and its `why:` still offers carrying on with the work;
 - on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
 - on a real repository, the architecture check finds nothing after `/ratchet:adopt`, and the upgrade's code then owes no architecture;
 - on a real repository an older plugin adopted, the upgrade's code owes exactly what the architecture check finds, the route names the fill, then `/ratchet:architecture`, then its branch's merge, and the check finds nothing after;
