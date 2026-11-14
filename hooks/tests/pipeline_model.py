@@ -94,6 +94,7 @@ class Start(Enum):
     NO_TICKET = "starts with no ticket"
     REJUDGE = "judges a rebased branch again"
     REJUDGE_CONFLICT = "judges a branch whose rebase conflicted again"
+    REJUDGE_RED = "judges a branch whose check went red again"
     REJUDGE_MISSING = "judges a branch again without the first run's slug or spec path"
 
 
@@ -345,6 +346,7 @@ STARTS: dict[Start, State] = {
     Start.NO_TICKET: State(started=True, ending=Ending(Outcome.BLOCKED, stop=Stop.NO_TICKET)),
     Start.REJUDGE: State(started=True, rejudge=True, awaiting=Role.REVIEW_AGAIN),
     Start.REJUDGE_CONFLICT: State(started=True, rejudge=True, awaiting=Role.RECONCILE),
+    Start.REJUDGE_RED: State(started=True, rejudge=True, awaiting=Role.RECONCILE),
     Start.REJUDGE_MISSING: State(
         started=True, rejudge=True, ending=Ending(Outcome.ERROR, error=REFUSED)
     ),

@@ -8,7 +8,7 @@ The model is `hooks/tests/pipeline_model.py`. The tests in `hooks/tests/test_pip
 
 The model covers one run with:
 
-- five ways the orchestrator starts it: a build; a build with no ticket; judging again a branch that rebased cleanly; one whose rebase conflicted; and one without what the first run returned. The script takes the reconcile when the check went red too (`checkRed`). The model starts the reconcile by a conflict alone;
+- six ways the orchestrator starts it: a build; a build with no ticket; judging again a branch that rebased cleanly; one whose rebase conflicted; one whose check went red with no conflict (`checkRed`); and one without the slug or the spec path the first run returned. A conflict and a red check each start at the reconcile, and the reconcile's prompt differs only in the paths it lists;
 - each agent's answer cut down to the few values the script branches on, listed under [Steps](#steps). A dead agent is one that returns no result;
 - at most two fix rounds, the script's own bound. So the graph is every run the answers allow, not a sample.
 
@@ -29,7 +29,7 @@ What it leaves out is listed [at the end](#left-out).
 | The last critique | whether it owes a fix, and whether it found nothing and tried nothing |
 | How it ended | still running; approved; changes requested, with what forced it; stopped (blocked) with the reason, and for too large the ceiling, where it was measured, whether parts are proposed and whether the orchestrator splits it unasked; or the script's error, naming the agent and whether to resume. A verdict also carries the fix rounds, an unresolved finding, the lost promises for the next run, the kept promise in the assumptions, the verdict record, and whether the branch was judged again |
 
-A builder is the agent that changes code: the build, a fix round or the reconcile. From the start the model reaches 1,032 states and 1,172 steps. 832 of the states are a run that has ended.
+A builder is the agent that changes code: the build, a fix round or the reconcile. From the start the model reaches 1,032 states and 1,173 steps. 832 of the states are a run that has ended.
 
 ## Steps
 
@@ -37,7 +37,7 @@ Each step is the orchestrator's start, or the answer of the agent the run waits 
 
 | Agent | Its answers |
 | --- | --- |
-| the orchestrator | starts a build; starts with no ticket; judges a rebased branch again; judges a branch whose rebase conflicted again; judges a branch again without the first run's slug or spec path |
+| the orchestrator | starts a build; starts with no ticket; judges a rebased branch again; judges a branch whose rebase conflicted again; judges a branch whose check went red again; judges a branch again without the first run's slug or spec path |
 | `preflight` | dies; is red; is green with no slug; is green for a project nobody depends on; is green for a project that is depended-on |
 | `spec`, and `spec-amend` once the ticket check finds a gap | dies; asks the owner a question; needs a guard path changed; measures product code over its ceiling; measures tests over their ceiling; measures tests over two thirds of their ceiling; estimates the change cannot fit and proposes parts; fits; fits with tests that fail for the wrong reason |
 | `ticket-check`, and `ticket-recheck` after the amend | dies; finds no gap; finds a gap |
@@ -46,7 +46,7 @@ Each step is the orchestrator's start, or the answer of the agent the run waits 
 | `fix-1`, `fix-2` and `reconcile` | dies; is green; is red; measures product code over its ceiling |
 | `review`, and `review-again` | dies; approves; requests changes; approves on a red check; approves with a blocker of its own open; approves a change that drops a promise of the ticket; approves a guard path change nothing covers |
 
-Tests over two thirds of their ceiling stop the run only while the critic's tests are still to come (ADR 0040). After the build those tests are in, so one answer over a ceiling stands for every answer a fix round or the reconcile can give over one (ADR 0055). The start without the slug or spec path is played with a slug and no spec path. The script refuses either one missing with the same error.
+Tests over two thirds of their ceiling stop the run only while the critic's tests are still to come (ADR 0040). After the build those tests are in, so one answer over a ceiling stands for every answer a fix round or the reconcile can give over one (ADR 0055). The start without the slug or spec path is played with a slug and no spec path. The script refuses either one missing with the same error. The start whose check went red is played with no conflict, so `checkRed` alone takes the run to the reconcile.
 
 ## Rules
 
@@ -91,19 +91,19 @@ The tests also check that:
 
 ### The rules in the module
 
-`export()` gives each rule as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, so the module holds each state once for each set of step rules the step into it broke. Here no state is reached both by a step that breaks a rule and by one that keeps every rule, so the module has the graph's 1,032 states and 1,172 steps. The rules are computed in Python, so TLC checks that the module carries them and finds the shortest runs to them. It does not prove them a second way.
+`export()` gives each rule as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, so the module holds each state once for each set of step rules the step into it broke. Here no state is reached both by a step that breaks a rule and by one that keeps every rule, so the module has the graph's 1,032 states and 1,173 steps. The rules are computed in Python, so TLC checks that the module carries them and finds the shortest runs to them. It does not prove them a second way.
 
 ## The real script against the model
 
-The answers are finite and the script is deterministic given them, so nothing here samples. The test walks every complete run of the model: 3,415 sequences of answers from the start to an end. 3,390 are first builds, 16 judge a branch whose rebase conflicted, 7 one that rebased cleanly, one has no slug or spec path and one has no ticket. The longest has 12 answers. Each abstract answer stands for one concrete answer the script's schema allows.
+The answers are finite and the script is deterministic given them, so nothing here samples. The test walks every complete run of the model: 3,431 sequences of answers from the start to an end. 3,390 are first builds, 16 judge a branch whose rebase conflicted, 16 one whose check went red, 7 one that rebased cleanly, one has no slug or spec path and one has no ticket. The longest has 12 answers. Each abstract answer stands for one concrete answer the script's schema allows.
 
-All of them run on `workflows/pipeline.js` itself in one node process, in a context whose only globals are the language's own, with `agent`, `phase` and `log` passed in. The longest first build and the longest conflicted rejudge run once more, reading the ticket from a local file. That makes 3,417 plays. Each must call the same agents in the same stages as the model, and end as the model ends: the same verdict, the same reasons it was forced, the same stop or error. Every git or forge command any prompt names must be one the model allows that role. The test takes a little over a second.
+All of them run on `workflows/pipeline.js` itself in one node process, in a context whose only globals are the language's own, with `agent`, `phase` and `log` passed in. The longest first build and the longest conflicted rejudge run once more, reading the ticket from a local file. That makes 3,433 plays. Each must call the same agents in the same stages as the model, and end as the model ends: the same verdict, the same reasons it was forced, the same stop or error. Every git or forge command any prompt names must be one the model allows that role. The plays take a little over a second of processor time.
 
 ## Charts
 
-The rules were checked on `Pipeline.tla`, SHA-256 `5f746305125e64887323cbff96f8ebff3ec793c30971a07cd16868a1e91b6aeb`. TLC reached 1,032 states. Run again with only the rules that hold, it counts 1,173 states generated: the start and 1,172 steps. Sixteen rules hold, two break, each by the run above. A run that has ended has no step out, so the module tells TLC that is no deadlock.
+The rules were checked on `Pipeline.tla`, SHA-256 `a351e12aa1c1ae02d0b00b150d1bd90bdea9792a7538f54d0727e2f69a2d3006`. TLC reached 1,032 states. Run again with only the rules that hold, it counts 1,174 states generated: the start and 1,173 steps. Sixteen rules hold, two break, each by the run above. A run that has ended has no step out, so the module tells TLC that is no deadlock.
 
-That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `5fde479d1971e7783f7936687151a9966377b87f2d8f7dc15485a9730de76ccc`: the same graph seen through the stage a run is at. That is the agent it waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 72 states and 141 steps. A box groups states, and an arrow from a box leaves every state in it.
+That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `27f8354617e00352e611bd2d86a6aafc46437ce02544c4c3b64a0d62224be0a7`: the same graph seen through the stage a run is at. That is the agent it waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 72 states and 142 steps. A box groups states, and an arrow from a box leaves every state in it.
 
 ### A first build
 
@@ -163,7 +163,7 @@ Something stands against the change when the spec's tests fail for the wrong rea
 
 ### The critic and its fix rounds
 
-11 states and 14 arrows. It does not draw the 95 steps that stay in one state. Everything before the critic, every run of a project nobody depends on yet and every rejudge is the first state.
+11 states and 14 arrows. It does not draw the 96 steps that stay in one state. Everything before the critic, every run of a project nobody depends on yet and every rejudge is the first state.
 
 ```mermaid
 ---
@@ -275,7 +275,6 @@ stateDiagram-v2
 
 - What the orchestrator does with the result: committing, the verdict record, the pull request, the merge judge, and the drain's resume, split and park. The drain has a model of its own, `hooks/tests/drain_model.py`.
 - What an agent does inside its stage, and every field of its answer the script does not branch on: the criteria, the tests, the findings' titles, the assumptions other than the kept promise.
-- A rejudge that starts its reconcile because the check went red, with no conflict. The script takes the same path.
 - `args.ticketFindings` from the last run, and the settled readings a rejudge passes back.
 - A ticket read from a local file, but for the two runs played again reading one.
 - More than one answer over a ceiling from a fix round or the reconcile, and any answer of theirs between two thirds of the test ceiling and the whole of it.

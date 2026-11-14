@@ -58,6 +58,7 @@ ARGS: dict[Start, object] = {
         "branch": BRANCH,
         "rejudge": {**REJUDGE, "conflicts": ["flags.toml"]},
     },
+    Start.REJUDGE_RED: {"ref": "4", "branch": BRANCH, "rejudge": {**REJUDGE, "checkRed": True}},
     Start.REJUDGE_MISSING: {"ref": "4", "branch": BRANCH, "rejudge": {"slug": "expiry"}},
 }
 LOCAL = {"ref": TICKET_FILE, "base": "main"}
