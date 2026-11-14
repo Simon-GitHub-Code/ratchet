@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import coverage_groups
-from tests.repos import write
+from tests.repos import branch, commit, repository, write
 
 THRESHOLDS = """# thresholds
 [python.coverage.core]
@@ -39,7 +39,17 @@ def report(root: Path, *, core_hits: int = 1, app_hits: int = 1, extra: str = ""
     return path
 
 
-def project(tmp_path: Path, thresholds: str = THRESHOLDS) -> Path:
+def binding(kinds: str) -> str:
+    """A binding whose Suppressions section says what silences the coverage question."""
+    return (
+        "# Binding\n\n## Suppressions\n\n| Kind | Pattern | Rule |\n| --- | --- | --- |\n"
+        "| skip | `skip-marker\\|ignore-next` | rises |\n\n| Question | Kinds |\n| --- | --- |\n"
+        f"| coverage, absolute and ratcheted | {kinds} |\n"
+    )
+
+
+def project(tmp_path: Path, thresholds: str = THRESHOLDS, kinds: str = "`skip`") -> Path:
+    write(tmp_path, "docs/process/binding.md", binding(kinds))
     write(tmp_path, "quality/thresholds.toml", thresholds)
     write(tmp_path, "src/core/a.py", "x = 1\ny = 2\n")
     write(tmp_path, "src/app/b.py", "x = 1\ny = 2\n")
@@ -124,7 +134,7 @@ def test_absolute_groups_need_full_coverage_and_no_exclusion(tmp_path: Path) -> 
         "python.coverage.core: branch coverage 50.0% on an absolute path, needs 100%",
         "python.coverage.app: no branch threshold recorded; `--write` records 50.0%",
     ]
-    write(root, "src/core/a.py", "x = 1  # pragma: no cover\ny = 2\n")
+    write(root, "src/core/a.py", "x = 1  # skip-marker\ny = 2\n")
     full = report(root).read_text().replace('condition-coverage="50% (1/2)"', "")
     (root / "coverage.xml").write_text(full)
     write(
@@ -218,10 +228,10 @@ def test_tally_rates_and_exclusion_scan_skip_data_files(tmp_path: Path) -> None:
     assert not tally.measured
     assert coverage_groups.Tally(files=["a"]).measured
     write(tmp_path, "a.json", "pragma: no cover\n")
-    write(tmp_path, "a.py", "# istanbul ignore next\n")
-    assert coverage_groups.exclusions(tmp_path, ["a.json", "a.py", "missing.py"]) == [
-        "a.py:1: a coverage exclusion on an absolute path"
-    ]
+    write(tmp_path, "a.py", "# ignore-next\n")
+    found = coverage_groups.exclusions(tmp_path, ["a.json", "a.py", "missing.py"], ["ignore-next"])
+    assert found == ["a.py:1: a coverage exclusion on an absolute path"]
+    assert coverage_groups.exclusions(tmp_path, ["a.py"], []) == []
 
 
 def test_raised_inserts_a_missing_key_after_the_header() -> None:
@@ -300,3 +310,30 @@ def test_several_reports_are_tallied_together(
     assert coverage_groups.problems(root, [backend, frontend]) == [
         f"{frontend}: missing; run the suite with a Cobertura or LCOV report first"
     ]
+
+
+def test_the_kinds_that_silence_the_question_are_the_bindings_to_say(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path, kinds="none: the coverage tool reads no directive in the code")
+    write(root, "src/core/a.py", "x = 1  # skip-marker\ny = 2\n")
+    assert coverage_groups.exclusion_patterns(root) == []
+    write(
+        root,
+        "docs/process/binding.md",
+        binding("`skip`").replace("| coverage, abs", "| other, abs"),
+    )
+    assert coverage_groups.exclusion_patterns(root) is None
+    full = report(root).read_text().replace('condition-coverage="50% (1/2)"', "")
+    (root / "coverage.xml").write_text(full)
+    write(root, "quality/thresholds.toml", THRESHOLDS.replace("line = 50.0", "line = 50.0\nbranch = 50.0"))
+    assert coverage_groups.problems(root, [root / "coverage.xml"]) == []
+    assert "no exclusion is searched for on absolute paths" in capsys.readouterr().out
+
+
+def test_the_merge_bases_table_judges_not_the_changes_own(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"docs/process/binding.md": binding("`skip`")})
+    branch(root, "feature/x")
+    write(root, "docs/process/binding.md", binding("none: nothing silences it here"))
+    commit(root, "feat(core): loosen its own judge")
+    assert coverage_groups.exclusion_patterns(root) == ["skip-marker|ignore-next"]

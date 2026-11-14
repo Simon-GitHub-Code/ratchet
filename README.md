@@ -88,7 +88,7 @@ These need no stack, so the plugin ships them as code and proves them in its own
 | `scripts/flags.py` | 0 and 2 | is every feature flag declared once, owned and off when new; with `--expired`, is one past its removal date? `--temporary` lists the flags a gate that requests routes boots with on |
 | `scripts/pins.py` | 0 | is every action pinned by commit, every image by digest, every workflow least-privileged? |
 | `scripts/coverage_groups.py` | 1 | is each coverage group at its ratchet, and each absolute path at 100%? Fed by the suite's Cobertura or LCOV report |
-| `scripts/mutation_survivors.py` | 1 and 2 | is every surviving mutant registered, and no entry stale? Fed by any mutation tool: one JSON line per mutant, or a tool's own report where the script reads one as it is |
+| `scripts/mutation_survivors.py` | 1 and 2 | is every surviving mutant registered, and no entry stale? Fed by any mutation tool through one neutral format: one JSON line per mutant, which the project's mutation recipe writes from its tool's report (ADR 0050) |
 | `scripts/change_size.py` | 1 | is the change within its product files and lines ceiling, and its test lines within their own (ADR 0045)? (which paths are tests is the binding's `## Test paths`; records, the lockfiles the binding's Dependencies section names and their snapshots are not counted; a moved file counts by its changed lines) |
 | `ratchet_guards.diff` | 1 | which guard paths changed? |
 | `scripts/settings_rules.py` | 1 | do the permission rules hold the fixed denies, and ask nothing? `--write` (the `settings` entry point) writes them, and refuses under a plugin other than the one CI runs, whose check would reject what it wrote |

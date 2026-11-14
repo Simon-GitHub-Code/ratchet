@@ -48,14 +48,17 @@ layer = "a declared part in the binding's Architecture section"
 formal-model = "a formal model or proof the project keeps"
 
 # The events in a project's life a trigger can name, and the signs the route reads to propose one.
-# `signs` are globs over the tree; the owner declares the event, never the route.
+# `signs` are globs over the tree; the owner declares the event, never the route. What marks an
+# event in a tree is mostly the stack's: an event with `in-binding = true` has no shipped signs, and
+# the binding's `## Life event signs` table says which files of this project mark it (ADR 0050).
+# An event without it has signs no stack decides, here.
 [events.deployed]
 meaning = "it runs somewhere people other than the owner can reach"
-signs = ["fly.toml", "render.yaml", "vercel.json", "netlify.toml", "wrangler.toml", "Procfile", "app.yaml", "railway.json", ".github/workflows/*deploy*", "k8s/**", "deploy/**"]
+in-binding = true
 
 [events.irreplaceable-data]
 meaning = "it holds data the owner could not recreate: users' records, uploads, payments"
-signs = ["migrations/**", "**/migrations/**", "prisma/schema.prisma", "alembic.ini", "**/schema.sql"]
+in-binding = true
 
 [events.depended-on]
 meaning = "people outside the project rely on it: users, customers, other teams"

@@ -29,6 +29,7 @@ import installs
 import justfile_text
 import markdown_text
 import owed
+import pins
 import plugin_pin
 import project_bite
 import settings_rules
@@ -1063,7 +1064,10 @@ def bound(tool: str) -> bool:
     return bool(tool) and not later(tool) and application_types.NONE.match(tool) is None
 
 
-SUPPRESSIONS_STOPS = "the suppressions gate, which counts nothing until its section is filled"
+SUPPRESSIONS_STOPS = (
+    "the suppressions gate and the coverage gate's search for exclusions on absolute paths,"
+    " which count nothing until the section is filled"
+)
 
 
 def check_suppressions(root: Path) -> Iterable[Finding]:
@@ -1098,6 +1102,84 @@ def check_suppressions(root: Path) -> Iterable[Finding]:
                 " backticks or `none: <reason>`"
             )
             yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=SUPPRESSIONS_STOPS)
+
+
+SIGNS_STOPS = "the route's proposal of a life event it sees a sign of, which waits for the table"
+PINS_STOPS = "the pins gate's reading of the project's image files, which reads none until filled"
+MUTATION_STOPS = "the mutation gate, which reads no tool's own report any more (ADR 0050)"
+MUTATION_SCRIPT = "mutation_survivors.py"
+MUTATION_INPUTS = ("--mutants", "--changed")
+
+
+def check_signs(root: Path) -> Iterable[Finding]:
+    """The Life event signs table: which files of this stack mark a life event (ADR 0050).
+
+    Why: the plugin names no host and no store, so the route can propose an event only from the
+    files this binding lists. A missing row proposes nothing, which fails closed: the event is
+    never declared for the owner, and the row is owed, not red, on an adopted repository.
+    """
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    table = application_types.signs_in(text)
+    if table is None:
+        problem = (
+            f"has no '{application_types.SIGNS_SECTION}' section; add the template's, one row per"
+            " life event whose signs depend on the stack (ADR 0050)"
+        )
+        found = missing_section(
+            BINDING_PATH,
+            problem,
+            application_types.SIGNS_SECTION,
+            template_text=template_binding(),
+        )
+        yield replace(found, stops=SIGNS_STOPS)
+        return
+    for problem in table.problems:
+        yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=SIGNS_STOPS)
+
+
+def check_pins(root: Path) -> Iterable[Finding]:
+    """The Image pins section: the files that name an image and how (ADR 0050)."""
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    rules, problems = pins.parse(text)
+    if rules is None and problems and problems[0] == f"has no '{pins.SECTION}' section":
+        problem = (
+            f"{problems[0]}; add the template's, naming the files that name a container image"
+            " and the pattern that finds the reference in each (ADR 0050)"
+        )
+        found = missing_section(
+            BINDING_PATH, problem, pins.SECTION, template_text=template_binding()
+        )
+        yield replace(found, stops=PINS_STOPS)
+        return
+    for problem in problems:
+        yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=PINS_STOPS)
+
+
+def check_mutation(root: Path) -> Iterable[Finding]:
+    """A recipe that hands the mutation gate a tool's own report: the gate reads one format.
+
+    Why: ADR 0050. The plugin reads one JSON line per mutant and no tool's report, so a recipe
+    written for an earlier version, which passed a report or a results file, is red until it
+    converts the report itself and the register's entries are written again from the new records.
+    """
+    for path in justfile_paths(root):
+        for line in (read(path) or "").replace("\\\n", " ").splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            if MUTATION_SCRIPT in line and not any(flag in line for flag in MUTATION_INPUTS):
+                name = path.relative_to(root).as_posix()
+                problem = (
+                    f"a recipe runs {MUTATION_SCRIPT} on a tool's own report; it takes"
+                    " `--tool <name> --mutants <file>`, one JSON line per mutant, which the"
+                    " recipe writes from the report, and the register's entries are written"
+                    " again for the new identities (ADR 0050)"
+                )
+                yield replace(agent(f"{name}: {problem}"), stops=MUTATION_STOPS)
+                return
 
 
 def check_operability(root: Path) -> Iterable[Finding]:
@@ -2155,6 +2237,9 @@ CHECKS: tuple[Check, ...] = (
     check_triggers,
     check_dependencies,
     check_suppressions,
+    check_signs,
+    check_pins,
+    check_mutation,
     check_operability,
     check_speed,
     check_manifest,
@@ -2312,6 +2397,9 @@ def mutations() -> list[Mutation]:
         *pin_mutations(),
         *install_mutations(),
         *suppression_mutations(),
+        *signs_mutations(),
+        *pins_mutations(),
+        *mutation_gate_mutations(),
         *dependency_mutations(),
         *weekly_mutations(),
         *record_mutations(),
@@ -2884,6 +2972,56 @@ def suppression_mutations() -> list[Mutation]:
     ]
 
 
+def signs_mutations() -> list[Mutation]:
+    """The Life event signs table held to the events whose signs the stack decides (ADR 0050)."""
+    row = "| deployed | none: the self-test has no such file |"
+    section = application_types.SIGNS_SECTION
+    return [
+        ("binding without a Life event signs section", rebind(section, "## Marks")),
+        ("Life event signs table with no row for an event", rebind(row + "\n", "")),
+        ("Life event signs row for an event the catalogue lacks", rebind(row, "| famous | `a` |")),
+        (
+            "Life event signs row that says none with no reason",
+            rebind(row, "| deployed | none: x |"),
+        ),
+        ("Life event signs row with no globs", rebind(row, "| deployed | a file |")),
+        (
+            "Life event signs row left as the template wrote it",
+            rebind(row, "| deployed | <globs of the tracked files that show where it runs> |"),
+        ),
+    ]
+
+
+def pins_mutations() -> list[Mutation]:
+    """The Image pins section held to a table the pins gate can read (ADR 0050)."""
+    row = SELF_TEST_PINS
+    return [
+        ("binding without an Image pins section", rebind(pins.SECTION, "## Digests")),
+        ("Image pins row that says none with no reason", rebind(row, "| none: x | none |")),
+        ("Image pins row whose pattern is no regex", rebind(row, "| `a/**` | `(` |")),
+        ("Image pins row whose pattern has no group", rebind(row, "| `a/**` | `FROM x` |")),
+        (
+            "Image pins row left as the template wrote it",
+            rebind(
+                row,
+                "| <`globs` of the files that name an image, or `none: <reason>`> | <`regex`> |",
+            ),
+        ),
+    ]
+
+
+def mutation_gate_mutations() -> list[Mutation]:
+    """A recipe that hands the mutation gate a tool's own report (ADR 0050)."""
+
+    def passing_a_report(root: Path) -> None:
+        text = (root / "justfile").read_text(encoding="utf-8")
+        script = '"{{ratchet_plugin}}/scripts/mutation_survivors.py"'
+        recipe = f"\nmutation-own:\n    python3 {script} --tool x --report r.json\n"
+        (root / "justfile").write_text(text + recipe, encoding="utf-8")
+
+    return [("mutation recipe that passes a tool's own report", passing_a_report)]
+
+
 def owed_mutations() -> list[Mutation]:
     """An owed entry no finding matches: it would excuse that finding if it came back."""
 
@@ -2944,6 +3082,9 @@ REGISTRIES_PLACEHOLDER = re.compile(r"^- Registries: <[^\n]*>$", re.MULTILINE)
 SUPPRESSION_KIND_PLACEHOLDER = re.compile(r"^\| <suppression kind> \|[^\n]*$", re.MULTILINE)
 SUPPRESSION_QUESTION_PLACEHOLDER = re.compile(r"^\| <question> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_KIND = "self-test-silence"
+SIGNS_PLACEHOLDER = re.compile(r"^\| (deployed|irreplaceable-data) \| <[^\n]*$", re.MULTILINE)
+PINS_PLACEHOLDER = re.compile(r"^\| <`globs` of the files that name an image[^\n]*$", re.MULTILINE)
+SELF_TEST_PINS = "| none: the self-test names no image | none |"
 DECISION_PLACEHOLDER = re.compile(r"^- Decision: <[^\n]*>$", re.MULTILINE)
 PARTS_PLACEHOLDER = re.compile(r"^\| <part> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_RECORD = "docs/adr/0002-the-tool-is-one-command-over-its-rules.md"
@@ -2993,6 +3134,8 @@ def fill_binding(text: str) -> str:
         f"| {SELF_TEST_KIND} | `self-test: silence` | rises |", text
     )
     text = SUPPRESSION_QUESTION_PLACEHOLDER.sub(suppression_rows, text)
+    text = SIGNS_PLACEHOLDER.sub(r"| \1 | none: the self-test has no such file |", text)
+    text = PINS_PLACEHOLDER.sub(SELF_TEST_PINS, text)
     text = EMPTY_TOOL_CELL.sub(r"\1 a tool |", text)
     return SPEED_PLACEHOLDER.sub(r"\1stated for this stack", text)
 
