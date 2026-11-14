@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     RESUMABLE,
     JUDGED_AGAIN,
     SPLIT,
+    SPLIT_UNASKED,
     ASSUMED,
     CRITIC_WAITS,
     CHECK_ASKS_NOTHING,
@@ -71,7 +72,12 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     REPORTED: DIES_FIRST,
     RESUMABLE: None,
     JUDGED_AGAIN: None,
+    # 10 breaks on a change the spec measures over a ceiling, which names no parts. 10a holds.
+    # pipeline.md step 3 says the stop on the spec's estimate comes "with a proposed split" and
+    # says it of no other stop, and pipeline.js tells the orchestrator "with no `proposedSplit`,
+    # divide the ticket's promises yourself".
     SPLIT: MEASURED_OVER,
+    SPLIT_UNASKED: None,
     ASSUMED: None,
     CRITIC_WAITS: None,
     CHECK_ASKS_NOTHING: None,
@@ -254,6 +260,23 @@ def test_on_the_real_workflow_every_dead_agent_ends_in_an_error_that_says_to_res
         assert world.RESUME in error["message"], error
 
 
+def test_on_the_real_workflow_a_too_large_stop_ends_there_and_leaves_the_split_unasked() -> None:
+    stopped = [
+        (actions, real)
+        for actions, _, real in played()[0]
+        if (real.raw.get("result") or {}).get("tooLarge")
+    ]
+    assert stopped
+    for actions, real in stopped:
+        last, too = actions[-1], real.raw["result"]["tooLarge"]
+        assert real.calls[-1][0] == last.label, real.calls
+        assert last.role in model.MEASURED_AT, last.name
+        if last.answer is model.Spec.SPLIT:
+            assert too["parts"] > 0, last.name
+        for words in world.SPLIT_UNASKED:
+            assert words in too["instructions"], (last.name, words)
+
+
 @functools.cache
 def replays() -> dict[str, world.Played]:
     named = {
@@ -293,4 +316,4 @@ def test_a_change_measured_over_a_ceiling_stops_with_no_parts_named() -> None:
     real = replays()["measured over"]
     assert real.calls == (("preflight", "Preflight"), ("spec", "Spec"))
     too = real.raw["result"]["tooLarge"]
-    assert too == {"kind": "product", "stage": "the spec", "parts": 0}
+    assert (too["kind"], too["stage"], too["parts"]) == ("product", "the spec", 0)

@@ -180,7 +180,12 @@ function kept(result) {
     ref: result.ref ?? null,
     rejudged: result.rejudged === true,
     tooLarge: too
-      ? { kind: too.kind, stage: too.stage, parts: (too.proposedSplit || []).length }
+      ? {
+          kind: too.kind,
+          stage: too.stage,
+          parts: (too.proposedSplit || []).length,
+          instructions: (result.requiredByOrchestrator || []).join('\\n'),
+        }
       : null,
     questions: (result.openQuestions || []).length,
     guardEdits: (result.guardEdits || []).length,
@@ -288,6 +293,12 @@ FORCED = {
 STAGES = {"the spec": Role.SPEC, "the implementation": Role.IMPLEMENT}
 DIED = re.compile(r"^(.+) agent returned no result")
 RESUME = "resume the run"
+# Why: the "Too large" section of skills/feature/SKILL.md has the orchestrator split the ticket and
+# ask nothing. These are the words of the result that tell it so, with parts named and without.
+SPLIT_UNASKED = (
+    "the orchestrator splits it and the owner is not asked",
+    "with no `proposedSplit`, divide the ticket's promises yourself",
+)
 
 
 def objection(reason: str) -> Objection:
@@ -310,7 +321,15 @@ def stopped(result: dict[str, Any]) -> Ending:
     too = result["tooLarge"]
     if too:
         ceiling, stage = Ceiling(too["kind"]), STAGES[too["stage"]]
-        return Ending(Outcome.BLOCKED, Stop.TOO_LARGE, ceiling, stage, parts=too["parts"] > 0)
+        unasked = all(words in too["instructions"] for words in SPLIT_UNASKED)
+        return Ending(
+            Outcome.BLOCKED,
+            Stop.TOO_LARGE,
+            ceiling,
+            stage,
+            parts=too["parts"] > 0,
+            split_unasked=unasked,
+        )
     stops = [
         (Stop.QUESTION, result["questions"] > 0),
         (Stop.GUARD_EDIT, result["guardEdits"] > 0),

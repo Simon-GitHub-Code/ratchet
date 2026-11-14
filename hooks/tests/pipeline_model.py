@@ -262,6 +262,8 @@ class Ending:
     measured_after: Role | None = None
     parts: bool = False
     """Whether a run stopped too large names the parts to split the ticket into."""
+    split_unasked: bool = False
+    """Whether the result tells the orchestrator to split the ticket itself and ask the owner nothing."""  # noqa: E501
     error: str = ""
     """The agent the script's error names, or ``REFUSED`` for one it raises on a bad input."""
     resume: bool = False
@@ -381,7 +383,7 @@ def _ended(state: State, ending: Ending) -> State:
 
 
 def _too_large(state: State, ceiling: Ceiling, after: Role, *, parts: bool) -> State:
-    stop = Ending(Outcome.BLOCKED, Stop.TOO_LARGE, ceiling, after, parts=parts)
+    stop = Ending(Outcome.BLOCKED, Stop.TOO_LARGE, ceiling, after, parts=parts, split_unasked=True)
     return _ended(state, stop)
 
 
@@ -675,6 +677,20 @@ def split(before: State, name: str, after: State) -> bool:
     return ending.parts and named(name).role is not Role.IMPLEMENT and not before.built
 
 
+def split_unasked(_: State, name: str, after: State) -> bool:
+    """A run that stops too large stops on the answer of the spec or the implementer that measured it, carries the proposed parts when the spec's estimate stopped it, and tells the orchestrator to split the ticket without asking the owner."""  # noqa: E501
+    ending = after.ending
+    if ending is None or ending.stop is not Stop.TOO_LARGE:
+        return True
+    action = named(name)
+    estimated = action.answer is Spec.SPLIT
+    return (
+        ending.measured_after is MEASURED_AT.get(action.role)
+        and (ending.parts or not estimated)
+        and ending.split_unasked
+    )
+
+
 def assumed(_: State, __: str, after: State) -> bool:
     """A promise of the ticket the run keeps after the amend left it out reaches the result's assumptions."""  # noqa: E501
     ending = after.ending
@@ -731,6 +747,9 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "8a. a dead agent ends the run in an error that says to resume it": resumable,
     "9. a rebased branch is approved only by its own second review": judged_again,
     "10. a run that stops too large names its parts and is unbuilt": split,
+    "10a. a run that stops too large builds nothing more and the orchestrator splits it": (
+        split_unasked
+    ),
     "11. a promise the run kept from the ticket is in its assumptions": assumed,
     "12. the critic waits for a project that is depended-on": critic_waits,
     "13. the ticket check never stops the run": check_asks_nothing,
