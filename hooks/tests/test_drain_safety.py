@@ -941,3 +941,86 @@ def test_split_waits_for_the_drain_lock(
         assert run(root, "split", ALPHA, "--plan", str(parts)) == 2
     assert "another drain command is running" in capsys.readouterr().out
     assert "outcome" not in note(root, BRANCH_A)
+
+
+# --- findings of the second replay: kills around a landing and an update ----------------------
+
+
+def test_a_landing_killed_before_its_tree_is_removed_has_its_note(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    judged(root)
+    killed = start(root, "land", ALPHA, DRV_KILL_AT="discard")
+    killed.communicate(timeout=60)
+    assert killed.returncode == -signal.SIGKILL
+    assert BRANCH_A in drain.route.merged_features(root, "main"), "the merge landed"
+    assert note(root, BRANCH_A)["outcome"] == "merged", "and the note that says so is written"
+    assert note(root, BRANCH_A)["reported"] is False
+
+
+def test_clean_all_records_a_merge_whose_tree_is_gone_and_a_close_is_then_refused(
+    tmp_path: Path, capsys: Out
+) -> None:
+    killer = tmp_path / "killing_merge.py"
+    killer.write_text(KILLER.format(scripts=str(SCRIPTS)), encoding="utf-8")
+    root = project(tmp_path, **{"docs/process/binding.md": binding(f"{sys.executable} {killer}")})
+    tree = judged(root)
+    assert run(root, "land", ALPHA) == 2
+    assert "outcome" not in note(root, BRANCH_A)
+    git(root, "worktree", "remove", "--force", str(tree))
+    assert run(root, "clean", "--all") == 0
+    assert note(root, BRANCH_A)["outcome"] == "merged"
+    capsys.readouterr()
+    assert run(root, "close", ALPHA, "--outcome", "parked") != 0
+    assert "merged" in capsys.readouterr().out
+
+
+def test_the_plan_runs_update_again_for_a_branch_killed_past_its_rebase(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    judged(root, resolved=False)
+    write(root, "src/m.py", "M = 1\n")
+    commit(root, "feat(core): merged meanwhile")
+    killed = start(root, "update", ALPHA, DRV_KILL_AT="drop_record")
+    killed.communicate(timeout=60)
+    assert killed.returncode == -signal.SIGKILL
+    assert run(root, "clean", "--all") == 0
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert (entry.state, entry.why) == ("built", (drain.BEHIND,))
+    assert json.loads(update(root).stdout) == {"moved": True, "conflicts": []}
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert entry.why == ()
+
+
+def test_clean_all_clears_the_mark_of_an_update_killed_mid_rebase(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    write(root, "src/m.py", "M = 1\n")
+    commit(root, "feat(core): merged meanwhile")
+    hooks = tmp_path / "killhooks"
+    hook_script(
+        hooks,
+        "post-checkout",
+        f"[ -e {hooks}/fired ] && exit 0; touch {hooks}/fired; kill -9 $(ps -o ppid= $PPID) $PPID",
+    )
+    git(root, "config", "core.hooksPath", str(hooks))
+    assert update(root).returncode == -signal.SIGKILL
+    git(root, "config", "--unset", "core.hooksPath")
+    assert note(root, BRANCH_A)["rebasing"]
+    assert run(root, "clean", "--all") == 0
+    assert "rebasing" not in note(root, BRANCH_A)
+
+
+def test_a_close_and_an_open_that_keeps_a_note_drop_the_mark(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    path = drain.queue_notes.note_path(root, BRANCH_A)
+    drain.queue_notes.write_note(path, {**note(root, BRANCH_A), "rebasing": "0" * 40})
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "x") == 0
+    assert "rebasing" not in note(root, BRANCH_A)
+    drain.queue_notes.write_note(path, {**note(root, BRANCH_A), "rebasing": "0" * 40})
+    write(root, ALPHA, ticket(1, "Alpha", "the owner answered\n\n"))
+    commit(root, "docs: the owner edits ticket 1")
+    assert run(root, "open", ALPHA) == 0
+    kept = note(root, BRANCH_A)
+    assert kept["outcome"] == "parked"
+    assert "rebasing" not in kept

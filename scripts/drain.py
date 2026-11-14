@@ -601,14 +601,12 @@ def classify(ticket: preflight.Ticket, drain: Drain, seen: Seen) -> Entry:
     if ahead(drain.root, seen.base, branch):
         waited = queue_notes.read_note(drain.root, branch)
         again = queue_notes.texts(waited.get("reasons")) if waited.get("outcome") == WAITS else []
-        behind = (
-            tuple(again)
-            if gatelib.git(
-                drain.root, "merge-base", "--is-ancestor", seen.base, f"refs/heads/{branch}"
-            )
-            == ""
-            else (BEHIND,)
-        )
+        # Why: a mark means an `update` was killed, and what it left (an outdated record on top)
+        # is put right only by running it again, even though the branch holds the tip now.
+        current = gatelib.git(
+            drain.root, "merge-base", "--is-ancestor", seen.base, f"refs/heads/{branch}"
+        ) == "" and not waited.get("rebasing")
+        behind = tuple(again) if current else (BEHIND,)
         return replace(entry, state=BUILT, why=behind)
     if tree in seen.trees:
         return replace(entry, state=BUILDING)
@@ -743,7 +741,11 @@ def open_ticket(drain: Drain, ref: str) -> int:
     # Why: a close nobody has reported yet is still owed to the report; the run now starting
     # replaces it only when it closes. The hold ends here, since the ticket was released.
     keep = prior.get("reported") is False and prior.get("outcome") not in {None, MERGED}
-    kept = {k: v for k, v in prior.items() if k not in {"hold", "attempts"}} if keep else {}
+    kept = (
+        {k: v for k, v in prior.items() if k not in {"hold", "attempts", "rebasing"}}
+        if keep
+        else {}
+    )
     queue_notes.write_note(path, {**kept, **asdict(entry), "opened": opened})
     print(json.dumps({**asdict(entry), "state": BUILDING, "base": drafted.base}, indent=2))
     return 0
@@ -940,15 +942,13 @@ def settle(
     tree = tree_of(root, branch)
     change = change_of(root, merge_ready.default_ref(root), branch)
     gates = timings(tree)
-    kept = discard(root, tree, f"{branch}: {STASHED[outcome]} run")
-    stays = [f"the work tree stays at {tree}: {kept}"] if kept else []
     note = {
-        **queue_notes.read_note(root, branch),
+        **{k: v for k, v in queue_notes.read_note(root, branch).items() if k != "rebasing"},
         "hold": outcome != MERGED,
         "attempts": 0,
         **who,
         "outcome": outcome,
-        "reasons": [*reasons, *stays],
+        "reasons": reasons,
         "assumptions": assumptions(change),
         "additions": additions(change),
         "gates": gates,
@@ -959,7 +959,14 @@ def settle(
         "base": queue_notes.tip(root),
         "reported": False,
     }
-    queue_notes.write_note(queue_notes.note_path(root, branch), note)
+    # Why: the note goes first, so a run killed between the two leaves a merge that is recorded;
+    # a tree left with its work is the one thing the note learns afterwards.
+    path = queue_notes.note_path(root, branch)
+    queue_notes.write_note(path, note)
+    kept = discard(root, tree, f"{branch}: {STASHED[outcome]} run")
+    stays = [f"the work tree stays at {tree}: {kept}"] if kept else []
+    if stays:
+        queue_notes.write_note(path, {**note, "reasons": [*reasons, *stays]})
     return stays
 
 
@@ -1038,6 +1045,7 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
     heads = gatelib.git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads/") or ""
     owners = {tree_of(root, branch): branch for branch in heads.splitlines()}
     registered = worktrees(root)
+    record_orphans(root, heads.splitlines(), registered)
     for tree in sorted(registered | set(queue_home(root).glob("*"))):
         branch = owners.get(tree)
         why = (
@@ -1059,7 +1067,38 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
                 print(f"kept: {line}")
         stays = discard(root, tree, f"{branch or tree.name}: {INTERRUPTED} run")
         print(f"removed: {tree}: {why}" if stays is None else f"left: {tree}: {why}, and {stays}")
+    if everything:
+        for branch in heads.splitlines():
+            unmark(root, branch)
     return 0
+
+
+def record_orphans(root: Path, branches: list[str], registered: frozenset[Path]) -> None:
+    """Record each merge no note says whose work tree is gone: it is no tree's to sweep.
+
+    Why: a landing killed after the default branch moved, and after the tree was removed, leaves
+    only this; the next drain's report must still list the ticket as merged.
+    """
+    for branch in branches:
+        if tree_of(root, branch) not in registered and recorded_merge(root, branch):
+            for line in record_merge(root, branch):
+                print(f"kept: {line}")
+
+
+def unmark(root: Path, branch: str) -> None:
+    """Clear the ``rebasing`` mark of a branch whose rebase did not finish.
+
+    Why: a rebase killed part-way leaves the branch where the mark says it was, or with nothing
+    of its own; the mark is of a run that is over, and a branch made again must not inherit it.
+    """
+    held = queue_notes.read_note(root, branch)
+    tip = gatelib.git(root, "rev-parse", f"refs/heads/{branch}")
+    if held.get("rebasing") and (
+        tip == held["rebasing"] or not ahead(root, merge_ready.default_ref(root), branch)
+    ):
+        queue_notes.write_note(
+            queue_notes.note_path(root, branch), {k: v for k, v in held.items() if k != "rebasing"}
+        )
 
 
 # --- the report ------------------------------------------------------------------------------
