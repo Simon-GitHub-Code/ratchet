@@ -853,7 +853,7 @@ def triggers_follow(catalogue: application_types.Catalogue) -> tuple[str, ...]:
     return tuple(
         f"`{name}` asks the Triggers table for the kinds {', '.join(sorted(kinds))}"
         for name in catalogue.types
-        if (kinds := catalogue.kinds_asked({name}))
+        if (kinds := catalogue.kinds_required({name}))
     )
 
 
@@ -961,11 +961,16 @@ def check_triggers(root: Path) -> Iterable[Finding]:
                 f" lacks; the kinds are {', '.join(catalogue.kinds)}"
             )
     types = set(application_types.declared(text) or [])
-    for name in sorted(catalogue.kinds_asked(types) - set(kinds)):
+    asked = catalogue.kinds_asked(types)
+    for name in sorted(catalogue.kinds_required(types) - set(kinds)):
+        why = (
+            "which a question asked of these types is triggered by"
+            if name in asked
+            else "whose arrival reopens the architecture (ADR 0052)"
+        )
         yield agent(
-            f"{BINDING_PATH}: the Triggers table has no row for kind '{name}', which a question"
-            f" asked of these types is triggered by ({catalogue.kinds[name]});"
-            " write its Paths, or `none: <reason>`"
+            f"{BINDING_PATH}: the Triggers table has no row for kind '{name}', {why}"
+            f" ({catalogue.kinds[name]}); write its Paths, or `none: <reason>`"
         )
 
 
@@ -2999,7 +3004,7 @@ def fill_binding(text: str) -> str:
 
 def triggers_rows(_: re.Match[str]) -> str:
     """A row for each kind of code a question asked of a command line tool is triggered by."""
-    kinds = sorted(application_types.load().kinds_asked({"cli"}))
+    kinds = sorted(application_types.load().kinds_required({"cli"}))
     return "\n".join(f"| {kind} | none: the self-test has none | |" for kind in kinds)
 
 

@@ -1,7 +1,9 @@
 """The safeguard model's actions on a real repository, judged by the real triggers gate.
 
 Each instance of the kind is a file of its own under ``src/`` holding one line the Triggers row's
-pattern matches; the binding is written from the model's ``Tree``, a field to a line. A branch is
+pattern matches; the binding is written from the model's ``Tree``, a field to a line, and the
+review's record is a decision record of its own under ``docs/adr/``. The kind is one whose arrival
+reopens the architecture (ADR 0052) and the event is one that does not. A branch is
 committed as ``merge.attempt`` would meet it, and landed the way it lands one: merged ``--no-ff``
 on a detached copy of the default branch's tip, the gate run on the merge result, and the default
 branch moved forward to it only when the merge is clean and the gate is green. The gate also runs
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 import subprocess
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -24,6 +27,7 @@ from tests.safeguard_model import (
     Event,
     Landing,
     Row,
+    Start,
     State,
     Step,
     Table,
@@ -35,10 +39,20 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 BINDING = "docs/process/binding.md"
-KIND = "beacon"
+KIND = "outbound-call"
 EVENT = "launched"
 QUESTIONS = {Debt.KIND: "beacon calls fail safely", Debt.EVENT: "the launch is watched"}
 PATHS = {Table.FINDS: "src/**", Table.BLIND: "elsewhere/**"}
+REVIEW_ROW = (
+    f"| {triggers.REVIEW_QUESTION} | `ratchet` plugin `scripts/triggers.py` | 1 | |"
+    " `just triggers` |\n"
+)
+RECORD = "docs/adr/0001-architecture-review.md"
+REVIEWED = (
+    f"# The architecture holds\n\n- Architecture review: `code:{KIND}`\n- Outcome: holds\n"
+    "- Decided: 2026-11-14\n\n## Decision\n\nThe calls go through one part.\n\n"
+    "## Refutation criterion\n\nA second part calls out.\n"
+)
 
 
 def binding(tree: Tree) -> str:
@@ -56,13 +70,14 @@ def binding(tree: Tree) -> str:
         + "| lint | a linter | 0 | | `just lint` |\n"
         "| types | a type checker | 0 | | `just types` |\n"
         f"| {QUESTIONS[Debt.EVENT]} | {event_tool} | weekly | | `just watch` |\n"
-        "| tests | a test runner | 1 | | `just test` |\n\n"
-        "## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n"
+        "| tests | a test runner | 1 | | `just test` |\n"
+        + (REVIEW_ROW if tree.review is Row.BOUND else "")
+        + "\n## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n"
         f"| {KIND} | `{PATHS[tree.table]}` | `beacon\\(` |\n"
     )
 
 
-def read_binding(text: str) -> tuple[Row, Table, Event, Row]:
+def read_binding(text: str) -> tuple[Row, Table, Event, Row, Row]:
     """The fields of a binding ``binding`` wrote, read back from its lines alone."""
     lines = text.splitlines()
 
@@ -79,6 +94,7 @@ def read_binding(text: str) -> tuple[Row, Table, Event, Row]:
         Table.BLIND if blind else Table.FINDS,
         Event.DECLARED if EVENT in events else Event.UNDECLARED,
         row(QUESTIONS[Debt.EVENT], f"later: life:{EVENT}"),
+        Row.BOUND if REVIEW_ROW.strip() in lines else Row.ABSENT,
     )
 
 
@@ -91,11 +107,15 @@ class Run:
 
     @property
     def arrived(self) -> bool:
-        return f"note: '{KIND}' has arrived" in self.out
+        return re.search(rf"note: '{KIND}' has arrived \(.*\) and owes ", self.out) is not None
 
     @property
     def event_owes(self) -> bool:
         return f"note: life event '{EVENT}' is declared" in self.out
+
+    @property
+    def reopens(self) -> bool:
+        return re.search(rf"note: '{KIND}' has arrived \(.*\) and reopens ", self.out) is not None
 
 
 @dataclass(frozen=True)
@@ -151,6 +171,9 @@ class World:
         if tree.binding != before.binding:
             write(self.root, BINDING, binding(tree))
             self.log.append(f"write {BINDING}: {', '.join(f.value for f in tree.binding)}")
+        if tree.reviewed and not before.reviewed:
+            write(self.root, RECORD, REVIEWED)
+            self.log.append(f"write {RECORD}")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", subject)
 
@@ -160,12 +183,16 @@ class World:
         listed = [f"src/{path.name}" for path in (self.root / "src").glob("*")]
         instances = frozenset(names[path] for path in listed)
         text = (self.root / BINDING).read_text(encoding="utf-8")
-        return Tree(instances, *read_binding(text))
+        return Tree(instances, *read_binding(text), reviewed=(self.root / RECORD).exists())
 
     def owed(self) -> dict[Debt, int]:
         """What ``triggers.owed`` says the default branch's work tree owes, by debt."""
         by_question = {question: debt for debt, question in QUESTIONS.items()}
         return {by_question[row.question]: row.count for row in triggers.owed(self.root)}
+
+    def reviews(self) -> int | None:
+        """The kind's count when ``triggers.reviews_owed`` says the review is owed."""
+        return next((row.count for row in triggers.reviews_owed(self.root)), None)
 
     def take(
         self, step: Step, before: State, *, after: State, result: Landing | None
@@ -188,11 +215,14 @@ class World:
             fork, head = before.branch.fork, before.branch.head
             self.git("switch", "-q", self.open)
             held = (before.held, before.branch.held)
-            return self.land(self.open, (before.main, fork, head), self.gate(), held=held)
+            start = (before.start, before.branch.start)
+            trees = (before.main, fork, head)
+            return self.land(self.open, trees, self.gate(), held=held, start=start)
         assert result is not None
         name = self.fork(result.head, before.main, step)
-        held = (before.held, before.held)
-        return self.land(name, (before.main, before.main, result.head), None, held=held)
+        held, start = (before.held, before.held), (before.start, before.start)
+        trees = (before.main, before.main, result.head)
+        return self.land(name, trees, None, held=held, start=start)
 
     def fork(self, head: Tree, tip: Tree, step: Step) -> str:
         """Commit ``head`` on a new branch from the default branch; the branch's name."""
@@ -210,11 +240,13 @@ class World:
         branch_run: Run | None,
         *,
         held: tuple[bool, bool],
+        start: tuple[Start, Start],
     ) -> Attempt:
         """``merge.attempt`` of branch ``name``: merge, gate, and move the default branch.
 
-        ``held`` is the model's word on whether the tip's and the fork's past held an instance;
-        the gate reads that from the log, and its verdict is what is compared.
+        ``held`` is the model's word on whether the tip's and the fork's past held an instance,
+        and ``start`` on where the reviews stood at each; the gate reads both from the log, and
+        its verdict is what is compared.
         """
         self.git("switch", "-q", "--detach", "main")
         try:
@@ -231,6 +263,8 @@ class World:
                     branch_green=green,
                     tip_held=held[0],
                     fork_held=held[1],
+                    tip_start=start[0],
+                    fork_start=start[1],
                 ),
                 branch_run,
                 None,
@@ -239,5 +273,6 @@ class World:
         if merge_run.code == 0:
             self.git("update-ref", "refs/heads/main", "HEAD")
         branch_run = branch_run or merge_run
-        landing = Landing(*trees, self.tree(), merge_run.code == 0, branch_run.code == 0, *held)
+        green = (merge_run.code == 0, branch_run.code == 0)
+        landing = Landing(*trees, self.tree(), *green, *held, *start)
         return Attempt(landing, branch_run, merge_run)

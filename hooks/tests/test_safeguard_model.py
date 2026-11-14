@@ -18,6 +18,7 @@ from tests.safeguard_model import (
     Debt,
     Landing,
     Row,
+    Start,
     State,
     allowance_after,
     canonical,
@@ -27,6 +28,7 @@ from tests.safeguard_model import (
     judge,
     outcomes,
     owed,
+    reviews_owed,
     summary,
 )
 from tests.safeguard_world import Attempt, Run, World
@@ -34,7 +36,7 @@ from tests.support import PLUGIN_ROOT
 
 PAGE = PLUGIN_ROOT / "docs/model/safeguard.md"
 
-# The owner's seven rules, as the model finds them. A path is the shortest run that breaks the
+# The owner's eight rules, as the model finds them. A path is the shortest run that breaks the
 # rule; ``None`` says it holds on every reachable state and landing.
 FOUND: dict[str, tuple[str, ...] | None] = {
     # 1. The change that first brings a kind is free, however many instances it brings; a kind
@@ -56,6 +58,12 @@ FOUND: dict[str, tuple[str, ...] | None] = {
     "only binding leaves owed, with the guard": None,
     # 4. A declared event is never red.
     "event is never red": None,
+    # 8. An arrival that reopens the architecture owes a review once the binding asks for one
+    # (ADR 0052): another instance is red until its record lands, a record beside the instance
+    # counts not, and a kind the binding found when it first asked owes none.
+    "review owed takes no new instance": None,
+    "reviewed kind is judged by its row": None,
+    "a review is owed only after its arrival": None,
     # 5. Removing every instance used to make the next arrival free again; ADR 0048 closed it.
     # The gate alone still lets a kind grow once its Triggers row points elsewhere.
     "owed never grows unbound": (
@@ -149,6 +157,39 @@ def test_a_declared_event_owes_its_row_and_a_red_landing_is_the_kind_s_alone() -
     assert owed(state.main) == {Debt.KIND: 1, Debt.EVENT: 0}
 
 
+def test_a_kind_that_arrives_once_the_review_is_asked_owes_it_beside_a_bound_row() -> None:
+    state, landings = walk(
+        "another branch lands: ask for the architecture review",
+        "another branch lands: bind the row",
+        "another branch lands: add one instance",
+        "another branch lands: add one instance",
+        "another branch lands: add one instance with its review",
+        "another branch lands: land the architecture review",
+        "another branch lands: add one instance",
+    )
+    _, _, arrival, second, beside, review, after = landings
+    assert judge(arrival.tip, arrival.head, arrival.tip_held, start=arrival.tip_start).reopens
+    assert arrival.landed
+    assert not second.landed
+    assert not beside.landed
+    assert review.landed
+    assert after.landed
+    assert state.start is Start.FRESH
+    assert reviews_owed(state) is None
+
+
+def test_a_kind_held_when_the_review_is_first_asked_owes_none() -> None:
+    state, landings = walk(
+        "another branch lands: add one instance",
+        "another branch lands: bind the row",
+        "another branch lands: ask for the architecture review",
+        "another branch lands: add one instance",
+    )
+    assert all(landing.landed for landing in landings)
+    assert state.start is Start.HELD
+    assert reviews_owed(state) is None
+
+
 def replay(directory: Path, *names: str) -> tuple[World, State, list[Attempt]]:
     """The actions taken on a real repository, each landing checked against the model's."""
     world = World.create(directory / "repo")
@@ -195,6 +236,43 @@ def test_a_kind_that_went_back_to_none_and_returns_is_red_until_its_row_is_bound
     assert again.landing.landed
     assert len(state.main.instances) == 2
     assert world.owed() == {}
+
+
+def test_the_real_gate_holds_another_instance_until_the_review_lands(tmp_path: Path) -> None:
+    # Why: the review's rules hold on the model; here the real gate lands each step as it says,
+    # the red one naming the review and the free one saying the kind reopens the architecture.
+    world, state, seen = replay(
+        tmp_path,
+        "another branch lands: ask for the architecture review",
+        "another branch lands: bind the row",
+        "another branch lands: add one instance",
+        "another branch lands: add one instance",
+        "another branch lands: add one instance with its review",
+        "another branch lands: land the architecture review",
+        "another branch lands: add one instance",
+    )
+    _, _, arrival, second, beside, _, after = seen
+    assert arrival.branch_run.reopens
+    assert world.reviews() is None
+    for red in (second, beside):
+        assert red.merge_run is not None
+        assert "architecture review owed" in red.merge_run.out
+    assert after.landing.landed
+    assert len(state.main.instances) == 2
+
+
+def test_the_real_gate_owes_no_review_for_a_kind_held_when_it_was_first_asked(
+    tmp_path: Path,
+) -> None:
+    world, _, seen = replay(
+        tmp_path,
+        "another branch lands: add one instance",
+        "another branch lands: bind the row",
+        "another branch lands: ask for the architecture review",
+        "another branch lands: add one instance",
+    )
+    assert all(attempt.landing.landed for attempt in seen)
+    assert world.reviews() is None
 
 
 def test_a_row_dropped_and_put_back_does_not_make_the_return_an_arrival(tmp_path: Path) -> None:
@@ -248,17 +326,23 @@ class SafeguardMachine(RuleBasedStateMachine):
     def compare(self, seen: Attempt, expected: Landing) -> None:
         said = self.explain(seen.branch_run, seen.merge_run)
         assert seen.landing == expected, f"seen:  {seen.landing}\nmodel: {expected}\n{said}"
-        on_branch = judge(expected.fork, expected.head, expected.fork_held)
-        assert (seen.branch_run.arrived, seen.branch_run.event_owes) == (
+        on_branch = judge(
+            expected.fork, expected.head, expected.fork_held, start=expected.fork_start
+        )
+        assert notes(seen.branch_run) == (
             on_branch.arrived,
             on_branch.event_owes,
+            on_branch.reopens,
         ), said
         if expected.merged is not None:
             assert seen.merge_run is not None, said
-            on_merge = judge(expected.tip, expected.merged, expected.tip_held)
-            assert (seen.merge_run.arrived, seen.merge_run.event_owes) == (
+            on_merge = judge(
+                expected.tip, expected.merged, expected.tip_held, start=expected.tip_start
+            )
+            assert notes(seen.merge_run) == (
                 on_merge.arrived,
                 on_merge.event_owes,
+                on_merge.reopens,
             ), said
         for name in self.holding:
             check = RULES[name].step_check
@@ -268,10 +352,20 @@ class SafeguardMachine(RuleBasedStateMachine):
         main = self.world.tree()
         assert self.world.owed() == owed(expected.merged), said
         held = self.history.held or bool(main.instances)
-        self.history = State(main, allowance_after(self.history.allowance, main), None, held)
+        start = self.history.start
+        if start is Start.NONE and main.review is Row.BOUND:
+            start = Start.HELD if held else Start.FRESH
+        allowance = allowance_after(self.history.allowance, main)
+        self.history = State(main, allowance, None, held, start)
+        assert self.world.reviews() == reviews_owed(self.history), said
         for name in self.holding:
             check = RULES[name].state_check
             assert check is None or check(self.history), f"{name}\n{said}"
+
+
+def notes(run: Run) -> tuple[bool, bool, bool]:
+    """The three notes a run of the gate printed, as a ``Verdict`` holds them."""
+    return (run.arrived, run.event_owes, run.reopens)
 
 
 SafeguardMachine.TestCase.settings = settings(
