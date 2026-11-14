@@ -840,3 +840,217 @@ def test_an_update_killed_after_the_rebase_by_a_real_kill_drops_the_record_on_th
     out, _ = again.communicate(timeout=60)
     assert json.loads(out) == {"moved": True, "conflicts": []}
     assert "verdict.json" not in git(tree, "show", "--name-only", "--format=", "HEAD")
+
+
+# --- findings of the drain's model, each replayed on a real repository ------------------------
+
+
+def judged(root: Path, *, resolved: bool = True) -> Path:
+    """Open ticket A and commit its change and an approving verdict record, as a run would."""
+    run(root, "open", ALPHA)
+    done = {ALPHA: ticket(1, "Alpha", status="resolved")} if resolved else {}
+    return build(root, BRANCH_A, {"src/b.py": "B = 1\n", **done}, record=approval("alpha"))
+
+
+def test_a_held_ticket_is_not_landed(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    judged(root)
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "the owner decides") == 0
+    before = git(root, "rev-parse", "main")
+    capsys.readouterr()
+    assert run(root, "land", ALPHA) == 2
+    out = capsys.readouterr().out
+    assert "is held" in out
+    assert "the owner decides" in out
+    assert git(root, "rev-parse", "main") == before, "nothing landed"
+    assert note(root, BRANCH_A)["outcome"] == "parked"
+
+
+def test_a_close_after_the_landing_does_not_unsay_the_merge(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    judged(root)
+    assert run(root, "land", ALPHA) == 0
+    merged = note(root, BRANCH_A)
+    assert merged["outcome"] == "merged"
+    capsys.readouterr()
+    assert run(root, "close", ALPHA, "--outcome", "parked") != 0
+    assert "merged" in capsys.readouterr().out
+    assert note(root, BRANCH_A) == merged
+    assert run(root, "report") == 0
+    report = capsys.readouterr().out
+    assert "## Parked\n\n- none" in report
+    assert "## Merged\n\n- none" not in report
+
+
+def test_a_close_as_merged_after_the_landing_says_it_is_closed_and_changes_nothing(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    judged(root)
+    assert run(root, "land", ALPHA) == 0
+    merged = note(root, BRANCH_A)
+    capsys.readouterr()
+    assert run(root, "close", ALPHA, "--outcome", "merged") == 0
+    assert capsys.readouterr().out == f"closed: {ALPHA}: merged\n"
+    assert note(root, BRANCH_A) == merged
+
+
+def test_clean_all_says_when_the_tree_of_a_recorded_merge_stays(
+    tmp_path: Path, capsys: Out
+) -> None:
+    killer = tmp_path / "killing_merge.py"
+    killer.write_text(KILLER.format(scripts=str(SCRIPTS)), encoding="utf-8")
+    root = project(tmp_path, **{"docs/process/binding.md": binding(f"{sys.executable} {killer}")})
+    tree = judged(root)
+    assert run(root, "land", ALPHA) == 2
+    git(root, "worktree", "remove", "--force", str(tree))
+    tree.mkdir(parents=True)
+    (tree / "left.txt").write_text("not git's\n", encoding="utf-8")
+    capsys.readouterr()
+    assert run(root, "clean", "--all") == 0
+    assert f"kept: the work tree stays at {tree}" in capsys.readouterr().out
+    assert note(root, BRANCH_A)["outcome"] == "merged"
+
+
+def test_an_update_killed_after_its_rebase_and_a_clean_all_drops_the_record_on_the_rerun(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    tree = judged(root, resolved=False)
+    write(root, "src/m.py", "M = 1\n")
+    base = commit(root, "feat(core): merged meanwhile")
+    killed = start(root, "update", ALPHA, DRV_KILL_AT="drop_record")
+    killed.communicate(timeout=60)
+    assert killed.returncode == -signal.SIGKILL
+    assert run(root, "clean", "--all") == 0
+    assert not tree.exists(), "the sweep took the tree"
+    again = start(root, "update", ALPHA)
+    out, _ = again.communicate(timeout=60)
+    assert json.loads(out) == {"moved": True, "conflicts": []}
+    assert git(root, "merge-base", "--is-ancestor", base, BRANCH_A) == ""
+    assert "verdict.json" not in git(root, "show", "--name-only", "--format=", BRANCH_A)
+    assert json.loads(update(root).stdout) == {"moved": False, "conflicts": []}
+
+
+def test_update_does_not_make_a_tree_beyond_the_cap(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA, "--concurrency", "1") == 0
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "x") == 0
+    assert run(root, "open", GAMMA, "--concurrency", "1") == 0
+    write(root, ALPHA, ticket(1, "Alpha", "the owner answered\n\n"))
+    commit(root, "docs: the owner edits ticket 1")
+    capsys.readouterr()
+    assert run(root, "update", ALPHA, "--concurrency", "1") == 1
+    assert "1 tickets are building: the cap" in capsys.readouterr().out
+    assert len(drain.worktrees(root)) == 1
+
+
+def test_open_keeps_a_parked_outcome_the_report_has_not_listed(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "needs a decision") == 0
+    write(root, ALPHA, ticket(1, "Alpha", "the owner answered\n\n"))
+    commit(root, "docs: the owner edits ticket 1")
+    assert run(root, "open", ALPHA) == 0
+    kept = note(root, BRANCH_A)
+    assert (kept["outcome"], kept["reported"]) == ("parked", False)
+    assert kept["reasons"] == ["needs a decision"]
+
+
+def test_split_waits_for_the_drain_lock(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    parts = tmp_path / "plan.json"
+    parts.write_text(json.dumps({"parts": []}), encoding="utf-8")
+    monkeypatch.setattr(drain, "LOCK_WAIT", 0.2)
+    capsys.readouterr()
+    with drain.exclusive(root):
+        assert run(root, "split", ALPHA, "--plan", str(parts)) == 2
+    assert "another drain command is running" in capsys.readouterr().out
+    assert "outcome" not in note(root, BRANCH_A)
+
+
+# --- findings of the second replay: kills around a landing and an update ----------------------
+
+
+def test_a_landing_killed_before_its_tree_is_removed_has_its_note(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    judged(root)
+    killed = start(root, "land", ALPHA, DRV_KILL_AT="discard")
+    killed.communicate(timeout=60)
+    assert killed.returncode == -signal.SIGKILL
+    assert BRANCH_A in drain.route.merged_features(root, "main"), "the merge landed"
+    assert note(root, BRANCH_A)["outcome"] == "merged", "and the note that says so is written"
+    assert note(root, BRANCH_A)["reported"] is False
+
+
+def test_clean_all_records_a_merge_whose_tree_is_gone_and_a_close_is_then_refused(
+    tmp_path: Path, capsys: Out
+) -> None:
+    killer = tmp_path / "killing_merge.py"
+    killer.write_text(KILLER.format(scripts=str(SCRIPTS)), encoding="utf-8")
+    root = project(tmp_path, **{"docs/process/binding.md": binding(f"{sys.executable} {killer}")})
+    tree = judged(root)
+    assert run(root, "land", ALPHA) == 2
+    assert "outcome" not in note(root, BRANCH_A)
+    git(root, "worktree", "remove", "--force", str(tree))
+    assert run(root, "clean", "--all") == 0
+    assert note(root, BRANCH_A)["outcome"] == "merged"
+    capsys.readouterr()
+    assert run(root, "close", ALPHA, "--outcome", "parked") != 0
+    assert "merged" in capsys.readouterr().out
+
+
+def test_the_plan_runs_update_again_for_a_branch_killed_past_its_rebase(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    judged(root, resolved=False)
+    write(root, "src/m.py", "M = 1\n")
+    commit(root, "feat(core): merged meanwhile")
+    killed = start(root, "update", ALPHA, DRV_KILL_AT="drop_record")
+    killed.communicate(timeout=60)
+    assert killed.returncode == -signal.SIGKILL
+    assert run(root, "clean", "--all") == 0
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert (entry.state, entry.why) == ("built", (drain.BEHIND,))
+    assert json.loads(update(root).stdout) == {"moved": True, "conflicts": []}
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert entry.why == ()
+
+
+def test_clean_all_clears_the_mark_of_an_update_killed_mid_rebase(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    write(root, "src/m.py", "M = 1\n")
+    commit(root, "feat(core): merged meanwhile")
+    hooks = tmp_path / "killhooks"
+    hook_script(
+        hooks,
+        "post-checkout",
+        f"[ -e {hooks}/fired ] && exit 0; touch {hooks}/fired; kill -9 $(ps -o ppid= $PPID) $PPID",
+    )
+    git(root, "config", "core.hooksPath", str(hooks))
+    assert update(root).returncode == -signal.SIGKILL
+    git(root, "config", "--unset", "core.hooksPath")
+    assert note(root, BRANCH_A)["rebasing"]
+    assert run(root, "clean", "--all") == 0
+    assert "rebasing" not in note(root, BRANCH_A)
+
+
+def test_a_close_and_an_open_that_keeps_a_note_drop_the_mark(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    path = drain.queue_notes.note_path(root, BRANCH_A)
+    drain.queue_notes.write_note(path, {**note(root, BRANCH_A), "rebasing": "0" * 40})
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "x") == 0
+    assert "rebasing" not in note(root, BRANCH_A)
+    drain.queue_notes.write_note(path, {**note(root, BRANCH_A), "rebasing": "0" * 40})
+    write(root, ALPHA, ticket(1, "Alpha", "the owner answered\n\n"))
+    commit(root, "docs: the owner edits ticket 1")
+    assert run(root, "open", ALPHA) == 0
+    kept = note(root, BRANCH_A)
+    assert kept["outcome"] == "parked"
+    assert "rebasing" not in kept
