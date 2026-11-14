@@ -37,7 +37,8 @@ import route
 from tests import model_tla
 from tests import route_model as model
 from tests import route_world as real
-from tests.route_model import ActionName, Advice, World
+from tests.repos import git
+from tests.route_model import ActionName, Advice, Setup, Ticket, World
 from tests.support import PLUGIN_ROOT
 
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
@@ -162,6 +163,33 @@ def test_every_state_reaches_rest_by_some_actions() -> None:
             reaching.add(source)
             todo.append(source)
     assert set(graph.states) - reaching == set()
+
+
+RELEASED_BY = {
+    Ticket.HELD: ActionName.OWNER_ANSWERS_BLOCKED_RUN,
+    Ticket.ASKED: ActionName.OWNER_ANSWERS_ON_THE_TICKET,
+    Ticket.GUARDED: ActionName.OWNER_LANDS_GUARD_EDITS,
+    Ticket.OWED: ActionName.AGENT_BINDS_SAFEGUARD,
+    Ticket.PARKED: ActionName.OWNER_CHANGES_TICKET,
+}
+
+
+@pytest.mark.parametrize("hold", sorted(model.HOLDS))
+def test_a_hold_is_released_by_its_own_step_and_by_no_other(hold: Ticket) -> None:
+    """Each kind of hold has the one step the route names; any other change leaves it held.
+
+    So a ticket parked for guard edits stays parked when another ticket is agreed or the binding
+    changes, both commits on the default branch, and a note older than the kinds of hold is
+    released only by a change to the ticket.
+    """
+    kept: set[ActionName] = set()
+    released: set[ActionName] = set()
+    for source, name, target in model.graph().edges:
+        for slot, ticket in enumerate(source.tickets):
+            if ticket is hold:
+                (kept if target.tickets[slot] is hold else released).add(name)
+    assert released == {RELEASED_BY[hold]}
+    assert kept
 
 
 def test_the_graph_is_the_same_every_time_it_is_walked() -> None:
@@ -433,6 +461,33 @@ def test_the_route_names_what_the_pages_say_where_it_diverges(
     for source, name, target in path_to(entry.example):
         real.apply(repo, name, real.Change(source, target))
     assert real.classify(real.read(repo)) is model.advice(entry.example)
+
+
+def test_a_commit_the_hold_did_not_name_leaves_a_guard_hold_and_its_edits_release_it(
+    tmp_path: Path,
+) -> None:
+    """An agreed ticket commits on main under a guard hold; landing the edits then builds.
+
+    Why it is walked here: the sweep reaches each state by its shortest path, and none of those
+    commits on the default branch under a guard hold or lands the guard edits.
+    """
+    parked = World(
+        setup=Setup.BOUND, hooks=True, foundation=True, tickets=(Ticket.GUARDED, Ticket.TRIAGE)
+    )
+    repo = real.Repo.start(tmp_path)
+    for source, name, target in path_to(parked):
+        real.apply(repo, name, real.Change(source, target))
+    worlds, tips = [parked], [git(repo.root, "rev-parse", "main")]
+    said = [real.classify(real.read(repo))]
+    for name in (ActionName.OWNER_AGREES_TICKET, ActionName.OWNER_LANDS_GUARD_EDITS):
+        (after,) = model.ACTIONS[name].successors(worlds[-1])
+        real.apply(repo, name, real.Change(worlds[-1], after))
+        worlds.append(after)
+        tips.append(git(repo.root, "rev-parse", "main"))
+        said.append(real.classify(real.read(repo)))
+    assert len(set(tips)) == len(tips), "each step commits on the default branch"
+    expected = [Advice.LAND_GUARD, Advice.LAND_GUARD, Advice.BUILD]
+    assert said == [model.real_advice(world) for world in worlds] == expected
 
 
 def first_outcomes_meet() -> set[Advice]:

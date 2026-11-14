@@ -120,7 +120,9 @@ The tests also check that:
 
 - following the advice never comes back to a state it passed, except through rest;
 - every state reaches rest by some steps;
+- each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold waits for a change to the ticket;
 - the real route names what the model says in every one of the 276 states;
+- on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
 - on long runs of steps, a repository that loses its commit hooks is told to install them first, whatever else is true.
 
 ## Divergences
