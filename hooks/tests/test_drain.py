@@ -1175,3 +1175,29 @@ def test_a_split_parent_is_not_built_and_a_ticket_waiting_on_it_waits_for_its_pa
     assert states(root)[BRANCH_A] != "buildable"
     waiting = {entry.branch: entry for entry in drain.plan(offline(root)).tickets}[BRANCH_B]
     assert waiting.state != "buildable"
+
+
+def test_a_plan_that_does_not_parse_is_a_refused_split_and_a_split_parent_blocks_by_its_parts(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    assert run(root, "split", ALPHA, "--plan", str(bad)) == 1, "an unreadable plan splits nothing"
+    run(root, "open", ALPHA)
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    children = json.loads(capsys.readouterr().out.splitlines()[-1])["children"]
+    gh = offline(root).tracker
+    waiting = drain.preflight.fetch(BETA, root, gh)
+    assert waiting is not None
+    assert "was split, and its part" in " ".join(drain.preflight.open_blockers(waiting, root, gh))
+    split_parent = drain.preflight.fetch(ALPHA, root, gh)
+    assert split_parent is not None
+    report = drain.preflight.Report(ref=ALPHA)
+    drain.preflight.check_ticket(report, split_parent, "ready-for-agent", root=root, gh=gh)
+    assert "split" in [failure.check for failure in report.failures]
+    for child in children:
+        text = (root / child).read_text(encoding="utf-8")
+        (root / child).write_text(text.replace("Status:", "Status: done\nWas:"), encoding="utf-8")
+    assert drain.preflight.open_blockers(waiting, root, gh) == []
