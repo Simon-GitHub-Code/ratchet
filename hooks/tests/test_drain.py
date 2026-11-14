@@ -934,7 +934,7 @@ def test_a_removed_work_tree_takes_what_ran_from_it_along(tmp_path: Path, capsys
     service = servers.sleeper(tree)
     try:
         capsys.readouterr()
-        assert run(root, "clean", "--all") == 0
+        assert run(root, "clean", "--all", "--take-over") == 0
         assert capsys.readouterr().out.splitlines()[0] == (
             f"ended: process {service.pid}, which ran a program of {tree}"
         )

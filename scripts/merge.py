@@ -59,6 +59,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -81,6 +82,7 @@ INTENT_BYTES = 1 << 20
 SCRATCH = "ratchet-merge-"
 # Why: a lock the kernel holds for an open file is freed when its holder dies, however it dies.
 HELD = ".lock"
+STALE_SCRATCH = 60  # seconds an empty scratch directory stands before a sweep removes it
 LANDING = "ratchet-landing"
 OWNER_FILE = 0o600
 # Why: these say the merge itself failed, which the owner's merge would meet too; every other
@@ -275,8 +277,11 @@ def intent_of(data: bytes) -> dict[str, object]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def recover_landing(root: Path) -> list[str]:
+def recover_landing(root: Path) -> tuple[list[str], bool]:
     """Put right a ``git merge --ff-only`` that was killed: the work tree and the lock on its index.
+
+    Returns what it did and whether it finished: it did not while a git command still runs in the
+    tree, which is left as it is.
 
     Only while no merge is landing, which the lock on the intent shows. When the branch moved,
     the work tree was finished; when it did not, the files the fast-forward wrote are put back
@@ -285,15 +290,18 @@ def recover_landing(root: Path) -> list[str]:
     lines: list[str] = []
     with locked(state_dir(root) / LANDING, create=False) as descriptor:
         if descriptor is None:
-            return lines
+            return lines, True
         intent = intent_of(os.pread(descriptor, INTENT_BYTES, 0))
         if not intent:
-            return lines
+            return lines, True
         default, old, new = (str(intent.get(name)) for name in ("default", "old", "new"))
         holder = Path(str(intent.get("holder")))
         if tip(root, default) == old and holder.is_dir():
             if git_running_in(holder):
-                return [f"merge: a git command still runs in {holder}; run this again once it ends"]
+                waiting = (
+                    f"merge: a git command still runs in {holder}; run this again once it ends"
+                )
+                return [waiting], False
             lock = gatelib.git(holder, "rev-parse", "--git-path", "index.lock") or "index.lock"
             (holder / lock).unlink(missing_ok=True)
             lines.append(
@@ -302,7 +310,7 @@ def recover_landing(root: Path) -> list[str]:
             owned = frozenset(texts(intent.get("owned")))
             lines += roll_back(root, holder, old=old, new=new, owned=owned)
         os.ftruncate(descriptor, 0)
-    return lines
+    return lines, True
 
 
 def sweep(root: Path) -> list[str]:
@@ -327,12 +335,44 @@ def sweep(root: Path) -> list[str]:
             lines.append(f"merge: removed the work tree {tree} that a run which stopped left")
     if lines:
         gatelib.git(root, "worktree", "prune")
+    return lines + empty_scratch(home)
+
+
+def empty_scratch(home: Path) -> list[str]:
+    """Remove the empty scratch directories of runs killed between making one and its work tree.
+
+    Why: such a run registered no work tree, so the sweep above never finds its directory. An
+    empty one is a live run's too in the moment before it takes its lock, so only one that has
+    stood a while is removed, and only one of this user's.
+    """
+    lines = []
+    for scratch in home.glob(f"{SCRATCH}*"):
+        # Why: another run's directory may be made or removed between the listing and the look.
+        with contextlib.suppress(OSError):
+            stat = scratch.lstat()
+            if (
+                scratch.is_dir()
+                and not scratch.is_symlink()
+                and stat.st_uid == os.getuid()
+                and time.time() - stat.st_mtime > STALE_SCRATCH
+                and not any(scratch.iterdir())
+            ):
+                scratch.rmdir()
+                lines.append(
+                    f"merge: removed the empty directory {scratch} that a run which stopped left"
+                )
     return lines
+
+
+def recovery(root: Path) -> tuple[list[str], bool]:
+    """What a merge that was killed left, put right, and whether all of it was."""
+    landed, finished = recover_landing(root)
+    return [*sweep(root), *landed], finished
 
 
 def recover(root: Path) -> list[str]:
     """What a merge that was killed left: its work tree, and a fast-forward cut off half-way."""
-    return [*sweep(root), *recover_landing(root)]
+    return recovery(root)[0]
 
 
 def attempt(root: Path, tree: Path, *, default: str, branch: str) -> tuple[list[Reason], str]:
