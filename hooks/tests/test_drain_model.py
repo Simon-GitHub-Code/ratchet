@@ -27,6 +27,7 @@ PARK_A = "drain.py close --outcome parked a"
 EDIT_A = "the owner edits ticket a"
 KILL_AFTER_REBASE = "a kill after the rebase stops drain.py update a"
 KILLED_PAST_REBASE = [*JUDGED_A, EDIT_A, KILL_AFTER_REBASE]
+KILLED_TWICE = [*KILLED_PAST_REBASE, KILL_AFTER_REBASE]
 LAND_KILLED = [*JUDGED_A, "a kill before the note stops drain.py land a"]
 LAND_CUT = "a kill before the discard stops drain.py land a"
 MARK_LEFT = ["drain.py open a", EDIT_A, "a kill mid-rebase stops drain.py update a"]
@@ -41,7 +42,7 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     ONCE: [*LAND_KILLED, PARK_A],
     HELD: None,
     REFUSED: None,
-    # Why: the shortest break of 8, replayed below.
+    # Why: the shortest break of 8. ``KILLED_TWICE`` breaks it as well, replayed below.
     RECOVERS: ["drain.py open a", LAND_CUT],
     NO_TREE: [
         PARK_A,
@@ -379,3 +380,28 @@ def test_a_landing_killed_between_its_note_and_its_discard_is_not_finished_by_la
     assert (merged.world.code, merged.world.tree(Name.A).exists()) == (2, True)
     swept = f"removed: {tree}: the drain that made it was interrupted\ndrain: "
     assert play.named("drain.py clean --all").startswith(swept), "the next drain sweeps it"
+
+
+def test_a_refused_landing_killed_before_its_discard_counts_its_retry_twice(
+    tmp_path: Path,
+) -> None:
+    path = [*JUDGED_A, EDIT_A, LAND_CUT]
+    assert broken_by(path) == {RECOVERS}
+    play = replay(tmp_path, [*path, "drain.py land a"])
+    assert play.world.printed.endswith(f"closed: {REF[Name.A]}: waits\n")
+    note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    assert note["attempts"] == 2, "merge.py refused it once a run, and the note says twice"
+
+
+def test_an_update_killed_twice_before_it_drops_the_record_loses_its_mark(
+    tmp_path: Path,
+) -> None:
+    assert broken_by(KILLED_TWICE) == {RECOVERS}
+    play = replay(tmp_path, [*KILLED_TWICE, "drain.py clean --all"])
+    assert play.state.of(Name.A).branch is Branch.STALE
+    assert "rebasing" not in drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    entry = plan_of(play)[BRANCH[Name.A]]
+    assert (entry.state, entry.why) == ("built", ()), "not behind: the skill lands it next"
+    assert play.named("drain.py update a") == '{"moved": false, "conflicts": []}\n'
+    assert "merge: owner\nrecord: " in play.named("drain.py land a")
+    assert plan_of(play)[BRANCH[Name.A]].state == "held", "and the landing holds it"
