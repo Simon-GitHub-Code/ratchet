@@ -3,11 +3,12 @@
 ``route_model`` is the machine, pure. ``advice`` is what the method's pages say the route names,
 and these tests hold it to every rule. ``real_advice`` is that with the named divergences applied:
 it may break a rule only where a divergence says, and the real ``route.decide`` must give it in
-every state. A sweep visits every state of the model on a real repository; a stateful test takes
+every state. A sweep takes every step of the model on a real repository; a stateful test takes
 long runs of actions there; each divergence keeps a strict expected failure that passes the day
 the route is fixed. The exporter is held to a stable output, and the charts to the export.
 """
 
+import itertools
 import os
 import shutil
 import subprocess
@@ -31,6 +32,7 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
+import hooks_installed
 import route
 from tests import model_tla
 from tests import route_model as model
@@ -42,7 +44,7 @@ from tests.support import PLUGIN_ROOT
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
 CHARTS = PLUGIN_ROOT / "docs/model/route.md"
 HOOKS_EVERY = 7  # the steps between the times a run takes the commit hooks away
-SWEEP_CHUNKS = 8
+SWEEP_CHUNKS = 16
 
 # Why no shrinking: every step runs real git, and the message names the whole path to the first
 # disagreement, so a red run ends in seconds, not in the minutes Hypothesis spends shrinking.
@@ -339,38 +341,110 @@ def spanning() -> Spanning:
     return Spanning(tuple(order), place, parent, children, size)
 
 
-def sweep(repo: real.Repo, world: World, span: range, *, scratch: Path) -> int:
-    """Ask the route in each state below ``world`` whose place in the walk is in ``span``.
+@cache
+def leaving() -> dict[World, list[model.Edge]]:
+    """Each state's steps, in the order the graph lists them."""
+    out: dict[World, list[model.Edge]] = defaultdict(list)
+    for edge in model.graph().edges:
+        out[edge.source].append(edge)
+    return out
 
-    The repository is copied where the walk branches, so each state is reached once from its
-    parent, not replayed from an empty repository. Returns the number of states asked.
+
+def ask(repo: real.Repo, world: World, path: list[str]) -> None:
+    """The route on ``repo`` names what the model says it names in ``world``."""
+    step = real.read(repo)
+    assert real.classify(step) is model.real_advice(world), disagreement(world, step, path)
+
+
+def sweep(repo: real.Repo, world: World, span: range, *, scratch: Path) -> int:
+    """Take every step out of each state below ``world`` whose place in the walk is in ``span``.
+
+    Each state is built once, from its parent in the walk. A step to a state the walk goes on
+    into is taken on the repository that state keeps; any other is taken on a copy, which is
+    asked and thrown away. The route is asked after every step. Returns the steps taken.
     """
     tree = spanning()
-    asked = 0
-    if tree.place[world] in span:
-        step = real.read(repo)
-        assert real.classify(step) is model.real_advice(world), disagreement(
-            world, step, tree.trail(world)
-        )
-        asked = 1
+    path = tree.trail(world)
+    here = tree.place[world] in span
     below = [
         child
         for child in tree.children[world]
         if tree.place[child] < span.stop and tree.place[child] + tree.size[child] > span.start
     ]
+    taken = 0
+    for index, edge in enumerate(leaving()[world] if here else []):
+        if edge.target in below and tree.parent[edge.target] is edge:
+            continue
+        copy = repo.copy(scratch / f"{tree.place[world]}-{index}")
+        real.apply(copy, edge.action, real.Change(world, edge.target))
+        ask(copy, edge.target, [*path, edge.action])
+        shutil.rmtree(copy.root)
+        taken += 1
     for index, child in enumerate(below):
-        here = repo if index == len(below) - 1 else repo.copy(scratch / str(tree.place[child]))
-        real.apply(here, tree.parent[child].action, real.Change(world, child))
-        asked += sweep(here, child, span, scratch=scratch)
-    return asked
+        edge = tree.parent[child]
+        last = index == len(below) - 1
+        down = repo if last else repo.copy(scratch / str(tree.place[child]))
+        real.apply(down, edge.action, real.Change(world, child))
+        if here:
+            ask(down, child, [*path, edge.action])
+            taken += 1
+        taken += sweep(down, child, span, scratch=scratch)
+    return taken
 
 
+@cache
+def spans() -> list[range]:
+    """The walk's places cut into chunks that each take about as many steps."""
+    tree = spanning()
+    steps = [len(leaving()[state]) for state in tree.order]
+    total, bounds, done = sum(steps), [0], 0
+    for place, count in enumerate(steps):
+        done += count
+        if done * SWEEP_CHUNKS >= total * len(bounds) and len(bounds) < SWEEP_CHUNKS:
+            bounds.append(place + 1)
+    bounds.append(len(tree.order))
+    return [range(start, stop) for start, stop in itertools.pairwise(bounds)]
+
+
+def test_the_chunks_cover_every_state_once() -> None:
+    assert [place for span in spans() for place in span] == list(range(len(spanning().order)))
+    assert len(spans()) == SWEEP_CHUNKS
+
+
+@pytest.fixture
+def hooks_checked_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``hooks_installed.check`` run once for each set of hook files, its green verdict kept.
+
+    Why: it runs both hooks, a third of what a route call costs, and once they are installed every
+    repository the sweep builds holds the same hook files under the same git config. A red verdict
+    is never kept, so a repository without its hooks is checked again each time.
+    """
+    check = hooks_installed.check
+    green: set[tuple[bytes | None, ...]] = set()
+
+    def checked(root: Path) -> hooks_installed.Problem | None:
+        files = [root / ".git/config", *(root / ".git/hooks" / n for n in hooks_installed.HOOKS)]
+        key = tuple(path.read_bytes() if path.is_file() else None for path in files)
+        if key in green:
+            return None
+        problem = check(root)
+        if problem is None:
+            green.add(key)
+        return problem
+
+    monkeypatch.setattr(hooks_installed, "check", checked)
+
+
+@pytest.mark.usefixtures("hooks_checked_once")
 @pytest.mark.parametrize("chunk", range(SWEEP_CHUNKS))
-def test_the_route_names_what_the_model_says_in_every_state(tmp_path: Path, chunk: int) -> None:
-    count = len(spanning().order)
-    span = range(count * chunk // SWEEP_CHUNKS, count * (chunk + 1) // SWEEP_CHUNKS)
-    asked = sweep(real.Repo.start(tmp_path), World(), span, scratch=tmp_path / "copies")
-    assert asked == len(span)
+def test_the_route_names_what_the_model_says_after_every_step(tmp_path: Path, chunk: int) -> None:
+    span = spans()[chunk]
+    repo = real.Repo.start(tmp_path)
+    if 0 in span:
+        ask(repo, World(), [])
+    taken = sweep(repo, World(), span, scratch=tmp_path / "copies")
+    tree = spanning()
+    assert taken == sum(len(leaving()[tree.order[place]]) for place in span)
 
 
 def disagreement(world: World, step: route.Step, path: list[str]) -> str:
@@ -459,8 +533,8 @@ def test_a_commit_the_hold_did_not_name_leaves_a_guard_hold_and_its_edits_releas
 ) -> None:
     """An agreed ticket commits on main under a guard hold; landing the edits then builds.
 
-    Why it is walked here: the sweep reaches each state by its shortest path, and none of those
-    commits on the default branch under a guard hold or lands the guard edits.
+    Why it stays beside the sweep, which takes both steps too: it also checks that each step moves
+    the default branch.
     """
     parked = World(
         setup=Setup.BOUND, hooks=True, foundation=True, tickets=(Ticket.GUARDED, Ticket.TRIAGE)

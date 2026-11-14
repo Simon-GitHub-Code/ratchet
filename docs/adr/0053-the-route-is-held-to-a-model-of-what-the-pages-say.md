@@ -11,13 +11,13 @@ status: accepted
 
 **Where the route does something else, the model names it.** A divergence says what the route reads instead, the sentence of the pages it goes against, and the rule that breaks. The tests hold the real route to the model with the divergences applied, so a new difference is red. Each divergence also has a strict expected failure that asks the route for what the pages say, so the fix is red until the divergence is deleted. A model that copied the code would agree with every fault in it.
 
-**The real route is asked in every state of the model.** The sweep walks the graph's shortest-path tree on a real repository, copies it where the tree branches, and asks `route.decide` once in each state. Walks along the advice and long stateful runs take the paths the sweep does not. The rules are proved on the graph in Python. No test runs a model checker or needs Java.
+**The real route is asked after every step of the model.** The sweep builds each state once on a real repository, along the graph's shortest-path tree, and copies it where the tree branches. From each state it takes every step the model has, each on a copy but the one the tree goes on with, and asks `route.decide` in the state the step leads to. Walks along the advice and long stateful runs take the histories the sweep does not. The rules are proved on the graph in Python. No test runs a model checker or needs Java.
 
 **The charts are drawn from the model, and a test keeps them current.** `hooks/tests/model_tla.py` writes any model's graph and rules as a TLA+ module. The `statechart` command of pstack checks that module with TLC and draws a chart for each view. The page names the SHA-256 of the export it was drawn from, and a test is red when the model changes and the page does not. A change to what the route names starts in the model.
 
 ## Refutation criterion
 
-This is wrong if, within the model's scope, a change to `route.py` that names a step the owner cannot take, loops, or names another step than the model gives passes `check`. It is also wrong if the sweep cannot stay inside the test gate's time ceiling without leaving states out.
+This is wrong if, within the model's scope, a change to `route.py` that names a step the owner cannot take, loops, or names another step than the model gives passes `check`. It is also wrong if the sweep cannot stay inside the test gate's time ceiling without leaving steps out.
 
 ## Considered options
 

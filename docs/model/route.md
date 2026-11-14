@@ -2,7 +2,7 @@
 
 `scripts/route.py` reads the checkout and names the one command the owner types next. [The route](../../skills/method/route.md) says what it names in each case. This page writes that down as a state machine: the states the route can tell apart, what it names in each, the steps that lead from one state to the next, and the rules the steps keep.
 
-The model is `hooks/tests/route_model.py`. The tests in `hooks/tests/test_route_model.py` prove the rules on it and ask the real route in each of its states.
+The model is `hooks/tests/route_model.py`. The tests in `hooks/tests/test_route_model.py` prove the rules on it, take each of its steps on a real repository, and ask the real route after each.
 
 ## Scope
 
@@ -129,7 +129,7 @@ The tests also check that:
 - following the advice never comes back to a state it passed, except through rest;
 - every state reaches rest by some steps;
 - each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold, or a guard hold with no base commit, waits for a change to the ticket;
-- the real route names what the model says in every one of the 448 states;
+- on a real repository, the real route names what the model says after every one of the 1118 steps, each taken from its source state as the shortest path from an empty directory builds it;
 - on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
 - a drain note older than a blocked run's stash, or one with no base commit, does not release the run;
 - on long runs of steps, a repository that loses its commit hooks is told to install them first, whatever else is true.
