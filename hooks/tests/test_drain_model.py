@@ -442,3 +442,18 @@ def test_an_update_killed_twice_before_it_drops_the_record_keeps_its_mark(
     assert play.state.of(Name.A).branch is Branch.DRAFT, "update drops the record no review wrote"
     assert "rebasing" not in note_of(play)
     assert plan_of(play)[BRANCH[Name.A]].why == ()
+
+
+def test_a_merge_recorded_by_a_landing_killed_before_its_discard_is_reported_twice(
+    tmp_path: Path,
+) -> None:
+    path = COUNTEREXAMPLES[ONCE] or []
+    assert broken_by(path) == {ONCE}
+    play = replay(tmp_path, MERGE_CUT)
+    assert "Alpha" in listed_under(play.named("drain.py report"), "Merged")
+    assert note_of(play)["reported"] is True
+    assert play.named(PARK_A) == RECORDED + UNSAID, (
+        "the tree stands, so the merge is recorded again"
+    )
+    assert (play.world.code, note_of(play)["reported"]) == (2, False)
+    assert "Alpha" in listed_under(play.named("drain.py report"), "Merged"), "and printed again"
