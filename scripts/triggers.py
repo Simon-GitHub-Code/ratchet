@@ -46,7 +46,9 @@ says ``- Outcome: holds`` or ``- Outcome: changes`` and ``- Decided: YYYY-MM-DD`
 ``## Decision`` and a ``## Refutation criterion``; one that changes the architecture also has
 ``## Considered options`` with at least two options. A record written in the change that adds
 the instance does not count: the review lands on its own, before the code that would grow under
-it.
+it. A review settles only the arrivals it could have seen, so a record that landed before the kind
+first arrived, or in the change that first brings it, settles nothing: the arrival is noted and
+the review stays owed until a record lands after it.
 
 The review is asked only where the binding's Gates table holds the row ``architecture reviewed
 when its shape changes``, bound to this script. The first commit on the default line whose binding
@@ -357,9 +359,50 @@ def reviews_at(root: Path, ref: str | None) -> list[Review]:
     return found
 
 
-def reviewed(reviews: Sequence[Review]) -> frozenset[str]:
-    """The triggers a review that counts names."""
-    return frozenset(key for review in reviews if not review.problems for key in review.keys)
+def first_held(root: Path, ref: str, kind: Kind) -> int | None:
+    """Where ``touched(root, ref)`` has the oldest commit that held an instance of ``kind``.
+
+    ``None`` when no commit up to ``ref`` held one. Oldest first, trying only commits that
+    touched a path the kind finds, so it stops at the arrival.
+    """
+    log = touched(root, ref)
+    for place in range(len(log) - 1, -1, -1):
+        commit, names_text = log[place]
+        if (
+            any(kind.finds(path) for path in names_text.split("\n") if path)
+            and instances(root, commit, {kind.name: kind})[kind.name]
+        ):
+            return place
+    return None
+
+
+def added_at(root: Path, ref: str, path: str) -> int | None:
+    """Where ``touched(root, ref)`` has the oldest commit that added ``path``; ``None`` if none."""
+    listed = gatelib.git(
+        root, "log", "-m", "--first-parent", "--diff-filter=A", "--format=%H", ref, "--", path
+    )
+    added = (listed or "").split()
+    places = {commit: place for place, (commit, _) in enumerate(touched(root, ref))}
+    return places.get(added[-1]) if added else None
+
+
+def settled(
+    root: Path, ref: str, reviews: Sequence[Review], *, key: str, kind: Kind | None
+) -> bool:
+    """Whether a review that counts names ``key`` and could have seen the arrival it settles.
+
+    Why: ADR 0052. A review settles only the arrivals it could have seen, so a record that landed
+    before the kind first arrived, or in the change that first brings it, settles nothing: it
+    would let a guard be loosened by writing the record ahead of the code. A record in no commit
+    yet is the work tree's, newer than any arrival. An event has no arrival to come before.
+    """
+    counting = [review for review in reviews if not review.problems and key in review.keys]
+    if kind is None:
+        return bool(counting)
+    arrival = first_held(root, ref, kind)
+    if arrival is None:
+        return False
+    return any((at := added_at(root, ref, r.path)) is None or at < arrival for r in counting)
 
 
 def why_not(reviews: Sequence[Review], key: str) -> str:
@@ -431,7 +474,8 @@ def reviews_owed(root: Path) -> list[Owed]:
     """The architecture reviews head owes: each trigger that reopens it, fired since the start.
 
     ``question`` is ``architecture review``; ``name`` and ``count`` are as for a row. A trigger a
-    review in the work tree names, or one that had fired when the reviews started, is not owed.
+    review in the work tree names after the kind arrived, or one that had fired when the reviews
+    started, is not owed.
     """
     binding = binding_at(root, None)
     if not reviews_bound(binding):
@@ -441,23 +485,26 @@ def reviews_owed(root: Path) -> list[Owed]:
     named = {kind for key in reopening for kind in application_types.code_kinds(key)}
     found = instances(root, None, {name: kinds[name] for name in named if name in kinds})
     events = application_types.life_events(binding)
-    done = reviewed(reviews_at(root, None))
+    reviews = reviews_at(root, None)
     head = gatelib.git(root, "rev-parse", "--verify", "--quiet", "HEAD")
     if head is None:
         return []
     start = Start(root, head)
     owing: list[Owed] = []
     for key in reopening:
-        if key in done:
-            continue
         code = application_types.code_kinds(key)
         if code:
             kind = code[0]
-            if found.get(kind) and not start.had(kinds[kind]):
+            arrived = found.get(kind) and not start.had(kinds[kind])
+            if arrived and not settled(root, head, reviews, key=key, kind=kinds[kind]):
                 owing.append(Owed(REVIEW, key, kind, len(found[kind])))
             continue
         event = key.removeprefix(application_types.LIFE)
-        if event in events and not start.declared(event):
+        if (
+            event in events
+            and not start.declared(event)
+            and not settled(root, head, reviews, key=key, kind=None)
+        ):
             owing.append(Owed(REVIEW, key, event, 0))
     return owing
 
@@ -566,16 +613,17 @@ def judge_reviews(
     if not grown and not events:
         return [], []
     found = reviews_at(judged.root, judged.base)
-    done = reviewed(found)
     start = Start(judged.root, judged.base)
     problems: list[str] = []
     notes: list[str] = []
     for kind in grown:
         key = application_types.CODE + kind
-        if key in done:
-            continue
         before_count = len(judged.at_base[kind])
         earlier = history(kind) if before_count == 0 else None
+        if (before_count or earlier) and settled(
+            judged.root, judged.base, found, key=key, kind=judged.kinds[kind]
+        ):
+            continue
         if before_count == 0 and earlier is None:
             notes.append(
                 f"triggers: note: '{kind}' has arrived ({listing(judged.at_head[kind])}) and"
@@ -599,7 +647,9 @@ def judge_reviews(
         )
     for event in events:
         key = application_types.LIFE + event
-        if key not in done and not start.declared(event):
+        if not settled(judged.root, judged.base, found, key=key, kind=None) and not start.declared(
+            event
+        ):
             notes.append(
                 f"triggers: note: life event '{event}' is declared and reopens the architecture"
                 f" ({reopening[key]}); run {ARCHITECTURE} to review it (ADR 0052)"
