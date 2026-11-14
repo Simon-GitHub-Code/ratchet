@@ -42,7 +42,10 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   ``clean --all``: one drain runs on a repository at a time, so every work tree found then is
   left over. Which the script holds to: ``clean --all`` takes a lease naming the processes above
   it, refuses while a process of another drain on this repository is alive, and ``report`` ends
-  the lease; ``--take-over`` replaces one whose drain is gone for good. Every command that
+  the lease and prints the drain's token on stderr; ``--take-over`` replaces one whose drain
+  is gone for good. Two drains under one long-lived process are told apart by the lease's
+  record of commands run since it started, and by the token: ``clean --all --drain TOKEN``
+  resumes the drain that holds it. Every command that
   changes a work tree also runs under a lock of the kernel's, freed when its holder dies however
   it dies, so two commands at once (two ``open`` of one ticket) are run one at a time.
 - ``report`` writes ``.ratchet/queue/<date>-<time>.md`` and prints it: per ticket merged, waiting
@@ -67,6 +70,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import stat
@@ -125,12 +129,16 @@ LOCK_WAIT, LOCK_POLL = 30.0, 0.05
 # Why: the start time is the 22nd field of /proc/<pid>/stat, the 20th after the command's name.
 PROC_START = 19
 DEPTH = 64
+TOKEN_BYTES = 4
+# Why: a drain's agents build for an hour at a time between its commands.
+LEASE_FRESH = 2 * 60 * 60
 OTHERS_WRITE = 0o022
 NOT_OURS = "the queue's work trees go in a directory only this user can write; remove it"
 NOT_A_TREE = "it is not a work tree of this repository or an empty directory, so it stays"
 MERGE = "merge"
 SLOWEST = 3
 LOCKED = frozenset({"open", "update", "close", "clean", "report"})
+STAMPED = frozenset({"open", "update", "close"})
 # Why: the triggers gate's red line; the kind it names is what the safeguard binds (ADR 0028).
 OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
 DEFAULT_WORDS = "the default branch"
@@ -383,34 +391,61 @@ def ancestry() -> list[str]:
     return chain
 
 
-def rival(root: Path) -> str | None:
-    """The live process of another drain, as the lease names it; ``None`` when there is none.
+def rival(held: dict[str, object]) -> str | None:
+    """Why the lease ``held`` names a drain that is still running, or ``None`` when it is gone.
 
-    The lease holds the processes above the command that started the drain. A drain run again
-    from the same session shares the session's process, and the commands that were run have
-    ended; a drain of another session has a process of its own that is still alive.
+    The lease holds the processes above the command that started the drain. A process of that
+    chain which is alive and not above this command is another session's. When only processes
+    above this command are alive (two drains under one long-lived process, which no process
+    tells apart) the drain's own record decides: its commands that came after it started, which
+    stamp the lease, were run within the last ``LEASE_FRESH`` seconds.
     """
-    held = queue_notes.loaded(gatelib.read_text(state_dir(root) / LEASE)).get("chain")
     mine = set(ancestry())
-    for entry in queue_notes.texts(held):
+    alive = []
+    for entry in queue_notes.texts(held.get("chain")):
         pid, _, start = entry.partition(":")
         row = process_row(int(pid)) if pid.isdigit() else None
-        if entry not in mine and row is not None and row[1] == start:
-            return pid
-    return None
+        if row is not None and row[1] == start:
+            alive.append(entry)
+    elsewhere = [entry.partition(":")[0] for entry in alive if entry not in mine]
+    if elsewhere:
+        return f"process {elsewhere[0]}"
+    beat = held.get("beat")
+    age = time.time() - beat if isinstance(beat, float) else LEASE_FRESH
+    return (
+        f"its last command ran {round(age / 60)} minutes ago"
+        if alive and age < LEASE_FRESH
+        else None
+    )
 
 
-def lease(root: Path, *, take_over: bool) -> None:
-    """Start a drain: refused while a live process of another drain holds the repository."""
-    other = None if take_over else rival(root)
-    if other is not None:
+def lease(root: Path, *, take_over: bool, token: str = "") -> None:
+    """Start a drain: refused while another drain is running here, unless ``token`` is its own.
+
+    The token names the drain: ``clean --all`` prints one on stderr, and the commands that follow
+    may pass it back as ``--drain`` to say whose they are.
+    """
+    held = queue_notes.loaded(gatelib.read_text(state_dir(root) / LEASE))
+    ours = bool(token) and token == held.get("token")
+    why = None if take_over or ours else rival(held)
+    if why is not None:
         message = (
-            f"another drain is running on this repository (process {other}), and `clean --all`"
-            " would end its programs and remove its work trees. End that drain, or when it is"
-            " gone for good run `clean --all --take-over`"
+            f"another drain is running on this repository ({why}), and `clean --all` would end"
+            " its programs and remove its work trees. End that drain, or when it is gone for good"
+            " run `clean --all --take-over`"
         )
         raise RefusedError(message)
-    queue_notes.write_note(state_dir(root) / LEASE, {"chain": ancestry()})
+    token = token if ours else secrets.token_hex(TOKEN_BYTES)
+    queue_notes.write_note(state_dir(root) / LEASE, {"chain": ancestry(), "token": token})
+    print(f"drain: {token}", file=sys.stderr)
+
+
+def stamp(root: Path) -> None:
+    """Record that a drain command ran now, if a drain holds the lease."""
+    path = state_dir(root) / LEASE
+    held = queue_notes.loaded(gatelib.read_text(path))
+    if held:
+        queue_notes.write_note(path, {**held, "beat": time.time()})
 
 
 def release(root: Path) -> None:
@@ -922,6 +957,7 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
         return 2
     branch = route.own_branch(ticket)
     with exclusive(drain.root):
+        stamp(drain.root)
         for line in merge.recover(drain.root):
             print(line)
         if recorded_merge(drain.root, branch):
@@ -945,13 +981,13 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
     return done.returncode
 
 
-def clean(root: Path, *, everything: bool, take_over: bool = False) -> int:
+def clean(root: Path, *, everything: bool, take_over: bool = False, token: str = "") -> int:
     """Remove the queue work trees whose branch is merged or gone; with ``everything``, all.
 
     ``everything`` starts a drain, so it is refused while another drain is running here.
     """
     if everything:
-        lease(root, take_over=take_over)
+        lease(root, take_over=take_over, token=token)
     for line in merge.recover(root):
         print(line)
     merged = route.merged_features(root, merge_ready.default_ref(root))
@@ -1126,7 +1162,10 @@ WHOLE: dict[str, Callable[[Drain, argparse.Namespace], int]] = {
     "plan": show_plan,
     "open": lambda drain, options: open_ticket(drain, options.ref or ""),
     "clean": lambda drain, options: clean(
-        drain.root, everything=options.everything, take_over=options.take_over
+        drain.root,
+        everything=options.everything,
+        take_over=options.take_over,
+        token=options.drain,
     ),
     "report": lambda drain, _options: report(drain),
 }
@@ -1147,6 +1186,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--reason", action="append", default=[])
     parser.add_argument("--result", type=Path, help="the pipeline's result, as JSON")
     parser.add_argument("--all", action="store_true", dest="everything")
+    parser.add_argument("--drain", default="", help="the token `clean --all` printed")
     parser.add_argument(
         "--take-over", action="store_true", help="with --all: another drain is gone"
     )
@@ -1164,6 +1204,8 @@ def main(argv: list[str]) -> int:
     try:
         # Why: `land` holds the lock only at its two ends, since the merge it runs takes minutes.
         with exclusive(root) if options.action in LOCKED else contextlib.nullcontext():
+            if options.action in STAMPED:
+                stamp(root)
             return action(drain, options)
     except RefusedError as refused:
         print(f"{options.action}: {refused}" if options.action == "open" else f"drain: {refused}")
