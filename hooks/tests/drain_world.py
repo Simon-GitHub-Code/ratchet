@@ -634,6 +634,7 @@ class LeaseWorld:
             stashed=bool(git(self.world.root, "stash", "list")),
             landing=self.landing[0] if self.landing is not None and live else None,
             merge=merge,
+            built=merge is not Merge.NONE or drain.ahead(self.world.root, "main", BRANCH[Name.A]),
             held=note.get("hold") is True,
         )
 

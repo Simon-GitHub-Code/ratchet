@@ -818,6 +818,8 @@ def test_a_take_over_leaves_a_live_landing_and_takes_its_tree_once_the_landing_i
     taken = two_drains.named(path[6])
     assert f"removed: {tree}: the drain that made it was interrupted\n" in taken
     assert "recorded:" not in taken, "the kill came before the merge, so none is recorded"
+    opened = two_drains.named("drain 2: drain.py open a")
+    assert opened.startswith(f"open: {REF[Name.A]} is not started: it is built"), opened
     assert "Alpha" not in listed_under(two_drains.named("drain 2: drain.py report"), "Merged")
 
 
@@ -1052,10 +1054,12 @@ def landing_decision(
 
 
 def decision(before: model.Lease, said: str) -> tuple[object, ...]:
-    """The branch of ``drain.lease`` or ``drain.other_drain`` a step takes, whether a ``clean --all`` takes another drain's tree, whether a merge no note says is recorded or left alone, and what a step meets in a live landing; any other step is its own."""  # noqa: E501
+    """The branch of ``drain.lease`` or ``drain.other_drain`` a step takes, whether a ``clean --all`` takes another drain's tree, whether a merge no note says is recorded or left alone, what a step meets in a live landing, and whether `open` meets a branch with commits; any other step is its own."""  # noqa: E501
     drain_, step = model.LEASE_STEPS.get(said, (None, None))
     if (found := landing_decision(before, drain_, step)) is not None:
         return found
+    if step is Step.OPEN:
+        return (step.value, before.built)
     if step not in model.CLEANS | model.REPORTS | {Step.CLEAN}:
         return (said.rpartition(": ")[2],)
     holder = before.holder

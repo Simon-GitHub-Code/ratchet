@@ -1078,6 +1078,8 @@ class Lease(NamedTuple):
     command runs, and that cut is not taken.
     """
     merge: Merge = Merge.NONE
+    built: bool = False
+    """Whether the branch has the agent's commits: a ``land`` was started on it."""
     held: bool = False
     """Whether the ticket's note holds it.
 
@@ -1206,7 +1208,7 @@ def _land(lease: Lease, drain: Drain, _: Step) -> Lease | None:
     ready = lease.tree is drain and of(lease.draining, drain) and lease.merge is Merge.NONE
     if not ready or lease.draft or lease.running:
         return None
-    return lease._replace(landing=drain)
+    return lease._replace(landing=drain, built=True)
 
 
 def _merges(lease: Lease, _: Drain, __: Step) -> Lease | None:
@@ -1238,9 +1240,10 @@ def _open_tree(lease: Lease, drain: Drain, _: Step) -> Lease | None:
         # starts only a buildable one.
         return lease
     ready = lease.holder is drain and of(lease.draining, drain) and lease.tree is None
-    if not ready:
+    if not ready or lease.merge is not Merge.NONE:
         return None
-    return lease._replace(tree=drain) if lease.merge is Merge.NONE else None
+    # Why: the plan calls a branch with commits and no tree built, and ``open`` refuses it.
+    return lease if lease.built else lease._replace(tree=drain)
 
 
 def _refused_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
@@ -1603,6 +1606,7 @@ LEASE_FACTS: dict[str, Callable[[Lease], object]] = {
     "stashed": lambda lease: lease.stashed,
     "landing": lambda lease: drain_id(lease.landing),
     "merge": lambda lease: lease.merge.name.lower(),
+    "built": lambda lease: lease.built,
     "held": lambda lease: lease.held,
 }
 """What a module reads of the lease, a drain named by its number: ``alive1``."""
@@ -1616,11 +1620,11 @@ def lease_run() -> Run:
 SHOWN_LANDING = ("statusA", *(f"{fact}A" for fact in TICKET_FACTS))
 """What the chart of a ticket's life reads: ticket ``a``."""
 # Why: the statechart tool draws a whole chart only of a module of at most 500 states, and
-# neither chart reads the tree, the program or the hold, which no step writes.
+# neither chart reads the tree, the program, the agent's commits or the hold.
 SHOWN_LEASE = tuple(
     fact
     for fact in LEASE_FACTS
-    if fact not in {"took1", "took2", "tree", "draft", "running", "stashed", "held"}
+    if fact not in {"took1", "took2", "tree", "draft", "running", "stashed", "built", "held"}
 )
 """What the charts of the lease read: the drains, the lease, the landing and its merge."""
 
