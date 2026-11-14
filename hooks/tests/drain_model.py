@@ -929,15 +929,20 @@ def stays_held(before: State, _: str, after: State) -> bool:
     )
 
 
+def released_by_the_owner(ticket: Ticket) -> bool:
+    """Whether no note holds the ticket, or the owner has changed the text it was held on."""
+    note = ticket.note
+    if note is None or not note.hold:
+        return True
+    return note.text is not None and 0 <= note.text < ticket.text
+
+
 def held_until_edited(before: State, _: str, after: State) -> bool:
     """A ticket its note holds merges only once the owner has changed the text it was held on."""
-    for was, now in zip(before.tickets, after.tickets, strict=True):
-        note = was.note
-        if now.merged and not was.merged and note is not None and note.hold:
-            edited = note.text is not None and 0 <= note.text < was.text
-            if not edited:
-                return False
-    return True
+    return all(
+        was.merged or not now.merged or released_by_the_owner(was)
+        for was, now in zip(before.tickets, after.tickets, strict=True)
+    )
 
 
 def refused(_: State, __: str, after: State) -> bool:
