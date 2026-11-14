@@ -1081,10 +1081,20 @@ class Lease(NamedTuple):
     built: bool = False
     """Whether the branch has the agent's commits: a ``land`` was started on it."""
     orphan: Drain | None = None
-    """The drain whose ``land`` a kill stopped alone before its merge: its ``merge.py`` runs on.
+    """The drain whose ``land`` a kill stopped alone after its ``merge.py`` probed it.
 
-    ``land`` starts ``merge.py`` with no descriptor of its landing lock, so the lock ends with
-    ``land`` and ``merge.py`` holds none a command reads. Every command meets no landing here.
+    ``merge.py`` holds its own lock on the branch for its whole run, and every command reads that
+    lock as it reads the landing lock, so the landing is still seen. Until it lands the merge or
+    ends, ``update``, ``close`` and a second ``land`` refuse, and ``report``, ``clean`` and
+    ``clean --all`` leave the ticket alone.
+    """
+    doomed: bool = False
+    """Whether the ``merge.py`` of a ``land`` killed before the merge probed it is still starting.
+
+    It holds no lock yet, so every command meets no landing. Its ``land``'s private lock is free,
+    so whatever runs meanwhile, its probe finds the ``land`` gone and it stops, merging nothing.
+    Taking its own lock, probing and stopping are one step here: the instant it holds its lock
+    before it stops is left out.
     """
     held: bool = False
     """Whether the ticket's note holds it.
@@ -1095,14 +1105,29 @@ class Lease(NamedTuple):
     """
 
 
+def seen_by(lease: Lease) -> str | None:
+    """What ``drain.landing_holder`` reads held: the landing lock of a ``land`` alive, or the merge lock of a ``merge.py`` past its probe."""  # noqa: E501
+    return "landing" if lease.landing is not None else "merge" if lease.orphan is not None else None
+
+
 def landing_seen(lease: Lease) -> Drain | None:
-    """The landing ``drain.landing_running`` sees: a ``land`` alive, whose lock it reads."""
-    return lease.landing
+    """The landing ``drain.landing_running`` sees, by either lock."""
+    return lease.landing if seen_by(lease) == "landing" else lease.orphan
 
 
 def landing_alive(lease: Lease) -> Drain | None:
-    """The drain whose landing is alive: its ``land`` runs, or the ``merge.py`` a killed land started."""  # noqa: E501
+    """The drain whose landing is alive: its ``land`` runs, or a ``merge.py`` it started that can still land."""  # noqa: E501
     return lease.landing if lease.landing is not None else lease.orphan
+
+
+def merges_that_can_land(lease: Lease) -> list[Drain | None]:
+    """The ``land`` that owns each live merge that can still land; ``None`` for one whose ``land`` is gone."""  # noqa: E501
+    owners: list[Drain | None] = []
+    if lease.landing is not None and lease.merge is Merge.NONE:
+        owners.append(lease.landing)
+    if lease.orphan is not None:
+        owners.append(None)
+    return owners
 
 
 def of(pair: tuple[bool, bool], drain: Drain) -> bool:
@@ -1132,7 +1157,12 @@ class Step(Fact):
     MERGES = "its merge.py lands the merge"
     LAND_REST = "drain.py land a, the close after the merge"
     MERGE_KILLED = "a kill stops its land and its merge.py before the merge"
-    ORPHANED = "a kill stops its land alone before the merge, its merge.py running on"
+    KILLED_AT_START = "a kill stops its land alone before its merge.py probes it"
+    DOOMED_STOPS = "the merge.py of a land killed before its probe finds the land gone and stops"
+    LOCKED_OUT = "its merge.py meets the merge lock of a merge whose land is gone, and both stop"
+    ORPHANED = (
+        "a kill stops its land alone once its merge.py has probed it, the merge.py running on"
+    )
     ORPHAN_MERGES = "the merge.py its killed land started lands the merge"
     ORPHAN_ENDS = "the merge.py its killed land started ends and lands nothing"
     LAND_KILLED = "a kill stops its land after the merge, before the close"
@@ -1222,7 +1252,8 @@ def _land(lease: Lease, drain: Drain, _: Step) -> Lease | None:
     A bound: the agent lands only a tree with nothing uncommitted and no program running from it.
     """
     if landing_seen(lease) is not None:
-        # Why: ``drain.landing_lock`` refuses a second landing of the ticket, which changes nothing.
+        # Why: ``drain.land`` refuses while the merge lock is held, and ``drain.landing_lock``
+        # while the landing lock is; either changes nothing.
         return lease
     ready = lease.tree is drain and of(lease.draining, drain) and lease.merge is Merge.NONE
     if not ready or lease.draft or lease.running:
@@ -1244,22 +1275,43 @@ def _land_rest(lease: Lease, _: Drain, __: Step) -> Lease | None:
 
 
 def _orphaned(lease: Lease, drain: Drain, _: Step) -> Lease | None:
-    """A kill of ``land`` alone before the merge: its lock goes with it, its ``merge.py`` runs on.
+    """A kill of ``land`` alone once its ``merge.py`` probed it: the landing lock goes, the merge lock stays.
 
     A bound: one such ``merge.py`` at a time.
-    """
+    """  # noqa: E501
     if lease.merge is not Merge.NONE or lease.orphan is not None:
         return None
     return lease._replace(landing=None, orphan=drain)
 
 
+def _killed_at_start(lease: Lease, _: Drain, __: Step) -> Lease | None:
+    """A kill of ``land`` alone before its ``merge.py`` probed it: no lock is held, and the merge is doomed.
+
+    A bound: one such ``merge.py`` at a time.
+    """  # noqa: E501
+    if lease.merge is not Merge.NONE or lease.doomed:
+        return None
+    return lease._replace(landing=None, doomed=True)
+
+
+def _locked_out(lease: Lease, _: Drain, __: Step) -> Lease | None:
+    """``land``'s ``merge.py`` gives up on the merge lock a doomed merge holds past its tries.
+
+    It merges nothing and exits 2, so ``land`` closes nothing; the doomed merge then probes and
+    stops. The instant it holds the lock is folded into this step.
+    """
+    if not lease.doomed or lease.merge is not Merge.NONE:
+        return None
+    return lease._replace(landing=None, doomed=False)
+
+
 def _orphan_merges(lease: Lease) -> Lease | None:
-    """The ``merge.py`` of a killed ``land`` lands the merge: it reads no note, and no ``land`` closes it."""  # noqa: E501
+    """The ``merge.py`` of a killed ``land`` lands the merge and exits: it reads no note, and no ``land`` closes it."""  # noqa: E501
     return lease._replace(merge=Merge.UNSAID, orphan=None) if lease.merge is Merge.NONE else None
 
 
 def _orphan_ends(lease: Lease) -> Lease:
-    """The ``merge.py`` of a killed ``land`` is killed, or refused as moved once another landed."""
+    """The ``merge.py`` of a killed ``land`` is killed before it lands, and its lock with it."""
     return lease._replace(orphan=None)
 
 
@@ -1268,6 +1320,11 @@ ORPHAN_STEPS: dict[Step, Callable[[Lease], Lease | None]] = {
     Step.ORPHAN_ENDS: _orphan_ends,
 }
 """What the ``merge.py`` of a killed ``land`` does: it is no drain's command, and outlives a session."""  # noqa: E501
+
+
+def _doomed_stops(lease: Lease) -> Lease | None:
+    """The doomed ``merge.py`` takes the merge lock, finds its ``land``'s private lock free, and stops."""  # noqa: E501
+    return lease._replace(doomed=False) if lease.doomed else None
 
 
 def _land_killed(lease: Lease, _: Drain, __: Step) -> Lease | None:
@@ -1292,14 +1349,19 @@ def _open_tree(lease: Lease, drain: Drain, _: Step) -> Lease | None:
     return lease if lease.built else lease._replace(tree=drain)
 
 
+def in_flight(lease: Lease) -> bool:
+    """Whether a landing is alive, or a doomed merge still starting: where ``update`` and ``close`` are taken."""  # noqa: E501
+    return landing_alive(lease) is not None or lease.doomed
+
+
 def _update_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
     """``update`` while a landing of the ticket is alive: it changes nothing.
 
     ``drain.act_on`` refuses it while it sees the landing. Unseen, it finds a branch that holds the
     default tip, which only a merge moves here, and rebases nothing; a merge landed is recorded.
-    A bound: the step is taken only while a landing is alive.
+    A bound: the step is taken only while a landing is alive or a doomed merge starts.
     """
-    if landing_alive(lease) is None:
+    if not in_flight(lease):
         return None
     if landing_seen(lease) is None and lease.merge is Merge.UNSAID:
         return merge_recorded(lease)
@@ -1311,9 +1373,9 @@ def _park_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
 
     ``drain.act_on`` refuses it while it sees the landing. Unseen, ``close`` records a merge no
     note says and refuses, refuses one a note says, and otherwise holds the ticket and discards
-    its tree. A bound: the step is taken only while a landing is alive.
+    its tree. A bound: the step is taken only while a landing is alive or a doomed merge starts.
     """
-    if landing_alive(lease) is None:
+    if not in_flight(lease):
         return None
     if landing_seen(lease) is not None:
         return lease
@@ -1376,12 +1438,23 @@ INSIDE_LAND: dict[Step, DrainAct] = {
     Step.MERGES: _merges,
     Step.LAND_REST: _land_rest,
     Step.MERGE_KILLED: _merge_killed,
+    Step.KILLED_AT_START: _killed_at_start,
+    Step.LOCKED_OUT: _locked_out,
     Step.ORPHANED: _orphaned,
     Step.LAND_KILLED: _land_killed,
     Step.DIE: _die,
 }
 LANDING_ITSELF = frozenset(
-    {Step.MERGES, Step.LAND_REST, Step.MERGE_KILLED, Step.LAND_KILLED, Step.ORPHANED, *ORPHAN_STEPS}
+    {
+        Step.MERGES,
+        Step.LAND_REST,
+        Step.MERGE_KILLED,
+        Step.KILLED_AT_START,
+        Step.LOCKED_OUT,
+        Step.LAND_KILLED,
+        Step.ORPHANED,
+        *ORPHAN_STEPS,
+    }
 )
 
 
@@ -1396,7 +1469,7 @@ def _by_a_drain(lease: Lease, drain: Drain, step: Step) -> Lease | None:
 DRAIN_STEPS = tuple(
     step
     for step in Step
-    if step not in {Step.SEPARATE, Step.SHARED, Step.PROGRAM_ENDS, *ORPHAN_STEPS}
+    if step not in {Step.SEPARATE, Step.SHARED, Step.PROGRAM_ENDS, Step.DOOMED_STOPS, *ORPHAN_STEPS}
 )
 LEASE_INITIAL = Lease()
 LeaseEdge = tuple[Lease, str, Lease]
@@ -1417,6 +1490,8 @@ def lease_moves(lease: Lease) -> list[tuple[str, Lease]]:
                 found.append((f"{drain.value}: {step.value}", after))
     if lease.running:
         found.append((Step.PROGRAM_ENDS.value, lease._replace(running=False)))
+    if (stopped := _doomed_stops(lease)) is not None:
+        found.append((Step.DOOMED_STOPS.value, stopped))
     if lease.orphan is not None:
         for step, act in ORPHAN_STEPS.items():
             if (after := act(lease)) is not None:
@@ -1502,10 +1577,10 @@ def printed_once(before: Lease, said: str, after: Lease) -> bool:
     return after.merge is not Merge.PRINTED or step in REPORTS
 
 
-# Why: in 9f and 9h a landing is alive while its `land` or the `merge.py` it started runs, as
-# `landing_alive` says, and not only while `drain.landing_running` sees it. The merge.py of a
-# killed land still lands the merge, and what a command does to the ticket meanwhile is done
-# under a merge in flight.
+# Why: in 9f and 9h a landing is alive while its `land` runs or a `merge.py` it started can still
+# land, as `landing_alive` says, and not only while `drain.landing_running` sees it. What a
+# command does to the ticket while such a merge runs is done under a merge in flight. A merge
+# whose `land` died before its probe can land nothing, so it keeps no landing alive.
 
 
 def spares_the_landing(before: Lease, said: str, after: Lease) -> bool:
@@ -1541,18 +1616,32 @@ def leaves_the_landing_alone(before: Lease, said: str, after: Lease) -> bool:
 
 
 def hold_not_merged(before: Lease, _: str, after: Lease) -> bool:
-    """A ticket whose note holds it is never merged, since no step of the lease graph is the owner's edit that frees it."""  # noqa: E501
+    """A ticket whose note holds it is never merged by the drain, since no step of the lease graph is the owner's edit that frees it or the owner's own merge."""  # noqa: E501
     return not before.held or before.merge is not Merge.NONE or after.merge is Merge.NONE
 
 
 def seen_while_alive(_: Lease, __: str, after: Lease) -> bool:
-    """A landing is seen, so the ticket's commands refuse it and report and clean leave it alone, while its land or the merge.py it started is alive."""  # noqa: E501
+    """A landing is seen, so the ticket's commands refuse it and report and clean leave it alone, from its land's start until its land and every merge of it that can still land have ended."""  # noqa: E501
     return landing_alive(after) is None or landing_seen(after) is not None
 
 
 def unseen_once_ended(_: Lease, __: str, after: Lease) -> bool:
-    """A landing is not seen once its land and the merge.py it started have both ended."""
+    """A landing is not seen once its land and every merge of the branch have ended."""
     return landing_seen(after) is None or landing_alive(after) is not None
+
+
+def closed_by_the_owner(before: Lease, said: str, after: Lease) -> bool:
+    """No close is written for the ticket while a merge of it that can still land is alive, except by the landing that owns that merge."""  # noqa: E501
+    if note_of(after) == note_of(before):
+        return True
+    drain, step = LEASE_STEPS.get(said, (None, None))
+    writer = drain if step in LANDING_ITSELF and before.landing is drain else None
+    return all(owner is not None and owner is writer for owner in merges_that_can_land(before))
+
+
+def one_merge_can_land(_: Lease, __: str, after: Lease) -> bool:
+    """At most one merge of the ticket that can still land is alive at a time, so the ticket is merged once."""  # noqa: E501
+    return len(merges_that_can_land(after)) <= 1
 
 
 LEASE_RULES: dict[str, Callable[[Lease, str, Lease], bool]] = {
@@ -1569,10 +1658,20 @@ LEASE_RULES: dict[str, Callable[[Lease, str, Lease], bool]] = {
     "9h. no command but the landing itself removes the tree or writes the note of a live landing": (
         leaves_the_landing_alone
     ),
-    "9i. a ticket whose note holds it is not merged": hold_not_merged,
+    "9i. a ticket whose note holds it is not merged by the drain": hold_not_merged,
     # Why: 9j and 9k are one rule read both ways: a landing is seen exactly while it is alive.
-    "9j. a landing is seen while its land or its merge.py is alive": seen_while_alive,
-    "9k. a landing is not seen once its land and its merge.py have ended": unseen_once_ended,
+    "9j. a landing is seen until its land and every merge of it that can still land have ended": (
+        seen_while_alive
+    ),
+    "9k. a landing is not seen once its land and every merge of the branch have ended": (
+        unseen_once_ended
+    ),
+    "9l. no close is written while a merge that can still land is alive, but by its own landing": (
+        closed_by_the_owner
+    ),
+    "9m. at most one merge of the ticket that can still land is alive at a time": (
+        one_merge_can_land
+    ),
 }
 
 
@@ -1706,6 +1805,7 @@ LEASE_FACTS: dict[str, Callable[[Lease], object]] = {
     "merge": lambda lease: lease.merge.name.lower(),
     "built": lambda lease: lease.built,
     "orphan": lambda lease: drain_id(lease.orphan),
+    "doomed": lambda lease: lease.doomed,
     "held": lambda lease: lease.held,
 }
 """What a module reads of the lease, a drain named by its number: ``alive1``."""
@@ -1718,14 +1818,27 @@ def lease_run() -> Run:
 
 SHOWN_LANDING = ("statusA", *(f"{fact}A" for fact in TICKET_FACTS))
 """What the chart of a ticket's life reads: ticket ``a``."""
-# Why: the statechart tool draws a whole chart only of a module of at most 500 states, and
-# neither chart reads the tree, the program, the agent's commits or the hold.
-SHOWN_LEASE = tuple(
-    fact
-    for fact in LEASE_FACTS
-    if fact not in {"took1", "took2", "tree", "draft", "running", "stashed", "built", "held"}
-)
-"""What the charts of the lease read: the drains, the lease, the landing and its merge."""
+
+
+def holder_is(lease: Lease) -> str:
+    """Whether the lease's holder drains, has stopped with its session open, or is gone."""
+    if lease.holder is None:
+        return "none"
+    if of(lease.draining, lease.holder):
+        return "draining"
+    return "stopped" if of(lease.alive, lease.holder) else "gone"
+
+
+# Why: the statechart tool draws a whole chart only of a module of at most 500 states. No chart
+# reads the tree, the program, the agent's commits or the hold, and the chart of the lease reads
+# only its holder's session, so the other drain's session and whether it drains are dropped.
+SHOWN_LEASE: dict[str, Callable[[Lease], object]] = {
+    "processes": LEASE_FACTS["processes"],
+    "holder": LEASE_FACTS["holder"],
+    "holderIs": holder_is,
+    **{fact: LEASE_FACTS[fact] for fact in ("landing", "merge", "orphan", "doomed")},
+}
+"""What the charts of the lease read: how the drains run, the lease, the landing and its merge."""
 
 
 def seen_through(
@@ -1772,10 +1885,5 @@ def exports() -> tuple[model_tla.Export, ...]:
             deadlock=False,
         ),
         seen_through("DrainLife", life_run(), {fact: facts[fact] for fact in SHOWN_LANDING}),
-        seen_through(
-            "DrainLeaseShown",
-            lease,
-            {fact: LEASE_FACTS[fact] for fact in SHOWN_LEASE},
-            deadlock=False,
-        ),
+        seen_through("DrainLeaseShown", lease, SHOWN_LEASE, deadlock=False),
     )
