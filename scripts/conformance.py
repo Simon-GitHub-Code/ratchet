@@ -1199,14 +1199,37 @@ CHANGED_CAPTURE = re.compile(
 )
 
 
-def unfiltered_changed(line: str) -> bool:
-    """Whether ``line`` captures ``--changed`` output and uses it with no filter between."""
+def unfiltered_changed(line: str, later: str = "") -> bool:
+    """Whether ``line`` captures ``--changed`` output and uses it with no filter between.
+
+    ``later`` is the rest of the recipe body when it runs as one script, which can filter there.
+    A pipe, a here-string or a new assignment of the variable is a filter.
+    """
     for found in CHANGED_CAPTURE.finditer(line):
-        after = line[found.end() :].replace("||", "")
+        after = f"{line[found.end() :]}\n{later}".replace("||", "")
         reassigned = re.search(rf"\b{found['var']}=", after)
-        if "|" not in found["body"] and "|" not in after and not reassigned:
+        if "|" not in found["body"] and "|" not in after and "<<<" not in after and not reassigned:
             return True
     return False
+
+
+def shebang_rest(lines: list[str], at: int) -> str:
+    """The lines after ``lines[at]`` in its recipe when the body is a script, else nothing.
+
+    Why: a recipe whose first body line starts with `#!` runs as one script, so the filter may sit
+    on a later line; any other recipe runs each line alone.
+    """
+    start = at
+    while start > 0 and (lines[start - 1][:1].isspace() or not lines[start - 1].strip()):
+        start -= 1
+    body = lines[start:]
+    first = next((line for line in body if line.strip()), "")
+    if not first.strip().startswith("#!") or not first[:1].isspace():
+        return ""
+    end = at + 1
+    while end < len(lines) and (lines[end][:1].isspace() or not lines[end].strip()):
+        end += 1
+    return "\n".join(lines[at + 1 : end])
 
 
 def check_mutation_filter(root: Path) -> Iterable[Finding]:
@@ -1216,8 +1239,11 @@ def check_mutation_filter(root: Path) -> Iterable[Finding]:
     finding is never owed (``owed.NEVER``): the changed-code mutation gate is red on it now.
     """
     for path in justfile_paths(root):
-        for line in (read(path) or "").replace("\\\n", " ").splitlines():
-            if not line.lstrip().startswith("#") and unfiltered_changed(line):
+        lines = (read(path) or "").replace("\\\n", " ").splitlines()
+        for at, line in enumerate(lines):
+            if not line.lstrip().startswith("#") and unfiltered_changed(
+                line, shebang_rest(lines, at)
+            ):
                 name = path.relative_to(root).as_posix()
                 problem = (
                     f"a recipe hands the output of {MUTATION_SCRIPT} --changed to its tool"
