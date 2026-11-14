@@ -10,6 +10,7 @@ protected. What these rules cannot see is a ref name that a variable, a file or 
 from collections.abc import Iterator, Sequence
 from itertools import pairwise
 
+from ratchet_guards.committed import anchored_on_reflog
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gitcall import Invocation
 from ratchet_guards.options import Spec, expand_long, scan
@@ -108,6 +109,14 @@ def _writes(
     return _refused(call) if any(protects(n, names) for n in written if n) else []
 
 
+def _unrecorded_move(context: Context, call: Invocation, guard: Guard) -> bool:
+    """Whether a move of ``HEAD`` that leaves no reflog line starts on a default branch.
+
+    Only where the reflog alone names it (``ratchet_guards.committed``).
+    """
+    return guard.on_main(context, call.cwd) and anchored_on_reflog(call.cwd)
+
+
 def trusted_key(key: str) -> bool:
     """Whether a git config key, in any case, sets something the default branch is read through."""
     lowered = key.lower()
@@ -158,15 +167,26 @@ def update_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict
 
 
 def symbolic_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git symbolic-ref`` setting or deleting a protected ref; reading one is fine."""
+    """``git symbolic-ref`` setting or deleting a protected ref, or ``HEAD`` on a default branch.
+
+    Pointing ``HEAD`` elsewhere leaves no ``checkout`` line in the reflog; where that reflog is
+    what names the default branch it is refused too. Reading a ref is fine.
+    """
     options = scan(expand_long(call.args, _SYMBOLIC_REF_LONG), _SYMBOLIC_REF)
     writes = bool(options.flags & {"-d", "--delete"}) or len(options.operands) > 1
+    if writes and options.operands[:1] == ("HEAD",) and _unrecorded_move(context, call, guard):
+        return _refused(call)
     return _writes(call, options.operands[:1], guard, context=context) if writes else []
 
 
 def creates(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
-    """``git switch`` and ``git checkout`` creating or resetting a branch named like a default."""
+    """``git switch`` and ``git checkout`` creating or resetting a branch named like a default.
+
+    ``--orphan`` is refused too where the reflog names the default branch: it leaves no line in it.
+    """
     options = scan(expand_long(call.args, _CREATE_LONG), _CREATE)
+    if "--orphan" in options.values and _unrecorded_move(context, call, guard):
+        return _refused(call)
     return _writes(
         call, [options.values.get(flag) for flag in _CREATE_FLAGS], guard, context=context
     )
@@ -277,6 +297,15 @@ def remote(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     adds_origin = verb == "add" and rest[:1] == [REMOTE]
     redirects = verb == "add" and bool(options.flags & _REMOTE_ADD_REDIRECTS)
     return _refused(call) if verb in _REMOTE_REWRITES or adds_origin or redirects else []
+
+
+def reflog(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
+    """``git reflog expire`` and ``delete``: the main work tree's reflog names the default branch.
+
+    Showing a reflog, and the default ``show``, change nothing.
+    """
+    del context, guard
+    return _refused(call) if call.args[:1] in (("expire",), ("delete",)) else []
 
 
 def refused(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:

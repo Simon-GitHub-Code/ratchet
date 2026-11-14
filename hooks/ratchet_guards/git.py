@@ -275,6 +275,7 @@ _SUBCOMMANDS: dict[str, Rule] = {
     "cherry-pick": merges.cherry_pick,
     "rebase": refmoves.rebase,
     "remote": refmoves.remote,
+    "reflog": refmoves.reflog,
     "replace": refmoves.refused,
     "fast-import": refmoves.refused,
     "send-pack": refmoves.refused,

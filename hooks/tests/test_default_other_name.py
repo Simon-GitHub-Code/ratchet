@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ratchet_guards import hook
+from ratchet_guards import committed, hook
 from tests.conftest import isolated_git_config  # noqa: F401
 from tests.repos import commit, git, repository, write
 from tests.test_drain import FILES, MERGE, binding, scratch  # noqa: F401
@@ -87,3 +87,55 @@ def test_renaming_the_default_branch_does_not_switch_the_guards_off(tmp_path: Pa
         },
     }
     assert decide(root, edit) != "allow"
+
+
+def adopt_a_weaker_manifest(root: Path, tmp_path: Path) -> str:
+    """The manifest as ``trunk`` has it; a branch ``z`` in a linked work tree carries another."""
+    owned = (root / "guards/manifest.toml").read_text(encoding="utf-8")
+    linked = tmp_path / "linked"
+    git(root, "worktree", "add", "-q", "-b", "z", str(linked))
+    write(linked, "guards/manifest.toml", "# nothing is guarded\n")
+    commit(linked, "chore: weaken the manifest")
+    git(root, "worktree", "remove", "--force", str(linked))
+    return owned
+
+
+@pytest.mark.parametrize(
+    "move", [["switch", "z"], ["checkout", "z"], ["checkout", "--detach", "z"]]
+)
+def test_moving_head_in_the_main_work_tree_does_not_change_the_default_branch(
+    tmp_path: Path, move: list[str]
+) -> None:
+    root = repo(tmp_path / "r", "trunk")
+    owned = adopt_a_weaker_manifest(root, tmp_path)
+    git(root, *move)
+    held = committed.committed_manifest(root)
+    assert held is not None
+    assert held.text == owned.strip()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git checkout --orphan evil",
+        "git switch --orphan evil",
+        "git symbolic-ref HEAD refs/heads/z",
+    ],
+)
+def test_a_move_of_head_that_leaves_no_reflog_line_is_refused_on_the_default_branch(
+    tmp_path: Path, command: str
+) -> None:
+    assert bash(repo(tmp_path, "trunk"), command) != "allow"
+
+
+@pytest.mark.parametrize(
+    "command", ["git reflog expire --expire=now --all", "git reflog delete HEAD@{1}"]
+)
+def test_the_reflog_that_names_the_default_branch_is_not_the_agents_to_erase(
+    tmp_path: Path, command: str
+) -> None:
+    assert bash(repo(tmp_path, "trunk"), command) != "allow"
+
+
+def test_showing_the_reflog_is_fine(tmp_path: Path) -> None:
+    assert bash(repo(tmp_path, "trunk"), "git reflog") == "allow"

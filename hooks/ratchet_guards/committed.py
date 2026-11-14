@@ -20,14 +20,14 @@ agent made under the short name would be read in place of the branch. ``ratchet_
 refuses the commands that move these refs (ADR 0016).
 
 A repository with no remote whose default branch has another name (``trunk``, ``develop``) has none
-of those refs. Then the default branch is the one the repository's main work tree has checked out,
-the first entry of ``git worktree list``: git keeps it, outside ``refs/``, and a ref an agent
-creates or renames elsewhere does not change it. An agent works in a linked work tree or on a
-branch of its own and cannot switch the main work tree's ``HEAD`` without a ``git`` command that
-names that directory, which the owner's prompt shows. Were it the other way round, a guard that
-took any local branch holding the manifest for the default one would read an adoption branch's
-own manifest before the owner had merged it. A main work tree on a detached ``HEAD``, or a
-repository that is bare, names no branch, and then no default branch is found, as before.
+of those refs. Then the default branch is the first one the repository's main work tree (the first
+entry of ``git worktree list``) was on, read from that work tree's ``HEAD`` reflog: the oldest
+``checkout: moving from <branch>``, else the branch it is on. Git keeps that outside ``refs/``, and
+a ref an agent creates, renames or deletes does not change it. Moving the main work tree's ``HEAD``
+to another branch, or detaching it, adds a later entry and cannot change the first: were the anchor
+the current branch, an agent could commit a weakened manifest on a branch of its own and switch the
+main work tree to it. A branch that no longer exists is skipped for the next. A reflog is a file
+the owner's machine keeps; ADR 0041 records what removing it costs.
 """
 
 import subprocess
@@ -69,22 +69,47 @@ def run_git(cwd: Path, args: Sequence[str]) -> str | None:
     return completed.stdout.strip() if completed.returncode == 0 else None
 
 
-def _main_worktree_branch(checkout: Path, git: Git) -> str | None:
-    """The full name of the branch the repository's main work tree has checked out, if any."""
+_MOVING = "checkout: moving from "
+
+
+def _main_worktree_branches(checkout: Path, git: Git) -> list[str]:
+    """The branches the main work tree has been on, the first it was on first, then the current.
+
+    The first is read from the main work tree's ``HEAD`` reflog, the oldest ``checkout: moving
+    from <branch> to <other>``. Moving ``HEAD`` there adds an entry and changes the current branch
+    but never the first one.
+    """
     listed = git(checkout, ["worktree", "list", "--porcelain"])
-    first = (listed or "").split("\n\n", 1)[0]
-    lines = (line for line in first.splitlines() if line.startswith("branch refs/heads/"))
-    return next(lines, "").removeprefix("branch ") or None
+    first = (listed or "").split("\n\n", 1)[0].splitlines()
+    path = next((ln.removeprefix("worktree ") for ln in first if ln.startswith("worktree ")), "")
+    current = next((ln.removeprefix("branch ") for ln in first if ln.startswith("branch ")), "")
+    log = git(Path(path), ["log", "-g", "--format=%gs", "HEAD"]) if path else None
+    moves = [line for line in reversed((log or "").splitlines()) if line.startswith(_MOVING)]
+    previous = [line.removeprefix(_MOVING).rpartition(" to ")[0] for line in moves]
+    return [*(f"refs/heads/{name}" for name in previous), *([current] if current else [])]
+
+
+def _first_existing(checkout: Path, refs: Sequence[str], git: Git) -> str | None:
+    return next((r for r in refs if git(checkout, ["show-ref", "--verify", "--hash", r])), None)
+
+
+def _fixed(checkout: Path, git: Git) -> str | None:
+    remote_head = git(checkout, ["symbolic-ref", REMOTE_HEAD])
+    return _first_existing(
+        checkout, [*([remote_head] if remote_head else []), *FALLBACK_BRANCHES], git
+    )
 
 
 def default_branch(checkout: Path, git: Git = run_git) -> str | None:
     """The full name of the ref the default branch's tip is read from, else ``None``."""
-    remote_head = git(checkout, ["symbolic-ref", REMOTE_HEAD])
-    for ref in (*([remote_head] if remote_head else []), *FALLBACK_BRANCHES):
-        if git(checkout, ["show-ref", "--verify", "--hash", ref]):
-            return ref
-    main = _main_worktree_branch(checkout, git)
-    return main if main and git(checkout, ["show-ref", "--verify", "--hash", main]) else None
+    return _fixed(checkout, git) or _first_existing(
+        checkout, _main_worktree_branches(checkout, git), git
+    )
+
+
+def anchored_on_reflog(checkout: Path, git: Git = run_git) -> bool:
+    """Whether the default branch is found only through the main work tree's reflog."""
+    return _fixed(checkout, git) is None and default_branch(checkout, git) is not None
 
 
 def committed_manifest(checkout: Path, git: Git = run_git) -> Committed | None:
