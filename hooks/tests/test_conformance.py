@@ -15,7 +15,7 @@ import conformance
 import justfile_text
 import markdown_text
 from tests import adopted
-from tests.repos import repository
+from tests.repos import git, repository
 from tests.support import PLUGIN_ROOT
 
 SKILLS = PLUGIN_ROOT / "skills"
@@ -871,3 +871,16 @@ def test_the_incidents_gate_judges_the_records_alone(
     assert capsys.readouterr().out.splitlines()[-1] == "incidents: red (1 failures)"
     monkeypatch.chdir(repo)
     assert conformance.main(["conformance.py", "--incidents"]) == 1
+
+
+def test_a_default_branch_found_only_through_the_reflog_is_red(repo: Path) -> None:
+    git(repo, "init", "-q", "-b", "trunk")
+    git(repo, "config", "user.email", "t@example.invalid")
+    git(repo, "config", "user.name", "t")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "chore: start")
+    lines = red(repo)
+    assert len(lines) == 1
+    assert "found only through the main work tree's history of branch switches" in lines[0]
+    git(repo, "branch", "-m", "trunk", "main")
+    assert red(repo) == []
