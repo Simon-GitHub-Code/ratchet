@@ -16,11 +16,11 @@ A map of the repository. [The README](../README.md) says what the method is and 
 | `skills/conjecture/` | `/ratchet:conjecture <ticket or spec>`: the method's two additions to a ticket (or to the spec it came from), its conjecture and how it is operated, drafted from the conversation that produced it |
 | `skills/next/` | `/ratchet:next`: the command the owner types next, decided from the checkout and the tracker |
 | `scripts/route.py` | the route engine behind `/ratchet:next`, every hand-over and the session hook's last line |
-| `scripts/drain.py` | the queue behind `/ratchet:feature` with no ticket: the plan, the work trees it makes and removes, the rebase, the local merge and the report |
+| `scripts/drain.py` | the queue behind `/ratchet:feature` with no ticket: the plan, the work trees it makes and removes, the rebase, the local merge (through `scripts/merge.py`) and the report |
 | `scripts/questions.py` | one line per answer the owner gives a skill, and the proposal of a standing answer once the recommended option was taken three times running |
-| `workflows/pipeline.js` | the feature pipeline (preflight, spec, ticket check, implement, review; one fix pass on a review blocker until the project is depended on, the critic and its fix loop after) the feature skill runs, and the second review of a change brought up to date behind another merge |
+| `workflows/pipeline.js` | the feature pipeline (preflight, spec, ticket check, implement, review; one fix pass on a review blocker until the project is depended on, the critic and its fix loop after) the feature skill runs, and the reconcile and second review of a change brought up to date behind another merge |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
-| `scripts/` | the gates that ship, in the table above |
+| `scripts/` | the gates that ship, listed in [gates.md](gates.md) |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |
 | `scripts/adapter.py` | wires the guard into Codex or OpenCode when the harness does not load the plugin's hooks |
 | `adapters/` | the pi extension and the OpenCode plugin that translate a tool call into the guard's JSON |
@@ -28,6 +28,6 @@ A map of the repository. [The README](../README.md) says what the method is and 
 | `docs/adr/` | the plugin's own decisions; 0004 is the harness decision, made for five and since extended to Antigravity, 0017 the one that removed the presets |
 | `docs/research/` | the sources behind the stance |
 | `docs/gates.md` | every shipped gate script, its tier and the question it answers |
-| `docs/model/` | one page per state machine in the plugin (the route, the ratchet, the safeguards, a pipeline run, the drain and its merge), each held to the code by tests |
+| `docs/model/` | one page per modelled state machine (the route, the ratchet, the safeguards, a pipeline run, the drain and its merge), each held to the code by tests |
 | `docs/acceptance.md` | the files an acceptance tester writes and the acceptance harness reads |
 | `evals/` | the measurements: whether the stance changes how an agent works, and what the first hour asks of a solo builder |
