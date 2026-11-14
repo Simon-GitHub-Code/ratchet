@@ -412,6 +412,27 @@ def test_a_held_landing_killed_before_its_discard_is_not_finished_by_land_again(
     assert play.named("drain.py clean --all").startswith(swept), "the next drain sweeps it"
 
 
+def test_the_mark_of_a_held_landing_killed_after_its_discard_uncounts_the_next_runs_retry(
+    tmp_path: Path,
+) -> None:
+    path = ["drain.py open a", LAND_LEFT]
+    assert broken_by(path) == {RECOVERS}
+    play = replay(tmp_path, [*path, "drain.py land a", "drain.py clean --all"])
+    assert note_of(play)["discarding"] is True, "neither land again nor clean --all drops it"
+    for name in [EDIT_A, "drain.py open a", *OPEN_A[1:], JUDGED_A[-1]]:
+        play.named(name, compare=False)
+    play.agree()
+    assert note_of(play)["discarding"] is True, "open keeps a close no report has printed"
+    # Why: a second edit is past the model's bound, so the repository takes these steps alone.
+    play.world.perform(model.Action(Kind.EDIT, Name.C))
+    play.world.perform(model.Action(Kind.LAND, Name.A))
+    assert play.world.code == 1
+    assert "\nbehind: " in play.world.printed
+    assert play.world.printed.endswith(f"closed: {REF[Name.A]}: waits\n")
+    note = note_of(play)
+    assert (note["attempts"], note["hold"]) == (0, False), "the run's first refusal is not counted"
+
+
 def test_a_refused_landing_killed_before_its_discard_counts_its_retry_once(
     tmp_path: Path,
 ) -> None:
