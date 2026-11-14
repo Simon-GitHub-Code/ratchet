@@ -8,11 +8,8 @@ sequence of abstract answers up to the fix loop's bound runs on the model and on
 from __future__ import annotations
 
 import functools
-import itertools
 from collections import deque
 from typing import TYPE_CHECKING
-
-import pytest
 
 from tests import model_tla
 from tests import pipeline_model as model
@@ -113,12 +110,14 @@ YOUNG_PARKED = [
     "review-1 requests changes with a blocker of its own",
 ]
 YOUNG_FIXED_OVER = [*REVIEWED_YOUNG, "fix-1 measures product code over its ceiling"]
-# Why: a divergence. The decision spends a young project's fix pass on the review's blocking
-# issues, and the workflow spends it only when the review's own verdict is not approve
-# (`fixableByReview`, ADR 0056), so a review that approves with a blocker of its own open parks the
-# ticket with no pass. The runs through that step are held to what the workflow does, and a strict
-# expected failure turns red the day it gives them the pass: then delete this.
-UNPASSED = model.Review.APPROVES_ISSUE
+# Why: the pass keys on the review's blocking issues, not its verdict. The workflow's first version
+# asked the verdict first and parked this run with no pass.
+YOUNG_APPROVED_ISSUE = [
+    *REVIEWED_YOUNG[:-1],
+    "review approves with a blocker of its own open",
+    "fix-1 is green",
+    "review-1 approves",
+]
 
 
 @functools.cache
@@ -214,14 +213,6 @@ def described(
 Case = tuple[list[model.Action], model.Ending | None, world.Played]
 
 
-def unpassed(actions: list[model.Action]) -> bool:
-    """Whether the run hands a review that approves with a blocker of its own to the fix pass."""
-    return any(
-        review.answer is UNPASSED and fix.role is model.Role.FIX
-        for review, fix in itertools.pairwise(actions)
-    )
-
-
 @functools.cache
 def played() -> tuple[list[Case], world.Batch]:
     """Every run of the model with the ending it expects, and what the real workflow did on it."""
@@ -237,22 +228,13 @@ def played() -> tuple[list[Case], world.Batch]:
     return [(actions, ending, real) for (actions, ending), real in together], batch
 
 
-def held(*, diverged: bool = False) -> list[Case]:
-    """The played runs outside the divergence of ``UNPASSED``, or with ``diverged`` those in it."""
-    return [case for case in played()[0] if unpassed(case[0]) == diverged]
-
-
-def differing(cases: list[Case]) -> list[Case]:
-    return [
+def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers() -> None:
+    cases, batch = played()
+    differ = [
         (actions, ending, real)
         for actions, ending, real in cases
         if real.calls != world.expected_calls(actions) or real.ending != ending
     ]
-
-
-def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers() -> None:
-    cases, batch = held(), played()[1]
-    differ = differing(cases)
     shortest = described(*min(differ, key=lambda run: len(run[0]))) if differ else ""
     assert not differ, f"{len(differ)} of {len(cases)} runs differ; the shortest:\n{shortest}"
     assert set(batch.effects) == set(model.Role), "every agent's prompt was read"
@@ -262,7 +244,7 @@ def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers
 
 def ending_on(test: Callable[[model.Action], bool]) -> list[tuple[model.Action, world.Played]]:
     """Each real run whose last answer passes ``test``, with that answer."""
-    return [(actions[-1], real) for actions, _, real in held() if test(actions[-1])]
+    return [(actions[-1], real) for actions, _, real in played()[0] if test(actions[-1])]
 
 
 def test_on_the_real_workflow_a_change_any_measuring_role_finds_over_a_ceiling_stops() -> None:
@@ -298,7 +280,7 @@ def test_on_the_real_workflow_every_dead_agent_ends_in_an_error_that_says_to_res
 def test_on_the_real_workflow_a_too_large_stop_ends_there_and_leaves_the_split_unasked() -> None:
     stopped = [
         (actions, real)
-        for actions, _, real in held()
+        for actions, _, real in played()[0]
         if (real.raw.get("result") or {}).get("tooLarge")
     ]
     assert stopped
@@ -320,6 +302,7 @@ def replays() -> dict[str, world.Played]:
         "young pass": YOUNG_PASS,
         "young parked": YOUNG_PARKED,
         "young fixed over": YOUNG_FIXED_OVER,
+        "young approved issue": YOUNG_APPROVED_ISSUE,
         "reconciled over": RECONCILED_OVER,
         "measured over": MEASURED_OVER,
     }
@@ -375,22 +358,8 @@ def test_a_project_nobody_depends_on_spends_one_fix_pass_and_a_second_review_dec
         ), name
 
 
-def test_on_the_real_workflow_a_review_that_approves_with_a_blocker_parks_with_no_pass() -> None:
-    cases = held(diverged=True)
-    assert cases
-    for actions, _, real in cases:
-        reviewed = actions[: [action.answer for action in actions].index(UNPASSED) + 1]
-        assert real.calls == world.expected_calls(reviewed), described(actions, None, real)
-        assert real.ending.outcome is model.Outcome.REQUEST_CHANGES, real.ending
-        assert model.Objection.REVIEW_ISSUE in real.ending.objections, real.ending
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="divergence UNPASSED: no fix pass for a review that approves with a blocker of its own",
-)
-def test_on_the_real_workflow_a_review_that_approves_with_a_blocker_takes_the_fix_pass() -> None:
-    cases = held(diverged=True)
-    differ = differing(cases)
-    shortest = described(*min(differ, key=lambda run: len(run[0]))) if differ else ""
-    assert not differ, f"{len(differ)} of {len(cases)} runs differ; the shortest:\n{shortest}"
+def test_a_review_that_approves_with_a_blocker_of_its_own_takes_the_fix_pass() -> None:
+    real = replays()["young approved issue"]
+    assert real.calls[-3:] == (("review", "Review"), ("fix-1", "Fix"), ("review-1", "Review"))
+    result = real.raw["result"]
+    assert (result["verdict"], result["forcedBy"], result["iterations"]) == ("approve", [], 1)
