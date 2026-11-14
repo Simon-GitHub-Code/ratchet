@@ -3,11 +3,15 @@
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import drain
 import hooks_installed
+import queue_notes
 import route
+import triggers
 from tests.repos import branch, commit, git, install_hooks, repository, write
 
 Out = pytest.CaptureFixture[str]
@@ -17,8 +21,10 @@ CONJECTURE = (
     "\n\n## Conjecture\n\nOne script decides the route; the refuter is a wrong command on a"
     " known state. Alternatives: the model guesses (killed: it drifts).\n"
 )
+# Why: adopt writes the plugin pin last of what it binds, so a binding without one is unfinished.
+PIN = f"- Ratchet plugin: 999.0.0 at {'0' * 40}\n"
 BINDING = (
-    "# Binding\n\n- Default branch: `main`\n\n| Entry point | Command |\n| --- | --- |\n"
+    f"# Binding\n\n{PIN}\n- Default branch: `main`\n\n| Entry point | Command |\n| --- | --- |\n"
     "| check | `just check` |\n"
     "| merge | `just merge` |\n"
 )
@@ -655,8 +661,8 @@ def test_an_answer_that_became_a_habit_is_offered_after_the_three_lines(
 
 
 def test_a_plugin_newer_than_the_pin_is_offered_as_the_upgrade(tmp_path: Path, capsys: Out) -> None:
-    pin = f"- Ratchet plugin: 0.0.1 at {'0' * 40}\n"
-    root = repository(tmp_path, {**ADOPTED, "docs/process/binding.md": BINDING + pin})
+    older = f"- Ratchet plugin: 0.0.1 at {'0' * 40}\n"
+    root = repository(tmp_path, {**ADOPTED, "docs/process/binding.md": BINDING.replace(PIN, older)})
     assert route.main(["route", "--root", str(root), "--offline"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert out[3].startswith("also: the Ratchet plugin in use is ")
@@ -774,3 +780,127 @@ def test_a_file_written_for_outside_contributors_is_a_sign_of_depended_on(tmp_pa
     assert line.startswith("`CONTRIBUTING.md` is a sign that the project is `depended-on`")
     assert f"type `{route.SAFEGUARD} depended-on`" in line
     assert route.event_proposals(owing(tmp_path / "plain", **{"README.md": "# A\n"})) == []
+
+
+SIZE_BLOCK = {
+    "verdict": "blocked",
+    "verdictForcedBy": [
+        (
+            "too large: 1067 lines after the implementation, over two thirds of the change-size"
+            " ceiling of 1500, with the review still to come"
+        )
+    ],
+    "tooLarge": {"stage": "the implementation", "lines": 1067, "ceiling": 1500},
+    "openQuestions": [],
+    "guardEdits": [],
+}
+OWED_LINE = (
+    "triggers: 'outbound-call' gained 1 instance(s) (src/b.py:2) while the base already held 1"
+    " and these rows are still `later:`: survives failing dependencies."
+)
+
+
+def parked(root: Path, result: dict[str, object], *, stash: bool = True) -> None:
+    """The drain's close of the held ticket, as an eval run left it: its note, and its stash."""
+    if stash:
+        git(root, "switch", "-q", "-c", "feature/2-b")
+        write(root, "docs/features/b/spec.md", "draft\n")
+        git(root, "stash", "push", "-q", "-u", "-m", "feature/2-b: blocked run")
+        git(root, "switch", "-q", "main")
+    out = root / "result.json"
+    out.write_text(json.dumps(result), encoding="utf-8")
+    argv = ["drain", "close", HELD, "--outcome", "parked", "--result", str(out)]
+    assert drain.main([*argv, "--root", str(root), "--offline"]) == 0
+    out.unlink()
+
+
+def held_root(tmp_path: Path) -> Path:
+    return repository(tmp_path, {**ADOPTED, HELD: HELD_TEXT})
+
+
+def test_a_ticket_parked_as_too_large_names_the_split_not_questions_or_a_rerun(
+    tmp_path: Path,
+) -> None:
+    # Why: an eval run's block was size alone, yet the route asked for answers or guard edits,
+    # and once the stash was dropped it named a bare rerun the drain still refused.
+    root = held_root(tmp_path)
+    parked(root, SIZE_BLOCK)
+    step = route.decide(root, None)
+    assert step.stage == "blocked-run"
+    assert step.command == f"{route.TICKETS} <the spec of ticket {HELD}>"
+    assert "questions" not in step.command
+    assert "1067 lines" in step.why
+    git(root, "stash", "drop", "-q")
+    after = route.decide(root, None)
+    assert after.stage == "blocked-run", "the drain's hold outlives the stash"
+    assert after.command == step.command
+
+
+def test_a_held_ticket_is_released_by_changing_its_text(tmp_path: Path) -> None:
+    root = held_root(tmp_path)
+    parked(root, SIZE_BLOCK, stash=False)
+    assert route.decide(root, None).stage == "blocked-run"
+    write(root, HELD, HELD_TEXT + "\nSplit: the first half only.\n")
+    commit(root, "docs(tracker): narrow the ticket")
+    assert route.decide(root, None).command == f"{route.FEATURE} {HELD}"
+
+
+@pytest.mark.parametrize(
+    ("result", "named", "absent"),
+    [
+        ({"openQuestions": [{"question": "which?"}]}, "answer the open questions", "guard"),
+        ({"guardEdits": [{"path": "guards/x", "edit": "y"}]}, "land the guard edits", "to-tickets"),
+        ({"openQuestions": [{"question": "q"}], "tooLarge": {"lines": 1}}, "to-tickets", ""),
+        ({}, "change ticket", "to-tickets"),
+    ],
+    ids=["questions", "guard edits", "several", "no kind"],
+)
+def test_each_kind_of_hold_names_the_step_that_releases_it(
+    tmp_path: Path, *, result: dict[str, object], named: str, absent: str
+) -> None:
+    root = held_root(tmp_path)
+    parked(root, {"verdict": "blocked", **result}, stash=False)
+    step = route.decide(root, None)
+    assert named in step.command
+    assert not absent or absent not in step.command
+    assert step.command != f"{route.FEATURE} {HELD}"
+    assert step.then.startswith(route.FEATURE)
+
+
+def test_a_ticket_held_for_a_safeguard_names_it_until_it_is_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = held_root(tmp_path)
+    parked(root, {"verdict": "blocked", "checkOutput": OWED_LINE}, stash=False)
+    monkeypatch.setattr(triggers, "owed", lambda _root: [SimpleNamespace(name="outbound-call")])
+    checkout = route.observe(root)
+    assert checkout is not None
+    step = route.ticket_step(root, None, checkout)
+    assert f"run {route.SAFEGUARD} for outbound-call" in step.command
+    monkeypatch.setattr(triggers, "owed", lambda _root: [])
+    assert route.ticket_step(root, None, checkout).command == f"{route.FEATURE} {HELD}"
+
+
+def test_a_note_without_a_hold_leaves_the_ticket_buildable(tmp_path: Path) -> None:
+    root = held_root(tmp_path)
+    assert queue_notes.holds_of({"verdict": "approve"}) == []
+    ticket = route.agent_ready(root, None)[0][0]
+    assert route.drain_hold(root, ticket) is None
+
+
+def test_an_adoption_that_stopped_is_resumed_before_the_hooks_are_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Why: an eval run's adoption stopped after copying the templates onto a branch, with the
+    # binding still the template's. The route named the hooks install twice, which finishes nothing.
+    monkeypatch.setattr(hooks_installed, "check", REAL_CHECK)
+    template = "# Binding\n\n- Ratchet plugin: <X.Y.Z> at <ratchet-sha>\n- Default branch: `main`\n"
+    root = repository(tmp_path, {**ADOPTED, "docs/process/binding.md": template})
+    git(root, "switch", "-q", "-c", "adopt-ratchet")
+    for _ in range(2):
+        step = route.decide(root, None)
+        assert (step.command, step.stage) == (route.ADOPT, "adopt")
+        assert "no plugin pin" in step.why
+    write(root, "docs/process/binding.md", BINDING)
+    commit(root, "chore(method): adopt, the pin")
+    assert route.decide(root, None).stage == "hooks"
