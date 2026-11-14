@@ -637,6 +637,81 @@ def test_a_project_nobody_depends_on_goes_spec_implement_review() -> None:
     assert any("critic.ran is false" in line for line in result["requiredByOrchestrator"])
 
 
+BLOCKER = {
+    "axis": "spec",
+    "severity": "blocker",
+    "title": "drops a link with exit 0",
+    "location": "src/links.py:3",
+    "evidence": "saving an empty link answers 200",
+}
+BLOCKED = {**REVIEW, "verdict": "request_changes", "issues": [BLOCKER]}
+YOUNG_LABELS = ["preflight", "spec", "ticket-check", "implement"]
+
+
+def test_a_young_project_gets_one_fix_pass_on_a_review_blocker_and_one_more_review() -> None:
+    answers = {"implement": IMPLEMENTED, "review": BLOCKED, "fix-1": IMPLEMENTED}
+    answers |= {"review-1": REVIEW}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+    assert ran["labels"] == [*YOUNG_LABELS, "review", "fix-1", "review-1"]
+    assert '"title": "drops a link with exit 0"' in ran["prompts"]["fix-1"].split("MAY resolve")[0]
+    assert "round 1 of 1" in ran["prompts"]["fix-1"]
+    result = ran["result"]
+    assert (result["verdict"], result["iterations"], result["critic"]["ran"]) == (
+        "approve",
+        1,
+        False,
+    )
+    assert result["reviewIssues"] == []
+
+
+def test_a_review_that_approves_with_a_blocker_of_its_own_still_gets_the_pass() -> None:
+    approving = {**BLOCKED, "verdict": "approve"}
+    answers = {"implement": IMPLEMENTED, "review": approving, "fix-1": IMPLEMENTED}
+    answers |= {"review-1": REVIEW}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+    assert ran["labels"] == [*YOUNG_LABELS, "review", "fix-1", "review-1"]
+    assert ran["result"]["verdict"] == "approve"
+
+
+def test_a_young_project_whose_second_review_still_blocks_is_parked_after_one_pass() -> None:
+    answers = {"implement": IMPLEMENTED, "review": BLOCKED, "fix-1": IMPLEMENTED}
+    answers |= {"review-1": BLOCKED, "fix-2": IMPLEMENTED, "review-2": REVIEW}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+    assert ran["labels"] == [*YOUNG_LABELS, "review", "fix-1", "review-1"]
+    assert ran["result"]["verdict"] == "request_changes"
+    assert ran["result"]["reviewIssues"] == [BLOCKER]
+
+
+def test_a_young_projects_fix_pass_is_spent_only_on_blockers_in_the_change() -> None:
+    lost = {**PROMISES[0], "reading": "dropped", "change": "the list is not newest first"}
+    refused = {**BLOCKED, "ticketPromises": [lost, *PROMISES[1:]]}
+    minor = {**REVIEW, "verdict": "request_changes", "issues": [{**BLOCKER, "severity": "minor"}]}
+    for review in (refused, minor):
+        answers = {"implement": IMPLEMENTED, "review": review, "fix-1": IMPLEMENTED}
+        ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+        assert ran["labels"] == [*YOUNG_LABELS, "review"]
+        assert ran["result"]["verdict"] == "request_changes"
+
+
+def test_a_fix_pass_that_takes_a_young_project_over_the_ceiling_stops_the_run() -> None:
+    size = {"lines": 900, "ceiling": 800, "testLines": 10, "testCeiling": 1000}
+    answers = {
+        "implement": IMPLEMENTED,
+        "review": BLOCKED,
+        "fix-1": {**IMPLEMENTED, "changeSize": size},
+    }
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+    assert ran["labels"] == [*YOUNG_LABELS, "review", "fix-1"]
+    assert ran["result"]["tooLarge"]["stage"] == "fix round 1"
+
+
+def test_a_depended_on_project_with_a_review_blocker_gets_no_extra_pass() -> None:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": BLOCKED}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert ran["labels"] == [*YOUNG_LABELS, "critique", "review"]
+    assert ran["result"]["verdict"] == "request_changes"
+
+
 def test_a_project_that_is_depended_on_runs_the_critic() -> None:
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     old = {**PREFLIGHT, "critic": True, "critic_reason": "others rely on it"}
@@ -677,7 +752,10 @@ def test_the_review_does_not_name_findings_that_do_not_exist() -> None:
 def test_what_the_review_opens_is_open_without_a_critic() -> None:
     finding = {"severity": "major", "title": "loses the order"}
     review = {**REVIEW, "issues": [finding], "verdict": "approve"}
-    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, implement=IMPLEMENTED, review=review)
+    again = {"fix-1": IMPLEMENTED, "review-1": review}
+    ran = _run(
+        {"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, implement=IMPLEMENTED, review=review, **again
+    )
     result = ran["result"]
     assert result["verdict"] == "request_changes"
     assert result["verdictForcedBy"] == ["1 blocker/major review issue(s)"]
@@ -1328,7 +1406,8 @@ def test_the_drain_counts_every_agent_a_run_can_spawn() -> None:
     # Why: the drain states its cost before it starts, from the number the script declares.
     worst = {"ticket-check": GAP, "spec-amend": SPECIFIED, "ticket-recheck": CHECKED}
     worst |= {"implement": IMPLEMENTED, "review": REVIEW}
-    young = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **worst)["labels"]
+    blocked = {"review": BLOCKED, "fix-1": IMPLEMENTED, "review-1": BLOCKED}
+    young = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **{**worst, **blocked})["labels"]
     assert len(young) == drain.YOUNG_PIPELINE_AGENTS
     owed = {**CRITIQUED, "findings": [{"severity": "major", "title": "open"}]}
     rounds = {"critique": owed, "fix-1": IMPLEMENTED, "critique-1": owed}
