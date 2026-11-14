@@ -116,7 +116,7 @@ class Record:
     status: str
     state: str
     line: int
-    span: tuple[int, int, int, int] | None
+    span: tuple[int, int, int, int]
     unit: tuple[int, int] | None = None
 
 
@@ -215,10 +215,8 @@ def placed(record: Record, source: list[str]) -> Mutant:
     start, end = (
         (record.unit[0] - 1, record.unit[1]) if record.unit else unit_bounds(source, record.line)
     )
-    place = "?"
-    if record.span is not None:
-        start_line, start_column, end_line, end_column = record.span
-        place = f"{start_line - start}:{start_column}-{end_line - start}:{end_column}"
+    start_line, start_column, end_line, end_column = record.span
+    place = f"{start_line - start}:{start_column}-{end_line - start}:{end_column}"
     replacement = " ".join(record.replacement.split())[:REPLACEMENT_WIDTH]
     text = "\n".join(line.rstrip() for line in source[start:end])
     digest = "sha256:" + hashlib.sha256(text.encode()).hexdigest() if source else "unknown"

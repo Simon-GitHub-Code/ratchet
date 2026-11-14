@@ -485,3 +485,10 @@ def test_the_changed_scope_of_any_other_tool_is_the_changed_files_that_exist(
     commit(root, "refactor: drop b")
     assert run(root, "--tool", "cargo-mutants", "--changed", "--base", "main") == 0
     assert capsys.readouterr().out == "src/c.rs\nsrc/lib.rs\n"
+
+
+def test_a_changed_scope_with_nothing_changed_prints_nothing(tmp_path: Path, capsys: Out) -> None:
+    root = repository(tmp_path, {RUST: "fn a() {}\n"})
+    branch(root, "feature/x")
+    assert run(root, "--tool", "cargo-mutants", "--changed", "--base", "main") == 0
+    assert capsys.readouterr().out == ""
