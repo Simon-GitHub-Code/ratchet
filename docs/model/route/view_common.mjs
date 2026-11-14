@@ -29,7 +29,10 @@ export const NEXT = {
 export const checkout = (v) => {
   if (v.head === "records") return "A landing run stopped part-way";
   if (v.parked) return "A records branch waits for your merge";
-  if (v.head === "work") return v.tree === "code" ? "Code uncommitted on a branch" : "A clean branch to merge";
+  if (v.head !== "main") {
+    if (v.tree === "code") return "Code uncommitted on a branch";
+    return v.head === "work" ? "A clean branch to merge" : "A merged branch still checked out";
+  }
   if (v.tree === "records") return "Records uncommitted";
   if (v.tree === "code") return "Code uncommitted on the default branch";
   return "Nothing unfinished";
@@ -71,6 +74,9 @@ const STEP = {
   SomeoneEditsCode: "someone edits code",
   AgentCommitsOnABranch: "an agent commits on a branch",
   BranchMerges: "the branch merges",
+  MergeLeavesTheBranchCheckedOut: "the merge leaves the branch checked out",
+  SomeoneChecksOutAMergedBranch: "someone checks out a merged branch",
+  AgentSwitchesToTheDefaultBranch: "an agent switches to the default branch",
   AgentLandsRecords: "an agent lands the records",
   RecordsRunStops: "the landing run stops",
   OwnerMergesRecords: "you merge the records branch",

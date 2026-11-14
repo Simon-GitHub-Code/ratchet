@@ -58,6 +58,79 @@ def test_a_clean_change_is_merged_and_tier_2_is_named_next(
         " first\n"
     )
     assert git(root, "worktree", "list", "--porcelain").count("worktree ") == 1
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert git(root, "rev-parse", "HEAD") == merged
+    assert git(root, "rev-parse", "--verify", f"refs/heads/{FEATURE}") == head
+
+
+SWITCH_FIRST = (
+    "next: `git switch main`, then just check-deep on `main`: tier 2 runs after every merge, and"
+    " a red one comes first"
+)
+
+
+def test_a_merge_made_from_another_checkout_leaves_it_alone(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path)
+    git(root, "switch", "--quiet", "--detach")
+    capsys.readouterr()
+    assert run(root) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "next: just check-deep on `main`: tier 2 runs after every merge, and a red one comes first"
+    )
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+
+
+def test_a_merge_made_while_another_branch_is_checked_out_leaves_that_branch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path)
+    git(root, "switch", "--quiet", "-c", "other")
+    capsys.readouterr()
+    assert run(root) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "next: just check-deep on `main`: tier 2 runs after every merge, and a red one comes first"
+    )
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "other"
+
+
+def test_a_dirty_checkout_stays_on_the_merged_branch_and_the_next_line_says_to_switch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path)
+    write(root, "scratch.txt", "mine\n")
+    capsys.readouterr()
+    assert run(root) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == SWITCH_FIRST
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == FEATURE
+
+
+def test_a_default_branch_held_by_another_work_tree_leaves_the_checkout_and_says_to_switch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo")
+    held = tmp_path / "held"
+    git(root, "worktree", "add", "--quiet", str(held), "main")
+    capsys.readouterr()
+    assert run(root) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == SWITCH_FIRST
+    assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == FEATURE
+
+
+def test_a_switch_that_fails_leaves_the_checkout_and_says_to_switch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    real = merge.gatelib.git
+
+    def refuse(tree: Path, *args: str) -> str | None:
+        return None if args[:1] == ("switch",) else real(tree, *args)
+
+    monkeypatch.setattr(merge.gatelib, "git", refuse)
+    capsys.readouterr()
+    assert run(root) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == SWITCH_FIRST
     assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == FEATURE
 
 
@@ -233,7 +306,10 @@ def test_a_binding_without_tier_2_still_says_what_comes_next(
     root = project(tmp_path, deep=None)
     capsys.readouterr()
     assert run(root) == 0
-    assert "next: the binding's `check-deep` entry point on `main`" in capsys.readouterr().out
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "next: the binding's `check-deep` entry point on `main`: tier 2 runs after every merge,"
+        " and a red one comes first"
+    )
 
 
 # --- the adoption (ADR 0031) ------------------------------------------------------------------

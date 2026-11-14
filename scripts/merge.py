@@ -429,8 +429,21 @@ def merge(root: Path, branch: str) -> int:
         return 1
     deep = gatelib.entry_point(root, TIER2) or f"the binding's `{TIER2}` entry point"
     print(f"merged: `{branch}` into `{default}` at {merged[:12]}")
-    print(f"{NEXT}{deep} on `{default}`: tier 2 runs after every merge, and a red one comes first")
+    switch = ""
+    if on_branch(root) == branch and not left(root, default):
+        switch = f"`git switch {default}`, then "
+    print(
+        f"{NEXT}{switch}{deep} on `{default}`: tier 2 runs after every merge, and a red one"
+        " comes first"
+    )
     return 0
+
+
+def left(root: Path, default: str) -> bool:
+    """Whether the owner's checkout was moved onto ``default``: a clean tree, ``default`` free."""
+    if dirty_paths(root) or checked_out(root, default) is not None:
+        return False
+    return gatelib.git(root, "switch", "--quiet", default) is not None
 
 
 def on_branch(root: Path) -> str | None:
