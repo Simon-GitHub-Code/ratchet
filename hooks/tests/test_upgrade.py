@@ -641,3 +641,25 @@ def test_the_plan_reads_the_plugin_the_script_runs_from(
     root = fixture("0.9.2", tmp_path)
     assert upgrade.main(["upgrade.py", "--root", str(root)]) == 1
     assert f"to 999.0.0 at {repos.git(used, 'rev-parse', 'HEAD')}." in capsys.readouterr().out
+
+
+def test_an_unfiltered_changed_recipe_is_red_in_the_summary_and_not_owed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The summary says 0 red only when check stays green; this recipe makes the check red."""
+    root = fixture("0.8.2", tmp_path)
+    script = '"{{ratchet_plugin}}/scripts/mutation_survivors.py"'
+    recipe = (
+        f'files="$(python3 {script} --tool made-up --changed)"; '
+        '[ -z "$files" ] && exit 0; made-up run --mutate "$files"'
+    )
+    path = root / "justfile"
+    path.write_text(f"{path.read_text()}\nmutation-own:\n    {recipe}\n", encoding="utf-8")
+    repos.git(root, "add", "-A")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 1
+    out = capsys.readouterr().out
+    assert "and 1 red;" in verdict(out)
+    assert "and 0 red" not in verdict(out)
+    assert "Red until fixed" in out
+    assert "    - a recipe hands the output of mutation_survivors.py --changed" in out
+    assert "1 thing stops a merge until fixed." in plain(out)

@@ -429,3 +429,12 @@ def test_the_templates_own_entry_points_table_splits_and_is_written_by_hand() ->
 def test_a_body_with_two_tables_gives_the_rows_of_both_and_neither_header() -> None:
     body = "| A | B |\n| - | - |\n| x | y |\n\nBetween.\n\n| C | D |\n| :-- | --: |\n| z | w |\n"
     assert markdown_text.table_cells(body) == [("x", "y"), ("z", "w")]
+
+
+def test_pipe_lines_that_are_not_a_table_are_left_as_they_are() -> None:
+    text = "| a | b |\n| c |\n\n| x | y |\n| - | - |\n| 1 | 22 |\n"
+    assert markdown_text.padded_tables(text) == (
+        "| a | b |\n| c |\n\n| x   | y   |\n| --- | --- |\n| 1   | 22  |\n"
+    )
+    loose = "| just a line |\nplain\n"
+    assert markdown_text.padded_tables(loose) == loose

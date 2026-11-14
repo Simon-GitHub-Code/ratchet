@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Build features from tickets
 
-`/ratchet:feature <ticket>` builds one ticket: a number on the tracker (`4` or `#4`) or the path of a local ticket file (`.scratch/<slug>/issues/02-<slug>.md`). `/ratchet:feature` with no ticket, or `/ratchet:feature all`, builds every agent-ready ticket: [the drain](#the-drain-every-agent-ready-ticket). Load the `ratchet:method` skill first; [pipeline.md](../method/pipeline.md) says what the roles do (spec, the ticket check, implement and review always; the critic and its fix loop once the project is depended-on) and [records.md](../method/records.md) what the ticket carries.
+`/ratchet:feature <ticket>` builds one ticket: a number on the tracker (`4` or `#4`) or the path of a local ticket file (`.scratch/<slug>/issues/02-<slug>.md`). `/ratchet:feature` with no ticket, or `/ratchet:feature all`, builds every agent-ready ticket: [the drain](#the-drain-every-agent-ready-ticket). Load the `ratchet:method` skill first; [pipeline.md](../method/pipeline.md) says what the roles do (spec, the ticket check, implement and review always; the critic and its fix loop once the project is depended-on, and before that one fix pass on a blocker the review finds) and [records.md](../method/records.md) what the ticket carries.
 
 The input is the ticket the owner's `/mattpocock-skills:to-spec`, `to-tickets` or `triage` wrote, with the method's `## Conjecture` and `## Operability` sections, and the agent-ready label the owner applies (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it). The label is the owner's agreement; nothing below infers it or applies it (ADR 0008).
 
@@ -18,14 +18,14 @@ Stay in the turn until every workflow you start has returned: in a headless sess
 
 2. **The branch.** Green: `git switch <branch>` when `git rev-parse --verify --quiet <branch>` finds it, else `git switch -c <branch> <base>`. Run the preflight again with `--branch <branch>`; it must stay green.
 
-3. **The pipeline.** Call the Workflow tool (`name: "ratchet:pipeline"` where the harness lists plugin workflows by name):
+3. **The pipeline.** Call the Workflow tool by the workflow's name, `ratchet:pipeline`, here and in every Workflow call below. A harness that lists no plugin workflow by name takes `scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"` instead, once you have read that file: a fresh install refuses a script path the session has not read.
 
    ```
-   scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"
+   name: "ratchet:pipeline"
    args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
    ```
 
-   It runs the same preflight as its first stage, which is where it reads `critic` (the arguments carry only the script's path): Spec, the ticket check (with one amend of the spec when it finds a gap; a promise the plan still leaves out is built as the ticket says it, and an input case still undecided with the safe answer, each in the result's `assumptions`, and neither asks the owner anything), Implement, then Critique and the fix loop only when `critic` is true (the binding declares the `depended-on` life event, ADR 0028), then Review. When it did not run the critic, the result's `critic` says so and why; put that line in the pull request. It never commits, pushes or opens a pull request.
+   It runs the same preflight as its first stage, which is where it reads `critic` (the arguments carry only the script's path): Spec, the ticket check (with one amend of the spec when it finds a gap; a promise the plan still leaves out is built as the ticket says it, and an input case still undecided with the safe answer, each in the result's `assumptions`, and neither asks the owner anything), Implement, then Critique and the fix loop only when `critic` is true (the binding declares the `depended-on` life event, ADR 0028), then Review; when `critic` is false and the review lists a fixable blocker of the change, one fix pass and a second Review run before the result is returned (ADR 0056). When it did not run the critic, the result's `critic` says so and why; put that line in the pull request. It never commits, pushes or opens a pull request.
 
    When the run errors instead of returning (an agent died), resume it once; if it errors again, tell the owner which stage died and stop: the drain closes such a ticket for a retry, a single ticket has no queue to retry it.
 
@@ -56,7 +56,7 @@ Stay in the turn until every workflow you start has returned: in a headless sess
 3. **Start the pipelines.** For each ticket in `start`, `D open <ticket> --root .`: exit 0 prints its `branch`, `worktree` and `base`; exit 1 means the plan does not start it. Then call the Workflow tool once per ticket opened, every call in one message so the runs are concurrent:
 
    ```
-   scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"
+   name: "ratchet:pipeline"
    args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
    ```
 
@@ -72,13 +72,15 @@ Stay in the turn until every workflow you start has returned: in a headless sess
    4. **Judge it again.** After a rebase or a conflict the first review no longer describes the change:
 
       ```
-      scriptPath: "${CLAUDE_PLUGIN_ROOT}/workflows/pipeline.js"
+      name: "ratchet:pipeline"
       args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "rejudge": { "slug": "<slug>", "specPath": "<specPath>", "conflicts": [<the conflicts>], "checkRed": <true when check was red>, "dependencies": <the first result's dependencies>, "assumptions": <the first result's assumptions>, "settled": <the first result's settled> } }
       ```
 
       One agent finishes the rebase and gets `check` green, only when there was a conflict or a red `check`; then the reviewer judges the change as it stands, held to the readings the first run's ticket check settled (`settled`), so a case the first run assumed is not read as open again. Not `approve`: park as in step 4.1. Otherwise commit its `filesChanged`, if any, and use its `verdictRecord` in place of the first.
    5. **The records.** As step 5 of the one-ticket path: `ratchet` and the raised `quality/` files, the suggested ADR, with no forge the change description and the local ticket's `Status:` line, then the verdict record from the latest result, alone and last.
    6. **Land it.** With no forge: `D land <ticket> --root .` runs the binding's `merge` entry point, prints the judge's lines, removes the work tree and records merged or waiting with every reason; exit 2 means it could not ask, so report what it printed and leave the ticket. With a forge: push, open the pull request as step 6 of the one-ticket path says, and wait for both workflows: `gh pr checks <n> --watch` for `ci`, then the `merge` run that follows it (`gh run list --workflow merge.yml --limit 1`, then `gh run watch <id>`). When `gh pr view <n> --json state` says `MERGED`, run `git pull --ff-only` on the default branch and `D close <ticket> --outcome merged --root .`. Otherwise `D close <ticket> --outcome waits --root .`, with one `--reason` per line of the judge's comment on the pull request.
+
+   Exit 3 from `update`, `close` or `split` means a landing of that ticket is still running (for example a `land` the shell gave up waiting on): leave the ticket, do not close, reconcile or split it, wait for that landing to end, and go on at step 5 (`D plan`), since the landing records the outcome itself.
 
    A ticket the plan lists as `built` was committed by an earlier drain and has no run: start it at step 4.3 when its `why` says it is behind the default branch (`update` makes its work tree again, rebases it and drops the verdict record the move outdated; then step 4.4 judges it again and 4.5 writes the new record), otherwise at step 4.6. The merge refuses a branch behind the default branch with the `behind` reason, so no verdict lands on a tree it was not given on. A ticket the plan lists as `held` was parked or left to the owner for a decision and is not landed again until its text changes or a path its run named as the cause changes on the default branch. A ticket that waited only for a reason the drain resolves itself (`behind`, `moved`, `conflict`, `gates`, `refs`, `errored`) stays `built` and is retried, at most three times in a row; then it is held with a reason that says so.
 
@@ -101,5 +103,5 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
 A question reaches the owner only when it is a product question: its answer shapes the product (`direction`) or cannot be taken back (`irreversible`), as ADRs 0022 and 0034 say. The spec role's result marks each one, with two to four options, the recommended one first, and a sentence on why. Never ask the owner to confirm what you would do anyway, and never ask whether to go on.
 
 1. **Ask** `feature.open-question`: "<the question the build stopped on, in the words of someone using the product>" All of them in one message, each as the spec role wrote it, so the owner can accept them all at once. The recommended option is first and its label ends with `(recommended)`; the description gives the reason.
-2. Write each answer on the ticket under `## Answers`, the question and the answer in one line each. A local ticket: write them at the end of the file and land it from the default branch: with no forge `just merge --records` (the `merge` entry point) commits it on a branch of its own, and with a forge it goes on a branch of its own and through a pull request. Never commit on the default branch itself. A labelled ticket changes only by the owner's merge (ADR 0031), so the run prints `merge: owner` and the owner's command; relay both as they are. A tracker ticket: `gh issue edit <n> --body-file <file>` with the full body, no label flag.
+2. Write each answer on the ticket under `## Answers`, the question and the answer in one line each. A local ticket: write them at the end of the file and land it from the default branch: with no forge `just merge --records` (the `merge` entry point) commits it on a branch of its own, and with a forge it goes on a branch of its own and through a pull request. Never commit on the default branch itself. A labelled ticket changes only by the owner's merge (ADR 0031; ADR 0057 lets its link paths change alone), so the run prints `merge: owner` and the owner's command; relay both as they are. A tracker ticket: `gh issue edit <n> --body-file <file>` with the full body, no label flag.
 3. Record how the owner answered, one Bash call per answer: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/questions.py" record --skill feature --key "feature.<slug>.<n>" --kind <direction|irreversible> --recommended <yes|no> --root .`, where `<n>` is the question's place in the result. The log is `.ratchet/questions.tsv`, which no commit carries.

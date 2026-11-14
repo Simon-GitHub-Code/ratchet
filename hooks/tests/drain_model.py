@@ -29,15 +29,15 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+from tests import model_tla
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
 CAP = 1
 RETRIES = 3
-PART_WRITTEN = -1
-"""The text of a ticket's file while a fast-forward that changes it is cut off: none it ever had."""
 
 
 class Fact(Enum):
@@ -749,56 +749,45 @@ def _unlock(state: State, name: Name) -> State | None:
     return state.with_ticket(name, ticket._replace(tree=Tree.DIRTY))
 
 
-def as_read(act: Callable[[State, Name], State | None]) -> Callable[[State, Name], State | None]:
-    """``act`` on the ticket as ``drain.py`` reads it: from the default branch's work tree, first.
+def recovering(act: Callable[[State, Name], State | None]) -> Callable[[State, Name], State | None]:
+    """``act`` once ``merge.recover`` has run: ``drain.main`` runs it before every command.
 
-    ``land`` reads it before ``merge.recover`` runs, and ``close`` never runs it, so while a
-    fast-forward that changes the file is cut off they read the merge's text, part-written. A
-    note that says merged is never written again, so nothing reads the text it was written on.
+    So no command reads a ticket's text while a fast-forward cut off half-way holds the merge's.
     """
 
-    def read(state: State, name: Name) -> State | None:
-        if state.half is not name:
-            return act(state, name)
-        text = state.of(name).text
-        after = act(state.with_ticket(name, state.of(name)._replace(text=PART_WRITTEN)), name)
-        if after is None:
-            return None
-        ticket = after.of(name)._replace(text=text)
-        if says_merged(ticket) and ticket.note is not None:
-            ticket = ticket._replace(note=ticket.note._replace(text=text))
-        return after.with_ticket(name, ticket)
+    def run(state: State, name: Name) -> State | None:
+        return act(recovered(state), name)
 
-    return read
+    return run
 
 
 # Why: where two paths to a state are as short, the search keeps the one whose actions come
 # first here; a landing runs merge.py, the dearest step to replay, so it comes last.
 ON_TICKET: dict[Kind, Callable[[State, Name], State | None]] = {
-    Kind.OPEN: _open,
+    Kind.OPEN: recovering(_open),
     Kind.WORK: _work,
     Kind.COMMIT: _commit,
     Kind.RECORD: _record,
-    Kind.CLOSE: as_read(_close),
-    Kind.UPDATE: _update,
+    Kind.CLOSE: recovering(_close),
+    Kind.UPDATE: recovering(_update),
     Kind.EDIT: _edit,
-    Kind.LAND: as_read(_land),
+    Kind.LAND: recovering(_land),
     Kind.LOCK: _lock,
     Kind.UNLOCK: _unlock,
-    Kind.KILL_MID_REBASE: _kill_mid_rebase,
-    Kind.KILL_AFTER_REBASE: _kill_after_rebase,
-    Kind.KILL_BEFORE_DISCARD: as_read(_kill_before_discard),
-    Kind.KILL_AFTER_STASH: as_read(_kill_after_stash),
-    Kind.KILL_LAND_BEFORE_NOTE: as_read(_kill_land_before_note),
-    Kind.KILL_LAND_BEFORE_DISCARD: as_read(_kill_land_before_discard),
-    Kind.KILL_LAND_AFTER_DISCARD: as_read(_kill_land_after_discard),
-    Kind.KILL_BEFORE_FAST_FORWARD: as_read(_kill_before_fast_forward),
-    Kind.KILL_MID_FAST_FORWARD: as_read(_kill_mid_fast_forward),
+    Kind.KILL_MID_REBASE: recovering(_kill_mid_rebase),
+    Kind.KILL_AFTER_REBASE: recovering(_kill_after_rebase),
+    Kind.KILL_BEFORE_DISCARD: recovering(_kill_before_discard),
+    Kind.KILL_AFTER_STASH: recovering(_kill_after_stash),
+    Kind.KILL_LAND_BEFORE_NOTE: recovering(_kill_land_before_note),
+    Kind.KILL_LAND_BEFORE_DISCARD: recovering(_kill_land_before_discard),
+    Kind.KILL_LAND_AFTER_DISCARD: recovering(_kill_land_after_discard),
+    Kind.KILL_BEFORE_FAST_FORWARD: recovering(_kill_before_fast_forward),
+    Kind.KILL_MID_FAST_FORWARD: recovering(_kill_mid_fast_forward),
 }
 WHOLE: dict[Kind, Callable[[State], State]] = {
     Kind.CLEAN: lambda state: cleaned(state, everything=False),
     Kind.CLEAN_ALL: lambda state: cleaned(state, everything=True),
-    Kind.REPORT: _report,
+    Kind.REPORT: lambda state: _report(recovered(state)),
 }
 
 
@@ -1077,13 +1066,25 @@ class Lease(NamedTuple):
     stashed: bool = False
     """Whether a draft was kept as a stash. A history leaves one draft, so the graph ends."""
     landing: Drain | None = None
-    """The drain whose ``land a`` has seen ``merge.py`` land the merge and has not yet closed it.
+    """The drain whose ``land a`` is past its checks and has not yet closed: its landing is alive.
 
-    ``land`` holds the drain lock before ``merge.py`` runs and again for its close, and not while
-    ``merge.py`` runs: another drain's commands run there. ``settle`` runs whole under the lock,
-    so between its note and its discard no other drain's command runs, and that cut is not taken.
+    ``land`` holds the drain lock for its checks and again for its close, and not while
+    ``merge.py`` runs: every other command runs there. While ``merge`` is ``NONE``, ``merge.py``
+    judges and checks; after it, the merge has landed. ``land`` holds the ticket's landing lock
+    the whole time, which ends with its process. ``report``, ``clean`` and ``clean --all`` read it
+    and leave the ticket alone; a second ``land``, ``update`` and ``close`` read it and refuse,
+    changing nothing. ``open`` does not read it, and the plan does not start the ticket.
+    ``settle`` runs whole under the drain lock, so between its note and its discard no other
+    command runs, and that cut is not taken.
     """
     merge: Merge = Merge.NONE
+    held: bool = False
+    """Whether the ticket's note holds it.
+
+    No step writes a hold: the graph has ``close --outcome parked`` only while a landing is alive,
+    which refuses it. The world reads the note's hold back after every step, so a hold written
+    under a landing shows there.
+    """
 
 
 def of(pair: tuple[bool, bool], drain: Drain) -> bool:
@@ -1107,8 +1108,12 @@ class Step(Fact):
     REPORT = "drain.py report"
     REPORT_OWN = "drain.py report --drain with its token"
     CLEAN = "drain.py clean"
-    LAND = "drain.py land a, up to the merge merge.py lands"
+    UPDATE = "drain.py update a"
+    PARK = "drain.py close --outcome parked a"
+    LAND = "drain.py land a, up to the merge.py it runs"
+    MERGES = "its merge.py lands the merge"
     LAND_REST = "drain.py land a, the close after the merge"
+    MERGE_KILLED = "a kill stops its land and its merge.py before the merge"
     LAND_KILLED = "a kill stops its land after the merge, before the close"
     STOP = "stops, its session still open"
     DIE = "its session ends"
@@ -1124,13 +1129,12 @@ def rival(lease: Lease, drain: Drain) -> bool:
     """``drain.rival``: whether the lease names a drain still running, as ``drain`` sees it.
 
     A live process of the holder's chain is evidence only when it is not above ``drain``'s
-    command too: in a session of its own. A program running from a queue tree always is.
+    command too: in a session of its own. A program running from a queue tree always is, with a
+    lease or with none.
     """
     holder = lease.holder
-    if holder is None:
-        return False
-    chain = of(lease.alive, holder) and not lease.shared and holder is not drain
-    return chain or lease.running
+    chain = holder is not None and of(lease.alive, holder) and not lease.shared
+    return (chain and holder is not drain) or lease.running
 
 
 def other_drain(lease: Lease, drain: Drain, step: Step) -> bool:
@@ -1161,17 +1165,20 @@ def _clean_all(lease: Lease, drain: Drain, step: Step) -> Lease:
         took=put(lease.took, drain, value=True),
         draining=put(lease.draining, drain, value=True),
     )
+    if taken.landing is not None:
+        # Why: ``drain.in_flight`` keeps the tree of a live landing, ``--take-over`` or not.
+        return taken
     return merge_recorded(taken) if taken.merge is Merge.UNSAID else without_tree(taken)
 
 
 def _report_and_release(lease: Lease, drain: Drain, step: Step) -> Lease:
-    """``drain.report``: a merge no note says recorded unless another drain runs, then printed.
+    """``drain.report``: a merge no note says recorded, then printed.
 
-    ``drain.release`` ends the lease on the same reading: the token is the holder's, or no rival
-    is alive.
+    The merge is left alone while another drain runs, or while its landing does. ``drain.release``
+    ends the lease on the drains alone: the token is the holder's, or no rival is alive.
     """
     busy = other_drain(lease, drain, step)
-    if not busy and lease.merge is Merge.UNSAID:
+    if not busy and lease.merge is Merge.UNSAID and lease.landing is None:
         lease = merge_recorded(lease)
     merge = Merge.PRINTED if lease.merge is Merge.SAID else lease.merge
     holder = lease.holder if busy else None
@@ -1181,32 +1188,68 @@ def _report_and_release(lease: Lease, drain: Drain, step: Step) -> Lease:
 
 
 def _clean(lease: Lease, drain: Drain, _: Step) -> Lease:
-    """``drain.clean``: a merge no note says recorded, its tree with it, unless another drain runs."""  # noqa: E501
-    if lease.merge is not Merge.UNSAID or other_drain(lease, drain, Step.CLEAN):
+    """``drain.clean``: a merge no note says recorded, its tree with it, unless another drain or its landing runs."""  # noqa: E501
+    busy = lease.landing is not None or other_drain(lease, drain, Step.CLEAN)
+    if lease.merge is not Merge.UNSAID or busy:
         return lease
     return merge_recorded(lease)
 
 
 def _land(lease: Lease, drain: Drain, _: Step) -> Lease | None:
-    """``land`` up to the merge ``merge.py`` lands, on a tree whose work is all committed.
+    """``land`` up to the ``merge.py`` it runs, on a tree whose work is all committed.
 
     A bound: the agent lands only a tree with nothing uncommitted and no program running from it.
     """
+    if lease.landing is not None:
+        # Why: ``drain.landing_lock`` refuses a second landing of the ticket, which changes nothing.
+        return lease
     ready = lease.tree is drain and of(lease.draining, drain) and lease.merge is Merge.NONE
     if not ready or lease.draft or lease.running:
         return None
-    return lease._replace(landing=drain, merge=Merge.UNSAID)
+    return lease._replace(landing=drain)
 
 
-def _land_rest(lease: Lease, _: Drain, __: Step) -> Lease:
-    """``land``'s close: ``settle`` on a merge no note says, nothing on one another drain recorded."""  # noqa: E501
+def _merges(lease: Lease, _: Drain, __: Step) -> Lease | None:
+    """``merge.py`` judges, checks and lands the merge: it reads no note, so a hold does not stop it."""  # noqa: E501
+    return lease._replace(merge=Merge.UNSAID) if lease.merge is Merge.NONE else None
+
+
+def _land_rest(lease: Lease, _: Drain, __: Step) -> Lease | None:
+    """``land``'s close: ``settle`` on a merge no note says; nothing on one another command recorded."""  # noqa: E501
+    if lease.merge is Merge.NONE:
+        return None
     done = merge_recorded(lease) if lease.merge is Merge.UNSAID else lease
     return done._replace(landing=None)
 
 
+def _land_killed(lease: Lease, _: Drain, __: Step) -> Lease | None:
+    """A kill of ``land`` once its merge has landed: the merge stays, and no note says it."""
+    return lease._replace(landing=None) if lease.merge is not Merge.NONE else None
+
+
+def _merge_killed(lease: Lease, _: Drain, __: Step) -> Lease | None:
+    """A kill of ``land`` and its ``merge.py`` together before the merge, as a timeout ends both."""
+    return lease._replace(landing=None) if lease.merge is Merge.NONE else None
+
+
 def _open_tree(lease: Lease, drain: Drain, _: Step) -> Lease | None:
+    if lease.landing is not None:
+        # Why: the plan calls the ticket of a live landing built, held or resolved, and ``open``
+        # starts only a buildable one.
+        return lease
     ready = lease.holder is drain and of(lease.draining, drain) and lease.tree is None
-    return lease._replace(tree=drain) if ready and lease.merge is Merge.NONE else None
+    if not ready:
+        return None
+    return lease._replace(tree=drain) if lease.merge is Merge.NONE else None
+
+
+def _refused_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
+    """``update`` or ``close`` while a landing of the ticket is alive: ``drain.act_on`` refuses it.
+
+    It changes nothing, before the merge lands and after. A bound: the step is taken only while a
+    landing of the ticket is alive.
+    """
+    return lease if lease.landing is not None else None
 
 
 def _leave_draft(lease: Lease, drain: Drain, _: Step) -> Lease | None:
@@ -1245,16 +1288,26 @@ BY_A_DRAIN: dict[Step, DrainAct] = {
     Step.REPORT: _report_and_release,
     Step.REPORT_OWN: _report_and_release,
     Step.CLEAN: _clean,
+    Step.UPDATE: _refused_in_flight,
+    Step.PARK: _refused_in_flight,
     Step.LAND: _land,
     Step.STOP: _stop,
     Step.DIE: _die,
 }
-# Why: a drain inside ``land`` takes no step of its own but the close, a kill of it, or its death.
+# Why: a drain inside ``land`` takes the land's own steps, a kill of it, or its death; and the
+# ticket's commands, which its agent types when its shell gave up waiting on the land.
 INSIDE_LAND: dict[Step, DrainAct] = {
+    Step.OPEN: _open_tree,
+    Step.UPDATE: _refused_in_flight,
+    Step.PARK: _refused_in_flight,
+    Step.LAND: _land,
+    Step.MERGES: _merges,
     Step.LAND_REST: _land_rest,
-    Step.LAND_KILLED: lambda lease, _, __: lease._replace(landing=None),
+    Step.MERGE_KILLED: _merge_killed,
+    Step.LAND_KILLED: _land_killed,
     Step.DIE: _die,
 }
+LANDING_ITSELF = frozenset({Step.MERGES, Step.LAND_REST, Step.MERGE_KILLED, Step.LAND_KILLED})
 
 
 def _by_a_drain(lease: Lease, drain: Drain, step: Step) -> Lease | None:
@@ -1369,20 +1422,39 @@ def printed_once(before: Lease, said: str, after: Lease) -> bool:
 
 
 def spares_the_landing(before: Lease, said: str, after: Lease) -> bool:
-    """No drain discards the work tree of a landing another live drain is still running, unless the owner says ``--take-over``."""  # noqa: E501
-    drain, step = LEASE_STEPS.get(said, (None, None))
+    """No drain discards the work tree of a landing another live drain is still running, not even on ``--take-over``."""  # noqa: E501
+    drain, _ = LEASE_STEPS.get(said, (None, None))
     landing = before.landing
-    if landing is None or landing is drain or step is Step.TAKE_OVER:
+    if landing is None or landing is drain:
         return True
     return before.tree is not landing or after.tree is not None
 
 
 def keeps_the_record(before: Lease, said: str, after: Lease) -> bool:
-    """The close a landing ends with never rewrites a merge another drain recorded meanwhile."""
+    """The close a landing ends with never rewrites a merge another command recorded meanwhile."""
     _, step = LEASE_STEPS.get(said, (None, None))
     if step is not Step.LAND_REST or before.merge in {Merge.NONE, Merge.UNSAID}:
         return True
     return after.merge is before.merge
+
+
+def note_of(lease: Lease) -> tuple[Merge | None, bool]:
+    """What the ticket's note says: the merge it records, printed or not, and whether it holds."""
+    return (lease.merge if lease.merge in {Merge.SAID, Merge.PRINTED} else None), lease.held
+
+
+def leaves_the_landing_alone(before: Lease, said: str, after: Lease) -> bool:
+    """No command but the landing itself removes the work tree or writes the note of a ticket whose landing is alive."""  # noqa: E501
+    drain, step = LEASE_STEPS.get(said, (None, None))
+    if before.landing is None or (drain is before.landing and step in LANDING_ITSELF):
+        return True
+    removed = before.tree is not None and after.tree is None
+    return not removed and note_of(after) == note_of(before)
+
+
+def hold_not_merged(before: Lease, _: str, after: Lease) -> bool:
+    """A ticket whose note holds it is never merged, since no step of the lease graph is the owner's edit that frees it."""  # noqa: E501
+    return not before.held or before.merge is not Merge.NONE or after.merge is Merge.NONE
 
 
 LEASE_RULES: dict[str, Callable[[Lease, str, Lease], bool]] = {
@@ -1395,5 +1467,212 @@ LEASE_RULES: dict[str, Callable[[Lease, str, Lease], bool]] = {
     "9d. a report ends no lease but its own drain's": report_spares,
     "9e. a merge is printed by exactly one report across both drains": printed_once,
     "9f. no drain discards the tree of a landing another live drain runs": spares_the_landing,
-    "9g. a landing's close keeps a merge another drain recorded meanwhile": keeps_the_record,
+    "9g. a landing's close keeps a merge another command recorded meanwhile": keeps_the_record,
+    "9h. no command but the landing itself removes the tree or writes the note of a live landing": (
+        leaves_the_landing_alone
+    ),
+    "9i. a ticket whose note holds it is not merged": hold_not_merged,
 }
+
+
+# --- the export: the graphs as TLA+ modules, for a model checker and the charts ------------------
+
+
+class Run(NamedTuple):
+    """States from a start, the start first, and the steps between them, as ``model_tla`` reads."""
+
+    states: tuple[object, ...]
+    edges: list[tuple[object, str, object]]
+
+
+def run(taken: Callable[[Action], bool]) -> Run:
+    """The part of ``graph()`` its start reaches by the actions ``taken`` keeps, breadth first.
+
+    Each of its states and steps is one of ``graph()``, so a rule breaks on a step of it exactly
+    where it breaks on that step of the graph.
+    """
+    seen = {INITIAL: INITIAL}
+    frontier = deque([INITIAL])
+    edges: list[tuple[object, str, object]] = []
+    while frontier:
+        state = frontier.popleft()
+        for action, after in moves(state):
+            if not taken(action):
+                continue
+            known = seen.get(after)
+            if known is None:
+                seen[after] = known = after
+                frontier.append(after)
+            edges.append((state, action.name, known))
+    return Run(tuple(seen), edges)
+
+
+def landing_run() -> Run:
+    """Every step but those on ``c``: ``a`` built, judged, landed or parked, ``b`` waiting on it."""
+    return run(lambda action: action.ticket is not Name.C)
+
+
+def life_run() -> Run:
+    """The landing run with no kill: a ticket's life as the drain's commands lead it."""
+    return run(lambda action: action.ticket is not Name.C and action.kind not in KILLS)
+
+
+def work_run() -> Run:
+    """The steps on ``c`` and on the queue, and ``a`` parked, which lets the cap start ``c``."""
+    return run(
+        lambda action: (
+            action.ticket in {Name.C, None}
+            or (action.ticket is Name.A and action.kind is Kind.CLOSE)
+        )
+    )
+
+
+def plan_word(state: State, name: Name) -> str:
+    """What ``drain.plan`` calls the ticket; ``resolved`` when it is not in the plan."""
+    status = classify(state).get(name)
+    return "resolved" if status is None else status.value
+
+
+def note_fact(read: Callable[[Note], object], none: object) -> Callable[[Ticket], object]:
+    return lambda ticket: none if ticket.note is None else read(ticket.note)
+
+
+TICKET_FACTS: dict[str, Callable[[Ticket], object]] = {
+    "tree": lambda ticket: ticket.tree.name.lower(),
+    "branch": lambda ticket: ticket.branch.name.lower(),
+    "current": lambda ticket: ticket.current,
+    "merged": lambda ticket: ticket.merged,
+    "note": note_fact(lambda note: note.outcome.name.lower(), "none"),
+    "hold": note_fact(lambda note: note.hold, none=False),
+    "fresh": note_fact(lambda note: note.fresh, none=False),
+    "attempts": note_fact(lambda note: note.attempts, 0),
+    "rebasing": note_fact(lambda note: note.rebasing, none=False),
+    "discarding": note_fact(lambda note: note.discarding, none=False),
+    "edited": lambda ticket: ticket.text > 0,
+    "stashes": lambda ticket: ticket.stashes,
+}
+"""What a module reads of each ticket, named with the ticket's letter: ``treeA``."""
+
+
+def state_facts(names: tuple[Name, ...]) -> dict[str, Callable[[State], object]]:
+    """The variables of a module of the main graph: the plan's word and the facts of each ticket."""
+    facts: dict[str, Callable[[State], object]] = {}
+    for name in names:
+        letter = name.value.upper()
+        facts[f"status{letter}"] = lambda state, name=name: plan_word(state, name)
+        for fact, read in TICKET_FACTS.items():
+            facts[f"{fact}{letter}"] = lambda state, name=name, read=read: read(state.of(name))
+    return {
+        **facts,
+        "scratch": lambda state: state.scratch,
+        "half": lambda state: "none" if state.half is None else state.half.value,
+    }
+
+
+def rule_name(name: str) -> str:
+    """A rule's name in a module, by its number: ``Rule6a``."""
+    return model_tla.identifier(f"Rule {name.partition('.')[0]}")
+
+
+def step_rules(rules: Mapping[str, Callable[[Any, str, Any], bool]]) -> dict[str, model_tla.Rule]:
+    return {
+        rule_name(name): model_tla.Step((holds.__doc__ or "").strip(), holds)
+        for name, holds in rules.items()
+    }
+
+
+def drain_id(drain: Drain | None) -> str:
+    return "none" if drain is None else drain.value.rsplit(" ", 1)[-1]
+
+
+LEASE_FACTS: dict[str, Callable[[Lease], object]] = {
+    "processes": lambda lease: (
+        "undecided" if lease.shared is None else "one" if lease.shared else "separate"
+    ),
+    "holder": lambda lease: drain_id(lease.holder),
+    **{
+        f"{fact}{drain_id(drain)}": lambda lease, fact=fact, drain=drain: of(
+            getattr(lease, fact), drain
+        )
+        for fact in ("alive", "draining", "took")
+        for drain in Drain
+    },
+    "tree": lambda lease: drain_id(lease.tree),
+    "draft": lambda lease: lease.draft,
+    "running": lambda lease: lease.running,
+    "stashed": lambda lease: lease.stashed,
+    "landing": lambda lease: drain_id(lease.landing),
+    "merge": lambda lease: lease.merge.name.lower(),
+    "held": lambda lease: lease.held,
+}
+"""What a module reads of the lease, a drain named by its number: ``alive1``."""
+
+
+def lease_run() -> Run:
+    _, edges = lease_graph()
+    return Run(tuple(dict.fromkeys([LEASE_INITIAL, *(after for _, _, after in edges)])), edges)
+
+
+SHOWN_LANDING = ("statusA", *(f"{fact}A" for fact in TICKET_FACTS))
+"""What the chart of a ticket's life reads: ticket ``a``."""
+# Why: the statechart tool draws a whole chart only of a module of at most 500 states, and
+# neither chart reads the tree, the program or the hold, which no step writes.
+SHOWN_LEASE = tuple(
+    fact
+    for fact in LEASE_FACTS
+    if fact not in {"took1", "took2", "tree", "draft", "running", "stashed", "held"}
+)
+"""What the charts of the lease read: the drains, the lease, the landing and its merge."""
+
+
+def seen_through(
+    name: str, graph: Run, shown: Mapping[str, Callable[[Any], object]], *, deadlock: bool = True
+) -> model_tla.Export:
+    """The summary of ``graph`` whose states are the values of the facts ``shown``."""
+    summary = model_tla.summary(
+        graph, lambda state: tuple(fact(state) for fact in shown.values()), model_tla.identifier
+    )
+    return model_tla.export(
+        name,
+        summary,
+        {},
+        fields=(),
+        derived={fact: (lambda values, at=at: values[at]) for at, fact in enumerate(shown)},
+        deadlock=deadlock,
+    )
+
+
+def exports() -> tuple[model_tla.Export, ...]:
+    """The modules ``docs/model/drain.md`` was checked and drawn from.
+
+    TLC checks the rules on the landing run, the work run and the whole lease graph; the search
+    in the tests proves them on the whole main graph. The charts are drawn from those three, and
+    from summaries of the life run and the lease graph.
+    """
+    landing, lease = landing_run(), lease_run()
+    facts = state_facts(NAMES)
+    main = step_rules(RULES)
+    return (
+        model_tla.export(
+            "DrainLanding", landing, main, fields=(), derived=facts, action=model_tla.identifier
+        ),
+        model_tla.export(
+            "DrainWork", work_run(), main, fields=(), derived=facts, action=model_tla.identifier
+        ),
+        model_tla.export(
+            "DrainLease",
+            lease,
+            step_rules(LEASE_RULES),
+            fields=(),
+            derived=LEASE_FACTS,
+            action=model_tla.identifier,
+            deadlock=False,
+        ),
+        seen_through("DrainLife", life_run(), {fact: facts[fact] for fact in SHOWN_LANDING}),
+        seen_through(
+            "DrainLeaseShown",
+            lease,
+            {fact: LEASE_FACTS[fact] for fact in SHOWN_LEASE},
+            deadlock=False,
+        ),
+    )

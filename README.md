@@ -116,6 +116,7 @@ A change merges itself when all of these hold:
 - A change to a protected file: a check, its settings, a threshold, the dependency list, a decision record, the instructions agents read.
 - A disagreement an agent has written down about a check it believes is wrong.
 - A review that did not end in a clean approval.
+- A change to a ticket you have marked agent-ready, or to the spec it is built from. A path fix in one of its links is the exception.
 - Once other people can reach your project: a change that cannot be taken back, such as a data migration, and new behaviour with no switch to turn it off.
 
 ### What you are asked
@@ -233,7 +234,7 @@ When the plugin updates, every tier says so on its first line and `/ratchet:next
 python3 ~/.claude/plugins/marketplaces/ratchet/scripts/upgrade.py --apply
 ```
 
-It moves the repository to the plugin version in use in one change, and it adds and never removes. Anything that needs judgement it writes to `quality/owed.toml` instead of failing: each item is counted, none is red, and between upgrades the list only shrinks. Without `--apply` it prints the same plan and writes nothing. The upgrade touches guard paths, so merging it is your one step. `/ratchet:next` then names `/ratchet:fill`, where an agent writes what it can from the repository alone, and no feature starts before that is done. [CHANGELOG.md](CHANGELOG.md) says what each version changed.
+It moves the repository to the plugin version in use in one change, and it adds and never removes. Anything that needs judgement it writes to `quality/owed.toml` instead of failing: each item is counted, none is red, and between upgrades the list only shrinks. The few findings that cannot be owed, such as a mutation recipe that would test nothing, it lists as red until fixed. Without `--apply` it prints the same plan and writes nothing. The upgrade touches guard paths, so merging it is your one step. `/ratchet:next` then names `/ratchet:fill`, where an agent writes what it can from the repository alone, and no feature starts before that is done. [CHANGELOG.md](CHANGELOG.md) says what each version changed.
 
 ## Limits
 
