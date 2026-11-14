@@ -2,6 +2,7 @@
 
 The repository is the one ``test_drain`` builds: three local tickets, ``Beta`` blocked by
 ``Alpha``, a binding whose ``merge`` entry point runs ``merge.py`` and whose ``check`` is green.
+``merge.py`` runs as it does in a drain, in a process of its own, which a kill ends with SIGKILL.
 Each command runs as a session runs it, ``drain.main`` with no tracker; the agent's commits are
 the commits the feature skill makes, and the owner's edit is an answer on the default branch.
 After each action ``seen`` reads the repository back in the model's terms.
@@ -13,8 +14,11 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import re
 import signal
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,9 +26,24 @@ from unittest import mock
 
 import drain
 import gatelib
+import merge
 import merge_ready
 from tests import drain_model as model
-from tests.drain_model import Branch, Kind, Name, Note, Outcome, Status, Ticket, Tree
+from tests import servers
+from tests.drain_model import (
+    Branch,
+    Drain,
+    Kind,
+    Lease,
+    Merge,
+    Name,
+    Note,
+    Outcome,
+    Status,
+    Step,
+    Ticket,
+    Tree,
+)
 from tests.repos import git, repository, snapshot, write
 from tests.test_drain import (
     ALPHA,
@@ -34,7 +53,9 @@ from tests.test_drain import (
     BRANCH_C,
     FILES,
     GAMMA,
+    SCRIPTS,
     approval,
+    binding,
 )
 
 if TYPE_CHECKING:
@@ -49,6 +70,54 @@ DRAFT = "src/draft.py"
 VERDICT = "docs/features/alpha/verdict.json"
 STATUSES = {status.value: status for status in Status}
 COMMANDS = frozenset({Kind.OPEN, Kind.UPDATE, Kind.LAND, Kind.CLOSE})
+KILL_AT = "DRAIN_MODEL_KILL_AT"
+# Why: the binding's `merge` entry point. It is merge.py, ended by a real SIGKILL at the point
+# the environment names, so that what a killed run leaves is what merge.py itself wrote. Mid
+# fast-forward it leaves what git does when killed there: files of the merge in the work tree,
+# the first written part-way, and the lock on the index.
+MERGE_KILLER = """\
+import os, signal, subprocess, sys
+from pathlib import Path
+
+sys.path.insert(0, {scripts!r})
+import gatelib
+import merge
+
+AT = os.environ.get({kill_at!r})
+
+
+def die(*_args, **_kwargs):
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+def cut_off(where, *args):
+    if args[:2] != ("merge", "--ff-only"):
+        return real_git(where, *args)
+    old = real_git(where, "rev-parse", "HEAD")
+    rows = [row for row in merge.blobs(where, old, args[-1]) if row[0] != "D"]
+    for at, (_status, path, _was, blob) in enumerate(rows):
+        body = subprocess.run(
+            ["git", "-C", str(where), "cat-file", "blob", blob], capture_output=True, check=True
+        ).stdout
+        target = Path(where) / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(body[: len(body) // 2] if at == 0 else body)
+    gitdir = Path(real_git(where, "rev-parse", "--absolute-git-dir"))
+    (gitdir / "index.lock").write_text("")
+    die()
+
+
+real_git = gatelib.git
+if AT == "check":
+    merge.run_check = die
+elif AT == "fast-forward":
+    gatelib.git = cut_off
+raise SystemExit(merge.main(sys.argv))
+"""
+MERGE_KILLS = {
+    Kind.KILL_BEFORE_FAST_FORWARD: "check",
+    Kind.KILL_MID_FAST_FORWARD: "fast-forward",
+}
 
 
 def digest(text: str) -> str:
@@ -66,13 +135,19 @@ class Seen:
     statuses: dict[Name, Status]
     start: tuple[Name, ...]
     tickets: tuple[Ticket, Ticket, Ticket]
+    scratch: bool
+    half: Name | None
 
 
 class World:
     """A repository the drain runs on, with no forge, as a session's commands leave it."""
 
     def __init__(self, directory: Path) -> None:
-        self.root = repository(directory / "repo", dict(FILES))
+        directory.mkdir(parents=True, exist_ok=True)
+        killer = directory / "merge_killer.py"
+        killer.write_text(MERGE_KILLER.format(scripts=str(SCRIPTS), kill_at=KILL_AT))
+        merging = binding(f"{sys.executable} {killer}")
+        self.root = repository(directory / "repo", {**FILES, "docs/process/binding.md": merging})
         self.token = ""
         self.printed = ""
         self.code = 0
@@ -169,6 +244,8 @@ class World:
                 drain, "discard", discard_then_killed
             ),
         }
+        if kind in MERGE_KILLS:
+            return mock.patch.dict(os.environ, {KILL_AT: MERGE_KILLS[kind]})
         return killers[kind]()
 
     def perform(self, action: model.Action) -> None:
@@ -223,9 +300,10 @@ class World:
         branches = {line.split(" ", 1)[0]: line.split(" ", 3)[1:] for line in refs.splitlines()}
         stashes = git(self.root, "stash", "list", "--format=%gs").splitlines()
         on_merge = drain.route.merged_features(self.root, "main")
+        half = self.half()
         tickets = []
         for name, was in ghost.each():
-            merged = name not in statuses
+            merged = name not in statuses and name is not half
             tree = self.tree_state(name) if self.tree(name) in trees else Tree.NONE
             listed = branches.get(BRANCH[name])
             landed = merged and BRANCH[name] in on_merge
@@ -243,7 +321,22 @@ class World:
                 stashes=sum(f": {BRANCH[name]}: " in line for line in stashes),
             )
             tickets.append(model.normal(ticket))
-        return Seen(statuses, start, (tickets[0], tickets[1], tickets[2]))
+        listing = git(self.root, "worktree", "list", "--porcelain").splitlines()
+        scratch = any(
+            Path(line.removeprefix("worktree ")).parent.name.startswith(merge.SCRATCH)
+            for line in listing
+            if line.startswith("worktree ")
+        )
+        return Seen(statuses, start, (tickets[0], tickets[1], tickets[2]), scratch, half)
+
+    def half(self) -> Name | None:
+        """The ticket whose fast-forward the landing intent says was cut off, if one was."""
+        landing = merge.state_dir(self.root) / merge.LANDING
+        intent = merge.intent_of(landing.read_bytes() if landing.exists() else b"")
+        if not intent:
+            return None
+        subject = git(self.root, "log", "-1", "--format=%s", str(intent["new"]))
+        return next(name for name, branch in BRANCH.items() if f"'{branch}'" in subject)
 
     def tree_state(self, name: Name) -> Tree:
         if self.lock_of(name).exists():
@@ -291,3 +384,152 @@ class World:
             rebasing=rebasing,
             discarding=held.get("discarding") is True,
         )
+
+
+# --- the lease ---------------------------------------------------------------------------------
+
+REAL_ANCESTRY = drain.ancestry
+
+
+def session() -> subprocess.Popen[bytes]:
+    """A process that stands for a drain's session: the agent that runs its commands."""
+    return subprocess.Popen(["sleep", "600"])  # noqa: S607 # -- a sleep, no shell
+
+
+class LeaseWorld:
+    """Two drains on one repository: each session a real process, the program a real one too.
+
+    A drain's command runs in this process as its session would run it: ``drain.ancestry`` names
+    the session's process above the command, so the real ``drain.rival`` reads real processes.
+    A ``land`` is cut where it holds no lock: ``drain.close``, its last call, is held back until
+    the step that runs it, under the drain lock as ``land`` runs it.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self.world = World(directory)
+        self.sessions: dict[Drain, subprocess.Popen[bytes]] = {}
+        self.program: subprocess.Popen[bytes] | None = None
+        self.tokens: dict[Drain, str] = {}
+        self.closing: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def chain(self, which: Drain) -> list[str]:
+        session = self.sessions[which]
+        row = drain.process_row(session.pid)
+        return [f"{session.pid}:{row[1] if row else ''}", *REAL_ANCESTRY()]
+
+    def command(self, which: Drain, *argv: str) -> str:
+        with mock.patch.object(drain, "ancestry", return_value=self.chain(which)):
+            self.world.command(*argv)
+        return self.world.printed
+
+    def land(self, which: Drain) -> None:
+        """The agent's commits and its verdict record, then ``land`` up to its close."""
+        self.world.by_hand(Kind.COMMIT, Name.A)
+        self.world.by_hand(Kind.RECORD, Name.A)
+
+        def held_back(*args: object, **kwargs: object) -> None:
+            self.closing.append((args, kwargs))
+
+        with mock.patch.object(drain, "close", held_back):
+            self.command(which, "land", REF[Name.A])
+
+    def close_the_landing(self, which: Drain) -> None:
+        """What ``land`` does once ``merge.py`` is done: its close, under the drain lock."""
+        args, kwargs = self.closing.pop()
+        out = io.StringIO()
+        with (
+            mock.patch.object(drain, "ancestry", return_value=self.chain(which)),
+            contextlib.redirect_stdout(out),
+            drain.exclusive(self.world.root),
+        ):
+            drain.close(*args, **kwargs)
+        self.world.printed = out.getvalue()
+
+    def perform(self, said: str) -> None:
+        """Do what the lease step ``said`` names."""
+        if said in {Step.SEPARATE.value, Step.SHARED.value}:
+            first = session()
+            self.sessions = {
+                Drain.ONE: first,
+                Drain.TWO: first if said == Step.SHARED.value else session(),
+            }
+            return
+        if said == Step.PROGRAM_ENDS.value:
+            assert self.program is not None
+            self.program.kill()
+            self.program.wait()
+            return
+        which, step = model.LEASE_STEPS[said]
+        if step in {*model.CLEANS, *model.REPORTS, Step.CLEAN, Step.OPEN}:
+            self.drain_command(which, step)
+        else:
+            self.by_hand(which, step)
+
+    def drain_command(self, which: Drain, step: Step) -> None:
+        token = ["--drain", self.tokens[which]] if step in model.OWN else []
+        if step in model.CLEANS:
+            over = ["--take-over"] if step is Step.TAKE_OVER else []
+            self.command(which, "clean", "--all", *token, *over)
+            if self.world.code == 0:
+                self.tokens[which] = self.world.token
+        elif step in model.REPORTS:
+            self.command(which, "report", *token)
+        elif step is Step.CLEAN:
+            self.command(which, "clean")
+        else:
+            self.command(which, "open", REF[Name.A])
+
+    def by_hand(self, which: Drain, step: Step) -> None:
+        """What a drain's agent or its session does, and ``land`` cut in two."""
+        tree = self.world.tree(Name.A)
+        if step is Step.LAND:
+            self.land(which)
+        elif step is Step.LAND_REST:
+            self.close_the_landing(which)
+        elif step is Step.LAND_KILLED:
+            self.closing.pop()
+        elif step is Step.DRAFT:
+            write(tree, DRAFT, "half done\n")
+        elif step is Step.PROGRAM:
+            self.program = servers.sleeper(tree)
+        elif step is Step.DIE:
+            self.sessions[which].kill()
+            self.sessions[which].wait()
+
+    def seen(self, ghost: Lease) -> Lease:
+        """The repository and the processes read back; ``ghost`` gives what no file holds."""
+        lease = drain.state_dir(self.world.root) / drain.LEASE
+        held = json.loads(lease.read_text(encoding="utf-8")) if lease.exists() else {}
+        holder = next((d for d, token in self.tokens.items() if token == held.get("token")), None)
+        tree = self.world.tree(Name.A)
+        made = tree in drain.worktrees(self.world.root)
+        note = drain.queue_notes.read_note(self.world.root, BRANCH[Name.A])
+        merge = (
+            Merge.NONE
+            if BRANCH[Name.A] not in drain.route.merged_features(self.world.root, "main")
+            else Merge.UNSAID
+            if note.get("outcome") != "merged"
+            else Merge.SAID
+            if note.get("reported") is False
+            else Merge.PRINTED
+        )
+        return ghost._replace(
+            holder=holder,
+            alive=(
+                self.sessions[Drain.ONE].poll() is None,
+                self.sessions[Drain.TWO].poll() is None,
+            ),
+            took=(Drain.ONE in self.tokens, Drain.TWO in self.tokens),
+            tree=ghost.tree if made else None,
+            draft=made and bool(git(tree, "status", "--porcelain")),
+            running=self.program is not None and self.program.poll() is None,
+            stashed=bool(git(self.world.root, "stash", "list")),
+            merge=merge,
+        )
+
+    def close(self) -> None:
+        """End every process this world started."""
+        for process in [*self.sessions.values(), *([self.program] if self.program else [])]:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
