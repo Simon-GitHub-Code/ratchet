@@ -4,13 +4,15 @@ import * as c from "./view_common.mjs";
 // the lease's holder, or the other drain.
 export const title = "The drain lease: who holds it, and when the next drain may take it";
 const MODE = { separate: "Each drain in a session of its own", one: "One process runs both drains" };
+const HOLDER = {
+  none: "No lease",
+  draining: "Its holder drains",
+  stopped: "Its holder stopped, its session open",
+  gone: "Its holder is gone",
+};
 export const state = (v) => {
   if (v.processes === "undecided") return "Not started";
-  const holder = v.holder;
-  if (holder === "none") return [MODE[v.processes], "No lease"];
-  if (v[`draining${holder}`]) return [MODE[v.processes], "Its holder drains"];
-  if (v[`alive${holder}`]) return [MODE[v.processes], "Its holder stopped, its session open"];
-  return [MODE[v.processes], "Its holder is gone"];
+  return [MODE[v.processes], HOLDER[v.holderIs]];
 };
 const WORDS = {
   DrainPyCleanAll: "clean --all",
@@ -32,7 +34,7 @@ export const step = (action, from, to) => {
   const found = Object.entries(WORDS).find(([key]) => action.endsWith(key))?.[1] ?? taken.words;
   // Why: a take-over differs from a plain clean --all only where that is refused: in sessions of
   // their own, while the holder's session is alive.
-  const alive = from.processes === "separate" && from[`alive${from.holder}`];
+  const alive = from.processes === "separate" && ["draining", "stopped"].includes(from.holderIs);
   const word = found === "clean --all --take-over" && !(alive && who === "the other drain") ? "clean --all" : found;
   if (word === "stop") return `${who} stops`;
   // Why: a report keeps the lease only while a program runs from the tree, which no state here shows.
