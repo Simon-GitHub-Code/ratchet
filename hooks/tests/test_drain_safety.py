@@ -5,6 +5,7 @@ drain that cleaned the first, a cap that stopped counting, and runs killed part-
 a real repository, and a kill is a real SIGKILL or the state one leaves.
 """
 
+import fcntl
 import json
 import os
 import signal
@@ -1437,6 +1438,41 @@ def test_a_landing_in_flight_keeps_its_tree_and_note_from_a_report_and_a_clean(
     assert "Alpha" in capsys.readouterr().out.split("## Waits for you")[0]
     assert run(root, "report") == 0
     assert "## Merged\n\n- none" in capsys.readouterr().out
+
+
+def test_a_second_land_of_a_ticket_is_refused_while_a_landing_holds_its_lock(
+    tmp_path: Path, capsys: Out
+) -> None:
+    ran = tmp_path / "ran"
+    script = tmp_path / "recording_merge.py"
+    script.write_text(f"import pathlib\npathlib.Path({str(ran)!r}).touch()\n", encoding="utf-8")
+    root = project(tmp_path, **{"docs/process/binding.md": binding(f"{sys.executable} {script}")})
+    judged(root)
+    with drain.landing_path(root, BRANCH_A).open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        capsys.readouterr()
+        assert run(root, "land", ALPHA) == 2
+    assert capsys.readouterr().out == (
+        f"land: a landing of `{BRANCH_A}` is already running in another command; run land"
+        " again once it ends\n"
+    )
+    assert not ran.exists(), "no merge script ran"
+    assert note(root, BRANCH_A).get("outcome") is None
+
+
+def test_clean_all_leaves_the_tree_and_mark_of_a_live_landing(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    tree = judged(root)
+    owner_edits_ticket(root)
+    killed = start(root, "land", ALPHA, DRV_KILL_AT="discard")
+    killed.communicate(timeout=60)
+    marked = note(root, BRANCH_A)
+    assert marked["discarding"] is True
+    with drain.landing_path(root, BRANCH_A).open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert run(root, "clean", "--all") == 0
+    assert tree in drain.worktrees(root)
+    assert note(root, BRANCH_A) == marked
 
 
 def test_a_sweep_removes_an_empty_scratch_directory_a_killed_merge_left(tmp_path: Path) -> None:
