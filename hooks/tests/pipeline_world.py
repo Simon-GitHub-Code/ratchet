@@ -120,6 +120,18 @@ BUILDS: dict[Said, object] = {
 REVIEWS: dict[Said, object] = {
     Review.APPROVES: REVIEW,
     Review.REFUSES: {**REVIEW, "verdict": "request_changes"},
+    Review.REFUSES_ISSUE: {**REVIEW, "verdict": "request_changes", "issues": [BLOCKER]},
+    Review.REFUSES_MINOR: {
+        **REVIEW,
+        "verdict": "request_changes",
+        "issues": [{**BLOCKER, "severity": "minor"}],
+    },
+    Review.REFUSES_DROPPED: {
+        **REVIEW,
+        "verdict": "request_changes",
+        "issues": [BLOCKER],
+        "ticketPromises": GAP["ticketPromises"],
+    },
     Review.APPROVES_RED: {**REVIEW, "checkPasses": False},
     Review.APPROVES_ISSUE: {**REVIEW, "issues": [BLOCKER]},
     Review.APPROVES_DROPPED: {**REVIEW, "ticketPromises": GAP["ticketPromises"]},
@@ -163,6 +175,7 @@ const pipeline = vm.runInContext(
 const { catalogue, runs } = JSON.parse(fs.readFileSync(0, 'utf8'))
 const COMMAND = /`(git [a-z-]+|gh [a-z]+ [a-z]+)/g
 const PUBLISHING = /\\b(?:git (?:commit|push)|gh pr)\\b/g
+const ROUNDS = /\\(round \\d+ of (\\d+)\\)/
 const commands = {}
 const scanned = new Set()
 function scan(label, prompt) {
@@ -203,16 +216,20 @@ async function main() {
   const played = []
   for (const run of runs) {
     const calls = []
+    const told = []
     const agent = async (prompt, options) => {
       calls.push([options.label, options.phase])
+      const rounds = options.label.startsWith('fix-') && prompt.match(ROUNDS)
+      if (rounds) told.push([options.label, Number(rounds[1])])
       scan(options.label, prompt)
       const answer = catalogue[run.answers[options.label]]
       return answer == null ? null : JSON.parse(JSON.stringify(answer))
     }
     try {
-      played.push({ calls, result: kept(await pipeline(run.args, agent, () => {}, () => {})) })
+      const result = kept(await pipeline(run.args, agent, () => {}, () => {}))
+      played.push({ calls, told, result })
     } catch (error) {
-      played.push({ calls, error: { name: error.name, message: String(error.message) } })
+      played.push({ calls, told, error: { name: error.name, message: String(error.message) } })
     }
   }
   const effects = Object.fromEntries(
@@ -230,6 +247,8 @@ class Played:
     calls: tuple[tuple[str, str], ...]
     ending: Ending
     raw: dict[str, Any]
+    told: tuple[tuple[str, int], ...]
+    """Each fix agent's label with the rounds its prompt says its loop has."""
 
 
 @dataclass(frozen=True)
@@ -273,7 +292,12 @@ def play(runs: list[list[Action]], local: list[list[Action]] | None = None) -> B
     )
     out = json.loads(ran.stdout)
     played = [
-        Played(tuple((label, phase) for label, phase in raw["calls"]), ending(raw), raw)
+        Played(
+            tuple((label, phase) for label, phase in raw["calls"]),
+            ending(raw),
+            raw,
+            tuple((label, rounds) for label, rounds in raw["told"]),
+        )
         for raw in out["played"]
     ]
     effects = {Role(role): frozenset(found) for role, found in out["effects"].items()}
