@@ -14,13 +14,14 @@ from tests.support import MANIFEST_TEXT, PLUGIN_ROOT
 BASE_MANIFEST = '[[group]]\nname = "old"\nreason = "r"\npaths = ["dropped/**", "CLAUDE.md"]\n'
 
 
-def fake_git(
+def fake_git(  # noqa: PLR0913 # -- one knob for each answer the fake can give
     worktree: Path,
     tracked: str,
     *,
     untracked: str = "",
     base_manifest: str | None = BASE_MANIFEST,
     base: str = "origin/main",
+    base_binding: str | None = None,
 ) -> diff.Git:
     """A git that answers only the exact command lines ``ratchet_guards.diff`` should run."""
     answers: dict[tuple[str, ...], str | None] = {
@@ -29,6 +30,7 @@ def fake_git(
         ("diff", "--name-only", "--no-renames", "-z", "abc123"): tracked,
         ("ls-files", "--others", "--exclude-standard", "--full-name", "-z", ":/"): untracked,
         ("show", f"abc123:{MANIFEST_PATH}"): base_manifest,
+        ("show", "abc123:docs/process/binding.md"): base_binding,
         ("rev-parse", "--verify", "--quiet", "origin/main^{commit}"): "abc\n",
     }
 

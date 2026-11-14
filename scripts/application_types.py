@@ -94,6 +94,7 @@ class Catalogue:
     triggers: Mapping[str, str] = field(default_factory=dict)
     kinds: Mapping[str, str] = field(default_factory=dict)
     events: Mapping[str, Event] = field(default_factory=dict)
+    directed: frozenset[str] = frozenset()
 
     @property
     def questions(self) -> frozenset[str]:
@@ -236,6 +237,7 @@ def parsed(text: str) -> Catalogue:
         proofs={q["name"]: tuple(q["proofs"]) for q in questions if "proofs" in q},
         meanings=dict(data.get("proofs", {})),
         triggers={q["name"]: q.get("trigger", ALWAYS) for q in questions},
+        directed=frozenset(q["name"] for q in questions if q.get("directives")),
         kinds=dict(data.get("kinds", {})),
         events={
             name: Event(event["meaning"], tuple(event["signs"]))

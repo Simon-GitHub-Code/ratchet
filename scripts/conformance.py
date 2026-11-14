@@ -30,7 +30,12 @@ import owed
 import plugin_pin
 import project_bite
 import settings_rules
+import suppressions
 import triggers
+
+# Why: the dependency contract lives with the guard, under hooks/, as gatelib lives here for it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+from ratchet_guards import dependencies
 
 ENTRY_POINTS = (
     "tier0",
@@ -917,6 +922,99 @@ def later(tool: str) -> bool:
     return application_types.LATER.match(tool) is not None
 
 
+DEPENDENCY_STOPS = (
+    "the dependency-only judgement of guard-diff and the merge judge, which sends every"
+    " dependency change to the owner until the section is filled"
+)
+DEPENDENCY_RECIPE = "dependencies"
+
+
+def check_dependencies(root: Path) -> Iterable[Finding]:
+    """The Dependencies section: which files hold a stack's dependencies and how to read them.
+
+    Why: ADR 0042. The plugin reads no manifest or lockfile format, so the binding names the files
+    and the entry point that prints their records, and a section that cannot be read leaves every
+    dependency change to the owner, the one thing the judgement can never be wrong about.
+    """
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    contract = dependencies.parse(text)
+    if contract is None:
+        problem = (
+            f"has no '{dependencies.SECTION}' section; add the template's, naming the manifests"
+            " and lockfiles of this stack and the entry point that reads them (ADR 0042)"
+        )
+        found = missing_section(
+            BINDING_PATH, problem, dependencies.SECTION, template_text=template_binding()
+        )
+        yield replace(found, stops=DEPENDENCY_STOPS)
+        return
+    for problem in contract.problems:
+        yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=DEPENDENCY_STOPS)
+    justfile = read_justfile(root)
+    if justfile is None or not contract.entry:
+        return
+    if not justfile_text.defines_recipe(justfile, DEPENDENCY_RECIPE):
+        yield replace(
+            missing_recipe(justfile, DEPENDENCY_RECIPE, "dependencies"), stops=DEPENDENCY_STOPS
+        )
+        return
+    block = next(
+        b for b in justfile_text.blocks(justfile.split("\n")) if b.name == DEPENDENCY_RECIPE
+    )
+    body = justfile_text.code_of("\n".join(justfile_text.definition(justfile, DEPENDENCY_RECIPE)))
+    problem = ""
+    if block.parsed is None or not block.parsed.params:
+        problem = "the `dependencies` recipe takes no directory, which the entry point is given"
+    elif justfile_text.BINDS in body:
+        problem = "the `dependencies` recipe still holds the template's `bind:` placeholder"
+    if problem:
+        yield replace(agent(f"justfile: {problem}"), stops=DEPENDENCY_STOPS)
+
+
+def bound(tool: str) -> bool:
+    """Whether a Tool cell names a tool: it is not empty, ``later:`` or ``none``."""
+    return bool(tool) and not later(tool) and application_types.NONE.match(tool) is None
+
+
+SUPPRESSIONS_STOPS = "the suppressions gate, which counts nothing until its section is filled"
+
+
+def check_suppressions(root: Path) -> Iterable[Finding]:
+    """The Suppressions section: the directives of the tools this repository bound (ADR 0040).
+
+    Why: the plugin names no directive of any tool, so the gate counts what the binding lists. A
+    bound row whose tool a directive can silence must say which kinds do, or that none does, so
+    a tool bound with no kind listed cannot go uncounted without a deterministic gate saying so.
+    """
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    spec = suppressions.parse(text)
+    if spec is None:
+        problem = (
+            f"has no '{suppressions.SECTION}' section; add the template's, one row per kind of"
+            " directive the bound tools read (ADR 0040)"
+        )
+        found = missing_section(
+            BINDING_PATH, problem, suppressions.SECTION, template_text=template_binding()
+        )
+        yield replace(found, stops=SUPPRESSIONS_STOPS)
+        return
+    for problem in spec.problems:
+        yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=SUPPRESSIONS_STOPS)
+    directed = application_types.load().directed
+    for row in project_bite.gate_rows(text):
+        if row.question in directed and bound(row.tool) and row.question not in spec.silenced:
+            problem = (
+                f"gate '{row.question}' is bound to a tool, and the Suppressions section does"
+                " not say which kinds of directive silence it: add its row, naming kinds in"
+                " backticks or `none: <reason>`"
+            )
+            yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=SUPPRESSIONS_STOPS)
+
+
 def check_operability(root: Path) -> Iterable[Finding]:
     text = read(root / BINDING_PATH) or ""
     asked = set(FIRST_CELL.findall(markdown_text.section(text, "## Gates")))
@@ -1282,62 +1380,129 @@ def check_pin_recipe(root: Path) -> Iterable[Finding]:
     yield Finding("justfile", problem, edit)
 
 
+INSTALL_STOPS = "the check that a fresh checkout has the tools the recipes run"
+INSTALL_BULLET = re.compile("^- (?:" + "|".join(installs.LABELS) + "):")
+
+
+def install_section(bullets: dict[str, str]) -> str:
+    """The template's Install section with its bullets written as ``bullets`` says."""
+    block = installs.SECTION + markdown_text.section(template_binding(), installs.SECTION).rstrip()
+    lines = block.splitlines()
+    at = next(i for i, line in enumerate(lines) if INSTALL_BULLET.match(line))
+    kept = [line for line in lines if not INSTALL_BULLET.match(line)]
+    written = [f"- {label}: {value}" for label, value in bullets.items()]
+    return "\n".join([*kept[:at], *written, *kept[at:]])
+
+
+def missing_install_section(root: Path, text: str, justfile: str | None) -> Finding:
+    """The Install section a binding lacks: what its justfile states, else the template's."""
+    problem = (
+        f"has no '{installs.SECTION}' section, which says whether a fresh checkout installs the"
+        " tools before a recipe runs one (ADR 0041)"
+    )
+    found = (
+        installs.derived(
+            justfile,
+            tracked=lambda name: (root / name).is_file(),
+            tiers=tier_recipes(text, justfile).values(),
+        )
+        if justfile is not None
+        else None
+    )
+    if found is None:
+        return missing_section(
+            BINDING_PATH, problem, installs.SECTION, template_text=template_binding()
+        )
+    want = markdown_text.with_section(
+        installs.SECTION, install_section(found), headings(template_binding())
+    )
+    return Finding(
+        BINDING_PATH,
+        problem,
+        Edit(
+            f"write the '{installs.SECTION}' section from the justfile's own install recipe",
+            want,
+            Agent((installs.SECTION, *install_section(found).splitlines()[1:])),
+        ),
+    )
+
+
 def check_installs(root: Path) -> Iterable[Finding]:
-    """A recipe that runs a package manager's tool, though a fresh checkout has not installed it.
+    """What the binding says about an install first, held to the justfile (ADR 0041).
 
     Why: ADR 0039. ``merge.py`` runs the gates in a new work tree and CI runs each in a new
-    checkout, with no ``node_modules``. ``uv run --frozen`` syncs as it runs and ``npx
-    --no-install`` does not, so every recipe that runs such a tool depends on the ``install``
-    recipe, and every tier runs it once before its gates start so no two install at once.
+    checkout. The binding says whether this stack's tools need an install first; when they do,
+    every recipe that runs one depends on the ``install`` recipe, which names the lockfile it is
+    frozen to, and every tier runs it once before its gates start so no two install at once.
     """
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
     justfile = read_justfile(root)
-    manager = installs.manager_of(root)
-    if justfile is None or manager is None:
+    spec = installs.parse(text)
+    if spec is None:
+        yield replace(missing_install_section(root, text, justfile), stops=INSTALL_STOPS)
         return
-    running = installs.tool_recipes(justfile)
-    if not running:
+    for problem in spec.problems:
+        yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=INSTALL_STOPS)
+    if justfile is None or not spec.needed or spec.problems:
         return
-    tiers = tier_recipes(read(root / BINDING_PATH) or "", justfile).values()
-    bare = [name for name in running if not installs.reaches_install(justfile, name)]
+    yield from installing(root, text, justfile, spec=spec)
+
+
+def installing(root: Path, text: str, justfile: str, *, spec: installs.Spec) -> Iterable[Finding]:
+    """The justfile against a binding that says an install comes first."""
+    lockfile = spec.lockfile
+    if not (root / lockfile).is_file():
+        yield agent(f"{BINDING_PATH}: the Install section's lockfile '{lockfile}' is not a file")
+    missing = [name for name in spec.recipes if not justfile_text.defines_recipe(justfile, name)]
+    if missing:
+        yield agent(
+            f"{BINDING_PATH}: the Install section lists the recipes {_listed(missing)}, which the"
+            " justfile does not define"
+        )
+    tiers = tier_recipes(text, justfile).values()
+    bare = [
+        name
+        for name in spec.recipes
+        if name not in missing and not installs.reaches_install(justfile, name)
+    ]
     unrun = [name for name in tiers if not installs.depends_directly(justfile, name)]
-    locked = installs.installs_from_lock(justfile, manager)
-    if not (bare or unrun or not locked):
+    frozen = installs.installs_from_lock(justfile, lockfile)
+    if not (bare or unrun or not frozen):
         return
     reasons = []
-    if not locked:
-        reasons.append(f"the justfile has no `install` recipe that runs `{manager.frozen_name}`")
+    if not frozen:
+        reasons.append(f"the justfile's `install` recipe does not name {lockfile}")
     if bare:
         reasons.append(f"the recipes {_listed(bare)} do not depend on `install`")
     if unrun:
         reasons.append(f"the recipes {_listed(unrun)} do not run `install` before their gates")
-    # Why: the problem names every recipe that runs a tool, fixed or not, so an edit that mends
+    # Why: the problem names every recipe the binding lists, fixed or not, so an edit that mends
     # some of them leaves it as it was and the trial does not count the edit as the fix.
     problem = (
-        f"the recipes {_listed(running)} run {manager.name} tools that a fresh checkout does not"
-        f" have, so they fail in the merge's work tree and in CI; each must depend on an"
-        f" `install` recipe that runs `{manager.frozen_name}` from {manager.lockfile}, and every"
-        " tier must run it before its gates start"
+        f"the recipes {_listed(list(spec.recipes))} run tools that a fresh checkout does not have,"
+        f" so they fail in the merge's work tree and in CI; each must depend on an `install`"
+        f" recipe that installs from {lockfile} and does nothing once it has, and every tier must"
+        " run it before its gates start"
     )
     wants = [
-        installs.with_install(manager),
         *(justfile_text.with_first_dependency(name, installs.INSTALL) for name in bare),
         *(
             justfile_text.with_dependency_after(name, installs.INSTALL, PIN_RECIPE)
             for name in unrun
         ),
     ]
-    start = tuple(installs.recipe_lines(manager))
     edit = Edit(
-        f"write an `install` recipe for {manager.lockfile} and make every recipe that runs its"
-        " tools depend on it",
+        "make every recipe that runs the installed tools, and every tier, depend on `install`",
         gatelib.chained(*wants),
-        Agent(start=start, then=tuple(reasons)),
+        Agent(then=tuple(reasons)),
     )
     yield Finding(
         "justfile",
         problem,
         edit,
-        identity=f"{manager.name} tools are run with no install ahead of them",
+        identity="the recipes that run installed tools run with no install ahead of them",
     )
 
 
@@ -1850,6 +2015,8 @@ CHECKS: tuple[Check, ...] = (
     check_adrs,
     check_binding,
     check_triggers,
+    check_dependencies,
+    check_suppressions,
     check_operability,
     check_speed,
     check_manifest,
@@ -2005,6 +2172,8 @@ def mutations() -> list[Mutation]:
         *merge_mutations(),
         *pin_mutations(),
         *install_mutations(),
+        *suppression_mutations(),
+        *dependency_mutations(),
         *weekly_mutations(),
         *record_mutations(),
         *trigger_mutations(),
@@ -2146,6 +2315,16 @@ def artefact_mutations() -> list[Mutation]:
             rewrite("GLOSSARY.md", "the project", GLOSSARY_PLACEHOLDER, count=1),
         ),
     ]
+
+
+def both(first: Callable[[Path], None], second: Callable[[Path], None]) -> Callable[[Path], None]:
+    """A mutation that makes two."""
+
+    def mutate(root: Path) -> None:
+        first(root)
+        second(root)
+
+    return mutate
 
 
 def rebind(old: str, new: str) -> Callable[[Path], None]:
@@ -2390,41 +2569,126 @@ def pin_mutations() -> list[Mutation]:
 
 
 def install_mutations() -> list[Mutation]:
-    """An adopted JavaScript tree whose recipes would fail in a fresh checkout (ADR 0039)."""
-    manager = installs.NPM
+    """A binding that says an install comes first, and a justfile that does not keep to it."""
+    lockfile = "self-test.lock"
+    kept = "- Install: `none: the self-test tools need no install`"
 
-    def js_app(*, install: str | None, depend: bool, tiers: bool) -> Callable[[Path], None]:
+    def installing(
+        *, names: bool = True, depends: bool = True, tiers: bool = True, listed: bool = True
+    ) -> Callable[[Path], None]:
         def mutate(root: Path) -> None:
-            (root / manager.lockfile).write_text("{}\n", encoding="utf-8")
-            path = root / "justfile"
-            text = path.read_text(encoding="utf-8").replace(
-                '@echo "bind: formatter --check"; exit 1', "npx --no-install biome format ."
+            (root / lockfile).write_text("locked\n", encoding="utf-8")
+            binding = root / BINDING_PATH
+            lines = [
+                "- Install: `just install`",
+                f"- Lockfile: `{lockfile}`",
+                f"- Needed by: `{'fmt-check' if listed else 'no-such-recipe'}`",
+            ]
+            binding.write_text(
+                binding.read_text(encoding="utf-8").replace(kept, "\n".join(lines)),
+                encoding="utf-8",
             )
-            text = text.replace("fmt-check:\n", f"fmt-check:{' install' if depend else ''}\n", 1)
-            if install is not None:
-                text = installs.with_install(manager)(text).replace(manager.command, install)
-            if not tiers:
-                text = text.replace("plugin-pin install\n", "plugin-pin\n")
+            path = root / "justfile"
+            text = path.read_text(encoding="utf-8")
+            named = lockfile if names else "other.lock"
+            text = text.replace("install:\n    @true", f"install:\n    @cmp -s {named} .stamp")
+            text = text.replace("fmt-check:\n", f"fmt-check:{' install' if depends else ''}\n", 1)
+            if tiers:
+                text = re.sub(r"^([\w-]+: plugin-pin)$", r"\1 install", text, flags=re.MULTILINE)
             path.write_text(text, encoding="utf-8")
 
         return mutate
 
     return [
         (
-            "npm tool run by a recipe with no install recipe",
-            js_app(install=None, depend=False, tiers=True),
+            "install recipe that does not name the lockfile",
+            installing(names=False),
         ),
         (
-            "npm tool run by a recipe that does not depend on install",
-            js_app(install=manager.command, depend=False, tiers=True),
-        ),
-        (
-            "install recipe that does not install from the lockfile",
-            js_app(install="npm install", depend=True, tiers=True),
+            "recipe the binding says needs an install that does not depend on it",
+            installing(depends=False),
         ),
         (
             "tiers that start their gates before anything installs",
-            js_app(install=manager.command, depend=True, tiers=False),
+            installing(tiers=False),
+        ),
+        (
+            "Install section listing a recipe the justfile lacks",
+            installing(listed=False),
+        ),
+        ("binding without an Install section", rebind(installs.SECTION, "## Setup")),
+        (
+            "Install section left as the template wrote it",
+            rebind(kept, "- Install: <`just install`>"),
+        ),
+        ("Install section that says none with no reason", rebind(kept, "- Install: `none: x`")),
+    ]
+
+
+def dependency_mutations() -> list[Mutation]:
+    """The Dependencies section held to the justfile that reads it (ADR 0042)."""
+    none = "`none: the self-test has no such file`"
+    entry = f"- Entry point: {none}"
+    named = "- Entry point: `just dependencies`"
+    return [
+        (
+            "binding without a Dependencies section",
+            rebind(dependencies.SECTION, "## Packages"),
+        ),
+        ("Dependencies section left as the template wrote it", rebind(entry, "- Entry point: <x>")),
+        (
+            "Dependencies section that says none with no reason",
+            rebind(f"- Manifests: {none}", "- Manifests: `none: x`"),
+        ),
+        (
+            "Dependencies section naming files without backticks",
+            rebind(f"- Lockfiles: {none}", "- Lockfiles: a.lock"),
+        ),
+        (
+            "Dependencies section with no registries line",
+            rebind("- Registries: `none`", "- Registries: <x>"),
+        ),
+        (
+            "entry point with no recipe behind it",
+            both(rebind(entry, named), rewrite("justfile", "dependencies dir:", "elsewhere dir:")),
+        ),
+        ("entry point whose recipe is still the template's", rebind(entry, named)),
+        (
+            "entry point whose recipe takes no directory",
+            both(
+                rebind(entry, named),
+                rewrite("justfile", "dependencies dir:", "dependencies:"),
+            ),
+        ),
+    ]
+
+
+def suppression_mutations() -> list[Mutation]:
+    """The Suppressions section held to the Gates rows it speaks for (ADR 0040)."""
+    row = f"| strict types | `{SELF_TEST_KIND}` |"
+    kind = f"| {SELF_TEST_KIND} | `self-test: silence` | rises |"
+    return [
+        ("binding without a Suppressions section", rebind(suppressions.SECTION, "## Silenced")),
+        (
+            "bound gate with no line in the Suppressions section",
+            rebind(row + "\n", ""),
+        ),
+        (
+            "bound gate naming a suppression kind with no row",
+            rebind(row, "| strict types | `never-listed` |"),
+        ),
+        ("bound gate that says none with no reason", rebind(row, "| strict types | none: x |")),
+        (
+            "suppression kind whose pattern git cannot read",
+            rebind(kind, f"| {SELF_TEST_KIND} | `(` | rises |"),
+        ),
+        (
+            "suppression kind with a rule that is neither rises nor never",
+            rebind(kind, f"| {SELF_TEST_KIND} | `self-test: silence` | sometimes |"),
+        ),
+        (
+            "Suppressions rows left as the template wrote them",
+            rebind(kind, "| <suppression kind> | <`pattern`> | rises |"),
         ),
     ]
 
@@ -2480,6 +2744,14 @@ TYPES_PLACEHOLDER = re.compile(r"^- Application types: <[^\n]*>$", re.MULTILINE)
 EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
 TRIGGERS_PLACEHOLDER = re.compile(r"^\| <kind> \|[^\n]*$", re.MULTILINE)
 SPEED_PLACEHOLDER = re.compile(r"^(- [A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
+INSTALL_PLACEHOLDER = re.compile(r"^- Install: <[^\n]*>$", re.MULTILINE)
+DEPENDENCY_PLACEHOLDER = re.compile(
+    r"^- (Manifests|Lockfiles|Entry point): <[^\n]*>$", re.MULTILINE
+)
+REGISTRIES_PLACEHOLDER = re.compile(r"^- Registries: <[^\n]*>$", re.MULTILINE)
+SUPPRESSION_KIND_PLACEHOLDER = re.compile(r"^\| <suppression kind> \|[^\n]*$", re.MULTILINE)
+SUPPRESSION_QUESTION_PLACEHOLDER = re.compile(r"^\| <question> \|[^\n]*$", re.MULTILINE)
+SELF_TEST_KIND = "self-test-silence"
 
 
 def fill_binding(text: str) -> str:
@@ -2493,6 +2765,13 @@ def fill_binding(text: str) -> str:
         "| rolls back safely | later: life:deployed and code:stored-format |",
     )
     text = TRIGGERS_PLACEHOLDER.sub(triggers_rows, text)
+    text = DEPENDENCY_PLACEHOLDER.sub(r"- \1: `none: the self-test has no such file`", text)
+    text = REGISTRIES_PLACEHOLDER.sub("- Registries: `none`", text)
+    text = INSTALL_PLACEHOLDER.sub("- Install: `none: the self-test tools need no install`", text)
+    text = SUPPRESSION_KIND_PLACEHOLDER.sub(
+        f"| {SELF_TEST_KIND} | `self-test: silence` | rises |", text
+    )
+    text = SUPPRESSION_QUESTION_PLACEHOLDER.sub(suppression_rows, text)
     text = EMPTY_TOOL_CELL.sub(r"\1 a tool |", text)
     return SPEED_PLACEHOLDER.sub(r"\1stated for this stack", text)
 
@@ -2501,6 +2780,14 @@ def triggers_rows(_: re.Match[str]) -> str:
     """A row for each kind of code a question asked of a command line tool is triggered by."""
     kinds = sorted(application_types.load().kinds_asked({"cli"}))
     return "\n".join(f"| {kind} | none: the self-test has none | |" for kind in kinds)
+
+
+def suppression_rows(_: re.Match[str]) -> str:
+    """A row for each question a directive can silence, naming the self-test's one kind."""
+    return "\n".join(
+        f"| {question} | `{SELF_TEST_KIND}` |"
+        for question in sorted(application_types.load().directed)
+    )
 
 
 def fill_registry(binding: str) -> str:

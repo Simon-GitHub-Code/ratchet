@@ -111,22 +111,20 @@ parallel := 'python3 "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + 
 # whose base holds no binding, it runs nothing and says so: tier 2 judges that tree whole.
 changed := 'python3 "' + ratchet_plugin + '/scripts/changed.py"'
 
-# The tools the gates run, installed from the lockfile before they run (ADR 0039). `merge` runs the
-# gates in a fresh work tree and CI runs each in a fresh checkout, with no `node_modules`: `uv run
-# --frozen` syncs `.venv` as it runs, but `npx --no-install`, `pnpm exec`, `yarn` and `bunx` find
-# nothing there. Where the tools come from a package manager that does not install on demand, bind
-# this to the frozen install, make every recipe that runs one of them depend on it, and put it after
-# `plugin-pin` in each tier, as in
-#   install:
-#       @cmp -s package-lock.json node_modules/.ratchet-install 2>/dev/null || { npm ci --no-audit --no-fund && mkdir -p node_modules && cp package-lock.json node_modules/.ratchet-install; }
-#   lint: install
-#   tier0: plugin-pin install
-# (`pnpm install --frozen-lockfile`, `yarn install --immutable`, `bun install --frozen-lockfile`
-# for the others.) The stamp makes it a no-op once the lockfile is installed, so a tier runs it
-# once before its gates start and no two gates install at once. A stack that installs on demand
-# keeps the body below. `conformance` is red on a JavaScript lockfile whose tools run without it.
+# The tools the gates run, installed before they run (ADR 0039, ADR 0041). `merge` runs the gates in
+# a fresh work tree and CI runs each in a fresh checkout, so a tool that is on disk only after an
+# install is missing there. The binding's `## Install` section says whether this stack needs one.
+# When it does, this recipe installs exactly what the lockfile it names says and does nothing once
+# that is installed, every recipe the section lists depends on it, and each tier runs it after
+# `plugin-pin`, so no two gates install at once. When it does not, the body below stays.
 install:
     @true
+
+# The dependency contract's entry point (ADR 0042): what the binding's `## Dependencies` section
+# names, run by `guard-diff` and the merge judge from the merge base's tree. It reads the files
+# under `dir` as data and prints the section's records. Bind it, or have the section say `none:`.
+dependencies dir:
+    @echo "bind: print the records the Dependencies section describes, for the files under {{dir}}"; exit 1
 
 # Every tier starts here: the plugin the recipes run is the version docs/process/binding.md pins,
 # the commit CI checks out. Red before any gate runs when it is older, another commit of the same

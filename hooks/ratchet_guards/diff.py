@@ -31,9 +31,11 @@ import argparse
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 from ratchet_guards import dependencies, records
+from ratchet_guards.dependency_entry import Entry
 from ratchet_guards.manifest import MANIFEST_PATH, Group, Manifest, ManifestError, parse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -113,24 +115,41 @@ def guarded(paths: Sequence[str], found: Sequence[Manifest]) -> list[tuple[str, 
 
 
 def dependency_notes(
-    git: Git, base: str, worktree: Path, *, paths: Sequence[str]
+    git: Git,
+    base: str,
+    worktree: Path,
+    *,
+    paths: Sequence[str],
+    entry: Callable[[Path, str], AbstractContextManager[dependencies.Runner]] = Entry,
 ) -> dict[str, str]:
-    """For each dependency manifest or lockfile in ``paths``, what its change does."""
+    """For each dependency manifest or lockfile in ``paths``, what its change does.
+
+    The binding's Dependencies section at the merge base says which paths those are and how to read
+    them; the entry point it names runs from the merge base's tree (ADR 0042).
+    """
+    if not paths:
+        return {}
     merge_base = _required(git, ["merge-base", base, "HEAD"]).strip()
-    notes: dict[str, str] = {}
+    contract = dependencies.parse(git(["show", f"{merge_base}:{gatelib.BINDING}"]))
+    if contract is None:
+        return {}
+    changed: dict[str, tuple[str | None, str | None]] = {}
     for path in paths:
-        if not dependencies.recognised(path):
+        if contract.recognised(path):
+            current = worktree / path
+            after = current.read_bytes().decode(errors="replace") if current.is_file() else None
+            changed[path] = (git(["show", f"{merge_base}:{path}"]), after)
+    if not changed:
+        return {}
+    with entry(worktree, merge_base) as run:
+        verdicts = dependencies.judge(contract, changed, run)
+    notes: dict[str, str] = {}
+    for path, verdict in verdicts.items():
+        if isinstance(verdict, dependencies.NotDependencyOnlyError):
+            notes[path] = f"not dependency-only: {verdict}"
             continue
-        current = worktree / path
-        after = current.read_bytes().decode(errors="replace") if current.is_file() else None
-        try:
-            found = dependencies.changes(path, git(["show", f"{merge_base}:{path}"]), after)
-        except dependencies.NotDependencyOnlyError as reason:
-            notes[path] = f"not dependency-only: {reason}"
-            continue
-        lock = dependencies.file_name(path) in dependencies.LOCKFILES
-        heading = "lockfile" if lock else "dependencies added"
-        notes[path] = f"{heading}: " + ("; ".join(map(str, found)) or "none")
+        heading = "lockfile" if contract.is_lockfile(path) else "dependencies added"
+        notes[path] = f"{heading}: " + ("; ".join(map(str, verdict)) or "none")
     return notes
 
 
