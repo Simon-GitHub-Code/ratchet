@@ -10,7 +10,8 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   ``building`` (its work tree exists), ``built`` (its branch holds commits and is not merged, so
   the judge is asked; when it is behind the default branch its ``why`` says it is brought up to
   date and judged again first), ``waiting`` (blocked only by tickets this drain can still merge),
-  ``held`` (its last run parked or was not approved, and the ticket has not changed since; a hold
+  ``held`` (its last run parked or was not approved, and neither the ticket nor a path the run
+  named as its cause, a guard edit or a dispute, has changed since; a hold
   outranks commits on the branch, but a wait for a reason the drain resolves itself is
   retried; a ticket waiting on a held one is refused naming it),
   ``merged`` (its branch is merged and the ticket is still open) and ``refused`` (the preflight
@@ -48,9 +49,13 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   process above both commands, as the service manager is, proves nothing; so a drain whose
   processes are all gone does not block the next, and two drains under one long-lived process
   are told apart by the first's program still running in its tree. ``clean --all --drain TOKEN``
-  resumes the drain that holds the token. Every command that
-  changes a work tree also runs under a lock of the kernel's, freed when its holder dies however
-  it dies, so two commands at once (two ``open`` of one ticket) are run one at a time.
+  resumes the drain that holds the token. An accepted limit: two drains run by one process on one
+  repository, with drain 1 between commands and nothing running from its tree, cannot be told
+  apart, so a ``clean --all`` from drain 2 without drain 1's token takes drain 1's tree (its draft
+  is kept as the stash "interrupted run"; no work is lost). Pass the token to avoid it. Every
+  command that changes a work tree also runs under a lock of the kernel's, freed when its holder
+  dies however it dies, so two commands at once (two ``open`` of one ticket) are run one at a
+  time.
 - ``report`` writes ``.ratchet/queue/<date>-<time>.md`` and prints it: per ticket merged, waiting
   for the owner or parked, with the reasons; every assumption with its refuter; every glossary
   term and ADR added; the time each ticket took.
@@ -923,6 +928,7 @@ def settle(
         "owes": owed_kinds(result or {}),
         "holds": queue_notes.holds_of(result or {}),
         "causes": queue_notes.causes_of(result or {}),
+        "base": queue_notes.tip(root),
         "reported": False,
     }
     queue_notes.write_note(queue_notes.note_path(root, branch), note)
