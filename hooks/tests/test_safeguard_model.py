@@ -9,7 +9,7 @@ from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule
 
-from tests import model_tla
+from tests import model_tla, safeguard_model
 from tests.safeguard_model import (
     ACTIONS,
     INITIAL,
@@ -60,10 +60,12 @@ FOUND: dict[str, tuple[str, ...] | None] = {
     "event is never red": None,
     # 8. An arrival that reopens the architecture owes a review once the binding asks for one
     # (ADR 0052): another instance is red until its record lands, a record beside the instance
-    # counts not, and a kind the binding found when it first asked owes none.
+    # counts not, a record that landed before the kind arrived counts not, and a kind the binding
+    # found when it first asked owes none. The route owes it exactly when the gate refuses.
     "review owed takes no new instance": None,
     "reviewed kind is judged by its row": None,
-    "a review is owed only after its arrival": None,
+    "the route owes what the gate refuses": None,
+    "an early record settles nothing": None,
     # 5. Removing every instance used to make the next arrival free again; ADR 0048 closed it.
     # The gate alone still lets a kind grow once its Triggers row points elsewhere.
     "owed never grows unbound": (
@@ -86,6 +88,47 @@ def test_each_rule_holds_or_breaks_by_its_shortest_run() -> None:
 
 def test_the_page_was_checked_and_drawn_from_the_current_export() -> None:
     assert not (why := model_tla.stale(PAGE, export(), summary())), why
+
+
+def route_owes(state: State, *, counts_the_record: bool, counts_early: bool = False) -> int | None:
+    """``reviews_owed`` with a part of it left out, as a mutation of the model."""
+    main = state.main
+    found = main.found(main.table)
+    settled = (counts_the_record and main.reviewed) or (counts_early and main.early)
+    asked = main.review is Row.BOUND and not settled
+    return len(found) if asked and found and state.start is not Start.HELD else None
+
+
+def test_the_rule_the_route_and_the_gate_share_catches_a_route_that_forgets_the_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Why: this mutation left the rule it replaced green. That rule asked only whether a review
+    # was owed after the binding asked and the kind came after, which a route that never reads
+    # the record still answers. Here the route owes a review the gate has stopped asking for.
+    def forgets_the_record(state: State) -> int | None:
+        return route_owes(state, counts_the_record=False)
+
+    def old_rule(state: State) -> bool:
+        owing = forgets_the_record(state) is not None
+        return not owing or (state.main.review is Row.BOUND and state.start is Start.FRESH)
+
+    monkeypatch.setattr(safeguard_model, "reviews_owed", forgets_the_record)
+    assert all(old_rule(state) for state in graph().states)
+    assert counterexample("the route owes what the gate refuses") is not None
+
+
+def test_the_early_record_rule_catches_a_route_that_counts_a_record_older_than_the_arrival(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def counts_early(state: State) -> int | None:
+        return route_owes(state, counts_the_record=True, counts_early=True)
+
+    monkeypatch.setattr(safeguard_model, "reviews_owed", counts_early)
+    # The record that came in the change that first brings the kind is older than the arrival too.
+    assert counterexample("an early record settles nothing") == (
+        "another branch lands: ask for the architecture review",
+        "another branch lands: add one instance with its review",
+    )
 
 
 def test_each_rule_says_in_one_sentence_what_it_promises() -> None:
@@ -273,6 +316,61 @@ def test_the_real_gate_owes_no_review_for_a_kind_held_when_it_was_first_asked(
     )
     assert all(attempt.landing.landed for attempt in seen)
     assert world.reviews() is None
+
+
+def test_a_record_that_landed_before_the_kind_arrived_settles_nothing(tmp_path: Path) -> None:
+    # Why: a review settles only the arrivals it could have seen (ADR 0052). The record here
+    # lands once the review is asked and before any instance exists, so it saw no kind; the
+    # arrival is still noted as reopening the architecture, another instance is red, and only a
+    # record landed after the arrival ends it.
+    world, state, seen = replay(
+        tmp_path,
+        "another branch lands: ask for the architecture review",
+        "another branch lands: bind the row",
+        "another branch lands: land the architecture review",
+        "another branch lands: add one instance",
+        "another branch lands: add one instance",
+        "another branch lands: land the architecture review",
+        "another branch lands: add one instance",
+    )
+    _, _, early, arrival, second, late, after = seen
+    assert early.landing.landed
+    assert arrival.branch_run.reopens
+    assert world.reviews() is None, "settled by the record that landed after the arrival"
+    assert not second.landing.landed
+    assert second.merge_run is not None
+    assert "architecture review owed" in second.merge_run.out
+    assert late.landing.landed
+    assert after.landing.landed
+    assert len(state.main.instances) == 2
+
+
+def test_a_record_in_the_change_that_first_brings_the_kind_settles_nothing(tmp_path: Path) -> None:
+    _, state, seen = replay(
+        tmp_path,
+        "another branch lands: ask for the architecture review",
+        "another branch lands: add one instance with its review",
+        "another branch lands: add one instance",
+    )
+    _, arrival, second = seen
+    assert arrival.branch_run.reopens
+    assert not second.landing.landed
+    assert reviews_owed(state) == 1
+
+
+def test_the_route_owes_a_review_a_record_before_the_arrival_did_not_settle(
+    tmp_path: Path,
+) -> None:
+    world, state, _ = replay(
+        tmp_path,
+        "another branch lands: ask for the architecture review",
+        "another branch lands: land the architecture review",
+        "another branch lands: add one instance",
+    )
+    assert state.main.early
+    assert not state.main.reviewed
+    assert reviews_owed(state) == 1
+    assert world.reviews() == 1
 
 
 def test_a_row_dropped_and_put_back_does_not_make_the_return_an_arrival(tmp_path: Path) -> None:
