@@ -9,7 +9,12 @@ remote. It makes a temporary work tree of the default branch, merges the branch 
 and nowhere else. Otherwise it prints ``merge: owner`` with every reason and changes nothing; where
 the reasons are the judge's, it prints the owner's merge command and the tier 2 entry point to run
 after it.
-The work tree is removed either way.
+The work tree is removed either way, and one a killed run left is removed by the next run: it
+holds a lock the kernel frees when the run dies, so a work tree nobody holds is a dead run's.
+The fast-forward of a checked-out default branch writes its intent first, under a lock of the
+same kind; a run killed in it leaves files of the merge in the work tree and a lock on its
+index, and the next run puts back only those files, as the default branch had them, and removes
+that lock. A file somebody changed since is left, and said.
 
 A branch that does not hold the tip of the default branch is the owner's with the ``behind``
 reason, as on a forge: its verdict was given on another tree, so it is brought up to date and
@@ -43,6 +48,10 @@ Usage: ``merge.py <branch> [--root DIR]`` or ``merge.py --records [--root DIR]``
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
+import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -50,10 +59,14 @@ import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import gatelib
 import merge_ready
 from merge_ready import Reason
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 HEADS = "refs/heads/"
 CHECK = "check"
@@ -62,6 +75,12 @@ NEXT = "next: "
 RECORDS = "records/"
 SUBJECT = "docs(records): land what the owner's conversation wrote"
 HOOK_LINES = 5
+INTENT_BYTES = 4096
+SCRATCH = "ratchet-merge-"
+# Why: a lock the kernel holds for an open file is freed when its holder dies, however it dies.
+HELD = ".lock"
+LANDING = "ratchet-landing"
+OWNER_FILE = 0o600
 # Why: these say the merge itself failed, which the owner's merge would meet too; every other
 # reason is the judge's, and the owner merging is what it asks for.
 NOT_THE_JUDGES = frozenset({"gates", "conflict", "moved", "refs"})
@@ -102,13 +121,52 @@ def run_check(tree: Path, entry: str = CHECK) -> Reason | None:
     return None
 
 
+def state_dir(root: Path) -> Path:
+    """The repository's own directory of git state, shared by every work tree."""
+    shown = gatelib.git(root, "rev-parse", "--git-common-dir")
+    return (root / shown).resolve() if shown else root / "git-state"
+
+
+@contextlib.contextmanager
+def locked(path: Path, *, create: bool = True) -> Iterator[int | None]:
+    """The open file ``path`` with its lock held, or ``None`` when another process holds it."""
+    try:
+        descriptor = os.open(path, os.O_RDWR | (os.O_CREAT if create else 0), OWNER_FILE)
+    except OSError:
+        yield None
+        return
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield None
+        else:
+            yield descriptor
+    finally:
+        os.close(descriptor)
+
+
 def land(root: Path, default: str, *, old: str, new: str) -> Reason | None:
-    """Move ``default`` from ``old`` forward to ``new``; why it could not, if it could not."""
+    """Move ``default`` from ``old`` forward to ``new``; why it could not, if it could not.
+
+    A checked-out branch moves by ``git merge --ff-only``, which writes the files before the ref:
+    killed in between it leaves files of ``new`` in the work tree and a lock on the index. The
+    intent is written first, under a lock that dies with this process, so ``recover`` can put the
+    work tree back from the intent alone.
+    """
     holder = checked_out(root, default)
-    if holder is not None:
-        moved = gatelib.git(holder, "merge", "--ff-only", "--quiet", new)
-    else:
+    if holder is None:
         moved = gatelib.git(root, "update-ref", "-m", "merge.py", f"{HEADS}{default}", new, old)
+    else:
+        with locked(state_dir(root) / LANDING) as descriptor:
+            if descriptor is None:
+                return Reason("moved", f"another merge is moving `{default}` now")
+            intent = {"default": default, "old": old, "new": new, "holder": str(holder)}
+            os.ftruncate(descriptor, 0)
+            os.write(descriptor, json.dumps(intent).encode())
+            os.fsync(descriptor)
+            moved = gatelib.git(holder, "merge", "--ff-only", "--quiet", new)
+            os.ftruncate(descriptor, 0)
     if moved is None:
         return Reason(
             "moved",
@@ -116,6 +174,136 @@ def land(root: Path, default: str, *, old: str, new: str) -> Reason | None:
             " tree holds changes the merge would overwrite",
         )
     return None
+
+
+def git_running_in(tree: Path, proc: Path = Path("/proc")) -> bool:
+    """Whether a ``git`` process runs in ``tree``; a system without ``/proc`` says no."""
+    for entry in proc.glob("[0-9]*"):
+        try:
+            if (entry / "comm").read_text().strip() == "git" and (
+                (entry / "cwd").readlink().is_relative_to(tree)
+            ):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def blobs(root: Path, old: str, new: str) -> list[tuple[str, str, str, str]]:
+    """Each path ``new`` changes from ``old``: its status, the path, the blob it had and has."""
+    raw = gatelib.git(root, "diff", "--raw", "-z", "--no-abbrev", "--no-renames", old, new) or ""
+    fields = raw.split("\0")
+    rows = []
+    for at in range(0, len(fields) - 1, 2):
+        head = fields[at].split()
+        rows.append((head[4][0], fields[at + 1], head[2], head[3]))
+    return rows
+
+
+def hashed(tree: Path, paths: list[str]) -> dict[str, str]:
+    """The blob id of each of ``paths`` as ``tree`` holds it; a path that is no file is left out."""
+    plain = [p for p in paths if (tree / p).is_file() and not (tree / p).is_symlink()]
+    done = subprocess.run(
+        ["git", "-C", str(tree), "hash-object", "--stdin-paths"],
+        input="".join(f"{p}\n" for p in plain),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return dict(zip(plain, done.stdout.split(), strict=False)) if done.returncode == 0 else {}
+
+
+def roll_back(root: Path, holder: Path, *, old: str, new: str) -> list[str]:
+    """Put the work tree of ``holder`` back at ``old``, touching only what ``new`` changed.
+
+    A path is put back only when the work tree holds the blob ``old`` or ``new`` has there, or
+    nothing: anything else was written by somebody since, and stays. The lines say what stays.
+    """
+    changes = blobs(root, old, new)
+    held = hashed(holder, [path for _, path, _, _ in changes])
+    stays = [p for _, p, was, now in changes if p in held and held[p] not in {was, now}]
+    restore = [p for status, p, _, _ in changes if status != "A" and p not in stays]
+    added = [p for status, p, _, _ in changes if status == "A" and p not in stays]
+    pathspecs = ("--pathspec-from-file=-", "--pathspec-file-nul")
+    if restore:
+        args = ("restore", f"--source={old}", "--staged", "--worktree", *pathspecs)
+        porcelain(holder, *args, given="\0".join(restore))
+    if added:
+        args = ("rm", "--quiet", "--cached", "--ignore-unmatch", *pathspecs)
+        porcelain(holder, *args, given="\0".join(added))
+    for path in added:
+        (holder / path).unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            os.removedirs((holder / path).parent)
+    return [f"merge: {path} was changed since, and stays as it is" for path in stays]
+
+
+def intent_of(data: bytes) -> dict[str, object]:
+    """The landing intent in ``data``, or an empty one."""
+    try:
+        loaded: object = json.loads(data or b"")
+    except ValueError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def recover_landing(root: Path) -> list[str]:
+    """Put right a ``git merge --ff-only`` that was killed: the work tree and the lock on its index.
+
+    Only while no merge is landing, which the lock on the intent shows. When the branch moved,
+    the work tree was finished; when it did not, the files the fast-forward wrote are put back
+    and the next merge starts from the branch as it was.
+    """
+    lines: list[str] = []
+    with locked(state_dir(root) / LANDING, create=False) as descriptor:
+        if descriptor is None:
+            return lines
+        intent = intent_of(os.pread(descriptor, INTENT_BYTES, 0))
+        if not intent:
+            return lines
+        default, old, new = (str(intent.get(name)) for name in ("default", "old", "new"))
+        holder = Path(str(intent.get("holder")))
+        if tip(root, default) == old and holder.is_dir():
+            if git_running_in(holder):
+                return [f"merge: a git command still runs in {holder}; run this again once it ends"]
+            lock = gatelib.git(holder, "rev-parse", "--git-path", "index.lock") or "index.lock"
+            (holder / lock).unlink(missing_ok=True)
+            lines.append(
+                f"merge: a run that stopped was moving `{default}`; its work tree is put back"
+            )
+            lines += roll_back(root, holder, old=old, new=new)
+        os.ftruncate(descriptor, 0)
+    return lines
+
+
+def sweep(root: Path) -> list[str]:
+    """Remove the scratch work trees of merge runs that died: registered, and no run holds them."""
+    listing = gatelib.git(root, "worktree", "list", "--porcelain") or ""
+    home = Path(tempfile.gettempdir()).resolve()
+    lines = []
+    for line in listing.splitlines():
+        tree = Path(line.removeprefix("worktree "))
+        scratch = tree.parent
+        if (
+            not line.startswith("worktree ")
+            or not scratch.name.startswith(SCRATCH)
+            or scratch.parent != home
+        ):
+            continue
+        with locked(scratch / HELD, create=False) as descriptor:
+            if descriptor is None:
+                continue
+            gatelib.git(root, "worktree", "remove", "--force", str(tree))
+            shutil.rmtree(scratch, ignore_errors=True)
+            lines.append(f"merge: removed the work tree {tree} that a run which stopped left")
+    if lines:
+        gatelib.git(root, "worktree", "prune")
+    return lines
+
+
+def recover(root: Path) -> list[str]:
+    """What a merge that was killed left: its work tree, and a fast-forward cut off half-way."""
+    return [*sweep(root), *recover_landing(root)]
 
 
 def attempt(root: Path, tree: Path, *, default: str, branch: str) -> tuple[list[Reason], str]:
@@ -149,14 +337,17 @@ def merge(root: Path, branch: str) -> int:
     if default is None or tip(root, branch) is None or branch == default:
         print(f"merge: `{branch}` is not a local branch to merge into a local default branch")
         return 2
-    scratch = Path(tempfile.mkdtemp(prefix="ratchet-merge-"))
+    for line in recover(root):
+        print(line)
+    scratch = Path(tempfile.mkdtemp(prefix=SCRATCH))
     tree = scratch / "tree"
-    try:
-        reasons, merged = attempt(root, tree, default=default, branch=branch)
-    finally:
-        gatelib.git(root, "worktree", "remove", "--force", str(tree))
-        shutil.rmtree(scratch, ignore_errors=True)
-        gatelib.git(root, "worktree", "prune")
+    with locked(scratch / HELD):
+        try:
+            reasons, merged = attempt(root, tree, default=default, branch=branch)
+        finally:
+            gatelib.git(root, "worktree", "remove", "--force", str(tree))
+            shutil.rmtree(scratch, ignore_errors=True)
+            gatelib.git(root, "worktree", "prune")
     print(merge_ready.render(reasons), end="")
     if reasons and not any(reason.code in NOT_THE_JUDGES for reason in reasons):
         command = gatelib.entry_point(root, TIER2)
