@@ -777,14 +777,15 @@ Your tasks, in order:
      misses.
    - Glossary terms used (exact GLOSSARY.md names) and each term you added to the glossary
    - Design: how the feature fits the project's architecture, in three short parts. Placement:
-     for each piece of the feature, which declared path or layer it lives in (using the names
-     AGENTS.md and binding.md define, or the module when none are declared) and why, the
-     reason tied to the architecture ADR in docs/adr/ (the one that records the project's
-     macro and micro architecture) and to the layers AGENTS.md declares, by name. Seams: each
+     for each piece of the feature, which declared path or part it lives in (using the parts
+     the \`## Architecture\` table of docs/process/binding.md declares, or the module when none
+     are declared) and why, the reason tied to the architecture decision record that section
+     names on its \`- Decision:\` line (the one that records the project's macro and micro
+     architecture) and to the parts its table declares, by name. Seams: each
      seam the feature adds or changes, its interface, and why the module behind it is deep
      (much behaviour behind a small interface) rather than a shallow wrapper. Considered: the
      placements and shapes you weighed and rejected, each with the reason. Read the
-     architecture ADR and the declared layers before placing anything, and keep the feature
+     architecture decision record and the declared parts before placing anything, and keep the feature
      inside them; where the project records none, say so and place by the existing code's
      shape. Whether this change implies a change to the architecture is the question below
    - Seams under test: the public interfaces the tests observe behaviour through, one line
@@ -1248,9 +1249,10 @@ D. The ticket. Only the spec role and the ticket check read it before you, so a 
    carried it is gone from spec.md, or the tests and the code do not do it.
 E. Inputs. ${INPUT_READINGS} A case is null when the change does not decide it as spec.md states,
    or as the settled reading states where the run assumed it.
-F. Design. Judge the change against the project's architecture: read the architecture ADR in
-   docs/adr/ (the one that records the macro and micro architecture) and the layers AGENTS.md
-   declares, and the spec's Design section for what was decided and why. Issues on the \`design\`
+F. Design. Judge the change against the project's architecture: read the architecture decision
+   record the \`## Architecture\` section of docs/process/binding.md names on its \`- Decision:\`
+   line (the one that records the macro and micro architecture) and the parts its table declares
+   with what each may depend on, and the spec's Design section for what was decided and why. Issues on the \`design\`
    axis are: a layer or seam violated, a module that reaches around the seam the architecture
    declares for what it uses, logic placed in a layer that should not hold it, a dependency
    direction the architecture does not allow, a shallow wrapper (a module whose interface is

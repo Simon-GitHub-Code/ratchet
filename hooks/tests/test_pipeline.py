@@ -969,13 +969,17 @@ def test_the_spec_role_designs_the_placement_and_the_review_judges_it_on_axis_f(
     spec = _said(ran["prompts"]["spec"])
     assert "mattpocock-skills:codebase-design" in spec
     assert "Design: how the feature fits the project's architecture" in spec
-    assert "architecture ADR" in spec
-    assert "the layers AGENTS.md declares" in spec
+    # Why: ADR 0049 put the architecture in the binding's `## Architecture` section, which names
+    # the decision record and declares the parts.
+    assert "the `## Architecture` table of docs/process/binding.md declares" in spec
+    assert "architecture decision record that section" in spec
+    assert "AGENTS.md declares" not in spec
     assert "a new layer, a new kind of storage, a new process boundary" in spec
     assert "open question of kind `direction`" in spec.split("A change that implies")[1]
     review = _said(ran["prompts"]["review"])
     assert "mattpocock-skills:codebase-design" in review
     axis = review.split("F. Design.")[1].split("The script files every")[0]
+    assert "the `## Architecture` section of docs/process/binding.md" in axis
     assert "A layer violation is a blocker" in axis
     assert "shallow wrapper" in axis
     assert "are minor" in axis

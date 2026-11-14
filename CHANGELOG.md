@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The architecture and the tools are asked at adoption, recorded and declared (ADR 0049). The adopting agent drafts two or three whole systems (what it is written in, where it runs, where its data is kept, how its parts talk, its parts, its trade-offs and what changing it later costs), with the tools that would check each, and the owner picks in the same round as the product questions, recommendation first; "you decide" takes the recommendation and the record says so. A repository with code is offered "keep what is here" first, and a rewrite never by default.
+
+- The choice is a decision record with `## Decision` and its `- Chosen by:` line, at least two alternatives under `## Considered options`, `## Reversal cost` and `## Refutation criterion`. The binding's new `## Architecture` section names it and declares the parts, `| Part | Path | May depend on |`, which replaces the `## Layers` section of `AGENTS.md`.
+- `conformance` is red on a missing record, fewer than two alternatives, no reversal cost or refuter, no `- Chosen by:`, no declared part, or a part that depends on one the table lacks. It reads structure only.
+- An adopted repository gets the template's section from the upgrade, and the rest is owed (ADR 0037). While it is owed the route names the new `/ratchet:architecture`, which also revisits the choice later.
+- Init no longer assumes the stack, and `/ratchet:safeguard` takes the tool the record names for a concept. Everything else of ADR 0034 stands.
+
 A drain whose processes are all gone no longer blocks the next `clean --all`. The lease judged a drain alive by any process of its chain that was still running, including the service manager above every session; it now counts only a process below where the chains part, or a program running from a queue work tree, and the two-hour record of commands is gone.
 A ticket that is too large is split by the agent, not handed back to the owner (ADR 0046). A part names its ticket (`Split from:`) and inherits the agent-ready label while that ticket carries it on the default branch or the tracker, one level only. A deterministic check holds the scope: each promise (`- [ ]` line) of a part appears in the parent verbatim and the parts carry every promise exactly once; a refusal names the line. `drain.py split --plan` files the parts in order, closes the parent as `split` with its text untouched, and keeps draining.
 

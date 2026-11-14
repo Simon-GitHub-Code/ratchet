@@ -20,7 +20,11 @@ def test_adopt_asks_its_product_questions_first_and_chooses_tools_itself() -> No
     # minutes, and the tools are the agent's; a tool the plugin ships is a regression.
     step_3 = ADOPT.split("3. **Recognise the repository.**", 1)[1].split("\n4. ", 1)[0]
     assert "nothing after this step asks the owner anything" in step_3
-    assert "**Assume** `adopt.tools`" in ADOPT
+    # Why: ADR 0049. The architecture and its tools are asked in the same round, not assumed.
+    assert "**Assume** `adopt.tools`" not in ADOPT
+    assert "**Ask** `architecture.system`" in ADOPT
+    assert "**Ask** `architecture.tools`" in ADOPT
+    assert "**Assume** `init.stack`" not in INIT
     assert "interactive" not in ADOPT
     assert not (SKILLS / "adopt/presets").exists()
     assert "preset" not in ADOPT
@@ -234,8 +238,11 @@ RULE_PARTS = (
     ),
     (
         "anything a later change reverses without loss to the user: order, wording, layout, timing,"
-        " limits, tools, and how it is built"
+        " limits, and, within the architecture the owner chose, tools and how it is built"
     ),
+    # Why: ADR 0049. The architecture and its tools are the one choice of how it is built that
+    # reaches the owner.
+    "/ratchet:architecture",
 )
 PLACES = ["init/templates/AGENTS.md", "method/SKILL.md", "method/records.md", "method/pipeline.md"]
 
@@ -516,7 +523,8 @@ def test_every_cost_line_the_owner_reads_says_what_is_redone() -> None:
     for page in ("adopt", "safeguard"):
         for part in SWITCHES_A_TOOL:
             assert any(part in span for span in examples[page]), (page, part)
-    assert any("no step yet" in span for span in examples["init"])
+    # Why: ADR 0049. Init no longer assumes the stack; adoption puts it to the owner.
+    assert any("adoption then offers ways to build it" in span for span in examples["init"])
     records = flat("method/records.md")
     route = records.split("## Overturning an assumption", 1)[1].split(" ## ", 1)[0]
     assert "its lockfile" in route
@@ -525,13 +533,17 @@ def test_every_cost_line_the_owner_reads_says_what_is_redone() -> None:
 
 
 def test_the_cost_check_names_the_stack_and_the_tool_route_names_what_is_redone() -> None:
-    # Why: the verifier deleted the sentence that says a stack changed after adoption has no step
-    # yet, and the tool route's "Nothing built is redone", and every test stayed green. An agent
-    # checks a cost line against these before the owner reads it.
+    # Why: the verifier deleted the sentence that says what a stack changed after adoption costs,
+    # and the tool route's "Nothing built is redone", and every test stayed green. An agent
+    # checks a cost line against these before the owner reads it. Since ADR 0049 the change is
+    # recorded by `/ratchet:architecture`, and each tool is still replaced on its own.
     records = flat("method/records.md")
     assumed = records.split("Assume, and list under **Assumed**", 1)[1]
     assumed = assumed.split(" The pipeline's", 1)[0]
-    assert "a stack changed after adoption, which no step yet supports" in assumed
+    assert (
+        "a stack changed after adoption, which `/ratchet:architecture` records and whose tools are"
+        " then replaced one change per tool"
+    ) in assumed
     route = records.split("## Overturning an assumption", 1)[1].split(" ## ", 1)[0]
     tool = route.split("- *A tool*:", 1)[1].split(" - *", 1)[0]
     assert tool.endswith("Its merge is the owner's. Nothing built is redone.")

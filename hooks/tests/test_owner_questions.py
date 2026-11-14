@@ -2,8 +2,9 @@
 
 ADR 0034. Every question a skill tells an agent to put to the owner is written as
 ``**Ask** `<key>`: "<text>"``, and the registry lists the key with the kind ``product`` and the
-same text. A question that a default answers is an ``[[assume]]`` entry instead, and its skill
-writes ``**Assume** `<key>``` beside the default the hand-over states.
+same text, or, under ``architecture.`` alone, the kind ``architecture`` (ADR 0049). A question
+that a default answers is an ``[[assume]]`` entry instead, and its skill writes
+``**Assume** `<key>``` beside the default the hand-over states.
 
 What this catches: a new ``**Ask**`` line whose key is not registered, whose kind is not
 ``product``, whose text differs from the registry's, or whose skill the registry does not list;
@@ -64,6 +65,7 @@ ASKING = re.compile(
 NEGATION = re.compile(r"\b(?:never|not|no|nothing|neither|nor|without)\b", re.IGNORECASE)
 UNTIL = re.compile(r"\buntil (?:you |they |the agent )?$", re.IGNORECASE)
 RULE = "product question"
+ARCHITECTURE = "architecture"
 SENTENCE = re.compile(r"(?<=[.?!])\s+|\n\s*[-*|]\s+|\n\s*\d+\.\s+|\n\n")
 FENCE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 METHOD_TERMS = re.compile(
@@ -132,6 +134,17 @@ def asks_unmarked(sentence: str) -> bool:
     return NEGATION.search(sentence, 0, asking.start()) is None
 
 
+def allowed_kind(entry: Entry) -> bool:
+    """Whether a question's kind may reach the owner: product, or the architecture (ADR 0049).
+
+    Only a key under ``architecture.`` may carry the kind ``architecture``, so the exception
+    cannot grow into a tooling question under another name.
+    """
+    return entry.kind == "product" or (
+        entry.kind == ARCHITECTURE and entry.key.startswith(f"{ARCHITECTURE}.")
+    )
+
+
 def ask_problems(text: str, skill: str, entries: dict[str, Entry]) -> list[tuple[int, str]]:
     """Each ``**Ask**`` line of a page that does not match its registered product question."""
     problems: list[tuple[int, str]] = []
@@ -141,7 +154,7 @@ def ask_problems(text: str, skill: str, entries: dict[str, Entry]) -> list[tuple
         if entry is None or entry.table != "ask":
             problems.append((line, f"`{key}` is not a registered question"))
             continue
-        if entry.kind != "product":
+        if not allowed_kind(entry):
             problems.append((line, f"`{key}` is a {entry.kind!r} question, not product"))
         if skill not in entry.skills:
             problems.append((line, f"`{key}` is not registered for the {skill} skill"))
@@ -184,7 +197,7 @@ def test_every_registered_question_is_a_product_question_in_plain_words() -> Non
     for entry in registry().values():
         if entry.table != "ask":
             continue
-        assert entry.kind == "product", entry.key
+        assert allowed_kind(entry), entry.key
         assert METHOD_TERMS.search(entry.text) is None, f"{entry.key}: {entry.text}"
 
 
@@ -218,6 +231,19 @@ def test_an_unregistered_key_and_a_kind_other_than_product_are_caught(tmp_path: 
     ]
     assert plant(tmp_path / "b", '**Ask** `demo.tools`: "Which linter?"\n') == [
         "skills/demo/SKILL.md:1: `demo.tools` is not a registered question"
+    ]
+
+
+def test_the_architecture_kind_is_allowed_only_under_its_own_keys(tmp_path: Path) -> None:
+    # Why: ADR 0049 asks the architecture and the tools at adoption. The kind must not become a
+    # way to register any tooling question.
+    system = ASKED.replace('"demo.what"', '"architecture.what"').replace(
+        '"product"', '"architecture"'
+    )
+    assert plant(tmp_path, '**Ask** `architecture.what`: "What is it?"\n', system) == []
+    elsewhere = ASKED.replace('"product"', '"architecture"')
+    assert plant(tmp_path / "b", '**Ask** `demo.what`: "What is it?"\n', elsewhere) == [
+        "skills/demo/SKILL.md:1: `demo.what` is a 'architecture' question, not product"
     ]
 
 
