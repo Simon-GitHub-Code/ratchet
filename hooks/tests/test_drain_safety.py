@@ -10,7 +10,6 @@ import os
 import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -184,27 +183,6 @@ def test_a_second_drain_does_not_clean_the_first(
         first.wait()
 
 
-def test_a_command_waits_for_the_one_that_runs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = project(tmp_path)
-    holding = threading.Event()
-
-    def hold() -> None:
-        with drain.exclusive(root):
-            holding.set()
-            time.sleep(0.3)
-
-    holder = threading.Thread(target=hold)
-    holder.start()
-    holding.wait()
-    monkeypatch.setattr(drain, "LOCK_WAIT", 10.0)
-    try:
-        assert run(root, "open", ALPHA) == 0, "it waited, and then ran"
-    finally:
-        holder.join()
-
-
 def test_a_drain_run_again_from_its_own_session_is_not_a_rival(tmp_path: Path) -> None:
     root = project(tmp_path)
     assert run(root, "clean", "--all") == 0
@@ -230,29 +208,113 @@ def test_the_report_ends_the_drain_and_take_over_ends_a_lost_one(
             session.wait()
 
 
-def test_two_opens_of_one_ticket_leave_the_winner_its_tree(
-    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
-) -> None:
+DRIVER = Path(__file__).with_name("drain_driver.py")
+
+
+def start(root: Path, *argv: str, **env: str) -> subprocess.Popen[str]:
+    """``drain.py argv`` as a process of its own, as a session's command is."""
+    return subprocess.Popen(  # noqa: S603 # -- this interpreter, no shell
+        [sys.executable, str(DRIVER), *argv, "--root", str(root), "--offline"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env={**os.environ, **env},
+    )
+
+
+def two_opens(tmp_path: Path, *, paused: float, wait: str) -> tuple[Path, list[object]]:
+    """Two ``open`` processes of one ticket: the first stops after it read the plan."""
+    root = project(tmp_path)
+    gate = tmp_path / "gate"
+    gate.mkdir()
+    first = start(root, "open", ALPHA, DRV_PAUSE=str(gate))
+    while not (gate / "paused").exists():
+        assert first.poll() is None, first.stdout.read() if first.stdout else ""
+        time.sleep(0.02)
+    second = start(root, "open", ALPHA, DRV_LOCK_WAIT=wait)
+    time.sleep(0.5)
+    waiting = second.poll() is None
+    time.sleep(paused - 0.5)
+    (gate / "go").touch()
+    out1, _ = first.communicate(timeout=60)
+    out2, _ = second.communicate(timeout=60)
+    return root, [first.returncode, second.returncode, waiting, out1, out2]
+
+
+def test_a_second_open_of_the_ticket_waits_and_is_then_not_started(tmp_path: Path) -> None:
+    root, (rc1, rc2, waiting, _out1, out2) = two_opens(tmp_path, paused=1.5, wait="30")
+    tree = drain.tree_of(root, BRANCH_A)
+    assert (rc1, rc2, waiting) == (0, 1, True), "the second waited while the first ran"
+    assert "is not started: it is building" in str(out2)
+    assert tree in drain.worktrees(root), "the tree the first reported is still there"
+    assert stashes(root) == ""
+
+
+def test_a_second_open_is_refused_when_its_wait_runs_out(tmp_path: Path) -> None:
+    root, (rc1, rc2, waiting, _out1, out2) = two_opens(tmp_path, paused=2.5, wait="1")
+    assert (rc1, rc2, waiting) == (0, 1, True)
+    assert "another drain command is running on this repository" in str(out2)
+    assert drain.tree_of(root, BRANCH_A) in drain.worktrees(root)
+    assert stashes(root) == ""
+
+
+SESSION = """
+import re, shutil, subprocess, sys, time
+from pathlib import Path
+
+def run(*argv):
+    done = subprocess.run([sys.executable, {driver!r}, *argv, "--root", {root!r}, "--offline"],
+                          capture_output=True, text=True)
+    return done.returncode, done.stdout + done.stderr
+
+rc, out = run("clean", "--all")
+token = re.search(r"drain: (\\w+)", out).group(1)
+print("d1", rc, run("open", {ticket!r})[0], flush=True)
+tree = Path({tree!r})
+(tree / "src").mkdir(exist_ok=True)
+(tree / "src/b.py").write_text("drain 1's agent is mid-build\\n")
+(tree / "target").mkdir()
+shutil.copy(shutil.which("sleep"), tree / "target/sleep")
+service = subprocess.Popen([str(tree / "target/sleep"), "300"])
+rc2, _ = run("clean", "--all")
+time.sleep(0.2)
+print("d2", rc2, "service", service.poll(), "tree", tree.exists(), flush=True)
+rc3, _ = run("clean", "--all", "--drain", token)
+time.sleep(0.2)
+print("d1 again", rc3, "service", service.poll(), flush=True)
+service.kill()
+service.wait()
+"""
+
+
+def test_two_drains_under_one_long_lived_process_are_told_apart(tmp_path: Path) -> None:
     root = project(tmp_path)
     tree = drain.tree_of(root, BRANCH_A)
-    real_plan = drain.plan
-    rivals: list[int] = []
+    session = SESSION.format(driver=str(DRIVER), root=str(root), ticket=ALPHA, tree=str(tree))
+    done = subprocess.run(  # noqa: S603 # -- this interpreter, no shell
+        [sys.executable, "-c", session], capture_output=True, text=True, check=False, timeout=120
+    )
+    lines = done.stdout.splitlines()
+    assert done.returncode == 0, done.stderr
+    assert lines[0] == "d1 0 0"
+    assert lines[1] == "d2 2 service None tree True", "the second drain is refused; nothing ended"
+    assert lines[2].startswith("d1 again 0 service "), "the first drain, by its token, resumes"
+    assert not tree.exists()
 
-    def plan_then_rival(d: drain.Drain) -> drain.Plan:
-        drafted = real_plan(d)
-        if not rivals:
-            rivals.append(run(root, "open", ALPHA))
-        return drafted
 
-    monkeypatch.setattr(drain, "LOCK_WAIT", 0.0)
-    monkeypatch.setattr(drain, "plan", plan_then_rival)
-    assert run(root, "open", ALPHA) == 0
-    monkeypatch.setattr(drain, "plan", real_plan)
-    out = capsys.readouterr().out
-    assert rivals == [1], "the open that arrives while another runs is refused"
-    assert "open: another drain command is running on this repository" in out
-    assert tree in drain.worktrees(root)
-    assert stashes(root) == ""
+def test_a_lease_is_held_while_its_drain_was_active_and_a_process_above_it_lives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chain = drain.ancestry()
+    held: dict[str, object] = {"chain": chain}
+    assert drain.rival(held) is None, "no command after the start: nothing says it is running"
+    held["beat"] = time.time() - 60
+    assert drain.rival(held) == "its last command ran 1 minutes ago"
+    held["beat"] = time.time() - drain.LEASE_FRESH - 1
+    assert drain.rival(held) is None, "idle for hours: gone"
+    monkeypatch.setattr(drain, "process_row", lambda _pid: None)
+    held["beat"] = time.time()
+    assert drain.rival(held) is None, "every process of the drain has ended"
 
 
 def test_a_rebase_git_cannot_abort_stops_the_update(tmp_path: Path, capsys: Out) -> None:
@@ -424,9 +486,17 @@ def test_a_fast_forward_killed_half_way_is_put_back(tmp_path: Path) -> None:
     assert (gitdir(root) / merge.LANDING).read_text(encoding="utf-8") == ""
 
 
-def test_a_fast_forward_put_back_leaves_what_somebody_wrote_since(tmp_path: Path) -> None:
+def owned(root: Path, *paths: str) -> None:
+    """Say the fast-forward began with ``paths`` already changed or untracked by the owner."""
+    landing = gitdir(root) / merge.LANDING
+    intent = json.loads(landing.read_text(encoding="utf-8"))
+    landing.write_text(json.dumps({**intent, "owned": list(paths)}), encoding="utf-8")
+
+
+def test_a_fast_forward_put_back_leaves_what_the_owner_had_changed_before(tmp_path: Path) -> None:
     root, old, _new = half_landed(tmp_path)
     write(root, "src/a.py", "A = 'the owner, meanwhile'\n")
+    owned(root, "src/a.py")
     lines = merge.recover(root)
     assert "merge: src/a.py was changed since, and stays as it is" in lines
     assert (root / "src/a.py").read_text(encoding="utf-8") == "A = 'the owner, meanwhile'\n"
@@ -518,6 +588,7 @@ def test_land_writes_its_intent_while_the_branch_moves_and_clears_it(tmp_path: P
         "old": old,
         "new": new,
         "holder": str(root),
+        "owned": [],
     }
     assert (gitdir(root) / merge.LANDING).read_text(encoding="utf-8") == ""
 
@@ -639,3 +710,71 @@ def test_a_marker_for_a_rebase_that_changed_nothing_is_cleared(tmp_path: Path) -
 def test_a_process_that_cannot_be_read_is_not_a_git_in_the_tree(tmp_path: Path) -> None:
     (tmp_path / "proc" / "4242").mkdir(parents=True)
     assert not merge.git_running_in(tmp_path, proc=tmp_path / "proc")
+
+
+BIG = "bulk/a_big.bin"
+CONTENT = b"0123456789abcdef" * 256
+
+
+class MergeKilledError(Exception):
+    """The merge run was killed."""
+
+
+@pytest.mark.parametrize("written", [0, 100])
+def test_a_fast_forward_killed_inside_one_files_write_is_put_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, written: int
+) -> None:
+    """The state a kill leaves: the intent is on disk, ``BIG`` is cut short, the index is locked."""
+    root = project(tmp_path)
+    git(root, "switch", "-q", "-c", "big")
+    (root / BIG).parent.mkdir()
+    (root / BIG).write_bytes(CONTENT)
+    write(root, "src/b.py", "B = 1\n")
+    new = commit(root, "feat(core): the merge result")
+    git(root, "switch", "-q", "main")
+    write(root, "owner.txt", "the owner's untracked notes\n")
+    old = git(root, "rev-parse", "main")
+    real = gatelib.git
+
+    def die_in_the_write(where: Path, *args: str) -> str | None:
+        if args[:2] != ("merge", "--ff-only"):
+            return real(where, *args)
+        (where / BIG).parent.mkdir(exist_ok=True)
+        (where / BIG).write_bytes(CONTENT[:written])
+        (gitdir(where) / "index.lock").write_text("")
+        raise MergeKilledError
+
+    monkeypatch.setattr(gatelib, "git", die_in_the_write)
+    with pytest.raises(MergeKilledError):
+        merge.land(root, "main", old=old, new=new)
+    monkeypatch.setattr(gatelib, "git", real)
+    assert (root / BIG).stat().st_size == written
+    lines = merge.recover(root)
+    assert lines[0].startswith("merge: a run that stopped was moving `main`")
+    assert not any("stays as it is" in line for line in lines), lines
+    assert not (root / BIG).exists(), "git's part-written file is not the owner's edit"
+    assert git(root, "rev-parse", "main") == old
+    assert git(root, "status", "--porcelain") == "?? owner.txt"
+    assert (root / "owner.txt").read_text(encoding="utf-8") == "the owner's untracked notes\n"
+    assert not (gitdir(root) / "index.lock").exists()
+
+
+def test_an_update_killed_after_the_rebase_by_a_real_kill_drops_the_record_on_the_rerun(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    tree = build(root, BRANCH_A, {"src/b.py": "B = 1\n"}, record=approval("alpha"))
+    write(root, "src/m.py", "M = 1\n")
+    base = commit(root, "feat(core): merged meanwhile")
+    killed = start(root, "update", ALPHA, DRV_KILL_AT="drop_record")
+    killed.communicate(timeout=60)
+    assert killed.returncode == -signal.SIGKILL
+    assert git(tree, "merge-base", "--is-ancestor", base, "HEAD") == "", "the rebase finished"
+    assert "verdict.json" in git(tree, "show", "--name-only", "--format=", "HEAD"), (
+        "record is on top"
+    )
+    again = start(root, "update", ALPHA)
+    out, _ = again.communicate(timeout=60)
+    assert json.loads(out) == {"moved": True, "conflicts": []}
+    assert "verdict.json" not in git(tree, "show", "--name-only", "--format=", "HEAD")
