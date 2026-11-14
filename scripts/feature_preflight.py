@@ -100,7 +100,7 @@ STATUS_LINE = re.compile(
     r"^\*{0,2}status:?\*{0,2}:?\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE
 )
 PARENT_LINE = re.compile(
-    r"^\*{0,2}parent:?\*{0,2}:?\s*`?(#?\d+|[^`\s]+\.md)`?", re.IGNORECASE | re.MULTILINE
+    r"^\*{0,2}parent:?\*{0,2}:?\s*`?([^`\s]+\.md|#?\d+)`?", re.IGNORECASE | re.MULTILINE
 )
 PARENT_SECTION = "## Parent"
 SECTION_REF = re.compile(r"(?:#|/issues/)(\d+)|([^`\s()\[\]]+\.md)")
