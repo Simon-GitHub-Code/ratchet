@@ -1430,3 +1430,63 @@ def test_a_record_the_lowered_gate_would_read_as_a_relaxation_never_passes(  # n
     assert lowered.RELAXES.match(line.splitlines()[-1])
     with pytest.raises(NotAdditiveError, match="Relaxes"):
         records.additions("docs/adr/0004-x.md", Before(None, ADRS), f"{body}\n{line}{tail}")
+
+
+REWRITE_GLOSSARY = "python3 - <<'EOF'\nopen('GLOSSARY.md', 'w').write('x')\nEOF"
+
+
+def two_checkouts(adopted: Path, *, session_on: str, other_on: str) -> tuple[Path, Path]:
+    """The adopted checkout on ``session_on`` and a worktree of it on ``other_on``."""
+    other = adopted / ".claude" / "worktrees" / "agent-1"
+    if session_on == "main":
+        repos.git(adopted, "checkout", "-q", "main")
+        repos.git(adopted, "worktree", "add", "-q", "-b", other_on, str(other))
+        return adopted, other
+    repos.git(adopted, "checkout", "-q", "-b", session_on)
+    repos.git(adopted, "worktree", "add", "-q", str(other), "main")
+    return adopted, other
+
+
+def test_an_interpreter_write_in_a_feature_worktree_is_judged_by_that_worktree(
+    adopted: Path,
+) -> None:
+    session, other = two_checkouts(adopted, session_on="main", other_on="feature")
+    edit = {"file_path": str(other / "GLOSSARY.md"), "old_string": "**", "new_string": "*"}
+    assert answer(session, "Edit", edit) == "pass"
+    assert answer(session, "Bash", {"command": f"cd {other} && {REWRITE_GLOSSARY}"}) == "pass"
+    assert answer(other, "Bash", {"command": REWRITE_GLOSSARY}) == "pass"
+
+
+def test_a_write_in_the_checkout_on_the_default_branch_is_refused_from_a_feature_session(
+    adopted: Path,
+) -> None:
+    session, other = two_checkouts(adopted, session_on="feature", other_on="main")
+    assert answer(session, "Bash", {"command": f"cd {other} && {REWRITE_GLOSSARY}"}) == "deny"
+    assert answer(session, "Bash", {"command": f"cd {other} && echo x >> GLOSSARY.md"}) == "deny"
+    assert answer(session, "Bash", {"command": f"echo x >> {other}/GLOSSARY.md"}) == "deny"
+    assert answer(session, "Bash", {"command": REWRITE_GLOSSARY}) == "pass"
+
+
+@pytest.mark.parametrize(
+    ("joint", "verdict"),
+    [
+        (" && ", "pass"),
+        ("; ", "deny"),
+        ("\n", "deny"),
+        (" || exit 1 && ", "deny"),
+    ],
+    ids=["and", "semicolon", "newline", "or"],
+)
+def test_a_cd_the_shell_may_not_have_made_leaves_the_write_judged_in_the_session_checkout(
+    adopted: Path, joint: str, verdict: str
+) -> None:
+    """Only ``&&`` proves the ``cd`` happened; after another joint the session may be home."""
+    session, other = two_checkouts(adopted, session_on="main", other_on="feature")
+    command = f"cd {other}{joint}{REWRITE_GLOSSARY}"
+    assert answer(session, "Bash", {"command": command}) == verdict
+
+
+def test_a_cd_the_guard_cannot_resolve_is_judged_in_the_session_checkout(adopted: Path) -> None:
+    session, other = two_checkouts(adopted, session_on="main", other_on="feature")
+    command = f'cd "$(echo {other})" && {REWRITE_GLOSSARY}'
+    assert answer(session, "Bash", {"command": command}) == "deny"

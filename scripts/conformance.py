@@ -478,7 +478,10 @@ def kept_directory(path: str) -> Finding:
 
 def missing_section(path: str, problem: str, heading: str, *, template_text: str) -> Finding:
     """A ``## `` section the template has and the file lacks: the upgrade adds it verbatim."""
-    block = heading + markdown_text.section(template_text, heading).rstrip()
+    # Why: a project that formats its Markdown pads every table, so the block is written padded.
+    block = markdown_text.padded_tables(
+        heading + markdown_text.section(template_text, heading).rstrip()
+    )
     want = markdown_text.with_section(heading, block, headings(template_text))
     start = (heading, *block.splitlines()[1:])
     return Finding(

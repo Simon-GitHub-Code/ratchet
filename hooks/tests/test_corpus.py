@@ -11,10 +11,14 @@ a write of an agent-instruction file or a CI workflow, which acts before any mer
 asked on every branch.
 """
 
+from pathlib import Path
+
 import pytest
 
+from ratchet_guards.context import Guard
 from ratchet_guards.manifest import EMPTY
-from tests.support import ROOT, FakeRepo, make_guard, rules
+from tests.support import ROOT, WORKTREE, FakeRepo, make_guard, rules
+from tests.test_units import Heads
 
 W = "guard-path-write"
 P = "guard-path-default"
@@ -1777,3 +1781,29 @@ def test_a_move_the_line_does_not_spell_out_is_followed_or_refused(
 @pytest.mark.parametrize("command", [command for command, expected in FROM_APP if P in expected])
 def test_a_write_followed_to_the_root_is_refused_on_main(command: str) -> None:
     assert P in rules(command, make_guard(FakeRepo(branch="main")), cwd=ROOT / "app")
+
+
+# A session in one checkout whose line `cd`s into another: the write is judged by the checkout that
+# holds the file, not by the one the session started in.
+PY_WRITES_JUSTFILE = "python3 - <<'EOF'\nopen('justfile', 'w').write('x')\nEOF"
+
+
+def heads(session: Path, other: Path, *, session_on: str, other_on: str) -> Guard:
+    return make_guard(Heads(branch=session_on, heads={session: session_on, other: other_on}))
+
+
+def test_a_write_in_a_feature_worktree_is_not_refused_for_the_session_on_the_default_branch() -> (
+    None
+):
+    guard = heads(ROOT, WORKTREE, session_on="main", other_on="feat/x")
+    shell = f"cd {WORKTREE} && echo x > justfile"
+    assert rules(shell, guard) == []
+    assert rules(f"cd {WORKTREE} && {PY_WRITES_JUSTFILE}", guard) == []
+
+
+def test_a_write_in_the_default_branch_checkout_is_refused_for_a_session_on_a_feature_branch() -> (
+    None
+):
+    guard = heads(WORKTREE, ROOT, session_on="feat/x", other_on="main")
+    assert rules(f"cd {ROOT} && echo x > justfile", guard, cwd=WORKTREE) == [P]
+    assert rules(f"cd {ROOT} && {PY_WRITES_JUSTFILE}", guard, cwd=WORKTREE) == [P]
