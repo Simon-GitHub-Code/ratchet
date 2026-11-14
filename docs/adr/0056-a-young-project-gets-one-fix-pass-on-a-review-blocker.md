@@ -19,7 +19,7 @@ The pass is the loop's own code, parameterised by the number of rounds: one for 
 
 **The critic stays as it was.** It runs only when the project is `depended-on`. The fix round needs findings, and the review's issues carry the same severity and title the round reads, so it runs without the critic.
 
-**What it costs.** A run that is not `depended-on` spawns at most nine agents, not seven: the fix agent and the second review. A run whose first review approves spawns none of them. `AGENTS_AT_MOST` declares the number and the drain reads it.
+**What it costs.** A run that is not `depended-on` spawns at most nine agents, not seven: the fix agent and the second review. A run whose first review finds no blocker spawns none of them. `AGENTS_AT_MOST` declares the number and the drain reads it.
 
 Decided 2026-11-14.
 
