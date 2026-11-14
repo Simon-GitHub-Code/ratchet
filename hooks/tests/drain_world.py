@@ -155,6 +155,9 @@ class World:
             Kind.KILL_BEFORE_NOTE: lambda: mock.patch.object(
                 drain.queue_notes, "write_note", write_until
             ),
+            Kind.KILL_LAND_BEFORE_NOTE: lambda: mock.patch.object(
+                drain.queue_notes, "write_note", write_until
+            ),
         }
         return killers[kind]()
 

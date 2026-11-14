@@ -26,6 +26,7 @@ OPEN_A = ["drain.py open a", "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
 PARK_A = "drain.py close --outcome parked a"
 EDIT_A = "the owner edits ticket a"
+KILLED_PAST_REBASE = [*JUDGED_A, EDIT_A, "a kill after the rebase stops drain.py update a"]
 # Why: a rule the code does not keep is pinned here by the shortest path from the initial state
 # to a step that breaks it, so the break is a recorded fact and not a red test; each pinned path
 # is replayed below on a real repository.
@@ -37,7 +38,8 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     ONCE: [*JUDGED_A, "drain.py land a", PARK_A],
     HELD: [*JUDGED_A, PARK_A, "drain.py land a"],
     REFUSED: None,
-    RECOVERS: [*JUDGED_A, EDIT_A, "a kill after the rebase stops drain.py update a"],
+    # Why: the shortest break of 8. ``KILLED_PAST_REBASE`` breaks it as well, replayed below.
+    RECOVERS: [*JUDGED_A, "a kill before the note stops drain.py land a"],
     NO_TREE: [
         PARK_A,
         "drain.py open c",
@@ -143,6 +145,7 @@ WEIGHTED = [
     Kind.WORK,
     Kind.KILL_AFTER_STASH,
     Kind.KILL_BEFORE_NOTE,
+    Kind.KILL_LAND_BEFORE_NOTE,
     Kind.CLEAN,
     Kind.CLEAN_ALL,
     Kind.REPORT,
@@ -274,11 +277,21 @@ def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_w
     assert git(play.world.root, "show", f"stash@{{0}}^3:{DRAFT}") == "half done"
 
 
+def broken_by(path: list[str]) -> set[str]:
+    """The rules the last step of ``path`` breaks in the model."""
+    state = before = model.INITIAL
+    for name in path:
+        before = state
+        state = next(after for action, after in model.moves(state) if action.name == name)
+    return {rule for rule, holds in model.RULES.items() if not holds(before, path[-1], state)}
+
+
 def test_clean_all_after_an_update_killed_past_its_rebase_keeps_a_record_no_review_wrote(
     tmp_path: Path,
 ) -> None:
+    assert broken_by(KILLED_PAST_REBASE) == {RECOVERS}
     play = Play(tmp_path)
-    for name in COUNTEREXAMPLES[RECOVERS] or []:
+    for name in KILLED_PAST_REBASE:
         play.named(name, compare=False)
     play.agree()
     assert play.state.of(Name.A).branch is Branch.STALE
@@ -289,3 +302,19 @@ def test_clean_all_after_an_update_killed_past_its_rebase_keeps_a_record_no_revi
     reasons = merge_ready.judge(play.world.root, "refs/heads/main", tip, asked=asked)
     assert [reason.code for reason in reasons] == ["record"]
     assert "a commit came after the review" in reasons[0].text
+
+
+def test_a_landing_killed_before_its_note_is_never_recorded_by_the_next_drain(
+    tmp_path: Path,
+) -> None:
+    play = Play(tmp_path)
+    for name in COUNTEREXAMPLES[RECOVERS] or []:
+        landed = play.named(name)
+    assert "merged: `feature/1-alpha` into `main`" in landed
+    assert not play.world.tree(Name.A).exists()
+    assert play.named("drain.py clean --all") == f"drain: {play.world.token}\n", "nothing recorded"
+    assert "outcome" not in drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    assert BRANCH[Name.A] not in plan_of(play), "the next drain's plan does not list it"
+    merged = play.named("drain.py report").split("## Waits for you")[0]
+    assert merged.endswith("## Merged\n\n- none\n\n"), "and its report does not say it merged"
+    assert play.named("drain.py land a") == f"closed: {REF[Name.A]}: merged\n", "land again does"

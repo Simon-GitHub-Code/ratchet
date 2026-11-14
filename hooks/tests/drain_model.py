@@ -259,6 +259,7 @@ class Kind(Fact):
     KILL_AFTER_REBASE = "a kill after the rebase stops drain.py update"
     KILL_AFTER_STASH = "a kill after the stash stops drain.py close --outcome parked"
     KILL_BEFORE_NOTE = "a kill before the note stops drain.py close --outcome parked"
+    KILL_LAND_BEFORE_NOTE = "a kill before the note stops drain.py land"
 
 
 KILLS = {
@@ -266,6 +267,7 @@ KILLS = {
     Kind.KILL_AFTER_REBASE: Kind.UPDATE,
     Kind.KILL_AFTER_STASH: Kind.CLOSE,
     Kind.KILL_BEFORE_NOTE: Kind.CLOSE,
+    Kind.KILL_LAND_BEFORE_NOTE: Kind.LAND,
 }
 
 
@@ -456,6 +458,14 @@ def _land(state: State, name: Name) -> State:
     return state.with_ticket(name, closed(ticket, Outcome.CLOSED, retry=retry))
 
 
+def _kill_land_before_note(state: State, name: Name) -> State | None:
+    """Every effect of ``land`` but the note, which ``drain.settle`` writes last."""
+    whole = _land(state, name)
+    if whole == state:
+        return None
+    return whole.with_ticket(name, whole.of(name)._replace(note=state.of(name).note))
+
+
 def _close(state: State, name: Name) -> State:
     return state.with_ticket(name, closed(state.of(name), Outcome.CLOSED))
 
@@ -516,6 +526,7 @@ ON_TICKET: dict[Kind, Callable[[State, Name], State | None]] = {
     Kind.KILL_AFTER_REBASE: _kill_after_rebase,
     Kind.KILL_AFTER_STASH: _kill_after_stash,
     Kind.KILL_BEFORE_NOTE: _kill_before_note,
+    Kind.KILL_LAND_BEFORE_NOTE: _kill_land_before_note,
 }
 WHOLE: dict[Kind, Callable[[State], State]] = {
     Kind.CLEAN: lambda state: cleaned(state, everything=False),
@@ -526,10 +537,10 @@ WHOLE: dict[Kind, Callable[[State], State]] = {
 
 # Why: a bound. Each ticket plays one part so the graph stays small: the agent commits only in
 # a, whose branch goes the whole way to merged, and leaves work uncommitted only in c, the ticket
-# the cap holds back; b, which waits on a, is only opened. A kill stops ``update`` only in a,
-# whose branch carries a verdict record, and ``close`` only in c, whose tree holds work. The
-# drain's other commands and the owner reach a and c, and the commands of the whole queue reach
-# all three.
+# the cap holds back; b, which waits on a, is only opened. A kill stops ``update`` and ``land``
+# only in a, whose branch carries a verdict record, and ``close`` only in c, whose tree holds
+# work. The drain's other commands and the owner reach a and c, and the commands of the whole
+# queue reach all three.
 A_AND_C = (Name.A, Name.C)
 PLAYS: dict[Kind, tuple[Name, ...]] = {
     Kind.COMMIT: (Name.A,),
@@ -545,6 +556,7 @@ PLAYS: dict[Kind, tuple[Name, ...]] = {
     Kind.KILL_AFTER_REBASE: (Name.A,),
     Kind.KILL_AFTER_STASH: (Name.C,),
     Kind.KILL_BEFORE_NOTE: (Name.C,),
+    Kind.KILL_LAND_BEFORE_NOTE: (Name.A,),
 }
 
 
@@ -635,11 +647,15 @@ def merge_said(ticket: Ticket) -> tuple[bool, bool]:
 
 
 def reported_once(before: State, action: str, after: State) -> bool:
-    """A ticket's merge is recorded when it lands and is printed by exactly one report."""
+    """A ticket's merge is recorded when it lands, or left to recovery by a kill, and is printed by exactly one report."""  # noqa: E501
+    killed = action.rpartition(" ")[0] in KILLED
     for was, now in zip(before.tickets, after.tickets, strict=True):
         said, unprinted = merge_said(was)
         says, unprinting = merge_said(now)
-        if now.merged and not was.merged and not unprinting:
+        left = killed and unrecorded(now)
+        if now.merged and not was.merged and not unprinting and not left:
+            return False
+        if says and not said and not unprinting:
             return False
         if said and not says:
             return False
