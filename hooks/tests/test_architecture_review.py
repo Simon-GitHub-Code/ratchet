@@ -330,7 +330,7 @@ def test_the_route_names_the_review_before_the_safeguards(
     commit(root, "feat: keep the links")
     step = route.decide(root, None)
     assert step.command == route.ARCHITECTURE
-    assert step.stage == "architecture"
+    assert step.stage == "architecture-review"
     assert step.why.startswith(
         "`stored-format` has arrived (1 instance) and reopens the architecture: the project now"
         " keeps data:"

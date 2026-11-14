@@ -105,7 +105,7 @@ WAIT = "nothing: the merge job merges it once `ci` is green, or comments why the
 MERGE_FALLBACK = "the binding's `merge` entry point"
 NEXT = "/ratchet:next"
 SAFEGUARD = "/ratchet:safeguard"
-ARCHITECTURE = triggers.ARCHITECTURE
+ARCHITECTURE = "/ratchet:architecture"
 EVENTS_LOG = "events.tsv"
 EVENTS_HEADER = "date\tevent\tsign\tanswer"
 DECLINED = "declined"
@@ -759,13 +759,13 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         if missing
         else ticket_step(root, gh, checkout)
     )
-    return architecture_step(root, step) or safeguard_step(root, step) or step
+    return review_step(root, step) or safeguard_step(root, step) or step
 
 
 # --- architecture reviews, safeguards and life events (ADR 0028, ADR 0052) -----------------
 
 
-def architecture_step(root: Path, instead: Step) -> Step | None:
+def review_step(root: Path, instead: Step) -> Step | None:
     """``/ratchet:architecture`` when the repository owes a review, before any safeguard.
 
     Why: ADR 0052. The review decides where the new kind of code lives, and so where its
@@ -800,7 +800,7 @@ def architecture_step(root: Path, instead: Step) -> Step | None:
         ARCHITECTURE,
         f"{'; '.join(said)}. Or carry on with {instead.command}: {cost}",
         then,
-        "architecture",
+        "architecture-review",
     )
 
 
