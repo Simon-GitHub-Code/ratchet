@@ -772,7 +772,7 @@ def _branch_merges(world: World) -> Iterator[World]:
     """The merge entry point merges the branch and switches the checkout to the default branch.
 
     Why it can be run on a branch already merged, and changes nothing there: the merge judge
-    refuses that branch as behind the default branch, which holds its merge.
+    refuses it, behind a merge commit that holds it, or with nothing of its own to judge.
     """
     if on_a_clean_branch(world, Head.WORK):
         yield merged(world, Head.MAIN)

@@ -621,10 +621,10 @@ def merge_branch(repo: Repo) -> str:
 
 @does(ActionName.BRANCH_MERGES)
 def _branch_merges(repo: Repo, change: Change) -> None:
-    """The merge, as the fixed entry point leaves it: merged, and the default branch checked out.
+    """The merge, as the entry point leaves it: merged, and the default branch checked out.
 
-    On a branch already merged it does nothing: the entry point's judge refuses that branch as
-    behind, and the tests that run the real entry point show it changes nothing.
+    On a branch already merged it does nothing: the entry point's judge refuses that branch, and
+    the tests that run the real entry point show it changes nothing.
     """
     if change.before.head is Head.WORK:
         merge_branch(repo)
