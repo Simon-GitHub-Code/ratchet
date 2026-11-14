@@ -70,9 +70,12 @@ class Ticket(StrEnum):
 
     None yet, open for triage, agent-ready with or without a conjecture; held by a blocked
     feature run's stash; held by the drain's note for open questions, for guard edits, for an owed
-    safeguard, or by a note written before the drain recorded kinds; built on a branch, merged but
+    safeguard, or by a note written before the drain recorded kinds or the base commit that
+    landing guard edits is read from; built on a branch, merged but
     still open, or resolved. A ticket parked for guard edits the owner has since landed is not a
     state of its own: landing them releases the hold, so the route reads it as agent-ready again.
+    A guard hold whose note keeps no base commit cannot be released that way: the route reads it
+    as ``PARKED``, which only a change to the ticket releases.
     """
 
     NONE = "none"
