@@ -409,26 +409,49 @@ def test_a_test_the_critic_kept_failing_is_fixed_before_the_review() -> None:
     assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement", "critique", "review"]
 
 
-def test_a_change_with_no_room_under_the_ceiling_stops_before_the_next_stage() -> None:
+def test_a_change_with_no_room_under_the_ceilings_stops_before_the_next_stage() -> None:
     # Why: a ticket whose spec tests and code already filled the ceiling ran nine agents and
-    # ended red on change-size alone once the critic's tests were added.
+    # ended red on change-size alone once the critic's tests were added. ADR 0045: product lines
+    # and test lines have a ceiling each, and only the tests keep a margin for the critic's.
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
-    heavy = {**SPECIFIED, "changeSize": {"lines": 1001, "ceiling": 1500}}
+    heavy = {
+        **SPECIFIED,
+        "changeSize": {"lines": 100, "ceiling": 1000, "testLines": 2001, "testCeiling": 3000},
+    }
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=heavy, **answers)
     assert ran["labels"] == ["preflight", "spec"]
     result = ran["result"]
     assert (result["verdict"], result["tooLarge"]["stage"]) == ("blocked", "the spec")
-    assert "1001 lines after the spec" in result["verdictForcedBy"][0]
-    assert "splits the ticket" in result["requiredByOrchestrator"][1]
+    assert result["tooLarge"]["kind"] == "tests"
+    assert "2001 test lines after the spec" in result["verdictForcedBy"][0]
+    assert "orchestrator splits it" in result["requiredByOrchestrator"][0]
+    assert "drain.py split" in result["requiredByOrchestrator"][1]
 
-    fits = {**SPECIFIED, "changeSize": {"lines": 1000, "ceiling": 1500}}
-    built = {**IMPLEMENTED, "changeSize": {"lines": 1200, "ceiling": 1500}}
+    fits = {
+        **SPECIFIED,
+        "changeSize": {"lines": 100, "ceiling": 1000, "testLines": 2000, "testCeiling": 3000},
+    }
+    built = {
+        **IMPLEMENTED,
+        "changeSize": {"lines": 1001, "ceiling": 1000, "testLines": 2000, "testCeiling": 3000},
+    }
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=fits, **{**answers, "implement": built})
     assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement"]
     assert ran["result"]["tooLarge"]["stage"] == "the implementation"
+    assert ran["result"]["tooLarge"]["kind"] == "product"
     assert sorted(ran["result"]["filesChanged"]) == ["src/links.py", "tests/test_expiry.py"]
 
-    unbound = {**SPECIFIED, "changeSize": {"lines": 9, "ceiling": 0}}
+    full = {
+        **SPECIFIED,
+        "changeSize": {"lines": 1000, "ceiling": 1000, "testLines": 100, "testCeiling": 3000},
+    }
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=full, **answers)
+    assert ran["result"]["verdict"] == "approve", "product code may fill its whole ceiling"
+
+    unbound = {
+        **SPECIFIED,
+        "changeSize": {"lines": 9, "ceiling": 0, "testLines": 9, "testCeiling": 0},
+    }
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=unbound, **answers)
     assert ran["result"]["verdict"] == "approve"
 
@@ -515,16 +538,26 @@ def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> 
     answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
     split = [{"title": "first", "criteria": ["a"]}, {"title": "second", "criteria": ["b"]}]
     fits = {"implementationLines": 400, "criticLines": 300, "recordLines": 50, "proposedSplit": []}
-    sized = {**SPECIFIED, "changeSize": {"lines": 700, "ceiling": 1500}}
+    sized = {
+        **SPECIFIED,
+        "changeSize": {"lines": 500, "ceiling": 1000, "testLines": 1500, "testCeiling": 3000},
+    }
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec={**sized, "changeEstimate": fits}, **answers)
-    assert ran["result"]["verdict"] == "approve", "1,450 of 1,500 fits"
+    assert ran["result"]["verdict"] == "approve", "950 product and 1,800 test lines fit"
 
     over = {**fits, "implementationLines": 451, "proposedSplit": split}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec={**sized, "changeEstimate": over}, **answers)
     assert ran["labels"] == ["preflight", "spec"]
     result = ran["result"]
     assert (result["verdict"], result["tooLarge"]["proposedSplit"]) == ("blocked", split)
-    assert "estimates 1501 lines" in result["verdictForcedBy"][0]
+    assert "estimates 1001 product lines" in result["verdictForcedBy"][0]
+
+    tests = {**fits, "criticLines": 1501, "proposedSplit": split}
+    ran = _run(
+        {"ref": "4"}, preflight=PREFLIGHT, spec={**sized, "changeEstimate": tests}, **answers
+    )
+    assert ran["result"]["tooLarge"]["kind"] == "tests"
+    assert "estimates 3001 test lines" in ran["result"]["verdictForcedBy"][0]
 
     bare = {k: v for k, v in over.items() if k != "proposedSplit"}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec={**sized, "changeEstimate": bare}, **answers)
@@ -616,8 +649,14 @@ def test_without_the_critic_a_change_may_fill_the_whole_ceiling() -> None:
     # Why: an eval run's first ticket came back blocked at 1,067 lines of a 1,500 ceiling, "with
     # the review still to come", though no critic ran and the review's records are not counted.
     answers = {"implement": IMPLEMENTED, "review": REVIEW}
-    spec = {**SPECIFIED, "changeSize": {"lines": 1067, "ceiling": 1500}}
-    built = {**IMPLEMENTED, "changeSize": {"lines": 1500, "ceiling": 1500}}
+    spec = {
+        **SPECIFIED,
+        "changeSize": {"lines": 100, "ceiling": 1000, "testLines": 2500, "testCeiling": 3000},
+    }
+    built = {
+        **IMPLEMENTED,
+        "changeSize": {"lines": 100, "ceiling": 1000, "testLines": 3000, "testCeiling": 3000},
+    }
     ran = _run({"ref": "4"}, preflight=YOUNG, spec=spec, **{**answers, "implement": built})
     assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement", "review"]
     assert ran["result"]["verdict"] == "approve"
@@ -625,28 +664,31 @@ def test_without_the_critic_a_change_may_fill_the_whole_ceiling() -> None:
     old = {**PREFLIGHT, "critic": True, "critic_reason": "others rely on it"}
     ran = _run({"ref": "4"}, preflight=old, spec=spec)
     assert ran["result"]["tooLarge"]["stage"] == "the spec", (
-        "with the critic two thirds still holds"
+        "with the critic two thirds of the test ceiling still holds"
     )
-    assert "two thirds of the ceiling the run stops" in ran["prompts"]["spec"]
+    assert "two thirds of the test ceiling the run stops" in ran["prompts"]["spec"]
 
 
 def test_the_critics_share_of_the_size_is_not_counted_when_it_does_not_run() -> None:
-    sized = {**SPECIFIED, "changeSize": {"lines": 700, "ceiling": 1500}}
-    over = {"implementationLines": 451, "criticLines": 300, "recordLines": 50, "proposedSplit": []}
+    sized = {
+        **SPECIFIED,
+        "changeSize": {"lines": 100, "ceiling": 1000, "testLines": 2900, "testCeiling": 3000},
+    }
+    over = {"implementationLines": 400, "criticLines": 300, "recordLines": 50, "proposedSplit": []}
     answers = {"implement": IMPLEMENTED, "review": REVIEW}
     ran = _run({"ref": "4"}, preflight=YOUNG, spec={**sized, "changeEstimate": over}, **answers)
-    assert ran["result"]["verdict"] == "approve", "1,201 of 1,500 without the critic's 300"
+    assert ran["result"]["verdict"] == "approve", (
+        "2,900 of 3,000 test lines without the critic's 300"
+    )
     assert "plus the critic's tests" not in ran["prompts"]["spec"]
     assert "return criticLines: 0" in ran["prompts"]["spec"]
-    heavy = {**SPECIFIED, "changeSize": {"lines": 1501, "ceiling": 1500}}
+    heavy = {**SPECIFIED, "changeSize": {"lines": 1001, "ceiling": 1000}}
     ran = _run({"ref": "4"}, preflight=YOUNG, spec=heavy)
-    assert (
-        "over the change-size ceiling of 1500, and the review"
-        in ran["result"]["verdictForcedBy"][0]
-    )
-    full = {**over, "implementationLines": 800}
+    assert "over the change-size ceiling of 1000" in ran["result"]["verdictForcedBy"][0]
+    full = {**over, "implementationLines": 900}
     ran = _run({"ref": "4"}, preflight=YOUNG, spec={**sized, "changeEstimate": full})
-    assert "no critic, records 50" in ran["result"]["verdictForcedBy"][0]
+    assert "no critic" not in ran["result"]["verdictForcedBy"][0], "a product stop names no critic"
+    assert "records 50" in ran["result"]["verdictForcedBy"][0]
 
 
 OWED_LINE = (

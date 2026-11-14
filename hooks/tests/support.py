@@ -129,6 +129,11 @@ class FakeRepo:
     pushed: bool | None = False
     asked: list[str] = field(default_factory=list)
     names: dict[str, str] = field(default_factory=lambda: dict(NAMES))
+    default_files: dict[str, str] = field(default_factory=dict)
+
+    def default_file(self, root: Path, relative: str) -> str | None:
+        del root
+        return self.default_files.get(relative)
 
     def current_branch(self, cwd: Path) -> str | None:
         self.asked.append(f"branch {cwd}")

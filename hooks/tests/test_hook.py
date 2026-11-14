@@ -828,3 +828,17 @@ def test_the_manifest_of_a_checkout_is_read_from_git_once(
     assert reads == [session, adopted]
     assert hook.LocalFilesystem().guarded_checkout(adopted / "x") is not None
     assert reads == [session, adopted, adopted]
+
+
+def test_git_repo_state_reads_a_file_from_the_default_branch_not_the_work_tree(
+    tmp_path: Path,
+) -> None:
+    state = hook.GitRepoState()
+    assert state.default_file(tmp_path, "t.md") is None, "no repository, no default branch"
+    _git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "t.md").write_text("held\n", encoding="utf-8")
+    _git(tmp_path, "add", "t.md")
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x")
+    (tmp_path / "t.md").write_text("edited\n", encoding="utf-8")
+    assert state.default_file(tmp_path, "t.md") == "held\n"
+    assert state.default_file(tmp_path, "gone.md") is None

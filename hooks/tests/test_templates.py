@@ -284,15 +284,24 @@ FIRST_SLICE_LINES = 683
 def test_the_change_size_ceiling_is_there_before_the_first_feature_and_its_first_slice_fits(
     tmp_path: Path,
 ) -> None:
-    # Why: ADR 0032. The spec stage stops a ticket over two thirds of the ceiling as too large,
-    # so a first slice the pipeline builds must fit under that, with no ceiling to record first.
+    # Why: ADRs 0032 and 0045. The product ceiling is the stop itself, so a first slice the
+    # pipeline builds must fit under it with every line counted, as it is before the Test paths
+    # section is filled, and with no ceiling to record first.
     path = TEMPLATES / "quality/thresholds.toml"
     ceiling = tomllib.loads(path.read_text(encoding="utf-8"))["ceilings"]["change"]
-    assert ceiling["files"] * 2 >= FIRST_SLICE_FILES * 3, "the first slice's files fit"
-    assert ceiling["lines"] * 2 >= FIRST_SLICE_LINES * 3, "the first slice's lines fit"
+    assert ceiling["product_files"] >= FIRST_SLICE_FILES, "the first slice's files fit"
+    assert ceiling["product_lines"] >= FIRST_SLICE_LINES, "the first slice's lines fit"
     (tmp_path / "quality").mkdir()
     shutil.copy(path, tmp_path / "quality/thresholds.toml")
-    assert change_size.ceilings(tmp_path) == (40, 1500), "the gate reads the template's ceiling"
+    assert change_size.ceilings(tmp_path) == change_size.Ceilings(25, 1000, 3000), (
+        "the gate reads the template's ceilings"
+    )
+
+
+def test_the_binding_template_has_a_test_paths_row_the_gate_finds_unfilled() -> None:
+    text = (TEMPLATES / "docs/process/binding.md").read_text(encoding="utf-8")
+    assert "## Test paths\n" in text
+    assert "- Tests: <" in text, "adoption fills the placeholder"
 
 
 def test_start_runs_the_deliverable_on_its_port_and_says_where_to_open_it(tmp_path: Path) -> None:

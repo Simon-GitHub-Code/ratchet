@@ -1954,3 +1954,44 @@ def test_the_adoption_writes_no_instruction_file_the_judge_does_not_know() -> No
         if merge_ready.instructs(token)
     }
     assert copied | named == merge_ready.ADOPTION_WRITES
+
+
+def part(*promises: str, split: str = "01-a.md") -> str:
+    criteria = "".join(f"- [ ] {promise}\n" for promise in promises)
+    return f"# 02: B\n\nStatus: ready-for-agent\n\nSplit from: {split}\n\n{criteria}"
+
+
+PART = ".scratch/thing/issues/02-b.md"
+LABEL_REFUSED = f"{BUT}{PART} {GIVES.format(label='ready-for-agent')}"
+
+
+def test_a_part_of_a_split_ticket_inherits_the_label_its_parent_holds(tracked: Path) -> None:
+    # Why: ADR 0046. Splitting by size is no product decision, so the parts carry the agreement.
+    change(tracked, {PART: part("It saves a link.")}, record=False)
+    assert judged(tracked) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        part("It saves a link.", "It mines coins."),
+        part("It saves a link!"),
+        part("It saves a link.", split="09-missing.md"),
+        part("It saves a link.", split="02-b.md"),
+        "# 02: B\n\nStatus: ready-for-agent\n\n- [ ] It saves a link.\n",
+    ],
+    ids=["an added promise", "a reworded one", "a parent that is not there", "itself", "no parent"],
+)
+def test_a_part_that_adds_or_rewords_a_promise_still_gives_the_label_to_the_owner(
+    tracked: Path, text: str
+) -> None:
+    change(tracked, {PART: text}, record=False)
+    assert LABEL_REFUSED in judged(tracked)
+
+
+def test_the_judge_reads_the_parent_from_the_default_branch_not_from_the_change(
+    tracked: Path,
+) -> None:
+    unlabelled = AGREED.replace("ready-for-agent", "needs-triage")
+    change(tracked, {TICKET: unlabelled, PART: part("It saves a link.")}, record=False)
+    assert LABEL_REFUSED in judged(tracked) or FROZEN in " ".join(judged(tracked))
