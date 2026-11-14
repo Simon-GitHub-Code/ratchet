@@ -629,6 +629,7 @@ def test_clean_removes_merged_and_gone_work_trees_and_keeps_work_in_progress(
     capsys.readouterr()
     assert run(root, "clean") == 0
     assert capsys.readouterr().out.splitlines() == [
+        f"recorded: {BRANCH_A}: merged, and the run that landed it stopped before it said so",
         f"removed: {tree_a}: its branch is merged",
         f"kept: {tree_c}: `{BRANCH_C}` is not merged",
         f"removed: {stray}: no work tree is registered there",

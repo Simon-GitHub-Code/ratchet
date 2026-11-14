@@ -14,8 +14,10 @@ from hypothesis import HealthCheck, Phase, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
 
+from tests import model_tla
 from tests import ratchet_model as model
 from tests.ratchet_world import Gate, Landing, World
+from tests.support import PLUGIN_ROOT
 
 NAMED, BROUGHT, NOT_LATE, REMEMBERED = model.RULES
 
@@ -53,10 +55,11 @@ OWN_RECORD = [
 ]
 # Why: the stateful run checks real histories past the exhaustive graph's bound.
 LONGER = 6
+PAGE = PLUGIN_ROOT / "docs/model/ratchet.md"
 
 
 @functools.cache
-def graph() -> tuple[frozenset[model.State], list[model.Edge]]:
+def graph() -> model.Graph:
     return model.graph()
 
 
@@ -68,7 +71,7 @@ def shortest_break(name: str) -> list[str] | None:
     while queue:
         state = queue.popleft()
         for action, after in model.moves(state):
-            if not rule_holds(state, action.name, after):
+            if not rule_holds(state, action, after):
                 path, at = [action.name], came[state]
                 while at is not None:
                     path.append(at[1])
@@ -97,9 +100,11 @@ def test_every_rule_reads_as_one_sentence() -> None:
 
 def test_every_kind_of_action_is_reachable() -> None:
     _, edges = graph()
-    named = {name for _, name, _ in edges}
-    for kind in model.Kind:
-        assert any(kind.value in name for name in named), kind
+    assert {action.kind for _, action, _ in edges} == set(model.Kind)
+
+
+def test_the_page_was_checked_and_drawn_from_the_current_export() -> None:
+    assert not (why := model_tla.stale(PAGE, model.export(), model.summary())), why
 
 
 def landings() -> list[tuple[model.State, model.Branch, model.State]]:
@@ -168,7 +173,7 @@ def real_steps(world: World) -> list[model.Edge]:
             merge.after, (None, None), model.remember(state.last, merge.after), state.left - 1
         )
         held.append(state.last)
-        steps.append((before, "a branch lands", state))
+        steps.append((before, model.Action(model.Kind.LAND, model.Slot.A), state))
     return steps
 
 

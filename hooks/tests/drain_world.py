@@ -122,7 +122,11 @@ class World:
         The command runs in this process, and an exception no ``except`` of the drain catches
         stands for the kill. The drain lock it holds is freed either way, as the kernel frees it.
         """
-        real_git, real_write = gatelib.git, drain.queue_notes.write_note
+        real_git, real_write, real_discard = (
+            gatelib.git,
+            drain.queue_notes.write_note,
+            drain.discard,
+        )
 
         def git_until(stop: tuple[str, str]) -> Callable[..., str | None]:
             def run(root: Path, *args: str) -> str | None:
@@ -144,6 +148,10 @@ class World:
         def killed(*_args: object) -> None:
             raise Killed
 
+        def discard_then_killed(*args: Path | str) -> None:
+            real_discard(*args)
+            raise Killed
+
         killers = {
             Kind.KILL_MID_REBASE: lambda: mock.patch.object(
                 gatelib, "git", git_until(("rebase", "--quiet"))
@@ -157,6 +165,9 @@ class World:
                 drain.queue_notes, "write_note", write_until
             ),
             Kind.KILL_LAND_BEFORE_DISCARD: lambda: mock.patch.object(drain, "discard", killed),
+            Kind.KILL_LAND_AFTER_DISCARD: lambda: mock.patch.object(
+                drain, "discard", discard_then_killed
+            ),
         }
         return killers[kind]()
 
@@ -211,12 +222,14 @@ class World:
         )
         branches = {line.split(" ", 1)[0]: line.split(" ", 3)[1:] for line in refs.splitlines()}
         stashes = git(self.root, "stash", "list", "--format=%gs").splitlines()
+        on_merge = drain.route.merged_features(self.root, "main")
         tickets = []
         for name, was in ghost.each():
             merged = name not in statuses
             tree = self.tree_state(name) if self.tree(name) in trees else Tree.NONE
             listed = branches.get(BRANCH[name])
-            branch, current = self.branch_state(name, listed, merged=merged, was=was)
+            landed = merged and BRANCH[name] in on_merge
+            branch, current = self.branch_state(name, listed, landed=landed, was=was)
             text = int(ANSWER in (self.root / REF[name]).read_text(encoding="utf-8"))
             note = self.note(name, merged=merged, was=was.note)
             ticket = Ticket(
@@ -240,12 +253,12 @@ class World:
         return Tree.DIRTY if git(self.tree(name), "status", "--porcelain") else Tree.CLEAN
 
     def branch_state(
-        self, name: Name, listed: list[str] | None, *, merged: bool, was: Ticket
+        self, name: Name, listed: list[str] | None, *, landed: bool, was: Ticket
     ) -> tuple[Branch, bool]:
-        """The branch and whether it holds the default tip; a merged one is as it landed."""
+        """The branch and whether it holds the default tip; one on its merge is as it landed."""
         if listed is None:
             return Branch.NONE, True
-        if merged:
+        if landed:
             return was.branch, was.current
         ahead, behind, subject = listed
         if ahead == "0":
@@ -276,4 +289,5 @@ class World:
             fresh=held.get("reported") is False,
             attempts=min(model.RETRIES, attempts if isinstance(attempts, int) else 0),
             rebasing=rebasing,
+            discarding=held.get("discarding") is True,
         )

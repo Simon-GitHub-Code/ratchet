@@ -254,9 +254,10 @@ def running(root: Path) -> list[str]:
 
 def tried(url: str) -> None:
     """What the good record says was done: the empty list, a link saved, the list again."""
-    assert request(url)[0] == 200
-    assert request(url, "POST", "/items", body=b"link=https://example.com/a")[0] == 303
-    assert request(url)[0] == 200
+    expected = (("GET", "/", None, 200), ("POST", "/items", b"link=https://example.com/a", 303))
+    for method, path, body, want in (*expected, ("GET", "/", None, 200)):
+        status, answer = request(url, method, path, body=body)
+        assert status == want, f"{method} {path} answered {status}, not {want}: {answer[:300]!r}"
 
 
 def good_record(directory: Path) -> dict[str, object]:

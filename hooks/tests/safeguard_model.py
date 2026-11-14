@@ -30,6 +30,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, NamedTuple, TypeVar
 
+from tests import model_tla
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
@@ -86,7 +88,9 @@ class Tree(NamedTuple):
     """What one commit holds that the gate reads: the kind's instances, the binding, the review.
 
     ``review`` is the binding's architecture review row, ``BOUND`` to the plugin's gate or
-    ``ABSENT``; ``reviewed`` is whether a decision record citing the kind is held.
+    ``ABSENT``; ``reviewed`` is whether a decision record citing the kind that counts is held, one
+    that landed after the kind first arrived. ``early`` is whether one that landed before it is
+    held: the gate never reads it, since a review settles only the arrivals it could have seen.
     """
 
     instances: frozenset[int] = frozenset()
@@ -96,6 +100,7 @@ class Tree(NamedTuple):
     event_row: Row = Row.LATER
     review: Row = Row.ABSENT
     reviewed: bool = False
+    early: bool = False
 
     def found(self, table: Table) -> frozenset[int]:
         """The instances a Triggers row as ``table`` says finds."""
@@ -265,11 +270,12 @@ def merge(fork: Tree, tip: Tree, head: Tree) -> Tree | None:
         three_way(*sides) for sides in zip(fork.binding, tip.binding, head.binding, strict=True)
     ]
     reviewed = three_way(fork.reviewed, tip.reviewed, head.reviewed)
-    if any(field is None for field in fields) or reviewed is None:
+    early = three_way(fork.early, tip.early, head.early)
+    if any(field is None for field in fields) or reviewed is None or early is None:
         return None
     row, table, event, event_row, review = (field[0] for field in fields if field is not None)
     instances = (tip.instances - removed) | added
-    return Tree(instances, row, table, event, event_row, review, reviewed[0])
+    return Tree(instances, row, table, event, event_row, review, reviewed[0], early[0])
 
 
 @dataclass(frozen=True)
@@ -358,7 +364,12 @@ def canonical(state: State) -> State:
     Two instances the same trees hold are interchangeable, so numbering them in the order of
     the trees that hold them makes one state of every way to name them. Once the review is
     settled the gate never reads its record or its start again, so every settled state is
-    numbered as one that began held and holds no record.
+    numbered as one that began held and holds no record, early or not.
+
+    Why folding "a record landed" into "started held" is sound: the two differ in one verdict,
+    ``reopens``, which needs the kind never to have been held. A record counts only once the
+    kind is held (``record``), and a start that is held has the kind held, so a settled state of
+    either kind has ``held`` set, which this keeps, and ``reopens`` is false in both.
     """
     bits = places(state)
     order = sorted(bits, key=lambda n: (bits[n], n))
@@ -369,7 +380,11 @@ def canonical(state: State) -> State:
 
     def renamed(tree: Tree) -> Tree:
         instances = frozenset(names[n] for n in tree.instances)
-        return tree._replace(instances=instances, reviewed=tree.reviewed and not calm)
+        return tree._replace(
+            instances=instances,
+            reviewed=tree.reviewed and not calm,
+            early=tree.early and not calm,
+        )
 
     branch = state.branch
     if branch is not None:
@@ -433,14 +448,17 @@ def record(state: State, new: frozenset[int] | None) -> Tree | None:
     """The tip with the review's record landed beside ``new`` instances; ``None`` when it cannot.
 
     Why: a record matters only while the review is owed; one landed after it settled is one the
-    gate never reads.
+    gate never reads. A record counts only when the kind has been held before its change: one
+    landed while no commit held the kind, or in the change that first brings it, is older than
+    the arrival, which it could not have seen, and the gate reads it not. One landed before the
+    review was asked is the same file, so only the asked case is modelled.
     """
     tip = state.main
-    if state.start is not Start.FRESH or tip.reviewed or new is None:
+    if state.start is not Start.FRESH or new is None or len(tip.instances | new) > WIDEST:
         return None
-    if len(tip.instances | new) > WIDEST:
-        return None
-    return tip._replace(instances=tip.instances | new, reviewed=True)
+    if state.held:
+        return None if tip.reviewed else tip._replace(instances=tip.instances | new, reviewed=True)
+    return None if tip.early else tip._replace(instances=tip.instances | new, early=True)
 
 
 def binding_edit(tip: Tree, change: Change) -> Tree | None:
@@ -478,14 +496,16 @@ class Step(NamedTuple):
     change: Change | None = None
 
 
-def forks(tip: Tree) -> bool:
-    """Whether a branch forked from ``tip`` waits open, or lands at once.
+def forks(state: State) -> bool:
+    """Whether a branch forked from the tip waits open, or lands at once.
 
     Why: a branch that waits matters only where the gate's verdict can change while it waits.
-    Once the tip's row is gone or its Triggers row finds nothing, the kind is never red again,
-    and a branch then lands as it would at once.
+    Once the Triggers row finds nothing the kind is never red again. With the kind's row gone it
+    is red no more for its row, but still red for its review while one is owed, so a branch waits
+    there too; with neither, a branch lands as it would at once.
     """
-    return tip.row is not Row.ABSENT and tip.table is Table.FINDS
+    tip = state.main
+    return tip.table is Table.FINDS and (tip.row is not Row.ABSENT or review_owed(tip, state.start))
 
 
 def landed(state: State, result: Landing) -> State:
@@ -519,7 +539,7 @@ def outcomes(step: Step, state: State) -> Iterator[tuple[State, Landing | None]]
         yield (after._replace(branch=None) if result.landed else after), result
     elif step.verb is Verb.ABANDON and branch is not None:
         yield state._replace(branch=None), None
-    elif step.verb is Verb.FORK and branch is None and forks(state.main):
+    elif step.verb is Verb.FORK and branch is None and forks(state):
         assert step.change is not None
         for head in heads(state, step.change):
             branch = Branch(state.main, step.change, head, state.held, state.start)
@@ -726,10 +746,25 @@ def reviewed_kind_is_judged_by_its_row(result: Landing) -> bool:
     return result.landed is not rows.red
 
 
-def a_review_is_owed_only_after_its_arrival(state: State) -> bool:
-    """No kind owes a review before the binding asks for it, nor one held when it first asked."""
-    owing = reviews_owed(state) is not None
-    return not owing or (state.main.review is Row.BOUND and state.start is Start.FRESH)
+def route_owes_what_the_gate_refuses(result: Landing) -> bool:
+    """The route owes a kind's review exactly when the gate refuses one more of its instances."""
+    merged = result.merged
+    if not result.landed or merged is None or not merged.found(merged.table):
+        return True
+    after = landed(State(result.tip, None, None, result.tip_held, result.tip_start), result)
+    # Why: a row bound at the probe's head is owed no longer, so the gate can be red only for the
+    # review, which is the one reason this asks about.
+    probe = merged._replace(instances=merged.instances | {-1}, row=Row.BOUND)
+    refused = judge(merged, probe, after.held, start=after.start).red
+    return (reviews_owed(after) is not None) == refused
+
+
+def an_early_record_settles_nothing(state: State) -> bool:
+    """A decision record that landed before the kind first arrived leaves its review owed."""
+    main = state.main
+    stray = main.early and not main.reviewed and main.review is Row.BOUND
+    arrived = state.start is Start.FRESH and bool(main.found(main.table))
+    return not (stray and arrived) or reviews_owed(state) is not None
 
 
 def owed_never_grows_unbound(state: State) -> bool:
@@ -788,9 +823,10 @@ RULES: dict[str, Rule] = {
     "reviewed kind is judged by its row": Rule(
         "step", step_check=reviewed_kind_is_judged_by_its_row
     ),
-    "a review is owed only after its arrival": Rule(
-        "state", state_check=a_review_is_owed_only_after_its_arrival
+    "the route owes what the gate refuses": Rule(
+        "step", step_check=route_owes_what_the_gate_refuses
     ),
+    "an early record settles nothing": Rule("state", state_check=an_early_record_settles_nothing),
     "owed never grows unbound": Rule("state", state_check=owed_never_grows_unbound),
     "owed never grows unbound, with the guard": Rule(
         "state", state_check=owed_never_grows_unbound_guarded
@@ -801,3 +837,75 @@ RULES: dict[str, Rule] = {
         "step", step_check=nothing_blinds_the_gate_guarded
     ),
 }
+
+
+def exported_rule(rule: Rule) -> model_tla.Rule:
+    """A rule as the module checks it: an invariant on a state, or a rule on every step."""
+    if rule.state_check is not None:
+        return model_tla.Invariant(rule.doc, rule.state_check)
+
+    def keeps(before: State, name: str, after: State) -> bool:
+        return rule((before, name, after))
+
+    return model_tla.Step(rule.doc, keeps)
+
+
+class Kind(NamedTuple):
+    """What the default branch holds of the kind, the event and the review, and the histories."""
+
+    instances: int
+    row: str
+    table: str
+    event: str
+    event_row: str
+    review: str
+    reviewed: bool
+    held: bool
+    start: str
+    allowance: int
+    """As ``State.allowance``, with -1 for none."""
+
+
+def kind(state: State) -> Kind:
+    """What the charts read of a state."""
+    main = state.main
+    allowance = -1 if state.allowance is None else state.allowance
+    return Kind(
+        len(main.instances),
+        main.row,
+        main.table,
+        main.event,
+        main.event_row,
+        main.review,
+        main.reviewed,
+        state.held,
+        state.start,
+        allowance,
+    )
+
+
+def export() -> model_tla.Export:
+    """The reachable graph as a TLA+ module, with the seventeen rules.
+
+    Fourteen rules are about a landing, so each is a ``model_tla.Step``, and the module holds a
+    state once for each set of them the step into it broke.
+    """
+    return model_tla.export(
+        "Safeguard",
+        graph(),
+        {model_tla.identifier(name): exported_rule(rule) for name, rule in RULES.items()},
+        fields=(),
+        derived={
+            **{
+                name: (lambda state, name=name: getattr(kind(state), name)) for name in Kind._fields
+            },
+            "branch": lambda state: "none" if state.branch is None else state.branch.change,
+        },
+        action=model_tla.identifier,
+    )
+
+
+def summary() -> model_tla.Export:
+    """The graph seen through ``kind``, small enough for the statechart tool to draw whole."""
+    seen = model_tla.summary(graph(), kind, model_tla.identifier)
+    return model_tla.export("SafeguardKind", seen, {}, fields=Kind._fields)
