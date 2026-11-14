@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import feature_preflight as preflight
 import merge_ready
 from tests import dependency_stack as stack
 from tests.repos import branch, commit, git, repository, write
@@ -1463,15 +1464,14 @@ BLOCKER = ".scratch/thing/issues/02-b.md"
 ELSEWHERE = ".scratch/other/spec.md"
 
 
-@pytest.fixture
-def linked(tmp_path: Path) -> Path:
-    """A labelled ticket with ``Parent:`` and ``Blocked by:`` lines, and two symbolic links."""
+def linked_by(tmp_path: Path, ticket: str) -> Path:
+    """A labelled ``ticket`` beside a spec, a closed blocker, and two symbolic links."""
     repository(
         tmp_path,
         {
             **BASE,
             SPEC: "# Thing\n",
-            TICKET: WITH_LINKS,
+            TICKET: ticket,
             BLOCKER: "# 02: B\n\nStatus: done\n",
             ELSEWHERE: "# Other\n",
         },
@@ -1481,6 +1481,12 @@ def linked(tmp_path: Path) -> Path:
     commit(tmp_path, "docs: links")
     branch(tmp_path, "records-thing")
     return tmp_path
+
+
+@pytest.fixture
+def linked(tmp_path: Path) -> Path:
+    """A labelled ticket with ``Parent:`` and ``Blocked by:`` lines, and two symbolic links."""
+    return linked_by(tmp_path, WITH_LINKS)
 
 
 def edited(old: str, new: str) -> dict[str, str | None]:
@@ -1547,6 +1553,44 @@ def test_any_other_change_to_an_agreed_ticket_stays_the_owners(
 ) -> None:
     change(linked, files, record=False)
     assert judged(linked) == [f"{BUT}{TICKET} {FROZEN}"]
+
+
+def test_a_parent_that_reads_as_the_same_file_either_way_is_the_agents(tmp_path: Path) -> None:
+    # Why: `Parent: 02-b.md` once read as the number 02, so the two spellings read differently.
+    ticket = WITH_LINKS.replace("Parent: ../spec.md", "Parent: ./02-b.md")
+    repo = linked_by(tmp_path, ticket)
+    change(repo, {TICKET: ticket.replace("./02-b.md", "02-b.md")}, record=False)
+    assert judged(repo) == []
+    old, new = (preflight.local_ticket(TICKET, text) for text in (ticket, ticket.replace("./", "")))
+    assert old.parent == new.parent == BLOCKER
+
+
+@pytest.mark.parametrize(
+    ("base", "now"),
+    [
+        ("Parent: ../spec.md", "Parent: 2"),
+        ("Parent: 2", "Parent: ../spec.md"),
+        ("Parent: ../spec.md", "Parent: #2"),
+        ("Blocked by: 02-b.md", "Blocked by: 2"),
+        ("Blocked by: 2", "Blocked by: 02-b.md"),
+        ("Blocked by: 02-b.md", "Blocked by: #2"),
+    ],
+)
+def test_a_link_that_turns_into_a_number_or_back_is_the_owners(
+    tmp_path: Path, base: str, now: str
+) -> None:
+    was = "Parent: ../spec.md" if base.startswith("Parent") else "Blocked by: 02-b.md"
+    ticket = WITH_LINKS.replace(was, base)
+    repo = linked_by(tmp_path, ticket)
+    change(repo, {TICKET: ticket.replace(base, now)}, record=False)
+    assert judged(repo) == [f"{BUT}{TICKET} {FROZEN}"]
+
+
+def test_a_parent_section_in_place_of_a_line_is_the_owners(tmp_path: Path) -> None:
+    ticket = WITH_LINKS.replace("Parent: ../spec.md\n", "")
+    repo = linked_by(tmp_path, ticket + "\n## Parent\n\n../spec.md\n")
+    change(repo, {TICKET: ticket + "\n## Parent\n\n../../thing/spec.md\n"}, record=False)
+    assert judged(repo) == [f"{BUT}{TICKET} {FROZEN}"]
 
 
 def test_a_ticket_the_change_renames_is_not_a_link_edit(linked: Path) -> None:

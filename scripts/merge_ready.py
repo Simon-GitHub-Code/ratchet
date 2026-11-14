@@ -855,8 +855,6 @@ def resolved(change: Change, ticket: str, ref: str) -> str | None:
     walked: list[str] = []
     parts = [*PurePosixPath(ticket).parent.parts, *ref.split("/")]
     for index, part in enumerate(parts):
-        if part in ("", "."):
-            continue
         if part == "..":
             if not walked:
                 return None
@@ -896,11 +894,35 @@ def link_only(change: Change, path: str) -> bool:
         same = LINK_REF.sub("\0", was) == LINK_REF.sub("\0", now) and len(found[0]) == len(found[1])
         if not links or not same:
             return False
-        for before, after in zip(*found, strict=True):
-            target = resolved(change, path, before)
-            if before != after and (target is None or target != resolved(change, path, after)):
-                return False
-    return True
+    return same_refs(change, path, (old, new))
+
+
+def same_refs(change: Change, path: str, texts: tuple[str, str]) -> bool:
+    """Whether the preflight reads the same refs from both texts, each pair one file or number.
+
+    Why: the regex of ``link_only`` must not decide how a line reads. ``Ticket`` is what the
+    drain and the route parse with, so a path that it reads as a number is the owner's.
+    """
+    folder = PurePosixPath(path).parent
+    refs = []
+    for text in texts:
+        ticket = preflight.local_ticket(path, text)
+        # Why: a parent comes joined to the folder of the ticket; a blocker is joined here.
+        blockers = [
+            b if not b.endswith(".md") else (folder / b).as_posix() for b in ticket.blockers
+        ]
+        refs.append([*([ticket.parent] if ticket.parent else []), *blockers])
+
+    def same(before: str, after: str) -> bool:
+        found = (resolved(change, "", before), resolved(change, "", after))
+        return before == after or (
+            before.endswith(".md")
+            and after.endswith(".md")
+            and None not in found
+            and found[0] == found[1]
+        )
+
+    return len(refs[0]) == len(refs[1]) and all(same(*pair) for pair in zip(*refs, strict=False))
 
 
 def agreement(change: Change, path: str) -> str | None:

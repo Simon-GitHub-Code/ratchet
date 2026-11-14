@@ -16,7 +16,13 @@ A skill rewrote the `Parent:` line of two agent-ready tickets from one path of t
 - On each changed line, the text around the `.md` refs is identical and the refs are as many. A link added or removed is another difference.
 - Each ref that changed names, from the folder of the ticket, one regular file in the head's tree, and the old and new refs name the same one. The judge walks the path component by component in the commit's tree, never the work tree. A missing file, a directory, an absolute path, a path that climbs out of the repository, and a symbolic link at any component make it uncertain, and uncertain is the owner's.
 
+The judge does not trust its own pattern for how a line reads. It parses both texts with the preflight's `Ticket`, the parser the drain and the route use, and the edit passes only when `parent` and `blockers` give the same number of refs and each pair is either two numbers with the same text, or two paths that lead to the same regular file. A path read as a number on one side is the owner's.
+
 Every other rule of ADR 0031 still applies to the rest of the change. The spec the ticket inherits from, a ticket it is blocked by and every other path are judged by their own rules, and the label count, the number and the close rules still read the ticket. A link edit frees nothing but the ticket's own link lines. When it holds, the judge gives no reason for that ticket; the other reasons it prints are unchanged.
+
+## A parent line reads a path before a number
+
+The preflight's `PARENT_LINE` tried `#?\d+` before the `.md` form, so `Parent: 02-b.md` read as the number `02`, which `reads` turns into every local ticket numbered 2, or issue 2 on a forge. A path read as a number is a defect, so the pattern now tries the `.md` form first, as `BLOCKER_REF` does. This changes how a parent line whose file name starts with digits is read: it is a path. No fallback keeps the old reading.
 
 ## What an agent could forge
 
@@ -36,4 +42,5 @@ This is wrong if a link-only merge changes what a labelled ticket builds or whet
 
 - Let any change to a link line pass: rejected. `Parent:` selects the spec the conjecture is read from, so a link to another spec changes what is built.
 - Compare the link text with its spelling normalised: rejected. Text that looks equal can lead elsewhere through a link on the way, so the files are compared.
+- Trust the line-level pattern alone: rejected. A reviewer showed a rewrite of `./02-b.md` to `02-b.md` that named one file but read as a path and then as a number.
 - Resolve in the work tree: rejected. The judge reads commits, and the work tree may hold what the merge does not.
