@@ -235,3 +235,121 @@ def test_a_package_json_that_is_not_json_or_has_no_scripts_names_nothing(tmp_pat
     assert appcheck.start_command(tmp_path) is None
     (tmp_path / "justfile").write_text("check:\n    true\n", "utf-8")
     assert appcheck.start_command(tmp_path) is None
+
+
+CLI_PIECE = Slice("cli", "add a task, list it", "add buy oat milk", "buy oat milk", then="list")
+TODO = textwrap.dedent(
+    """
+    import pathlib, sys
+    store = pathlib.Path("tasks.txt")
+    if sys.argv[1] == "add":
+        store.open("a").write(" ".join(sys.argv[2:]) + "\\n")
+    elif sys.argv[1] == "list":
+        print(store.read_text() if sys.argv[-1] != "empty" else "nothing")
+    else:
+        sys.exit(2)
+    """
+)
+
+
+def cli_app(tmp_path: Path, recipe: str = "python3 todo.py {{args}}") -> Path:
+    (tmp_path / "todo.py").write_text(TODO, encoding="utf-8")
+    (tmp_path / "justfile").write_text(f"run *args:\n    {recipe}\n", encoding="utf-8")
+    return tmp_path
+
+
+def cli_check(root: Path, piece: Slice = CLI_PIECE, timeout: float = 20.0) -> appcheck.Result:
+    return appcheck.check(root, piece, root / "app.log", timeout=timeout)
+
+
+def test_a_command_line_tool_is_run_the_way_the_repository_says_and_its_list_read(
+    tmp_path: Path,
+) -> None:
+    result = cli_check(cli_app(tmp_path))
+    assert result.usable, result.finding
+    assert result.start_command == "just run"
+    assert result.started
+    assert "printed what the slice expects" in result.finding
+    log = (tmp_path / "app.log").read_text(encoding="utf-8")
+    assert "$ just run add buy oat milk" in log
+    assert "$ just run list" in log
+
+
+def test_a_command_line_tool_that_runs_but_lists_nothing_fails_the_slice(tmp_path: Path) -> None:
+    piece = Slice("cli", "d", "add x", "buy oat milk", then="list empty")
+    result = cli_check(cli_app(tmp_path), piece)
+    assert not result.usable
+    assert result.started
+    assert "is not in its output" in result.finding
+
+
+def test_a_command_line_tool_that_exits_non_zero_stops_at_that_command(tmp_path: Path) -> None:
+    result = cli_check(cli_app(tmp_path), Slice("cli", "d", "frobnicate", "x", then="list"))
+    assert not result.usable
+    assert not result.started
+    assert "failed (2)" in result.finding
+    assert "$ just run list" not in (tmp_path / "app.log").read_text(encoding="utf-8")
+
+
+def test_a_command_line_tool_that_does_not_answer_fails_with_the_wait(tmp_path: Path) -> None:
+    result = cli_check(cli_app(tmp_path, "exec sleep 3"), timeout=0.5)
+    assert not result.usable
+    assert "no answer within 0.5s" in result.finding
+
+
+def test_a_command_line_tool_runs_through_the_wrapper_and_the_slices_one_step_alone(
+    tmp_path: Path,
+) -> None:
+    seen: list[list[str]] = []
+
+    def wrap(command: list[str]) -> list[str]:
+        seen.append(list(command))
+        return command
+
+    root = cli_app(tmp_path)
+    one = Slice("cli", "d", "add buy oat milk", "buy oat milk")
+    launch = appcheck.Launch(wrap, {"PATH": "/usr/bin:/bin"})
+    result = appcheck.check(root, one, root / "app.log", launch=launch)
+    assert result.start_command == "just run"
+    assert seen == [["sh", "-c", "just run add buy oat milk"]]
+    assert not result.usable  # the add prints nothing, so the expected line is not in its output
+
+
+def test_a_readmes_example_run_is_cut_back_to_the_program_before_its_arguments() -> None:
+    assert appcheck.cli_base("go run . add <task>", "add") == "go run ."
+    assert appcheck.cli_base("go run . add buy milk", "add") == "go run ."
+    assert appcheck.cli_base("cargo run -- <args>", "list") == "cargo run --"
+    assert appcheck.cli_base("./todo", "") == "./todo"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "go run .",
+        "cargo run",
+        "dotnet run",
+        "bundle exec rackup",
+        "bin/rails server",
+        "rails s",
+        "./gradlew bootRun",
+        "mvn spring-boot:run",
+        "java -jar app.jar --serve",
+    ],
+)
+def test_the_start_commands_of_the_other_ecosystems_are_read_from_a_readme(
+    tmp_path: Path, command: str
+) -> None:
+    (tmp_path / "README.md").write_text(f"```sh\n{command}\n```\n", encoding="utf-8")
+    found = appcheck.start_command(tmp_path)
+    assert found is not None
+    assert found.command == command
+
+
+@pytest.mark.parametrize(
+    "command", ["go build ./...", "cargo test", "dotnet build", "bundle install"]
+)
+def test_the_build_and_test_commands_of_the_other_ecosystems_are_not_start_commands(
+    tmp_path: Path, command: str
+) -> None:
+    (tmp_path / "README.md").write_text(f"```sh\n{command}\n```\n", encoding="utf-8")
+    assert appcheck.start_command(tmp_path) is None

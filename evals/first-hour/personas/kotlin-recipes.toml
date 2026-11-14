@@ -1,0 +1,34 @@
+# A web owner who insists on Kotlin on the JVM.
+
+name = "kotlin-recipes"
+stack = "Kotlin on the JVM, a web backend"
+
+idea = "A recipe box for my family: I type a recipe's name on a page, it saves it, and the page lists every recipe we have."
+
+profile = """
+I am a hobbyist, not a software engineer, though my day job is near the Java world and I know a little
+of it. I have an idea for a small web app for my family and I want an AI to build it while I watch and
+answer questions. I can follow instructions and copy a command into a terminal when I am told exactly
+what to type, but I do not know git, testing, linters, databases or deployment, and I do not want to
+learn them.
+
+The app: a recipe box. A page has a form where I type a recipe's name and save it, and under it the
+list of every recipe saved. Later I may add ingredients, but not now. It runs on my own computer and
+my family opens it from the same wifi.
+
+Firm positions:
+- The back end must be written in Kotlin and run on the Java virtual machine; I have Java 21 on my
+  laptop and I want to use that. If you suggest another language, my answer is no.
+- The pages are made by the server, plain HTML with a form and a list, which works without any
+  JavaScript.
+- Local only. Nothing goes online: no GitHub, no remote repository, no hosting, no accounts.
+- No sign-in; the family shares one list.
+- Keep it small and plain. Saving a recipe and seeing the list matter most; everything else can wait.
+- If a recipe name is saved twice, keep one.
+"""
+
+[slice]
+kind = "html-form"
+describe = "open the page, type a recipe name into the form, save it, and see it in the list"
+value = "Lemon tart for the first hour"
+expect = "Lemon tart for the first hour"

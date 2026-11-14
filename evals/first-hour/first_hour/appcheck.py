@@ -31,15 +31,21 @@ if TYPE_CHECKING:
     from first_hour.persona import Slice
 
 NO_WAY = "no way to start it: no run command in the README, justfile or package.json"
-START_WORDS = re.compile(r"\b(start|dev|serve|server|run|up|app|main)\b")
+START_WORDS = re.compile(r"\b(start|dev|serve|server|run|up|app|main|bootRun|rackup)\b|\brails s\b")
 NOT_START = re.compile(
     r"\b(install|sync|test|pytest|vitest|jest|check|lint|build|fmt|format|typecheck|ci)\b"
 )
-README_LINE = re.compile(r"^\s*\$?\s*((?:just|npm|pnpm|yarn|bun|node|python3?|uv|make|deno)\s.+)$")
+README_LINE = re.compile(
+    r"^\s*\$?\s*((?:just|npm|pnpm|yarn|bun|node|python3?|uv|make|deno"
+    r"|go|cargo|dotnet|bundle|ruby|rails|rackup|bin/rails|java|gradle|mvn|sbt"
+    r"|\./gradlew|\./mvnw)\s.+)$"
+)
 RECIPE = re.compile(r"^([A-Za-z][\w-]*)(?:\s+[^:\n]*)?:(?!=)", re.MULTILINE)
 URL = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d+)")
 RECIPE_NAMES = ("start", "dev", "serve", "run", "app")
 SCRIPT_NAMES = ("start", "dev", "serve")
+CLI_KINDS = frozenset({"cli"})
+PLACEHOLDER = re.compile(r"^(?:<.*|\[.*|\$.*|\{.*|\.\.\.)$")
 FIELD_TYPES = frozenset({"", "text", "url", "search"})
 TIMEOUT_S = 120.0
 REQUEST_S = 15.0
@@ -131,6 +137,20 @@ def _package(root: Path) -> Start | None:
     runner = "pnpm" if (root / "pnpm-lock.yaml").is_file() else "npm"
     runner = "yarn" if (root / "yarn.lock").is_file() else runner
     return Start(f"{runner} run {name}", "package.json")
+
+
+def cli_base(command: str, verb: str) -> str:
+    """A README's example run of a command-line tool, cut back to the part before its arguments.
+
+    ``go run . add <title>`` with the slice's first word ``add`` is ``go run .``: the words from
+    the first placeholder or the slice's own verb on are the arguments the check supplies itself.
+    """
+    kept: list[str] = []
+    for word in command.split():
+        if PLACEHOLDER.match(word) or (kept and word == verb):
+            break
+        kept.append(word)
+    return " ".join(kept)
 
 
 def start_command(root: Path) -> Start | None:
@@ -275,6 +295,67 @@ class Launch:
 DIRECT = Launch()
 
 
+@dataclass(frozen=True)
+class Where:
+    """Where a command-line check runs: the checkout, a command's time, and how it starts."""
+
+    root: Path
+    timeout: float
+    launch: Launch
+
+
+def _cli_once(command: str, where: Where) -> tuple[int, str]:
+    env = {**(os.environ if where.launch.env is None else where.launch.env), "CI": "1"}
+    timeout = where.timeout
+    try:
+        done = subprocess.run(
+            where.launch.wrap(["sh", "-c", command.strip()]),
+            cwd=where.root,
+            env=env,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return -1, f"no answer within {timeout:g}s"
+    return done.returncode, (done.stdout + done.stderr).strip()
+
+
+def check_cli(start: Start, piece: Slice, log: Path, *, where: Where) -> Result:
+    """Run the tool the way the repository says: the slice's first command, then its second.
+
+    The slice works when the last command succeeds and its output holds what the slice expects.
+    """
+    base = cli_base(start.command, (piece.value.split() or [""])[0])
+    steps = [s for s in (piece.value, piece.then) if s]
+    lines: list[str] = []
+    code, out = 0, ""
+    for args in steps:
+        code, out = _cli_once(f"{base} {args}", where)
+        lines.append(f"$ {base} {args}\n[{code}] {out}")
+        if code != 0:
+            break
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    ran = code == 0
+    works = ran and piece.expect in out
+    if works:
+        finding = f"`{base} {steps[-1]}` printed what the slice expects"
+    elif ran:
+        finding = f"`{base} {steps[-1]}` ran, and `{piece.expect}` is not in its output"
+    else:
+        finding = f"`{base} {steps[-1]}` failed ({code}): {out[-300:]}"
+    return Result(
+        base,
+        start.source,
+        started=ran,
+        page_ok=ran,
+        slice=Verdict.WORKS if works else Verdict.FAILS,
+        finding=finding,
+    )
+
+
 def check(
     root: Path, piece: Slice, log: Path, *, timeout: float = TIMEOUT_S, launch: Launch = DIRECT
 ) -> Result:
@@ -282,6 +363,8 @@ def check(
     start = start_command(root)
     if start is None:
         return Result(None, None, started=False, page_ok=False, slice=Verdict.FAILS, finding=NO_WAY)
+    if piece.kind in CLI_KINDS:
+        return check_cli(start, piece, log, where=Where(root, timeout, launch))
     port = free_port()
     base_env = os.environ if launch.env is None else launch.env
     child_env = {**base_env, "PORT": str(port), "HOST": "127.0.0.1", "CI": "1"}
