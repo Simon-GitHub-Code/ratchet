@@ -42,7 +42,7 @@ The gate is the one ADR 0047 describes. A record excuses a loosening only in the
 
 ## Rules
 
-Each rule is about a step, the landing that moves the default branch.
+Each rule is about a step, the landing that moves the default branch. The model and its tests number them 1 to 4 in this order; the names are the module's.
 
 | Rule | Says | In Python | In TLC |
 | --- | --- | --- | --- |
