@@ -220,3 +220,107 @@ def test_the_footer_names_how_many_findings_the_upgrade_makes(
     assert conformance.main(["conformance.py", str(repo)]) == 1
     last = capsys.readouterr().out.splitlines()[-1]
     assert last == "conformance: red (2 failures; `upgrade.py --apply` makes 1 of them)"
+
+
+SCRIPT = '"{{ratchet_plugin}}/scripts/mutation_survivors.py"'
+UNFILTERED = (
+    f'files="$(python3 {SCRIPT} --tool made-up --changed --base "$B")"; '
+    '[ -z "$files" ] && exit 0; made-up run --mutate "$files"'
+)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        UNFILTERED,
+        UNFILTERED.replace("&& exit 0", "|| true"),
+        f'changed=$(python3 {SCRIPT} --tool made-up --changed); made-up "$changed"',
+    ],
+)
+def test_a_recipe_that_hands_changed_output_to_its_tool_unfiltered_is_found(line: str) -> None:
+    assert conformance.unfiltered_changed(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f'files="$(python3 {SCRIPT} --tool made-up --changed | grep -E "[.]x$")"; made-up "$files"',
+        f'files="$(python3 {SCRIPT} --tool made-up --changed)"; files="$(echo "$files" | keep)"',
+        f'files="$(python3 {SCRIPT} --tool made-up --changed)"; echo "$files" | keep | made-up',
+        f"python3 {SCRIPT} --tool made-up --mutants out.jsonl",
+        f"python3 {SCRIPT} --tool made-up --changed",
+    ],
+)
+def test_a_recipe_that_filters_the_list_or_uses_the_mutants_form_is_not_found(line: str) -> None:
+    assert not conformance.unfiltered_changed(line)
+
+
+def test_the_finding_names_both_fixes_and_is_left_to_an_agent(repo: Path) -> None:
+    path = repo / JUSTFILE
+    path.write_text(
+        path.read_text(encoding="utf-8") + f"\n# {UNFILTERED}\nmutation-own:\n    {UNFILTERED}\n",
+        encoding="utf-8",
+    )
+    [found] = [f for f in conformance.findings(repo) if f.rule == "mutation_filter"]
+    assert isinstance(found.fix, conformance.Agent)
+    assert found.path == JUSTFILE
+    assert "unfiltered" in found.problem
+    assert "filter the list in the recipe" in found.problem
+    assert "`--mutants` form (ADR 0050)" in found.problem
+
+
+def test_a_second_unfiltered_recipe_is_not_a_second_finding(repo: Path) -> None:
+    path = repo / JUSTFILE
+    path.write_text(
+        path.read_text(encoding="utf-8") + f"\na:\n    {UNFILTERED}\nb:\n    {UNFILTERED}\n",
+        encoding="utf-8",
+    )
+    assert [f.rule for f in conformance.findings(repo)].count("mutation_filter") == 1
+
+
+CAPTURE = f'files="$(python3 {SCRIPT} --tool made-up --changed)"'
+
+
+def mutation_filter_findings(repo: Path, recipe: str) -> list[conformance.Finding]:
+    path = repo / JUSTFILE
+    path.write_text(path.read_text(encoding="utf-8") + recipe, encoding="utf-8")
+    return [f for f in conformance.findings(repo) if f.rule == "mutation_filter"]
+
+
+def script_recipe(*body: str) -> str:
+    lines = "".join(f"    {line}\n" for line in body)
+    return f"\nmutation-own:\n    #!/usr/bin/env bash\n{lines}"
+
+
+def test_a_script_recipe_that_filters_on_a_later_line_is_not_found(repo: Path) -> None:
+    recipe = script_recipe(
+        CAPTURE,
+        'files="$(printf \'%s\\n\' "$files" | keep)"',
+        'made-up run --mutate "$files"',
+    )
+    assert mutation_filter_findings(repo, recipe) == []
+
+
+def test_a_script_recipe_that_filters_through_a_loop_is_not_found(repo: Path) -> None:
+    recipe = script_recipe(CAPTURE, 'while read -r f; do keep "$f"; done <<< "$files"')
+    assert mutation_filter_findings(repo, recipe) == []
+
+
+def test_a_script_recipe_that_never_filters_is_found(repo: Path) -> None:
+    recipe = script_recipe(CAPTURE, '[ -z "$files" ] && exit 0', 'made-up run --mutate "$files"')
+    assert len(mutation_filter_findings(repo, recipe)) == 1
+
+
+def test_a_filter_in_the_next_recipe_does_not_clear_this_one(repo: Path) -> None:
+    other = '\nother:\n    echo "$files" | keep\n'
+    recipe = script_recipe(CAPTURE, 'made-up run --mutate "$files"') + other
+    assert len(mutation_filter_findings(repo, recipe)) == 1
+
+
+def test_a_linewise_recipe_does_not_read_its_later_lines(repo: Path) -> None:
+    recipe = f'\nmutation-own:\n    {CAPTURE}\n    echo "$files" | keep\n'
+    assert len(mutation_filter_findings(repo, recipe)) == 1
+
+
+def test_a_here_string_fed_with_the_variable_is_a_filter() -> None:
+    assert not conformance.unfiltered_changed(f'{CAPTURE}; keep <<< "$files"')
