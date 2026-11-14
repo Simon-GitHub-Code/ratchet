@@ -35,6 +35,7 @@ from tests.drain_model import (
     Drain,
     Kind,
     Lease,
+    Merge,
     Name,
     Note,
     Outcome,
@@ -400,6 +401,8 @@ class LeaseWorld:
 
     A drain's command runs in this process as its session would run it: ``drain.ancestry`` names
     the session's process above the command, so the real ``drain.rival`` reads real processes.
+    A ``land`` is cut where it holds no lock: ``drain.close``, its last call, is held back until
+    the step that runs it, under the drain lock as ``land`` runs it.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -407,6 +410,7 @@ class LeaseWorld:
         self.sessions: dict[Drain, subprocess.Popen[bytes]] = {}
         self.program: subprocess.Popen[bytes] | None = None
         self.tokens: dict[Drain, str] = {}
+        self.closing: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def chain(self, which: Drain) -> list[str]:
         session = self.sessions[which]
@@ -417,6 +421,29 @@ class LeaseWorld:
         with mock.patch.object(drain, "ancestry", return_value=self.chain(which)):
             self.world.command(*argv)
         return self.world.printed
+
+    def land(self, which: Drain) -> None:
+        """The agent's commits and its verdict record, then ``land`` up to its close."""
+        self.world.by_hand(Kind.COMMIT, Name.A)
+        self.world.by_hand(Kind.RECORD, Name.A)
+
+        def held_back(*args: object, **kwargs: object) -> None:
+            self.closing.append((args, kwargs))
+
+        with mock.patch.object(drain, "close", held_back):
+            self.command(which, "land", REF[Name.A])
+
+    def close_the_landing(self, which: Drain) -> None:
+        """What ``land`` does once ``merge.py`` is done: its close, under the drain lock."""
+        args, kwargs = self.closing.pop()
+        out = io.StringIO()
+        with (
+            mock.patch.object(drain, "ancestry", return_value=self.chain(which)),
+            contextlib.redirect_stdout(out),
+            drain.exclusive(self.world.root),
+        ):
+            drain.close(*args, **kwargs)
+        self.world.printed = out.getvalue()
 
     def perform(self, said: str) -> None:
         """Do what the lease step ``said`` names."""
@@ -433,7 +460,12 @@ class LeaseWorld:
             self.program.wait()
             return
         which, step = model.LEASE_STEPS[said]
-        tree = self.world.tree(Name.A)
+        if step in {*model.CLEANS, *model.REPORTS, Step.CLEAN, Step.OPEN}:
+            self.drain_command(which, step)
+        else:
+            self.by_hand(which, step)
+
+    def drain_command(self, which: Drain, step: Step) -> None:
         token = ["--drain", self.tokens[which]] if step in model.OWN else []
         if step in model.CLEANS:
             over = ["--take-over"] if step is Step.TAKE_OVER else []
@@ -442,8 +474,20 @@ class LeaseWorld:
                 self.tokens[which] = self.world.token
         elif step in model.REPORTS:
             self.command(which, "report", *token)
-        elif step is Step.OPEN:
+        elif step is Step.CLEAN:
+            self.command(which, "clean")
+        else:
             self.command(which, "open", REF[Name.A])
+
+    def by_hand(self, which: Drain, step: Step) -> None:
+        """What a drain's agent or its session does, and ``land`` cut in two."""
+        tree = self.world.tree(Name.A)
+        if step is Step.LAND:
+            self.land(which)
+        elif step is Step.LAND_REST:
+            self.close_the_landing(which)
+        elif step is Step.LAND_KILLED:
+            self.closing.pop()
         elif step is Step.DRAFT:
             write(tree, DRAFT, "half done\n")
         elif step is Step.PROGRAM:
@@ -459,6 +503,16 @@ class LeaseWorld:
         holder = next((d for d, token in self.tokens.items() if token == held.get("token")), None)
         tree = self.world.tree(Name.A)
         made = tree in drain.worktrees(self.world.root)
+        note = drain.queue_notes.read_note(self.world.root, BRANCH[Name.A])
+        merge = (
+            Merge.NONE
+            if BRANCH[Name.A] not in drain.route.merged_features(self.world.root, "main")
+            else Merge.UNSAID
+            if note.get("outcome") != "merged"
+            else Merge.SAID
+            if note.get("reported") is False
+            else Merge.PRINTED
+        )
         return ghost._replace(
             holder=holder,
             alive=(
@@ -470,6 +524,7 @@ class LeaseWorld:
             draft=made and bool(git(tree, "status", "--porcelain")),
             running=self.program is not None and self.program.poll() is None,
             stashed=bool(git(self.world.root, "stash", "list")),
+            merge=merge,
         )
 
     def close(self) -> None:
