@@ -93,6 +93,23 @@ FIXED_OVER = [
     "critique finds a major it does not see fixed",
     "fix-1 measures product code over its ceiling",
 ]
+# Why: one fix pass for every project. Before the critic runs, the review's blocking issues take
+# the pass, and a second review decides: its approval approves, anything else parks.
+REVIEWED_YOUNG = [
+    "the orchestrator starts a build",
+    "preflight is green for a project nobody depends on",
+    "spec fits",
+    "ticket-check finds no gap",
+    "implement is green",
+    "review approves with a blocker of its own open",
+]
+YOUNG_PASS = [*REVIEWED_YOUNG, "fix-1 is green", "review-1 approves"]
+YOUNG_PARKED = [
+    *REVIEWED_YOUNG,
+    "fix-1 is green",
+    "review-1 approves with a blocker of its own open",
+]
+YOUNG_FIXED_OVER = [*REVIEWED_YOUNG, "fix-1 measures product code over its ceiling"]
 
 
 @functools.cache
@@ -274,6 +291,9 @@ def replays() -> dict[str, world.Played]:
     named = {
         "dies": DIES_FIRST,
         "fixed over": FIXED_OVER,
+        "young pass": YOUNG_PASS,
+        "young parked": YOUNG_PARKED,
+        "young fixed over": YOUNG_FIXED_OVER,
         "reconciled over": RECONCILED_OVER,
         "measured over": MEASURED_OVER,
     }
@@ -296,6 +316,7 @@ def test_a_change_a_fix_round_or_a_reconcile_takes_over_the_ceiling_stops_as_too
     # these two ended in an approval on an agent's green answer.
     for name, stage, calls in (
         ("fixed over", "fix round 1", ("fix-1", "Fix")),
+        ("young fixed over", "fix round 1", ("fix-1", "Fix")),
         ("reconciled over", "the reconcile", ("reconcile", "Reconcile")),
     ):
         real = replays()[name]
@@ -310,3 +331,19 @@ def test_a_change_measured_over_a_ceiling_stops_with_no_parts_named() -> None:
     assert real.calls == (("preflight", "Preflight"), ("spec", "Spec"))
     too = real.raw["result"]["tooLarge"]
     assert (too["kind"], too["stage"], too["parts"]) == ("product", "the spec", 0)
+
+
+def test_a_project_nobody_depends_on_spends_one_fix_pass_and_a_second_review_decides() -> None:
+    passed = (("review", "Review"), ("fix-1", "Fix"), ("review-1", "Review"))
+    for name, verdict, forced in (
+        ("young pass", "approve", []),
+        ("young parked", "request_changes", ["1 blocker/major review issue(s)"]),
+    ):
+        real = replays()[name]
+        assert real.calls[-3:] == passed, (name, real.calls)
+        result = real.raw["result"]
+        assert (result["verdict"], result["verdictForcedBy"], result["iterations"]) == (
+            verdict,
+            forced,
+            1,
+        ), name
