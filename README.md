@@ -139,7 +139,7 @@ Carrying on is free in both cases until a change adds another of the same kind.
 - **Four plugins.** Ratchet says what must be true before a merge. [`mattpocock-skills`](https://github.com/mattpocock/skills) says how the work is done, [`pstack`](https://github.com/michael-denyer/pstack-claude) in what style, and [`impeccable`](https://github.com/pbakaus/impeccable) how anything a person sees is designed.
 - **Time at adoption.** About 25 minutes on an empty repository, an estimate. A repository with code takes longer, because the safeguards its code already needs are set up at once.
 - **Agents.** A ticket built while you are away takes five agents, or seven when its plan is sent back once, or nine when the review also finds a blocker and it gets its one fix pass. After you declare that people rely on the project, a critic and its fix loop join and the most is twelve. A ticket judged again behind another merge takes one more, or two when its rebase conflicted or its check went red. A run over several tickets states its largest possible count before it starts.
-- **Your keystrokes.** Four or five questions at init, one setup command, up to six questions at adoption (nine on a repository that already has code), and on GitHub one merge of the adoption. After that: tickets, the agent-ready label, product questions, and the merges the checks leave to you.
+- **Your keystrokes.** Four or five questions at init, one setup command, up to six questions at adoption (nine on a repository that already has code), and on GitHub one merge of the adoption (on another forge, every merge until its merge job is written). After that: tickets, the agent-ready label, product questions, and the merges the checks leave to you.
 
 ## How it works
 
@@ -234,7 +234,7 @@ When the plugin updates, every tier says so on its first line and `/ratchet:next
 python3 ~/.claude/plugins/marketplaces/ratchet/scripts/upgrade.py --apply
 ```
 
-It moves the repository to the plugin version in use in one change, and it adds and never removes. Anything that needs judgement it writes to `quality/owed.toml` instead of failing: each item is counted, none is red, and between upgrades the list only shrinks. The few findings that cannot be owed, such as a mutation recipe that would test nothing, it lists as red until fixed. Without `--apply` it prints the same plan and writes nothing. The upgrade touches guard paths, so merging it is your one step. `/ratchet:next` then names `/ratchet:fill`, where an agent writes what it can from the repository alone, and no feature starts before that is done. [CHANGELOG.md](CHANGELOG.md) says what each version changed.
+It moves the repository to the plugin version in use in one change, keeps every line it did not write, and loosens no gate. Anything that needs judgement it writes to `quality/owed.toml` instead of failing: each item is counted, none is red, and between upgrades the list only shrinks. The few findings that cannot be owed, such as a mutation recipe that fails on a change with no code in it, it lists as red until fixed. Without `--apply` it prints the same plan and writes nothing. The upgrade touches guard paths, so merging it is your one step. When the upgrade left rows an agent can write from the repository alone, `/ratchet:next` then names `/ratchet:fill`, and no feature starts before that is done. [CHANGELOG.md](CHANGELOG.md) says what each version changed.
 
 ## Limits
 
@@ -273,7 +273,7 @@ cd ratchet
 just check
 ```
 
-`just check` runs lint and strict types, the test suite under 100% line and branch coverage of the gate scripts and the guard, the suite again on Python 3.11, the conformance self-test, every shipped gate against a synthetic violation, a parse of the workflow and the adapters, and `claude plugin validate`. The method says gates are themselves gated; this is where that applies to the method.
+`just check` runs lint and strict types, the test suite under 100% line and branch coverage of the gate scripts and the guard, the suite again on Python 3.11, the conformance self-test, every shipped gate against a synthetic violation, the lowered gate on the repository's own thresholds, a parse of the workflow and the adapters, and `claude plugin validate`. The method says gates are themselves gated; this is where that applies to the method.
 
 To try a checkout as your installed plugin, add it as a local marketplace (`claude plugin marketplace add /path/to/ratchet`). It is read in place, so an edit applies at the next session or `/reload-plugins`.
 
