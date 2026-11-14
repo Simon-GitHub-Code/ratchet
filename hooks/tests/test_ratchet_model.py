@@ -14,8 +14,10 @@ from hypothesis import HealthCheck, Phase, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
 
+from tests import model_tla
 from tests import ratchet_model as model
 from tests.ratchet_world import Gate, Landing, World
+from tests.support import PLUGIN_ROOT
 
 NAMED, BROUGHT, NOT_LATE, REMEMBERED = model.RULES
 
@@ -53,6 +55,7 @@ OWN_RECORD = [
 ]
 # Why: the stateful run checks real histories past the exhaustive graph's bound.
 LONGER = 6
+PAGE = PLUGIN_ROOT / "docs/model/ratchet.md"
 
 
 @functools.cache
@@ -98,6 +101,10 @@ def test_every_rule_reads_as_one_sentence() -> None:
 def test_every_kind_of_action_is_reachable() -> None:
     _, edges = graph()
     assert {action.kind for _, action, _ in edges} == set(model.Kind)
+
+
+def test_the_page_was_checked_and_drawn_from_the_current_export() -> None:
+    assert not (why := model_tla.stale(PAGE, model.export(), model.summary())), why
 
 
 def landings() -> list[tuple[model.State, model.Branch, model.State]]:
