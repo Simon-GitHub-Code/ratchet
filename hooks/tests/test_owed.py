@@ -637,6 +637,7 @@ def test_a_rule_of_the_project_s_own_stays_red_and_stays_a_question(
         ("incidents", "docs/incidents/2026-01-01-outage.md"),
         ("glossary", "GLOSSARY.md (or GLOSSARY-MAP.md)"),
         ("quality", "quality/thresholds.toml"),
+        ("mutation_filter", "justfile"),
         (owed.OWN, LEDGER),
     ],
 )
