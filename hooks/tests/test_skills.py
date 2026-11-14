@@ -135,7 +135,7 @@ def test_init_passes_the_owners_answers_to_the_setups() -> None:
 def test_every_ratchet_skill_ends_with_the_route() -> None:
     # Why: the owner's next command is the method's promise at every stage (ADR 0009); a
     # hand-over that forgets it leaves the owner guessing which plugin's keystroke comes next.
-    for name in ("init", "adopt", "feature", "safeguard"):
+    for name in ("init", "adopt", "feature", "safeguard", "architecture"):
         text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
         assert 'scripts/route.py" --root .' in text, name
 
@@ -148,6 +148,19 @@ def test_the_safeguard_skill_asks_nothing_and_commits_as_the_gate_accepts() -> N
     assert "`just bite-one <gate>`" in safeguard
     assert commits.SUBJECT.match("chore(method): safeguard outbound calls")
     assert "`chore(method): safeguard <what>`" in safeguard
+
+
+def test_the_architecture_skill_asks_once_and_only_when_the_architecture_changes() -> None:
+    # Why: ADR 0052. A decision that holds is an assumption; a change is the owner's, asked once.
+    review = (SKILLS / "architecture/SKILL.md").read_text(encoding="utf-8")
+    assert "**Assume** `architecture.holds`" in review
+    assert review.count("**Ask**") == 1
+    assert "**Ask** `architecture.change`" in review
+    assert 'scripts/triggers.py" --root . --reviews' in review
+    for line in ("- Architecture review:", "- Outcome:", "- Decided: YYYY-MM-DD"):
+        assert f"`{line}" in review, line
+    assert commits.SUBJECT.match("docs(adr): architecture review for stored data")
+    assert "`docs(adr): architecture review for <what>`" in review
 
 
 def test_the_safeguard_skill_guards_a_new_config_on_its_own_branch() -> None:

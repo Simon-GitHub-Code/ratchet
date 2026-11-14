@@ -29,7 +29,7 @@ The ratchet marketplace entry declares `mattpocock-skills`, `pstack` and `impecc
 | the question tool | `AskUserQuestion`, up to four questions per dialog |
 | subagents | `Agent`; `pstack:poteto-agent` and friends by name |
 | the plugin cache | `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` |
-| `/ratchet:init`, `/ratchet:adopt`, `/ratchet:feature`, `/ratchet:conjecture`, `/ratchet:safeguard`, `/ratchet:next` | as written |
+| `/ratchet:init`, `/ratchet:adopt`, `/ratchet:feature`, `/ratchet:conjecture`, `/ratchet:safeguard`, `/ratchet:architecture`, `/ratchet:next` | as written |
 
 ## What is Claude Code only
 

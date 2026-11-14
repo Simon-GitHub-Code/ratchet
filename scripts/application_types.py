@@ -84,6 +84,7 @@ class Catalogue:
     ``proofs`` maps a question to the named proofs it requires, and ``meanings`` a proof to the
     fault it plants. ``triggers`` maps every question to when it is asked (ADR 0028), ``kinds`` a
     kind of code to what marks it, and ``events`` a life event to its meaning and signs.
+    ``architecture`` maps each trigger that reopens the architecture to what it reopens (ADR 0052).
     """
 
     types: Mapping[str, str]
@@ -95,6 +96,7 @@ class Catalogue:
     kinds: Mapping[str, str] = field(default_factory=dict)
     events: Mapping[str, Event] = field(default_factory=dict)
     directed: frozenset[str] = frozenset()
+    architecture: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def questions(self) -> frozenset[str]:
@@ -139,6 +141,17 @@ class Catalogue:
             if self.asked_of(question) & types
             for kind in code_kinds(self.trigger_of(question))
         )
+
+    def kinds_required(self, types: AbstractSet[str]) -> frozenset[str]:
+        """The kinds the Triggers table must find: those asked, and each reopening the architecture.
+
+        Why: ADR 0052. A kind that reopens the architecture is counted whatever the types, or its
+        arrival could never owe the review.
+        """
+        if not types:
+            return frozenset()
+        reopen = (code_kinds(trigger) for trigger in self.architecture)
+        return self.kinds_asked(types) | frozenset(kind for kinds in reopen for kind in kinds)
 
     def asked_of(self, question: str) -> frozenset[str]:
         """The types a question is asked of: every type unless the catalogue narrows it."""
@@ -243,6 +256,7 @@ def parsed(text: str) -> Catalogue:
             name: Event(event["meaning"], tuple(event["signs"]))
             for name, event in data.get("events", {}).items()
         },
+        architecture=dict(data.get("architecture", {})),
     )
 
 

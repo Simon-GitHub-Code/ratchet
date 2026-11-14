@@ -478,6 +478,7 @@ def test_an_upgraded_older_adoption_runs_every_gate_of_the_plugin_s_own_it_binds
         "feature flags declared",
         "incidents tighten a gate",
         "safeguards bound before more instances",
+        "architecture reviewed when its shape changes",
     ):
         row = next(r for r in project_bite.gate_rows(binding) if r.question == question)
         assert project_bite.SHIPPED.fullmatch(row.tool), row

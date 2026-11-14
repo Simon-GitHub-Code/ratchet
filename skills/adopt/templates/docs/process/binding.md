@@ -121,6 +121,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | method conformance | `ratchet` plugin `scripts/conformance.py` | 1 | | `just conformance` |
 | incidents tighten a gate | `ratchet` plugin `scripts/conformance.py` | 1 | `docs/incidents/` against `quality/bites.toml` | `just incidents` |
 | safeguards bound before more instances | `ratchet` plugin `scripts/triggers.py` | 1 | the Triggers section below, as the merge base holds it | `just triggers` |
+| architecture reviewed when its shape changes | `ratchet` plugin `scripts/triggers.py` | 1 | the Triggers section below and `docs/adr/`, as the merge base holds them | `just triggers` |
 | full mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 2 | `quality/mutation-register.toml` | `just mutation` |
 | deep interface conformance | | 2 | | `just api-deep` |
 | symbolic checking | | 2 | | `just symbolic` |
@@ -143,7 +144,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 
 ## Triggers
 
-Where each `code:<kind>` trigger of the Gates table finds its instances in this stack (ADR 0028). One row per kind that a question asked of this repository's application types names; `skills/method/application-types.toml` in the `ratchet` plugin lists the kinds and what each means. `Paths` are comma-separated globs over tracked files. Without a `Pattern` each matching file is one instance; with one, each matching line is, and a literal `|` in it is written `\|`. A repository that never has the kind writes `none: <reason>`. The `triggers` gate counts instances at the merge base and at head, reads this table as the merge base holds it, and holds the rule that the change that brings a kind is free, in any number of files, and a later one that adds another instance while a row it owes is still `later:` is red.
+Where each `code:<kind>` trigger of the Gates table finds its instances in this stack (ADR 0028). One row per kind that a question asked of this repository's application types names, and one per kind whose arrival reopens the architecture, whatever the types (ADR 0052); `skills/method/application-types.toml` in the `ratchet` plugin lists the kinds and what each means. `Paths` are comma-separated globs over tracked files. Without a `Pattern` each matching file is one instance; with one, each matching line is, and a literal `|` in it is written `\|`. A repository that never has the kind writes `none: <reason>`. The `triggers` gate counts instances at the merge base and at head, reads this table as the merge base holds it, and holds the rule that the change that brings a kind is free, in any number of files, and a later one that adds another instance while a row it owes is still `later:`, or while the architecture review its arrival reopened has not landed as a decision record, is red.
 
 | Kind | Paths | Pattern |
 | --- | --- | --- |

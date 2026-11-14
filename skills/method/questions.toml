@@ -90,6 +90,16 @@ skills = ["feature"]
 kind = "product"
 text = "<the question the build stopped on, in the words of someone using the product>"
 
+# ADR 0052: when an arrival or a life event reopens the architecture and the review finds it no
+# longer fits, the ways to change it go to the owner in one message. Each way is a different
+# product to live with (what is kept and where, who can reach it, what happens when something is
+# down), and undoing it later rewrites the project, so it is his.
+[[ask]]
+key = "architecture.change"
+skills = ["architecture"]
+kind = "product"
+text = "<what the project now does that the way it is built did not plan for, and two or three ways forward, each with what someone using it would notice, what it costs, and how hard it is to undo, the recommended one first>"
+
 # Questions the first-hour dogfood of 2026-11-13 recorded, or the skills asked before ADR 0034,
 # that a sensible default answers. Each is taken, acted on, and stated in the hand-over.
 
@@ -127,3 +137,8 @@ replaces = "Do you accept the proposed tools for the floor?"
 key = "safeguard.tools"
 skills = ["safeguard"]
 replaces = "Accept the proposed tools, or name others for any row?"
+
+[[assume]]
+key = "architecture.holds"
+skills = ["architecture"]
+replaces = "Does the way the project is built still fit, now that this has arrived?"

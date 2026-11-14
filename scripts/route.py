@@ -36,7 +36,11 @@ The stages, in order; the first that does not hold is the answer:
    the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0023). Before any of
    these, a safeguard the repository owes (``triggers.owed``: a kind of code has arrived, or a
    life event is declared, and a row it fires is still ``later:``) is ``/ratchet:safeguard``,
-   with the step it would otherwise name offered as the alternative (ADR 0028).
+   with the step it would otherwise name offered as the alternative (ADR 0028). Before that,
+   an architecture review the repository owes (``triggers.reviews_owed``: a kind that reopens
+   the architecture has arrived for the first time, or such a life event is declared, and no
+   decision record names it) is ``/ratchet:architecture``, with ``/ratchet:safeguard`` after it
+   when rows are owed too, since the review may move where the safeguards go (ADR 0052).
 
 After the three lines come the ``also:`` lines, when there are any: the upgrade, when the plugin
 in use is newer than the one the binding pins (ADR 0027); each question the owner has answered
@@ -101,6 +105,7 @@ WAIT = "nothing: the merge job merges it once `ci` is green, or comments why the
 MERGE_FALLBACK = "the binding's `merge` entry point"
 NEXT = "/ratchet:next"
 SAFEGUARD = "/ratchet:safeguard"
+ARCHITECTURE = triggers.ARCHITECTURE
 EVENTS_LOG = "events.tsv"
 EVENTS_HEADER = "date\tevent\tsign\tanswer"
 DECLINED = "declined"
@@ -429,6 +434,8 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
         steps.append(f"answer the open questions the run of {ref} named, on the ticket")
     if queue_notes.GUARD in hold.kinds:
         steps.append(f"land the guard edits the run of {ref} named on {default_branch}")
+    if hold.reviews:
+        steps.append(f"run {ARCHITECTURE} for {', '.join(hold.reviews)}")
     if hold.owes:
         steps.append(f"run {SAFEGUARD} for {', '.join(hold.owes)}")
     return steps or [f"change ticket {ref} to meet what the drain parked it for"]
@@ -752,10 +759,49 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         if missing
         else ticket_step(root, gh, checkout)
     )
-    return safeguard_step(root, step) or step
+    return architecture_step(root, step) or safeguard_step(root, step) or step
 
 
-# --- safeguards and life events (ADR 0028) ---------------------------------------------------
+# --- architecture reviews, safeguards and life events (ADR 0028, ADR 0052) -----------------
+
+
+def architecture_step(root: Path, instead: Step) -> Step | None:
+    """``/ratchet:architecture`` when the repository owes a review, before any safeguard.
+
+    Why: ADR 0052. The review decides where the new kind of code lives, and so where its
+    safeguards are bound; like a safeguard it never hides the build, since the change that
+    brought the kind was free and only the next one that adds another waits for the review.
+    """
+    owing = triggers.reviews_owed(root)
+    if not owing:
+        return None
+    reopening = application_types.load().architecture
+    said = []
+    for review in owing:
+        if application_types.code_kinds(review.trigger):
+            count = review.count
+            said.append(
+                f"`{review.name}` has arrived ({count} instance{'s' * (count != 1)}) and reopens"
+                f" the architecture: {reopening[review.trigger]}"
+            )
+        else:
+            said.append(
+                f"the declared life event `{review.name}` reopens the architecture:"
+                f" {reopening[review.trigger]}"
+            )
+    code = any(application_types.code_kinds(review.trigger) for review in owing)
+    cost = (
+        "the change that brought the kind was free, one that adds another waits for this"
+        if code
+        else "a declared event is never red"
+    )
+    then = SAFEGUARD if triggers.owed(root) else instead.command
+    return Step(
+        ARCHITECTURE,
+        f"{'; '.join(said)}. Or carry on with {instead.command}: {cost}",
+        then,
+        "architecture",
+    )
 
 
 def safeguard_step(root: Path, instead: Step) -> Step | None:

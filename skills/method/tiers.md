@@ -164,6 +164,27 @@ Safeguards are added by judgement, per project, at the stage they earn their kee
 
 **Nothing unbinds.** A row already bound stays bound, whatever its trigger. The ratchet does not loosen, so a repository adopted before triggers keeps every gate it has.
 
+**Some arrivals reopen the architecture** (ADR 0052). The architecture the adoption chose fits the project it saw. When a kind of code that changes the project's shape arrives for the first time, or the owner declares a life event, an **architecture review** is owed beside any rows, and owed the same way: the arrival is free and noted, a later change that adds another instance of the kind is red until the review has landed, and an event is never red. The route names `/ratchet:architecture` before `/ratchet:safeguard`, since the review decides where the new kind lives and so where its safeguards go. The review re-reads the architecture decision and the declared layers against the code as it now is, and records either that the decision holds or, after one question to the owner, the option he chose, with the layers updated so the gates hold. It counts once a decision record at the merge base names the trigger on its `- Architecture review:` line, with `- Outcome: holds` or `changes`, `- Decided:`, a `## Decision`, a `## Refutation criterion`, and two or more options under `## Considered options` when it changes the architecture; a record in the same change as another instance does not count. The `architecture reviewed when its shape changes` row asks it, and the first commit whose binding held that row starts the reviews: what the repository had then counts as reviewed by the adoption, or by the upgrade that added the row.
+
+### Which triggers reopen the architecture
+
+The catalogue's `[architecture]` table holds each, with the question its arrival reopens. Every repository's Triggers table has a row for each of these kinds, whatever its types.
+
+| Trigger | What its first arrival reopens |
+| --- | --- |
+| `code:stored-format` | where the data lives, which part alone reads and writes it, how its shape changes without loss |
+| `code:listener` | a process that keeps running: what starts and stops it, how the other parts reach it |
+| `code:outbound-call` | a system the project does not run: which part alone talks to it, what happens when it is slow, wrong or gone |
+| `code:user-interface` | a screen where there was none: which part draws it, which holds the rules, how they talk |
+| `code:scheduled-work`: work a clock starts | where it runs, what happens when a run overlaps, fails or is missed |
+| `code:access-control`: who is acting, what they may do | whose data each person may see or change, and the one place that rule is held |
+| `code:concurrency` | what parts running at once share, who may change it, how they hand work over |
+| `life:deployed` | where it runs, how it is configured there, how a bad release is undone |
+| `life:irreplaceable-data` | where that data lives, how it is copied, how it is restored |
+| `life:depended-on` | which surfaces are promises, and how they change without breaking anyone |
+
+The other kinds are more of the shape the adoption drew (a module, a route, a setting, a package, an example, a flag, a proof), packaging whose place is decided at `deployed`, or a surface that becomes a promise at `depended-on`.
+
 ### Every question, its tier and its trigger
 
 Each group says why its questions wait for that trigger and no later. A row's applies-to types are in [application-types.toml](application-types.toml); the tier is the binding template's.

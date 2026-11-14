@@ -37,6 +37,8 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   ``triggers`` red in its ``checkOutput`` (another instance of a kind whose safeguard is owed,
   ADR 0028) adds
   a reason naming ``/ratchet:safeguard``, and the ticket is held only until no such kind is owed.
+  One for a kind whose architecture review is owed (ADR 0052) names ``/ratchet:architecture``
+  the same way, and holds the ticket until that review has landed.
 - ``clean`` removes every queue work tree whose branch is merged or gone; ``--all`` removes the
   rest too, their uncommitted work stashed as ``<branch>: interrupted run``. A drain starts with
   ``clean --all``: one drain runs on a repository at a time, so every work tree found then is
@@ -142,6 +144,8 @@ LOCKED = frozenset({"open", "update", "close", "clean", "report"})
 STAMPED = frozenset({"open", "update", "close"})
 # Why: the triggers gate's red line; the kind it names is what the safeguard binds (ADR 0028).
 OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
+# Why: ADR 0052. The red line of a kind whose architecture review is owed; the review releases it.
+REVIEW_RED = re.compile(r"triggers: architecture review owed: '([^']+)' gained \d+ instance")
 DEFAULT_WORDS = "the default branch"
 BEHIND = (
     "behind the default branch: `update` it and judge it again before it lands, since its last"
@@ -481,17 +485,26 @@ def reasons_of(result: dict[str, object]) -> list[str]:
     found += [f"unresolved: {title}" for title in unresolved]
     disputes = queue_notes.tables(result.get("disputes"))
     found += [f"dispute: {d.get('path')}: {d.get('recommendation')}" for d in disputes]
-    return found + [
+    found += [
         f"safeguard owed: `{kind}` gained an instance while a row it fires is still `later:`;"
         f" run {route.SAFEGUARD} on {DEFAULT_WORDS}, and the drain builds this ticket again"
         for kind in owed_kinds(result)
     ]
+    return found + [
+        f"architecture review owed: `{kind}` gained an instance while the review it reopens has"
+        f" not landed; run {route.ARCHITECTURE} on {DEFAULT_WORDS}, and the drain builds this"
+        " ticket again"
+        for kind in owed_kinds(result, REVIEW_RED)
+    ]
 
 
-def owed_kinds(result: dict[str, object]) -> list[str]:
-    """The kinds whose ``triggers`` red the result's last ``check`` shows (ADR 0028)."""
+def owed_kinds(result: dict[str, object], red: re.Pattern[str] = OWED_RED) -> list[str]:
+    """The kinds whose ``triggers`` red the result's last ``check`` shows (ADR 0028, ADR 0052).
+
+    ``red`` is the line of an owed safeguard, or of an owed architecture review.
+    """
     output = result.get("checkOutput")
-    found = OWED_RED.findall(output) if isinstance(output, str) else []
+    found = red.findall(output) if isinstance(output, str) else []
     return list(dict.fromkeys(found))
 
 
@@ -919,6 +932,7 @@ def settle(
         "gates": gates,
         "closed": now().isoformat(timespec="seconds"),
         "owes": owed_kinds(result or {}),
+        "reviews": owed_kinds(result or {}, REVIEW_RED),
         "holds": queue_notes.holds_of(result or {}),
         "causes": queue_notes.causes_of(result or {}),
         "reported": False,

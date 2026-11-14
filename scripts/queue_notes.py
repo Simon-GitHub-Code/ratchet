@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import gatelib
@@ -88,12 +88,17 @@ def write_note(path: Path, note: dict[str, object]) -> None:
 
 
 def safeguarded(root: Path, note: dict[str, object]) -> bool:
-    """Whether a ticket held for an owed safeguard is free: none of those kinds is owed now.
+    """Whether a ticket held for an owed safeguard or review is free: none of those is owed now.
 
-    Why: the ticket's text need not change for it to build; binding the safeguard is the change.
+    Why: the ticket's text need not change for it to build; binding the safeguard, or landing the
+    architecture review (ADR 0052), is the change.
     """
-    owes = set(texts(note.get("owes")))
-    return bool(owes) and not owes & {row.name for row in triggers.owed(root)}
+    owes, reviews = set(texts(note.get("owes"))), set(texts(note.get("reviews")))
+    if not owes and not reviews:
+        return False
+    if owes & {row.name for row in triggers.owed(root)}:
+        return False
+    return not reviews & {review.name for review in triggers.reviews_owed(root)}
 
 
 def holds_of(result: dict[str, object]) -> list[str]:
@@ -120,6 +125,7 @@ class Hold:
     reasons: list[str]
     kinds: list[str]
     owes: list[str]
+    reviews: list[str] = field(default_factory=list)
 
 
 def split_into(root: Path, branch: str, ticket: preflight.Ticket) -> list[str] | None:
@@ -137,4 +143,9 @@ def held(root: Path, branch: str, ticket: preflight.Ticket) -> Hold | None:
         return None
     if safeguarded(root, note):
         return None
-    return Hold(texts(note.get("reasons")), texts(note.get("holds")), texts(note.get("owes")))
+    return Hold(
+        texts(note.get("reasons")),
+        texts(note.get("holds")),
+        texts(note.get("owes")),
+        texts(note.get("reviews")),
+    )

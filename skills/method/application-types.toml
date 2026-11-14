@@ -46,6 +46,26 @@ doc-example = "a code example in the documentation"
 flag = "a feature flag in flags.toml"
 layer = "a declared layer in AGENTS.md"
 formal-model = "a formal model or proof the project keeps"
+scheduled-work = "work a clock starts rather than a caller: a timer, a recurring task, a schedule entry"
+access-control = "a check of who is acting or what they may see or do: a sign-in, a session, a role"
+
+# When the architecture is reviewed again (ADR 0052). The architecture the adoption chose is read
+# again against the code when the project's shape changes: when one of these kinds of code first
+# arrives, or one of these life events is declared. Each key is a trigger. Its text is what the
+# arrival reopens, the question the review answers; the review is an ADR that names the key.
+# A kind that is not listed is one more module, call site, setting or tool inside the shape the
+# adoption chose, and its arrival owes safeguards only.
+[architecture]
+"code:stored-format" = "the project now keeps data: where it lives, which part alone reads and writes it, and how its shape changes without losing what is kept"
+"code:listener" = "a process now keeps running to serve: what starts and stops it, and how the other parts reach it"
+"code:outbound-call" = "the project now depends on a system it does not run: which part alone talks to it, and what the project does when it is slow, wrong or gone"
+"code:user-interface" = "a screen now exists where there was none: which part draws it, which part holds the rules, and how the two talk"
+"code:scheduled-work" = "a clock now starts work: where that work runs, and what happens when a run overlaps, fails or is missed"
+"code:access-control" = "more than one person now acts in it: whose data each may see or change, and the one place that rule is held"
+"code:concurrency" = "parts now run at once: what they share, who may change it, and how they hand work to each other"
+"life:deployed" = "others can now reach it: where it runs, how it is configured there, and how a bad release is undone"
+"life:irreplaceable-data" = "it now holds data that cannot be recreated: where that data lives, how it is copied, and how it is restored"
+"life:depended-on" = "people now rely on it: which of its surfaces are promises, and how they change without breaking anyone"
 
 # The events in a project's life a trigger can name, and the signs the route reads to propose one.
 # `signs` are globs over the tree; the owner declares the event, never the route.
@@ -307,3 +327,9 @@ trigger = "life:deployed"
 # The shipped gate that holds the first-one-free rule itself (scripts/triggers.py).
 [[question]]
 name = "safeguards bound before more instances"
+
+# The shipped gate that holds the architecture review of ADR 0052 (scripts/triggers.py). Its row
+# is also where a repository's reviews start: a kind or an event already there when the row was
+# first bound counts as reviewed by the adoption, or by the upgrade that added the row.
+[[question]]
+name = "architecture reviewed when its shape changes"
