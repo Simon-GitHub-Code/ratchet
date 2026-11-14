@@ -213,6 +213,25 @@ def padded(text: str, heading: str) -> str:
     return "\n".join(lines)
 
 
+def padded_tables(text: str) -> str:
+    """The text with every table that splits padded, as a formatter writes it."""
+    lines = text.split("\n")
+    at = 0
+    while at < len(lines):
+        if not lines[at].startswith("|"):
+            at += 1
+            continue
+        found = _table_at(lines, at, len(lines))
+        end = found.last if found else at + 1
+        if found:
+            lines[found.first : found.last] = found.render(found.rows)
+            end = found.first + len(found.lines)
+        while end < len(lines) and lines[end].startswith("|"):
+            end += 1
+        at = end
+    return "\n".join(lines)
+
+
 class _Neighbour(NamedTuple):
     """The key a new key goes beside: its position among the keys, and whether it goes after."""
 
