@@ -336,6 +336,7 @@ def stopped(result: dict[str, Any]) -> Ending:
             stage,
             parts=too["parts"] > 0,
             split_unasked=unasked,
+            rejudged=result["rejudged"],
         )
     stops = [
         (Stop.QUESTION, result["questions"] > 0),

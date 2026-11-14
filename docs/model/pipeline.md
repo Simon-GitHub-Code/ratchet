@@ -27,7 +27,7 @@ What it leaves out is listed [at the end](#left-out).
 | A promise kept from the ticket | yes once the second ticket check still finds a gap |
 | Built, and the last builder's check | built or not; green, red or none yet |
 | The last critique | whether it owes a fix, and whether it found nothing and tried nothing |
-| How it ended | still running; approved; changes requested, with what forced it; stopped (blocked) with the reason, and for too large the ceiling, where it was measured, whether parts are proposed and whether the orchestrator splits it unasked; or the script's error, naming the agent and whether to resume. A verdict also carries the fix rounds, an unresolved finding, the lost promises for the next run, the kept promise in the assumptions, the verdict record, and whether the branch was judged again |
+| How it ended | still running; approved; changes requested, with what forced it; stopped (blocked) with the reason, and for too large the ceiling, where it was measured, whether parts are proposed and whether the orchestrator splits it unasked; or the script's error, naming the agent and whether to resume. A verdict also carries the fix rounds, an unresolved finding, the lost promises for the next run, the kept promise in the assumptions, the verdict record, and whether the branch was judged again. A stop for too large says that too |
 
 A builder is the agent that changes code: the build, a fix round or the reconcile. From the start the model reaches 1,032 states and 1,173 steps. 832 of the states are a run that has ended.
 
@@ -101,7 +101,7 @@ All of them run on `workflows/pipeline.js` itself in one node process, in a cont
 
 ## Charts
 
-The rules were checked on `Pipeline.tla`, SHA-256 `a351e12aa1c1ae02d0b00b150d1bd90bdea9792a7538f54d0727e2f69a2d3006`. TLC reached 1,032 states. Run again with only the rules that hold, it counts 1,174 states generated: the start and 1,173 steps. Sixteen rules hold, two break, each by the run above. A run that has ended has no step out, so the module tells TLC that this is no deadlock.
+The rules were checked on `Pipeline.tla`, SHA-256 `d9350304ec2ef79af12ae066056c3dbd09e1f31ab60625e3ff9a29b3fb5d5416`. TLC reached 1,032 states. Run again with only the rules that hold, it counts 1,174 states generated: the start and 1,173 steps. Sixteen rules hold, two break, each by the run above. A run that has ended has no step out, so the module tells TLC that this is no deadlock.
 
 That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `27f8354617e00352e611bd2d86a6aafc46437ce02544c4c3b64a0d62224be0a7`: the same graph seen through the stage a run is at. That is the agent it waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 72 states and 142 steps. A box groups states, and an arrow from a box leaves every state in it.
 
