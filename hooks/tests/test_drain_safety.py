@@ -11,6 +11,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -1441,8 +1442,9 @@ def test_a_landing_in_flight_keeps_its_tree_and_note_from_a_report_and_a_clean(
 
 
 def test_a_second_land_of_a_ticket_is_refused_while_a_landing_holds_its_lock(
-    tmp_path: Path, capsys: Out
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(drain, "LANDING_POLL", 0.001)
     ran = tmp_path / "ran"
     script = tmp_path / "recording_merge.py"
     script.write_text(f"import pathlib\npathlib.Path({str(ran)!r}).touch()\n", encoding="utf-8")
@@ -1458,6 +1460,31 @@ def test_a_second_land_of_a_ticket_is_refused_while_a_landing_holds_its_lock(
     )
     assert not ran.exists(), "no merge script ran"
     assert note(root, BRANCH_A).get("outcome") is None
+
+
+def test_a_land_waits_out_a_probe_of_its_landing_lock(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    judged(root)
+    held, release = threading.Event(), threading.Event()
+
+    def probe() -> None:
+        with drain.landing_path(root, BRANCH_A).open("a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            held.set()
+            release.wait(timeout=30)
+
+    prober = threading.Thread(target=probe)
+    prober.start()
+    assert held.wait(timeout=30)
+    threading.Timer(0.1, release.set).start()
+    try:
+        capsys.readouterr()
+        assert run(root, "land", ALPHA) == 0
+    finally:
+        release.set()
+        prober.join()
+    assert capsys.readouterr().out.endswith(f"closed: {ALPHA}: merged\n")
+    assert note(root, BRANCH_A)["outcome"] == "merged"
 
 
 def test_clean_all_leaves_the_tree_and_mark_of_a_live_landing(tmp_path: Path) -> None:
