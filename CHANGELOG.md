@@ -22,6 +22,8 @@ The queue drain finishes what a killed or concurrent command left, and no longer
 
 A gate's proof can no longer write into the real repository through a link. A setup left running could swap a directory of the scratch copy for a link into the real tree; the snapshot then held the link, and each restore wrote it back. `bite` now refuses any link that setup made or changed whose end lies outside the copy, and names it. It judges the link by its text in the snapshot, through every link on the way, not by the copy as it stands, and refuses a ring of links. A link the commit already holds is the repository's own and stays.
 
+A project that is not yet depended-on gets one fix pass on a review blocker: a fresh fix agent and a second review, keyed on the review's own blockers whatever its verdict (ADR 0056). A lost ticket promise still parks the ticket. Such a run spawns at most nine agents, not seven.
+
 The change size is read after each fix round and after a rejudge's reconcile, not only after the spec and the build (ADR 0055). A round that takes product code over its ceiling stops the run as too large, so the drain splits the ticket instead of parking it on a red check. A pipeline run that errors is resumed once, then closed to be tried again; after three such closes in a row the ticket is held, and the reason says the run errored each time. A guard hold written before the drain recorded its base commit is released by a change to the ticket, and the route names that step.
 
 The last stack knowledge leaves the plugin's code and pages for the binding (ADR 0050).
