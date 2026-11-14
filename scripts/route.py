@@ -369,6 +369,8 @@ def blocked_runs(
         if not run.endswith(BLOCKED_RUN):
             continue
         ticket, note = by_branch.get(branch), queue_notes.read_note(root, branch)
+        if not of_this_run(root, default_branch, ref, note=note):
+            note = {}
         recorded = isinstance(note.get("digest"), str)
         if ticket is not None and recorded and queue_notes.edited(note, ticket):
             continue
@@ -376,6 +378,21 @@ def blocked_runs(
         if not answered(root, default_branch, ref, asked=asked):
             found.setdefault(branch, run)
     return found
+
+
+def of_this_run(root: Path, default_branch: str, stash: str, *, note: dict[str, object]) -> bool:
+    """Whether the drain's note is no older than the blocked run's stash.
+
+    Why: a note written before the run blocked records the ticket as it was then, so an edit
+    since would read as an answer to a run that blocked after it. The note counts only when its
+    ``base`` is the commit the stash forked from on the default branch, or one after it; a note
+    with no ``base`` never does, and the run is judged as if the drain had written none.
+    """
+    base = note.get("base")
+    if not isinstance(base, str):
+        return False
+    fork = gatelib.git(root, "merge-base", default_branch, stash) or default_branch
+    return gatelib.git(root, "merge-base", "--is-ancestor", fork, base) is not None
 
 
 def asked_paths(ticket: preflight.Ticket | None, causes: list[str], *, recorded: bool) -> list[str]:

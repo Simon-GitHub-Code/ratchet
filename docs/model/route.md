@@ -127,6 +127,7 @@ The tests also check that:
 - each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold, or a guard hold with no base commit, waits for a change to the ticket;
 - the real route names what the model says in every one of the 409 states;
 - on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
+- a drain note older than a blocked run's stash, or one with no base commit, does not release the run;
 - on long runs of steps, a repository that loses its commit hooks is told to install them first, whatever else is true.
 
 ## Divergences
@@ -272,7 +273,7 @@ stateDiagram-v2
 - The owner's ticket edits as records. Agreeing a ticket, stating its conjecture and finishing a ticket yourself are one step each. Only marking a ticket resolved goes through records uncommitted and a landing.
 - A split that stops half-way, a grill that writes only part of its records, and a safeguard run that stops.
 - The drain's own states: its work trees, the merge job, and retries of a mechanical wait.
-- A blocked run's stash and a drain note on the same ticket, and a note with more than one kind of hold.
+- A drain note written after a blocked run's stash on the same ticket, and a note with more than one kind of hold. The other order is in the model: a ticket the drain parked, then changed by the owner, then held by a run that blocked. The note is older than the run, so the route judges the run as if the drain had written no note, and names it until the ticket changes again.
 - A note a drain wrote with its kinds of hold but before it recorded the default branch's commit. Landing its guard edits does not release it, and the route names them again; a change to the ticket does.
 - A kind that reopens the architecture and owes rows of its own as well, a declared life event that reopens it, and a ticket the drain parks while a review is owed. The model's arrival owes the review alone; `test_architecture_review.py` holds the route's order where rows are owed too, the review and then the safeguard, and the release of such a park.
 - An architecture an upgrade left owed in `quality/owed.toml`, which the route names after an owed safeguard and in the same way (ADR 0049). The model's repositories never owe one.
