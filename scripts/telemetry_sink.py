@@ -17,7 +17,7 @@ variables removed, so nothing in the project's environment redirects the export.
 ``OTEL_EXPORTER_OTLP_PROTOCOL`` becomes ``http/protobuf`` and the batch, log and metric export
 intervals drop to a fraction of a second, so a short run exports before it ends. After the
 command the sink waits up to ``--wait`` seconds (10) for what is still missing, then judges. The
-SDK must flush on a clean shutdown, as the OpenTelemetry SDKs do.
+SDK must flush on a clean shutdown, as the OTLP SDKs do.
 
 ``/v1/traces``, ``/v1/metrics`` and ``/v1/logs`` take protobuf or JSON, gzip or plain, with a
 length or chunked. The protobuf is walked by hand for the two facts asked: the ``service.name``
@@ -232,7 +232,7 @@ class Receiver(ThreadingHTTPServer):
 
 
 def exporter_env(port: int) -> dict[str, str]:
-    """The environment that points an OpenTelemetry SDK at the sink."""
+    """The environment that points an OTLP SDK at the sink."""
     own = {f"OTEL_EXPORTER_OTLP_{name.upper()}_ENDPOINT" for name in SIGNALS}
     env = {key: value for key, value in os.environ.items() if key not in own}
     env["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"http://127.0.0.1:{port}"

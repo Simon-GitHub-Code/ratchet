@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """The grouped coverage gate: per-group line and branch coverage against the ratchet.
 
-Reads a Cobertura report (``coverage.xml``, which coverage.py, c8, vitest, Jest and most tools
-emit) or an LCOV tracefile, and the coverage groups in ``quality/thresholds.toml``::
+Reads a Cobertura report or an LCOV tracefile, the two formats most coverage tools write, and
+the coverage groups in ``quality/thresholds.toml``::
 
-    [python.coverage.core]
+    [<language>.coverage.core]
     paths = ["src/core/**"]
     absolute = true           # held at 100% by this gate, not by a number in the file
 
-    [python.coverage.app]
+    [<language>.coverage.app]
     paths = ["src/app/**"]
     line = 90.0
     branch = 80.0
 
 Every table two levels under ``<language>.coverage`` is a group; its ``paths`` are globs over
 repository-relative paths. An absolute group needs 100% lines and branches and may carry no
-coverage exclusion in its files (``pragma: no cover``, ``istanbul ignore`` and peers). A measured
+coverage exclusion in its files (``NO_COVER`` below holds the directives it knows). A measured
 file that falls in no group fails: new code cannot land outside the rules. ``--write`` raises each
 group's recorded line and branch to the measured value and never lowers one.
 
@@ -26,11 +26,8 @@ with one suite per stack judges every group against the merged view in one run.
 The format is read from the report's content, never its name. An LCOV tracefile counts a
 ``DA`` record as a line and a ``BRDA`` record as a branch, hit when its count is above zero,
 which is what a Cobertura ``line`` and its ``condition-coverage`` say. A file that several
-records name is tallied once. Between them the two formats are native to most stacks:
-Cobertura to Python, JavaScript, PHP, .NET and C or C++ through gcovr; LCOV to Dart, Swift,
-Elixir and anything built on llvm-cov or gcov; Rust's cargo-llvm-cov writes both. A stack that
-writes neither converts in its coverage recipe: Go's cover profile through ``gcov2lcov`` or
-``gocover-cobertura``, JaCoCo's XML through ``cover2cover``.
+records name is tallied once. A stack whose coverage tool writes neither format converts its
+report to one of them in its coverage recipe.
 
 Usage: ``coverage_groups.py [--root DIR] [--report FILE]... [--write]``.
 """
@@ -141,7 +138,7 @@ def cobertura(report: Path, root: Path, tallies: dict[str, Tally]) -> None:
         path = relative(cls.get("filename", ""), sources, root)
         tally = tallies.setdefault(path, Tally())
         tally.files = [path]
-        # Why: Istanbul and llvm-cov repeat a function's first line under <methods>; every
+        # Why: some tools repeat a function's first line under <methods>; every
         # descendant `line` would count it twice.
         for line in cls.findall("lines/line"):
             tally.lines += 1

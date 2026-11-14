@@ -63,7 +63,7 @@ jobs:
         with:
           path: | # bind: the dependency directory, the mutation cache, the fuzz corpus
             .cache
-          key: tier2-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('pyproject.toml', 'package.json') }} # bind: lockfiles and tool configs
+          key: tier2-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }} # bind: lockfiles and tool configs
           restore-keys: |
             tier2-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
@@ -93,7 +93,7 @@ jobs:
         with:
           path: | # bind: the dependency directory, the mutation cache, the fuzz corpus
             .cache
-          key: tier2-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('pyproject.toml', 'package.json') }} # bind: lockfiles and tool configs
+          key: tier2-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }} # bind: lockfiles and tool configs
           restore-keys: |
             tier2-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on

@@ -33,7 +33,7 @@ jobs:
         with:
           path: | # bind: the dependency directory and every tool cache the weekly gates write
             .cache
-          key: weekly-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('pyproject.toml', 'package.json') }} # bind: lockfiles and tool configs
+          key: weekly-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }} # bind: lockfiles and tool configs
           restore-keys: |
             weekly-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
