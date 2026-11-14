@@ -579,9 +579,10 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
 def switch_step(checkout: Checkout) -> Step | None:
     """On a working branch already in the default branch: switch to it; else ``None``.
 
-    Why: a merge the owner ran by hand moves the default branch by ``git update-ref`` and leaves
-    the checkout where it was, and without this the route names the same merge again. A squash
-    merge on a forge leaves HEAD out of the default branch, so the pull request's state decides it.
+    Why: ``merge.py`` cut off before it switched the checkout, or unable to switch it, and a merge
+    the owner made from another checkout leave the checkout on the merged branch, and without this
+    the route names the same merge again. A squash merge on a forge leaves HEAD out of the default
+    branch, so the pull request's state decides it.
     """
     default, root = checkout.default_branch, checkout.root
     if gatelib.git(root, "merge-base", "--is-ancestor", "HEAD", default) is None:
