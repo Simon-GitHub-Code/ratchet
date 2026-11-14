@@ -58,11 +58,17 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   apart, so a ``clean --all`` from drain 2 without drain 1's token takes drain 1's tree (its draft
   is kept as the stash "interrupted run"; no work is lost). Pass the token to avoid it. A
   ``clean --all`` killed between writing the lease and printing the token loses the token; the same
-  session's rerun still takes the lease, and prints a new one. A ``land`` holds a lock of the
-  kernel's on its ticket from before its merge runs until it ends, so ``report`` and ``clean``,
-  of any drain, leave that ticket's note and tree alone while it runs, and ``update``, ``close``
-  and ``split`` of that ticket refuse with exit 3, change nothing, and say to run ``plan`` once
-  it ends: the landing records the ticket's outcome itself. A ``--take-over`` of a
+  session's rerun still takes the lease, and prints a new one. A landing is seen while its
+  ``land`` or the merge it started is alive: the ``land`` holds a lock of the kernel's on its
+  ticket, and the merge holds one of its own on the branch, so a ``land`` killed alone leaves a
+  landing that is still seen. ``report`` and ``clean``, of any drain, leave that ticket's note and
+  tree alone while it is seen, and ``update``, ``close`` and ``split`` of that ticket refuse with
+  exit 3, change nothing, and say to run ``plan`` once it ends: with a ``land`` alive, that the
+  landing records the ticket's outcome itself; with only a merge alive, that a merge is running,
+  and a ``report`` or an ``update`` records the outcome afterwards. A second ``land`` is refused
+  while either runs; one that meets an orphaned merge in its last instant is refused once, by the
+  merge, with "run land again". ``clean`` removes the private lock file of a ``land`` that is
+  gone. A ``--take-over`` of a
   drain that is still alive is the owner's call: a landing that drain runs keeps its tree while
   it runs, and the next ``clean --all`` takes the tree once that landing has ended, its work all
   committed. Every
@@ -1114,7 +1120,7 @@ def record_merge(root: Path, branch: str) -> list[str]:
 
 def landing_path(root: Path, branch: str) -> Path:
     """The file whose lock a ``land`` of ``branch`` holds, from before its merge until it ends."""
-    return state_dir(root) / f"ratchet-landing-{hashlib.sha256(branch.encode()).hexdigest()[:16]}"
+    return state_dir(root) / f"ratchet-landing-{merge.branch_digest(branch)}"
 
 
 @contextlib.contextmanager
@@ -1125,30 +1131,64 @@ def landing_lock(root: Path, branch: str) -> Iterator[int | None]:
     ``land`` that tried at that moment would refuse for a landing that is not running. A probe
     holds the lock for microseconds, a real landing for minutes.
     """
-    for _ in range(LANDING_TRIES - 1):
-        with merge.locked(landing_path(root, branch)) as held:
-            if held is not None:
-                yield held
-                return
-        time.sleep(LANDING_POLL)
-    with merge.locked(landing_path(root, branch)) as held:
+    with merge.locked_retrying(landing_path(root, branch), LANDING_TRIES, LANDING_POLL) as held:
         yield held
 
 
+@contextlib.contextmanager
+def private_lock(root: Path) -> Iterator[Path]:
+    """A lock private to one ``land``, in a file of a fresh name; the merge it starts probes it.
+
+    Why: the landing lock is freed when ``land`` is killed, though the merge it started runs on.
+    The merge holds its own lock on the branch, and probes this one to learn that its ``land`` is
+    gone. Neither descriptor is inherited by the merge.
+    """
+    path = state_dir(root) / f"{merge.PRIVATE}{secrets.token_hex(8)}"
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, merge.OWNER_FILE)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield path
+    finally:
+        path.unlink(missing_ok=True)
+        os.close(descriptor)
+
+
+def sweep_private_locks(root: Path) -> None:
+    """Remove the private lock files whose lock is free: the ``land`` that made one is gone."""
+    for path in state_dir(root).glob(f"{merge.PRIVATE}*"):
+        if not merge.lock_held(path):
+            path.unlink(missing_ok=True)
+
+
+def landing_holder(root: Path, branch: str) -> str | None:
+    """What holds the landing of ``branch``: ``landing`` (a ``land``), ``merge`` (only a merge).
+
+    Why: a ``land`` killed alone frees its lock while the merge it started runs on, so the merge's
+    own lock counts too, and which one is held says who records the outcome.
+    """
+    for name, path in (
+        ("landing", landing_path(root, branch)),
+        ("merge", merge.merge_lock_path(root, branch)),
+    ):
+        if path.exists():
+            with merge.locked(path) as descriptor:
+                if descriptor is None:
+                    return name
+    return None
+
+
 def landing_running(root: Path, branch: str) -> bool:
-    """Whether a ``land`` of ``branch`` is alive: it holds its lock, which dies with it."""
-    if not landing_path(root, branch).exists():
-        return False
-    with merge.locked(landing_path(root, branch)) as descriptor:
-        return descriptor is None
+    """Whether a ``land`` of ``branch`` is alive, or the merge it started: either lock is held."""
+    return landing_holder(root, branch) is not None
 
 
 def landing_alive(root: Path, branch: str, said: str) -> bool:
     """``landing_running``, saying so: a live landing records the merge it made itself."""
-    alive = landing_running(root, branch)
-    if alive:
-        print(f"{said}: a landing of `{branch}` is running in another command, so it is left alone")
-    return alive
+    holder = landing_holder(root, branch)
+    if holder is not None:
+        what = "a landing" if holder == "landing" else "a merge"
+        print(f"{said}: {what} of `{branch}` is running in another command, so it is left alone")
+    return holder is not None
 
 
 def record_merge_aloud(root: Path, branch: str) -> None:
@@ -1173,7 +1213,13 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
     branch = route.own_branch(ticket)
     # Why: `land` holds no drain lock while the merge runs, and the merge takes minutes; this lock
     # is what tells another command, in this process or another, that the landing is alive.
-    with landing_lock(drain.root, branch) as held:
+    if landing_holder(drain.root, branch) == "merge":
+        print(
+            f"land: a merge of `{branch}` is running in another command; run land again once it"
+            " ends"
+        )
+        return 2
+    with landing_lock(drain.root, branch) as held, private_lock(drain.root) as private:
         if held is None:
             # Why: two landings of one ticket would run the merge at once, or one would close the
             # ticket while the other is mid-merge.
@@ -1182,11 +1228,13 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
                 " again once it ends"
             )
             return 2
-        return landed(drain, ticket, branch, command=command)
+        return landed(drain, ticket, branch, command=command, private=private)
 
 
-def landed(drain: Drain, ticket: preflight.Ticket, branch: str, *, command: str) -> int:
-    """The body of ``land``, run under its landing lock."""
+def landed(
+    drain: Drain, ticket: preflight.Ticket, branch: str, *, command: str, private: Path
+) -> int:
+    """The body of ``land``, run under its landing lock and its private lock."""
     with exclusive(drain.root):
         if recorded_merge(drain.root, branch):
             record_merge_aloud(drain.root, branch)
@@ -1203,7 +1251,14 @@ def landed(drain: Drain, ticket: preflight.Ticket, branch: str, *, command: str)
             return 2
     argv = [*shlex.split(command), branch]
     try:
-        done = subprocess.run(argv, cwd=drain.root, capture_output=True, text=True, check=False)
+        done = subprocess.run(
+            argv,
+            cwd=drain.root,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, merge.LANDING_VAR: str(private)},
+        )
     except OSError as error:
         print(f"land: `{command}` could not run: {error}")
         return 2
@@ -1226,6 +1281,7 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
     """
     if everything:
         lease(root, take_over=take_over, token=token)
+    sweep_private_locks(root)
     merged = route.merged_features(root, merge_ready.default_ref(root))
     heads = gatelib.git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads/") or ""
     owners = {tree_of(root, branch): branch for branch in heads.splitlines()}
@@ -1285,8 +1341,9 @@ def in_flight(root: Path, branch: str | None, busy: str | None) -> str | None:
     """
     if branch is None:
         return None
-    if landing_running(root, branch):
-        return f"`{branch}` has a landing running"
+    holder = landing_holder(root, branch)
+    if holder is not None:
+        return f"`{branch}` has a {holder} running"
     if busy is not None and recorded_merge(root, branch):
         return f"`{branch}` is merged and no note says so"
     return None
@@ -1474,11 +1531,16 @@ def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) 
     # another process; it is not in `close`, where `landing_running` would see the landing's own
     # lock as held. It runs under the drain lock, before `split` files anything.
     branch = route.own_branch(ticket)
-    if landing_running(drain.root, branch):
+    holder = landing_holder(drain.root, branch)
+    if holder is not None:
+        what, why = (
+            ("a landing", ": the landing records the ticket's outcome itself")
+            if holder == "landing"
+            else ("a merge", "")
+        )
         print(
-            f"{options.action}: a landing of `{branch}` is running in another command; nothing was"
-            " done; wait for it to end, then run plan: the landing records the ticket's outcome"
-            " itself"
+            f"{options.action}: {what} of `{branch}` is running in another command; nothing was"
+            f" done; wait for it to end, then run plan{why}"
         )
         return LANDING_RUNNING
     if options.action == "update":

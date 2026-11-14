@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ from tests.test_drain import (
     BRANCH_C,
     GAMMA,
     HALVES,
+    MERGE,
     SCRIPTS,
     WHOLE,
     Out,
@@ -324,6 +326,7 @@ def test_a_second_open_is_refused_when_its_wait_runs_out(tmp_path: Path) -> None
 
 SESSION = """
 import re, shutil, subprocess, sys, time
+from collections.abc import Callable
 from pathlib import Path
 
 def run(*argv):
@@ -1727,3 +1730,377 @@ def test_a_split_is_refused_while_a_landing_holds_its_lock_and_files_nothing(
         assert tree in drain.worktrees(root)
     assert run(root, "split", ALPHA, "--plan", str(plan)) == 0
     assert note(root, BRANCH_A)["outcome"] == "split"
+
+
+# --- a landing is seen while its land or the merge it started is alive ------------------------
+
+WAIT_FOR = """\
+import sys
+import time
+from collections.abc import Callable
+from pathlib import Path
+
+
+def wait_for(path):
+    deadline = time.monotonic() + 60
+    while not Path(path).exists():
+        assert time.monotonic() < deadline, path
+        time.sleep(0.02)
+"""
+# Why: the binding's `check`, which merge.py runs while it holds its lock: it says it started,
+# optionally leaves a process running, and waits for the test to say go.
+GATE_CHECK = (
+    WAIT_FOR
+    + """\
+import subprocess
+
+gate = Path(sys.argv[1])
+if len(sys.argv) > 2:
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(300)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    (gate / "child").write_text(str(child.pid))
+(gate / "started").touch()
+wait_for(gate / "go")
+"""
+)
+# Why: the binding's `merge`, which is merge.py after it waits for the test to say go-<land's pid>:
+# the instant between a land starting its merge and the merge's first act.
+WRAPPED_MERGE = (
+    WAIT_FOR
+    + """\
+import contextlib
+import io
+import json
+import os
+
+sys.path[:0] = [__SCRIPTS__, __HOOKS__]
+import merge
+
+gate = Path(sys.argv[1])
+me = os.getppid()
+(gate / f"at-{me}").touch()
+wait_for(gate / f"go-{me}")
+fds = []
+for name in os.listdir("/proc/self/fd"):
+    with contextlib.suppress(OSError):
+        fds.append(os.readlink(f"/proc/self/fd/{name}"))
+landing = os.environ.get(merge.LANDING_VAR)
+said = io.StringIO()
+with contextlib.redirect_stdout(said):
+    code = merge.main(["merge", sys.argv[-1], "--root", os.getcwd()])
+(gate / f"result-{me}").write_text(
+    json.dumps(
+        {
+            "code": code,
+            "out": said.getvalue(),
+            "fds": fds,
+            "landing": landing,
+            "present": bool(landing) and os.path.exists(landing),
+        }
+    )
+)
+sys.exit(code)
+"""
+)
+STOPPED = (
+    "merge: the land that started this merge has stopped; nothing was merged; run land again\n"
+)
+
+
+def wait_until(condition: Callable[[], object]) -> None:
+    deadline = time.monotonic() + 60
+    while not condition():
+        assert time.monotonic() < deadline, "the condition never came true"
+        time.sleep(0.02)
+
+
+def kill_alone(land: subprocess.Popen[str]) -> None:
+    """End the drain process by its PID, as the model's replays do: its merge runs on."""
+    os.kill(land.pid, signal.SIGKILL)
+    land.communicate(timeout=60)
+    assert land.returncode == -signal.SIGKILL
+
+
+def tool(tmp_path: Path, name: str, text: str) -> Path:
+    path = tmp_path / "tools" / name
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def gated(
+    tmp_path: Path,
+    *,
+    spawn: bool = False,
+    resolved: bool = True,
+    files: dict[str, str] | None = None,
+) -> tuple[Path, Path]:
+    """A built ticket whose merge's `check` waits for ``gate/go``; the repository and the gate."""
+    gate = tmp_path / "tools" / "gate"
+    gate.mkdir(parents=True)
+    check = f"{sys.executable} {tool(tmp_path, 'check.py', GATE_CHECK)} {gate}"
+    bound = binding(MERGE, check=check + (" spawn" if spawn else ""))
+    root = project(tmp_path, **{"docs/process/binding.md": bound, **(files or {})})
+    judged(root, resolved=resolved)
+    return root, gate
+
+
+def wrapped(tmp_path: Path) -> tuple[Path, Path, str]:
+    """A built ticket whose merge waits for ``gate/go-<land's pid>`` before it runs merge.py."""
+    gate = tmp_path / "tools" / "gate"
+    gate.mkdir(parents=True)
+    text = WRAPPED_MERGE.replace("__SCRIPTS__", repr(str(SCRIPTS)))
+    text = text.replace("__HOOKS__", repr(str(SCRIPTS.parent / "hooks")))
+    command = f"{sys.executable} {tool(tmp_path, 'merge_after.py', text)} {gate}"
+    root = project(tmp_path, **{"docs/process/binding.md": binding(command)})
+    judged(root)
+    return root, gate, command
+
+
+def release(gate: Path, land: subprocess.Popen[str]) -> dict[str, object]:
+    """Let the wrapped merge of ``land`` run; what it printed and returned."""
+    (gate / f"go-{land.pid}").touch()
+    result = gate / f"result-{land.pid}"
+    wait_until(result.exists)
+    return json.loads(result.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def privates(root: Path) -> list[Path]:
+    return sorted(drain.state_dir(root).glob(f"{merge.PRIVATE}*"))
+
+
+def refused_for_a_merge(command: str) -> str:
+    return (
+        f"{command}: a merge of `{BRANCH_A}` is running in another command; nothing was done;"
+        " wait for it to end, then run plan\n"
+    )
+
+
+def land_waits_for_a_merge() -> str:
+    return (
+        f"land: a merge of `{BRANCH_A}` is running in another command; run land again once it"
+        " ends\n"
+    )
+
+
+def test_a_land_killed_alone_leaves_its_merge_seen_until_the_merge_ends(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, gate = gated(tmp_path)
+    tree = drain.tree_of(root, BRANCH_A)
+    head = git(root, "rev-parse", "main")
+    land = start(root, "land", ALPHA)
+    wait_until((gate / "started").exists)
+    kill_alone(land)
+    assert drain.landing_holder(root, BRANCH_A) == "merge"
+    capsys.readouterr()
+    assert run(root, "update", ALPHA) == 3
+    assert capsys.readouterr().out == refused_for_a_merge("update")
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "x") == 3
+    assert capsys.readouterr().out == refused_for_a_merge("close")
+    assert run(root, "land", ALPHA) == 2
+    assert capsys.readouterr().out == land_waits_for_a_merge()
+    assert run(root, "clean", "--all") == 0
+    assert f"kept: {tree}: `{BRANCH_A}` has a merge running\n" in capsys.readouterr().out
+    assert tree.exists()
+    assert "outcome" not in note(root, BRANCH_A)
+    assert git(root, "rev-parse", "main") == head
+    (gate / "go").touch()
+    wait_until(lambda: drain.landing_holder(root, BRANCH_A) is None)
+    assert git(root, "rev-parse", "main") != head, "the merge landed"
+    assert run(root, "report") == 0
+    assert note(root, BRANCH_A)["outcome"] == "merged"
+    assert run(root, "update", ALPHA) != 3
+
+
+def test_a_report_says_a_merge_whose_land_was_killed_alone_is_left_alone(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, gate = gated(tmp_path)
+    land = start(root, "land", ALPHA)
+    wait_until((gate / "started").exists)
+    kill_alone(land)
+    capsys.readouterr()
+    assert drain.landing_alive(root, BRANCH_A, "report")
+    assert capsys.readouterr().out == (
+        f"report: a merge of `{BRANCH_A}` is running in another command, so it is left alone\n"
+    )
+    (gate / "go").touch()
+    wait_until(lambda: drain.landing_holder(root, BRANCH_A) is None)
+    assert not drain.landing_alive(root, BRANCH_A, "report")
+
+
+def test_a_merge_finding_its_land_gone_merges_nothing_and_removes_the_private_lock(
+    tmp_path: Path,
+) -> None:
+    root, gate, _ = wrapped(tmp_path)
+    head = git(root, "rev-parse", "main")
+    land = start(root, "land", ALPHA)
+    wait_until((gate / f"at-{land.pid}").exists)
+    (private,) = privates(root)
+    kill_alone(land)
+    result = release(gate, land)
+    assert (result["code"], result["out"]) == (2, STOPPED)
+    assert git(root, "rev-parse", "main") == head
+    assert not private.exists()
+    assert "outcome" not in note(root, BRANCH_A)
+
+
+@pytest.mark.parametrize("first", ["the dead land's merge", "the second land's merge"])
+def test_a_second_land_in_the_window_lands_once_and_the_other_merge_stops(
+    tmp_path: Path, first: str
+) -> None:
+    root, gate, _ = wrapped(tmp_path)
+    one = start(root, "land", ALPHA)
+    wait_until((gate / f"at-{one.pid}").exists)
+    kill_alone(one)
+    two = start(root, "land", ALPHA)
+    wait_until((gate / f"at-{two.pid}").exists)
+    order = [one, two] if first.startswith("the dead") else [two, one]
+    results = {land.pid: release(gate, land) for land in order}
+    out, _ = two.communicate(timeout=60)
+    assert two.returncode == 0
+    assert out.endswith(f"closed: {ALPHA}: merged\n")
+    assert (results[one.pid]["code"], results[one.pid]["out"]) == (2, STOPPED)
+    assert results[two.pid]["code"] == 0
+    merges = git(root, "log", "--merges", "--format=%s", "main")
+    assert merges.count(f"Merge branch '{BRANCH_A}'") == 1
+    assert note(root, BRANCH_A)["outcome"] == "merged"
+    assert privates(root) == []
+
+
+def test_a_merge_that_meets_a_held_merge_lock_stops_and_its_land_closes_nothing(
+    tmp_path: Path,
+) -> None:
+    root, gate, command = wrapped(tmp_path)
+    head = git(root, "rev-parse", "main")
+    land = start(root, "land", ALPHA)
+    wait_until((gate / f"at-{land.pid}").exists)
+    with merge.merge_lock_path(root, BRANCH_A).open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = release(gate, land)
+    out, _ = land.communicate(timeout=60)
+    assert (result["code"], result["out"]) == (
+        2,
+        f"merge: a merge of `{BRANCH_A}` is already running; nothing was merged\n",
+    )
+    assert land.returncode == 2
+    assert out == f"land: `{command}` stopped (exit 2); run land again to finish it\n"
+    assert git(root, "rev-parse", "main") == head
+    assert "outcome" not in note(root, BRANCH_A)
+    assert privates(root) == []
+
+
+def test_the_merge_is_given_the_private_lock_by_a_variable_and_no_lock_by_descriptor(
+    tmp_path: Path,
+) -> None:
+    root, gate, _ = wrapped(tmp_path)
+    land = start(root, "land", ALPHA)
+    wait_until((gate / f"at-{land.pid}").exists)
+    (private,) = privates(root)
+    result = release(gate, land)
+    land.communicate(timeout=60)
+    assert land.returncode == 0
+    assert (result["landing"], result["present"]) == (str(private), True)
+    held = (merge.PRIVATE, "ratchet-landing-", "ratchet-merge-lock-")
+    fds = result["fds"]
+    assert isinstance(fds, list)
+    assert not [link for link in fds if any(name in link for name in held)]
+    assert not private.exists(), "a land that ends normally removes its own lock file"
+
+
+@pytest.mark.parametrize("code", [2, 3, 255])
+def test_a_merge_that_stops_with_any_code_but_0_or_1_closes_nothing(
+    tmp_path: Path, capsys: Out, code: int
+) -> None:
+    script = tool(tmp_path, "stopping_merge.py", "import sys\nsys.exit(int(sys.argv[1]))\n")
+    command = f"{sys.executable} {script} {code}"
+    root = project(tmp_path, **{"docs/process/binding.md": binding(command)})
+    judged(root)
+    capsys.readouterr()
+    assert run(root, "land", ALPHA) == 2
+    assert capsys.readouterr().out == (
+        f"land: `{command}` stopped (exit {code}); run land again to finish it\n"
+    )
+    assert "outcome" not in note(root, BRANCH_A)
+    assert privates(root) == []
+
+
+@pytest.mark.parametrize("how", ["ends normally", "killed alone"])
+def test_a_process_the_merges_check_leaves_running_does_not_keep_the_landing_seen(
+    tmp_path: Path, how: str
+) -> None:
+    root, gate = gated(tmp_path, spawn=True)
+    if how == "killed alone":
+        land = start(root, "land", ALPHA)
+        wait_until((gate / "started").exists)
+        kill_alone(land)
+        (gate / "go").touch()
+        wait_until(lambda: drain.landing_holder(root, BRANCH_A) is None)
+    else:
+        (gate / "go").touch()
+        assert run(root, "land", ALPHA) == 0
+    child = int((gate / "child").read_text(encoding="utf-8"))
+    try:
+        os.kill(child, 0)
+        assert not drain.landing_running(root, BRANCH_A)
+    finally:
+        os.kill(child, signal.SIGKILL)
+
+
+def test_a_hand_merge_holds_the_merge_lock_and_the_drains_commands_refuse(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, gate = gated(tmp_path, resolved=False, files=WHOLE)
+    plan = plan_file(tmp_path, HALVES)
+    env = {k: v for k, v in os.environ.items() if k != merge.LANDING_VAR}
+    by_hand = subprocess.Popen(  # noqa: S603 # -- this interpreter, no shell
+        [sys.executable, str(SCRIPTS / "merge.py"), BRANCH_A, "--root", str(root)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+    try:
+        wait_until((gate / "started").exists)
+        capsys.readouterr()
+        assert run(root, "update", ALPHA) == 3
+        assert capsys.readouterr().out == refused_for_a_merge("update")
+        assert run(root, "close", ALPHA, "--outcome", "parked") == 3
+        assert capsys.readouterr().out == refused_for_a_merge("close")
+        assert run(root, "split", ALPHA, "--plan", str(plan)) == 3
+        assert capsys.readouterr().out == refused_for_a_merge("split")
+        assert run(root, "land", ALPHA) == 2
+        assert capsys.readouterr().out == land_waits_for_a_merge()
+        assert "outcome" not in note(root, BRANCH_A)
+    finally:
+        (gate / "go").touch()
+        by_hand.wait(timeout=60)
+
+
+def test_clean_removes_a_private_lock_nobody_holds_and_never_one_that_is_held(
+    tmp_path: Path,
+) -> None:
+    root, gate = gated(tmp_path)
+    land = start(root, "land", ALPHA)
+    wait_until((gate / "started").exists)
+    kill_alone(land)
+    (gate / "go").touch()
+    wait_until(lambda: drain.landing_holder(root, BRANCH_A) is None)
+    assert len(privates(root)) == 1, "the killed land left its lock file"
+    alive = drain.state_dir(root) / f"{merge.PRIVATE}alive"
+    with alive.open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert run(root, "clean") == 0
+        assert privates(root) == [alive], "the held one stays, the dead land's is gone"
+    assert run(root, "clean", "--all") == 0
+    assert privates(root) == []
+    names = {path.name for path in drain.state_dir(root).glob("ratchet-*")}
+    assert {
+        drain.landing_path(root, BRANCH_A).name,
+        merge.merge_lock_path(root, BRANCH_A).name,
+    } <= names
