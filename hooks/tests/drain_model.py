@@ -1628,10 +1628,14 @@ def lease_run() -> Run:
 
 SHOWN_LANDING = ("statusA", *(f"{fact}A" for fact in TICKET_FACTS))
 """What the chart of a ticket's life reads: ticket ``a``."""
+# Why: the statechart tool draws a whole chart only of a module of at most 500 states. Seen
+# through the tree and the program too, the lease graph has 659, and neither chart reads them.
 SHOWN_LEASE = tuple(
-    fact for fact in LEASE_FACTS if fact not in {"took1", "took2", "draft", "stashed"}
+    fact
+    for fact in LEASE_FACTS
+    if fact not in {"took1", "took2", "tree", "draft", "running", "stashed"}
 )
-"""What the charts of the lease read: all but the tokens, the draft and the stash."""
+"""What the charts of the lease read: the drains, the lease, the landing, its merge and hold."""
 
 
 def seen_through(
