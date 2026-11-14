@@ -15,6 +15,10 @@ adds the gates up. ``--over report`` is for a pull request, whose runner varies:
 ceiling is printed, raised as a warning annotation, recorded as red and exits 0. The default,
 ``--over block``, is what the default branch, the nightly and a local run use.
 
+A ceiling is the wall clock of one CI job. A gate that CI runs as one job per shard (the suite,
+``SHARD`` of ``SHARDS``) is therefore held to its ceiling per shard job: each shard calls
+``budget.py`` on its own, and sharding is how a gate fits its ceiling, never a reason to raise it.
+
 ``--set`` records the measured time times ``HEADROOM`` (default 1.5) as the key's own ceiling
 when none exists or the new value is lower; it never raises one, because raising a ceiling is a
 loosening and needs an ADR, like lowering a threshold. A tier's ceiling is never set under the
