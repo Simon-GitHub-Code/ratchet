@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The plugin names no language, package manager or stack tool in its gates, and the binding holds each stack fact (ADR 0042, ADR 0043, ADR 0044).
+
+- Three binding sections carry what the gates used to list: `## Install` (whether an install comes first, its lockfile and the recipes that need it), `## Dependencies` (manifest and lockfile globs, accepted registries, and a `just dependencies <dir>` entry point that prints records the plugin compares) and `## Suppressions` (the directive kinds the bound tools read). `conformance` is red when a needed row is missing or malformed, and when a manifest or lockfile the section declares is in no `guards/manifest.toml` group.
+- The merge base's entry point and table judge a change, so a change cannot loosen its own judge. The upgrade writes a section only from what the tree states and owes the rest.
+- Supersedes ADR 0039 and ADR 0011 in part.
+
 A ticket that fits the change-size ceiling is no longer parked as too large before the critic exists (ADR 0040). Until the binding declares `depended-on` the early size stop is the ceiling itself; with the critic it stays at two thirds.
 
 The route no longer loops a non-engineer on a parked ticket or a half-finished adoption. It reads the drain's note of why a ticket is held and names the step that releases that kind of hold (a size block names the split, never a bare `/ratchet:feature`), and a binding with no plugin pin names `/ratchet:adopt` to resume, ahead of the hooks install.

@@ -36,6 +36,7 @@ import triggers
 # Why: the dependency contract lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import dependencies
+from ratchet_guards import manifest as guard_manifest
 
 ENTRY_POINTS = (
     "tier0",
@@ -952,6 +953,7 @@ def check_dependencies(root: Path) -> Iterable[Finding]:
         return
     for problem in contract.problems:
         yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=DEPENDENCY_STOPS)
+    yield from unguarded_dependency_files(root, contract)
     justfile = read_justfile(root)
     if justfile is None or not contract.entry:
         return
@@ -971,6 +973,38 @@ def check_dependencies(root: Path) -> Iterable[Finding]:
         problem = "the `dependencies` recipe still holds the template's `bind:` placeholder"
     if problem:
         yield replace(agent(f"justfile: {problem}"), stops=DEPENDENCY_STOPS)
+
+
+def unguarded_dependency_files(root: Path, contract: dependencies.Contract) -> Iterable[Finding]:
+    """Each declared file that no guard group covers, tracked or new and not ignored.
+
+    Why: ADR 0044. The method names no lockfile, so the guard on one is whatever the adopting
+    agent wrote in ``guards/manifest.toml``. A row that declares a file the manifest misses would
+    otherwise drop the guard silently: a change to it would merge without the owner.
+    """
+    text = read(root / "guards/manifest.toml")
+    if text is None:
+        return
+    try:
+        guards = guard_manifest.parse(text)
+    except guard_manifest.ManifestError:
+        return  # the manifest check reports it
+    listed = gatelib.git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    tracked = (
+        listed.split("\0")
+        if listed is not None
+        else [
+            str(p.relative_to(root))
+            for p in root.rglob("*")
+            if p.is_file() and not any(x.startswith(".") for x in p.relative_to(root).parts)
+        ]
+    )
+    for path in sorted(p for p in tracked if p and contract.recognised(p)):
+        if guards.group_of(path) is None:
+            yield agent(
+                f"guards/manifest.toml: the Dependencies section declares {path}, which no group"
+                " guards; add it to a group, or a change to it merges without the owner"
+            )
 
 
 def bound(tool: str) -> bool:
@@ -2625,6 +2659,11 @@ def install_mutations() -> list[Mutation]:
     ]
 
 
+def unguarded_lockfile(root: Path) -> None:
+    """A lockfile in a tree whose guard manifest names no such file."""
+    (root / "self-test.lock").write_text("locked\n", encoding="utf-8")
+
+
 def dependency_mutations() -> list[Mutation]:
     """The Dependencies section held to the justfile that reads it (ADR 0044)."""
     none = "`none: the self-test has no such file`"
@@ -2651,6 +2690,10 @@ def dependency_mutations() -> list[Mutation]:
         (
             "entry point with no recipe behind it",
             both(rebind(entry, named), rewrite("justfile", "dependencies dir:", "elsewhere dir:")),
+        ),
+        (
+            "declared lockfile that no guard group covers",
+            both(rebind(f"- Lockfiles: {none}", "- Lockfiles: `*.lock`"), unguarded_lockfile),
         ),
         ("entry point whose recipe is still the template's", rebind(entry, named)),
         (
