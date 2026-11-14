@@ -1,4 +1,4 @@
-"""Suppressions: the binding lists the directives, and the gate counts what it lists (ADR 0040).
+"""Suppressions: the binding lists the directives, and the gate counts what it lists (ADR 0042).
 
 The directives here are made up. The plugin names no tool's directive, so a gate that passes on
 ``SILENCE-IT`` and ``ONLY-THIS`` shows it reads the table and nothing else.

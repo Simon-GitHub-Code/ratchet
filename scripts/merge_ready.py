@@ -406,7 +406,7 @@ def dependency_notes(
     """What each changed dependency manifest or lockfile does, as the merge base's binding names.
 
     The binding's Dependencies section and the entry point it names are the merge base's: the
-    change under judgement cannot rewrite what judges it (ADR 0042).
+    change under judgement cannot rewrite what judges it (ADR 0044).
     """
     contract = dependencies.parse(change.before(str(gatelib.BINDING)))
     if contract is None:

@@ -151,7 +151,7 @@ Where each `code:<kind>` trigger of the Gates table finds its instances in this 
 
 ## Install
 
-Whether a fresh checkout must install the tools before a recipe runs one (ADR 0041). `merge` runs the gates in a new work tree and CI runs each in a new checkout, so a tool that is on disk only after an install is missing there unless a recipe installs it first. Say which case this stack is, from what you know of the tools you bound; the method names no package manager. Write `- Install: \`just install\``, with the lockfile it is frozen to and the recipes that run a tool it provides, or `- Install: none: <reason>` and delete the two lines below when the tools arrive on demand. The `install` recipe names the lockfile, installs exactly what it says, and does nothing once that is installed. Each recipe listed depends on `install`, and each tier runs it before its gates start.
+Whether a fresh checkout must install the tools before a recipe runs one (ADR 0043). `merge` runs the gates in a new work tree and CI runs each in a new checkout, so a tool that is on disk only after an install is missing there unless a recipe installs it first. Say which case this stack is, from what you know of the tools you bound; the method names no package manager. Write `- Install: \`just install\``, with the lockfile it is frozen to and the recipes that run a tool it provides, or `- Install: none: <reason>` and delete the two lines below when the tools arrive on demand. The `install` recipe names the lockfile, installs exactly what it says, and does nothing once that is installed. Each recipe listed depends on `install`, and each tier runs it before its gates start.
 
 - Install: <`just install`, or `none: <reason>`>
 - Lockfile: <the path of the file the install is frozen to>
@@ -159,7 +159,7 @@ Whether a fresh checkout must install the tools before a recipe runs one (ADR 00
 
 ## Dependencies
 
-What `guard-diff` and the merge judge read to tell a change that only adds or raises dependencies from one that changes a gate (ADR 0042, ADR 0011). A manifest or a lockfile is a guard path. The method knows no manifest or lockfile format: name the files of this stack, from what you know of its tools, and write the entry point. What this section cannot read is not dependency-only, and goes to the owner.
+What `guard-diff` and the merge judge read to tell a change that only adds or raises dependencies from one that changes a gate (ADR 0044, ADR 0011). A manifest or a lockfile is a guard path. The method knows no manifest or lockfile format: name the files of this stack, from what you know of its tools, and write the entry point. What this section cannot read is not dependency-only, and goes to the owner.
 
 - Manifests: <globs of the files that declare dependencies, each in backticks, or `none: <reason>`>
 - Lockfiles: <globs of the files that record what they resolved to, each in backticks, or `none: <reason>`>
@@ -181,7 +181,7 @@ What `guard-diff` and the merge judge read to tell a change that only adds or ra
 
 ## Suppressions
 
-How the tools bound in the Gates table are told, in the code, to skip a finding, and which markers narrow a suite to the part somebody was looking at (ADR 0040). The method names none: list each directive of the tools this stack binds, from what you know of them, as one row per kind. `Pattern` is an extended regular expression in backticks (a literal `|` in it is written `\|`); the `suppressions` gate counts the lines it matches at the merge base and at head. `Rule` is `rises` (red when the count rose) or `never` (red when a line matches at all). The merge base's table judges a change, so a change cannot loosen its own judge.
+How the tools bound in the Gates table are told, in the code, to skip a finding, and which markers narrow a suite to the part somebody was looking at (ADR 0042). The method names none: list each directive of the tools this stack binds, from what you know of them, as one row per kind. `Pattern` is an extended regular expression in backticks (a literal `|` in it is written `\|`); the `suppressions` gate counts the lines it matches at the merge base and at head. `Rule` is `rises` (red when the count rose) or `never` (red when a line matches at all). The merge base's table judges a change, so a change cannot loosen its own judge.
 
 | Kind | Pattern | Rule |
 | --- | --- | --- |

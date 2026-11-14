@@ -1,4 +1,4 @@
-"""Dependency-only changes to a guard path, read through the binding's contract (ADR 0042).
+"""Dependency-only changes to a guard path, read through the binding's contract (ADR 0044).
 
 The stack here is made up (``tests/dependency_stack.py``): the plugin reads no manifest or lockfile
 format, so a pass on a stack no tool writes shows it knows none.
@@ -689,3 +689,75 @@ def test_a_section_left_as_the_template_wrote_it_or_missing_is_red(repo: Path) -
     assert any("'- Entry point:' is `just dependencies`" in said for said in found(repo))
     swap(repo, "docs/process/binding.md", "## Dependencies", new="## Packages")
     assert any("has no '## Dependencies' section" in said for said in found(repo))
+
+
+def unguarded(root: Path) -> list[str]:
+    return [f.problem for f in conformance.findings(root) if "which no group guards" in f.problem]
+
+
+def declare_lockfile(root: Path) -> None:
+    """A declared lockfile in a repository the guard manifest knows nothing of."""
+    swap(root, "docs/process/binding.md", "- Lockfiles: " + NONE, new="- Lockfiles: `*.lock`")
+    write(root, "app.lock", stack.LOCK)
+    git(root, "init", "-q")
+
+
+def test_a_declared_file_that_no_guard_group_covers_is_red(repo: Path) -> None:
+    declare_lockfile(repo)
+    [said] = unguarded(repo)
+    assert said == (
+        "the Dependencies section declares app.lock, which no group guards;"
+        " add it to a group, or a change to it merges without the owner"
+    )
+
+
+def test_a_declared_file_in_a_guard_group_is_green_and_so_is_its_snapshot(repo: Path) -> None:
+    declare_lockfile(repo)
+    swap(
+        repo,
+        "guards/manifest.toml",
+        'paths = [\n    "guards/**",',
+        new='paths = [\n    "app.lock",\n    "guards/**",',
+    )
+    write(repo, "quality/snapshots/app.lock", stack.LOCK)
+    assert unguarded(repo) == []
+
+
+def test_a_snapshot_of_a_declared_file_that_no_group_covers_is_red(repo: Path) -> None:
+    declare_lockfile(repo)
+    swap(
+        repo,
+        "guards/manifest.toml",
+        'paths = [\n    "guards/**",',
+        new='paths = [\n    "app.lock",\n    "guards/**",',
+    )
+    write(repo, "quality/snapshots/app.lock", stack.LOCK)
+    swap(repo, "guards/manifest.toml", '"quality/**"', new='"nothing/**"')
+    [said] = unguarded(repo)
+    assert "declares quality/snapshots/app.lock" in said
+
+
+def test_a_file_the_section_does_not_declare_is_not_asked_about(repo: Path) -> None:
+    write(repo, "other.lock", "x\n")
+    git(repo, "init", "-q")
+    assert unguarded(repo) == []
+
+
+def test_a_repository_with_a_broken_guard_manifest_leaves_it_to_that_check(repo: Path) -> None:
+    declare_lockfile(repo)
+    (repo / "guards/manifest.toml").write_text("[[group\n", encoding="utf-8")
+    assert unguarded(repo) == []
+
+
+def test_a_repository_with_no_guard_manifest_leaves_it_to_that_check(repo: Path) -> None:
+    declare_lockfile(repo)
+    (repo / "guards/manifest.toml").unlink()
+    assert unguarded(repo) == []
+
+
+def test_a_tree_that_is_no_repository_is_read_from_its_files_less_hidden_ones(repo: Path) -> None:
+    swap(repo, "docs/process/binding.md", "- Lockfiles: " + NONE, new="- Lockfiles: `**/*.lock`")
+    write(repo, "app.lock", stack.LOCK)
+    write(repo, ".cache/hidden.lock", stack.LOCK)
+    [said] = unguarded(repo)
+    assert "declares app.lock" in said

@@ -1,11 +1,11 @@
-"""What a guard-path change does to dependencies, when that is all it does (ADR 0011, ADR 0042).
+"""What a guard-path change does to dependencies, when that is all it does (ADR 0011, ADR 0044).
 
 A dependency manifest holds gate configuration beside the dependency list, so the whole file is a
 guard path, and so is its lockfile. ``guard-diff`` and the merge judge say, for each, what the
 change does to dependencies when that is all it does, so the owner reads the versions and the
 pipeline can match the added names against the ones its spec named.
 
-This module reads no manifest or lockfile format (ADR 0040). The binding's ``## Dependencies``
+This module reads no manifest or lockfile format (ADR 0042). The binding's ``## Dependencies``
 section names the manifests and lockfiles of this stack, the registries it accepts and an entry
 point, ``just dependencies <dir>``, that whoever bound the stack wrote. Given a directory holding
 the changed files at their own paths, the entry point prints records, one per line, tab separated,

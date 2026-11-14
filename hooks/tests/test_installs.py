@@ -1,4 +1,4 @@
-"""The binding says whether an install comes first, and the justfile keeps to it (ADR 0041).
+"""The binding says whether an install comes first, and the justfile keeps to it (ADR 0043).
 
 The stack here is made up: a lockfile called ``tool.lock`` and an install that copies it to a stamp.
 The plugin names no package manager, so nothing below needs one.

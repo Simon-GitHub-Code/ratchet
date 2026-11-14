@@ -111,7 +111,7 @@ parallel := 'python3 "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + 
 # whose base holds no binding, it runs nothing and says so: tier 2 judges that tree whole.
 changed := 'python3 "' + ratchet_plugin + '/scripts/changed.py"'
 
-# The tools the gates run, installed before they run (ADR 0039, ADR 0041). `merge` runs the gates in
+# The tools the gates run, installed before they run (ADR 0039, ADR 0043). `merge` runs the gates in
 # a fresh work tree and CI runs each in a fresh checkout, so a tool that is on disk only after an
 # install is missing there. The binding's `## Install` section says whether this stack needs one.
 # When it does, this recipe installs exactly what the lockfile it names says and does nothing once
@@ -120,7 +120,7 @@ changed := 'python3 "' + ratchet_plugin + '/scripts/changed.py"'
 install:
     @true
 
-# The dependency contract's entry point (ADR 0042): what the binding's `## Dependencies` section
+# The dependency contract's entry point (ADR 0044): what the binding's `## Dependencies` section
 # names, run by `guard-diff` and the merge judge from the merge base's tree. It reads the files
 # under `dir` as data and prints the section's records. Bind it, or have the section say `none:`.
 dependencies dir:

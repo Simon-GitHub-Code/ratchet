@@ -17,7 +17,7 @@ The adoption change is large by construction: it lands the templates, the bindin
 records in one commit. When every commit in the range is ``chore(method): adopt``, the gate
 reports the size and passes, and the pull request's Criticism section carries the number.
 
-Generated lockfiles (the ones the merge base's binding lists under ``## Dependencies``, ADR 0042)
+Generated lockfiles (the ones the merge base's binding lists under ``## Dependencies``, ADR 0044)
 and their copies under ``quality/snapshots/`` are not counted: nobody reviews a lockfile line by
 line, and ``pins`` still catches drift from the manifest. A moved file counts by its changed
 lines only.

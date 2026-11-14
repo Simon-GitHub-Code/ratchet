@@ -1,4 +1,4 @@
-"""Run a project's dependency entry point as the merge base has it (ADR 0042).
+"""Run a project's dependency entry point as the merge base has it (ADR 0044).
 
 The binding's ``## Dependencies`` section names ``just dependencies`` as the recipe that reads
 manifests and lockfiles. It runs from a copy of the merge base's tree, never from the change under
