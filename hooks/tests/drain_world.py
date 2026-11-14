@@ -274,7 +274,7 @@ class World:
             Outcome.MERGED if outcome == "merged" else Outcome.CLOSED,
             hold=held.get("hold") is True,
             text=was.text if merged and was is not None else written,
-            fresh=outcome == "merged" and held.get("reported") is False,
+            fresh=held.get("reported") is False,
             attempts=min(model.RETRIES, attempts if isinstance(attempts, int) else 0),
             rebasing=rebasing,
         )
