@@ -845,6 +845,7 @@ def close(  # noqa: PLR0913 -- the note's parts
         "branch": branch,
         "hold": outcome != MERGED and (exhausted or not retry),
         "attempts": attempts,
+        **({"children": children} if children is not None else {}),
     }
     stays = settle(root, who, outcome=outcome, reasons=reasons, result=result)
     print(f"closed: {who['ref']}: {outcome}")
@@ -886,8 +887,6 @@ def settle(
         "holds": queue_notes.holds_of(result or {}),
         "reported": False,
     }
-    if children is not None:
-        note["children"] = children
     queue_notes.write_note(queue_notes.note_path(root, branch), note)
     return stays
 
@@ -1057,7 +1056,7 @@ def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -
             "",
             *section("Merged", by[MERGED]),
             *section("Waits for you", by[WAITS]),
-            *section("Split by size into tickets of their own", by[SPLIT]),
+            *(section("Split by size into tickets of their own", by[SPLIT]) if by[SPLIT] else []),
             *section("Parked", by[PARKED] + held),
             *section("Not built", unbuilt),
             *section("Assumptions", assumed),

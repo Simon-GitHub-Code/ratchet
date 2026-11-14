@@ -851,7 +851,11 @@ def test_a_held_ticket_is_released_by_changing_its_text(tmp_path: Path) -> None:
     [
         ({"openQuestions": [{"question": "which?"}]}, "answer the open questions", "guard"),
         ({"guardEdits": [{"path": "guards/x", "edit": "y"}]}, "land the guard edits", "to-tickets"),
-        ({"openQuestions": [{"question": "q"}], "tooLarge": {"lines": 1}}, "to-tickets", ""),
+        (
+            {"openQuestions": [{"question": "q"}], "tooLarge": {"lines": 1}},
+            "change the criteria",
+            "",
+        ),
         ({}, "change ticket", "to-tickets"),
     ],
     ids=["questions", "guard edits", "several", "no kind"],
