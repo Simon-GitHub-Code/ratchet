@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import hashlib
 import importlib
 import re
@@ -121,6 +122,7 @@ def lowered(name: str) -> str:
     return name[0].lower() + name[1:]
 
 
+@functools.cache
 def identifier(words: str) -> str:
     """A TLA+ name for ``words``: each word capitalised, the rest dropped."""
     return "".join(word[:1].upper() + word[1:] for word in re.findall(r"[A-Za-z0-9]+", words))
