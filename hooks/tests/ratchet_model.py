@@ -7,7 +7,7 @@ it has made. A branch lands the way ``merge.attempt`` lands one: merged with the
 tip, judged by the gate on the merge result, and the default branch moved forward only when the
 merge is clean and the gate is green. ``graph()`` is every reachable state and step, ``RULES``
 what a reader expects to stay true over any history. Every rule is a predicate over a step:
-``(before, action name, after)``.
+``(before, action, after)``.
 
 The gate is the one ADR 0047 describes. A record excuses a loosening only in the change that adds
 it, and a key the base lacks is judged against the value it last held. A flag and a number are
@@ -21,9 +21,12 @@ than can still land.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
+
+from tests import model_tla
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -382,22 +385,29 @@ def moves(state: State) -> list[Move]:
     return [move for actions in ACTIONS.values() for move in actions(state)]
 
 
-Edge = tuple[State, str, State]
+Edge = tuple[State, Action, State]
 
 
-def graph() -> tuple[frozenset[State], list[Edge]]:
+class Graph(NamedTuple):
+    """Every state reachable from ``INITIAL`` in breadth-first order, and every step."""
+
+    states: tuple[State, ...]
+    edges: tuple[Edge, ...]
+
+
+def graph() -> Graph:
     """Every state reachable from ``INITIAL`` and every step between them."""
-    seen = {INITIAL}
-    frontier = [INITIAL]
+    seen = {INITIAL: None}
+    queue = deque([INITIAL])
     edges: list[Edge] = []
-    while frontier:
-        state = frontier.pop()
+    while queue:
+        state = queue.popleft()
         for action, after in moves(state):
-            edges.append((state, action.name, after))
+            edges.append((state, action, after))
             if after not in seen:
-                seen.add(after)
-                frontier.append(after)
-    return frozenset(seen), edges
+                seen[after] = None
+                queue.append(after)
+    return Graph(tuple(seen), tuple(edges))
 
 
 def landed(before: State, after: State) -> Branch | None:
@@ -411,19 +421,19 @@ def landed(before: State, after: State) -> Branch | None:
     )
 
 
-def named(before: State, _: str, after: State) -> bool:
+def named(before: State, _: Action, after: State) -> bool:
     """A value on the default branch never loosens unless a relaxation record in that tree names exactly that step."""  # noqa: E501
     steps = loosenings(before.default, after.default, before.last)
     return all(names(after.default.records, step) for step in steps)
 
 
-def brought(before: State, _: str, after: State) -> bool:
+def brought(before: State, _: Action, after: State) -> bool:
     """Every loosening that lands brings its own relaxation record in the same change."""
     added = after.default.records - before.default.records
     return all(names(added, step) for step in loosenings(before.default, after.default, NEVER))
 
 
-def not_late(before: State, _: str, after: State) -> bool:
+def not_late(before: State, _: Action, after: State) -> bool:
     """A branch that was green when it forked cannot loosen the default branch by landing late."""
     branch = landed(before, after)
     if branch is None or not green(branch.fork, branch.head, branch.held):
@@ -432,7 +442,7 @@ def not_late(before: State, _: str, after: State) -> bool:
     return all(step in own for step in loosenings(before.default, after.default, before.last))
 
 
-def remembered(before: State, _: str, after: State) -> bool:
+def remembered(before: State, _: Action, after: State) -> bool:
     """A key that was removed comes back looser than the value it last held only with its own relaxation record in the same change, and the thresholds file never goes."""  # noqa: E501
     if not after.default.file:
         return False
@@ -445,9 +455,75 @@ def remembered(before: State, _: str, after: State) -> bool:
     return True
 
 
-RULES: dict[str, Callable[[State, str, State], bool]] = {
+RULES: dict[str, Callable[[State, Action, State], bool]] = {
     "1. a loosening on the default branch is named by a record in its tree": named,
     "2. a loosening that lands brings its own record": brought,
     "3. a branch green at its fork does not loosen by landing late": not_late,
     "4. a removed key comes back no looser without a record, and the file stays": remembered,
 }
+
+
+# The rules by the names the TLA+ module gives them.
+NAMES = dict(zip(("Named", "Brought", "NotLate", "Remembered"), RULES, strict=True))
+
+
+def spelled(value: Cell) -> str:
+    return "absent" if value is None else value.value
+
+
+def tla_action(action: Action) -> str:
+    """The action of the module a step is: its kind, whichever branch, key or record it takes."""
+    return model_tla.identifier(f"branch {action.kind.value}")
+
+
+def export() -> model_tla.Export:
+    """The reachable graph as a TLA+ module: what the default branch holds, and the four rules.
+
+    Every rule is about a step, so each is a ``model_tla.Step``. None breaks, so the module has
+    the graph's states and steps and no more.
+    """
+    return model_tla.export(
+        "Ratchet",
+        graph(),
+        {
+            name: model_tla.Step((RULES[rule].__doc__ or "").strip(), RULES[rule])
+            for name, rule in NAMES.items()
+        },
+        fields=(),
+        derived={
+            "floor": lambda state: spelled(state.default.floor),
+            "ceiling": lambda state: spelled(state.default.ceiling),
+            "file": lambda state: state.default.file,
+            "records": lambda state: frozenset(
+                f"{record.step.line} ({record.copy + 1})" for record in state.default.records
+            ),
+            "held": lambda state: tuple(spelled(value) for value in state.last),
+            "left": lambda state: state.left,
+        },
+        action=tla_action,
+        deadlock=False,
+    )
+
+
+class Default(NamedTuple):
+    """What the default branch holds, as the charts show it: each key, and what its records name."""
+
+    floor: str
+    ceiling: str
+    relaxes: frozenset[str]
+    """The loosenings its records name, each as ``key from old to new``, and which copy."""
+
+
+def default(state: State) -> Default:
+    relaxes = frozenset(
+        f"{r.step.key.value} from {r.step.old.value} to {spelled(r.step.new)}"
+        + (f", copy {r.copy + 1}" if r.copy else "")
+        for r in state.default.records
+    )
+    return Default(spelled(state.default.floor), spelled(state.default.ceiling), relaxes)
+
+
+def summary() -> model_tla.Export:
+    """The graph seen through ``default``, small enough for the statechart tool to draw whole."""
+    seen = model_tla.summary(graph(), default, tla_action)
+    return model_tla.export("RatchetDefault", seen, {}, fields=Default._fields, deadlock=False)
