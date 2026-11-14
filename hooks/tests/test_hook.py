@@ -439,7 +439,7 @@ def test_the_default_branches_are_main_master_and_the_one_the_manifest_is_read_f
     root = checkout(tmp_path)
     assert defaults(root) == {"main", "master"}
     _git(root, "branch", "-m", "main", "trunk")
-    assert defaults(root) == {"main", "master"}
+    assert defaults(root) == {"main", "master", "trunk"}
     _git(root, "update-ref", "refs/remotes/origin/trunk", "HEAD")
     _git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
     assert defaults(root) == {"main", "master", "trunk"}
