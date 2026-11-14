@@ -57,4 +57,13 @@ statechart /tmp/route-model/Route.tla --config /tmp/route-model/Route.cfg \
 
 A model with a summary writes it beside the module, as `RatchetDefault.tla` beside `Ratchet.tla`. Draw its views from the summary, and run the tool once on the whole module for the rules. Above 500 states the report counts the states but not the steps. The last line of `tlc.out`, `N states generated`, counts the start and each step. It is the first run of TLC, which stops at the first rule that breaks, so for the count run the tool again with a config that names only the rules that hold.
 
+For a module of more than a few thousand states, the tool's run on the whole module can exhaust its memory. Then call TLC directly, where `tlc` below stands for the way TLC runs on your machine. Run it once with a config that names only the rules that hold, for the counts. Then run it once for each rule that breaks, with a config that names that rule alone and a single worker, so that its trace is the shortest:
+
+```sh
+tlc -workers 4 -config /tmp/ratchet-model/Holds.cfg /tmp/ratchet-model/Ratchet
+tlc -workers 1 -deadlock -config /tmp/ratchet-model/OneRule.cfg /tmp/ratchet-model/Ratchet
+```
+
+`OneRule.cfg` holds two lines, `SPECIFICATION Spec` and `INVARIANT` with the rule's name. The counts and the traces of these runs are what the page names.
+
 Put each `chart.mmd` in its block on the page, the counts from each `report.md` beside it, and each SHA-256 on the line that names it.
