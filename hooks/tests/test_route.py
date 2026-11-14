@@ -1025,3 +1025,9 @@ def test_an_adoption_that_stopped_is_resumed_before_the_hooks_are_installed(
     write(root, "docs/process/binding.md", BINDING)
     commit(root, "chore(method): adopt, the pin")
     assert route.decide(root, None).stage == "hooks"
+
+
+def test_a_repository_with_no_default_branch_commit_has_no_tip(tmp_path: Path) -> None:
+    git(tmp_path, "init", "-q")
+    assert queue_notes.tip(tmp_path) is None
+    assert not queue_notes.caused(tmp_path, {"causes": ["a"], "base": "b"})
