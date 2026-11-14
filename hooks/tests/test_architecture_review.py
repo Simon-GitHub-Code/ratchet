@@ -380,3 +380,58 @@ def test_conformance_asks_for_a_row_of_each_kind_that_reopens_the_architecture(
         " architecture (ADR 0052)" in problem
         for problem in problems
     ), problems
+
+
+def test_the_reviews_start_where_the_row_was_bound_not_where_it_was_first_written(
+    tmp_path: Path, capsys: Out
+) -> None:
+    # Why: binding the row's Tool cell keeps how often its question appears, so the start is
+    # found by the line that changed, and a row bound after it was written still asks the review.
+    unbound = REVIEW_ROW.replace("`ratchet` plugin `scripts/triggers.py`", "a manual check")
+    root = repository(tmp_path, {BINDING: binding(unbound), "README.md": "# A\n"})
+    write(root, BINDING, binding(REVIEW_ROW))
+    commit(root, "chore(method): bind the review")
+    write(root, "src/store.py", STORE)
+    commit(root, "feat(core): keep the links")
+    branch(root)
+    write(root, "src/more.py", STORE)
+    capsys.readouterr()
+    assert run(root) == 1
+    assert "architecture review owed: 'stored-format'" in capsys.readouterr().out
+
+
+def test_a_row_the_default_branch_does_not_hold_yet_owes_nothing(tmp_path: Path) -> None:
+    root = repository(tmp_path, {BINDING: binding(), "src/store.py": STORE})
+    write(root, BINDING, binding(REVIEW_ROW, events="deployed"))
+    assert triggers.reviews_owed(root) == []
+
+
+def test_a_repository_with_no_commit_owes_no_review(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init", "-q", "-b", "main")
+    write(root, BINDING, binding(REVIEW_ROW))
+    write(root, "src/store.py", STORE)
+    git(root, "add", "-A")
+    assert triggers.reviews_owed(root) == []
+
+
+def test_a_record_that_names_no_trigger_is_not_a_review(tmp_path: Path) -> None:
+    root = arrived(tmp_path)
+    write(root, "docs/adr/0002-other.md", "# Another decision\n\n## Decision\n\nSomething.\n")
+    git(root, "add", "-A")
+    assert [review.trigger for review in triggers.reviews_owed(root)] == ["code:stored-format"]
+
+
+def test_the_route_names_the_review_a_declared_event_owes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hooks_installed, "check", lambda _root: None)
+    root = repository(tmp_path, {**ADOPTED, BINDING: ROUTED_BINDING + ROUTED})
+    text = (root / BINDING).read_text(encoding="utf-8")
+    write(root, BINDING, text.replace("- Life events: none", "- Life events: deployed"))
+    commit(root, "chore(method): declare deployed")
+    step = route.decide(root, None)
+    assert step.command == route.ARCHITECTURE
+    assert step.why.startswith("the declared life event `deployed` reopens the architecture:")
+    assert step.why.endswith(f"Or carry on with {route.SPEC}: a declared event is never red")

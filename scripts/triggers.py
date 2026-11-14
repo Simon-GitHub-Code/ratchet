@@ -382,9 +382,9 @@ def reviews_start(root: Path, ref: str) -> str | None:
     """The first commit on the default line up to ``ref`` whose binding held the review's row.
 
     Why: ADR 0052. What was there when the reviews started was reviewed by the adoption, or by
-    the upgrade that added the row. One first-parent search for the commits that changed how
-    often the row's question appears in the binding, oldest first; the first that holds the row
-    bound is the start.
+    the upgrade that added the row. One first-parent search for the commits that added or removed
+    a binding line naming the row's question, oldest first; the first that holds the row bound is
+    the start. A line, not a count: a row whose Tool cell is bound later keeps its count.
     """
     listed = gatelib.git(
         root,
@@ -393,7 +393,7 @@ def reviews_start(root: Path, ref: str) -> str | None:
         "--first-parent",
         "--reverse",
         "--format=%H",
-        f"-S{REVIEW_QUESTION}",
+        f"-G{REVIEW_QUESTION}",
         ref,
         "--",
         str(gatelib.BINDING),
