@@ -24,6 +24,22 @@ if TYPE_CHECKING:
 QUEUE = "queue"
 # Why: the kinds of hold a parked run leaves, read from its result; each has its own release.
 SIZE, QUESTIONS, GUARD = "size", "questions", "guard"
+# Why: the judge's reason codes the drain resolves itself: update, judge again, run the gates
+# again. A ticket left to the owner for these alone is retried, not held; any other code is the
+# owner's decision, and holds the ticket until its text changes.
+MECHANICAL = frozenset({"behind", "moved", "conflict", "gates", "refs"})
+# Why: how many times in a row those may leave a ticket waiting before it is the owner's.
+RETRIES = 3
+
+
+def code_of(line: str) -> str:
+    """The code a judge's reason line starts with: ``code: text``, as a ``Reason`` prints."""
+    return line.split(":", 1)[0]
+
+
+def mechanical(reasons: list[str]) -> bool:
+    """Whether every reason is one the drain resolves itself."""
+    return bool(reasons) and all(code_of(reason) in MECHANICAL for reason in reasons)
 
 
 def digest(ticket: preflight.Ticket) -> str:
