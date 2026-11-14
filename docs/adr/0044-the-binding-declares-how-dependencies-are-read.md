@@ -33,7 +33,7 @@ This is wrong if a loosening of a gate reaches a merge as a dependency-only chan
 
 ## Considered options
 
-- **Keep the parsers, add a plugin-side registry of formats.** Rejected by ADR 0040.
+- **Keep the parsers, add a plugin-side registry of formats.** Rejected by ADR 0042.
 - **Have the entry point decide dependency-only itself and print a verdict.** Rejected: the security properties (a swap at the same version, a rollback, a new source) are the plugin's to hold, and a verdict from a recipe the agent writes would put them in the agent's hands. The recipe only reports facts, and the plugin compares them.
 - **Run the head's recipe.** Rejected: a change could then rewrite what judges it.
 - **Call the entry point from the guard hook.** Rejected: the hook runs before every tool call, must stay fast, and has no business executing project code. The judgement belongs to `guard-diff` and the merge judge, which run once per change.

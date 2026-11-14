@@ -1,4 +1,4 @@
-"""Dependency-only changes to a guard path, read through the binding's contract (ADR 0042).
+"""Dependency-only changes to a guard path, read through the binding's contract (ADR 0044).
 
 The stack here is made up (``tests/dependency_stack.py``): the plugin reads no manifest or lockfile
 format, so a pass on a stack no tool writes shows it knows none.

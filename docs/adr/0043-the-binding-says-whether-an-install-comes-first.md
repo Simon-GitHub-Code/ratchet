@@ -7,7 +7,7 @@ ADR 0039 made a recipe that runs a package manager's tool depend on an `install`
 
 ## Decision
 
-**The binding's `## Install` section says whether this stack needs an install first** (ADR 0040). It has three lines. `Install` is `just install`, or `none: <reason>` for a stack whose tools arrive on demand. `Lockfile` is the one file the install is frozen to. `Needed by` lists the recipes that run a tool the install provides. The agent that adopts writes them, as it chose the tools.
+**The binding's `## Install` section says whether this stack needs an install first** (ADR 0042). It has three lines. `Install` is `just install`, or `none: <reason>` for a stack whose tools arrive on demand. `Lockfile` is the one file the install is frozen to. `Needed by` lists the recipes that run a tool the install provides. The agent that adopts writes them, as it chose the tools.
 
 **`conformance` holds the justfile to the section, and knows no package manager.** With `just install` named, it is red when the lockfile is not a file, when a listed recipe is not defined, when the `install` recipe does not name the lockfile, when a listed recipe does not reach `install`, or when a tier does not run `install` directly. With `none` it asks nothing more. A section that is missing, still the template's, or says `none` with no reason is red. The structural findings stay on the owed ledger's `never` list for the `justfile` path, for the reason ADR 0037 gives: the recipes they name are red in the merge's work tree and in CI as they stand. A missing or malformed section can be owed, since no other gate reads it.
 
@@ -25,6 +25,6 @@ This is wrong if an adopted project merges through `just merge` or passes its CI
 
 ## Considered options
 
-- **Keep the lockfile detector and add managers.** Rejected by ADR 0040.
+- **Keep the lockfile detector and add managers.** Rejected by ADR 0042.
 - **Have the section hold the install command and check it appears in the recipe.** Rejected: the command is the agent's text in the recipe already, and a second copy drifts. The lockfile it names is the one fact a gate can compare.
 - **Require the section's recipes to be found by the plugin from the justfile.** Rejected: which recipes run an installed tool is a fact about the tools, not about the justfile.

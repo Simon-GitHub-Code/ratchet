@@ -74,7 +74,7 @@ signs = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".github/ISSUE_
 #               and its `bite-all` entry point expects red.
 #   directives  true when the question's tool can be told by a directive in the code to skip a
 #               finding. Once its row is bound, the binding's `## Suppressions` section says which
-#               kinds of directive silence it, or `none: <reason>` (ADR 0040).
+#               kinds of directive silence it, or `none: <reason>` (ADR 0042).
 #   proofs      the named proofs the question requires of a gate bound to it, beyond one fault of
 #               the repository's choosing. `[proofs]` below says what each one plants. A `[[bite]]`
 #               of `quality/bites.toml` claims one with `proof = "<name>"`, and the conformance

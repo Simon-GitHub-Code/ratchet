@@ -932,7 +932,7 @@ DEPENDENCY_RECIPE = "dependencies"
 def check_dependencies(root: Path) -> Iterable[Finding]:
     """The Dependencies section: which files hold a stack's dependencies and how to read them.
 
-    Why: ADR 0042. The plugin reads no manifest or lockfile format, so the binding names the files
+    Why: ADR 0044. The plugin reads no manifest or lockfile format, so the binding names the files
     and the entry point that prints their records, and a section that cannot be read leaves every
     dependency change to the owner, the one thing the judgement can never be wrong about.
     """
@@ -943,7 +943,7 @@ def check_dependencies(root: Path) -> Iterable[Finding]:
     if contract is None:
         problem = (
             f"has no '{dependencies.SECTION}' section; add the template's, naming the manifests"
-            " and lockfiles of this stack and the entry point that reads them (ADR 0042)"
+            " and lockfiles of this stack and the entry point that reads them (ADR 0044)"
         )
         found = missing_section(
             BINDING_PATH, problem, dependencies.SECTION, template_text=template_binding()
@@ -982,7 +982,7 @@ SUPPRESSIONS_STOPS = "the suppressions gate, which counts nothing until its sect
 
 
 def check_suppressions(root: Path) -> Iterable[Finding]:
-    """The Suppressions section: the directives of the tools this repository bound (ADR 0040).
+    """The Suppressions section: the directives of the tools this repository bound (ADR 0042).
 
     Why: the plugin names no directive of any tool, so the gate counts what the binding lists. A
     bound row whose tool a directive can silence must say which kinds do, or that none does, so
@@ -995,7 +995,7 @@ def check_suppressions(root: Path) -> Iterable[Finding]:
     if spec is None:
         problem = (
             f"has no '{suppressions.SECTION}' section; add the template's, one row per kind of"
-            " directive the bound tools read (ADR 0040)"
+            " directive the bound tools read (ADR 0042)"
         )
         found = missing_section(
             BINDING_PATH, problem, suppressions.SECTION, template_text=template_binding()
@@ -1398,7 +1398,7 @@ def missing_install_section(root: Path, text: str, justfile: str | None) -> Find
     """The Install section a binding lacks: what its justfile states, else the template's."""
     problem = (
         f"has no '{installs.SECTION}' section, which says whether a fresh checkout installs the"
-        " tools before a recipe runs one (ADR 0041)"
+        " tools before a recipe runs one (ADR 0043)"
     )
     found = (
         installs.derived(
@@ -1428,7 +1428,7 @@ def missing_install_section(root: Path, text: str, justfile: str | None) -> Find
 
 
 def check_installs(root: Path) -> Iterable[Finding]:
-    """What the binding says about an install first, held to the justfile (ADR 0041).
+    """What the binding says about an install first, held to the justfile (ADR 0043).
 
     Why: ADR 0039. ``merge.py`` runs the gates in a new work tree and CI runs each in a new
     checkout. The binding says whether this stack's tools need an install first; when they do,
@@ -2349,7 +2349,7 @@ def type_mutations() -> list[Mutation]:
         ),
         (
             "binding with a gate bound to none under an ADR the repository lacks",
-            rebind("| format | a tool |", "| format | none: no formatter; ADR 0042 |"),
+            rebind("| format | a tool |", "| format | none: no formatter; ADR 0044 |"),
         ),
         (
             "binding saying 'not a service' of a row a service is asked",
@@ -2626,7 +2626,7 @@ def install_mutations() -> list[Mutation]:
 
 
 def dependency_mutations() -> list[Mutation]:
-    """The Dependencies section held to the justfile that reads it (ADR 0042)."""
+    """The Dependencies section held to the justfile that reads it (ADR 0044)."""
     none = "`none: the self-test has no such file`"
     entry = f"- Entry point: {none}"
     named = "- Entry point: `just dependencies`"
@@ -2664,7 +2664,7 @@ def dependency_mutations() -> list[Mutation]:
 
 
 def suppression_mutations() -> list[Mutation]:
-    """The Suppressions section held to the Gates rows it speaks for (ADR 0040)."""
+    """The Suppressions section held to the Gates rows it speaks for (ADR 0042)."""
     row = f"| strict types | `{SELF_TEST_KIND}` |"
     kind = f"| {SELF_TEST_KIND} | `self-test: silence` | rises |"
     return [

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The suppressions gate: no kind of suppression rises, and no focus marker exists.
 
-The plugin names no directive of any tool (ADR 0040). The binding's ``## Suppressions`` section
+The plugin names no directive of any tool (ADR 0042). The binding's ``## Suppressions`` section
 lists, one row per kind, the directives of the tools this project bound, each as an extended
 regular expression written by whoever bound the tool::
 
