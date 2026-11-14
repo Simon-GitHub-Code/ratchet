@@ -122,7 +122,11 @@ class World:
         The command runs in this process, and an exception no ``except`` of the drain catches
         stands for the kill. The drain lock it holds is freed either way, as the kernel frees it.
         """
-        real_git, real_write = gatelib.git, drain.queue_notes.write_note
+        real_git, real_write, real_discard = (
+            gatelib.git,
+            drain.queue_notes.write_note,
+            drain.discard,
+        )
 
         def git_until(stop: tuple[str, str]) -> Callable[..., str | None]:
             def run(root: Path, *args: str) -> str | None:
@@ -144,6 +148,10 @@ class World:
         def killed(*_args: object) -> None:
             raise Killed
 
+        def discard_then_killed(*args: Path | str) -> None:
+            real_discard(*args)
+            raise Killed
+
         killers = {
             Kind.KILL_MID_REBASE: lambda: mock.patch.object(
                 gatelib, "git", git_until(("rebase", "--quiet"))
@@ -157,6 +165,9 @@ class World:
                 drain.queue_notes, "write_note", write_until
             ),
             Kind.KILL_LAND_BEFORE_DISCARD: lambda: mock.patch.object(drain, "discard", killed),
+            Kind.KILL_LAND_AFTER_DISCARD: lambda: mock.patch.object(
+                drain, "discard", discard_then_killed
+            ),
         }
         return killers[kind]()
 
@@ -229,7 +240,7 @@ class World:
                 text=text,
                 stashes=sum(f": {BRANCH[name]}: " in line for line in stashes),
             )
-            tickets.append(model.normal(ticket))
+            tickets.append(model.normal(name, ticket))
         return Seen(statuses, start, (tickets[0], tickets[1], tickets[2]))
 
     def tree_state(self, name: Name) -> Tree:
@@ -276,4 +287,5 @@ class World:
             fresh=held.get("reported") is False,
             attempts=min(model.RETRIES, attempts if isinstance(attempts, int) else 0),
             rebasing=rebasing,
+            discarding=held.get("discarding") is True,
         )
