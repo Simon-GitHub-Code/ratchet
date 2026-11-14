@@ -886,13 +886,17 @@ def close(  # noqa: PLR0913 -- the note's parts
     attempts = (before if same and isinstance(before, int) else 0) + 1 if retry else 0
     exhausted = retry and attempts >= queue_notes.RETRIES
     if exhausted:
-        reasons = [
-            (
+        errored = all(queue_notes.code_of(r) == queue_notes.ERRORED for r in reasons)
+        why = (
+            f"the pipeline run errored on each of {attempts} tries, each resumed once: an agent"
+            " kept dying, which the drain cannot resolve itself"
+            if errored
+            else (
                 f"retried {attempts} times and each left it waiting for the same kind of reason,"
                 " which the drain cannot resolve itself"
-            ),
-            *reasons,
-        ]
+            )
+        )
+        reasons = [why, *reasons]
     who: dict[str, object] = {
         "ref": ticket.ref,
         "title": ticket.title,

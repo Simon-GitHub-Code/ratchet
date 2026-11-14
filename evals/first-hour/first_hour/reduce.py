@@ -12,7 +12,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from first_hour import owner
+from first_hour import architecture, owner
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -86,6 +86,8 @@ class _Fold:
     guard_denials: int = 0
     denials: list[Event] = field(default_factory=list)
     apps: list[Event] = field(default_factory=list)
+    repo: Event = field(default_factory=dict)
+    leaks: Event = field(default_factory=dict)
     usable_min: float | None = None
     stop: Event = field(default_factory=dict)
     integrity: Event = field(default_factory=dict)
@@ -158,6 +160,12 @@ class _Fold:
 
     def on_app(self, event: Event) -> None:
         self.apps.append(event)
+
+    def on_architecture(self, event: Event) -> None:
+        self.repo = {k: v for k, v in event.items() if k not in ("kind", "s", "step")}
+
+    def on_stack_leaks(self, event: Event) -> None:
+        self.leaks = {k: v for k, v in event.items() if k not in ("kind", "s", "step")}
 
     def on_usable(self, event: Event) -> None:
         if self.usable_min is None:
@@ -311,6 +319,37 @@ def _app(apps: list[Event]) -> dict[str, object]:
     }
 
 
+FEATURE_BRANCH_SKIP = ("adopt", "init")
+
+
+def _first_feature_merge(merges: list[dict[str, object]]) -> object:
+    """The minute of the first merge that is not the adoption's or init's, by branch name."""
+    return next(
+        (
+            m["minute"]
+            for m in merges
+            if not any(word in str(m["branch"]).lower() for word in FEATURE_BRANCH_SKIP)
+        ),
+        None,
+    )
+
+
+def _architecture(questions: list[Event], repo: Event) -> dict[str, object]:
+    """What was asked of the owner about the architecture, and what the repository holds."""
+    reviews = repo.get("reviews")
+    binding = repo.get("binding")
+    parts = binding.get("parts") if isinstance(binding, dict) else None
+    return {
+        **architecture.asked(questions),
+        "read": bool(repo),
+        "adr": repo.get("adr") or {},
+        "binding": binding or {},
+        "parts_declared": len(parts) if isinstance(parts, list) else 0,
+        "features": repo.get("features") or {},
+        "reviews": reviews if isinstance(reviews, dict) else {},
+    }
+
+
 def reduce(events: Iterable[Event]) -> dict[str, object]:
     """The run's measurements."""
     fold = _Fold()
@@ -333,10 +372,13 @@ def reduce(events: Iterable[Event]) -> dict[str, object]:
         "minutes": {
             "total": round(fold.last_s / 60, 1),
             "to_first_merge": merges[0]["minute"] if merges else None,
+            "to_first_feature_merge": _first_feature_merge(merges),
             "to_first_usable_merge": fold.usable_min,
         },
         "app": _app(fold.apps),
         "questions": _questions(fold.questions),
+        "architecture": _architecture(fold.questions, fold.repo),
+        "stack_leaks": fold.leaks or {"count": None, "names": [], "items": []},
         "prompts": {
             "total": len(fold.prompts),
             "guard": prompts["guard"],
@@ -393,6 +435,61 @@ def _count(value: object) -> int:
     return len(value) if isinstance(value, (list, dict)) else 0
 
 
+def _yes(value: object) -> str:
+    return "yes" if value else "no"
+
+
+def _asked(metrics: dict[str, object]) -> str:
+    if not _at(metrics, "architecture.asked"):
+        return "not asked"
+    return " / ".join(
+        (
+            _cell(_at(metrics, "architecture.options")),
+            _yes(_at(metrics, "architecture.recommended")),
+            _yes(_at(metrics, "architecture.batched")),
+        )
+    )
+
+
+def _record(metrics: dict[str, object]) -> str:
+    if not _at(metrics, "architecture.read"):
+        return "not read"
+    adr = _at(metrics, "architecture.adr")
+    if not isinstance(adr, dict) or not adr.get("found"):
+        return "no"
+    return (
+        f"{_yes(adr.get('complete'))} (options {adr.get('options')}, reversal cost "
+        f"{_yes(adr.get('reversal_cost'))}, refutation {_yes(adr.get('refutation_criterion'))})"
+    )
+
+
+def _parts(metrics: dict[str, object]) -> str:
+    return (
+        _cell(_at(metrics, "architecture.parts_declared"))
+        if _at(metrics, "architecture.read")
+        else "not read"
+    )
+
+
+def _designs(metrics: dict[str, object]) -> str:
+    if not _at(metrics, "architecture.read"):
+        return "not read"
+    done = _cell(_at(metrics, "architecture.features.with_design"))
+    return f"{done} of {_cell(_at(metrics, 'architecture.features.specs'))}"
+
+
+def _axis(metrics: dict[str, object]) -> str:
+    keys = ("results", "design_issues", "mentions")
+    return " / ".join(_cell(_at(metrics, f"architecture.reviews.{k}")) for k in keys)
+
+
+def _leaks(metrics: dict[str, object]) -> str:
+    count = _at(metrics, "stack_leaks.count")
+    names = _at(metrics, "stack_leaks.names")
+    listed = ", ".join(map(str, names)) if isinstance(names, list) and names else "none"
+    return "not read" if count is None else f"{count} ({listed})"
+
+
 def table(metrics: dict[str, object]) -> str:
     """The measurements a person reads first, as a Markdown table."""
 
@@ -425,6 +522,13 @@ def table(metrics: dict[str, object]) -> str:
             "Recommended option offered / taken",
             f"{at('questions.recommended_offered')} / {at('questions.took_recommended')}",
         ),
+        ("Architecture asked (options / recommended / one round)", _asked(metrics)),
+        ("Architecture record landed", _record(metrics)),
+        ("Parts declared in the binding", _parts(metrics)),
+        ("Features with a Design section", _designs(metrics)),
+        ("Reviews seen / design-axis issues / axis F mentions", _axis(metrics)),
+        ("Architecture-change questions after adoption", at("architecture.change_questions")),
+        ("Stack names the plugin introduced (owner never said)", _leaks(metrics)),
         ("Guard approval prompts", at("prompts.guard")),
         ("Other permission prompts", str(int(prompts))),
         ("Guard denials the agent met", at("guard_denials")),

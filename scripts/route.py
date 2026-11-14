@@ -436,8 +436,16 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
         )
     if queue_notes.QUESTIONS in hold.kinds:
         steps.append(f"answer the open questions the run of {ref} named, on the ticket")
-    if queue_notes.GUARD in hold.kinds:
+    if queue_notes.GUARD in hold.kinds and hold.based:
         steps.append(f"land the guard edits the run of {ref} named on {default_branch}")
+    elif queue_notes.GUARD in hold.kinds:
+        # Why: ADR 0055. A note with no base cannot tell that the edits landed, and its time is no
+        # reliable stand-in (the default branch may have moved either side of it), so a guess
+        # would release a ticket still refused or hold one forever; the ticket's text is the step.
+        steps.append(
+            f"change ticket {ref}: its hold was written before the drain kept the commit that"
+            f" landing the guard edits on {default_branch} is read from, so landing frees nothing"
+        )
     if hold.reviews:
         steps.append(f"run {ARCHITECTURE} for {', '.join(hold.reviews)}")
     if hold.owes:
