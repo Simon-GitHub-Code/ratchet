@@ -26,6 +26,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, NamedTuple, TypeVar
 
+from tests import model_tla
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
@@ -644,3 +646,63 @@ RULES: dict[str, Rule] = {
         "step", step_check=nothing_blinds_the_gate_guarded
     ),
 }
+
+
+def exported_rule(rule: Rule) -> model_tla.Rule:
+    """A rule as the module checks it: an invariant on a state, or a rule on every step."""
+    if rule.state_check is not None:
+        return model_tla.Invariant(rule.doc, rule.state_check)
+
+    def keeps(before: State, name: str, after: State) -> bool:
+        return rule((before, name, after))
+
+    return model_tla.Step(rule.doc, keeps)
+
+
+class Kind(NamedTuple):
+    """What the default branch holds of the kind and the event, and the two histories."""
+
+    instances: int
+    row: str
+    table: str
+    event: str
+    event_row: str
+    held: bool
+    allowance: int
+    """As ``State.allowance``, with -1 for none."""
+
+
+def kind(state: State) -> Kind:
+    """What the charts read of a state."""
+    main = state.main
+    allowance = -1 if state.allowance is None else state.allowance
+    return Kind(
+        len(main.instances), main.row, main.table, main.event, main.event_row, state.held, allowance
+    )
+
+
+def export() -> model_tla.Export:
+    """The reachable graph as a TLA+ module, with the thirteen rules.
+
+    Eleven rules are about a landing, so each is a ``model_tla.Step``, and the module holds a
+    state once for each set of them the step into it broke.
+    """
+    return model_tla.export(
+        "Safeguard",
+        graph(),
+        {model_tla.identifier(name): exported_rule(rule) for name, rule in RULES.items()},
+        fields=(),
+        derived={
+            **{
+                name: (lambda state, name=name: getattr(kind(state), name)) for name in Kind._fields
+            },
+            "branch": lambda state: "none" if state.branch is None else state.branch.change,
+        },
+        action=model_tla.identifier,
+    )
+
+
+def summary() -> model_tla.Export:
+    """The graph seen through ``kind``, small enough for the statechart tool to draw whole."""
+    seen = model_tla.summary(graph(), kind, model_tla.identifier)
+    return model_tla.export("SafeguardKind", seen, {}, fields=Kind._fields)
