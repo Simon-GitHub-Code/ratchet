@@ -29,8 +29,10 @@ SIZE, QUESTIONS, GUARD = "size", "questions", "guard"
 SPLIT = "split"
 # Why: the judge's reason codes the drain resolves itself: update, judge again, run the gates
 # again. A ticket left to the owner for these alone is retried, not held; any other code is the
-# owner's decision, and holds the ticket until its text changes.
-MECHANICAL = frozenset({"behind", "moved", "conflict", "gates", "refs"})
+# owner's decision, and holds the ticket until its text changes. ``errored`` (ADR 0055) is a
+# pipeline run that threw twice, an agent having died each time: the run is the thing to retry.
+ERRORED = "errored"
+MECHANICAL = frozenset({"behind", "moved", "conflict", "gates", "refs", ERRORED})
 # Why: how many times in a row those may leave a ticket waiting before it is the owner's.
 RETRIES = 3
 
