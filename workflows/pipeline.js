@@ -159,7 +159,8 @@ function commonRules(rebasing, ownTestsOnly) {
 Ground rules for every agent in this pipeline:
 - Work in ${ROOT_HINT} on branch \`${BRANCH}\`.
   First run \`git rev-parse --abbrev-ref HEAD\`; if it does not print \`${BRANCH}\`, run
-  \`git switch ${BRANCH}\` (or \`git switch -c ${BRANCH} ${BASE}\` if the branch does not exist).
+  \`git switch ${BRANCH}\`. The orchestrator creates the branch, never you: if it does not
+  exist, stop and return an error saying so.
 ${uncommitted}
 - Vocabulary comes from the glossary: use its terms in code, tests and docs; its Avoid lists
   are banned identifiers.

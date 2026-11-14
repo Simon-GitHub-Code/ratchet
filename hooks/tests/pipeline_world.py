@@ -290,7 +290,13 @@ FORCED = {
     "the spec reported failingForRightReason: false": Objection.SPEC_EVIDENCE,
     "the critic found nothing and lists nothing attempted": Objection.SILENT,
 }
-STAGES = {"the spec": Role.SPEC, "the implementation": Role.IMPLEMENT}
+STAGES = {
+    "the spec": Role.SPEC,
+    "the implementation": Role.IMPLEMENT,
+    "fix round 1": Role.FIX,
+    "fix round 2": Role.FIX,
+    "the reconcile": Role.RECONCILE,
+}
 DIED = re.compile(r"^(.+) agent returned no result")
 RESUME = "resume the run"
 # Why: the "Too large" section of skills/feature/SKILL.md has the orchestrator split the ticket and
