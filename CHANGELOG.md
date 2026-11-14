@@ -3,6 +3,12 @@
 ## Unreleased
 
 A drain whose processes are all gone no longer blocks the next `clean --all`. The lease judged a drain alive by any process of its chain that was still running, including the service manager above every session; it now counts only a process below where the chains part, or a program running from a queue work tree, and the two-hour record of commands is gone.
+A ticket that is too large is split by the agent, not handed back to the owner (ADR 0046). A part names its ticket (`Split from:`) and inherits the agent-ready label while that ticket carries it on the default branch or the tracker, one level only. A deterministic check holds the scope: each promise (`- [ ]` line) of a part appears in the parent verbatim and the parts carry every promise exactly once; a refusal names the line. `drain.py split --plan` files the parts in order, closes the parent as `split` with its text untouched, and keeps draining.
+
+The change-size ceiling counts product code, not tests (ADR 0045). Tests were 85% of the lines counted on recent changes, so the ceiling mostly limited them. `[ceilings.change]` is now `product_files = 25`, `product_lines = 1000` and a loose `test_lines = 3000` that only stops a runaway, and the early stops follow: product code has no margin for what is still to come, tests keep two thirds of their ceiling while the critic runs.
+
+- Which paths are tests is the binding's `## Test paths` section, written at adoption by the project's agent: the plugin names no stack. Until it is filled every changed line counts as product, as before, and conformance names the missing section.
+- An existing repository's `files` and `lines` become `product_files` and `product_lines` at the same values, by `upgrade.py --apply`; the lowered gate reads the move and refuses a higher value. `test_lines` is new, and the one loosening, which the upgrade says plainly.
 
 The drain's recovery reads a kill inside one file's write, and tells two drains under one process apart (ADR 0023). A fast-forward killed while git wrote a file puts that part-written file back, and keeps only what the owner had changed or left untracked before it began. `clean --all` prints the drain's token, and the drain's later commands stamp its lease, so a second drain started under the same long-lived process is refused while the first is active.
 

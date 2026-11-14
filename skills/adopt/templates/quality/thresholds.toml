@@ -25,9 +25,13 @@
 # tier1 = 600
 # tier2 = 3600
 
-# The change-size ceiling per pull request: files, and added-plus-deleted lines, against the merge
-# base. It only falls; the plugin's `scripts/change_size.py --set --files N --lines N` writes a
-# lower one. The adoption's own commits are exempt.
+# The change-size ceilings per pull request, against the merge base (ADR 0045). The first two bound
+# the product code a change brings: files, and added-plus-deleted lines of what is not a test. The
+# third only stops a runaway of test lines. Which paths are tests is the binding's `- Test paths:`
+# row; without it every changed line counts as product. They only fall; the plugin's
+# `scripts/change_size.py --set --product-files N --product-lines N --test-lines N` writes lower
+# ones. The adoption's own commits are exempt.
 [ceilings.change]
-files = 40
-lines = 1500
+product_files = 25
+product_lines = 1000
+test_lines = 3000

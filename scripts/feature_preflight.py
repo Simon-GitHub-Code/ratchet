@@ -54,8 +54,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import application_types
+import change_size
 import gatelib
 import hooks_installed
+import queue_notes
 
 # Why: a local ticket is the file the guard asks about the label on; both read its shape here.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -67,6 +69,11 @@ OPERABILITY = "## Operability"
 # asked when the catalogue asks its question of a type the binding declares, so a library's
 # ticket is asked none and a command's only its flag; and when its row is not bound `later:`
 # (ADR 0028), since a row that waits judges nothing yet.
+SIZE = "## Size"
+SIZE_LINE = re.compile(
+    r"^\s*[-*]\s*\*{0,2}Product (lines|files):?\*{0,2}:?\s*~?(\d[\d,]*)",
+    re.MULTILINE | re.IGNORECASE,
+)
 OPERABILITY_LINES = (
     ("Flag", "changed flags off and on", "the flag the behaviour ships behind"),
     ("Signal", "telemetry emitted", "the span, metric or log that shows it working"),
@@ -113,6 +120,11 @@ PRODUCES = {
         "`/ratchet:conjecture <ticket>` writes `## Operability` on the ticket, or on its parent"
         " spec for all its tickets, from the binding and the record"
     ),
+    "size": (
+        "the orchestrator splits the ticket itself: the parts as tickets that block each other in"
+        " the tracker, the original marked split (`/ratchet:feature`, step 4, `tooLarge`)"
+    ),
+    "split": "build the parts it was split into; nothing is left to do for the ticket itself",
     "label": "the owner applies the agent-ready label (mattpocock-skills:triage, or by hand)",
     "blocked": (
         "build the blocking tickets first; when the order no longer holds, the owner edits the"
@@ -452,6 +464,28 @@ def operability_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
     return f"{ticket.ref}: `{OPERABILITY}` {'; '.join(parts)}; write each, or `none` and why"
 
 
+def size_failure(ticket: Ticket, root: Path) -> str | None:
+    """The ticket's own size estimate when it passes a product ceiling; ``None`` otherwise.
+
+    Why: ADR 0045. A spec run costs several agents, and the ticket's author already knows roughly
+    how much product code it brings. A ticket that states no ``## Size`` is not refused here: the
+    spec stage estimates the whole change and stops it as soon as it can.
+    """
+    limits = change_size.ceilings(root)
+    stated = {
+        kind.lower(): int(number.replace(",", ""))
+        for kind, number in SIZE_LINE.findall(section(ticket.body, SIZE))
+    }
+    over = [
+        f"{stated[kind]} product {kind}, ceiling {limit}"
+        for kind, limit in (("lines", limits.product_lines), ("files", limits.product_files))
+        if limit is not None and stated.get(kind, 0) > limit
+    ]
+    if not over:
+        return None
+    return f"{ticket.ref}: `{SIZE}` estimates {'; '.join(over)}: one change would stop as too large"
+
+
 def operability_line(name: str) -> re.Pattern[str]:
     """One line of the block, as a list item or bare, bold or plain, its value captured."""
     return re.compile(
@@ -511,9 +545,23 @@ def open_blockers(ticket: Ticket, root: Path, gh: Runner) -> list[str]:
         blocker = fetch(resolved, root, gh)
         if blocker is None:
             problems.append(f"blocker {ref} was not found")
+        elif blocker.is_open and (parts := split_parts(blocker, root)) is not None:
+            # Why: ADR 0046. A split ticket is open, text untouched, and done when its parts are.
+            for part in parts:
+                found = fetch(part, root, gh)
+                if found is None or found.is_open:
+                    problems.append(
+                        f"blocker {resolved} was split, and its part {part} is not done"
+                    )
         elif blocker.is_open:
             problems.append(f"blocker {resolved} is still open")
     return problems
+
+
+def split_parts(ticket: Ticket, root: Path) -> list[str] | None:
+    """The parts the drain split ``ticket`` into, as its note keeps them; ``None`` when none."""
+    branch = branch_of(ticket, slug_of(ticket.title, ticket.number))
+    return queue_notes.split_into(root, branch, ticket)
 
 
 def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: Runner) -> None:
@@ -522,12 +570,17 @@ def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: 
     report.branch = branch_of(ticket, report.slug)
     if not ticket.is_open:
         report.fail("open", f"{ticket.ref} is not open")
+    if (parts := split_parts(ticket, root)) is not None:
+        report.fail("split", f"{ticket.ref} was split by size into {', '.join(parts)}")
     failure = conjecture_failure(ticket, root, gh)
     if failure is not None:
         report.fail("conjecture", failure)
     failure = operability_failure(ticket, root, gh)
     if failure is not None:
         report.fail("operability", failure)
+    failure = size_failure(ticket, root)
+    if failure is not None:
+        report.fail("size", failure)
     if label not in ticket.labels:
         report.fail(
             "label", f"{ticket.ref} does not carry `{label}`; labels: {list(ticket.labels)}"
