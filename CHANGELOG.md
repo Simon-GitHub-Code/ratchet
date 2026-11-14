@@ -101,6 +101,8 @@ An upgrade is one command, and what it cannot settle is owed, not red (ADR 0029,
 
 Records land without the owner, and so does the adoption (ADR 0031). The merge judge asks no verdict of a change made only of records: a ticket, a spec, a change description, a glossary addition or an ADR. The owner still merges a ticket change that gives the agent-ready label, takes another's number or closes a ticket, any change to a labelled ticket or the spec it inherits from, and any ADR. `AGENTS.md`, `CLAUDE.md` and the other agent-instruction files stay the owner's at any depth. `just merge --records` lands the records a skill left on the default branch through a branch of their own, and the route never tells an agent to commit on the default branch. The adoption is judged by the manifest it brings, which must guard at least what the template does.
 
+- A ticket edit that changes only its links is the agent's to merge, when each changed link names the same file and the preflight reads the ticket the same; otherwise it is the owner's (ADR 0057). The preflight's `Parent:` line reads a `.md` path before a bare number.
+
 An agent changes a guard path on a branch without a prompt, and the owner decides at the merge (ADR 0033). The merge judge already sends every guard path change to the owner with its reasons. In the owner's replayed sessions this took the prompts from 173 to 39.
 
 - Two kinds of file act the moment they are written, so the hook asks before each write of one, on every branch: a CI workflow, and an agent-instruction file at any depth.
