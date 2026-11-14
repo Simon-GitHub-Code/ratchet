@@ -442,7 +442,7 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
 
 
 def drain_hold(root: Path, ticket: preflight.Ticket) -> queue_notes.Hold | None:
-    """The hold the drain keeps on ``ticket`` from its note, until the ticket's text changes."""
+    """The hold the drain keeps on ``ticket`` from its note, until ``queue_notes.released``."""
     return queue_notes.held(root, own_branch(ticket), ticket)
 
 
@@ -514,7 +514,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             return Step(
                 "; ".join(releases(hold, held, checkout.default_branch)),
                 f'the drain parked ticket {held.ref} "{held.title}" and holds it until its text'
-                f" changes ({why});"
+                f" changes or the cause it names lands ({why});"
                 f" {FEATURE} would be refused again",
                 f"{FEATURE}, or {POTETO} {held.ref} now to make the change as the guard asks",
                 "blocked-run",
