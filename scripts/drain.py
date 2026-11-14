@@ -60,7 +60,9 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   ``clean --all`` killed between writing the lease and printing the token loses the token; the same
   session's rerun still takes the lease, and prints a new one. A ``land`` holds a lock of the
   kernel's on its ticket from before its merge runs until it ends, so ``report`` and ``clean``,
-  of any drain, leave that ticket's note and tree alone while it runs. A ``--take-over`` of a
+  of any drain, leave that ticket's note and tree alone while it runs, and ``update``, ``close``
+  and ``split`` of that ticket refuse with exit 3, change nothing, and say to run ``plan`` once
+  it ends: the landing records the ticket's outcome itself. A ``--take-over`` of a
   drain that is still alive is the owner's call: a landing that drain runs keeps its tree while
   it runs, and the next ``clean --all`` takes the tree once that landing has ended, its work all
   committed. Every
