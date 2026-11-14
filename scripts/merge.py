@@ -59,6 +59,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -81,6 +82,7 @@ INTENT_BYTES = 1 << 20
 SCRATCH = "ratchet-merge-"
 # Why: a lock the kernel holds for an open file is freed when its holder dies, however it dies.
 HELD = ".lock"
+STALE_SCRATCH = 60  # seconds an empty scratch directory stands before a sweep removes it
 LANDING = "ratchet-landing"
 OWNER_FILE = 0o600
 # Why: these say the merge itself failed, which the owner's merge would meet too; every other
@@ -327,6 +329,32 @@ def sweep(root: Path) -> list[str]:
             lines.append(f"merge: removed the work tree {tree} that a run which stopped left")
     if lines:
         gatelib.git(root, "worktree", "prune")
+    return lines + empty_scratch(home)
+
+
+def empty_scratch(home: Path) -> list[str]:
+    """Remove the empty scratch directories of runs killed between making one and its work tree.
+
+    Why: such a run registered no work tree, so the sweep above never finds its directory. An
+    empty one is a live run's too in the moment before it takes its lock, so only one that has
+    stood a while is removed, and only one of this user's.
+    """
+    lines = []
+    for scratch in home.glob(f"{SCRATCH}*"):
+        # Why: another run's directory may be made or removed between the listing and the look.
+        with contextlib.suppress(OSError):
+            stat = scratch.lstat()
+            if (
+                scratch.is_dir()
+                and not scratch.is_symlink()
+                and stat.st_uid == os.getuid()
+                and time.time() - stat.st_mtime > STALE_SCRATCH
+                and not any(scratch.iterdir())
+            ):
+                scratch.rmdir()
+                lines.append(
+                    f"merge: removed the empty directory {scratch} that a run which stopped left"
+                )
     return lines
 
 

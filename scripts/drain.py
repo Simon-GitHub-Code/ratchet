@@ -56,7 +56,11 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   resumes the drain that holds the token. An accepted limit: two drains run by one process on one
   repository, with drain 1 between commands and nothing running from its tree, cannot be told
   apart, so a ``clean --all`` from drain 2 without drain 1's token takes drain 1's tree (its draft
-  is kept as the stash "interrupted run"; no work is lost). Pass the token to avoid it. Every
+  is kept as the stash "interrupted run"; no work is lost). Pass the token to avoid it. A
+  ``clean --all`` killed between writing the lease and printing the token loses the token; the same
+  session's rerun still takes the lease, and prints a new one. A ``land`` holds a lock of the
+  kernel's on its ticket from before its merge runs until it ends, so ``report`` and ``clean``,
+  of any drain, leave that ticket's note and tree alone while it runs. Every
   command that changes a work tree also runs under a lock of the kernel's, freed when its holder
   dies however it dies, so two commands at once (two ``open`` of one ticket) are run one at a
   time.
@@ -427,10 +431,10 @@ def rival(root: Path, held: dict[str, object]) -> str | None:
     user's service manager is above every session. What a drain owns is evidence. Either a live
     process of the chain the lease holds that is below where that chain parts from this one (the
     other session's own), or a live process running a program from a queue work tree, or in one,
-    which is what ``clean --all`` would end. With neither, the drain is dead.
+    which is what ``clean --all`` would end, whether or not a lease is held: a report ends the
+    lease, and a drain under the same long-lived process is still told by its program. With
+    neither, the drain is dead.
     """
-    if not held:
-        return None
     chain = ancestry()
     mine = {entry.partition(":")[0] for entry in chain}
     for entry in queue_notes.texts(held.get("chain")):
@@ -1100,6 +1104,27 @@ def record_merge(root: Path, branch: str) -> list[str]:
     return settle(root, {**who, "branch": branch}, outcome=MERGED, reasons=[reason])
 
 
+def landing_path(root: Path, branch: str) -> Path:
+    """The file whose lock a ``land`` of ``branch`` holds, from before its merge until it ends."""
+    return state_dir(root) / f"ratchet-landing-{hashlib.sha256(branch.encode()).hexdigest()[:16]}"
+
+
+def landing_running(root: Path, branch: str) -> bool:
+    """Whether a ``land`` of ``branch`` is alive: it holds its lock, which dies with it."""
+    if not landing_path(root, branch).exists():
+        return False
+    with merge.locked(landing_path(root, branch)) as descriptor:
+        return descriptor is None
+
+
+def landing_alive(root: Path, branch: str, said: str) -> bool:
+    """``landing_running``, saying so: a live landing records the merge it made itself."""
+    alive = landing_running(root, branch)
+    if alive:
+        print(f"{said}: a landing of `{branch}` is running in another command, so it is left alone")
+    return alive
+
+
 def record_merge_aloud(root: Path, branch: str) -> None:
     """``record_merge``, saying so, and saying what it kept."""
     print(f"recorded: {branch}: merged, and the run that landed it stopped before it said so")
@@ -1120,9 +1145,15 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
         )
         return 2
     branch = route.own_branch(ticket)
+    # Why: `land` holds no drain lock while the merge runs, and the merge takes minutes; this lock
+    # is what tells another command, in this process or another, that the landing is alive.
+    with merge.locked(landing_path(drain.root, branch)):
+        return landed(drain, ticket, branch, command=command)
+
+
+def landed(drain: Drain, ticket: preflight.Ticket, branch: str, *, command: str) -> int:
+    """The body of ``land``, run under its landing lock."""
     with exclusive(drain.root):
-        for line in merge.recover(drain.root):
-            print(line)
         if recorded_merge(drain.root, branch):
             record_merge_aloud(drain.root, branch)
         if queue_notes.read_note(drain.root, branch).get("outcome") == MERGED:
@@ -1161,8 +1192,6 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
     """
     if everything:
         lease(root, take_over=take_over, token=token)
-    for line in merge.recover(root):
-        print(line)
     merged = route.merged_features(root, merge_ready.default_ref(root))
     heads = gatelib.git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads/") or ""
     owners = {tree_of(root, branch): branch for branch in heads.splitlines()}
@@ -1187,8 +1216,9 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
         if why is None:
             print(f"kept: {tree}: `{branch}` is not merged")
             continue
-        if in_flight(root, branch, busy):
-            print(f"kept: {tree}: `{branch}` is merged and no note says so")
+        held_back = in_flight(root, branch, busy)
+        if held_back:
+            print(f"kept: {tree}: {held_back}")
             continue
         if branch is not None and tree in registered:
             if recorded_merge(root, branch):
@@ -1203,9 +1233,19 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
     return 0
 
 
-def in_flight(root: Path, branch: str | None, busy: str | None) -> bool:
-    """Whether ``branch`` holds a merge no note says while another drain runs: its landing's."""
-    return busy is not None and branch is not None and recorded_merge(root, branch)
+def in_flight(root: Path, branch: str | None, busy: str | None) -> str | None:
+    """Why a landing's tree is left alone: its landing is alive, or another drain runs.
+
+    Why: a live landing, or another drain's, is about to write the note that this would write, and
+    discarding its tree under it would end work it still does.
+    """
+    if branch is None:
+        return None
+    if landing_running(root, branch):
+        return f"`{branch}` has a landing running"
+    if busy is not None and recorded_merge(root, branch):
+        return f"`{branch}` is merged and no note says so"
+    return None
 
 
 def record_orphans(
@@ -1221,7 +1261,11 @@ def record_orphans(
         print(f"clean: {LANDING_MAY_RUN} ({busy}), so a merge no note says is left alone")
         return
     for branch in branches:
-        if tree_of(root, branch) not in registered and recorded_merge(root, branch):
+        if (
+            tree_of(root, branch) not in registered
+            and recorded_merge(root, branch)
+            and not landing_alive(root, branch, "clean")
+        ):
             record_merge_aloud(root, branch)
 
 
@@ -1332,7 +1376,7 @@ def report(drain: Drain, token: str = "") -> int:
     for branch in (heads or "").splitlines() if busy is None else []:
         # Why: a merge no note says is reported as merged, not as the close `open` kept for the
         # ticket; recording it writes the note a landing would have.
-        if recorded_merge(drain.root, branch):
+        if recorded_merge(drain.root, branch) and not landing_alive(drain.root, branch, "report"):
             record_merge_aloud(drain.root, branch)
     directory = gatelib.state_dir(drain.root) / QUEUE
     paths = sorted((directory / "tickets").glob("*.json"))
@@ -1473,6 +1517,11 @@ def main(argv: list[str]) -> int:
     if theirs is not None:
         print(f"drain: {theirs}: {NOT_OURS}")
         return 2
+    # Why: a landing cut off half-way leaves the merge's files in the default branch's work tree,
+    # the text of a ticket among them; it is put back before any command reads a ticket, or a hold
+    # would be written on the merge's text and the owner's ticket would differ from it.
+    for line in merge.recover(root):
+        print(line, file=sys.stderr if options.action == "plan" else sys.stdout)
     drain = Drain(root, None if options.offline else preflight.run_gh, options.concurrency)
     action = WHOLE.get(options.action, on_ticket)
     try:
