@@ -1071,14 +1071,20 @@ class Lease(NamedTuple):
     ``land`` holds the drain lock for its checks and again for its close, and not while
     ``merge.py`` runs: every other command runs there. While ``merge`` is ``NONE``, ``merge.py``
     judges and checks; after it, the merge has landed. ``land`` holds the ticket's landing lock
-    the whole time, which ends with its process; ``report``, ``clean``, ``clean --all`` and a
-    second ``land`` read it, and ``update``, ``close`` and ``open`` do not. ``settle`` runs whole
-    under the drain lock, so between its note and its discard no other command runs, and that
-    cut is not taken.
+    the whole time, which ends with its process. ``report``, ``clean`` and ``clean --all`` read it
+    and leave the ticket alone; a second ``land``, ``update`` and ``close`` read it and refuse,
+    changing nothing. ``open`` does not read it, and the plan does not start the ticket.
+    ``settle`` runs whole under the drain lock, so between its note and its discard no other
+    command runs, and that cut is not taken.
     """
     merge: Merge = Merge.NONE
     held: bool = False
-    """Whether the ticket's note holds it: a close as parked wrote it, and no merge since."""
+    """Whether the ticket's note holds it.
+
+    No step writes a hold: the graph has ``close --outcome parked`` only while a landing is alive,
+    which refuses it. The world reads the note's hold back after every step, so a hold written
+    under a landing shows there.
+    """
 
 
 def of(pair: tuple[bool, bool], drain: Drain) -> bool:
@@ -1147,7 +1153,7 @@ def without_tree(lease: Lease) -> Lease:
 
 def merge_recorded(lease: Lease) -> Lease:
     """``drain.settle`` of a merge: the note says merged, unprinted, and the tree is discarded."""
-    return without_tree(lease)._replace(merge=Merge.SAID, held=False)
+    return without_tree(lease)._replace(merge=Merge.SAID)
 
 
 def _clean_all(lease: Lease, drain: Drain, step: Step) -> Lease:
@@ -1209,11 +1215,10 @@ def _merges(lease: Lease, _: Drain, __: Step) -> Lease | None:
 
 
 def _land_rest(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """``land``'s close: ``settle`` on a merge no note says, a hold or none; nothing on one recorded."""  # noqa: E501
-    if lease.merge is Merge.NONE:
+    """``land``'s close: ``settle`` on the merge it made, which no other command records first."""
+    if lease.merge is not Merge.UNSAID:
         return None
-    done = merge_recorded(lease) if lease.merge is Merge.UNSAID else lease
-    return done._replace(landing=None)
+    return merge_recorded(lease)._replace(landing=None)
 
 
 def _land_killed(lease: Lease, _: Drain, __: Step) -> Lease | None:
@@ -1232,37 +1237,18 @@ def _open_tree(lease: Lease, drain: Drain, _: Step) -> Lease | None:
         # starts only a buildable one.
         return lease
     ready = lease.holder is drain and of(lease.draining, drain) and lease.tree is None
-    if not ready or lease.held:
+    if not ready:
         return None
     return lease._replace(tree=drain) if lease.merge is Merge.NONE else None
 
 
-def _update_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """``drain.update`` while a landing of the ticket is alive, which it does not read.
+def _refused_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
+    """``update`` or ``close`` while a landing of the ticket is alive: ``drain.act_on`` refuses it.
 
-    A merge no note says is recorded and its tree discarded. Else the branch holds the default
-    tip, which only the merge moves here, and nothing changes. A bound: the step is taken only
-    while a landing of the ticket is alive.
+    It changes nothing, before the merge lands and after. A bound: the step is taken only while a
+    landing of the ticket is alive.
     """
-    if lease.landing is None:
-        return None
-    return merge_recorded(lease) if lease.merge is Merge.UNSAID else lease
-
-
-def _park_in_flight(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """``drain.close`` as parked while a landing of the ticket is alive, which it does not read.
-
-    A merge no note says is recorded, its tree discarded, and the close refused; a merge a note
-    says refuses it. Before the merge lands, the note holds the ticket and the tree is discarded.
-    A bound: the step is taken only while a landing of the ticket is alive.
-    """
-    if lease.landing is None:
-        return None
-    if lease.merge is Merge.UNSAID:
-        return merge_recorded(lease)
-    if lease.merge is not Merge.NONE:
-        return lease
-    return without_tree(lease)._replace(held=True)
+    return lease if lease.landing is not None else None
 
 
 def _leave_draft(lease: Lease, drain: Drain, _: Step) -> Lease | None:
@@ -1301,8 +1287,8 @@ BY_A_DRAIN: dict[Step, DrainAct] = {
     Step.REPORT: _report_and_release,
     Step.REPORT_OWN: _report_and_release,
     Step.CLEAN: _clean,
-    Step.UPDATE: _update_in_flight,
-    Step.PARK: _park_in_flight,
+    Step.UPDATE: _refused_in_flight,
+    Step.PARK: _refused_in_flight,
     Step.LAND: _land,
     Step.STOP: _stop,
     Step.DIE: _die,
@@ -1311,8 +1297,8 @@ BY_A_DRAIN: dict[Step, DrainAct] = {
 # ticket's commands, which its agent types when its shell gave up waiting on the land.
 INSIDE_LAND: dict[Step, DrainAct] = {
     Step.OPEN: _open_tree,
-    Step.UPDATE: _update_in_flight,
-    Step.PARK: _park_in_flight,
+    Step.UPDATE: _refused_in_flight,
+    Step.PARK: _refused_in_flight,
     Step.LAND: _land,
     Step.MERGES: _merges,
     Step.LAND_REST: _land_rest,
@@ -1628,14 +1614,14 @@ def lease_run() -> Run:
 
 SHOWN_LANDING = ("statusA", *(f"{fact}A" for fact in TICKET_FACTS))
 """What the chart of a ticket's life reads: ticket ``a``."""
-# Why: the statechart tool draws a whole chart only of a module of at most 500 states. Seen
-# through the tree and the program too, the lease graph has 659, and neither chart reads them.
+# Why: the statechart tool draws a whole chart only of a module of at most 500 states, and
+# neither chart reads the tree, the program or the hold, which no step writes.
 SHOWN_LEASE = tuple(
     fact
     for fact in LEASE_FACTS
-    if fact not in {"took1", "took2", "tree", "draft", "running", "stashed"}
+    if fact not in {"took1", "took2", "tree", "draft", "running", "stashed", "held"}
 )
-"""What the charts of the lease read: the drains, the lease, the landing, its merge and hold."""
+"""What the charts of the lease read: the drains, the lease, the landing and its merge."""
 
 
 def seen_through(
