@@ -125,7 +125,7 @@ def test_every_rule_reads_as_one_sentence() -> None:
 
 
 def test_every_answer_of_every_agent_is_given_on_some_run() -> None:
-    given = {(model.NAMED[name].role, model.NAMED[name].answer) for _, name, _ in graph()[1]}
+    given = {(model.named(name).role, model.named(name).answer) for _, name, _ in graph()[1]}
     for role, answers in model.ANSWERS.items():
         for answer in answers:
             assert (role, answer) in given, (role, answer)
@@ -140,7 +140,7 @@ def runs() -> list[tuple[list[model.Action], model.State]]:
         if state.ending is not None:
             done.append((actions, state))
         stack.extend(
-            (([*actions, model.NAMED[name]], after) for name, after in adjacency().get(state, []))
+            (([*actions, model.named(name)], after) for name, after in adjacency().get(state, []))
         )
     return done
 
@@ -172,11 +172,14 @@ def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers
     ]
     batch = world.play([actions for actions, _ in cases], [actions for actions, _ in local])
     differ = [
-        described(actions, ending, real)
+        (actions, ending, real)
         for (actions, ending), real in zip([*cases, *local], batch.played, strict=True)
         if real.calls != world.expected_calls(actions) or real.ending != ending
     ]
-    assert not differ, f"{len(differ)} of {len(batch.played)} runs differ; the first:\n{differ[0]}"
+    shortest = described(*min(differ, key=lambda run: len(run[0]))) if differ else ""
+    assert not differ, (
+        f"{len(differ)} of {len(batch.played)} runs differ; the shortest:\n{shortest}"
+    )
     assert set(batch.effects) == set(model.Role), "every agent's prompt was read"
     for role, commands in batch.effects.items():
         assert commands <= model.COMMANDS[role], (role, sorted(commands - model.COMMANDS[role]))

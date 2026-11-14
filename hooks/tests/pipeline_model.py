@@ -21,6 +21,8 @@ check, 0040 and 0045 on the size stops, 0046 on splitting a ticket).
 
 from __future__ import annotations
 
+import functools
+import re
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -510,18 +512,21 @@ def graph() -> tuple[frozenset[State], list[Edge]]:
     return frozenset(seen), edges
 
 
-NAMED: dict[str, Action] = {
-    action.name: action
-    for action in [
-        *(Action(start) for start in Start),
-        *(
-            Action(answer, role, rounds)
-            for role, answers in ANSWERS.items()
-            for answer in answers
-            for rounds in range(MAX_FIX_ROUNDS + 1)
-        ),
-    ]
-}
+ROUND = re.compile(r"-(\d+)$")
+
+
+@functools.cache
+def named(name: str) -> Action:
+    """The action called ``name``, in whatever round of the fix loop it is taken."""
+    who, said = name.split(" ", 1)
+    if who == "the":
+        return Action(Start(said.removeprefix("orchestrator ")))
+    role = Role(ROUND.sub("", who))
+    numbered = ROUND.search(who)
+    number = int(numbered.group(1)) if numbered else 0
+    rounds = number - 1 if role is Role.FIX else number
+    answer = next(answer for answer in type(ANSWERS[role][0]) if answer.value == said)
+    return Action(answer, role, rounds)
 
 
 def most(state: State) -> int:
@@ -532,7 +537,7 @@ def most(state: State) -> int:
 
 def evidenced(before: State, name: str, after: State) -> bool:
     """A run ends approved only when the review that runs last approves with its own check green and nothing open, and the last builder's check was green."""  # noqa: E501
-    action = NAMED[name]
+    action = named(name)
     if action.role in REVIEWS and after.ending is None:
         return False
     if after.ending is None or after.ending.outcome is not Outcome.APPROVE:
@@ -547,7 +552,7 @@ def bounded(_: State, __: str, after: State) -> bool:
 
 def ordered(before: State, name: str, _: State) -> bool:
     """Agents run in the documented order of stages, and the implementer runs only after a spec with no open question has been through the ticket check."""  # noqa: E501
-    action = NAMED[name]
+    action = named(name)
     if action.phase is None:
         return True
     if before.phase is not None and PHASES.index(action.phase) < PHASES.index(before.phase):
@@ -560,7 +565,7 @@ def ordered(before: State, name: str, _: State) -> bool:
 
 def stricter(before: State, name: str, after: State) -> bool:
     """No answer lifts an objection the run has raised but the repair the documents name for it, and a run with an objection standing never ends approved."""  # noqa: E501
-    role = NAMED[name].role
+    role = named(name).role
     repairs = REPAIRS.get(role, frozenset()) if role else frozenset()
     if not standing(before) - standing(after) <= repairs:
         return False
@@ -570,7 +575,7 @@ def stricter(before: State, name: str, after: State) -> bool:
 
 def ceilinged(_: State, name: str, after: State) -> bool:
     """A change measured or estimated over the product ceiling or the test ceiling stops the run as too large on that ceiling, so it is never approved."""  # noqa: E501
-    ceiling = OVER.get(NAMED[name].answer)
+    ceiling = OVER.get(named(name).answer)
     if ceiling is None:
         return True
     ending = after.ending
@@ -579,7 +584,7 @@ def ceilinged(_: State, name: str, after: State) -> bool:
 
 def loop_ends(before: State, name: str, after: State) -> bool:
     """The fix loop runs at most two rounds, and a finding still owed after the last one reaches the result as unresolved."""  # noqa: E501
-    action = NAMED[name]
+    action = named(name)
     if after.rounds > MAX_FIX_ROUNDS:
         return False
     if action.role not in REVIEWS or not before.owed or after.ending is None:
@@ -589,13 +594,13 @@ def loop_ends(before: State, name: str, after: State) -> bool:
 
 def unpublished(_: State, name: str, __: State) -> bool:
     """The run never commits, pushes or opens a pull request, and asks each agent only for the git and forge commands the documents give its role."""  # noqa: E501
-    role = NAMED[name].role
+    role = named(name).role
     return role is None or not COMMANDS[role] & PUBLISHING
 
 
 def reported(_: State, name: str, after: State) -> bool:
     """A failed or malformed agent answer ends in a result that says so, never in an approval and never in an unhandled error."""  # noqa: E501
-    answer = NAMED[name].answer
+    answer = named(name).answer
     if answer not in FAILED and answer not in MALFORMED:
         return True
     ending = after.ending
@@ -604,7 +609,7 @@ def reported(_: State, name: str, after: State) -> bool:
 
 def judged_again(_: State, name: str, after: State) -> bool:
     """Judging a rebased branch again always ends on a second review, and only that review's own approval approves the branch."""  # noqa: E501
-    action = NAMED[name]
+    action = named(name)
     ending = after.ending
     if not after.rejudge or ending is None or ending.outcome not in VERDICTS:
         return True
@@ -617,7 +622,7 @@ def split(before: State, name: str, after: State) -> bool:
     ending = after.ending
     if ending is None or ending.stop is not Stop.TOO_LARGE:
         return True
-    return ending.parts and NAMED[name].role is not Role.IMPLEMENT and not before.built
+    return ending.parts and named(name).role is not Role.IMPLEMENT and not before.built
 
 
 def assumed(_: State, __: str, after: State) -> bool:
@@ -630,12 +635,12 @@ def assumed(_: State, __: str, after: State) -> bool:
 
 def critic_waits(before: State, name: str, _: State) -> bool:
     """The critic and its fix loop run only once the project is depended-on."""
-    return NAMED[name].role not in {Role.CRITIQUE, Role.FIX} or before.critic is True
+    return named(name).role not in {Role.CRITIQUE, Role.FIX} or before.critic is True
 
 
 def check_asks_nothing(_: State, name: str, after: State) -> bool:
     """The ticket check never stops the run unless its agent dies, so no question reaches the owner from it."""  # noqa: E501
-    action = NAMED[name]
+    action = named(name)
     if action.role not in {Role.CHECK, Role.RECHECK} or action.answer is Check.DIES:
         return True
     return after.ending is None
@@ -643,7 +648,7 @@ def check_asks_nothing(_: State, name: str, after: State) -> bool:
 
 def never_crashes(_: State, name: str, after: State) -> bool:
     """A failed or malformed agent answer is never approved and never crashes the run, which ends in the script's own error naming that agent."""  # noqa: E501
-    action = NAMED[name]
+    action = named(name)
     if action.answer not in FAILED and action.answer not in MALFORMED:
         return True
     ending = after.ending
@@ -655,7 +660,7 @@ def never_crashes(_: State, name: str, after: State) -> bool:
 def lost(_: State, name: str, after: State) -> bool:
     """A change the review finds dropping a promise of the ticket is refused, and a first build returns what it lost for the next run."""  # noqa: E501
     ending = after.ending
-    if NAMED[name].answer is not Review.APPROVES_DROPPED or ending is None:
+    if named(name).answer is not Review.APPROVES_DROPPED or ending is None:
         return True
     return ending.outcome is Outcome.REQUEST_CHANGES and ending.lost == (not after.rejudge)
 
