@@ -1,52 +1,168 @@
-"""What a guard-path change does to dependencies, when that is all it does.
+"""What a guard-path change does to dependencies, when that is all it does (ADR 0011, ADR 0044).
 
-A dependency manifest (``pyproject.toml``, ``Cargo.toml``, ``package.json``) holds gate
-configuration beside the dependency list, so the whole file is a guard path, and so is its
-lockfile. ``guard-diff`` lists every changed guard path; for a manifest, a lockfile or a
-snapshot of one it adds what the change does to dependencies when that is all it does, so the
-owner reads the versions, and the pipeline can match the added names against the ones its spec
-named (ADR 0011).
+A dependency manifest holds gate configuration beside the dependency list, so the whole file is a
+guard path, and so is its lockfile. ``guard-diff`` and the merge judge say, for each, what the
+change does to dependencies when that is all it does, so the owner reads the versions and the
+pipeline can match the added names against the ones its spec named.
 
-A manifest change is dependency-only when both sides parse, they are equal once the dependency
-tables and the package's own version are set aside, and every entry that changed is a new one
-fetched from the registry by name and version range. A lockfile change is dependency-only when
-no artifact changed in place at the same version, every new artifact comes from a registry the
-lockfile already uses (or the ecosystem's default), and no package's highest version falls. Any
-other change returns the reason it is not: each is a way to swap a gate tool or roll it back.
+This module reads no manifest or lockfile format (ADR 0042). The binding's ``## Dependencies``
+section names the manifests and lockfiles of this stack, the registries it accepts and an entry
+point, ``just dependencies <dir>``, that whoever bound the stack wrote. Given a directory holding
+the changed files at their own paths, the entry point prints records, one per line, tab separated,
+in the format this module defines::
+
+    declared<TAB>file<TAB>table<TAB>name<TAB>spec<TAB>origin
+    locked<TAB>file<TAB>scope<TAB>name<TAB>version<TAB>order<TAB>origin<TAB>source<TAB>integrity<TAB>sides
+    rest<TAB>file<TAB>digest
+
+``declared`` is one dependency a manifest asks for: its table, the spec as the file writes it, and
+whether the spec fetches it from a registry by name and version range (``registry``) or by any
+other means (``other``). ``locked`` is one resolved package version of a lockfile: its scope (an
+inventory of its own, such as the one a tool keeps for itself), its version as written, ``order``
+(dot-separated non-negative integers that sort the versions of one name the way its registry
+does), where it comes from (``registry``, ``direct`` or ``local``), the source and an integrity
+value that identifies its contents, and whether versions of the name sit beside each other in the
+scope (``many``) or only one runs (``one``). ``rest`` is a digest of everything else in the file
+that can change what installs: the file less its dependency tables, resolved packages and the
+package's own version.
+
+The merge base's entry point reads the files at the merge base and at the head, so the change
+cannot rewrite the code that judges it, and this module compares the two outputs. A manifest
+change is dependency-only when its ``rest`` is equal and every entry that changed is a new one
+fetched from a registry by name and version range. A lockfile change is dependency-only when its
+``rest`` is equal, no artifact changed in place at the same version, every new artifact comes
+from a registry the lockfile already uses or the binding names, and no package's highest version
+falls. Each new version must also appear in a line the change added, so an entry point that
+reports what the file does not show is refused. Any other change returns the reason it is not:
+each is a way to swap a gate tool or roll it back. A change the contract cannot judge (no section,
+no entry point, a run that fails or prints what is not a record) is not dependency-only.
 """
 
-import json
 import re
-import tomllib
-from collections.abc import Callable
-from dataclasses import dataclass
-from pathlib import PurePosixPath
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from typing import NoReturn
 
-LOCKFILES = frozenset(
-    {"uv.lock", "Cargo.lock", "poetry.lock", "pnpm-lock.yaml", "package-lock.json"}
-    | {"yarn.lock", "bun.lock", "Gemfile.lock", "go.sum", "composer.lock"}
-)
+from ratchet_guards import globs
+
+SECTION = "## Dependencies"
+SNAPSHOTS = "quality/snapshots/"
 SNAPSHOT_SEPARATOR = "__"
-_CARGO_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
-_CARGO_KEYS = frozenset(
-    {"version", "features", "default-features", "default_features", "optional", "workspace"}
-)
-_NPM_TABLES = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
-_REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
-# Why: a version range never holds these; a URL, a path, a git reference, an npm alias or a
-# workspace link does, and each can stand a fork in for a gate tool.
-_NOT_A_RANGE = re.compile(r"[:/\\#@]")
-_RELEASE = re.compile(r"\d+(?:\.\d+)*")
-_DEFAULT_REGISTRIES = frozenset(
-    {
-        "https://pypi.org/simple",
-        "registry+https://github.com/rust-lang/crates.io-index",
-        "sparse+https://index.crates.io/",
-        "https://registry.npmjs.org",
-    }
-)
+ENTRY = "just dependencies"
+NONE_PREFIX = "none:"
+MIN_REASON = 10
+LABELS = ("Manifests", "Lockfiles", "Entry point", "Registries")
+MANIFEST, LOCKFILE = "manifest", "lockfile"
+REGISTRY, DIRECT, LOCAL = "registry", "direct", "local"
+ORIGINS = frozenset({REGISTRY, DIRECT, LOCAL})
+DECLARED_ORIGINS = frozenset({REGISTRY, "other"})
+MANY, ONE = "many", "one"
+ORDER = re.compile(r"\d+(?:\.\d+)*")
+BULLET = re.compile(r"^- ([^:\n]+):[ \t]*(.*?)[ \t]*$")
+TICKED = re.compile(r"`([^`\n]+)`")
+WIDTHS = {"declared": 6, "locked": 10, "rest": 3}
 
-Data = dict[str, object]
+Runner = Callable[[Mapping[str, str]], str]
+
+
+class NotDependencyOnlyError(ValueError):
+    """The change does more than change dependencies; the message says what."""
+
+
+@dataclass(frozen=True)
+class Contract:
+    """What a binding says about dependencies: the files, the registries, whether it has an entry.
+
+    ``manifests`` and ``lockfiles`` are globs over tracked files. ``entry`` is whether the binding
+    names the entry point. ``problems`` is what keeps the section from being read as written.
+    """
+
+    manifests: tuple[str, ...] = ()
+    lockfiles: tuple[str, ...] = ()
+    registries: frozenset[str] = frozenset()
+    entry: bool = False
+    problems: tuple[str, ...] = field(default=())
+
+    def original(self, path: str) -> str | None:
+        """The declared file ``path`` is or copies (a snapshot is named after it), else ``None``."""
+        name = path
+        if path.startswith(SNAPSHOTS) and "/" not in path.removeprefix(SNAPSHOTS):
+            name = path.removeprefix(SNAPSHOTS).replace(SNAPSHOT_SEPARATOR, "/")
+        # Why: the entry point is given the file at this path under a directory of its own.
+        if ".." in name.split("/") or name.startswith("/"):
+            return None
+        return name if self.kind(name) else None
+
+    def kind(self, path: str) -> str | None:
+        """``manifest`` or ``lockfile`` when a glob of the section matches ``path``."""
+        for kind, patterns in ((MANIFEST, self.manifests), (LOCKFILE, self.lockfiles)):
+            if any(globs.matches(path, pattern) for pattern in patterns):
+                return kind
+        return None
+
+    def is_lockfile(self, path: str) -> bool:
+        """Whether ``path`` is a declared lockfile, or a snapshot of one."""
+        file = self.original(path)
+        return file is not None and self.kind(file) == LOCKFILE
+
+    def recognised(self, path: str) -> bool:
+        """Whether ``path`` is a declared manifest or lockfile, or a snapshot of one."""
+        return self.original(path) is not None
+
+
+def _fields(binding: str) -> dict[str, str] | None:
+    """The ``- Label: value`` lines under the section's heading, or ``None`` without one."""
+    lines = binding.split("\n")
+    start = next((i for i, line in enumerate(lines) if line.rstrip() == SECTION), None)
+    if start is None:
+        return None
+    found: dict[str, str] = {}
+    for line in lines[start + 1 :]:
+        if line.startswith("## "):
+            break
+        if match := BULLET.match(line):
+            found.setdefault(match.group(1).strip(), match.group(2))
+    return found
+
+
+def _paths(label: str, value: str, problems: list[str]) -> tuple[str, ...]:
+    plain = value.strip("` ")
+    if not value or value.startswith("<"):
+        problems.append(f"'- {label}:' is still the template's: name files, or `none: <reason>`")
+    elif plain.lower().startswith(NONE_PREFIX):
+        if len(plain[len(NONE_PREFIX) :].strip()) < MIN_REASON:
+            problems.append(f"'- {label}: none:' needs the reason this stack has none")
+    elif not (found := tuple(item.strip() for item in TICKED.findall(value))):
+        problems.append(f"'- {label}:' names its files in backticks, or says `none: <reason>`")
+    else:
+        return found
+    return ()
+
+
+def parse(binding: str | None) -> Contract | None:
+    """The binding's Dependencies section as a contract, or ``None`` when it has none."""
+    fields = _fields(binding) if binding is not None else None
+    if fields is None:
+        return None
+    problems: list[str] = []
+    manifests = _paths(LABELS[0], fields.get(LABELS[0], ""), problems)
+    lockfiles = _paths(LABELS[1], fields.get(LABELS[1], ""), problems)
+    entry = fields.get(LABELS[2], "")
+    plain = entry.strip("` ")
+    if plain == ENTRY:
+        named = True
+    else:
+        named = False
+        reason = plain[len(NONE_PREFIX) :].strip()
+        if not plain.lower().startswith(NONE_PREFIX) or len(reason) < MIN_REASON:
+            problems.append(f"'- {LABELS[2]}:' is `{ENTRY}`, or `none: <reason>` of its own")
+    said = fields.get(LABELS[3], "")
+    if not said or said.startswith("<"):
+        problems.append(f"'- {LABELS[3]}:' is still the template's: name registries, or `none`")
+    registries = frozenset(
+        TICKED.findall(said) if not said.strip("` ").lower().startswith("none") else ()
+    )
+    return Contract(manifests, lockfiles, registries, named, tuple(problems))
 
 
 @dataclass(frozen=True)
@@ -67,546 +183,257 @@ class Change:
 class Artifact:
     """One locked package version: where it comes from and what identifies its contents."""
 
-    kind: str
+    origin: str
     source: str
-    identity: str
+    integrity: str
 
 
-class NotDependencyOnlyError(ValueError):
-    """The change does more than change dependencies; the message says what."""
+@dataclass(frozen=True)
+class Locked:
+    """One ``locked`` record, less the file it was read from."""
+
+    scope: str
+    name: str
+    version: str
+    order: tuple[int, ...]
+    artifact: Artifact
+    many: bool
 
 
-def normalise(name: str) -> str:
-    """A package name as registries compare it (PEP 503; Cargo's ``-`` and ``_`` alike)."""
-    return re.sub(r"[-_.]+", "-", name).lower()
+@dataclass(frozen=True)
+class Declared:
+    """One ``declared`` record, less the file it was read from."""
+
+    table: str
+    name: str
+    spec: str
+    origin: str
 
 
-def _table(data: Data, key: str) -> Data:
-    value = data.get(key)
-    return value if isinstance(value, dict) else {}
+@dataclass
+class Output:
+    """The records an entry point printed, by the file they describe."""
+
+    declared: dict[str, list[Declared]] = field(default_factory=dict)
+    locked: dict[str, list[Locked]] = field(default_factory=dict)
+    rest: dict[str, str] = field(default_factory=dict)
 
 
-def _no_duplicates(pairs: list[tuple[str, object]]) -> Data:
-    keys = [key for key, _ in pairs]
-    if len(keys) != len(set(keys)):
-        msg = "a key is given twice"
-        raise NotDependencyOnlyError(msg)
-    return dict(pairs)
+def _refuse(message: str) -> NoReturn:
+    raise NotDependencyOnlyError(message)
 
 
-def _load_json(text: str) -> object:
-    return json.loads(text, object_pairs_hook=_no_duplicates)
+def _record(output: Output, fields: list[str], line: str) -> None:
+    kind, file = fields[0], fields[1]
+    if kind == "rest":
+        if file in output.rest:
+            _refuse(f"the entry point prints two rest lines for {file}")
+        output.rest[file] = fields[2]
+    elif kind == "declared":
+        table, name, spec, origin = fields[2:]
+        if origin not in DECLARED_ORIGINS:
+            _refuse(f"the entry point prints the origin '{origin}' for a declared entry")
+        output.declared.setdefault(file, []).append(Declared(table, name, spec, origin))
+    else:
+        scope, name, version, order, origin, source, integrity, sides = fields[2:]
+        if origin not in ORIGINS or sides not in {MANY, ONE} or not ORDER.fullmatch(order):
+            _refuse(f"the entry point prints a locked line it cannot be read from: {line!r}")
+        if origin != LOCAL and not integrity:
+            _refuse(f"{name} {version} has no integrity, so it cannot be shown unswapped")
+        artifact = Artifact(origin, source, integrity)
+        parts = tuple(int(part) for part in order.split("."))
+        output.locked.setdefault(file, []).append(
+            Locked(scope, name, version, parts, artifact, sides == MANY)
+        )
 
 
-Entries = dict[tuple[str, str], str]
-
-
-def _add(entries: Entries, table: str, *, name: str, spec: str) -> None:
-    key = (table, normalise(name))
-    if key in entries:
-        msg = f"{name} is listed twice in {table}"
-        raise NotDependencyOnlyError(msg)
-    entries[key] = spec
-
-
-def _requirements(entries: Entries, items: object, table: str) -> None:
-    for item in items if isinstance(items, list) else []:
-        match = _REQUIREMENT_NAME.match(item) if isinstance(item, str) else None
-        if match is None:
-            msg = f"{table} holds {json.dumps(item)}, not a requirement"
-            raise NotDependencyOnlyError(msg)
-        _add(entries, table, name=match.group(1), spec=item)
-
-
-def _pyproject(data: Data) -> tuple[Data, Entries]:
-    project = dict(_table(data, "project"))
-    entries: Entries = {}
-    _requirements(entries, project.pop("dependencies", None), "project.dependencies")
-    for extra, items in _table(project, "optional-dependencies").items():
-        _requirements(entries, items, f"optional-dependencies.{extra}")
-    project.pop("optional-dependencies", None)
-    project.pop("version", None)
-    for group, items in _table(data, "dependency-groups").items():
-        _requirements(entries, items, f"dependency-groups.{group}")
-    rest = {k: v for k, v in data.items() if k not in {"project", "dependency-groups"}}
-    return rest | {"project": project}, entries
-
-
-def _cargo_spec(spec: object) -> str:
-    """A version string as it is; a table as JSON, or as ``<keys>`` when a key names a source."""
-    if isinstance(spec, dict) and not spec.keys() <= _CARGO_KEYS:
-        return "<" + ", ".join(sorted(spec)) + ">"
-    return spec if isinstance(spec, str) else json.dumps(spec, sort_keys=True)
-
-
-def _crates(entries: Entries, table: Data, prefix: str) -> None:
-    for name, spec in table.items():
-        _add(entries, prefix, name=name, spec=_cargo_spec(spec))
-
-
-def _cargo(data: Data) -> tuple[Data, Entries]:
-    rest = dict(data)
-    entries: Entries = {}
-    for key in _CARGO_TABLES:
-        _crates(entries, _table(data, key), key)
-        rest.pop(key, None)
-    targets = {}
-    for target, table in _table(data, "target").items():
-        kept = dict(table) if isinstance(table, dict) else {}
-        for key in _CARGO_TABLES:
-            _crates(entries, _table(kept, key), f"target.{target}.{key}")
-            kept.pop(key, None)
-        targets[target] = kept
-    rest["target"] = targets
-    workspace = dict(_table(data, "workspace"))
-    _crates(entries, _table(workspace, "dependencies"), "workspace.dependencies")
-    workspace.pop("dependencies", None)
-    rest["workspace"] = workspace
-    package = dict(_table(data, "package"))
-    package.pop("version", None)
-    rest["package"] = package
-    return rest, entries
-
-
-def _package_json(data: Data) -> tuple[Data, Entries]:
-    rest = {k: v for k, v in data.items() if k not in {*_NPM_TABLES, "version"}}
-    entries: Entries = {}
-    for key in _NPM_TABLES:
-        for name, spec in _table(data, key).items():
-            _add(entries, key, name=name, spec=spec if isinstance(spec, str) else json.dumps(spec))
-    return rest, entries
-
-
-def _registry_spec(file: str, spec: str) -> bool:
-    if file == "pyproject.toml":
-        return "@" not in spec and "://" not in spec
-    if file == "Cargo.toml":
-        if spec.startswith("<"):
-            return False
-        return spec.startswith("{") or _NOT_A_RANGE.search(spec) is None
-    return _NOT_A_RANGE.search(spec) is None
-
-
-Manifest = Callable[[Data], tuple[Data, Entries]]
-_MANIFESTS: dict[str, tuple[Callable[[str], object], Manifest]] = {
-    "pyproject.toml": (tomllib.loads, _pyproject),
-    "Cargo.toml": (tomllib.loads, _cargo),
-    "package.json": (_load_json, _package_json),
-}
-
-
-Locked = dict[str, dict[str, Artifact]]
-# Why: a lockfile may hold more than one inventory (pnpm's boot document beside the project's),
-# and each is compared on its own, so a version falling in one is not hidden by the other.
-Inventories = dict[str, Locked]
-LOCKFILE = "lockfile"
-
-
-def _identity(item: Data, keys: tuple[str, ...]) -> str:
-    return json.dumps({key: item.get(key) for key in keys}, sort_keys=True)
-
-
-def _uv(item: Data) -> Artifact:
-    source = _table(item, "source")
-    if set(source) == {"registry"}:
-        return Artifact("registry", str(source["registry"]), _identity(item, ("sdist", "wheels")))
-    kind = "local" if set(source) <= {"editable", "virtual"} else "direct"
-    return Artifact(kind, json.dumps(source, sort_keys=True), "")
-
-
-def _cargo_lock(item: Data) -> Artifact:
-    source = item.get("source")
-    if source is None:
-        return Artifact("local", "", "")
-    text = str(source)
-    if text.startswith(("registry+", "sparse+")):
-        return Artifact("registry", text, _identity(item, ("checksum",)))
-    return Artifact("direct", text, "")
-
-
-def _poetry(item: Data) -> Artifact:
-    source = _table(item, "source")
-    if not source:
-        return Artifact("registry", "https://pypi.org/simple", _identity(item, ("files",)))
-    if source.get("type") == "legacy":
-        return Artifact("registry", str(source.get("url")), _identity(item, ("files",)))
-    return Artifact("direct", json.dumps(source, sort_keys=True), "")
-
-
-def _toml_lock(artifact: Callable[[Data], Artifact]) -> Callable[[Data], Inventories]:
-    def read(data: Data) -> Inventories:
-        locked: Locked = {}
-        packages = data.get("package")
-        for item in packages if isinstance(packages, list) else []:
-            if isinstance(item, dict) and "name" in item:
-                _lock(
-                    locked,
-                    str(item["name"]),
-                    version=str(item.get("version", "")),
-                    artifact=artifact(item),
-                )
-        return {LOCKFILE: locked}
-
-    return read
-
-
-def _npm_lock(data: Data) -> Inventories:
-    locked: Locked = {}
-    for path, item in _table(data, "packages").items():
-        if not path or not isinstance(item, dict):
+def read_output(text: str) -> Output:
+    """The records of an entry point's output; anything that is not one is refused."""
+    output = Output()
+    for line in text.split("\n"):
+        if not line.strip():
             continue
-        name = str(item.get("name") or path.rsplit("node_modules/", 1)[-1])
-        resolved = str(item.get("resolved", ""))
-        if item.get("link") or "node_modules/" not in path:
-            artifact = Artifact("local", resolved, "")
-        elif match := re.match(r"https://[^/]+", resolved):
-            artifact = Artifact("registry", match.group(0), _identity(item, ("integrity",)))
-        else:
-            artifact = Artifact("direct", resolved, "")
-        _lock(locked, name, version=str(item.get("version", "")), artifact=artifact)
-    return {LOCKFILE: locked}
+        fields = line.split("\t")
+        if fields[0] not in WIDTHS or len(fields) != WIDTHS[fields[0]]:
+            _refuse(f"the entry point prints a line that is not a record: {line[:80]!r}")
+        _record(output, fields, line)
+    return output
 
 
-def _lock(locked: Locked, name: str, *, version: str, artifact: Artifact) -> None:
-    versions = locked.setdefault(normalise(name), {})
-    if versions.get(version, artifact) != artifact:
-        msg = f"{name} {version} is locked twice with different contents"
-        raise NotDependencyOnlyError(msg)
-    versions[version] = artifact
+Entries = dict[tuple[str, str], Declared]
 
 
-_PNPM_KEY = re.compile(r"""^(?:'((?:[^']|'')*)'|"([^"]*)"|([^'"\s][^:]*?))\s*:(?:\s+(\S.*))?$""")
-# Why: overrides and patches change what installs without naming a dependency, so a lockfile
-# that has them is refused rather than read as if they were not there.
-_PNPM_SECTIONS = frozenset(
-    {"lockfileVersion", "settings", "importers", "packages", "snapshots", "time", "catalogs"}
-)
-_PNPM_ITEM = re.compile(r"""^-\s+(?:'((?:[^']|'')*)'|"([^"]*)"|([^'"\s:#][^:#]*?))\s*$""")
-# Why: the one list pnpm writes as a block sequence; a list anywhere else is refused.
-_PNPM_SEQUENCES = frozenset({"transitivePeerDependencies"})
-_PNPM_PACKAGE = re.compile(r"^(@?[^@\s]+)@(\d[^@()\s]*)$")
-_PNPM_PINNED = re.compile(r"^\d[^@()\s]*(?:\(.*\))?$")
-_PNPM_FIELD = re.compile(r"(\w+):\s*('[^']*'|[^,}]+)")
-# Why: from pnpm 11 the lockfile may open with a boot document, which locks the pnpm that runs
-# and the config dependencies, before the project's own (https://pnpm.io/lockfile). pnpm writes
-# the leading marker only when it writes both.
-_PNPM_DOCUMENT = "---"
-PNPM_BOOT = "boot document"
-# Why: the boot document may lock two pnpm versions after an upgrade; its pin picks the one that
-# runs, so a pin moved back is a rollback though no locked package changes.
-PNPM_PIN = "boot document pin"
-_PNPM_BOOT_GROUPS = frozenset({"configDependencies", "packageManagerDependencies"})
-# Why: an anchor, alias, tag or merge key changes what a value is without changing its text; pnpm
-# writes none, so one where a value, an item or a flow entry starts is refused.
-_PNPM_YAML_MARK = re.compile(r"(?:^|[:\-{\[,]\s*)[&*!]|<<")
+def _declared(output: Output, file: str) -> Entries:
+    entries: Entries = {}
+    for item in output.declared.get(file, []):
+        key = (item.table, item.name)
+        if key in entries:
+            _refuse(f"{item.name} is listed twice in {item.table}")
+        entries[key] = item
+    return entries
 
 
-def _pnpm_tree(text: str) -> Data:
-    """The indented ``key: value`` tree of a pnpm lockfile, flow values left as text.
-
-    The standard library has no YAML parser and pnpm writes one narrow shape, so this reads
-    that shape only. Anything else (a tab, a multi-line scalar, a key given twice, a list where
-    pnpm writes none) is refused.
-    """
-    root: Data = {}
-    stack: list[tuple[int, Data | list[str]]] = [(-1, root)]
-    leaf = len(text)
-    for line in text.splitlines():
-        body = line.strip()
-        if not body or body.startswith("#"):
-            continue
-        if _PNPM_YAML_MARK.search(body):
-            msg = "it uses a YAML anchor, alias, tag or merge key, which pnpm does not write"
-            raise NotDependencyOnlyError(msg)
-        indent = len(line) - len(line.lstrip())
-        match = _PNPM_KEY.match(body)
-        item = _PNPM_ITEM.match(body)
-        while stack[-1][0] >= indent:
-            stack.pop()
-        parent = stack[-1][1]
-        # Why: a line indented under a value, not under a key that opens a block, would land in
-        # the block above it instead.
-        if line[:indent].strip(" ") or (match is None and item is None) or indent > leaf:
-            msg = "it is not in the shape pnpm writes"
-            raise NotDependencyOnlyError(msg)
-        opens = item is None and match is not None and match.group(4) is None
-        leaf = len(text) if opens else indent
-        if isinstance(parent, list) and item is not None:
-            parent.append(_unquoted(item))
-            continue
-        if isinstance(parent, list) or match is None:
-            msg = "it is not in the shape pnpm writes"
-            raise NotDependencyOnlyError(msg)
-        key = _unquoted(match)
-        if key in parent:
-            msg = "a key is given twice"
-            raise NotDependencyOnlyError(msg)
-        if match.group(4) is None:
-            child: Data | list[str] = [] if key in _PNPM_SEQUENCES else {}
-            parent[key] = child
-            stack.append((indent, child))
-        else:
-            parent[key] = match.group(4)
-    return root
+def _same_rest(file: str, before: Output, after: Output) -> None:
+    if file not in before.rest or file not in after.rest:
+        _refuse("the entry point prints no rest line for it")
+    if before.rest[file] != after.rest[file]:
+        _refuse("it changes more than the dependency tables and the package version")
 
 
-def _block(value: object) -> Data:
-    """A mapping pnpm writes as a block, or ``{}`` for an empty one.
-
-    Why: the tree keeps a one-line mapping as text, so ``packages: {a@1.0.0: {...}}`` would read
-    as no packages at all; pnpm writes none but the empty one there.
-    """
-    if value is None or value == "{}":
-        return {}
-    if not isinstance(value, dict):
-        msg = "it is not in the shape pnpm writes"
-        raise NotDependencyOnlyError(msg)
-    return value
-
-
-def _unquoted(match: re.Match[str]) -> str:
-    """The key or item a matched line names, without its quotes."""
-    return match.group(1) or match.group(2) or match.group(3)
-
-
-def _pnpm_load(text: str) -> object:
-    """Each document of a pnpm lockfile by the inventory it holds: the project's, the boot one."""
-    lines = text.splitlines()
-    starts = [index for index, line in enumerate(lines) if line == _PNPM_DOCUMENT]
-    if not starts:
-        return {LOCKFILE: _pnpm_document(text)}
-    if starts[0] != 0 or len(starts) != 2:  # noqa: PLR2004 # -- a boot document and the project's
-        msg = "it is not in the shape pnpm writes"
-        raise NotDependencyOnlyError(msg)
-    boot = _pnpm_document("\n".join(lines[1 : starts[1]]))
-    groups = {group for i in _block(boot.get("importers")).values() for group in _block(i)}
-    if not groups <= _PNPM_BOOT_GROUPS:
-        msg = f"its boot document locks {', '.join(sorted(groups - _PNPM_BOOT_GROUPS))}"
-        raise NotDependencyOnlyError(msg)
-    return {PNPM_BOOT: boot, LOCKFILE: _pnpm_document("\n".join(lines[starts[1] + 1 :]))}
-
-
-def _pnpm_document(text: str) -> Data:
-    tree = _pnpm_tree(text)
-    version = str(tree.get("lockfileVersion", "")).strip("'\"")
-    if not version.startswith("9.") or not tree.keys() <= _PNPM_SECTIONS:
-        msg = "only a pnpm v9 lockfile without overrides or patches is read"
-        raise NotDependencyOnlyError(msg)
-    return tree
-
-
-def _pnpm_artifact(entry: Data) -> Artifact:
-    """A ``packages`` entry's ``resolution``: a registry tarball with an integrity, or direct."""
-    resolution = entry.get("resolution")
-    fields = dict(_PNPM_FIELD.findall(resolution)) if isinstance(resolution, str) else {}
-    integrity = fields.get("integrity", "").strip("'")
-    tarball = fields.get("tarball", "").strip("'")
-    if not integrity or not fields.keys() <= {"integrity", "tarball"}:
-        return Artifact("direct", str(resolution), "")
-    if not tarball:
-        return Artifact("registry", "https://registry.npmjs.org", integrity)
-    origin = re.match(r"https://[^/]+", tarball)
-    if origin is None:
-        return Artifact("direct", tarball, "")
-    return Artifact("registry", origin.group(0), integrity)
-
-
-def _pnpm_lock(data: Data) -> Inventories:
-    inventories = {name: _pnpm_inventory(_table(data, name)) for name in data}
-    if PNPM_BOOT in data:
-        inventories[PNPM_PIN] = _pnpm_pins(_table(data, PNPM_BOOT), inventories[PNPM_BOOT])
-    return inventories
-
-
-def _pnpm_pins(boot: Data, locked: Locked) -> Locked:
-    """The versions the boot document's importers pin, each with the package it locks."""
-    pins: Locked = {}
-    for importer in _block(boot.get("importers")).values():
-        for group in _block(importer).values():
-            for name, spec in _block(group).items():
-                version = spec.get("version", "") if isinstance(spec, dict) else ""
-                pinned = str(version).split("(", 1)[0]
-                artifact = locked.get(normalise(name), {}).get(pinned)
-                if artifact is None:
-                    msg = f"the boot document pins {name} {pinned} but locks no such package"
-                    raise NotDependencyOnlyError(msg)
-                _lock(pins, name, version=pinned, artifact=artifact)
-    return pins
-
-
-def _pnpm_inventory(data: Data) -> Locked:
-    locked: Locked = {}
-    for key, entry in _block(data.get("packages")).items():
-        match = _PNPM_PACKAGE.match(key)
-        if match is None or not isinstance(entry, dict):
-            msg = f"{key} is not a name and version pnpm locks from a registry"
-            raise NotDependencyOnlyError(msg)
-        _lock(locked, match.group(1), version=match.group(2), artifact=_pnpm_artifact(entry))
-    for path, importer in _block(data.get("importers")).items():
-        for group in _block(importer).values():
-            for name, spec in _block(group).items():
-                pinned = spec.get("version", "") if isinstance(spec, dict) else ""
-                if pinned.startswith("link:"):
-                    _lock(locked, name, version=pinned, artifact=Artifact("local", path, ""))
-                elif not _PNPM_PINNED.match(pinned):
-                    msg = f"{name} is pinned to {pinned or 'nothing'} in {path}, not a version"
-                    raise NotDependencyOnlyError(msg)
-    return locked
-
-
-_SIDE_BY_SIDE = frozenset({"Cargo.lock", "package-lock.json", "pnpm-lock.yaml"})
-_LOCKS: dict[str, tuple[Callable[[str], object], Callable[[Data], Inventories]]] = {
-    "uv.lock": (tomllib.loads, _toml_lock(_uv)),
-    "Cargo.lock": (tomllib.loads, _toml_lock(_cargo_lock)),
-    "poetry.lock": (tomllib.loads, _toml_lock(_poetry)),
-    "package-lock.json": (_load_json, _npm_lock),
-    "pnpm-lock.yaml": (_pnpm_load, _pnpm_lock),
-}
-
-
-# The lockfiles this module reads; a gate that skips generated lockfiles skips these.
-LOCKED = frozenset(_LOCKS)
-
-
-def file_name(path: str) -> str:
-    """The name a path's file has in the tree; a snapshot is named after the file it copies."""
-    return PurePosixPath(path).name.rsplit(SNAPSHOT_SEPARATOR, 1)[-1]
-
-
-def recognised(path: str) -> bool:
-    """Whether ``path`` is a dependency manifest or lockfile, or a snapshot of one."""
-    name = file_name(path)
-    return name in _MANIFESTS or name in LOCKFILES
-
-
-def _parse(load: Callable[[str], object], text: str) -> Data:
-    try:
-        data = load(text)
-    except NotDependencyOnlyError:
-        raise
-    except ValueError as error:
-        msg = "it does not parse"
-        raise NotDependencyOnlyError(msg) from error
-    if not isinstance(data, dict):
-        msg = "it does not parse"
-        raise NotDependencyOnlyError(msg)
-    return data
-
-
-def _manifest(file: str, before: str, after: str) -> list[Change]:
-    load, split = _MANIFESTS[file]
-    old_rest, old = split(_parse(load, before))
-    new_rest, new = split(_parse(load, after))
-    if old_rest != new_rest:
-        msg = "it changes more than the dependency tables and the package version"
-        raise NotDependencyOnlyError(msg)
+def _manifest(file: str, before: Output, after: Output, *, added: str) -> list[Change]:
+    _same_rest(file, before, after)
+    old, new = _declared(before, file), _declared(after, file)
     found: list[Change] = []
-    for (table, name), spec in sorted(new.items()):
-        if old.get((table, name)) == spec:
+    for (table, name), item in sorted(new.items()):
+        if old.get((table, name)) == item:
             continue
         if (table, name) in old:
-            msg = f"it changes {name} in {table}, which was there before"
-            raise NotDependencyOnlyError(msg)
-        if not _registry_spec(file, spec):
-            msg = f"{name} in {table} is fetched by {spec}, not from the registry by version"
-            raise NotDependencyOnlyError(msg)
-        found.append(Change(name, table, None, spec))
+            _refuse(f"it changes {name} in {table}, which was there before")
+        if item.origin != REGISTRY:
+            _refuse(
+                f"{name} in {table} is fetched by {item.spec}, not from the registry by version"
+            )
+        _shown(item.spec, name, added)
+        found.append(Change(name, table, None, item.spec))
     if gone := sorted(f"{name} from {table}" for table, name in old.keys() - new.keys()):
-        msg = f"it removes {', '.join(gone)}"
-        raise NotDependencyOnlyError(msg)
+        _refuse(f"it removes {', '.join(gone)}")
     return found
 
 
-def _version(text: str) -> tuple[tuple[int, ...], int, str]:
-    """A sort key: the release numbers, then pre-release before final before post-release."""
-    match = _RELEASE.match(text)
-    if match is None:
-        return ((), 0, text)
-    release = tuple(int(part) for part in match.group(0).split("."))
-    while release and release[-1] == 0:
-        release = release[:-1]
-    suffix = text[match.end() :].lstrip(".-_")
-    stage = 1 if not suffix or suffix.startswith("+") else 2 if suffix.startswith("post") else 0
-    return (release, stage, suffix)
+def _shown(text: str, name: str, added: str) -> None:
+    """Refuse an entry point that reports what no line of the change shows."""
+    if text not in added:
+        _refuse(f"the entry point reports '{text}' for {name}, which no added line shows")
+
+
+Versions = dict[str, tuple[Artifact, tuple[int, ...]]]
+Inventory = dict[tuple[str, str], tuple[Versions, bool]]
+
+
+def _inventory(output: Output, file: str) -> Inventory:
+    found: Inventory = {}
+    for item in output.locked.get(file, []):
+        versions, many = found.setdefault((item.scope, item.name), ({}, item.many))
+        if many != item.many:
+            _refuse(f"{item.name} is given both as one version and as many in {item.scope}")
+        known = versions.get(item.version)
+        if known is not None and known[0] != item.artifact:
+            _refuse(f"{item.name} {item.version} is locked twice with different contents")
+        versions[item.version] = (item.artifact, item.order)
+    return found
 
 
 def _package(
-    name: str,
-    old: dict[str, Artifact],
-    new: dict[str, Artifact],
-    *,
-    known: set[str],
-    side_by_side: bool,
+    name: str, versions: tuple[Versions, Versions], *, known: set[str], many: bool, added: str
 ) -> None:
     """Raise unless ``name``'s locked versions only grow or rise, from a registry ``known``.
 
-    Where versions of a package sit ``side_by_side`` (Cargo, npm), only the highest must not
-    fall; elsewhere any new version below the old highest is a rollback for some environment.
+    Where versions of a package sit beside each other (``many``), only the highest must not fall;
+    elsewhere any new version below the old highest is a rollback for some environment.
     """
+    old, new = versions
     for version in old.keys() & new.keys():
-        before, after = old[version], new[version]
+        before, after = old[version][0], new[version][0]
         if before != after and not (
-            before.kind == after.kind == "local" and before.source == after.source
+            before.origin == after.origin == LOCAL and before.source == after.source
         ):
-            was, now = before.source or "local", after.source or "local"
-            msg = f"{name} {version} changed in place ({was} -> {now})"
-            raise NotDependencyOnlyError(msg)
-    highest = max(old, key=_version) if old else None
-    for version in sorted(new.keys() - old.keys(), key=_version):
-        artifact = new[version]
-        if artifact.kind != "registry" or artifact.source not in known:
+            was, now = before.source or LOCAL, after.source or LOCAL
+            _refuse(f"{name} {version} changed in place ({was} -> {now})")
+    highest = max(old, key=lambda v: old[v][1]) if old else None
+    for version in sorted(new.keys() - old.keys(), key=lambda v: new[v][1]):
+        artifact = new[version][0]
+        if artifact.origin != REGISTRY or artifact.source not in known:
             where = artifact.source or "a local path"
-            msg = f"{name} {version} comes from {where}, not a known registry"
-            raise NotDependencyOnlyError(msg)
-        if highest is not None and not side_by_side and _version(version) < _version(highest):
-            msg = f"{name} falls from {highest} to {version}"
-            raise NotDependencyOnlyError(msg)
-    if highest is not None and new and _version(max(new, key=_version)) < _version(highest):
-        msg = f"{name} falls from {highest} to {max(new, key=_version)}"
-        raise NotDependencyOnlyError(msg)
+            _refuse(f"{name} {version} comes from {where}, not a known registry")
+        if highest is not None and not many and new[version][1] < old[highest][1]:
+            _refuse(f"{name} falls from {highest} to {version}")
+        _shown(version, name, added)
+    if highest is not None and new:
+        top = max(new, key=lambda v: new[v][1])
+        if new[top][1] < old[highest][1]:
+            _refuse(f"{name} falls from {highest} to {top}")
 
 
-def _lockfile(file: str, before: str, after: str) -> list[Change]:
-    load, read = _LOCKS[file]
-    old, new = read(_parse(load, before)), read(_parse(load, after))
-    known = set(_DEFAULT_REGISTRIES) | {
-        a.source
-        for locked in old.values()
-        for versions in locked.values()
-        for a in versions.values()
-        if a.kind == "registry"
+def _lockfile(
+    file: str, before: Output, after: Output, *, added: str, accepted: frozenset[str]
+) -> list[Change]:
+    _same_rest(file, before, after)
+    old, new = _inventory(before, file), _inventory(after, file)
+    known = set(accepted) | {
+        artifact.source
+        for versions, _ in old.values()
+        for artifact, _ in versions.values()
+        if artifact.origin == REGISTRY
     }
     found: list[Change] = []
-    for table in sorted(old.keys() | new.keys(), key=lambda table: (table != LOCKFILE, table)):
-        was_table, now_table = old.get(table, {}), new.get(table, {})
-        # Why: pnpm's boot document runs the one pnpm its pin names, so no version sits beside
-        # another there: an older one added is the one that runs.
-        side_by_side = file in _SIDE_BY_SIDE and table == LOCKFILE
-        for name in sorted(was_table.keys() | now_table.keys()):
-            was, now = was_table.get(name, {}), now_table.get(name, {})
-            _package(name, was, now, known=known, side_by_side=side_by_side)
-            if was.keys() != now.keys():
-                show = (
-                    ", ".join(sorted(was, key=_version)) or None,
-                    ", ".join(sorted(now, key=_version)) or None,
-                )
-                found.append(Change(name, table, *show))
+    for scope, name in sorted(old.keys() | new.keys()):
+        was, many = old.get((scope, name), ({}, False))
+        now, now_many = new.get((scope, name), ({}, many))
+        _package(name, (was, now), known=known, many=many and now_many, added=added)
+        if was.keys() != now.keys():
+            show = (
+                ", ".join(sorted(was, key=lambda v: was[v][1])) or None,
+                ", ".join(sorted(now, key=lambda v: now[v][1])) or None,
+            )
+            found.append(Change(name, scope, *show))
     return found
 
 
-def changes(path: str, before: str | None, after: str | None) -> list[Change]:
-    """What the change of ``path`` does to dependencies, when that is all it does.
+def _added(before: str, after: str) -> str:
+    """The lines of ``after`` that ``before`` lacks."""
+    seen = set(before.split("\n"))
+    return "\n".join(line for line in after.split("\n") if line not in seen)
 
-    Raises ``NotDependencyOnlyError`` with the reason otherwise: a file created or deleted, a format
-    this module does not read, a parse failure, or any change it does not count as safe.
+
+Verdict = list[Change] | NotDependencyOnlyError
+Texts = Mapping[str, tuple[str | None, str | None]]
+
+
+def _verdict(
+    contract: Contract, file: str, outputs: tuple[Output, Output], *, texts: tuple[str, str]
+) -> Verdict:
+    old, new = outputs
+    added = _added(*texts)
+    try:
+        if contract.kind(file) == MANIFEST:
+            return _manifest(file, old, new, added=added)
+        return _lockfile(file, old, new, added=added, accepted=contract.registries)
+    except NotDependencyOnlyError as reason:
+        return reason
+
+
+def judge(contract: Contract, changed: Texts, run: Runner) -> dict[str, Verdict]:
+    """What each changed path does to dependencies, for the paths the contract recognises.
+
+    ``changed`` maps a path to its text before and after (``None`` for a side where it is not
+    there). ``run`` is the merge base's entry point: given files by path, the text it prints. It is
+    called once for each side, and not at all when no path can be judged. A path with no verdict
+    is not a dependency file.
     """
-    file = file_name(path)
-    if before is None or after is None:
-        msg = "it is created or deleted"
-        raise NotDependencyOnlyError(msg)
-    if file in _MANIFESTS:
-        return _manifest(file, before, after)
-    if file in _LOCKS:
-        return _lockfile(file, before, after)
-    msg = f"{file} is not read"
-    raise NotDependencyOnlyError(msg)
+    verdicts: dict[str, Verdict] = {}
+    pending: dict[str, tuple[str, str]] = {}
+    owners: dict[str, list[str]] = {}
+    for path, (before, after) in changed.items():
+        file = contract.original(path)
+        if file is None:
+            continue
+        if not contract.entry:
+            verdicts[path] = NotDependencyOnlyError(
+                "the binding names no entry point to read dependencies with"
+            )
+        elif before is None or after is None:
+            verdicts[path] = NotDependencyOnlyError("it is created or deleted")
+        elif pending.setdefault(file, (before, after)) != (before, after):
+            verdicts[path] = NotDependencyOnlyError(f"it differs from {file}, the file it copies")
+        else:
+            owners.setdefault(file, []).append(path)
+    if not pending:
+        return verdicts
+    try:
+        old = read_output(run({file: texts[0] for file, texts in pending.items()}))
+        new = read_output(run({file: texts[1] for file, texts in pending.items()}))
+    except NotDependencyOnlyError as reason:
+        return verdicts | {path: reason for paths in owners.values() for path in paths}
+    for file, texts in pending.items():
+        verdicts |= dict.fromkeys(owners[file], _verdict(contract, file, (old, new), texts=texts))
+    return verdicts

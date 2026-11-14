@@ -35,7 +35,7 @@ On every run, the gate counts at the merge base and at head:
 - marker comments: TODO, FIXME, HACK and their cousins;
 - the number of collected tests per suite.
 
-No suppression kind may rise. Test counts may not fall, and deleted test files are named. A focus marker (`.only` and its cousins) is banned outright. There is no number to edit, no slack to spend and no merge conflict.
+No suppression kind may rise. Test counts may not fall, and deleted test files are named. A focus marker, one that narrows a suite to the part somebody was looking at, is banned outright; the binding's Suppressions section lists the directives and markers of its stack (ADR 0042). There is no number to edit, no slack to spend and no merge conflict.
 
 ## 4. Mutation gates on zero unexplained survivors
 

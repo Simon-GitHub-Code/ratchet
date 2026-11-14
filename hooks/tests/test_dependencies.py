@@ -1,787 +1,763 @@
-"""Dependency-only changes to a guard path are told apart from gate changes."""
+"""Dependency-only changes to a guard path, read through the binding's contract (ADR 0044).
 
-import json
-import re
+The stack here is made up (``tests/dependency_stack.py``): the plugin reads no manifest or lockfile
+format, so a pass on a stack no tool writes shows it knows none.
+"""
+
+import contextlib
+import shutil
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
-from ratchet_guards import dependencies, diff
-from tests.repos import branch, repository, write
+import conformance
+from ratchet_guards import dependencies, dependency_entry, diff
+from tests import dependency_stack as stack
+from tests.dependency_stack import pin, read
+from tests.repos import branch, commit, git, repository, write
+from tests.test_conformance import pristine
+from tests.test_diff import fake_git
 
-PYPROJECT = """[project]
-name = "app"
-version = "0.1.0"
-dependencies = ["httpx>=0.27"]
-
-[dependency-groups]
-dev = ["pytest>=8"]
-
-[tool.ruff.lint]
-select = ["ALL"]
-"""
-
-CARGO = """[package]
-name = "splitbill"
-version = "0.1.0"
-
-[dependencies]
-serde = "1"
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-[workspace.dependencies]
-anyhow = "1"
-
-[lints.clippy]
-pedantic = "deny"
-"""
-
-PACKAGE = (
-    '{"name": "shelf", "version": "1.0.0", "dependencies": {"lit": "^3"},'
-    ' "scripts": {"test": "vitest"}}'
-)
+CONTRACT = dependencies.parse(stack.BINDING)
+assert CONTRACT is not None
 
 
-def _shown(path: str, before: str, after: str) -> list[str]:
-    return [str(change) for change in dependencies.changes(path, before, after)]
+def verdict(path: str, before: str | None, after: str | None) -> list[str] | str:
+    """What the contract says of one changed path: each change as text, or why it is not."""
+    found = dependencies.judge(CONTRACT, {path: (before, after)}, read)[path]
+    if isinstance(found, dependencies.NotDependencyOnlyError):
+        return str(found)
+    return [str(change) for change in found]
 
 
-def _reason(path: str, before: str | None, after: str | None) -> str:
-    with pytest.raises(dependencies.NotDependencyOnlyError) as raised:
-        dependencies.changes(path, before, after)
-    return str(raised.value)
+def shown(path: str, before: str, after: str) -> list[str]:
+    result = verdict(path, before, after)
+    assert isinstance(result, list), result
+    return result
 
 
-def test_new_python_dependencies_and_a_version_bump_are_dependency_only() -> None:
-    after = PYPROJECT.replace('"httpx>=0.27"', '"httpx>=0.27", "attrs>=24"')
-    after = after.replace('dev = ["pytest>=8"]', 'dev = ["pytest>=8", "Hypothesis[cli]>=6"]')
-    after = after.replace('version = "0.1.0"', 'version = "0.2.0"')
-    assert _shown("pyproject.toml", PYPROJECT, after) == [
-        "hypothesis (dependency-groups.dev) (none) -> Hypothesis[cli]>=6",
-        "attrs (project.dependencies) (none) -> attrs>=24",
-    ]
+def reason(path: str, before: str | None, after: str | None) -> str:
+    result = verdict(path, before, after)
+    assert isinstance(result, str), result
+    return result
 
 
-def test_a_gate_config_change_beside_a_dependency_is_not_dependency_only() -> None:
-    after = PYPROJECT.replace('"httpx>=0.27"', '"httpx>=0.27", "attrs>=24"')
-    loosened = after.replace('select = ["ALL"]', 'select = ["E"]')
-    assert "more than the dependency tables" in _reason("pyproject.toml", PYPROJECT, loosened)
-    sourced = after + '\n[tool.uv.sources]\nruff = { path = "../ruff" }\n'
-    assert "more than the dependency tables" in _reason("pyproject.toml", PYPROJECT, sourced)
+# --- the section ----------------------------------------------------------------------------
 
 
-def test_cargo_additions_in_every_table() -> None:
-    after = CARGO.replace(
-        'serde = "1"', 'serde = "1"\nproptest = { version = "1", features = ["std"] }'
-    )
-    after = after.replace('libc = "0.2"', 'libc = "0.2"\nnix = "0.29"')
-    assert _shown("Cargo.toml", CARGO, after) == [
-        'proptest (dependencies) (none) -> {"features": ["std"], "version": "1"}',
-        "nix (target.cfg(unix).dependencies) (none) -> 0.29",
-    ]
-    assert "more than" in _reason("Cargo.toml", CARGO, CARGO.replace('"deny"', '"allow"'))
+def test_a_binding_without_the_section_has_no_contract() -> None:
+    assert dependencies.parse("# Binding\n\n## Gates\n") is None
+    assert dependencies.parse(None) is None
 
 
-def test_package_json_additions_and_scripts() -> None:
-    after = PACKAGE.replace('"lit": "^3"', '"lit": "^3", "idb": "^8"').replace("1.0.0", "1.1.0")
-    assert _shown("web/package.json", PACKAGE, after) == ["idb (dependencies) (none) -> ^8"]
-    assert "more than" in _reason("package.json", PACKAGE, PACKAGE.replace("vitest", "true"))
+def test_the_section_names_files_registries_and_an_entry_point() -> None:
+    assert CONTRACT is not None
+    assert CONTRACT.manifests == ("*.manifest",)
+    assert CONTRACT.lockfiles == ("*.lock",)
+    assert CONTRACT.registries == {stack.REGISTRY}
+    assert CONTRACT.entry
+    assert CONTRACT.problems == ()
+
+
+def text_with(old: str, new: str) -> str:
+    assert old in stack.BINDING
+    return stack.BINDING.replace(old, new)
 
 
 @pytest.mark.parametrize(
-    "case",
+    ("old", "new", "problem"),
     [
+        ("`*.manifest`", "<globs>", "'- Manifests:' is still the template's"),
+        ("`*.manifest`", "none: x", "'- Manifests: none:' needs the reason"),
+        ("`*.manifest`", "*.manifest", "names its files in backticks"),
+        ("`*.lock`", "", "'- Lockfiles:' is still the template's"),
+        ("`just dependencies`", "<x>", "'- Entry point:' is `just dependencies`, or `none:"),
+        ("`just dependencies`", "none: x", "'- Entry point:' is `just dependencies`, or `none:"),
         (
-            "pyproject.toml",
-            PYPROJECT,
-            PYPROJECT.replace("httpx>=0.27", "httpx>=0.20"),
-            "changes httpx",
-        ),
-        ("pyproject.toml", PYPROJECT, PYPROJECT.replace('"pytest>=8"', ""), "removes pytest"),
-        (
-            "pyproject.toml",
-            PYPROJECT,
-            PYPROJECT.replace('"httpx>=0.27"', '"httpx>=0.27", "HTTPX<0.1"'),
-            "twice",
+            "`just dependencies`",
+            "`just deps`",
+            "'- Entry point:' is `just dependencies`, or `none:",
         ),
         (
-            "pyproject.toml",
-            PYPROJECT,
-            PYPROJECT.replace('"pytest>=8"', '"pytest>=8", "x @ git+https://x/x"'),
-            "not from the registry",
+            "- Registries: `https://registry.example`\n",
+            "",
+            "'- Registries:' is still the template's",
         ),
-        (
-            "pyproject.toml",
-            PYPROJECT,
-            PYPROJECT.replace('"pytest>=8"', '"pytest>=8", {include-group = "a"}'),
-            "not a requirement",
-        ),
-        (
-            "Cargo.toml",
-            CARGO,
-            CARGO.replace('serde = "1"', 'serde = "1"\nx = { git = "https://x/x" }'),
-            "<git>",
-        ),
-        (
-            "Cargo.toml",
-            CARGO,
-            CARGO.replace('serde = "1"', 'serde = "1"\nx = { path = "../x" }'),
-            "<path>",
-        ),
-        (
-            "Cargo.toml",
-            CARGO,
-            CARGO.replace('serde = "1"', 'serde = "1"\nx = { package = "y", version = "1" }'),
-            "<package, version>",
-        ),
-        (
-            "Cargo.toml",
-            CARGO,
-            CARGO.replace('serde = "1"', 'serde = "1"\nx = { registry = "r", version = "1" }'),
-            "<registry, version>",
-        ),
-        (
-            "Cargo.toml",
-            CARGO,
-            CARGO.replace('serde = "1"', 'serde = "1"\nserde_json = "1"\nserde-json = "1"'),
-            "twice",
-        ),
-        ("Cargo.toml", CARGO, CARGO.replace('libc = "0.2"', 'libc = "0.1"'), "changes libc"),
-        (
-            "package.json",
-            PACKAGE,
-            PACKAGE.replace('"lit": "^3"', '"lit": "^3", "a": "npm:evil@1"'),
-            "npm:evil@1",
-        ),
-        (
-            "package.json",
-            PACKAGE,
-            PACKAGE.replace('"lit": "^3"', '"lit": "^3", "a": "me/a"'),
-            "me/a",
-        ),
-        (
-            "package.json",
-            PACKAGE,
-            PACKAGE.replace('"lit": "^3"', '"lit": "^3", "a": "git://x/a"'),
-            "git://x/a",
-        ),
-        (
-            "package.json",
-            PACKAGE,
-            PACKAGE.replace('"lit": "^3"', '"lit": "^3", "a": "../a"'),
-            "../a",
-        ),
-        (
-            "package.json",
-            PACKAGE,
-            PACKAGE.replace('"lit": "^3"', '"lit": "^3", "lit": "^1"'),
-            "twice",
-        ),
-        ("pyproject.toml", None, PYPROJECT, "created or deleted"),
-        ("pyproject.toml", PYPROJECT, None, "created or deleted"),
-        ("pyproject.toml", PYPROJECT, "broken [", "does not parse"),
-        ("package.json", PACKAGE, "[1, 2]", "does not parse"),
-        ("ruff.toml", "a = 1\n", "a = 2\n", "ruff.toml is not read"),
-        ("yarn.lock", "a: 1\n", "a: 2\n", "yarn.lock is not read"),
+        ("`https://registry.example`", "<the source>", "'- Registries:' is still the template's"),
     ],
 )
-def test_manifest_changes_that_are_not_dependency_only_say_why(
-    case: tuple[str, str | None, str | None, str],
+def test_a_section_that_is_unfilled_or_malformed_says_what_is_wrong(
+    old: str, new: str, problem: str
 ) -> None:
-    path, before, after, reason = case
-    assert reason in _reason(path, before, after)
+    found = dependencies.parse(text_with(old, new))
+    assert found is not None
+    assert any(problem in line for line in found.problems), found.problems
 
 
-def _uv_lock(*packages: str) -> str:
-    return "version = 1\n\n" + "\n".join(packages)
-
-
-ROOT = (
-    '[[package]]\nname = "app"\nversion = "0.1.0"\nsource = { editable = "." }\ndependencies = []\n'
-)
-PYPI = '{ registry = "https://pypi.org/simple" }'
-
-
-def _pkg(name: str, version: str, *, source: str = PYPI, digest: str = "a") -> str:
-    return (
-        f'[[package]]\nname = "{name}"\nversion = "{version}"\nsource = {source}\n'
-        f'sdist = {{ url = "https://x/{name}", hash = "sha256:{digest}" }}\n'
+def test_none_with_a_reason_is_a_declaration_and_none_registries_are_none() -> None:
+    said = text_with("`*.manifest`", "`none: this stack has no manifest file`")
+    said = said.replace("`https://registry.example`", "`none`")
+    said = said.replace("`just dependencies`", "none: nothing here reads them")
+    found = dependencies.parse(said)
+    assert found is not None
+    assert (found.manifests, found.registries, found.entry, found.problems) == (
+        (),
+        frozenset(),
+        False,
+        (),
     )
 
 
-UV_BEFORE = _uv_lock(ROOT, _pkg("ruff", "0.9.1"), _pkg("httpx", "0.27.0"))
+def test_a_path_is_a_declared_file_or_a_snapshot_of_one() -> None:
+    assert CONTRACT is not None
+    assert CONTRACT.original("app.manifest") == "app.manifest"
+    assert CONTRACT.original("quality/snapshots/app.lock") == "app.lock"
+    assert CONTRACT.original("quality/snapshots/web__a.lock") is None, "a.lock is not at the root"
+    assert CONTRACT.original("README.md") is None
+    assert not CONTRACT.recognised("justfile")
+    assert CONTRACT.is_lockfile("quality/snapshots/app.lock")
+    assert not CONTRACT.is_lockfile("app.manifest")
+    assert not CONTRACT.is_lockfile("README.md")
+
+
+def test_a_path_that_leaves_the_directory_the_entry_point_reads_is_not_a_declared_file() -> None:
+    wide = dependencies.Contract(manifests=("**",), entry=True)
+    assert wide.original("a/../b.manifest") is None
+    assert wide.original("quality/snapshots/..__x") is None
+    assert wide.original("quality/snapshots/__x") is None, "an absolute path"
+    assert wide.original("a/b.manifest") == "a/b.manifest"
+
+
+# --- a manifest ------------------------------------------------------------------------------
+
+
+def test_new_dependencies_and_a_version_bump_are_dependency_only() -> None:
+    after = stack.MANIFEST.replace("own-version 1.0", "own-version 2.0")
+    after += "use dev delta ~2\nuse main beta 1.*\n"
+    assert shown("app.manifest", stack.MANIFEST, after) == [
+        "delta (dev) (none) -> ~2",
+        "beta (main) (none) -> 1.*",
+    ]
+
+
+def test_a_setting_beside_a_dependency_is_not_dependency_only() -> None:
+    after = stack.MANIFEST.replace("strict on", "strict off") + "use main beta 1\n"
+    assert "more than the dependency tables" in reason("app.manifest", stack.MANIFEST, after)
+
+
+@pytest.mark.parametrize(
+    ("after", "said"),
+    [
+        (
+            stack.MANIFEST.replace("alpha ^1.0", "alpha ^0.1"),
+            "it changes alpha in main, which was there before",
+        ),
+        (stack.MANIFEST.replace("use main alpha ^1.0\n", ""), "it removes alpha from main"),
+        (
+            stack.MANIFEST + "use main beta @elsewhere\n",
+            "beta in main is fetched by @elsewhere, not from the registry by version",
+        ),
+        (stack.MANIFEST + "use main alpha ^1.0\n", "alpha is listed twice in main"),
+    ],
+)
+def test_a_manifest_change_that_is_not_dependency_only_says_why(after: str, said: str) -> None:
+    assert reason("app.manifest", stack.MANIFEST, after) == said
+
+
+# --- a lockfile ------------------------------------------------------------------------------
+
+
+def lock(*pins: str) -> str:
+    return "setting frozen yes\n" + "".join(pins)
 
 
 def test_a_lockfile_reports_added_and_raised_versions() -> None:
-    after = _uv_lock(
-        ROOT.replace("[]", '[{ name = "attrs" }]'),
-        _pkg("ruff", "0.10.0", digest="b"),
-        _pkg("httpx", "0.27.0"),
-        _pkg("attrs", "24.2.0"),
-    )
-    assert _shown("uv.lock", UV_BEFORE, after) == [
-        "attrs (lockfile) (none) -> 24.2.0",
-        "ruff (lockfile) 0.9.1 -> 0.10.0",
+    after = lock(pin("alpha", "1.3.0"), pin("gamma", "3.0.0"), pin("beta", "0.9"))
+    assert shown("app.lock", stack.LOCK, after) == [
+        "alpha (main) 1.2.0 -> 1.3.0",
+        "beta (main) (none) -> 0.9",
     ]
+
+
+def test_a_dropped_package_is_reported_and_a_rewrite_of_nothing_is_none() -> None:
+    assert shown("app.lock", stack.LOCK, lock(pin("alpha", "1.2.0"))) == [
+        "gamma (main) 3.0.0 -> (none)"
+    ]
+    reordered = lock(pin("gamma", "3.0.0"), pin("alpha", "1.2.0"))
+    assert shown("app.lock", stack.LOCK, reordered) == []
 
 
 @pytest.mark.parametrize(
-    ("after", "reason"),
+    ("after", "said"),
     [
-        (UV_BEFORE.replace('"0.9.1"', '"0.5.0"'), "ruff falls from 0.9.1 to 0.5.0"),
-        (UV_BEFORE.replace('"0.9.1"', '"0.9.1rc1"'), "falls"),
         (
-            _uv_lock(ROOT, _pkg("ruff", "0.9.1", digest="evil"), _pkg("httpx", "0.27.0")),
-            "ruff 0.9.1 changed in place",
+            lock(pin("alpha", "1.2.0", sum_="swapped"), pin("gamma", "3.0.0")),
+            "alpha 1.2.0 changed in place (https://registry.example -> https://registry.example)",
         ),
         (
-            _uv_lock(
-                ROOT,
-                _pkg("ruff", "0.9.1", source='{ registry = "https://evil/simple" }'),
-                _pkg("httpx", "0.27.0"),
-            ),
-            "changed in place",
+            lock(pin("alpha", "1.2.0", source="https://other.example"), pin("gamma", "3.0.0")),
+            "alpha 1.2.0 changed in place (https://registry.example -> https://other.example)",
         ),
         (
-            _uv_lock(
-                ROOT,
-                _pkg("ruff", "0.9.2", source='{ registry = "https://evil/simple" }'),
-                _pkg("httpx", "0.27.0"),
-            ),
-            "not a known registry",
+            lock(pin("alpha", "1.3.0", source="https://other.example"), pin("gamma", "3.0.0")),
+            "alpha 1.3.0 comes from https://other.example, not a known registry",
         ),
         (
-            _uv_lock(
-                ROOT,
-                _pkg("ruff", "0.9.2", source='{ git = "https://x/ruff" }'),
-                _pkg("httpx", "0.27.0"),
-            ),
-            "not a known registry",
+            lock(pin("alpha", "1.1.0"), pin("gamma", "3.0.0")),
+            "alpha falls from 1.2.0 to 1.1.0",
         ),
         (
-            _uv_lock(
-                ROOT,
-                _pkg("ruff", "0.9.1", source='{ editable = "../ruff" }'),
-                _pkg("httpx", "0.27.0"),
-            ),
-            "changed in place",
+            lock(pin("alpha", "1.2.0"), pin("alpha", "1.1.0"), pin("gamma", "3.0.0")),
+            "alpha falls from 1.2.0 to 1.1.0",
         ),
         (
-            _uv_lock(ROOT, _pkg("Ruff", "0.5.0"), _pkg("ruff", "0.9.1"), _pkg("httpx", "0.27.0")),
-            "ruff falls from 0.9.1 to 0.5.0",
-        ),
-        (
-            _uv_lock(
-                ROOT,
-                _pkg("ruff", "0.9.1"),
-                _pkg("ruff", "0.9.1", digest="b"),
-                _pkg("httpx", "0.27.0"),
-            ),
-            "locked twice",
+            stack.LOCK.replace("setting frozen yes", "setting frozen no"),
+            "it changes more than the dependency tables and the package version",
         ),
     ],
 )
-def test_a_lockfile_rollback_or_swap_is_not_dependency_only(after: str, reason: str) -> None:
-    assert reason in _reason("uv.lock", UV_BEFORE, after)
+def test_a_lockfile_rollback_or_swap_is_not_dependency_only(after: str, said: str) -> None:
+    assert reason("app.lock", stack.LOCK, after) == said
 
 
-def test_a_dropped_transitive_package_and_a_post_release_are_reported() -> None:
-    after = _uv_lock(ROOT, _pkg("ruff", "0.9.1.post1"))
-    assert _shown("uv.lock", UV_BEFORE, after) == [
-        "httpx (lockfile) 0.27.0 -> (none)",
-        "ruff (lockfile) 0.9.1 -> 0.9.1.post1",
-    ]
-
-
-CARGO_LOCK = (
-    'version = 4\n\n[[package]]\nname = "splitbill"\nversion = "0.1.0"\n\n'
-    '[[package]]\nname = "syn"\nversion = "2.0.1"\n'
-    'source = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "aa"\n'
-)
-
-
-def test_cargo_lock_keeps_two_major_versions_and_rejects_a_git_crate() -> None:
-    older = CARGO_LOCK.replace('"2.0.1"', '"1.0.109"').replace('"aa"', '"bb"').split("\n\n", 2)[2]
-    assert _shown("Cargo.lock", CARGO_LOCK, CARGO_LOCK + "\n" + older) == [
-        "syn (lockfile) 2.0.1 -> 1.0.109, 2.0.1"
-    ]
-    git = CARGO_LOCK.replace(
-        "registry+https://github.com/rust-lang/crates.io-index", "git+https://x/syn"
+def test_a_version_that_is_not_from_a_registry_is_not_a_known_one() -> None:
+    direct = stack.LOCK + "pin delta 1.0 1 direct git+https://x sum-d one\n"
+    assert reason("app.lock", stack.LOCK, direct) == (
+        "delta 1.0 comes from git+https://x, not a known registry"
     )
-    git = git.replace('"2.0.1"', '"2.0.2"')
-    assert "not a known registry" in _reason("Cargo.lock", CARGO_LOCK, git)
+    local = stack.LOCK + "pin app 1.0 1 local . - one\n"
+    assert reason("app.lock", stack.LOCK, local) == "app 1.0 comes from ., not a known registry"
 
 
-NPM_LOCK = json.dumps(
-    {
-        "lockfileVersion": 3,
-        "packages": {
-            "": {"name": "shelf", "dependencies": {"lit": "^3"}},
-            "node_modules/lit": {
-                "version": "3.1.0",
-                "resolved": "https://registry.npmjs.org/lit/-/lit-3.1.0.tgz",
-                "integrity": "sha512-a",
-            },
-        },
-    }
-)
+def test_a_local_version_that_stays_where_it_was_is_unchanged() -> None:
+    before = stack.LOCK + "pin app 1.0 1 local . - one\n"
+    assert (
+        shown("app.lock", before, before.replace("setting frozen yes", "setting frozen yes")) == []
+    )
+    moved = before.replace("local . -", "local ../x -")
+    assert "app 1.0 changed in place (. -> ../x)" in reason("app.lock", before, moved)
 
 
-def test_package_lock_reads_the_packages_map() -> None:
-    data = json.loads(NPM_LOCK)
-    data["packages"][""]["dependencies"]["idb"] = "^8"
-    data["packages"]["node_modules/idb"] = {
-        "version": "8.0.0",
-        "resolved": "https://registry.npmjs.org/idb/-/idb-8.0.0.tgz",
-        "integrity": "sha512-b",
-        "dev": True,
-    }
-    assert _shown("package-lock.json", NPM_LOCK, json.dumps(data)) == [
-        "idb (lockfile) (none) -> 8.0.0"
+def test_the_first_package_comes_from_a_registry_the_binding_names() -> None:
+    empty = "setting frozen yes\n"
+    assert shown("app.lock", empty, empty + pin("alpha", "1.0")) == ["alpha (main) (none) -> 1.0"]
+    elsewhere = empty + pin("alpha", "1.0", source="https://other.example")
+    assert "not a known registry" in reason("app.lock", empty, elsewhere)
+
+
+def test_a_registry_the_lockfile_already_uses_is_known() -> None:
+    before = stack.LOCK + pin("beta", "1.0", source="https://other.example")
+    after = before + pin("delta", "2.0", source="https://other.example")
+    assert shown("app.lock", before, after) == ["delta (main) (none) -> 2.0"]
+
+
+def test_versions_beside_each_other_hold_only_the_highest() -> None:
+    before = lock(pin("alpha", "2.0", sides="many"))
+    older = before + pin("alpha", "1.0", sides="many")
+    assert shown("app.lock", before, older) == ["alpha (main) 2.0 -> 1.0, 2.0"]
+    gone = lock(pin("alpha", "1.0", sides="many"))
+    assert reason("app.lock", older, gone) == "alpha falls from 2.0 to 1.0"
+    single = before.replace("many", "one") + pin("alpha", "1.0")
+    assert (
+        reason("app.lock", before.replace("many", "one"), single) == "alpha falls from 2.0 to 1.0"
+    )
+
+
+def test_a_pre_release_sorts_below_its_release_as_the_entry_point_orders_it() -> None:
+    before = lock(pin("alpha", "1.0"))
+    pre = "pin alpha 1.1-rc 1.0.5 registry https://registry.example sum-rc one\n"
+    final = "pin alpha 1.1 1.1 registry https://registry.example sum-final one\n"
+    assert shown("app.lock", before, "setting frozen yes\n" + pre) == ["alpha (main) 1.0 -> 1.1-rc"]
+    assert shown("app.lock", "setting frozen yes\n" + pre, "setting frozen yes\n" + final) == [
+        "alpha (main) 1.1-rc -> 1.1"
     ]
-    data["packages"]["node_modules/lit"]["resolved"] = "git+ssh://git@github.com/me/lit.git"
-    assert "changed in place" in _reason("package-lock.json", NPM_LOCK, json.dumps(data))
+    assert "falls" in reason(
+        "app.lock", "setting frozen yes\n" + final, "setting frozen yes\n" + pre
+    )
+
+
+@pytest.mark.parametrize(
+    ("lines", "said"),
+    [
+        (
+            [pin("alpha", "1.0"), pin("alpha", "1.0", sum_="other")],
+            "alpha 1.0 is locked twice with different contents",
+        ),
+        (
+            [pin("alpha", "1.0", sides="many"), pin("alpha", "2.0")],
+            "alpha is given both as one version and as many in main",
+        ),
+    ],
+)
+def test_a_lockfile_that_contradicts_itself_is_not_dependency_only(
+    lines: list[str], said: str
+) -> None:
+    assert reason("app.lock", stack.LOCK, "setting frozen yes\n" + "".join(lines)) == said
+
+
+def test_the_same_version_written_twice_alike_is_one_version() -> None:
+    twice = stack.LOCK + pin("alpha", "1.2.0")
+    assert shown("app.lock", stack.LOCK, twice) == []
+
+
+def test_a_new_version_the_change_does_not_show_is_refused() -> None:
+    lying = {"app.lock": (stack.LOCK, stack.LOCK + pin("beta", "1.0"))}
+    old = read({"app.lock": stack.LOCK})
+    new = read({"app.lock": stack.LOCK + pin("beta", "1.0")}).replace("\t1.0\t", "\t7.7\t")
+    outputs = iter([old, new])
+    found = dependencies.judge(CONTRACT, lying, lambda _: next(outputs))["app.lock"]
+    assert str(found) == "the entry point reports '7.7' for beta, which no added line shows"
+
+
+def test_a_spec_the_change_does_not_show_is_refused() -> None:
+    after = stack.MANIFEST + "use main beta 1\n"
+    outputs = iter(
+        [
+            read({"app.manifest": stack.MANIFEST}),
+            read({"app.manifest": after}).replace("\t1\t", "\t9\t"),
+        ]
+    )
+    found = dependencies.judge(
+        CONTRACT, {"app.manifest": (stack.MANIFEST, after)}, lambda _: next(outputs)
+    )["app.manifest"]
+    assert str(found) == "the entry point reports '9' for beta, which no added line shows"
+
+
+# --- what the entry point prints ----------------------------------------------------------------
+
+REST = "rest\tapp.lock\tx\n"
+LOCKED = "locked\tapp.lock\tmain\tbeta\t1\t1\tregistry\thttps://registry.example\tsum\tone\n"
+DECLARED = "declared\tapp.manifest\tmain\tbeta\t1\tregistry\n"
+
+
+def printing(*texts: str) -> object:
+    outputs = iter(texts)
+    return lambda _: next(outputs)
+
+
+@pytest.mark.parametrize(
+    ("printed", "said"),
+    [
+        ("loose words\n", "the entry point prints a line that is not a record: 'loose words'"),
+        (
+            "rest\tapp.lock\n",
+            "the entry point prints a line that is not a record: 'rest\\tapp.lock'",
+        ),
+        (REST + REST, "the entry point prints two rest lines for app.lock"),
+        (
+            REST + LOCKED.replace("registry\thttps", "elsewhere\thttps"),
+            "a locked line it cannot be read from",
+        ),
+        (REST + LOCKED.replace("\tone\n", "\tsome\n"), "a locked line it cannot be read from"),
+        (REST + LOCKED.replace("\t1\t1\t", "\t1\ta.b\t"), "a locked line it cannot be read from"),
+        (
+            REST + LOCKED.replace("\tsum\t", "\t\t"),
+            "beta 1 has no integrity, so it cannot be shown unswapped",
+        ),
+        (
+            "rest\tapp.manifest\tx\n" + DECLARED.replace("registry\n", "fetched\n"),
+            "the entry point prints the origin 'fetched' for a declared entry",
+        ),
+        ("", "the entry point prints no rest line for it"),
+    ],
+)
+def test_output_that_is_not_a_record_is_not_dependency_only(printed: str, said: str) -> None:
+    path = "app.lock" if "app.manifest" not in printed else "app.manifest"
+    found = dependencies.judge(
+        CONTRACT,
+        {path: (stack.LOCK, stack.LOCK + "x\n")},
+        printing(printed, printed),  # type: ignore[arg-type]
+    )[path]
+    assert said in str(found)
+
+
+def test_a_missing_rest_line_leaves_the_file_unjudged() -> None:
+    nothing = dependencies.judge(
+        CONTRACT,
+        {"app.lock": (stack.LOCK, stack.LOCK + "x\n")},
+        printing("", ""),  # type: ignore[arg-type]
+    )["app.lock"]
+    assert str(nothing) == "the entry point prints no rest line for it"
+
+
+def test_blank_lines_in_the_output_are_ignored() -> None:
+    out = read({"app.lock": stack.LOCK})
+    assert dependencies.read_output("\n" + out + "\n\n").rest.keys() == {"app.lock"}
+
+
+# --- what is judged ------------------------------------------------------------------------------
+
+
+def never_run(_: Mapping[str, str]) -> str:
+    message = "the entry point should not run"
+    raise AssertionError(message)
+
+
+def test_a_path_that_is_no_dependency_file_has_no_verdict_and_runs_nothing() -> None:
+    assert dependencies.judge(CONTRACT, {"src/a.py": ("a", "b")}, never_run) == {}
+
+
+def test_a_file_created_or_deleted_is_not_dependency_only() -> None:
+    created = dependencies.judge(CONTRACT, {"app.lock": (None, stack.LOCK)}, never_run)
+    assert str(created["app.lock"]) == "it is created or deleted"
+    deleted = dependencies.judge(CONTRACT, {"app.manifest": (stack.MANIFEST, None)}, never_run)
+    assert str(deleted["app.manifest"]) == "it is created or deleted"
+
+
+def test_a_binding_that_names_no_entry_point_leaves_every_file_unjudged() -> None:
+    silent = dependencies.Contract(("*.manifest",), ("*.lock",), entry=False)
+    found = dependencies.judge(silent, {"app.lock": (stack.LOCK, stack.LOCK + "x")}, never_run)
+    assert str(found["app.lock"]) == "the binding names no entry point to read dependencies with"
 
 
 def test_a_snapshot_is_judged_as_the_file_it_copies() -> None:
-    path = "quality/snapshots/web__package.json"
-    after = PACKAGE.replace('"lit": "^3"', '"lit": "^3", "idb": "^8"')
-    assert dependencies.recognised(path)
-    assert _shown(path, PACKAGE, after) == ["idb (dependencies) (none) -> ^8"]
-    assert not dependencies.recognised("quality/snapshots/ruff.toml")
-
-
-MANIFEST = """[[group]]
-name = "tool-config"
-reason = "r"
-paths = ["pyproject.toml", "uv.lock"]
-
-[[group]]
-name = "ratchets"
-reason = "r"
-paths = ["quality/**"]
-"""
-
-
-def test_guard_diff_lists_and_counts_dependency_files_with_what_they_change(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    root = repository(
-        tmp_path,
+    after = stack.MANIFEST + "use main beta 1\n"
+    found = dependencies.judge(
+        CONTRACT,
         {
-            "guards/manifest.toml": MANIFEST,
-            "pyproject.toml": PYPROJECT,
-            "uv.lock": UV_BEFORE,
-            "quality/snapshots/pyproject.toml": PYPROJECT,
-            "quality/snapshots/yarn.lock": "a: 1\n",
+            "app.manifest": (stack.MANIFEST, after),
+            "quality/snapshots/app.manifest": (stack.MANIFEST, after),
         },
+        read,
     )
-    branch(root, "feature/2-attrs")
-    added = PYPROJECT.replace('"httpx>=0.27"', '"httpx>=0.27", "attrs>=24"')
-    write(root, "pyproject.toml", added)
-    write(root, "quality/snapshots/pyproject.toml", added.replace('["ALL"]', '["E"]'))
-    write(root, "quality/snapshots/yarn.lock", "a: 2\n")
-    write(root, "uv.lock", UV_BEFORE + "\n" + _pkg("attrs", "24.2.0"))
-    summary = tmp_path / "summary.md"
-    argv = ["--root", str(root), "--base", "main", "--fail-if-present", "--summary", str(summary)]
-    assert diff.main(argv) == 1
-    assert capsys.readouterr().out.splitlines() == [
-        "tool-config\tpyproject.toml",
-        "  dependencies added: attrs (project.dependencies) (none) -> attrs>=24",
-        "ratchets\tquality/snapshots/pyproject.toml",
-        "  not dependency-only: it changes more than the dependency tables and the package version",
-        "ratchets\tquality/snapshots/yarn.lock",
-        "  not dependency-only: yarn.lock is not read",
-        "tool-config\tuv.lock",
-        "  lockfile: attrs (lockfile) (none) -> 24.2.0",
-    ]
-    assert "| `uv.lock` | tool-config | lockfile: attrs (lockfile) (none) -> 24.2.0 |" in (
-        summary.read_text()
+    assert {path: [str(c) for c in found[path]] for path in found} == {  # type: ignore[union-attr]
+        "app.manifest": ["beta (main) (none) -> 1"],
+        "quality/snapshots/app.manifest": ["beta (main) (none) -> 1"],
+    }
+
+
+def test_a_snapshot_that_differs_from_the_file_it_copies_is_refused() -> None:
+    after = stack.MANIFEST + "use main beta 1\n"
+    found = dependencies.judge(
+        CONTRACT,
+        {
+            "app.manifest": (stack.MANIFEST, after),
+            "quality/snapshots/app.manifest": (stack.MANIFEST, after + "use main more 1\n"),
+        },
+        read,
     )
-
-
-def test_an_optional_dependency_group_is_read_like_the_others() -> None:
-    before = PYPROJECT + '\n[project.optional-dependencies]\nweb = ["flask>=3"]\n'
-    after = before.replace('"flask>=3"', '"flask>=3", "jinja2>=3"')
-    assert _shown("pyproject.toml", before, after) == [
-        "jinja2 (optional-dependencies.web) (none) -> jinja2>=3"
-    ]
-    assert "removes flask" in _reason("pyproject.toml", before, before.replace('"flask>=3"', ""))
-
-
-def _poetry_pkg(name: str, version: str, source: str = "") -> str:
-    return (
-        f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
-        f'files = [{{file = "{name}-{version}.whl", hash = "sha256:a"}}]\n{source}'
+    assert str(found["quality/snapshots/app.manifest"]) == (
+        "it differs from app.manifest, the file it copies"
     )
+    assert isinstance(found["app.manifest"], list)
 
 
-def test_poetry_lock_takes_the_default_index_and_a_legacy_index_but_not_a_vcs_source() -> None:
-    before = _poetry_pkg("attrs", "24.1.0")
-    legacy = '\n[package.source]\ntype = "legacy"\nurl = "https://pypi.org/simple"\n'
-    after = "\n".join([before, _poetry_pkg("idna", "3.7", legacy)])
-    assert _shown("poetry.lock", before, after) == ["idna (lockfile) (none) -> 3.7"]
-    vcs = '\n[package.source]\ntype = "git"\nurl = "https://x/idna"\n'
-    swapped = "\n".join([before, _poetry_pkg("idna", "3.7", vcs)])
-    assert "idna 3.7 comes from" in _reason("poetry.lock", before, swapped)
+def test_an_entry_point_that_fails_refuses_every_file_it_was_to_read() -> None:
+    def broken(_: Mapping[str, str]) -> str:
+        message = "the entry point exited 3"
+        raise dependencies.NotDependencyOnlyError(message)
 
-
-def test_a_lock_entry_that_is_not_a_named_table_is_not_counted() -> None:
-    odd = 'version = 1\npackage = [1, {version = "9"}]\n'
-    assert _shown("uv.lock", odd, odd + "\n") == []
-
-
-def test_package_lock_keeps_links_and_workspace_packages_as_local_paths() -> None:
-    data = json.loads(NPM_LOCK)
-    data["packages"]["node_modules/app"] = {"resolved": "packages/app", "link": True}
-    data["packages"]["packages/app"] = {"version": "1.0.0"}
-    before = json.dumps(data)
-    data["packages"]["node_modules/lit"]["version"] = "3.2.0"
-    data["packages"]["node_modules/lit"]["integrity"] = "sha512-b"
-    assert _shown("package-lock.json", before, json.dumps(data)) == [
-        "lit (lockfile) 3.1.0 -> 3.2.0"
-    ]
-
-
-def test_a_version_with_no_release_number_sorts_below_every_numbered_one() -> None:
-    after = UV_BEFORE.replace('"0.9.1"', '"nightly"')
-    assert "ruff falls from 0.9.1 to nightly" in _reason("uv.lock", UV_BEFORE, after)
-
-
-def test_dropping_the_highest_of_two_side_by_side_versions_is_a_rollback() -> None:
-    older = CARGO_LOCK.replace('"2.0.1"', '"1.0.109"').replace('"aa"', '"bb"').split("\n\n", 2)[2]
-    both = CARGO_LOCK + "\n" + older
-    assert "syn falls from 2.0.1 to 1.0.109" in _reason("Cargo.lock", both, older)
-
-
-PNPM_LOCK = """lockfileVersion: '9.0'
-
-settings:
-  autoInstallPeers: true
-  excludeLinksFromLockfile: false
-
-importers:
-
-  .:
-    dependencies:
-      lit:
-        specifier: ^3.1.0
-        version: 3.1.0
-    devDependencies:
-      '@types/node':
-        specifier: ^20
-        version: 20.11.0(typescript@5.4.0)
-
-packages:
-
-  '@lit-labs/ssr-dom-shim@1.2.0':
-    resolution: {integrity: sha512-ssr}
-
-  '@types/node@20.11.0':
-    resolution: {integrity: sha512-node}
-
-  lit@3.1.0:
-    resolution: {integrity: sha512-lit}
-    engines: {node: '>=18'}
-    peerDependencies:
-      react: '*'
-
-snapshots:
-
-  '@lit-labs/ssr-dom-shim@1.2.0': {}
-
-  lit@3.1.0:
-    dependencies:
-      '@lit-labs/ssr-dom-shim': 1.2.0
-"""
-
-
-def test_pnpm_lock_reports_added_and_raised_versions() -> None:
-    after = PNPM_LOCK.replace(
-        "lit@3.1.0:\n    resolution: {integrity: sha512-lit}",
-        "lit@3.2.0:\n    resolution: {integrity: sha512-new}",
+    found = dependencies.judge(
+        CONTRACT,
+        {"app.lock": (stack.LOCK, stack.LOCK + pin("beta", "1")), "app.manifest": ("a", "b")},
+        broken,
     )
-    after = after.replace("version: 3.1.0", "version: 3.2.0")
-    after = after.replace(
-        "packages:\n", "packages:\n\n  idb@8.0.0:\n    resolution: {integrity: sha512-idb}\n", 1
-    )
-    assert _shown("pnpm-lock.yaml", PNPM_LOCK, after) == [
-        "idb (lockfile) (none) -> 8.0.0",
-        "lit (lockfile) 3.1.0 -> 3.2.0",
-    ]
-    assert _shown("pnpm-lock.yaml", PNPM_LOCK, PNPM_LOCK) == []
+    assert {str(v) for v in found.values()} == {"the entry point exited 3"}
+    assert found.keys() == {"app.lock", "app.manifest"}
 
 
-@pytest.mark.parametrize(
-    ("after", "reason"),
-    [
-        (PNPM_LOCK.replace("sha512-lit", "sha512-evil"), "lit 3.1.0 changed in place"),
-        (
-            PNPM_LOCK.replace(
-                "lit@3.1.0:\n    resolution: {integrity: sha512-lit}",
-                "lit@3.1.0:\n    resolution: {tarball: https://x.example/lit.tgz}",
-            ),
-            "changed in place",
-        ),
-        (
-            PNPM_LOCK.replace("lit@3.1.0:\n    resolution", "lit@3.0.0:\n    resolution"),
-            "lit falls from 3.1.0 to 3.0.0",
-        ),
-        (
-            PNPM_LOCK.replace(
-                "\nsnapshots:",
-                "\n  evil@1.0.0:\n    resolution: {integrity: sha512-e, tarball: https://evil.example/e}\n"
-                "\nsnapshots:",
-            ),
-            "evil 1.0.0 comes from https://evil.example",
-        ),
-        (
-            PNPM_LOCK.replace(
-                "lit@3.1.0:\n    resolution: {integrity: sha512-lit}",
-                "lit@3.1.0:\n    resolution: {integrity: sha512-lit, tarball: file:../lit.tgz}",
-            ),
-            "changed in place",
-        ),
-        (
-            PNPM_LOCK.replace(
-                "lit@3.1.0:\n    resolution: {integrity: sha512-lit}",
-                "'lit@https://x/lit.tgz':\n    resolution: {integrity: sha512-lit}",
-            ),
-            "not a name and version",
-        ),
-        (
-            PNPM_LOCK.replace("version: 3.1.0", "version: github.com/x/lit/abc"),
-            "pinned to github.com/x/lit/abc",
-        ),
-        (PNPM_LOCK.replace("        version: 3.1.0\n", ""), "pinned to nothing"),
-        (PNPM_LOCK.replace("version: 3.1.0", "version: link:../lit"), "comes from"),
-        (PNPM_LOCK + "\noverrides:\n  lit: 2.0.0\n", "only a pnpm v9"),
-        (PNPM_LOCK.replace("'9.0'", "'6.0'"), "only a pnpm v9"),
-        (PNPM_LOCK.replace("settings:\n", "settings:\n\tx: 1\n"), "not in the shape"),
-        (PNPM_LOCK.replace("settings:\n", "settings:\n  a: 1\n  a: 2\n"), "key is given twice"),
-        ("just text", "not in the shape"),
-        ("- a\n", "not in the shape"),
-        ("[]", "not in the shape"),
-    ],
-)
-def test_a_pnpm_lockfile_that_swaps_or_cannot_be_read_is_not_dependency_only(
-    after: str, reason: str
+# --- the entry point, run as the merge base has it -----------------------------------------------
+
+
+@pytest.fixture
+def project(tmp_path: Path) -> Path:
+    if shutil.which("just") is None:
+        pytest.skip("just is not installed")
+    return repository(tmp_path, dict(stack.FILES))
+
+
+def test_the_entry_point_reads_the_files_it_is_given_from_the_merge_bases_tree(
+    project: Path,
 ) -> None:
-    assert reason in _reason("pnpm-lock.yaml", PNPM_LOCK, after)
+    base = git(project, "rev-parse", "HEAD")
+    branch(project)
+    # The head's own reader prints a lie and a lock that is clean; only the base's runs.
+    write(project, "tools/read_deps.py", "print('rest\\tapp.lock\\tx')\n")
+    commit(project, "feat(core): the change")
+    with dependency_entry.Entry(project, base) as run:
+        out = run({"app.lock": stack.LOCK})
+        assert "locked\tapp.lock\tmain\talpha\t1.2.0\t" in out
+        assert run({"app.manifest": stack.MANIFEST}).count("declared\t") == 2
+        assert run.runs == 2
 
 
-# Why: an anchor, alias, tag or merge key changes what a value is without changing its text, and
-# pnpm writes none, so the reader refuses them rather than take the text at its word.
-@pytest.mark.parametrize(
-    ("old", "new"),
-    [
-        ("  lit@3.1.0:\n    resolution", "  lit@3.1.0: &a\n    resolution"),
-        ("resolution: {integrity: sha512-lit}", "resolution: *a"),
-        ("{integrity: sha512-lit}", "{integrity: sha512-lit, <<: *a}"),
-        ("{integrity: sha512-lit}", "{<<: *a, integrity: sha512-lit}"),
-        ("{integrity: sha512-lit}", "!!map {integrity: sha512-lit}"),
-        ("version: 3.1.0", "version: !!str 3.1.0"),
-        ("  lit@3.1.0:\n", "  lit@3.1.0:\n    <<: *a\n"),
-        ("      - react\n", "      - *a\n"),
-    ],
-)
-def test_a_pnpm_lockfile_with_yaml_pnpm_does_not_write_is_refused(old: str, new: str) -> None:
-    after = PNPM_12_LOCK.replace(old, new, 1)
-    assert after != PNPM_12_LOCK
-    assert "anchor, alias, tag or merge key" in _reason("pnpm-lock.yaml", PNPM_12_LOCK, after)
+def test_an_entry_that_never_ran_has_nothing_to_clean_up(project: Path) -> None:
+    with dependency_entry.Entry(project, "HEAD") as run:
+        assert run.scratch is None
 
 
-def test_a_pnpm_lockfile_keeps_yaml_marks_inside_quotes_and_words() -> None:
-    marked = PNPM_12_LOCK.replace(
-        "    hasBin: true\n",
-        "    hasBin: true\n    os: ['!win32']\n    deprecated: use a & b, or c*\n",
-    ).replace("specifier: ^3.1.0", "specifier: '*'")
-    assert _shown("pnpm-lock.yaml", marked, marked) == []
-
-
-def test_pnpm_lock_keeps_a_linked_workspace_package_and_a_registry_tarball() -> None:
-    linked = PNPM_LOCK.replace("version: 3.1.0", "version: link:../lit", 1)
-    assert _shown("pnpm-lock.yaml", linked, linked) == []
-    private = PNPM_LOCK.replace("sha512-lit}", "sha512-lit, tarball: https://npm.example/lit.tgz}")
-    assert _shown("pnpm-lock.yaml", private, private) == []
-    more = private.replace(
-        "\nsnapshots:",
-        "\n  idb@8.0.0:\n    resolution: {integrity: sha512-i, tarball: https://npm.example/idb.tgz}\n"
-        "\nsnapshots:",
-    )
-    assert _shown("pnpm-lock.yaml", private, more) == ["idb (lockfile) (none) -> 8.0.0"]
-
-
-# pnpm 11 and later open the lockfile with a boot document, which locks the pnpm that runs and
-# the config dependencies, then write the project's own after a second marker.
-PNPM_BOOT = """---
-lockfileVersion: '9.0'
-
-importers:
-
-  .:
-    configDependencies: {}
-    packageManagerDependencies:
-      pnpm:
-        specifier: 12.18.0
-        version: 12.18.0
-
-packages:
-
-  pnpm@12.18.0:
-    resolution: {integrity: sha512-pnpm}
-    engines: {node: '>=18'}
-    hasBin: true
-
-snapshots:
-
-  pnpm@12.18.0: {}
-
----
-"""
-PNPM_12_LOCK = PNPM_BOOT + PNPM_LOCK.replace(
-    "      '@lit-labs/ssr-dom-shim': 1.2.0\n",
-    "      '@lit-labs/ssr-dom-shim': 1.2.0\n    transitivePeerDependencies:\n      - react\n"
-    "      - '@types/react'\n",
-)
-IDB = "packages:\n\n  idb@8.0.0:\n    resolution: {integrity: sha512-idb}\n"
-PNPM_PIN = (
-    "    packageManagerDependencies:\n      pnpm:\n        specifier: 12.18.0\n"
-    "        version: 12.18.0\n"
-)
-
-
-def _boot(text: str, old: str, new: str) -> str:
-    boot, marker, project = text.partition("\n---\n")
-    return boot.replace(old, new) + marker + project
-
-
-def test_a_pnpm_lockfile_with_a_boot_document_reads_both() -> None:
-    assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, PNPM_12_LOCK) == []
-    added = PNPM_12_LOCK[::-1].replace("packages:\n"[::-1], IDB[::-1], 1)[::-1]
-    assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, added) == ["idb (lockfile) (none) -> 8.0.0"]
-    raised = _boot(PNPM_12_LOCK, "12.18.0", "12.19.0")
-    assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, raised) == [
-        "pnpm (boot document) 12.18.0 -> 12.19.0",
-        "pnpm (boot document pin) 12.18.0 -> 12.19.0",
-    ]
-    assert _shown("pnpm-lock.yaml", PNPM_LOCK, PNPM_12_LOCK) == [
-        "pnpm (boot document) (none) -> 12.18.0",
-        "pnpm (boot document pin) (none) -> 12.18.0",
-    ]
-
-
-def test_a_pnpm_pin_dropped_from_the_boot_document_is_shown() -> None:
-    unpinned = _boot(PNPM_12_LOCK, PNPM_PIN, "    packageManagerDependencies: {}\n")
-    assert _shown("pnpm-lock.yaml", PNPM_12_LOCK, unpinned) == [
-        "pnpm (boot document pin) 12.18.0 -> (none)"
-    ]
-
-
-PNPM_IN_PROJECT = PNPM_12_LOCK.replace(
-    "      lit:\n", "      pnpm:\n        specifier: 13.0.0\n        version: 13.0.0\n      lit:\n"
-).replace(
-    "\n  lit@3.1.0:\n",
-    "\n  pnpm@13.0.0:\n    resolution: {integrity: sha512-p13}\n\n  lit@3.1.0:\n",
-)
-# Why: the boot document runs the one pnpm its pin names, so an older one locked beside the newest
-# and pinned is a rollback, though the newest stays.
-PNPM_BOOT_BESIDE = _boot(
-    PNPM_12_LOCK,
-    "        specifier: 12.18.0\n        version: 12.18.0\n",
-    "        specifier: 12.17.0\n        version: 12.17.0\n",
-).replace(
-    "\nsnapshots:\n\n  pnpm@12.18.0: {}\n",
-    "\n  pnpm@12.17.0:\n    resolution: {integrity: sha512-p17}\n"
-    "\nsnapshots:\n\n  pnpm@12.17.0: {}\n\n  pnpm@12.18.0: {}\n",
-    1,
-)
-# Why: YAML may write a mapping on one line; pnpm does not, and the reader would see no packages.
-PNPM_BOOT_FLOW = (
-    "---\nlockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    configDependencies: {}\n"
-    "    packageManagerDependencies: {pnpm: {specifier: 12.17.0, version: 12.17.0}}\n\n"
-    "packages: {pnpm@12.17.0: {resolution: {integrity: sha512-p17}}}\n\n"
-    "snapshots: {pnpm@12.17.0: {}}\n\n---\n" + PNPM_12_LOCK.partition("\n---\n")[2]
-)
-# Why: an upgrade may keep the old pnpm locked beside the new; the pin then picks which runs.
-PNPM_BOOT_TWO = _boot(
-    PNPM_12_LOCK.replace("version: 12.18.0", "version: 12.19.0"),
-    "\nsnapshots:\n",
-    "\n  pnpm@12.19.0:\n    resolution: {integrity: sha512-p19}\n\nsnapshots:\n",
-)
-PNPM_PROJECT_FLOW = re.sub(
-    r"\npackages:\n.*?\nsnapshots:",
-    "\npackages: {lit@2.0.0: {resolution: {integrity: sha512-old}}}\n\nsnapshots:",
-    PNPM_LOCK.replace("version: 3.1.0", "version: 2.0.0"),
-    flags=re.DOTALL,
-)
-
-
-@pytest.mark.parametrize(
-    ("before", "after", "reason"),
-    [
-        (PNPM_12_LOCK, _boot(PNPM_12_LOCK, "12.18.0", "12.17.0"), "pnpm falls from 12.18.0"),
-        (PNPM_IN_PROJECT, _boot(PNPM_IN_PROJECT, "12.18.0", "12.17.0"), "pnpm falls"),
-        (PNPM_12_LOCK, PNPM_BOOT_BESIDE, "pnpm falls from 12.18.0 to 12.17.0"),
-        (
-            PNPM_BOOT_TWO,
-            PNPM_BOOT_TWO.replace("version: 12.19.0", "version: 12.18.0"),
-            "pnpm falls from 12.19.0 to 12.18.0",
-        ),
-        (
-            PNPM_12_LOCK,
-            PNPM_12_LOCK.replace("version: 12.18.0", "version: 12.19.0"),
-            "the boot document pins pnpm 12.19.0 but locks no such package",
-        ),
-        (PNPM_12_LOCK, PNPM_BOOT_FLOW, "not in the shape"),
-        (
-            PNPM_12_LOCK,
-            PNPM_BOOT_FLOW.replace("  .:\n    configDependencies: {}\n", "  .: {}\n"),
-            "not in the shape",
-        ),
-        (PNPM_LOCK, PNPM_PROJECT_FLOW, "not in the shape"),
-        (PNPM_12_LOCK, _boot(PNPM_12_LOCK, "sha512-pnpm", "sha512-evil"), "changed in place"),
-        (
-            PNPM_12_LOCK,
-            _boot(PNPM_12_LOCK, "sha512-pnpm}", "sha512-p, tarball: https://evil.example/p}"),
-            "changed in place",
-        ),
-        (
-            PNPM_12_LOCK,
-            _boot(PNPM_12_LOCK, "    configDependencies: {}\n", "    dependencies: {}\n"),
-            "its boot document locks dependencies",
-        ),
-        (
-            PNPM_12_LOCK,
-            _boot(PNPM_12_LOCK, "  .:\n    configDependencies: {}\n", "  .: x\n"),
-            "not in the shape",
-        ),
-        (
-            PNPM_12_LOCK,
-            _boot(PNPM_12_LOCK, "\nsnapshots:", "\noverrides:\n  a: 1\nsnapshots:"),
-            "v9",
-        ),
-        (PNPM_12_LOCK, PNPM_12_LOCK + "---\n" + PNPM_LOCK, "not in the shape"),
-        (PNPM_12_LOCK, PNPM_LOCK + "---\n" + PNPM_LOCK, "not in the shape"),
-        (PNPM_12_LOCK, "---\n" + PNPM_LOCK, "not in the shape"),
-        (PNPM_12_LOCK, PNPM_12_LOCK.replace("\n---\n", "\n--- \n"), "not in the shape"),
-        (
-            PNPM_12_LOCK,
-            PNPM_12_LOCK.replace(
-                "      lit:\n        specifier", "      - lit\n      x:\n        s"
-            ),
-            "not in the shape",
-        ),
-        (
-            PNPM_12_LOCK,
-            PNPM_12_LOCK.replace("      - react\n", "      - react\n      evil: 1\n"),
-            "not in the shape",
-        ),
-    ],
-)
-def test_a_pnpm_boot_document_is_held_to_the_same_rules(
-    before: str, after: str, reason: str
+def test_the_entry_point_is_bounded_and_every_failure_is_a_refusal(
+    project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert reason in _reason("pnpm-lock.yaml", before, after)
+    def refused(files: Mapping[str, str]) -> str:
+        with (
+            dependency_entry.Entry(project, "HEAD") as run,
+            pytest.raises(dependencies.NotDependencyOnlyError) as error,
+        ):
+            run(files)
+        return str(error.value)
+
+    monkeypatch.setattr(dependency_entry, "LIMIT", 10)
+    assert refused({"app.lock": stack.LOCK}) == "the entry point printed more than it may"
+    monkeypatch.setattr(dependency_entry, "LIMIT", 8_000_000)
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    assert "just is not on the path" in refused({})
+    monkeypatch.undo()
+
+
+@pytest.mark.parametrize(
+    ("script", "said", "seconds"),
+    [
+        ("import sys\nsys.exit(3)\n", "the entry point exited 3", 60),
+        (
+            "import sys\nsys.stdout.buffer.write(b'\\xff\\xfe')\n",
+            "printed what is not text",
+            60,
+        ),
+        ("import time\ntime.sleep(30)\n", "the entry point ran over 1 seconds", 1),
+    ],
+)
+def test_an_entry_point_that_fails_hangs_or_prints_binary_is_refused(
+    project: Path, *, monkeypatch: pytest.MonkeyPatch, script: str, said: str, seconds: int
+) -> None:
+    write(project, "tools/read_deps.py", script)
+    commit(project, "feat(core): a broken reader")
+    monkeypatch.setattr(dependency_entry, "TIMEOUT", seconds)
+    with (
+        dependency_entry.Entry(project, "HEAD") as run,
+        pytest.raises(dependencies.NotDependencyOnlyError, match=said),
+    ):
+        run({"app.lock": stack.LOCK})
+
+
+def test_a_tree_that_cannot_be_copied_is_a_refusal(project: Path) -> None:
+    with (
+        dependency_entry.Entry(project, "no-such-revision") as run,
+        pytest.raises(dependencies.NotDependencyOnlyError, match="could not be copied"),
+    ):
+        run({"app.lock": stack.LOCK})
+
+
+# --- what guard-diff says of it --------------------------------------------------------------
+
+
+def test_guard_diff_reads_the_changed_files_through_the_merge_bases_binding(tmp_path: Path) -> None:
+    after = stack.MANIFEST + "use main beta 1.0\n"
+    write(tmp_path, "app.manifest", after)
+    write(tmp_path, "app.lock", stack.LOCK + pin("beta", "1.0"))
+    git = fake_git(tmp_path, "", base_binding=stack.BINDING)
+
+    def show(args: Sequence[str]) -> str | None:
+        shown = {
+            "abc123:app.manifest": stack.MANIFEST,
+            "abc123:app.lock": stack.LOCK,
+            "abc123:docs/process/binding.md": stack.BINDING,
+        }
+        return shown.get(args[1]) if args[0] == "show" else git(args)
+
+    runs: list[str] = []
+
+    def entry(_root: Path, rev: str) -> contextlib.AbstractContextManager[dependencies.Runner]:
+        runs.append(rev)
+        return contextlib.nullcontext(read)
+
+    notes = diff.dependency_notes(
+        show, "origin/main", tmp_path, paths=["app.manifest", "app.lock", "README.md"], entry=entry
+    )
+    assert notes == {
+        "app.manifest": "dependencies added: beta (main) (none) -> 1.0",
+        "app.lock": "lockfile: beta (main) (none) -> 1.0",
+    }
+    assert runs == ["abc123"]
+
+
+def test_guard_diff_says_why_a_file_is_not_dependency_only(tmp_path: Path) -> None:
+    write(tmp_path, "app.manifest", stack.MANIFEST.replace("strict on", "strict off"))
+    gone = tmp_path / "app.lock"
+
+    def show(args: Sequence[str]) -> str | None:
+        shown = {
+            "abc123:app.manifest": stack.MANIFEST,
+            "abc123:app.lock": stack.LOCK,
+            "abc123:docs/process/binding.md": stack.BINDING,
+        }
+        return shown.get(args[1]) if args[0] == "show" else fake_git(tmp_path, "")(args)
+
+    notes = diff.dependency_notes(
+        show,
+        "origin/main",
+        tmp_path,
+        paths=["app.manifest", "app.lock"],
+        entry=lambda _root, _rev: contextlib.nullcontext(read),
+    )
+    assert not gone.exists()
+    assert notes["app.manifest"].startswith("not dependency-only: it changes more than")
+    assert notes["app.lock"] == "not dependency-only: it is created or deleted"
+
+
+def test_guard_diff_asks_nothing_when_no_path_is_a_dependency_file_or_there_is_no_contract(
+    tmp_path: Path,
+) -> None:
+    def never(_root: Path, _rev: str) -> contextlib.AbstractContextManager[dependencies.Runner]:
+        message = "the entry point should not run"
+        raise AssertionError(message)
+
+    assert diff.dependency_notes(fake_git(tmp_path, ""), "origin/main", tmp_path, paths=[]) == {}
+    bare = fake_git(tmp_path, "", base_binding="# Binding\n")
+    assert (
+        diff.dependency_notes(bare, "origin/main", tmp_path, paths=["app.lock"], entry=never) == {}
+    )
+    named = fake_git(tmp_path, "", base_binding=stack.BINDING)
+    assert (
+        diff.dependency_notes(named, "origin/main", tmp_path, paths=["README.md"], entry=never)
+        == {}
+    )
+
+
+# --- conformance -----------------------------------------------------------------------------
+
+NONE = "`none: the self-test has no such file`"
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    shutil.copytree(pristine(), tmp_path / "repo", symlinks=True)
+    return tmp_path / "repo"
+
+
+def found(root: Path) -> list[str]:
+    return [
+        f.problem for f in conformance.findings(root) if f.stops == conformance.DEPENDENCY_STOPS
+    ]
+
+
+def swap(root: Path, path: str, old: str, *, new: str) -> None:
+    text = (root / path).read_text(encoding="utf-8")
+    assert old in text, old
+    (root / path).write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def named(
+    root: Path, recipe: str = "dependencies dir:\n    python3 tools/read_deps.py {{dir}}"
+) -> None:
+    swap(
+        root,
+        "docs/process/binding.md",
+        f"- Entry point: {NONE}",
+        new="- Entry point: `just dependencies`",
+    )
+    text = (root / "justfile").read_text(encoding="utf-8")
+    start = text.index("dependencies dir:")
+    end = text.index("\n\n", start)
+    (root / "justfile").write_text(text[:start] + recipe + text[end:], encoding="utf-8")
+
+
+def test_a_section_that_says_none_with_a_reason_asks_nothing_of_the_justfile(repo: Path) -> None:
+    assert found(repo) == []
+
+
+def test_an_entry_point_with_a_recipe_that_takes_a_directory_is_green(repo: Path) -> None:
+    named(repo)
+    assert found(repo) == []
+
+
+@pytest.mark.parametrize(
+    ("recipe", "problem"),
+    [
+        ("dependencies:\n    true", "takes no directory"),
+        ('dependencies dir:\n    @echo "bind: print the records"; exit 1', "`bind:` placeholder"),
+    ],
+)
+def test_a_recipe_that_cannot_be_the_entry_point_is_red(
+    repo: Path, recipe: str, problem: str
+) -> None:
+    named(repo, recipe)
+    [said] = found(repo)
+    assert problem in said
+
+
+def test_an_entry_point_with_no_recipe_behind_it_is_red(repo: Path) -> None:
+    named(repo)
+    swap(repo, "justfile", "dependencies dir:", new="elsewhere dir:")
+    [said] = found(repo)
+    assert "dependencies" in said
+
+
+def test_a_section_left_as_the_template_wrote_it_or_missing_is_red(repo: Path) -> None:
+    swap(repo, "docs/process/binding.md", f"- Entry point: {NONE}", new="- Entry point: <x>")
+    assert any("'- Entry point:' is `just dependencies`" in said for said in found(repo))
+    swap(repo, "docs/process/binding.md", "## Dependencies", new="## Packages")
+    assert any("has no '## Dependencies' section" in said for said in found(repo))
+
+
+def unguarded(root: Path) -> list[str]:
+    return [f.problem for f in conformance.findings(root) if "which no group guards" in f.problem]
+
+
+def declare_lockfile(root: Path) -> None:
+    """A declared lockfile in a repository the guard manifest knows nothing of."""
+    swap(root, "docs/process/binding.md", "- Lockfiles: " + NONE, new="- Lockfiles: `*.lock`")
+    write(root, "app.lock", stack.LOCK)
+    git(root, "init", "-q")
+
+
+def test_a_declared_file_that_no_guard_group_covers_is_red(repo: Path) -> None:
+    declare_lockfile(repo)
+    [said] = unguarded(repo)
+    assert said == (
+        "the Dependencies section declares app.lock, which no group guards;"
+        " add it to a group, or a change to it merges without the owner"
+    )
+
+
+def test_a_declared_file_in_a_guard_group_is_green_and_so_is_its_snapshot(repo: Path) -> None:
+    declare_lockfile(repo)
+    swap(
+        repo,
+        "guards/manifest.toml",
+        'paths = [\n    "guards/**",',
+        new='paths = [\n    "app.lock",\n    "guards/**",',
+    )
+    write(repo, "quality/snapshots/app.lock", stack.LOCK)
+    assert unguarded(repo) == []
+
+
+def test_a_snapshot_of_a_declared_file_that_no_group_covers_is_red(repo: Path) -> None:
+    declare_lockfile(repo)
+    swap(
+        repo,
+        "guards/manifest.toml",
+        'paths = [\n    "guards/**",',
+        new='paths = [\n    "app.lock",\n    "guards/**",',
+    )
+    write(repo, "quality/snapshots/app.lock", stack.LOCK)
+    swap(repo, "guards/manifest.toml", '"quality/**"', new='"nothing/**"')
+    [said] = unguarded(repo)
+    assert "declares quality/snapshots/app.lock" in said
+
+
+def test_a_file_the_section_does_not_declare_is_not_asked_about(repo: Path) -> None:
+    write(repo, "other.lock", "x\n")
+    git(repo, "init", "-q")
+    assert unguarded(repo) == []
+
+
+def test_a_repository_with_a_broken_guard_manifest_leaves_it_to_that_check(repo: Path) -> None:
+    declare_lockfile(repo)
+    (repo / "guards/manifest.toml").write_text("[[group\n", encoding="utf-8")
+    assert unguarded(repo) == []
+
+
+def test_a_repository_with_no_guard_manifest_leaves_it_to_that_check(repo: Path) -> None:
+    declare_lockfile(repo)
+    (repo / "guards/manifest.toml").unlink()
+    assert unguarded(repo) == []
+
+
+def test_a_tree_that_is_no_repository_is_read_from_its_files_less_hidden_ones(repo: Path) -> None:
+    swap(repo, "docs/process/binding.md", "- Lockfiles: " + NONE, new="- Lockfiles: `**/*.lock`")
+    write(repo, "app.lock", stack.LOCK)
+    write(repo, ".cache/hidden.lock", stack.LOCK)
+    [said] = unguarded(repo)
+    assert "declares app.lock" in said

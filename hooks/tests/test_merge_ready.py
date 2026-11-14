@@ -14,13 +14,14 @@ from pathlib import Path
 import pytest
 
 import merge_ready
+from tests import dependency_stack as stack
 from tests.repos import branch, commit, git, repository, write
 
 MANIFEST = """\
 [[group]]
 name = "tool-config"
 reason = "Rule sets and dependencies of every gate."
-paths = ["pyproject.toml", "lint.toml"]
+paths = ["app.manifest", "app.lock", "lint.toml"]
 
 [[group]]
 name = "gate-commands"
@@ -61,7 +62,6 @@ THRESHOLDS = (
     '[coverage.core]\npaths = ["src/**"]\nabsolute = true\nline = 80.0\n\n'
     "[ceilings.seconds]\ntier1 = 300\n"
 )
-PYPROJECT = '[project]\nname = "a"\nversion = "1"\ndependencies = ["attrs>=23"]\n'
 FLAGS = (
     '[[flag]]\nkey = "dark"\nowner = "core"\ndefault = false\nremove-by = 2999-01-01\n'
     'reason = "Ships dark until it is measured."\n\n'
@@ -91,11 +91,16 @@ BASE = {
     "docs/adr/0001-plain.md": ADR,
     "docs/disputes/.gitkeep": "",
     "quality/thresholds.toml": THRESHOLDS,
-    "pyproject.toml": PYPROJECT,
+    "app.manifest": stack.MANIFEST,
+    "app.lock": stack.LOCK,
+    "tools/read_deps.py": stack.READER,
     "lint.toml": "strict = true\n",
-    "justfile": "check:\n    true\n",
+    "justfile": "check:\n    true\n\n" + stack.JUSTFILE,
     "flags.toml": FLAGS,
-    BINDING: f"# Binding\n\n- Application types: service, library\n{LIVE}",
+    BINDING: (
+        f"# Binding\n\n- Application types: service, library\n{LIVE}\n"
+        f"## Dependencies{stack.BINDING.split('## Dependencies', 1)[1]}"
+    ),
     "src/a.py": "x = 1\n",
     "tests/contract/api.json": API,
     "tests/contract/surface.txt": SURFACE,
@@ -398,22 +403,56 @@ def test_a_drop_whose_pin_text_only_moved_around_is_the_agents(owing: Path) -> N
 
 
 def test_a_dependency_is_the_owners_whoever_named_it(root: Path) -> None:
-    added = PYPROJECT.replace('"attrs>=23"', '"attrs>=23", "pytest-skip-all>=1"')
-    change(
-        root, {"pyproject.toml": added, "docs/features/thing/spec.md": "Needs pytest-skip-all.\n"}
-    )
+    added = stack.MANIFEST + "use main beta 1.0\n"
+    change(root, {"app.manifest": added, "docs/features/thing/spec.md": "Needs beta.\n"})
     assert judged(root) == [
         (
-            "guard: pyproject.toml (tool-config): a dependency is the owner's to merge:"
-            " pytest-skip-all (project.dependencies) (none) -> pytest-skip-all>=1"
+            "guard: app.manifest (tool-config): a dependency is the owner's to merge:"
+            " beta (main) (none) -> 1.0"
+        )
+    ]
+
+
+def test_a_lockfile_that_only_adds_a_version_names_it_for_the_owner(root: Path) -> None:
+    change(root, {"app.lock": stack.LOCK + stack.pin("beta", "1.0")})
+    assert judged(root) == [
+        (
+            "guard: app.lock (tool-config): a dependency is the owner's to merge:"
+            " beta (main) (none) -> 1.0"
         )
     ]
 
 
 def test_a_manifest_change_that_is_more_than_a_dependency_says_so(root: Path) -> None:
-    change(root, {"pyproject.toml": PYPROJECT + "\n[tool.ruff]\nselect = []\n"})
+    change(root, {"app.manifest": stack.MANIFEST.replace("strict on", "strict off")})
     (reason,) = judged(root)
-    assert reason.startswith("guard: pyproject.toml (tool-config): not dependency-only: ")
+    assert reason.startswith("guard: app.manifest (tool-config): not dependency-only: ")
+
+
+def test_a_lockfile_swap_at_the_same_version_is_not_dependency_only(root: Path) -> None:
+    swapped = stack.LOCK.replace("sum-alpha1.2.0", "sum-swapped")
+    change(root, {"app.lock": swapped})
+    (reason,) = judged(root)
+    assert "not dependency-only: alpha 1.2.0 changed in place" in reason
+
+
+def test_a_branch_cannot_make_the_entry_point_lenient_for_itself(root: Path) -> None:
+    lying = "import hashlib\nprint('rest\\t' + 'app.lock' + '\\t' + '0')\n"
+    swapped = stack.LOCK.replace("sum-alpha1.2.0", "sum-swapped")
+    change(root, {"app.lock": swapped, "tools/read_deps.py": lying})
+    reasons = judged(root)
+    assert any("not dependency-only: alpha 1.2.0 changed in place" in r for r in reasons)
+
+
+def test_a_binding_without_the_section_sends_every_manifest_change_to_the_owner(
+    tmp_path: Path,
+) -> None:
+    files = {**BASE, BINDING: f"# Binding\n\n- Application types: service, library\n{LIVE}"}
+    repository(tmp_path, files)
+    branch(tmp_path, "feature/4-thing")
+    change(tmp_path, {"app.manifest": stack.MANIFEST + "use main beta 1.0\n"})
+    (reason,) = judged(tmp_path)
+    assert reason == "guard: app.manifest (tool-config)"
 
 
 # --- one-way doors ----------------------------------------------------------------------------

@@ -50,7 +50,7 @@ def test_the_catalogue_file_lists_each_question_once() -> None:
     data = tomllib.loads(application_types.CATALOGUE.read_text(encoding="utf-8"))
     names = [question["name"] for question in data["question"]]
     assert len(names) == len(set(names))
-    keys = {"name", "applies-to", "collection", "proofs", "trigger"}
+    keys = {"name", "applies-to", "collection", "directives", "proofs", "trigger"}
     assert all(set(question) <= keys for question in data["question"])
 
 

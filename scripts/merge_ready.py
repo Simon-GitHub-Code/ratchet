@@ -88,6 +88,7 @@ import plugin_pin
 # Why: the manifest and the two classifiers the judge shares with the hook live under hooks/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import dependencies, records
+from ratchet_guards.dependency_entry import Entry
 from ratchet_guards.gh import LABELS_RECORD, READY_ROLE, label_for_role
 from ratchet_guards.globs import matches
 from ratchet_guards.manifest import (
@@ -101,7 +102,8 @@ from ratchet_guards.manifest import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+    from contextlib import AbstractContextManager
 
 AGENT = "merge: agent"
 OWNER = "merge: owner"
@@ -396,7 +398,39 @@ def addition(change: Change, path: str) -> str | None:
     return None if note.startswith(records.ADDITIONS) else note
 
 
-def guard_note(change: Change, path: str, group: Group) -> str | None:
+def dependency_notes(
+    change: Change,
+    paths: Sequence[str],
+    entry: Callable[[Path, str], AbstractContextManager[dependencies.Runner]] = Entry,
+) -> dict[str, str]:
+    """What each changed dependency manifest or lockfile does, as the merge base's binding names.
+
+    The binding's Dependencies section and the entry point it names are the merge base's: the
+    change under judgement cannot rewrite what judges it (ADR 0044).
+    """
+    contract = dependencies.parse(change.before(str(gatelib.BINDING)))
+    if contract is None:
+        return {}
+    texts = {
+        path: (change.before(path), change.after(path))
+        for path in paths
+        if contract.recognised(path)
+    }
+    if not texts:
+        return {}
+    with entry(change.root, change.fork) as run:
+        verdicts = dependencies.judge(contract, texts, run)
+    return {
+        path: (
+            f"not dependency-only: {verdict}"
+            if isinstance(verdict, dependencies.NotDependencyOnlyError)
+            else "a dependency is the owner's to merge: " + ("; ".join(map(str, verdict)) or "none")
+        )
+        for path, verdict in verdicts.items()
+    }
+
+
+def guard_note(change: Change, path: str, group: Group, *, notes: Mapping[str, str]) -> str | None:
     """What a changed guard path's change is, or ``None`` when the judge lets it through."""
     if group.additive:
         return addition(change, path)
@@ -404,13 +438,7 @@ def guard_note(change: Change, path: str, group: Group) -> str | None:
         return more_than_tightened(change.before(path), change.after(path))
     if path == LEDGER:
         return more_than_shrunk(change)
-    if dependencies.recognised(path):
-        try:
-            found = dependencies.changes(path, change.before(path), change.after(path))
-        except dependencies.NotDependencyOnlyError as reason:
-            return f"not dependency-only: {reason}"
-        return "a dependency is the owner's to merge: " + ("; ".join(map(str, found)) or "none")
-    return ""
+    return notes.get(path, "")
 
 
 def instructs(path: str) -> bool:
@@ -429,6 +457,7 @@ def guard_reasons(change: Change, manifest: Manifest) -> list[Reason]:
     """
     lower = folded(manifest)
     reasons = []
+    notes = dependency_notes(change, [p for p in change.paths if manifest.group_of(p)])
     for path in change.paths:
         group = manifest.group_of(path) or (HARNESS if path == MANIFEST_PATH else None)
         if group is None and instructs(path):
@@ -440,7 +469,7 @@ def guard_reasons(change: Change, manifest: Manifest) -> list[Reason]:
                 text = f"{path} ({other.name}): matches a guard pattern but for its case"
                 reasons.append(Reason("guard", text))
             continue
-        note = guard_note(change, path, group)
+        note = guard_note(change, path, group, notes=notes)
         if note is not None:
             reasons.append(
                 Reason("guard", f"{path} ({group.name})" + (f": {note}" if note else ""))

@@ -109,6 +109,11 @@ BINDING = (
     "| lint | a linter | 0 | | `sh own-gates.sh lint` |\n"
     "| unit, property and fitness tests | a test runner | 1 | | `sh own-gates.sh tests` |\n"
 )
+SUPPRESSIONS = (
+    "\n## Suppressions\n\n| Kind | Pattern | Rule |\n| --- | --- | --- |\n"
+    "| bite-silence | `bite-silence` | rises |\n| bite-focus | `bite-focus` | never |\n\n"
+    "| Question | Kinds |\n| --- | --- |\n| lint | `bite-silence` |\n"
+)
 HOOK = '#!/bin/sh\n[ -n "$RATCHET_HOOK_PROBE" ] && echo {name} > "$RATCHET_HOOK_PROBE"\nexit 0\n'
 RESULTS = "    a.x_f__mutmut_1: killed\n    a.x_f__mutmut_2: {status}\n"
 RECORDS = (
@@ -162,7 +167,7 @@ def scratch(root: Path) -> None:
     write(root, TICKET_PATH, TICKET)
     write(root, "flags.toml", "# No flags yet.\n")
     write(root, "surface.txt", "f(a, b)\n")
-    write(root, "docs/process/binding.md", BINDING)
+    write(root, "docs/process/binding.md", BINDING + SUPPRESSIONS)
     write(root, "own-gates.sh", OWN_GATES)
     write(root, PLUGIN_MANIFEST, '{"version": "1.0.0"}\n')
     write(root, "tests/test_a.py", "def test_f():\n    assert True\n")
@@ -205,7 +210,7 @@ def add_marker(root: Path) -> None:
 
 
 def add_suppression(root: Path) -> None:
-    write(root, "src/a.py", "def f(a, b):\n    return a + b  # noqa: E501\n")
+    write(root, "src/a.py", "def f(a, b):\n    return a + b  # bite-silence\n")
 
 
 def survivor(root: Path) -> None:
@@ -303,7 +308,7 @@ def flag_overdue(root: Path) -> None:
 
 
 def add_focus(root: Path) -> None:
-    write(root, "src/a.test.js", "it.only('x', () => {})\n")
+    write(root, "src/a.test.js", "// bite-focus\n")
 
 
 def unpin(root: Path) -> None:
@@ -391,7 +396,7 @@ def triggers_gate(argv: list[str]) -> int:
     """
     root = Path(argv[2])
     if not (root / "src/client.py").is_file():
-        write(root, "docs/process/binding.md", BINDING + LATER_ROW + TRIGGERS_TABLE)
+        write(root, "docs/process/binding.md", BINDING + LATER_ROW + TRIGGERS_TABLE + SUPPRESSIONS)
         write(root, "src/client.py", OUTBOUND_CALL)
         commit(root, "feat(core): the first outbound call")
     return triggers.main([*argv, "--base", "HEAD"])
