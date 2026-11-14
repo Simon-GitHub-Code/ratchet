@@ -29,10 +29,12 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+from tests import model_tla
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
 CAP = 1
 RETRIES = 3
@@ -1397,3 +1399,201 @@ LEASE_RULES: dict[str, Callable[[Lease, str, Lease], bool]] = {
     "9f. no drain discards the tree of a landing another live drain runs": spares_the_landing,
     "9g. a landing's close keeps a merge another drain recorded meanwhile": keeps_the_record,
 }
+
+
+# --- the export: the graphs as TLA+ modules, for a model checker and the charts ------------------
+
+
+class Run(NamedTuple):
+    """States from a start, the start first, and the steps between them, as ``model_tla`` reads."""
+
+    states: tuple[object, ...]
+    edges: list[tuple[object, str, object]]
+
+
+def run(taken: Callable[[Action], bool]) -> Run:
+    """The part of ``graph()`` its start reaches by the actions ``taken`` keeps, breadth first.
+
+    Each of its states and steps is one of ``graph()``, so a rule breaks on a step of it exactly
+    where it breaks on that step of the graph.
+    """
+    seen = {INITIAL: INITIAL}
+    frontier = deque([INITIAL])
+    edges: list[tuple[object, str, object]] = []
+    while frontier:
+        state = frontier.popleft()
+        for action, after in moves(state):
+            if not taken(action):
+                continue
+            known = seen.get(after)
+            if known is None:
+                seen[after] = known = after
+                frontier.append(after)
+            edges.append((state, action.name, known))
+    return Run(tuple(seen), edges)
+
+
+def landing_run() -> Run:
+    """Every step but those on ``c``: ``a`` built, judged, landed or parked, ``b`` waiting on it."""
+    return run(lambda action: action.ticket is not Name.C)
+
+
+def life_run() -> Run:
+    """The landing run with no kill: a ticket's life as the drain's commands lead it."""
+    return run(lambda action: action.ticket is not Name.C and action.kind not in KILLS)
+
+
+def work_run() -> Run:
+    """The steps on ``c`` and on the queue, and ``a`` parked, which lets the cap start ``c``."""
+    return run(
+        lambda action: (
+            action.ticket in {Name.C, None}
+            or (action.ticket is Name.A and action.kind is Kind.CLOSE)
+        )
+    )
+
+
+def plan_word(state: State, name: Name) -> str:
+    """What ``drain.plan`` calls the ticket; ``resolved`` when it is not in the plan."""
+    status = classify(state).get(name)
+    return "resolved" if status is None else status.value
+
+
+def note_fact(read: Callable[[Note], object], none: object) -> Callable[[Ticket], object]:
+    return lambda ticket: none if ticket.note is None else read(ticket.note)
+
+
+TICKET_FACTS: dict[str, Callable[[Ticket], object]] = {
+    "tree": lambda ticket: ticket.tree.name.lower(),
+    "branch": lambda ticket: ticket.branch.name.lower(),
+    "current": lambda ticket: ticket.current,
+    "merged": lambda ticket: ticket.merged,
+    "note": note_fact(lambda note: note.outcome.name.lower(), "none"),
+    "hold": note_fact(lambda note: note.hold, none=False),
+    "fresh": note_fact(lambda note: note.fresh, none=False),
+    "attempts": note_fact(lambda note: note.attempts, 0),
+    "rebasing": note_fact(lambda note: note.rebasing, none=False),
+    "discarding": note_fact(lambda note: note.discarding, none=False),
+    "edited": lambda ticket: ticket.text > 0,
+    "stashes": lambda ticket: ticket.stashes,
+}
+"""What a module reads of each ticket, named with the ticket's letter: ``treeA``."""
+
+
+def state_facts(names: tuple[Name, ...]) -> dict[str, Callable[[State], object]]:
+    """The variables of a module of the main graph: the plan's word and the facts of each ticket."""
+    facts: dict[str, Callable[[State], object]] = {}
+    for name in names:
+        letter = name.value.upper()
+        facts[f"status{letter}"] = lambda state, name=name: plan_word(state, name)
+        for fact, read in TICKET_FACTS.items():
+            facts[f"{fact}{letter}"] = lambda state, name=name, read=read: read(state.of(name))
+    return {
+        **facts,
+        "scratch": lambda state: state.scratch,
+        "half": lambda state: "none" if state.half is None else state.half.value,
+    }
+
+
+def rule_name(name: str) -> str:
+    """A rule's name in a module, by its number: ``Rule6a``."""
+    return model_tla.identifier(f"Rule {name.partition('.')[0]}")
+
+
+def step_rules(rules: Mapping[str, Callable[[Any, str, Any], bool]]) -> dict[str, model_tla.Rule]:
+    return {
+        rule_name(name): model_tla.Step((holds.__doc__ or "").strip(), holds)
+        for name, holds in rules.items()
+    }
+
+
+def drain_id(drain: Drain | None) -> str:
+    return "none" if drain is None else drain.value.rsplit(" ", 1)[-1]
+
+
+LEASE_FACTS: dict[str, Callable[[Lease], object]] = {
+    "processes": lambda lease: (
+        "undecided" if lease.shared is None else "one" if lease.shared else "separate"
+    ),
+    "holder": lambda lease: drain_id(lease.holder),
+    **{
+        f"{fact}{drain_id(drain)}": lambda lease, fact=fact, drain=drain: of(
+            getattr(lease, fact), drain
+        )
+        for fact in ("alive", "draining", "took")
+        for drain in Drain
+    },
+    "tree": lambda lease: drain_id(lease.tree),
+    "draft": lambda lease: lease.draft,
+    "running": lambda lease: lease.running,
+    "stashed": lambda lease: lease.stashed,
+    "landing": lambda lease: drain_id(lease.landing),
+    "merge": lambda lease: lease.merge.name.lower(),
+}
+"""What a module reads of the lease, a drain named by its number: ``alive1``."""
+
+
+def lease_run() -> Run:
+    _, edges = lease_graph()
+    return Run(tuple(dict.fromkeys([LEASE_INITIAL, *(after for _, _, after in edges)])), edges)
+
+
+SHOWN_LANDING = ("statusA", *(f"{fact}A" for fact in TICKET_FACTS), "scratch", "half")
+"""What the charts of the landing run read: ticket ``a``, and what a killed ``merge.py`` left."""
+SHOWN_LEASE = tuple(fact for fact in LEASE_FACTS if fact not in {"took1", "took2", "stashed"})
+"""What the charts of the lease read: all but the tokens and the stash."""
+
+
+def seen_through(
+    name: str, graph: Run, shown: Mapping[str, Callable[[Any], object]], *, deadlock: bool = True
+) -> model_tla.Export:
+    """The summary of ``graph`` whose states are the values of the facts ``shown``."""
+    summary = model_tla.summary(
+        graph, lambda state: tuple(fact(state) for fact in shown.values()), model_tla.identifier
+    )
+    return model_tla.export(
+        name,
+        summary,
+        {},
+        fields=(),
+        derived={fact: (lambda values, at=at: values[at]) for at, fact in enumerate(shown)},
+        deadlock=deadlock,
+    )
+
+
+def exports() -> tuple[model_tla.Export, ...]:
+    """The modules ``docs/model/drain.md`` was checked and drawn from.
+
+    TLC checks the rules on the landing run, the work run and the whole lease graph; the search
+    in the tests proves them on the whole main graph. The charts are drawn from those three, and
+    from summaries of the life run, the landing run and the lease graph.
+    """
+    landing, lease = landing_run(), lease_run()
+    facts = state_facts(NAMES)
+    main = step_rules(RULES)
+    ticket_a = {fact: facts[fact] for fact in SHOWN_LANDING}
+    return (
+        model_tla.export(
+            "DrainLanding", landing, main, fields=(), derived=facts, action=model_tla.identifier
+        ),
+        model_tla.export(
+            "DrainWork", work_run(), main, fields=(), derived=facts, action=model_tla.identifier
+        ),
+        model_tla.export(
+            "DrainLease",
+            lease,
+            step_rules(LEASE_RULES),
+            fields=(),
+            derived=LEASE_FACTS,
+            action=model_tla.identifier,
+            deadlock=False,
+        ),
+        seen_through("DrainLife", life_run(), ticket_a),
+        seen_through("DrainLandingShown", landing, ticket_a),
+        seen_through(
+            "DrainLeaseShown",
+            lease,
+            {fact: LEASE_FACTS[fact] for fact in SHOWN_LEASE},
+            deadlock=False,
+        ),
+    )
