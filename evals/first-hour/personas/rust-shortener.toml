@@ -1,0 +1,34 @@
+# A web owner who insists on Rust.
+
+name = "rust-shortener"
+stack = "Rust, a web service"
+
+idea = "A link shortener for myself: I paste a long web address on a page, it gives me a short code for it, and the page lists my short links."
+
+profile = """
+I am a hobbyist, not a software engineer. I have an idea for a small web service for myself and I want
+an AI to build it while I watch and answer questions. I use a laptop and a phone. I can follow
+instructions and copy a command into a terminal when I am told exactly what to type, but I do not
+know git, testing, linters, frameworks, databases or deployment, and I do not want to learn them.
+
+The service: a link shortener. On a page I paste a long web address and press a button. It makes a
+short code, shows the short link, and lists every link I have shortened with its long address. Opening
+a short link goes to the long address. It is only for me. It runs on my own computer.
+
+Firm positions:
+- It must be written in Rust. I want it fast and small and I do not want a runtime to look after. If
+  you suggest another language, my answer is no.
+- It runs as one program that serves its own page. I do not want a second program, a separate
+  database server or anything I must start besides it.
+- The page is plain: a form and a list, which works without any JavaScript.
+- Local only. Nothing goes online: no GitHub, no remote repository, no hosting, no accounts.
+- It is for me alone, so no sign-in, no sharing, no other users.
+- Keep it small and plain. Shortening a link and seeing my list matter most; everything else can wait.
+- If I shorten the same address twice, keep one short code.
+"""
+
+[slice]
+kind = "html-form"
+describe = "open the page, paste a long address into the form, shorten it, and see it in the list"
+value = "https://example.com/articles/2026/a-very-long-first-hour-title"
+expect = "example.com/articles/2026/a-very-long-first-hour-title"

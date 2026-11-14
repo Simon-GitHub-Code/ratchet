@@ -159,7 +159,8 @@ function commonRules(rebasing, ownTestsOnly) {
 Ground rules for every agent in this pipeline:
 - Work in ${ROOT_HINT} on branch \`${BRANCH}\`.
   First run \`git rev-parse --abbrev-ref HEAD\`; if it does not print \`${BRANCH}\`, run
-  \`git switch ${BRANCH}\` (or \`git switch -c ${BRANCH} ${BASE}\` if the branch does not exist).
+  \`git switch ${BRANCH}\`. The orchestrator creates the branch, never you: if it does not
+  exist, stop and return an error saying so.
 ${uncommitted}
 - Vocabulary comes from the glossary: use its terms in code, tests and docs; its Avoid lists
   are banned identifiers.
@@ -1020,6 +1021,8 @@ critic test that asserts something the spec contradicts stays red and is explain
 \`notes\`. A finding that can only be resolved by changing a guard path, or a gate you believe
 is wrong, becomes a gate dispute listed in \`disputes\`.
 
+${CHANGE_SIZE_RULE}
+
 ${TRIGGERS_RULE}
 
 Finish when the spec tests and the
@@ -1057,7 +1060,9 @@ Do this, in order:
 
 \`filesChanged\` lists the files you edited after the rebase finished; \`allNewTestsPass\` is
 whether the spec's tests pass; \`notes\` names each conflict and how you resolved it, since
-the reviewer reads the result and not your reasoning.`
+the reviewer reads the result and not your reasoning.
+
+${CHANGE_SIZE_RULE}`
 }
 
 function critiquePrompt(spec, filesChanged, previousRound) {
@@ -1643,6 +1648,9 @@ if (REJUDGE) {
       'reconcile',
     )
     log(`Reconcile: ${conflicts.length} conflicted path(s), check=${reconcile.checkPasses}`)
+    // Why: ADR 0055. Bringing in what merged meanwhile can take the product code over its ceiling.
+    const reconcileStop = noRoom('the reconcile', reconcile.changeSize, false)
+    if (reconcileStop) return tooLarge(reconcileStop, spec, { filesChanged: reconcile.filesChanged, disputes: reconcile.disputes || [], checkOutput: reconcile.checkOutput })
   }
   phase('Review')
   const review = must(await agent(reviewPrompt(spec, true, SETTLED), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
@@ -1808,6 +1816,10 @@ if (CRITIC) {
     )
     filesChanged = union(filesChanged, fix.filesChanged)
     disputes.push(...(fix.disputes || []))
+    // Why: ADR 0055. A fix round can take the product code over its ceiling as the implementation
+    // can; the critic's tests are already in, so the tests have all of their ceiling.
+    const fixStop = noRoom(`fix round ${iterations}`, fix.changeSize, false)
+    if (fixStop) return tooLarge(fixStop, spec, { filesChanged, disputes, checkOutput: fix.checkOutput })
     lastCheckOutput = fix.checkOutput
     lastCheckPasses = fix.checkPasses === true
     critique = must(

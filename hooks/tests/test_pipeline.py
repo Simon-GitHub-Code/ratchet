@@ -456,6 +456,44 @@ def test_a_change_with_no_room_under_the_ceilings_stops_before_the_next_stage() 
     assert ran["result"]["verdict"] == "approve"
 
 
+OVER = {"lines": 1001, "ceiling": 1000, "testLines": 2500, "testCeiling": 3000}
+
+
+def test_a_fix_round_that_takes_the_product_code_over_its_ceiling_stops_the_run() -> None:
+    # Why: ADR 0055. The size was read after the spec and the implementation only, so a fix
+    # round ran on to a red check and a refused review instead of the drain's split.
+    finding = {"severity": "major", "title": "no expiry", "testFails": True}
+    kept = {**CRITIQUED, "findings": [finding], "testsAdded": ["tests/test_method.py"]}
+    answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
+    answers |= {"critique-1": CRITIQUED}
+    fits = {"lines": 1000, "ceiling": 1000, "testLines": 3000, "testCeiling": 3000}
+    over = {"fix-1": {**IMPLEMENTED, "changeSize": OVER}}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers, **over)
+    assert ran["labels"][-1] == "fix-1", "no re-critique and no review follow"
+    result = ran["result"]
+    assert (result["verdict"], result["tooLarge"]["stage"]) == ("blocked", "fix round 1")
+    assert (result["tooLarge"]["kind"], result["tooLarge"]["lines"]) == ("product", 1001)
+    assert "1001 product lines after fix round 1" in result["verdictForcedBy"][0]
+    assert "drain.py split" in result["requiredByOrchestrator"][1]
+    assert "change-size" in ran["prompts"]["fix-1"]
+    room = {"fix-1": {**IMPLEMENTED, "changeSize": fits}}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers, **room)
+    assert ran["result"]["verdict"] == "approve", "the whole of both ceilings is room"
+
+
+def test_a_reconcile_that_takes_the_product_code_over_its_ceiling_stops_before_the_review() -> None:
+    reconciled = {**IMPLEMENTED, "filesChanged": ["flags.toml"], "changeSize": OVER}
+    ran = _again({"conflicts": ["flags.toml"]}, reconcile=reconciled, **{"review-again": REVIEW})
+    assert ran["labels"] == ["reconcile"]
+    result = ran["result"]
+    assert (result["verdict"], result["tooLarge"]["stage"]) == ("blocked", "the reconcile")
+    assert result["filesChanged"] == ["flags.toml"]
+    assert "change-size" in ran["prompts"]["reconcile"]
+    fits = {**reconciled, "changeSize": {**OVER, "lines": 1000}}
+    ran = _again({"conflicts": ["flags.toml"]}, reconcile=fits, **{"review-again": REVIEW})
+    assert ran["labels"] == ["reconcile", "review-again"]
+
+
 def test_a_finding_whose_kept_test_passes_starts_no_fix_round() -> None:
     # Why: a major finding the critic's passing test showed the code holds still started a fix
     # round, and the fix agent had nothing to change.

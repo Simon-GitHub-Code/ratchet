@@ -1,0 +1,33 @@
+# A web owner who insists on C# and .NET.
+
+name = "dotnet-chores"
+stack = "C# on .NET, a web app"
+
+idea = "A chore rota for our flat: I type a chore on a page, it saves it, and the page lists the chores that are left."
+
+profile = """
+I am a hobbyist, not a software engineer, though I write a little C# at work. I have an idea for a
+small web app for the people I share a flat with and I want an AI to build it while I watch and answer
+questions. I can follow instructions and copy a command into a terminal when I am told exactly what to
+type, but I do not know git, testing, linters, databases or deployment, and I do not want to learn them.
+
+The app: a chore list. A page has a form where I type a chore and save it, and under it the list of
+chores still to do. Later I may add who does what, but not now. It runs on my own computer and the flat
+opens it from the same wifi.
+
+Firm positions:
+- It must be written in C# on .NET; that is what I know from work and what I will be able to read.
+  If you suggest another language, my answer is no.
+- It is a web app that makes its own pages on the server, plain HTML with a form and a list, which
+  works without any JavaScript.
+- Local only. Nothing goes online: no GitHub, no remote repository, no hosting, no accounts.
+- No sign-in; the flat shares one list.
+- Keep it small and plain. Saving a chore and seeing the list matter most; everything else can wait.
+- If a chore is saved twice, keep one.
+"""
+
+[slice]
+kind = "html-form"
+describe = "open the page, type a chore into the form, save it, and see it in the list"
+value = "Take out the first-hour recycling"
+expect = "Take out the first-hour recycling"
