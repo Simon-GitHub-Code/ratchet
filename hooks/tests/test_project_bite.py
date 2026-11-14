@@ -1526,6 +1526,33 @@ def test_a_link_the_snapshot_holds_is_judged_though_the_directory_is_back_by_the
     assert "leads outside the scratch copy" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("committed", [True, False], ids=["committed", "ignored"])
+def test_a_link_reached_back_up_through_another_link_is_judged_by_where_the_first_leads(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], committed: bool
+) -> None:
+    # Why: `L/../x` is not `x` when L leads out: the link M that names it ends outside the copy,
+    # though the path as written, collapsed, stays inside. L is the repository's own link or one
+    # git ignores, so it is never judged itself and only the walk through it can refuse M.
+    outside = tmp_path / "outside" / "sub"
+    outside.mkdir(parents=True)
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
+    setup = 'ln -s "$PWD/L/../x" M'
+    if committed:
+        (root / "L").symlink_to(outside)
+    else:
+        setup = f'ln -s "{outside}" L && {setup}'
+        (root / ".gitignore").write_text("ignored/\n*.secret\nL\n", encoding="utf-8")
+    (root / "quality/bites.toml").write_text(
+        f"setup = [{json.dumps('sh -c ' + shlex.quote(setup))}]\n" + bite("lint", "f"),
+        encoding="utf-8",
+    )
+    commit(root, "registry")
+    before = fingerprint(root)
+    assert prove(root) == 1
+    assert fingerprint(root) == before
+    assert "setup left M" in capsys.readouterr().out
+
+
 def test_links_that_lead_round_in_a_ring_are_refused_as_leading_nowhere_safe(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

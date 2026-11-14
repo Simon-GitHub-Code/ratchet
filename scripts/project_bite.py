@@ -1082,14 +1082,18 @@ def snapshot(copy: Path) -> None:
 
 
 def under(absolute: str, bases: tuple[str, ...]) -> list[str] | None:
-    """The parts of ``absolute`` below the first of ``bases`` holding it, or ``None``."""
+    """The parts of ``absolute`` below the first of ``bases`` holding it, or ``None``.
+
+    The target is taken as written: its ``..`` are walked with the links on the way by the
+    caller, never collapsed here, where ``L/../x`` would be ``x`` whatever ``L`` leads to.
+    """
     for base in bases:
         if absolute == base or absolute.startswith(base + os.sep):
             return absolute[len(base) :].split("/")
     return None
 
 
-def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...]) -> bool:
+def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...], copy: Path) -> bool:
     """Whether the link ``path`` ends inside the copy, by the link texts ``targets`` hold.
 
     Judged from the text the snapshot holds, which is what restoring writes, never from the copy
@@ -1106,12 +1110,20 @@ def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...]) -> b
                 return False
             here.pop()
         elif part not in ("", "."):
-            target = targets.get("/".join([*here, part]))
+            name = "/".join([*here, part])
+            # Why: a link git ignores is not in the snapshot and is not restored, but it stays in
+            # the copy, and a link to it still leads where it leads; so it is followed as it is.
+            # Such a link is not itself refused: a fault is refused through any link (``owned``),
+            # restoring replaces a link and never follows one, and what setup fills outside the
+            # tree through one (a package store) is what ``setup`` is for.
+            target = targets.get(name)
+            if target is None and (copy / name).is_symlink():
+                target = os.readlink(copy / name)
             if target is None:
                 here.append(part)
                 continue
             hops += 1
-            below = under(os.path.normpath(target), bases) if target.startswith("/") else None
+            below = under(target, bases) if target.startswith("/") else None
             if hops > MAX_LINK_HOPS or (target.startswith("/") and below is None):
                 return False
             if below is not None:
@@ -1147,7 +1159,7 @@ def contained(copy: Path, head: str) -> None:
     }
     bases = (os.path.realpath(copy), str(copy))
     for path, oid in snapshot.items():
-        if committed.get(path) != oid and not ends_inside(path, snapshot_links, bases):
+        if committed.get(path) != oid and not ends_inside(path, snapshot_links, bases, copy):
             message = (
                 f"setup left {path}, a symbolic link that leads outside the scratch copy"
                 " (to the real tree or elsewhere); a later write through it would land there"
