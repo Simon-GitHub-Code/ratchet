@@ -397,7 +397,12 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
     ref = ticket.ref
     steps = []
     if queue_notes.SIZE in hold.kinds:
-        steps.append(f"{TICKETS} {ticket.parent or f'<the spec of ticket {ref}>'}")
+        # Why: ADR 0046. The agent splits a ticket by size itself; a hold of this kind is left
+        # only where it could not (its plan was refused, or the ticket is already a part).
+        steps.append(
+            f"change the criteria of ticket {ref} so they divide into parts that fit: the"
+            " agent's own split of it was refused (the drain's report says why)"
+        )
     if queue_notes.QUESTIONS in hold.kinds:
         steps.append(f"answer the open questions the run of {ref} named, on the ticket")
     if queue_notes.GUARD in hold.kinds:

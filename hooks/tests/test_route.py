@@ -827,7 +827,8 @@ def test_a_ticket_parked_as_too_large_names_the_split_not_questions_or_a_rerun(
     parked(root, SIZE_BLOCK)
     step = route.decide(root, None)
     assert step.stage == "blocked-run"
-    assert step.command == f"{route.TICKETS} <the spec of ticket {HELD}>"
+    assert step.command.startswith(f"change the criteria of ticket {HELD}")
+    assert "to-tickets" not in step.command, "the agent splits by size, not the owner"
     assert "questions" not in step.command
     assert "1067 lines" in step.why
     git(root, "stash", "drop", "-q")

@@ -371,6 +371,11 @@ class GitRepoState:
             self._defaults[root] = MAIN_BRANCHES | ({name} if name else frozenset())
         return self._defaults[root]
 
+    def default_file(self, root: Path, relative: str) -> str | None:
+        """The file as the default branch's tip holds it, never as the work tree does."""
+        ref = default_branch(root)
+        return None if ref is None else _output(root, "show", f"{ref}:{relative}")
+
     def head_is_pushed(self, cwd: Path) -> bool | None:
         """Whether any remote-tracking branch contains ``HEAD`` (``--contains`` defaults to it)."""
         listed = _git(cwd, "branch", "--remotes", "--contains")

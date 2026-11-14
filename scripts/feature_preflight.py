@@ -57,6 +57,7 @@ import application_types
 import change_size
 import gatelib
 import hooks_installed
+import queue_notes
 
 # Why: a local ticket is the file the guard asks about the label on; both read its shape here.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -123,6 +124,7 @@ PRODUCES = {
         "the orchestrator splits the ticket itself: the parts as tickets that block each other in"
         " the tracker, the original marked split (`/ratchet:feature`, step 4, `tooLarge`)"
     ),
+    "split": "build the parts it was split into; nothing is left to do for the ticket itself",
     "label": "the owner applies the agent-ready label (mattpocock-skills:triage, or by hand)",
     "blocked": (
         "build the blocking tickets first; when the order no longer holds, the owner edits the"
@@ -543,9 +545,23 @@ def open_blockers(ticket: Ticket, root: Path, gh: Runner) -> list[str]:
         blocker = fetch(resolved, root, gh)
         if blocker is None:
             problems.append(f"blocker {ref} was not found")
+        elif blocker.is_open and (parts := split_parts(blocker, root)) is not None:
+            # Why: ADR 0046. A split ticket is open, text untouched, and done when its parts are.
+            for part in parts:
+                found = fetch(part, root, gh)
+                if found is None or found.is_open:
+                    problems.append(
+                        f"blocker {resolved} was split, and its part {part} is not done"
+                    )
         elif blocker.is_open:
             problems.append(f"blocker {resolved} is still open")
     return problems
+
+
+def split_parts(ticket: Ticket, root: Path) -> list[str] | None:
+    """The parts the drain split ``ticket`` into, as its note keeps them; ``None`` when none."""
+    branch = branch_of(ticket, slug_of(ticket.title, ticket.number))
+    return queue_notes.split_into(root, branch, ticket)
 
 
 def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: Runner) -> None:
@@ -554,6 +570,8 @@ def check_ticket(report: Report, ticket: Ticket, label: str, *, root: Path, gh: 
     report.branch = branch_of(ticket, report.slug)
     if not ticket.is_open:
         report.fail("open", f"{ticket.ref} is not open")
+    if (parts := split_parts(ticket, root)) is not None:
+        report.fail("split", f"{ticket.ref} was split by size into {', '.join(parts)}")
     failure = conjecture_failure(ticket, root, gh)
     if failure is not None:
         report.fail("conjecture", failure)

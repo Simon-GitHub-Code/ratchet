@@ -1086,3 +1086,90 @@ def test_a_mechanical_reason_that_keeps_coming_back_becomes_the_owners(
     )
     assert note(root, BRANCH_A)["attempts"] == 0
     capsys.readouterr()
+
+
+# --- a ticket too large is split by the agent (ADR 0046) -------------------------------------
+
+PROMISES = "\n## Acceptance criteria\n\n- [ ] It saves a link.\n- [ ] It lists the links.\n"
+WHOLE = {ALPHA: ticket(1, "Alpha", "") + PROMISES}
+CHILD = ".scratch/f/issues/04-child.md"
+
+HALVES: list[dict[str, object]] = [
+    {"title": "Save", "promises": ["It saves a link."], "summary": "Saving."},
+    {"title": "List", "promises": ["It lists the links."], "summary": "Listing."},
+]
+
+
+def plan_file(tmp_path: Path, parts: list[dict[str, object]]) -> Path:
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps({"parts": parts}), encoding="utf-8")
+    return path
+
+
+def test_split_files_the_parts_with_the_label_and_closes_the_parent_as_split(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    children = json.loads(capsys.readouterr().out.splitlines()[-1])["children"]
+    assert len(children) == 2
+    first, second = ((root / child).read_text(encoding="utf-8") for child in children)
+    assert "ready-for-agent" in first
+    assert f"Split from: {ALPHA}" in first
+    assert "- [ ] It saves a link." in first
+    assert f"Blocked by: {Path(children[0]).name}" in second
+    assert note(root, BRANCH_A)["outcome"] == "split"
+    assert (root / ALPHA).read_text(encoding="utf-8") == WHOLE[ALPHA], "the parent is never edited"
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        [HALVES[0], {"title": "More", "promises": ["It mines coins."]}],
+        [HALVES[0], {"title": "List"}],
+        [HALVES[0], {"title": "List", "promises": ["It lists the links.", "It saves a link."]}],
+    ],
+    ids=["an added promise", "a dropped one", "a doubled one"],
+)
+def test_a_refused_split_parks_the_ticket_as_too_large(
+    tmp_path: Path, capsys: Out, parts: list[dict[str, object]]
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, parts))) == 1
+    assert not list((root / ".scratch/f/issues").glob("0[4-9]*"))
+    reasons = note(root, BRANCH_A)["reasons"]
+    assert any("split was refused" in reason for reason in reasons)  # type: ignore[attr-defined]
+
+
+def test_a_part_of_a_split_is_not_split_again(tmp_path: Path, capsys: Out) -> None:
+    child = ticket(4, "Child", f"Split from: {ALPHA}\n\n") + PROMISES
+    root = project(tmp_path, **WHOLE, **{CHILD: child})
+    run(root, "open", CHILD)
+    capsys.readouterr()
+    assert run(root, "split", CHILD, "--plan", str(plan_file(tmp_path, HALVES))) == 1
+
+
+def test_the_parent_is_read_from_the_default_branch_not_the_work_tree(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    write(drain.tree_of(root, BRANCH_A), ALPHA, WHOLE[ALPHA] + "- [ ] It mines coins.\n")
+    capsys.readouterr()
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+
+
+def test_a_split_parent_is_not_built_and_a_ticket_waiting_on_it_waits_for_its_parts(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    capsys.readouterr()
+    assert states(root)[BRANCH_A] != "buildable"
+    waiting = {entry.branch: entry for entry in drain.plan(offline(root)).tickets}[BRANCH_B]
+    assert waiting.state != "buildable"

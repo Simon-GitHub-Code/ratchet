@@ -29,6 +29,7 @@ import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
+from ratchet_guards import splits
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gh import ready_label
 from ratchet_guards.shell import PLACEHOLDER
@@ -109,9 +110,47 @@ def check(
         return None
     label = ready_label(Context(path.parent), guard)
     before = guard.locator.filesystem.read_text(path) or ""
-    if label in statuses(after(tool, tool_input, before)) and label not in statuses(before):
+    text = after(tool, tool_input, before)
+    if label in statuses(text) and label not in statuses(before):
+        if inherits(path, text, label, guard=guard) is None:
+            return None
         return Verdict(RULE, _detail([path.name], label))
     return None
+
+
+def _tracker_root(path: Path) -> Path | None:
+    """The directory that holds the ``.scratch`` ``path`` is under."""
+    folded = [part.casefold() for part in path.parts]
+    return (
+        Path(*path.parts[: folded.index(TRACKER_DIRECTORY)])
+        if TRACKER_DIRECTORY in folded
+        else None
+    )
+
+
+def inherits(path: Path, text: str, label: str, *, guard: Guard) -> str | None:
+    """Why ``path``, holding ``text``, may not carry the label as a part of a split ticket.
+
+    ``None`` when it may (ADR 0046): the ticket it names with ``Split from:`` carries the label
+    at the default branch's tip, is no part itself, and ``text`` adds no promise of it nor repeats
+    one a sibling carries. The parent is read from git, never from the child's own words.
+    """
+    root = _tracker_root(path)
+    ref = splits.split_from(text)
+    if root is None or ref is None:
+        return "names no ticket it was split from"
+    target = posixpath.normpath(str((root / ref) if "/" in ref else (path.parent / ref)))
+    relative = posixpath.relpath(target, str(root))
+    parent = None if relative.startswith("..") else guard.repo.default_file(root, relative)
+    filesystem = guard.locator.filesystem
+    siblings = [
+        found
+        for found in filesystem.glob(path.parent / f"*{TICKET_SUFFIX}")
+        if found != path and splits.split_from(filesystem.read_text(found) or "") == ref
+    ]
+    return splits.refusal(
+        text, parent, label, siblings=[filesystem.read_text(found) or "" for found in siblings]
+    )
 
 
 def _detail(names: list[str], label: str) -> str:

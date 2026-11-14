@@ -71,6 +71,7 @@ import merge
 import merge_ready
 import queue_notes
 import route
+import split
 
 # Why: the additive-record check the hook and the judge share lives under hooks/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -97,9 +98,9 @@ UPDATE_AGENTS = _AGENTS["rejudge"]
 BUILDABLE, BUILDING, BUILT = "buildable", "building", "built"
 WAITING, HELD, MERGED, REFUSED = "waiting", "held", "merged", "refused"
 LIVE = frozenset({BUILDABLE, BUILDING, BUILT})
-WAITS, PARKED = "waits", "parked"
+WAITS, PARKED, SPLIT = "waits", "parked", queue_notes.SPLIT
 # Why: `<branch>: blocked run` is the stash the route reads as a held ticket.
-STASHED = {MERGED: "merged", WAITS: "unapproved", PARKED: "blocked"}
+STASHED = {MERGED: "merged", WAITS: "unapproved", PARKED: "blocked", SPLIT: "split"}
 INTERRUPTED = "interrupted"
 QUEUE = queue_notes.QUEUE
 QUEUE_HOME = "ratchet-queue"
@@ -602,13 +603,14 @@ def update(drain: Drain, ticket: preflight.Ticket) -> int:
     return 2
 
 
-def close(
+def close(  # noqa: PLR0913 -- the note's parts
     root: Path,
     ticket: preflight.Ticket,
     *,
     outcome: str,
     reasons: list[str],
     result: dict[str, object] | None = None,
+    children: list[str] | None = None,
 ) -> None:
     """Remove the ticket's work tree and write its note: the outcome and what the report prints."""
     branch = route.own_branch(ticket)
@@ -648,6 +650,8 @@ def close(
         "holds": queue_notes.holds_of(result or {}),
         "reported": False,
     }
+    if children is not None:
+        note["children"] = children
     discard(root, tree, f"{branch}: {STASHED[outcome]} run")
     queue_notes.write_note(queue_notes.note_path(root, branch), note)
     print(f"closed: {ticket.ref}: {outcome}")
@@ -742,7 +746,7 @@ def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -
     """The drain's one report: what merged, what waits and why, every assumption."""
     by = {
         outcome: [row for note in notes if note.get("outcome") == outcome for row in listed(note)]
-        for outcome in (MERGED, WAITS, PARKED)
+        for outcome in (MERGED, WAITS, PARKED, SPLIT)
     }
     held = [
         row
@@ -777,6 +781,7 @@ def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -
             "",
             *section("Merged", by[MERGED]),
             *section("Waits for you", by[WAITS]),
+            *section("Split by size into tickets of their own", by[SPLIT]),
             *section("Parked", by[PARKED] + held),
             *section("Not built", unbuilt),
             *section("Assumptions", assumed),
@@ -827,6 +832,8 @@ def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
         return update(drain, ticket)
     if options.action == "land":
         return land(drain, ticket)
+    if options.action == "split":
+        return split_ticket(drain, ticket, options)
     result = queue_notes.loaded(gatelib.read_text(options.result) if options.result else None)
     reasons = [*options.reason, *reasons_of(result)]
     close(
@@ -836,6 +843,39 @@ def on_ticket(drain: Drain, options: argparse.Namespace) -> int:
         reasons=reasons,
         result=result,
     )
+    return 0
+
+
+def split_ticket(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) -> int:
+    """Split a ticket that is too large into parts filed in the tracker, and keep draining.
+
+    Why: ADR 0046. Splitting by size is no product decision, so the agent does it: the parts are
+    filed with the label the parent holds, each waiting on the one before, and the parent is
+    closed with the outcome ``split`` and its text untouched. A plan ``split.py`` refuses (a
+    promise added, dropped, reworded or doubled, a parent that is itself a part) parks the
+    ticket as too large, and that is the owner's.
+    """
+    try:
+        plan_text = json.loads(gatelib.read_text(options.plan) or "") if options.plan else None
+    except ValueError:
+        plan_text = None
+    result = queue_notes.loaded(gatelib.read_text(options.result) if options.result else None)
+    made, refused = split.apply(drain.root, ticket.ref, plan_text, gh=drain.tracker)
+    if refused:
+        reasons = [f"too large, and the split was refused: {line}" for line in refused]
+        close(
+            drain.root, ticket, outcome=PARKED, reasons=reasons, result={**result, "tooLarge": True}
+        )
+        return 1
+    close(
+        drain.root,
+        ticket,
+        outcome=SPLIT,
+        reasons=[f"too large; split into {', '.join(made)}"],
+        result=result,
+        children=made,
+    )
+    print(json.dumps({"children": made}))
     return 0
 
 
@@ -854,7 +894,7 @@ WHOLE: dict[str, Callable[[Drain, argparse.Namespace], int]] = {
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=[*WHOLE, "update", "land", "close"])
+    parser.add_argument("action", choices=[*WHOLE, "update", "land", "close", "split"])
     parser.add_argument(
         "ref",
         nargs="?",
@@ -866,6 +906,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--outcome", choices=[MERGED, WAITS, PARKED], default=WAITS)
     parser.add_argument("--reason", action="append", default=[])
     parser.add_argument("--result", type=Path, help="the pipeline's result, as JSON")
+    parser.add_argument("--plan", type=Path, help="the split of a ticket too large, as JSON")
     parser.add_argument("--all", action="store_true", dest="everything")
     options = parser.parse_args(argv[1:])
     root = main_tree(Path(options.root))

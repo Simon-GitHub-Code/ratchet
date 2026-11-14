@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 QUEUE = "queue"
 # Why: the kinds of hold a parked run leaves, read from its result; each has its own release.
 SIZE, QUESTIONS, GUARD = "size", "questions", "guard"
+# Why: ADR 0046. A ticket the agent split by size is closed with this outcome, its text untouched.
+SPLIT = "split"
 # Why: the judge's reason codes the drain resolves itself: update, judge again, run the gates
 # again. A ticket left to the owner for these alone is retried, not held; any other code is the
 # owner's decision, and holds the ticket until its text changes.
@@ -99,6 +101,14 @@ class Hold:
     reasons: list[str]
     kinds: list[str]
     owes: list[str]
+
+
+def split_into(root: Path, branch: str, ticket: preflight.Ticket) -> list[str] | None:
+    """The parts the agent split ``ticket`` into, or ``None`` if it was not, as it reads now."""
+    note = read_note(root, branch)
+    if note.get("outcome") != SPLIT or note.get("digest") != digest(ticket):
+        return None
+    return texts(note.get("children"))
 
 
 def held(root: Path, branch: str, ticket: preflight.Ticket) -> Hold | None:
