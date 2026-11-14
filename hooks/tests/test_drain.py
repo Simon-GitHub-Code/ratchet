@@ -1090,6 +1090,38 @@ def test_a_mechanical_reason_that_keeps_coming_back_becomes_the_owners(
     capsys.readouterr()
 
 
+def test_a_run_that_keeps_erroring_is_retried_and_then_the_owners(
+    tmp_path: Path, capsys: Out
+) -> None:
+    # Why: ADR 0055. A run that errors has no result; the skill closes the ticket with this code.
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    crashed = "errored: the pipeline run errored twice: implement agent returned no result"
+    assert queue_notes.mechanical([crashed])
+    for attempt in range(1, queue_notes.RETRIES):
+        drain.close(
+            root,
+            drain.preflight.fetch(ALPHA, root, offline(root).tracker),
+            outcome="waits",
+            reasons=[crashed],
+        )
+        assert note(root, BRANCH_A)["attempts"] == attempt
+        assert note(root, BRANCH_A)["hold"] is False
+        entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+        assert entry.state == "buildable", "no commits: the next drain builds it from the start"
+    drain.close(
+        root,
+        drain.preflight.fetch(ALPHA, root, offline(root).tracker),
+        outcome="waits",
+        reasons=[crashed],
+    )
+    entry = next(e for e in drain.plan(offline(root)).tickets if e.branch == BRANCH_A)
+    assert entry.state == "held"
+    assert entry.why[0].startswith(f"the pipeline run errored on each of {queue_notes.RETRIES}")
+    assert entry.why[1] == crashed
+    capsys.readouterr()
+
+
 # --- a ticket too large is split by the agent (ADR 0046) -------------------------------------
 
 PROMISES = "\n## Acceptance criteria\n\n- [ ] It saves a link.\n- [ ] It lists the links.\n"
