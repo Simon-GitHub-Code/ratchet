@@ -1,19 +1,20 @@
 // The owner's words for one pipeline run, shared by the charts of docs/model/pipeline.md.
 
+// Why: Mermaid 11 reads a second colon in a state's words as an error, so no label holds one.
 export const FIRST_BUILD = "A first build";
 export const REJUDGE = "Judging a rebased branch again";
 
 const AGENT = {
-  preflight: "The preflight: is the ticket ready?",
-  spec: "The spec: tests that fail, and the size",
-  "ticket-check": "The ticket check: does the spec keep every promise?",
+  preflight: "The preflight checks the ticket is ready",
+  spec: "The spec writes tests that fail, and measures the size",
+  "ticket-check": "The ticket check reads the spec for every promise",
   "spec-amend": "The spec is amended to the gaps",
   "ticket-recheck": "The ticket check, once more",
   implement: "The build",
   critique: "The critic attacks the change",
   fix: "A fix round",
   review: "The review",
-  reconcile: "The reconcile: finish the rebase, check green",
+  reconcile: "The reconcile finishes the rebase and turns the check green",
   "review-again": "The review, once more",
 };
 // Why: before the project is depended-on the review hands its blockers to one fix pass, and a
@@ -27,12 +28,15 @@ export const agent = (v) => {
 };
 
 const STOP = {
-  "no ticket was passed": "Stopped: no ticket, or the ticket is not ready",
-  "the preflight is red": "Stopped: no ticket, or the ticket is not ready",
-  "a question for the owner": "Stopped for you: a question, or a guard path to change",
-  "a guard path the owner must change": "Stopped for you: a question, or a guard path to change",
-  "too large": "Stopped too large: split the ticket",
+  "no ticket was passed": "Stopped, no ticket or the ticket is not ready",
+  "the preflight is red": "Stopped, no ticket or the ticket is not ready",
+  "a question for the owner": "Stopped for you, a question or a guard path to change",
+  "a guard path the owner must change": "Stopped for you, a question or a guard path to change",
+  "too large": "Stopped too large, split the ticket",
 };
+
+const DIED = "Stopped on an error, resume the run";
+const MISSING = "Stopped on an error, an input is missing";
 
 // How a run ended, or the agent it waits on.
 export const where = (v) => {
@@ -40,14 +44,14 @@ export const where = (v) => {
   if (v.outcome === "approve") return "Approved";
   if (v.outcome === "request_changes") return "Changes requested";
   if (v.outcome === "blocked") return STOP[v.stop];
-  return v.resume ? "Stopped on an error: resume the run" : "Stopped on an error: an input is missing";
+  return v.resume ? DIED : MISSING;
 };
 
 // The agent's answer that moved the run between two of those.
 export const answer = (from, to) => {
   const now = where(to);
-  if (now === "Stopped on an error: resume the run") return "the agent dies";
-  if (now === "Stopped on an error: an input is missing") return "it is ready but names no slug";
+  if (now === DIED) return "the agent dies";
+  if (now === MISSING) return "it is ready but names no slug";
   if (now.startsWith("Stopped for you")) return "it asks you, or needs a guard path changed";
   if (now.startsWith("Stopped too large"))
     return from.waits.startsWith("spec")
