@@ -180,6 +180,8 @@ BITING = "RATCHET_BITING"
 # Why: the copy as it stood after setup, as an index of its own: restoring from it rewrites only
 # the files a run changed, so no build tool sees a tree of new timestamps.
 SNAPSHOT = ".git/bite-index"
+# Why: a chain of links longer than this is a loop, or as good as one, and is refused.
+MAX_LINK_HOPS = 40
 # Why: a gate that adds a rule here hides from the restore what it, or a fault, left behind.
 EXCLUDE = ".git/info/exclude"
 INDEX = ".git/index"
@@ -1079,6 +1081,45 @@ def snapshot(copy: Path) -> None:
     contained(copy, git_in(copy, "rev-parse", "HEAD"))
 
 
+def under(absolute: str, bases: tuple[str, ...]) -> list[str] | None:
+    """The parts of ``absolute`` below the first of ``bases`` holding it, or ``None``."""
+    for base in bases:
+        if absolute == base or absolute.startswith(base + os.sep):
+            return absolute[len(base) :].split("/")
+    return None
+
+
+def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...]) -> bool:
+    """Whether the link ``path`` ends inside the copy, by the link texts ``targets`` hold.
+
+    Judged from the text the snapshot holds, which is what restoring writes, never from the copy
+    as it stands: setup left running can put a directory back by the time this looks, and a link
+    accepted that way is written again, live, by the next restore.
+    """
+    pending: list[str] = path.split("/")
+    here: list[str] = []
+    hops = 0
+    while pending:
+        part = pending.pop(0)
+        if part == "..":
+            if not here:
+                return False
+            here.pop()
+        elif part not in ("", "."):
+            target = targets.get("/".join([*here, part]))
+            if target is None:
+                here.append(part)
+                continue
+            hops += 1
+            below = under(os.path.normpath(target), bases) if target.startswith("/") else None
+            if hops > MAX_LINK_HOPS or (target.startswith("/") and below is None):
+                return False
+            if below is not None:
+                here = []
+            pending = (below if below is not None else target.split("/")) + pending
+    return True
+
+
 def contained(copy: Path, head: str) -> None:
     """Refuse a link in the snapshot that resolves outside the copy; ``Unprovable`` names it.
 
@@ -1099,10 +1140,14 @@ def contained(copy: Path, head: str) -> None:
         return found
 
     committed = links("-r", head)
-    base = os.path.realpath(copy)
-    for path, oid in links("--stage", index=copy / SNAPSHOT).items():
-        end = os.path.realpath(copy / path)
-        if committed.get(path) != oid and end != base and not end.startswith(base + os.sep):
+    snapshot = links("--stage", index=copy / SNAPSHOT)
+    snapshot_links = {
+        path: git_bytes(copy, "cat-file", "blob", oid).decode(errors="surrogateescape")
+        for path, oid in snapshot.items()
+    }
+    bases = (os.path.realpath(copy), str(copy))
+    for path, oid in snapshot.items():
+        if committed.get(path) != oid and not ends_inside(path, snapshot_links, bases):
             message = (
                 f"setup left {path}, a symbolic link that leads outside the scratch copy"
                 " (to the real tree or elsewhere); a later write through it would land there"

@@ -1471,19 +1471,73 @@ def test_a_setup_that_leaves_a_link_leading_out_of_the_copy_is_unsafe_and_red(
     assert "leads outside the scratch copy" in out
 
 
+@pytest.mark.parametrize(
+    "link",
+    [
+        "ln -s src alias",
+        "ln -s ./src//. alias",
+        "ln -s src/../src alias",
+        'ln -s "$PWD/src" alias',
+        'ln -s "$PWD" alias',
+    ],
+    ids=["relative", "dotted", "back up", "absolute", "the copy itself"],
+)
 def test_a_setup_link_that_stays_inside_the_copy_is_accepted_and_the_proof_goes_green(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], link: str
 ) -> None:
     # Why: green end to end with a link present shows the link was accepted, not refused.
     root = project(tmp_path / "repo", {"lint": LINT}, "")
     (root / "quality/bites.toml").write_text(
-        'setup = ["ln -s src alias"]\n' + bite("lint", "a planted word"), encoding="utf-8"
+        f"setup = [{json.dumps('sh -c ' + shlex.quote(link))}]\n" + bite("lint", "a planted word"),
+        encoding="utf-8",
     )
     commit(root, "registry")
     assert prove(root) == 0
     out = capsys.readouterr().out
     assert "leads outside the scratch copy" not in out
     assert "bite: green" in out
+
+
+def test_a_link_the_snapshot_holds_is_judged_though_the_directory_is_back_by_the_time_it_looks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Why: the race run for real, made certain. Setup leaves src a link out as the snapshot is
+    # taken, and a process of its own puts the directory back before the check looks. Judged by
+    # the copy as it stands, the link was accepted and the next restore wrote it, live.
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
+    setup = f"mv src aside && ln -s {root / 'src'} src"
+    (root / "quality/bites.toml").write_text(
+        f"setup = [{json.dumps('sh -c ' + shlex.quote(setup))}]\n" + bite("lint", "f"),
+        encoding="utf-8",
+    )
+    commit(root, "registry")
+    before = fingerprint(root)
+    looked = project_bite.contained
+
+    def put_back_then_look(copy: Path, head: str) -> None:
+        if (copy / "src").is_symlink():
+            (copy / "src").unlink()
+            (copy / "aside").rename(copy / "src")
+        looked(copy, head)
+
+    monkeypatch.setattr(project_bite, "contained", put_back_then_look)
+    assert prove(root) == 1
+    assert fingerprint(root) == before
+    assert "leads outside the scratch copy" in capsys.readouterr().out
+
+
+def test_links_that_lead_round_in_a_ring_are_refused_as_leading_nowhere_safe(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
+    (root / "quality/bites.toml").write_text(
+        f"setup = [{json.dumps('sh -c ' + shlex.quote('ln -s b a && ln -s a b'))}]\n"
+        + bite("lint", "f"),
+        encoding="utf-8",
+    )
+    commit(root, "registry")
+    assert prove(root) == 1
+    assert "leads outside the scratch copy" in capsys.readouterr().out
 
 
 def test_a_process_setup_left_swapping_a_directory_for_a_link_never_changes_the_real_tree(
