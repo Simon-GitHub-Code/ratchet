@@ -341,38 +341,60 @@ def finished(tickets: list[preflight.Ticket], merged: list[str]) -> Step | None:
     return None
 
 
-def blocked_runs(root: Path, default_branch: str) -> dict[str, str]:
+def blocked_runs(
+    root: Path, default_branch: str, tickets: list[preflight.Ticket] | None = None
+) -> dict[str, str]:
     """Branches whose last feature run blocked and whose block still stands, with its stash.
 
-    The feature skill stashes a blocked run as ``<branch>: blocked run``. The block stands while
-    the default branch has not moved past the run, or has gained only records the merge judge
-    lets an agent land alone: the owner answers the ticket or lands the guard edits there, so a
-    newer default branch that holds what the owner merged is the cue to build again.
+    The feature skill stashes a blocked run as ``<branch>: blocked run``. The block stands until
+    what blocked it changes on the default branch (see ``answered``); any other move, as another
+    ticket agreed or an unrelated binding edit, leaves a rerun to block the same way.
     """
+    by_branch = {own_branch(ticket): ticket for ticket in tickets or []}
     listing = gatelib.git(root, "stash", "list", "--format=%gd%x09%gs") or ""
     found: dict[str, str] = {}
     for line in listing.splitlines():
         ref, _, subject = line.partition("\t")
         run = subject.split(": ", 1)[-1]
-        if run.endswith(BLOCKED_RUN) and not answered(root, default_branch, ref):
-            found.setdefault(run.removesuffix(BLOCKED_RUN), run)
+        branch = run.removesuffix(BLOCKED_RUN)
+        if not run.endswith(BLOCKED_RUN):
+            continue
+        ticket, note = by_branch.get(branch), queue_notes.read_note(root, branch)
+        recorded = isinstance(note.get("digest"), str)
+        if ticket is not None and recorded and queue_notes.edited(note, ticket):
+            continue
+        asked = asked_paths(ticket, queue_notes.texts(note.get("causes")), recorded=recorded)
+        if not answered(root, default_branch, ref, asked=asked):
+            found.setdefault(branch, run)
     return found
 
 
-def answered(root: Path, default_branch: str, stash: str) -> bool:
-    """Whether the default branch gained, since the blocked run, a change the owner merged.
+def asked_paths(ticket: preflight.Ticket | None, causes: list[str], *, recorded: bool) -> list[str]:
+    """The repo paths whose change answers a blocked run: its spec, the causes, and its ticket.
 
-    Why: records alone land without the owner (ADR 0031), so a move made of them answers
-    nothing; the answers on the held ticket, its spec or an ADR are the owner's to merge.
+    The ticket's own file counts only when no note recorded its text: with one, ``edited`` has
+    compared the text, so a forge issue is judged as a file is.
+    """
+    own = [] if ticket is None else [ticket.parent or ""] + ([] if recorded else [ticket.ref])
+    return [path for path in [*own, *causes] if path and not path.lstrip("#").isdigit()]
+
+
+def answered(root: Path, default_branch: str, stash: str, *, asked: list[str]) -> bool:
+    """Whether the default branch changed, since the blocked run, what the run was blocked on.
+
+    Why: a rerun is worth offering only when something the run asked was answered, never for any
+    other move the owner merged (ADR 0031 lets records land alone, and the owner merges more).
+    What it asked is read from durable facts: the ticket's own text and the spec it inherits
+    (an answer, ``## Answers``), and the paths the drain's note recorded as the cause (a guard
+    path it needed, a dispute it filed). A forge ticket has no file, so it is released by the
+    owner dropping the stash.
     """
     if gatelib.git(root, "merge-base", "--is-ancestor", default_branch, stash) is not None:
         return False
     fork = gatelib.git(root, "merge-base", default_branch, stash) or default_branch
-    listed = gatelib.git(root, "diff", "--name-only", "-z", fork, default_branch) or ""
-    paths = [path for path in listed.split("\0") if path]
-    return bool(
-        merge_ready.not_records(root, fork, paths) or merge_ready.judge(root, fork, default_branch)
-    )
+    if not asked:
+        return False
+    return bool(gatelib.git(root, "diff", "--name-only", fork, default_branch, "--", *asked))
 
 
 def stalled(ticket: preflight.Ticket, runs: dict[str, str]) -> str | None:
@@ -469,7 +491,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             f"{TICKETS}, then {CONJECTURE} <ticket>",
             "specify",
         )
-    runs = blocked_runs(root, checkout.default_branch)
+    runs = blocked_runs(root, checkout.default_branch, unblocked)
     drained = {t.ref: hold for t in unblocked if (hold := drain_hold(root, t))}
 
     def free(t: preflight.Ticket) -> bool:
