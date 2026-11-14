@@ -5,10 +5,12 @@ and these tests hold it to every rule. ``real_advice`` is that with the named di
 it may break a rule only where a divergence says, and the real ``route.decide`` must give it in
 every state. A sweep visits every state of the model on a real repository; a stateful test takes
 long runs of actions there; each divergence keeps a strict expected failure that passes the day
-the route is fixed. The exporter is held to a stable output.
+the route is fixed. The exporter is held to a stable output, and the charts to the export.
 """
 
+import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +41,7 @@ from tests.route_model import ActionName, Advice, World
 from tests.support import PLUGIN_ROOT
 
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
+CHARTS = PLUGIN_ROOT / "docs/model/route.md"
 HOOKS_EVERY = 7  # the steps between the times a run takes the commit hooks away
 SWEEP_CHUNKS = 8
 
@@ -206,6 +209,17 @@ def test_the_exporter_writes_the_same_bytes_whatever_the_hash_seed(tmp_path: Pat
     for name in ("Route.tla", "Route.cfg"):
         assert (tmp_path / "1" / name).read_bytes() == (tmp_path / "2" / name).read_bytes()
     assert (tmp_path / "1" / "Route.tla").read_text(encoding="utf-8") == model.export().module
+
+
+def test_the_charts_were_drawn_from_the_current_export() -> None:
+    drawn = re.search(r"SHA-256 `([0-9a-f]{64})`", CHARTS.read_text(encoding="utf-8"))
+    now = hashlib.sha256(model.export().module.encode()).hexdigest()
+    assert drawn is not None, f"{CHARTS} names no SHA-256 of the export its charts were drawn from"
+    assert drawn.group(1) == now, (
+        "the model changed since the charts in docs/model/route.md were drawn: regenerate them"
+        " as docs/model/README.md says (python3 -m tests.model_tla tests.route_model <dir>, then"
+        f" the statechart tool on each view) and write the new SHA-256 `{now}`"
+    )
 
 
 def follow(repo: real.Repo, world: World, outcome: int) -> tuple[World, list[Advice]]:
