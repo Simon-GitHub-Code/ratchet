@@ -4,9 +4,17 @@
 commits ``AGENTS.md``, ``/ratchet:adopt`` commits the binding and the manifest on its own branch
 and merges it, the spec skills leave records uncommitted on the default branch, ``merge --records``
 commits them on a ``records/<time>`` branch and merges it or leaves it parked, and the drain
-writes its note through ``drain.close``. ``scripts/merge.py`` is not run: its two outcomes are
-written with git. An owner's edit of a ticket is committed on the default branch at once, as the
-model has it. ``classify`` reads a real ``route.Step`` back as the model's advice label.
+writes its note through ``drain.close``. An owner's edit of a ticket is committed on the default
+branch at once, as the model has it. ``classify`` reads a real ``route.Step`` back as the model's
+advice label.
+
+``apply`` never runs ``scripts/merge.py``. Each merge it makes, of a working branch, of a records
+branch, or the drain's, is written with git: the merge that leaves the default branch checked out,
+the one that leaves the merged branch checked out, and the merge of a branch already merged, which
+changes nothing. The sweep's binding names ``just merge``, which nothing here can run. A repository
+made by ``Repo.merging`` names ``merge.py`` and green gates instead, and the tests run the real
+entry point there, from a clean working branch and from the adoption's branch, and again on the
+branch it merged; ``merge --records`` is never run.
 
 ``/ratchet:adopt`` writes the architecture decision record and the binding's ``## Architecture``
 section, as the adoption has since ADR 0049; an adoption by a plugin from before it writes
@@ -204,7 +212,9 @@ class Repo:
         ) + "".join(f"| {kind} | `src/{kind}.py` | |\n" for kind in self.reopened)
         return BINDING.format(
             pin=PIN.format(version=self.version()) if pinned else UNPINNED,
-            entries="".join(f"| {name} | `{command}` |\n" for name, command in self.entries.items()),
+            entries="".join(
+                f"| {name} | `{command}` |\n" for name, command in self.entries.items()
+            ),
             gates=gates + REVIEW_ROW,
             triggers=rows,
             architecture=self.architecture,
@@ -416,7 +426,7 @@ def _agent_builds_ticket(repo: Repo, change: Change) -> None:
 
 @does(ActionName.BUILD_STOPS)
 def _build_stops(repo: Repo, change: Change) -> None:
-    """The build stops with its code uncommitted, or right after ``/ratchet:feature`` cut its branch.
+    """The build stops with its code uncommitted, or just after ``/ratchet:feature`` cut the branch.
 
     Why the first ticket that can start: a stop before anything is written changes no ticket.
     """

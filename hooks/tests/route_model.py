@@ -11,7 +11,7 @@ is red until its entry is deleted. ``docs/model/route.md`` is the page for the o
 
 Scope: no forge (no ``origin``), local tickets, offline. Two tickets, the second blocked by the
 first. One thing happens at a time: a spec or ticket action needs a clean default branch with
-nothing parked.
+nothing parked. One checkout: no other work tree holds the default branch.
 """
 
 from __future__ import annotations
@@ -608,6 +608,8 @@ per_ticket(
     (Advice.BUILD,),
     Move(STATED, Ticket.BUILT, needs_free=True, head=Head.WORK),
 )
+
+
 @action(ActionName.BUILD_STOPS)
 def _build_stops(world: World) -> Iterator[World]:
     """The build stops with its code uncommitted, or on the branch it cut before it wrote any.
@@ -615,9 +617,13 @@ def _build_stops(world: World) -> Iterator[World]:
     Why the second is a merged branch: a branch cut from the default branch's tip and holding no
     commit of its own is in the default branch, and the route reads it so.
     """
-    yield from moves(world, Move(STATED, Ticket.BUILT, needs_free=True, head=Head.WORK, tree=Tree.CODE))
+    yield from moves(
+        world, Move(STATED, Ticket.BUILT, needs_free=True, head=Head.WORK, tree=Tree.CODE)
+    )
     if calm(world) and any(world.tickets[slot] in STATED for slot in runnable_slots(world)):
         yield replace(world, head=Head.MERGED)
+
+
 per_ticket(
     ActionName.FEATURE_RUN_BLOCKS,
     (),
