@@ -76,7 +76,7 @@ Run these in your repository. It can be empty.
 | --- | --- |
 | `/ratchet:init` | Asks four or five questions about what you are making and who it is for. Writes `AGENTS.md`, makes the first commit and, if you say so, a private copy on GitHub. |
 | `/mattpocock-skills:setup-matt-pocock-skills` | Records where your tickets live and the labels they use. |
-| `/ratchet:adopt` | Asks what you want to be able to do first, what can wait, and how it should be built: two or three whole designs, each with the tools that would check it. Then it sets up the first checks, shows each one fail on a planted mistake, and opens one pull request for you to merge. About 25 minutes on an empty repository. |
+| `/ratchet:adopt` | Asks what you want to be able to do first, what can wait, and how it should be built: two or three whole designs, each with the tools that would check it. Then it sets up the first checks, shows each one fail on a planted mistake, and hands over one change. On GitHub it is a pull request you merge; with no remote, one command merges it once its checks pass. About 25 minutes on an empty repository. |
 | `/ratchet:next` | Prints the command to type next, why, and the step after it. |
 
 No sample app is built. After adoption, the next thing written in an empty repository is your idea.
@@ -139,7 +139,7 @@ Carrying on is free in both cases until a change adds another of the same kind.
 - **Four plugins.** Ratchet says what must be true before a merge. [`mattpocock-skills`](https://github.com/mattpocock/skills) says how the work is done, [`pstack`](https://github.com/michael-denyer/pstack-claude) in what style, and [`impeccable`](https://github.com/pbakaus/impeccable) how anything a person sees is designed.
 - **Time at adoption.** About 25 minutes on an empty repository, an estimate. A repository with code takes longer, because the safeguards its code already needs are set up at once.
 - **Agents.** A ticket built while you are away takes five agents, or seven when its plan is sent back once, or nine when the review also finds a blocker and it gets its one fix pass. After you declare that people rely on the project, a critic and its fix loop join and the most is twelve. A ticket judged again behind another merge takes two more. A run over several tickets states its largest possible count before it starts.
-- **Your keystrokes.** Four or five questions at init, one setup command, up to six questions at adoption (nine on a repository that already has code), and one merge of the adoption. After that: tickets, the agent-ready label, product questions, and the merges the checks leave to you.
+- **Your keystrokes.** Four or five questions at init, one setup command, up to six questions at adoption (nine on a repository that already has code), and on GitHub one merge of the adoption. After that: tickets, the agent-ready label, product questions, and the merges the checks leave to you.
 
 ## How it works
 
