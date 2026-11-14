@@ -60,6 +60,9 @@ def test_a_whole_run_follows_the_route_to_a_usable_merge(tmp_path: Path) -> None
     assert prose["took_recommended"]
     assert prose["reason"] == "a build question"
     assert metrics["cost_usd"] == {"session": 1.5, "owner": 0.25, "sessions": 1}
+    assert metrics["architecture"]["read"]
+    assert not metrics["architecture"]["adr"]["found"]
+    assert metrics["stack_leaks"]["count"] == 0
     assert metrics["integrity"]["unchanged"]
     assert metrics["integrity"]["changed"] == []
     assert metrics["integrity"]["claude_projects"] == []
@@ -405,3 +408,52 @@ def test_a_second_signal_while_the_run_stops_changes_nothing() -> None:
         return interrupt.name, work.cancelled()
 
     assert asyncio.run(scenario()) == ("SIGTERM", True)
+
+
+def test_a_finished_run_logs_what_it_did_about_the_architecture_and_any_stack_leak(
+    tmp_path: Path,
+) -> None:
+    run, _ = make_run(tmp_path)
+    one = driver(run)
+    asyncio.run(one.session.turn("/ratchet:init", run.deadline))
+    app = run.layout.app
+    (app / "docs" / "adr").mkdir(parents=True)
+    (app / "docs" / "process").mkdir(parents=True)
+    (app / "docs" / "adr" / "0002-system.md").write_text(
+        "## Decision\n\nx\n\n- Chosen by: the owner\n\n## Considered options\n\n- a\n- b\n\n"
+        "## Reversal cost\n\nsmall\n\n## Refutation criterion\n\nslow\n",
+        encoding="utf-8",
+    )
+    (app / "docs" / "process" / "binding.md").write_text(
+        "## Architecture\n\n- Decision: `docs/adr/0002-system.md`\n\n"
+        "| Part | Path | May depend on |\n| --- | --- | --- |\n| core | `src/**` | nothing |\n",
+        encoding="utf-8",
+    )
+    fakes.git(app, "add", "-A")
+    fakes.git(app, "commit", "-q", "-m", "docs")
+    transcript = {
+        "type": "SystemMessage",
+        "msg": {"subtype": "hook_response", "data": {"output": "cargo"}},
+    }
+    with (run.layout.root / "transcript.jsonl").open("a", encoding="utf-8") as out:
+        out.write(json.dumps(transcript) + "\n")
+    harness.record_audit(run, one)
+    found = {e["kind"]: e for e in events(run)}
+    assert found["architecture"]["adr"]["complete"]
+    assert len(found["architecture"]["binding"]["parts"]) == 1
+    assert found["stack-leaks"]["names"] == ["Rust"]
+    metrics = reduce.reduce(events(run))
+    assert metrics["architecture"]["parts_declared"] == 1
+    assert metrics["stack_leaks"]["count"] == 1
+
+
+def test_a_run_that_never_reached_a_default_branch_logs_only_the_leak_reading(
+    tmp_path: Path,
+) -> None:
+    run, _ = make_run(tmp_path)
+    harness.record_audit(run, None)
+    assert [e["kind"] for e in events(run) if e["kind"] in ("architecture", "stack-leaks")] == [
+        "stack-leaks"
+    ]
+    harness.record_audit(run, driver(run))
+    assert not any(e["kind"] == "architecture" for e in events(run))

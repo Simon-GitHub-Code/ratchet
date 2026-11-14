@@ -1,0 +1,36 @@
+# A command-line owner who insists on Go. The slice is checked by running the program the way the
+# repository says, not by opening a page: `kind = "cli"` runs `value`, then `then`, and looks for
+# `expect` in the last output.
+
+name = "go-todo-cli"
+stack = "Go, a command-line tool"
+
+idea = "A tiny command-line to-do list: I type `todo add buy milk` and it remembers it, `todo list` shows what is left, and `todo done 2` ticks one off."
+
+profile = """
+I am a hobbyist, not a software engineer. I want a small program for my own terminal and I want an AI
+to build it while I watch and answer questions. I can follow instructions and copy a command into a
+terminal when I am told exactly what to type, but I do not know git, testing, linters, frameworks,
+databases or deployment, and I do not want to learn them.
+
+The tool: a to-do list for my terminal. `todo add <words>` saves a task, `todo list` prints the tasks
+that are left, numbered, and `todo done <number>` ticks one off so it leaves the list. It is only for
+me, on my own computer.
+
+Firm positions:
+- It must be written in Go. I read that Go makes one small program that I can copy to another
+  machine and run, and that is what I want. If you suggest another language, my answer is no.
+- It is a command-line tool: no website, no window, no app to install, nothing running in the
+  background.
+- No database to install. My list lives in one plain file in my home folder that I could open and read.
+- Local only. Nothing goes online: no GitHub, no remote repository, no hosting, no accounts.
+- Keep it small and plain. Adding and listing matter most; everything else can wait.
+- A task I tick off may disappear from the list; I do not need a history.
+"""
+
+[slice]
+kind = "cli"
+describe = "run `todo add buy oat milk`, then `todo list`, and see the task in the list"
+value = "add buy oat milk"
+then = "list"
+expect = "buy oat milk"
