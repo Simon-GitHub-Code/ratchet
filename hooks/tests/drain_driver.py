@@ -10,6 +10,8 @@ installed. Optional environment:
   and waiting for ``<dir>/go``: a command caught between reading and acting.
 - ``DRV_KILL_AT=drop_record`` ends this process with SIGKILL where ``update`` is about to drop
   the verdict record the rebase outdated: a run killed after its rebase.
+- ``DRV_KILL_AT=discard`` ends it where ``close`` is about to remove the work tree: a landing
+  killed after the merge, with its note written or not.
 """
 
 import os
@@ -51,5 +53,8 @@ if "DRV_PAUSE" in os.environ:
     drain.plan = paused_plan
 if os.environ.get("DRV_KILL_AT") == "drop_record":
     drain.drop_record = lambda _tree: os.kill(os.getpid(), signal.SIGKILL)
+
+if os.environ.get("DRV_KILL_AT") == "discard":
+    drain.discard = lambda *_args: os.kill(os.getpid(), signal.SIGKILL)
 
 raise SystemExit(drain.main(["drain", *sys.argv[1:]]))

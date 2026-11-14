@@ -25,6 +25,7 @@ import application_types
 import drain
 import feature_preflight as preflight
 import merge
+import owed
 import queue_notes
 import route
 import triggers
@@ -107,6 +108,8 @@ class Repo:
     parked: str | None = None
     reopened: list[str] = field(default_factory=list)
     reviewed: int = 0
+    upgrades: int = 0
+    unfilled: bool = False
 
     @classmethod
     def start(cls, parent: Path) -> Repo:
@@ -145,6 +148,19 @@ class Repo:
         return BINDING.format(
             pin=PIN if pinned else UNPINNED, gates=gates + REVIEW_ROW, triggers=rows
         )
+
+    def write_ledger(self) -> None:
+        """The owed ledger: one row an agent fills while ``unfilled``, none after."""
+        entries = (
+            [
+                owed.Entry(
+                    "docs/process/binding.md", "pins", "has no section", f"999.{self.upgrades}.0"
+                )
+            ]
+            if self.unfilled
+            else []
+        )
+        write(self.root, str(owed.LEDGER), owed.render(entries))
 
     def ticket_path(self, slot: int) -> str:
         """The local ticket in ``slot``: ``.scratch/f<n>/issues/NN-<letter><n>.md``."""
@@ -434,6 +450,21 @@ def _agent_lands_the_review(repo: Repo, _change: Change) -> None:
     snapshot(repo.root, "docs(adr): architecture review")
 
 
+@does(ActionName.UPGRADE_LEAVES_ROWS_TO_FILL)
+def _upgrade_leaves_rows_to_fill(repo: Repo, _change: Change) -> None:
+    repo.upgrades += 1
+    repo.unfilled = True
+    repo.write_ledger()
+    snapshot(repo.root, "chore: the upgrade")
+
+
+@does(ActionName.AGENT_FILLS_ROWS)
+def _agent_fills_rows(repo: Repo, _change: Change) -> None:
+    repo.unfilled = False
+    repo.write_ledger()
+    snapshot(repo.root, "docs(process): fill the rows the upgrade left")
+
+
 @does(ActionName.AGENT_BINDS_SAFEGUARD)
 def _agent_binds_safeguard(repo: Repo, _change: Change) -> None:
     repo.tools = [tool or "`just safe`" for tool in repo.tools]
@@ -507,6 +538,7 @@ STAGES: Final = {
     "hooks": Advice.HOOKS,
     "change": Advice.COMMIT,
     "merge": Advice.MERGE,
+    "fill": Advice.FILL,
     "architecture-review": Advice.REVIEW,
     "safeguard": Advice.SAFEGUARD,
     "triage": Advice.TRIAGE,

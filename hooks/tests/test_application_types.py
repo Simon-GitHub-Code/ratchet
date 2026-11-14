@@ -189,16 +189,20 @@ def test_an_event_owes_the_questions_whose_trigger_names_it() -> None:
 def test_the_signs_of_an_undeclared_event_are_the_first_paths_the_tree_matches(
     tmp_path: Path,
 ) -> None:
-    binding = "- Application types: cli\n- Life events: depended-on\n"
+    binding = (
+        "- Application types: cli\n- Life events: depended-on\n\n## Life event signs\n\n"
+        "| Event | Paths |\n| --- | --- |\n| deployed | `launch.cfg, deploy/**` |\n"
+        "| irreplaceable-data | none: nothing marks it here |\n"
+    )
     files = {
         "docs/process/binding.md": binding,
-        "fly.toml": "x",
+        "launch.cfg": "x",
         "deploy/up.sh": "x",
         "SECURITY.md": "x",
     }
     root = repository(tmp_path / "repo", files)
     assert application_types.signs_seen(root) == {
-        "deployed": {"fly.toml": "fly.toml", "deploy/**": "deploy/up.sh"}
+        "deployed": {"launch.cfg": "launch.cfg", "deploy/**": "deploy/up.sh"}
     }
     assert application_types.signs_seen(tmp_path) == {}
 
@@ -241,7 +245,8 @@ def test_the_shipped_catalogue_gives_every_question_a_trigger_it_can_fire() -> N
     assert SHIPPED.trigger_of("incidents tighten a gate") == "always"
     assert {"deployed", "irreplaceable-data", "depended-on"} == set(SHIPPED.events)
     assert "outbound-call" in SHIPPED.kinds
-    assert "migrations/**" in SHIPPED.events["irreplaceable-data"].signs
+    assert SHIPPED.events["irreplaceable-data"].signs == ()
+    assert SHIPPED.events["deployed"].in_binding
     # Why: with no signs the route could never propose `depended-on`, and ADR 0028's refuter
     # (a project people rely on is asked its depended-on questions) could not be tried.
     assert "CONTRIBUTING.md" in SHIPPED.events["depended-on"].signs
@@ -335,3 +340,18 @@ def test_a_catalogue_without_triggers_asks_every_question_always() -> None:
     assert plain.questions == {"tests"}
     assert plain.kinds_asked({"cli"}) == set()
     assert application_types.dropped("tests").startswith("the Gates table has no 'tests' row")
+
+
+def test_the_signs_table_is_read_and_its_faults_named() -> None:
+    head = "## Life event signs\n\n| Event | Paths |\n| --- | --- |\n"
+    ok = head + "| deployed | `a, b/**` |\n| irreplaceable-data | none: nothing marks it |\n"
+    signs = application_types.signs_in(ok)
+    assert signs is not None
+    assert (signs.globs["deployed"], signs.problems) == (("a", "b/**"), ())
+    assert application_types.signs_in("# B\n") is None
+    bad = head + "| deployed | none: x |\n| famous | `a` |\n| deployed | `b` |\n"
+    bad += "| irreplaceable-data | words |\n"
+    problems = application_types.signs_in(bad)
+    assert problems is not None
+    assert len(problems.problems) == 5
+    assert "lacks its table" in application_types.signs_in("## Life event signs\n\nx\n").problems[0]  # type: ignore[union-attr]

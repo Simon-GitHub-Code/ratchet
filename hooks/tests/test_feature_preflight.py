@@ -14,8 +14,9 @@ import pytest
 
 import drain
 import feature_preflight as preflight
+import owed
 import route
-from tests.repos import git, install_hooks, repository, write
+from tests.repos import git, install_hooks, repository, snapshot, write
 
 Out = pytest.CaptureFixture[str]
 Gh = Callable[[Sequence[str]], str | None]
@@ -642,6 +643,8 @@ def opened_by(root: Path, read: Callable[[], object]) -> set[str]:
         if os.path.normpath(path).startswith(f"{root}{os.sep}")
         # Why: the drain's notes are untracked state, which no change to the tracker can steer.
         and not os.path.relpath(path, root).startswith(".ratchet")
+        # Why: the owed ledger is an upgrade's record, which no change to the tracker can steer.
+        and os.path.relpath(path, root) != "quality/owed.toml"
     }
 
 
@@ -739,3 +742,18 @@ def test_a_ticket_that_states_a_size_over_the_product_ceiling_is_refused_before_
     assert "9 product files" not in report.failures[0].detail
     assert "orchestrator splits the ticket itself" in report.failures[0].produce
     assert checks(sized("\n## Size\n\n- Product files: 26\n")) == ["size"]
+
+
+def test_an_owed_item_an_agent_writes_stops_a_feature_and_names_the_step(tmp_path: Path) -> None:
+    files = {"docs/process/binding.md": "# Binding\n"}
+    root = repository(tmp_path, files)
+    install_hooks(root)
+    ledger = [owed.Entry("docs/process/binding.md", "signs", "has no section", "0.12.0")]
+    write(root, "quality/owed.toml", owed.render(ledger))
+    snapshot(root, "chore: the upgrade")
+    report = run(root, "4", gh_returning(issue(labels=("ready-for-agent",))))
+    assert checks(report) == ["fill"]
+    assert report.failures[0].produce == "/ratchet:fill"
+    write(root, "quality/owed.toml", owed.render([owed.Entry("a", "architecture", "x", "0.12.0")]))
+    snapshot(root, "chore: only the architecture is owed")
+    assert checks(run(root, "4", gh_returning(issue(labels=("ready-for-agent",))))) == []

@@ -141,20 +141,22 @@ class World:
                 raise Killed
             real_write(path, note)
 
-        def dropped(_tree: Path) -> None:
+        def killed(*_args: object) -> None:
             raise Killed
 
         killers = {
             Kind.KILL_MID_REBASE: lambda: mock.patch.object(
                 gatelib, "git", git_until(("rebase", "--quiet"))
             ),
-            Kind.KILL_AFTER_REBASE: lambda: mock.patch.object(drain, "drop_record", dropped),
+            Kind.KILL_AFTER_REBASE: lambda: mock.patch.object(drain, "drop_record", killed),
+            Kind.KILL_BEFORE_DISCARD: lambda: mock.patch.object(drain, "discard", killed),
             Kind.KILL_AFTER_STASH: lambda: mock.patch.object(
                 gatelib, "git", git_until(("worktree", "remove"))
             ),
-            Kind.KILL_BEFORE_NOTE: lambda: mock.patch.object(
+            Kind.KILL_LAND_BEFORE_NOTE: lambda: mock.patch.object(
                 drain.queue_notes, "write_note", write_until
             ),
+            Kind.KILL_LAND_BEFORE_DISCARD: lambda: mock.patch.object(drain, "discard", killed),
         }
         return killers[kind]()
 
@@ -271,7 +273,7 @@ class World:
             Outcome.MERGED if outcome == "merged" else Outcome.CLOSED,
             hold=held.get("hold") is True,
             text=was.text if merged and was is not None else written,
-            fresh=outcome == "merged" and held.get("reported") is False,
+            fresh=held.get("reported") is False,
             attempts=min(model.RETRIES, attempts if isinstance(attempts, int) else 0),
             rebasing=rebasing,
         )

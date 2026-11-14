@@ -13,7 +13,6 @@ from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
 
 import drain
-import merge_ready
 from tests import drain_model as model
 from tests.drain_model import Branch, Kind, Name
 from tests.drain_world import BRANCH, DRAFT, REF, World
@@ -26,18 +25,25 @@ OPEN_A = ["drain.py open a", "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
 PARK_A = "drain.py close --outcome parked a"
 EDIT_A = "the owner edits ticket a"
+KILL_AFTER_REBASE = "a kill after the rebase stops drain.py update a"
+KILLED_PAST_REBASE = [*JUDGED_A, EDIT_A, KILL_AFTER_REBASE]
+KILLED_TWICE = [*KILLED_PAST_REBASE, KILL_AFTER_REBASE]
+LAND_KILLED = [*JUDGED_A, "a kill before the note stops drain.py land a"]
+LAND_CUT = "a kill before the discard stops drain.py land a"
+MARK_LEFT = ["drain.py open a", EDIT_A, "a kill mid-rebase stops drain.py update a"]
 # Why: a rule the code does not keep is pinned here by the shortest path from the initial state
 # to a step that breaks it, so the break is a recorded fact and not a red test; each pinned path
 # is replayed below on a real repository.
 COUNTEREXAMPLES: dict[str, list[str] | None] = {
-    CAP: [*OPEN_A, PARK_A, "drain.py open c", EDIT_A, "drain.py update a"],
+    CAP: None,
     KEPT: None,
     JUDGED: None,
     NOT_STALE: None,
-    ONCE: [*JUDGED_A, "drain.py land a", PARK_A],
-    HELD: [*JUDGED_A, PARK_A, "drain.py land a"],
+    ONCE: [*LAND_KILLED, PARK_A],
+    HELD: None,
     REFUSED: None,
-    RECOVERS: [*JUDGED_A, EDIT_A, "a kill after the rebase stops drain.py update a"],
+    # Why: the shortest break of 8. ``KILLED_TWICE`` breaks it as well, replayed below.
+    RECOVERS: ["drain.py open a", LAND_CUT],
     NO_TREE: [
         PARK_A,
         "drain.py open c",
@@ -141,8 +147,10 @@ WEIGHTED = [
     Kind.CLOSE,
     Kind.LAND,
     Kind.WORK,
+    Kind.KILL_BEFORE_DISCARD,
     Kind.KILL_AFTER_STASH,
-    Kind.KILL_BEFORE_NOTE,
+    Kind.KILL_LAND_BEFORE_NOTE,
+    Kind.KILL_LAND_BEFORE_DISCARD,
     Kind.CLEAN,
     Kind.CLEAN_ALL,
     Kind.REPORT,
@@ -206,54 +214,67 @@ def plan_of(play: Play) -> dict[str, drain.Entry]:
 # comparing with the model at its end; the stateful run compares every step.
 
 
-def test_a_tree_made_again_by_update_takes_the_cap_past_what_open_allows(tmp_path: Path) -> None:
+def broken_by(path: list[str]) -> set[str]:
+    """The rules the last step of ``path`` breaks in the model."""
+    state = before = model.INITIAL
+    for name in path:
+        before = state
+        state = next(after for action, after in model.moves(state) if action.name == name)
+    return {rule for rule, holds in model.RULES.items() if not holds(before, path[-1], state)}
+
+
+# Why: a path played on a new repository reads back the same at each step, so a step another
+# replay of this run compared after the same steps is not compared again; most replays begin
+# with the same few steps, and a comparison costs as much as the drain command it follows.
+COMPARED: set[tuple[str, ...]] = set()
+
+
+def replay(tmp_path: Path, path: list[str]) -> Play:
+    """``path`` played on the model and a repository, compared at its end and after each step new to this run."""  # noqa: E501
     play = Play(tmp_path)
-    for name in OPEN_A:
-        play.named(name, compare=False)
-    refused = play.named("drain.py open c", compare=False)
-    assert refused.endswith("1 tickets are building: the cap\n"), "a built tree holds its place"
-    play.named(PARK_A, compare=False)
-    entries = plan_of(play)
-    assert entries[BRANCH[Name.A]].state == "held", "a ticket parked after it has commits"
-    assert entries[BRANCH[Name.B]].state == "refused", "its dependent is refused, not waiting"
-    for name in (COUNTEREXAMPLES[CAP] or [])[3:]:
-        printed = play.named(name, compare=False)
-    play.agree()
-    assert play.path[:2] + play.path[3:] == COUNTEREXAMPLES[CAP], "the pinned path, one refusal in"
-    assert printed == '{"moved": true, "conflicts": []}\n'
-    trees = drain.worktrees(play.world.root)
-    assert trees == {play.world.tree(Name.A), play.world.tree(Name.C)}
-    assert len(trees) > model.CAP
+    for at, name in enumerate(path, 1):
+        steps = (*play.path, name)
+        play.named(name, compare=at == len(path) or steps not in COMPARED)
+        COMPARED.add(steps)
+    return play
+
+
+def test_update_makes_no_tree_past_the_cap(tmp_path: Path) -> None:
+    path = [*OPEN_A, PARK_A, "drain.py open c", EDIT_A, "drain.py update a"]
+    assert broken_by(path) == set()
+    play = replay(tmp_path, path)
+    refused = f"update: {REF[Name.A]} is not rebased: 1 tickets are building: the cap\n"
+    assert (play.world.code, play.world.printed) == (1, refused)
+    assert drain.worktrees(play.world.root) == {play.world.tree(Name.C)}
 
 
 def test_a_branch_judged_on_an_older_tip_does_not_land_and_is_retried(tmp_path: Path) -> None:
-    play = Play(tmp_path)
-    for name in [*JUDGED_A, "the owner edits ticket c"]:
-        play.named(name, compare=False)
-    stale = play.named("drain.py land a", compare=False)
-    assert "merge: owner\nbehind: the branch does not hold the tip of `main`" in stale
-    play.agree()
+    play = replay(tmp_path, [*JUDGED_A, "the owner edits ticket c", "drain.py land a"])
+    assert "merge: owner\nbehind: the branch does not hold the tip of `main`" in play.world.printed
     assert play.state.of(Name.A).note == model.Note(
-        model.Outcome.CLOSED, hold=False, text=0, attempts=1
+        model.Outcome.CLOSED, hold=False, text=0, fresh=True, attempts=1
     ), "behind alone is a reason the drain resolves itself"
 
 
-def test_land_merges_a_held_ticket_and_a_close_after_it_unsays_the_merge(tmp_path: Path) -> None:
-    # Why: rule 6's pinned path, then rule 5's last step; rule 5's own pinned path closes the
-    # merged ticket straight after the landing, which reads the same way.
-    play = Play(tmp_path)
-    for name in [*JUDGED_A, PARK_A]:
-        play.named(name, compare=False)
-    assert plan_of(play)[BRANCH[Name.A]].state == "held", "a ticket parked after it has commits"
-    landed = play.named("drain.py land a", compare=False)
-    assert play.path == COUNTEREXAMPLES[HELD]
-    assert "merge: agent\nmerged: `feature/1-alpha` into `main`" in landed
-    play.named(PARK_A)
-    note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
-    assert (note["outcome"], note["reported"]) == ("parked", False)
+def test_land_refuses_a_held_ticket(tmp_path: Path) -> None:
+    path = [*JUDGED_A, PARK_A, "drain.py land a"]
+    assert broken_by(path) == set()
+    play = replay(tmp_path, path)
+    assert play.world.code == 2
+    assert play.world.printed.startswith(f"land: {REF[Name.A]} is held and is not landed: ")
+    assert plan_of(play)[BRANCH[Name.A]].state == "held"
+
+
+def test_a_close_after_the_landing_is_refused_and_the_merge_reported_once(tmp_path: Path) -> None:
+    path = [*JUDGED_A, "drain.py land a", PARK_A]
+    assert broken_by(path) == set()
+    play = replay(tmp_path, path)
+    refused = f"drain: {REF[Name.A]} merged, and a merge is not unsaid by closing it as parked\n"
+    assert (play.world.code, play.world.printed) == (2, refused)
     merged, parked = play.named("drain.py report").split("## Parked")
-    assert "Alpha" not in merged.split("## Merged")[1]
-    assert "Alpha" in parked.split("## Not built")[0]
+    assert "Alpha" in merged.split("## Merged")[1]
+    assert "Alpha" not in parked.split("## Not built")[0]
+    assert "Alpha" not in play.named("drain.py report"), "a second report does not print it"
 
 
 def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_work(
@@ -267,25 +288,120 @@ def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_w
     assert printed.startswith(f"left: {tree}: the drain that made it was interrupted, and git")
     assert (tree / DRAFT).read_text(encoding="utf-8") == "half done\n"
     play.named("the owner removes the stale index lock of c", compare=False)
+    play.named("a kill before the discard stops drain.py close --outcome parked c")
+    assert (tree / DRAFT).read_text(encoding="utf-8") == "half done\n", "the note came first"
     play.named("a kill after the stash stops drain.py close --outcome parked c")
-    play.named("a kill before the note stops drain.py close --outcome parked c")
-    assert not tree.exists()
-    assert play.named("drain.py close --outcome parked c") == f"closed: {REF[Name.C]}: parked\n"
+    assert plan_of(play)[BRANCH[Name.C]].state == "held", "the note says parked"
     assert git(play.world.root, "show", f"stash@{{0}}^3:{DRAFT}") == "half done"
+    assert play.named("drain.py close --outcome parked c") == f"closed: {REF[Name.C]}: parked\n"
+    assert not tree.exists()
 
 
-def test_clean_all_after_an_update_killed_past_its_rebase_keeps_a_record_no_review_wrote(
+def test_an_update_killed_past_its_rebase_is_called_behind_and_put_right_by_update(
     tmp_path: Path,
 ) -> None:
-    play = Play(tmp_path)
-    for name in COUNTEREXAMPLES[RECOVERS] or []:
-        play.named(name, compare=False)
-    play.agree()
+    assert broken_by(KILLED_PAST_REBASE) == set()
+    play = replay(tmp_path, [*KILLED_PAST_REBASE, "drain.py clean --all"])
     assert play.state.of(Name.A).branch is Branch.STALE
-    play.named("drain.py clean --all")
+    assert not play.world.tree(Name.A).exists()
+    assert drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])["rebasing"]
+    entry = plan_of(play)[BRANCH[Name.A]]
+    assert (entry.state, entry.why) == ("built", (drain.BEHIND,)), "the plan sends it to update"
+    assert play.named("drain.py update a") == '{"moved": true, "conflicts": []}\n'
+    assert play.state.of(Name.A).branch is Branch.DRAFT, "update drops the record no review wrote"
+    assert plan_of(play)[BRANCH[Name.A]].why == ()
+
+
+def test_open_keeps_a_close_the_report_has_not_printed(tmp_path: Path) -> None:
+    play = replay(tmp_path, [PARK_A, EDIT_A, "drain.py open a"])
+    note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    assert (note["outcome"], note["reported"], note.get("hold")) == ("parked", False, None)
+    parked = play.named("drain.py report").split("## Parked")[1]
+    assert "Alpha" in parked.split("## Not built")[0]
+
+
+def test_clean_all_clears_the_mark_of_an_update_killed_on_a_branch_with_no_commit(
+    tmp_path: Path,
+) -> None:
+    assert broken_by(MARK_LEFT) == set()
+    play = replay(tmp_path, [*MARK_LEFT, "drain.py clean --all"])
+    tree = play.world.tree(Name.A)
+    assert play.world.printed.startswith(f"removed: {tree}: the drain that made it was interrupted")
+    assert "rebasing" not in drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    assert plan_of(play)[BRANCH[Name.A]].state == "buildable"
+
+
+def test_a_landing_killed_before_its_note_is_recorded_by_the_next_drains_clean_all(
+    tmp_path: Path,
+) -> None:
+    assert broken_by(LAND_KILLED) == set()
+    play = replay(tmp_path, LAND_KILLED)
+    assert "merged: `feature/1-alpha` into `main`" in play.world.printed
+    tree = play.world.tree(Name.A)
+    assert tree.exists(), "the note comes before the discard, so the tree is still there"
+    swept = f"removed: {tree}: its branch is merged\ndrain: "
+    assert play.named("drain.py clean --all").startswith(swept)
+    note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    assert (note["outcome"], note["reported"]) == ("merged", False)
+    assert BRANCH[Name.A] not in plan_of(play)
+    merged = play.named("drain.py report").split("## Waits for you")[0]
+    assert "Alpha" in merged.split("## Merged")[1], "the next report says it merged"
+
+
+def test_a_merge_no_note_says_is_closed_as_parked_until_clean_records_it(tmp_path: Path) -> None:
+    assert broken_by(COUNTEREXAMPLES[ONCE] or []) == {ONCE}
+    play = replay(tmp_path, COUNTEREXAMPLES[ONCE] or [])
+    assert play.world.printed == f"closed: {REF[Name.A]}: parked\n"
+    first = play.named("drain.py report").split("## Parked")
+    assert "Alpha" not in first[0].split("## Merged")[1]
+    assert "Alpha" in first[1].split("## Not built")[0], "a merged ticket reported as parked"
+    assert play.named("drain.py clean") == "", "its tree is gone, and clean records it silently"
+    note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    assert (note["outcome"], note["reported"]) == ("merged", False)
+    refused = f"drain: {REF[Name.A]} merged, and a merge is not unsaid by closing it as parked\n"
+    assert (play.named(PARK_A), play.world.code) == (refused, 2), "a later close is refused"
+    second = play.named("drain.py report").split("## Waits for you")[0]
+    assert "Alpha" in second, "and the merge is reported again, as merged"
+
+
+def test_a_landing_killed_between_its_note_and_its_discard_is_not_finished_by_land_again(
+    tmp_path: Path,
+) -> None:
+    path = COUNTEREXAMPLES[RECOVERS] or []
+    assert broken_by(path) == {RECOVERS}
+    play = replay(tmp_path, path)
+    tree = play.world.tree(Name.A)
+    held = f"land: {REF[Name.A]} is held and is not landed: record: "
+    assert play.named("drain.py land a").startswith(held)
+    assert (play.world.code, tree.exists()) == (2, True), "refused, and the tree stays"
+    merged = replay(tmp_path / "merged", [*JUDGED_A, LAND_CUT])
+    unsaid = f"drain: {REF[Name.A]} merged, and a merge is not unsaid by closing it as waits\n"
+    assert merged.named("drain.py land a").endswith(unsaid), "merge.py runs again and is refused"
+    assert (merged.world.code, merged.world.tree(Name.A).exists()) == (2, True)
+    swept = f"removed: {tree}: the drain that made it was interrupted\ndrain: "
+    assert play.named("drain.py clean --all").startswith(swept), "the next drain sweeps it"
+
+
+def test_a_refused_landing_killed_before_its_discard_counts_its_retry_twice(
+    tmp_path: Path,
+) -> None:
+    path = [*JUDGED_A, EDIT_A, LAND_CUT]
+    assert broken_by(path) == {RECOVERS}
+    play = replay(tmp_path, [*path, "drain.py land a"])
+    assert play.world.printed.endswith(f"closed: {REF[Name.A]}: waits\n")
+    note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    assert note["attempts"] == 2, "merge.py refused it once a run, and the note says twice"
+
+
+def test_an_update_killed_twice_before_it_drops_the_record_loses_its_mark(
+    tmp_path: Path,
+) -> None:
+    assert broken_by(KILLED_TWICE) == {RECOVERS}
+    play = replay(tmp_path, [*KILLED_TWICE, "drain.py clean --all"])
+    assert play.state.of(Name.A).branch is Branch.STALE
+    assert "rebasing" not in drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    entry = plan_of(play)[BRANCH[Name.A]]
+    assert (entry.state, entry.why) == ("built", ()), "not behind: the skill lands it next"
     assert play.named("drain.py update a") == '{"moved": false, "conflicts": []}\n'
-    tip = git(play.world.root, "rev-parse", BRANCH[Name.A])
-    asked = merge_ready.Asked(current=True)
-    reasons = merge_ready.judge(play.world.root, "refs/heads/main", tip, asked=asked)
-    assert [reason.code for reason in reasons] == ["record"]
-    assert "a commit came after the review" in reasons[0].text
+    assert "merge: owner\nrecord: " in play.named("drain.py land a")
+    assert plan_of(play)[BRANCH[Name.A]].state == "held", "and the landing holds it"

@@ -61,6 +61,12 @@ NEVER: dict[tuple[str, str | None], str] = {
     ("quality", "quality/thresholds.toml"): "ratchet-lowered reads the file and is red without it",
     ("quality", "quality/mutation-register.toml"): "the mutation gates read the register",
 }
+# Why: ADR 0050. A finding an agent writes from the repository alone (a section of the binding
+# that the project's own tree and tools state, a recipe it converts) is filled first: the route
+# names the step right after an upgrade, and neither a feature nor the drain starts while one is
+# owed, so the window is one agent step. The checks are named by rule, the name the ledger already
+# keys an entry by; the owner has nothing to do for any of them.
+FILL_FIRST = frozenset({"signs", "pins", "suppressions", "dependencies", "installs", "mutation"})
 TABLE = "owed"
 FIELDS = ("rule", "path", "problem", "since")
 HEADER = """\
@@ -125,6 +131,11 @@ def parse(text: str | None) -> Ledger:
 def read(root: Path) -> Ledger:
     """The ledger the repository at ``root`` holds."""
     return parse(gatelib.read_text(root / LEDGER))
+
+
+def fill_first(root: Path) -> list[Entry]:
+    """The owed entries an agent fills first: those of a check ``FILL_FIRST`` names."""
+    return [entry for entry in read(root).entries if entry.rule in FILL_FIRST]
 
 
 def quoted(value: str) -> str:
@@ -294,8 +305,13 @@ def summary(root: Path, *, waiting: Sequence[str] = ()) -> str | None:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="owed.py")
     parser.add_argument("--root", type=Path, default=Path())
+    parser.add_argument("--fill-first", action="store_true", help="list what an agent fills first")
     options = parser.parse_args(argv[1:])
     root = options.root.resolve()
+    if options.fill_first:
+        for entry in fill_first(root):
+            print(f"{entry.rule}\t{entry.path}\t{entry.problem}")
+        return 0
     waiting: list[str] = []
     if read(root).entries:
         # Why: conformance imports this module, and only a project that owes pays for its checks.

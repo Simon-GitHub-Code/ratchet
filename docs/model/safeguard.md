@@ -2,16 +2,20 @@
 
 `scripts/triggers.py` is the triggers gate. A safeguard is a gate the project binds once it has something to guard: a Gates row of the binding says `later: code:<kind>` until the first instance of that kind of code arrives (ADR 0028). The change that brings a kind is free, however many instances it brings (ADR 0030). Then the row is owed, and a change that adds another instance is red until the row is bound. A kind that went back to none and returns is not arriving, so its return is red (ADR 0048). A declared life event owes its rows too, and is never red. `scripts/merge.py` lands a branch: it merges the branch into the default branch's tip, runs the gate on the result, and moves the default branch only when the merge is clean and the gate is green. This page writes that down as a state machine, and says which of the owner's promises the gate keeps.
 
+Some kinds change the project's shape when they first arrive, such as the first stored format or the first outbound call. Their arrival reopens the architecture (ADR 0052). The binding asks for an architecture review with a Gates row of its own. Once it asks, such an arrival is still free, and the gate notes that it reopens the architecture. Then the review is owed: a change that adds another instance is red until a decision record that cites the kind lands on the default branch. The record counts only when it lands on its own, not in the same change as another instance. A kind the default branch already held when the binding first asked counts as reviewed, so a repository never turns red for what it had.
+
 The model is `hooks/tests/safeguard_model.py`. The tests in `hooks/tests/test_safeguard_model.py` check each rule on every state and step it reaches. They also take the same steps on real repositories, where the real gate must judge each landing as the model does (`hooks/tests/safeguard_world.py`).
 
 ## Scope
 
 The model covers one repository with:
 
-- one kind of code and one life event;
+- one kind of code, whose arrival reopens the architecture, and one life event, which does not;
 - at most three instances in its trees at once. A change that adds instances leaves at most two where it forked, and a late landing can make three;
 - one open branch, forked from the default branch's tip with one change, which may wait while other branches land. Every other branch forks from the tip and lands at once;
-- changes to the event and to the binding, other than binding the row, that land at once and never wait on the open branch. The open branch forks only where the tip's row is there and finds the instances. With every change free to wait and a branch free to fork from any tip, the model reaches 27,501 states and gives every rule the same verdict.
+- changes to the event, to the review and to the binding, other than binding the row, that land at once and never wait on the open branch. The event's and the review's changes land only while no branch is open. The open branch forks only where the tip's row is there and finds the instances.
+
+Two wider models were run for this page, and each gives every rule the verdict it gives here. With every change free to wait, and the event's and the review's changes free to land while a branch is open, the model reaches 62,300 states and 469,590 steps. With a branch also free to fork from any tip, it reaches 130,187 states and 962,883 steps.
 
 What it leaves out is listed [at the end](#left-out).
 
@@ -19,12 +23,15 @@ What it leaves out is listed [at the end](#left-out).
 
 | Part | Values |
 | --- | --- |
-| The default branch's tip | its instances of the kind; the kind's Gates row: `later:`, bound, or no row; its Triggers row: finds the instances, or points where none are; the event: declared or not; the event's row: `later:` or bound |
+| The default branch's tip | its instances of the kind; the kind's Gates row: `later:`, bound, or no row; its Triggers row: finds the instances, or points where none are; the event: declared or not; the event's row: `later:` or bound; the review's row: there or not; a decision record that cites the kind: held or not |
 | The default branch ever held an instance | yes or no. The gate reads it from the log |
+| Where the reviews started | not asked; asked before the kind ever arrived; or asked once the kind was held. The reviews start at the first commit of the default branch whose binding has the review's row, and the gate reads that from the log |
 | The allowance | how many instances the kind had when its row came to be owed, while the row stays `later:`; none otherwise. No commit holds it. `OwedNeverGrowsUnbound` reads it |
-| The open branch | none; or the tip it forked from, its one change, its tree, and whether the default branch had held an instance by then |
+| The open branch | none; or the tip it forked from, its one change, its tree, whether the default branch had held an instance by then, and where the reviews stood |
 
-Two states that differ only in which instance is which are one state. From the start the model reaches 3,372 states and 20,991 steps.
+Two states that differ only in which instance is which are one state. So are two states the gate cannot tell apart once the review is settled. The review is settled when its record has landed, or when the reviews started with the kind held. After that the gate never reads the record or the start again. The model writes each settled state as one whose reviews started with the kind held, and with no record. So no state it counts holds a record, and "asked once the kind was held" means settled.
+
+From the start the model reaches 8,994 states and 56,355 steps. In 3,372 the review is not asked, in 2,250 it was asked before the kind and is not settled, and in 3,372 it is settled.
 
 ## Steps
 
@@ -33,13 +40,15 @@ Two states that differ only in which instance is which are one state. From the s
 | fork: add one instance, add several, move one, remove some, remove every one, or bind the row | opens the branch with that change, where the tip's row is there and finds the instances |
 | land the branch | merged into the tip and judged there. The default branch moves to the merge only when it is clean and green; otherwise nothing changes and the branch stays open |
 | abandon the branch | |
-| another branch lands: any of those six changes, or put the bound row back to `later:`, drop the row, put the dropped row back, point the Triggers row elsewhere, declare the event, bind the event's row | forked from the tip and landed at once, by the same rule |
+| another branch lands: any of those six changes, or put the bound row back to `later:`, drop the row, put the dropped row back, point the Triggers row elsewhere, declare the event, bind the event's row, ask for the architecture review, land the architecture review, add one instance with its review | forked from the tip and landed at once, by the same rule |
 
-The binding, `docs/process/binding.md`, is a guard path. A change to it lands only when the owner merges it (ADR 0021, ADR 0033), whatever the gate says. The model is the gate alone. A rule named "with the guard" exempts a change to the binding; the same rule without the suffix holds the gate alone to it.
+Landing the review brings its decision record alone. Adding one instance with its review brings the record and an instance in one change. A record can land only while the review was asked before the kind and is not settled.
+
+The binding, `docs/process/binding.md`, is a guard path. A change to it lands only when the owner merges it (ADR 0021, ADR 0033), whatever the gate says. Asking for the review is a change to the binding. A change that brings a decision record is the owner's to merge too (ADR 0052). The model is the gate alone. A rule named "with the guard" exempts a change to the binding; the same rule without the suffix holds the gate alone to it.
 
 ## Rules
 
-The owner's seven promises are thirteen rules. Eleven are about a landing, two about a state. The module spells each name as one word; the model and its tests spell it in words, as `arrival is free`.
+The owner's eight promises are sixteen rules. Thirteen are about a landing, three about a state. The module spells each name as one word; the model and its tests spell it in words, as `arrival is free`.
 
 | Rule | Says | In Python and in TLC |
 | --- | --- | --- |
@@ -47,15 +56,20 @@ The owner's seven promises are thirteen rules. Eleven are about a landing, two a
 | `ReturnIsNotArrival` | A kind that went back to none and returns while its row is owed is red. | holds |
 | `OwedTakesNoNewInstance` | While a kind's safeguard is owed, a change that adds another instance is red. | breaks in 2 steps |
 | `OwedCountDoesNotRise` | While a kind's safeguard is owed, a change that raises its count is red. | holds |
-| `BoundTakesInstances` | Once the row is bound, a change that only adds instances is green. | holds |
+| `BoundTakesInstances` | Once the row is bound and no review is owed, a change that only adds instances is green. | holds |
 | `OnlyBindingLeavesOwed` | Binding the row is the only green way out of owed for a kind that still has instances. | breaks in 2 steps |
 | `OnlyBindingLeavesOwedWithTheGuard` | No change that lands without the owner takes a kind with instances out of owed. | holds |
-| `EventIsNeverRed` | A declared event owes its rows and is never red: only the rise of a kind whose row is unbound is. | holds |
+| `EventIsNeverRed` | A declared event is never red: only the rise of a kind whose row or review is owed is. | holds |
+| `ReviewOwedTakesNoNewInstance` | While the architecture review is owed, a change that raises the kind's count is red. | holds |
+| `ReviewedKindIsJudgedByItsRow` | Once the review is held, or the kind was there when it was first asked, rows alone judge. | holds |
+| `AReviewIsOwedOnlyAfterItsArrival` | No kind owes a review before the binding asks for it, nor one held when it first asked. | holds |
 | `OwedNeverGrowsUnbound` | No run of green changes grows an owed kind past what its arrival brought, unbound. | breaks in 3 steps |
 | `OwedNeverGrowsUnboundWithTheGuard` | No run of changes landed without the owner grows an owed kind past its arrival, unbound. | holds |
 | `LateLandingAddsNothing` | A branch green when it forked cannot add to a kind that became owed after the fork. | holds |
 | `NothingBlindsTheGate` | No green change makes the gate stop seeing a kind or puts its bound row back to later. | breaks in 1 step |
 | `NothingBlindsTheGateWithTheGuard` | No change that lands without the owner makes the gate stop seeing a kind. | holds |
+
+The three rules of the review all hold. `ReviewOwedTakesNoNewInstance` reads "another instance" as the count rising, as `OwedCountDoesNotRise` does, so a move while the review is owed is green. `ReviewedKindIsJudgedByItsRow` compares each landing on a settled review with the gate on the same change with no review row, and they agree. `AReviewIsOwedOnlyAfterItsArrival` reads what the route reads, the kind's count while its review is owed.
 
 The four that break, each by the shortest run, the same in Python and in TLC:
 
@@ -72,22 +86,25 @@ The tests also check that:
 - another instance of an owed kind is red, and lands once the row is bound;
 - a branch forked before the kind arrived is red when it lands late;
 - a declared event owes its row, and a red landing is the kind's alone;
+- a kind that arrives once the review is asked owes it beside a bound row: its arrival reopens the architecture, another instance is red, an instance with its record beside it is red, and once the record lands another instance is green;
+- a kind held when the review is first asked owes none;
+- on a real repository, the gate holds another instance until the review lands, names the review in its red line, and owes no review for a kind held when it was first asked;
 - on a real repository, a kind that went back to none and returns is red until its row is bound, and a row dropped and put back does not make the return an arrival;
 - on real repositories, random runs of 15 steps take the model's steps, and the real gate agrees with the model on every landing and keeps every rule that holds.
 
 ### The rules in the module
 
-`export()` gives each of the eleven rules on a landing as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, and the move above does: once the instances are numbered by where they are, the tip after the move is the tip before it. So the module holds each state once for each set of step rules the step into it broke, and each such rule is a boolean of that state. Three step rules break, so the module has 6,414 states and 39,597 steps where the graph has 3,372 and 20,991. 108 states of the graph are reached only by a step that breaks a rule. The rules are computed in Python, so TLC checks that the module carries them and finds the shortest runs to them; it does not prove them a second way.
+`export()` gives each of the thirteen rules on a landing as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, and the move above does: once the instances are numbered by where they are, the tip after the move is the tip before it. So the module holds each state once for each set of step rules the step into it broke, and each such rule is a boolean of that state. Three step rules break, so the module has 17,052 states and 105,985 steps where the graph has 8,994 and 56,355. 276 states of the graph are reached only by a step that breaks a rule. The rules are computed in Python, so TLC checks that the module carries them and finds the shortest runs to them; it does not prove them a second way.
 
 ## Charts
 
-The rules were checked on `Safeguard.tla`, SHA-256 `a86f06df8675cb1b723d244e8010eac3cd3217247aecd2fa4c684809b59e18df`. TLC reached 6,414 states. Run again with only the rules that hold, its last line counts 39,598 states generated: the start and 39,597 steps. Nine rules hold, four break, each by the run above, and nothing deadlocks.
+The rules were checked on `Safeguard.tla`, SHA-256 `5fbc588aaa649394a8abf573973cf68a4fb53ab26ecfef10a2c5389795b72c6e`. TLC reached 17,052 states. Run again with only the rules that hold, its last line counts 105,986 states generated: the start and 105,985 steps. Twelve rules hold, four break, each by the run above, and nothing deadlocks.
 
-That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `SafeguardKind.tla`, SHA-256 `93116ceedaafcb63b27a85cfce463f8b46400e2345e520812690f703e6a2ad02`: the same graph seen through what the tip holds of the kind and the event, and the two histories. Each of those reports says that TLC reached 135 states and 1,449 steps. They draw no open branch, so an arrow is a change that lands, from whichever branch.
+That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `SafeguardKind.tla`, SHA-256 `cdb24cee7acd0ecbfff88786154e5f1b9d56e428dc236b68ca5593cd4529b18c`: the same graph seen through what the tip holds of the kind, the event and the review, and the histories. Each of those reports says that TLC reached 387 states and 4,320 steps. They draw no open branch, so an arrow is a change that lands, from whichever branch.
 
 ### The kind
 
-7 states and 22 arrows. It does not draw the 1,134 steps that keep the label.
+7 states and 22 arrows. It does not draw the 3,450 steps that keep the label.
 
 ```mermaid
 ---
@@ -96,41 +113,73 @@ title: "The kind's safeguard: what each green change does to it"
 stateDiagram-v2
   s0: No kind yet: the first change brings it free
   s1: Arrived, and owed: a new instance is red
-  s2: Bound: a new instance is green
-  s3: The row is dropped: nothing is owed
+  s2: Bound: a new instance is green unless the review is owed
+  s3: The row is dropped: the row owes nothing
   s4: The Triggers row points elsewhere: the gate sees no kind
   s5: Gone back to none: a return is red
   s6: Owed, and grown past its arrival unbound
   [*] --> s0
-  s0 --> s1: a change adds instances
+  s0 --> s1: a change adds instances or you merge a change that adds an instance with its review
   s0 --> s2: you merge a change that binds the row
   s0 --> s3: you merge a change that drops the row
   s0 --> s4: you merge a change that points the Triggers row elsewhere
+  s1 --> s2: you merge a change that binds the row
   s1 --> s3: you merge a change that drops the row
   s1 --> s4: you merge a change that points the Triggers row elsewhere
   s1 --> s5: a change removes every instance
-  s1 --> s2: you merge a change that binds the row
   s2 --> s0: you merge a change that puts the bound row back to later
   s2 --> s3: you merge a change that drops the row
   s2 --> s4: you merge a change that points the Triggers row elsewhere
   s3 --> s0: you merge a change that puts the dropped row back
   s3 --> s4: you merge a change that points the Triggers row elsewhere
+  s2 --> s1: you merge a change that puts the bound row back to later
   s3 --> s1: you merge a change that puts the dropped row back
-  s4 --> s6: a change adds instances
+  s4 --> s6: a change adds instances or you merge a change that adds an instance with its review
   s5 --> s2: you merge a change that binds the row
   s5 --> s3: you merge a change that drops the row
   s5 --> s4: you merge a change that points the Triggers row elsewhere
-  s2 --> s1: you merge a change that puts the bound row back to later
   s2 --> s5: you merge a change that puts the bound row back to later
   s3 --> s5: you merge a change that puts the dropped row back
   s6 --> s4: a change removes some instances or a change removes every instance or you merge a change that binds the row or you merge a change that drops the row
 ```
 
-Each way out of owed other than binding the row or removing every instance is a change to the binding, and so is each change that leaves the gate blind: you merge it. The gate alone would land it with no one asked.
+Each way out of owed other than binding the row or removing every instance is a change to the binding, and so is each change that leaves the gate blind: you merge it. The gate alone would land it with no one asked. A bound row lets a new instance in only while no review is owed; the next chart draws the review.
+
+### The architecture review
+
+6 states and 12 arrows. It does not draw the 3,909 steps that keep the label.
+
+```mermaid
+---
+title: "The architecture review: when it is owed, and what settles it"
+---
+stateDiagram-v2
+  s0: Not asked: no review is owed
+  s1: Asked before the kind: its arrival is free
+  s2: Settled: the rows alone judge the kind
+  s3: Asked, and the Triggers row points elsewhere: the gate sees no kind
+  s4: Owed: another instance is red until the review lands
+  s5: Asked, and the kind gone back to none: a return is red
+  [*] --> s0
+  s0 --> s1: you merge a change that asks for the architecture review, before the kind ever arrived
+  s0 --> s2: you merge a change that asks for the architecture review, once the kind was held
+  s0 --> s3: you merge a change that asks for the architecture review, before the kind ever arrived
+  s1 --> s2: you merge a change that adds an instance with its review or you merge a change that lands the architecture review
+  s1 --> s3: you merge a change that points the Triggers row elsewhere
+  s1 --> s4: a change adds instances
+  s3 --> s2: you merge a change that adds an instance with its review or you merge a change that lands the architecture review
+  s4 --> s2: you merge a change that lands the architecture review
+  s4 --> s3: you merge a change that points the Triggers row elsewhere
+  s4 --> s5: a change removes every instance
+  s5 --> s2: you merge a change that lands the architecture review
+  s5 --> s3: you merge a change that points the Triggers row elsewhere
+```
+
+Whether the default branch ever held the kind decides where asking for the review leads, so each arrow out of "Not asked" says it. Once the review is asked, the arrival is free and the review is owed. Only a record settles it. The first instance may bring its record with it. Once the review is owed, the record must land on its own: an instance with its record beside it is red, so no arrow leaves "Owed" that way. The kind going back to none does not settle it either: its return is red. Pointing the Triggers row elsewhere leaves the gate blind to the kind, as in the chart before. Once settled, the review is never owed again, and the rows alone judge the kind.
 
 ### The life event
 
-3 states and 2 arrows. It does not draw the 1,359 steps that keep the label.
+3 states and 2 arrows. It does not draw the 4,062 steps that keep the label.
 
 ```mermaid
 ---
@@ -147,7 +196,7 @@ stateDiagram-v2
 
 ### Where the gate alone breaks a rule
 
-Drawn from `Safeguard.tla`, where the tool draws only the shortest run to each rule that breaks: 5 states and 6 arrows. The states have the words of the chart of the kind, and the steps the model's own names, as the tests give the runs. A rule on a landing breaks in the state the landing reaches. Most states with that label were reached some other way, so the chart marks the label as breaking the rule in some cases.
+Drawn from `Safeguard.tla`, where the tool draws only the shortest run to each rule that breaks: 5 states and 6 arrows. The states have the words of the chart of the kind, and the steps the model's own names, as the tests give the runs. No run that breaks a rule takes a step of the review. A rule on a landing breaks in the state the landing reaches. Most states with that label were reached some other way, so the chart marks the label as breaking the rule in some cases.
 
 ```mermaid
 ---
@@ -164,7 +213,7 @@ stateDiagram-v2
   class lg2 bugPath
   s0: No kind yet: the first change brings it free
   s1: Arrived, and owed: a new instance is red
-  s2: The row is dropped: nothing is owed
+  s2: The row is dropped: the row owes nothing
   s3: The Triggers row points elsewhere: the gate sees no kind
   s4: Owed, and grown past its arrival unbound
   [*] --> s0
@@ -189,9 +238,11 @@ stateDiagram-v2
 ## Left out
 
 - The guard itself. The model takes a change to the binding as landing by the gate alone; the rules "with the guard" say what the owner's merge adds.
-- More than one kind and one event, a trigger that joins parts (`life:deployed and code:stored-format`), and the Triggers table's paths and patterns. An instance is a file of its own.
-- Four instance ids and three instances on the tip. With them, every change free to wait and a branch free to fork from any tip, the model reaches 60,099 states and gives every rule the verdict it gives here.
+- More than one kind and one event, a kind whose arrival does not reopen the architecture, a trigger that joins parts (`life:deployed and code:stored-format`), and the Triggers table's paths and patterns. An instance is a file of its own. A kind that does not reopen the architecture is judged as the model's kind is while the review is not asked.
+- A life event that reopens the architecture. ADR 0052 makes a declared event the table names owe a review, which is never red. The model's event owes its rows alone.
+- What the gate checks of a decision record: its `- Architecture review:` line, its outcome, its date and its sections. The model's record cites the kind and counts.
+- Four instance ids and three instances on the tip. With them, every change free to wait, and the event's and the review's changes free to land while a branch is open, the model reaches 123,597 states and 1,022,083 steps. With a branch also free to fork from any tip, it reaches 268,745 states and 2,190,308 steps. Each gives every rule the verdict it gives here.
 - More than one open branch at a time.
-- A branch that forks where the tip has no row or its Triggers row finds nothing. From there the kind is never red again, and a branch lands as it would at once.
+- A branch that forks where the tip has no row or its Triggers row finds nothing. Where the Triggers row finds nothing the kind is never red again, and a branch lands as it would at once. Where the row is dropped, a new instance is still red while the review is owed. The wider model above lets a branch fork from any tip, and gives every rule the verdict it gives here.
 - History the gate cannot read, as in a shallow clone, where every arrival reads as free.
-- What the route names when a safeguard is owed, and the `/ratchet:safeguard` run that binds it. [The route](route.md) models those.
+- What the route names when a safeguard or a review is owed, and the `/ratchet:safeguard` and `/ratchet:architecture` runs that bind the row and land the review. [The route](route.md) models those.

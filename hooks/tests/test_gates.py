@@ -45,6 +45,12 @@ def test_markers_rise_is_red_and_paydown_is_green(tmp_path: Path, capsys: Out) -
 # --- pins -----------------------------------------------------------------------------------
 
 PINNED = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5"
+IMAGE_PINS = (
+    "# Binding\n\n## Image pins\n\nWhy.\n\n| Files | Reference |\n| --- | --- |\n"
+    "| `**/Buildfile*, **/*.Buildfile` | `^\\s*FROM\\s+(?:--platform=\\S+\\s+)?(?!scratch\\b)(\\S+)"
+    "(?:\\s+AS\\s+(\\S+))?` |\n| `compose*.yml, docker-compose*.yaml` "
+    "| `^\\s*image:\\s*(\\S+)` |\n"
+)
 
 
 def test_pins_check_actions_images_and_permissions(tmp_path: Path) -> None:
@@ -57,7 +63,8 @@ def test_pins_check_actions_images_and_permissions(tmp_path: Path) -> None:
                 "      - uses: docker://alpine@sha256:0000\n"
                 "    container:\n      image: alpine@sha256:0000\n"
             ),
-            "Dockerfile": (
+            "docs/process/binding.md": IMAGE_PINS,
+            "Buildfile": (
                 "FROM python:3.13@sha256:abc AS build\nRUN make\nFROM build\nFROM scratch\n"
                 "FROM $BASE\n"
             ),
@@ -73,7 +80,7 @@ def test_pins_check_actions_images_and_permissions(tmp_path: Path) -> None:
         "      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830\n"
         "      - uses: docker://alpine:3\n    container:\n      image: alpine:3\n",
     )
-    write(root, "Dockerfile.dev", "FROM python:3.13\n")
+    write(root, "app.Buildfile", "FROM python:3.13\n")
     write(root, "docker-compose.yaml", "services:\n  db:\n    image: postgres:16\n")
     assert pins.problems(root) == [
         ".github/workflows/deep.yml: no top-level permissions block",
@@ -81,13 +88,60 @@ def test_pins_check_actions_images_and_permissions(tmp_path: Path) -> None:
         ".github/workflows/deep.yml:6: pinned action lacks a version comment",
         ".github/workflows/deep.yml:7: image docker://alpine:3 is not pinned by digest",
         ".github/workflows/deep.yml:9: image alpine:3 is not pinned by digest",
-        "Dockerfile.dev:1: FROM python:3.13 is not pinned by digest",
+        "app.Buildfile:1: image python:3.13 is not pinned by digest",
         "docker-compose.yaml:3: image postgres:16 is not pinned by digest",
     ]
     assert run(pins, root) == 1
     (root / "bin.yml").write_bytes(b"\x00")
     write(root, ".github/workflows/bin.yml", "\x00")  # unreadable, skipped
     assert len(pins.problems(root)) == 7
+
+
+def test_pins_read_the_image_files_the_binding_names_and_say_when_it_names_none(
+    tmp_path: Path, capsys: Out
+) -> None:
+    files = {"Buildfile": "FROM python:3.13\n", "docs/process/binding.md": "# Binding\n"}
+    root = repository(tmp_path, files)
+    assert pins.problems(root) == []
+    assert "no image file is read" in capsys.readouterr().out
+    none = IMAGE_PINS.split("| `**", maxsplit=1)[0] + "| none: the project names no image | |\n"
+    write(root, "docs/process/binding.md", none)
+    assert pins.problems(root) == []
+    assert "no image file is read" not in capsys.readouterr().out
+    write(root, "docs/process/binding.md", IMAGE_PINS)
+    assert pins.problems(root) == ["Buildfile:1: image python:3.13 is not pinned by digest"]
+
+
+def test_the_merge_bases_image_pins_judge_not_the_changes_own(tmp_path: Path) -> None:
+    files = {"Buildfile": "FROM python:3.13\n", "docs/process/binding.md": IMAGE_PINS}
+    root = repository(tmp_path, files)
+    branch(root, "feature/x")
+    none = IMAGE_PINS.split("| `**", maxsplit=1)[0] + "| none: narrowed by the change | |\n"
+    write(root, "docs/process/binding.md", none)
+    commit(root, "feat(core): narrow its own judge")
+    assert pins.problems(root) == ["Buildfile:1: image python:3.13 is not pinned by digest"]
+
+
+def test_image_pin_rows_are_read_and_their_faults_named() -> None:
+    rules, problems = pins.parse(IMAGE_PINS)
+    assert problems == []
+    assert rules is not None
+    assert [rule.files for rule in rules] == [
+        ("**/Buildfile*", "**/*.Buildfile"),
+        ("compose*.yml", "docker-compose*.yaml"),
+    ]
+    assert pins.parse(None)[1] == ["has no '## Image pins' section"]
+    head = "## Image pins\n\n| Files | Reference |\n| --- | --- |\n"
+    assert pins.parse("# B\n\n" + head + "| <globs> | <regex> |\n")[1] == [
+        "the image pins table still has the template's placeholder row"
+    ]
+    assert pins.parse("# B\n\n" + head + "| none: x | |\n")[1] == [
+        "an image pins row says none with no reason: say why"
+    ]
+    assert "no regex" in pins.parse("# B\n\n" + head + "| `a` | `(` |\n")[1][0]
+    assert "no group 1" in pins.parse("# B\n\n" + head + "| `a` | `x` |\n")[1][0]
+    assert "needs backticked globs" in pins.parse("# B\n\n" + head + "| a | `(x)` |\n")[1][0]
+    assert "lacks its table" in pins.parse("# B\n\n## Image pins\n\nprose\n")[1][0]
 
 
 # --- prose ----------------------------------------------------------------------------------
@@ -601,3 +655,10 @@ def test_a_test_paths_section_without_its_bullet_is_unfilled(binding: str) -> No
     globs, problems = change_size.test_paths(binding)
     assert globs is None
     assert any("still the template's" in problem for problem in problems)
+
+
+def test_prose_reads_the_comments_of_any_text_file_and_skips_a_binary_one(tmp_path: Path) -> None:
+    files = {"GLOSSARY.md": GLOSSARY, "a.zzz": "x = 1  # the client pays\n", "p.zzz": "client\n"}
+    root = repository(tmp_path, files)
+    (root / "b.bin").write_bytes(b"\x00 # client")
+    assert prose.problems(root) == ["a.zzz:1: 'client' is on the Avoid list of 'Customer'"]
