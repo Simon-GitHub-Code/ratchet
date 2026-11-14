@@ -204,11 +204,17 @@ class SdkSession:
             await self.queue.put(message)
         await self.queue.put(None)
 
-    def _deny(self, tool: str, tool_input: dict[str, Any], *, why: str, where: str) -> str:
+    def _deny(
+        self, tool: str, tool_input: dict[str, Any], *, decision: policy.Decision, where: str
+    ) -> str:
         self.run.log.emit(
-            "denied", tool=tool, why=why, at=where, input=json.dumps(tool_input, default=str)[:600]
+            "denied",
+            tool=tool,
+            why=decision.why,
+            at=where,
+            input=json.dumps(tool_input, default=str)[:600],
         )
-        return f"The first-hour harness refuses this call: it {why}."
+        return decision.told
 
     async def guard(
         self, data: dict[str, Any], _id: str | None, _ctx: HookContext
@@ -224,7 +230,7 @@ class SdkSession:
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": self._deny(
-                    tool, tool_input, why=decision.why, where="hook"
+                    tool, tool_input, decision=decision, where="hook"
                 ),
             }
         }
@@ -235,7 +241,7 @@ class SdkSession:
         """Answer a prompt as the owner, after the policy; answer a question dialog."""
         decision = self.decide(tool_name, tool_input)
         if not decision.allowed:
-            why = self._deny(tool_name, tool_input, why=decision.why, where="prompt")
+            why = self._deny(tool_name, tool_input, decision=decision, where="prompt")
             return PermissionResultDeny(message=why)
         if tool_name == "AskUserQuestion":
             answers = {}
