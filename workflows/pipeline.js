@@ -570,7 +570,7 @@ const REVIEW_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          axis: { type: 'string', enum: ['spec', 'standards'] },
+          axis: { type: 'string', enum: ['spec', 'standards', 'design'] },
           severity: { type: 'string', enum: ['blocker', 'major', 'minor'] },
           title: { type: 'string' },
           location: { type: 'string', description: 'file:line or acceptance-criterion id' },
@@ -748,6 +748,9 @@ ${commonRules(false, true)}
 Load the \`mattpocock-skills:tdd\` skill: it says what a good test is and how the seams under
 test are chosen. The spec names those seams; the owner has agreed the approach through the
 ticket's \`## Conjecture\` section and the agent-ready label.
+Load the \`mattpocock-skills:codebase-design\` skill too, and use its vocabulary (module,
+interface, depth, seam, adapter) for the Design section: where the feature lives, which seams
+it adds or changes, and deep modules over shallow wrappers.
 ${lastRunNote()}${amendNote(gaps)}
 Inputs you may read:
 - The ticket: ${ticketHint()}. Its sections are mattpocock-skills' (Parent, What to build,
@@ -773,8 +776,17 @@ Your tasks, in order:
      check reads the ticket against spec.md before anything is built and sends back what it
      misses.
    - Glossary terms used (exact GLOSSARY.md names) and each term you added to the glossary
-   - Placement: for each piece of the feature, which declared path or layer it lives in (using
-     the names AGENTS.md and binding.md define, or the module when none are declared) and why
+   - Design: how the feature fits the project's architecture, in three short parts. Placement:
+     for each piece of the feature, which declared path or layer it lives in (using the names
+     AGENTS.md and binding.md define, or the module when none are declared) and why, the
+     reason tied to the architecture ADR in docs/adr/ (the one that records the project's
+     macro and micro architecture) and to the layers AGENTS.md declares, by name. Seams: each
+     seam the feature adds or changes, its interface, and why the module behind it is deep
+     (much behaviour behind a small interface) rather than a shallow wrapper. Considered: the
+     placements and shapes you weighed and rejected, each with the reason. Read the
+     architecture ADR and the declared layers before placing anything, and keep the feature
+     inside them; where the project records none, say so and place by the existing code's
+     shape. Whether this change implies a change to the architecture is the question below
    - Seams under test: the public interfaces the tests observe behaviour through, one line
      each on what it catches and what it misses
    - Telemetry: for each acceptance criterion, the signal that shows it working in production
@@ -842,6 +854,14 @@ Three that are not, and are yours to assume:
 - Whether the expiry is checked in the store or in the route. The user cannot tell.
 - A limit the ticket leaves unstated where one value is plainly the safe one: take it, and
   the owner relaxes it in a later change.
+
+A change that implies a change to the architecture is the owner's too, and never one you take
+silently or bury in Design: a new layer, a new kind of storage, a new process boundary. It is
+an open question of kind \`direction\`, with the options (including the one that keeps the
+architecture as it is, if the feature can be built within it), the one you recommend first, and
+why. Place the feature inside the current architecture for everything the question does not
+touch. Raise no other question about design: a placement within the declared architecture is
+yours to decide, and a seam that is one choice among equals is an assumption.
 
 Everything else is an assumption. This run has no owner at the keyboard and a stopped run
 costs them a round trip, so decide what is yours to decide: take the conservative answer (the
@@ -1180,7 +1200,8 @@ judge the spec against the ticket, and the code against the spec and the standar
 Load the \`mattpocock-skills:code-review\` skill and apply its two axes in-process, as both of
 its sub-agents (the pipeline fixes the agent count): the spec source is spec.md; the standards
 sources are AGENTS.md, the glossary, docs/adr/ and the binding, plus the skill's smell
-baseline as judgement calls. Record every issue with axis, severity, location and evidence:
+baseline as judgement calls. Load the \`mattpocock-skills:codebase-design\` skill for axis F and
+use its vocabulary. Record every issue with axis, severity, location and evidence:
 A. Spec conformance: does each Given/When/Then acceptance criterion have a test and an
    implementation that satisfies it? Any criterion silently narrowed? Any test weakened,
    skipped or deleted? Any behaviour added that the spec does not ask for?
@@ -1227,6 +1248,21 @@ D. The ticket. Only the spec role and the ticket check read it before you, so a 
    carried it is gone from spec.md, or the tests and the code do not do it.
 E. Inputs. ${INPUT_READINGS} A case is null when the change does not decide it as spec.md states,
    or as the settled reading states where the run assumed it.
+F. Design. Judge the change against the project's architecture: read the architecture ADR in
+   docs/adr/ (the one that records the macro and micro architecture) and the layers AGENTS.md
+   declares, and the spec's Design section for what was decided and why. Issues on the \`design\`
+   axis are: a layer or seam violated, a module that reaches around the seam the architecture
+   declares for what it uses, logic placed in a layer that should not hold it, a dependency
+   direction the architecture does not allow, a shallow wrapper (a module whose interface is
+   nearly as large as what it hides, that only forwards), and a change that makes an
+   architecture decision (a new layer, a new kind of storage, a new process boundary) the spec
+   did not raise with the owner. A layer violation is a blocker, and so is a module that
+   reaches around a seam that is a layer boundary; around any other seam it is major. A dependency direction the
+   architecture ADR rules out, and an architecture decision made without the owner, are major.
+   A shallow wrapper, logic that fits its layer but sits in a worse module, and a placement the
+   Design section does not explain are minor, unless the spec's Design section says otherwise
+   and the code does something else: that is major. Where the project records no architecture,
+   judge only the declared layers and the spec's own Design section.
 The script files every \`dropped\` promise and every null case as a major issue: the change lost
 something the ticket promised. It lists every \`bent\` and \`assumed\` promise with the spec's
 assumptions for the owner to overrule, and neither holds the merge. Do not repeat them in
