@@ -9,6 +9,7 @@ from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule
 
+from tests import model_tla
 from tests.safeguard_model import (
     ACTIONS,
     INITIAL,
@@ -21,12 +22,17 @@ from tests.safeguard_model import (
     allowance_after,
     canonical,
     counterexample,
+    export,
     graph,
     judge,
     outcomes,
     owed,
+    summary,
 )
 from tests.safeguard_world import Attempt, Run, World
+from tests.support import PLUGIN_ROOT
+
+PAGE = PLUGIN_ROOT / "docs/model/safeguard.md"
 
 # The owner's seven rules, as the model finds them. A path is the shortest run that breaks the
 # rule; ``None`` says it holds on every reachable state and landing.
@@ -68,6 +74,10 @@ FOUND: dict[str, tuple[str, ...] | None] = {
 
 def test_each_rule_holds_or_breaks_by_its_shortest_run() -> None:
     assert {name: counterexample(name) for name in RULES} == FOUND
+
+
+def test_the_page_was_checked_and_drawn_from_the_current_export() -> None:
+    assert not (why := model_tla.stale(PAGE, export(), summary())), why
 
 
 def test_each_rule_says_in_one_sentence_what_it_promises() -> None:
