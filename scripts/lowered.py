@@ -11,6 +11,14 @@ under ``docs/adr/`` names it exactly, on a line of its own:
 agent may add that ADR (ADR 0014), but ``quality/thresholds.toml`` is a guard path, so the
 loosening itself is the owner's edit.
 
+A record binds one change (ADR 0047). Only a ``Relaxes:`` line the change adds, against the merge
+base, counts; one the base already holds excuses nothing, so a record that landed alone, or for a
+step later undone, cannot be spent again. ``<old>`` and ``<new>`` must be the base's value and
+head's value. A key the base lacks but the file once held is judged against the value it last
+held (its newest earlier version, found by one path-limited ``git log``), so removing a key and
+writing it back looser is a loosening. A key is forgotten only through named steps: each step of a
+chain such as 2, true, 1 is a change with a record of its own.
+
 The owed ledger, ``quality/owed.toml``, is a ratchet too (ADR 0037): against the merge base an
 entry may go, and none may be added or changed unless the same change moves the binding's plugin
 pin to a newer version and the new entry carries that version. Otherwise a change could silence a
@@ -105,18 +113,46 @@ def _named(value: Value | None) -> str:
     return "removed" if value is None else show(value)
 
 
-def relaxations(root: Path) -> dict[tuple[str, str, str], str]:
-    """Each loosening an ADR names, mapped to the ADR's path.
+def relaxations(root: Path, base: str) -> dict[tuple[str, str, str], str]:
+    """Each loosening an ADR line added since ``base`` names, mapped to the ADR's path.
 
+    Why: ADR 0047. A line the merge base already holds was spent on the change that added it.
     Keyed on the shown values: ``1.0 == True`` in Python, so values would let a number pass a flag.
     """
     named: dict[tuple[str, str, str], str] = {}
     for adr in sorted((root / ADRS).glob("*.md")):
+        relative = adr.relative_to(root).as_posix()
+        held = Counter((gatelib.show(root, base, relative) or "").splitlines())
         for line in (gatelib.read_text(adr) or "").splitlines():
+            if held[line] > 0:
+                held[line] -= 1
+                continue
             if match := RELAXES.match(line):
                 key = (match["key"], _spelled(match["old"]), _spelled(match["new"]))
-                named[key] = adr.relative_to(root).as_posix()
+                named[key] = relative
     return named
+
+
+def forgotten(root: Path, base: str, path: str, *, wanted: set[str]) -> dict[str, Value]:
+    """The last value each key in ``wanted`` held in ``path`` before ``base``, where it held one.
+
+    Why: ADR 0047. One ``git log`` limited to the file, newest first, stopping once every key is
+    found. A repository without that history (a shallow clone) finds nothing, so a key reads as new.
+    """
+    found: dict[str, Value] = {}
+    listed = gatelib.git(root, "log", "--format=%H", base, "--", path) or ""
+    for commit in listed.split():
+        text = gatelib.show(root, commit, path)
+        try:
+            flat = flatten(tomllib.loads(text)) if text else {}
+        except tomllib.TOMLDecodeError:
+            continue
+        for key in wanted - found.keys():
+            if key in flat:
+                found[key] = flat[key]
+        if found.keys() == wanted:
+            break
+    return found
 
 
 def main(argv: list[str]) -> int:
@@ -139,10 +175,12 @@ def main(argv: list[str]) -> int:
     if previous is None:
         print(f"ratchet-lowered: {options.file} is new at {base[:12]}; accepted as is")
         return gatelib.report("ratchet-lowered", problems, base) if problems else 0
-    found = _loosenings(
-        flatten(tomllib.loads(previous)), flatten(tomllib.loads(current_path.read_text()))
-    )
-    named = relaxations(root)
+    before = flatten(tomllib.loads(previous))
+    after = flatten(tomllib.loads(current_path.read_text()))
+    if absent := set(after) - set(before):
+        before = {**forgotten(root, base, options.file, wanted=absent), **before}
+    found = _loosenings(before, after)
+    named = relaxations(root, base)
     for key, old, new, message in found:
         adr = named.get((key, show(old), _named(new)))
         if adr is None:
