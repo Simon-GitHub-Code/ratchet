@@ -95,7 +95,7 @@ FIXED_OVER = [
 
 
 @functools.cache
-def graph() -> tuple[frozenset[model.State], list[model.Edge]]:
+def graph() -> model.Graph:
     return model.graph()
 
 
