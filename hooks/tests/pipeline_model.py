@@ -153,8 +153,8 @@ class Review(Enum):
 Answer = Preflight | Spec | Check | Build | Critique | Review
 Said = Start | Answer
 
-# Why: the script reads a size only after the spec and the implementation, so one answer over a
-# ceiling shows all a fixer or a reconcile agent can bring; the test ceiling takes the same branch.
+# Why: ADR 0055. The script reads a size after the spec, the implementation, each fix round and
+# the reconcile; one answer over a ceiling shows all a fixer or a reconcile agent can bring.
 LATE_BUILD = (Build.DIES, Build.GREEN, Build.RED, Build.PRODUCT_OVER)
 ANSWERS: dict[Role, tuple[Answer, ...]] = {
     Role.PREFLIGHT: tuple(Preflight),
@@ -294,7 +294,6 @@ class State:
     kept: bool = False
     built: bool = False
     green: bool | None = None
-    late_over: bool = False
     owed: bool = False
     silent: bool = False
     ending: Ending | None = None
@@ -355,8 +354,13 @@ OVER: dict[Said, Ceiling] = {
 }
 MARGINS = frozenset({Spec.TESTS_MARGIN, Build.TESTS_MARGIN})
 # Why: the amend is the spec role answering again, and the script names its stop "the spec".
-MEASURED_AT = {Role.SPEC: Role.SPEC, Role.AMEND: Role.SPEC, Role.IMPLEMENT: Role.IMPLEMENT}
-LATE = frozenset({Role.FIX, Role.RECONCILE})
+MEASURED_AT = {
+    Role.SPEC: Role.SPEC,
+    Role.AMEND: Role.SPEC,
+    Role.IMPLEMENT: Role.IMPLEMENT,
+    Role.FIX: Role.FIX,
+    Role.RECONCILE: Role.RECONCILE,
+}
 
 
 def stops_on(answer: Said, *, critic: bool | None) -> Ceiling | None:
@@ -429,10 +433,15 @@ def _critique(state: State, action: Action) -> State:
 
 
 def _built_late(state: State, action: Action, awaiting: Role) -> State:
-    """A fix round's or a reconcile's answer, whose size the script does not read."""
+    """A fix round's or a reconcile's answer: over a ceiling it stops the run too large.
+
+    Why: ADR 0055. The critic's tests are already counted, so the tests have all their ceiling.
+    """
+    ceiling = stops_on(action.answer, critic=False)
+    if ceiling is not None:
+        return _too_large(state, ceiling, action.role, parts=False)
     green = action.answer is not Build.RED
-    over = state.late_over or action.answer in OVER
-    return replace(state, green=green, late_over=over, awaiting=awaiting)
+    return replace(state, green=green, awaiting=awaiting)
 
 
 def _fix(state: State, action: Action) -> State:
@@ -598,7 +607,7 @@ def ceilinged(_: State, name: str, after: State) -> bool:
 
 
 def measured(_: State, name: str, after: State) -> bool:
-    """A change the spec or the implementation measures or estimates over a ceiling stops the run at that stage as too large on that ceiling."""  # noqa: E501
+    """A change the spec, the implementation, a fix round or the reconcile measures or estimates over a ceiling stops the run at that stage as too large on that ceiling."""  # noqa: E501
     action = named(name)
     ceiling = OVER.get(action.answer)
     if ceiling is None or action.role not in MEASURED_AT:
@@ -610,14 +619,6 @@ def measured(_: State, name: str, after: State) -> bool:
         and ending.ceiling is ceiling
         and ending.measured_after is MEASURED_AT[action.role]
     )
-
-
-def checked_late(before: State, name: str, after: State) -> bool:
-    """A change a fix round or a reconcile takes over a ceiling, which the script does not measure, is approved only when the last builder and the review report the check green."""  # noqa: E501
-    ending = after.ending
-    if not before.late_over or ending is None or ending.outcome is not Outcome.APPROVE:
-        return True
-    return before.green is True and named(name).answer is not Review.APPROVES_RED
 
 
 def loop_ends(before: State, name: str, after: State) -> bool:
@@ -678,7 +679,7 @@ def split(before: State, name: str, after: State) -> bool:
 
 
 def split_unasked(_: State, name: str, after: State) -> bool:
-    """A run that stops too large stops on the answer of the spec or the implementer that measured it, carries the proposed parts when the spec's estimate stopped it, and tells the orchestrator to split the ticket without asking the owner."""  # noqa: E501
+    """A run that stops too large stops on the answer of the role that measured it, carries the proposed parts when the spec's estimate stopped it, and tells the orchestrator to split the ticket without asking the owner."""  # noqa: E501
     ending = after.ending
     if ending is None or ending.stop is not Stop.TOO_LARGE:
         return True
@@ -737,10 +738,7 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "3. stages run in order, and nothing is built before the spec asks nothing": ordered,
     "4. a verdict only gets stricter, but by a documented repair": stricter,
     "5. a change over a ceiling stops as too large and is never approved": ceilinged,
-    "5a. a change over a ceiling after the spec or the implementation stops as too large": measured,
-    "5b. a change over a ceiling after a fix or a reconcile is approved only on a green check": (
-        checked_late
-    ),
+    "5a. a change over a ceiling after any role that measures it stops as too large": measured,
     "6. the fix loop ends, and what it leaves owed is in the result": loop_ends,
     "7. the run never commits, pushes or opens a pull request": unpublished,
     "8. a failed or malformed answer ends in a result that says so": reported,

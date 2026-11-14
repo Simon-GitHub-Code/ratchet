@@ -26,7 +26,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
-from first_hour import appcheck, gates, merges, owner, reduce, sandbox, steps, transcript
+from first_hour import (
+    appcheck,
+    audit,
+    gates,
+    merges,
+    owner,
+    reduce,
+    sandbox,
+    steps,
+    transcript,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable, Mapping, Sequence
@@ -447,7 +457,7 @@ class Driver:
             self.log.emit("app", finding=f"could not check out {branch} to start it", started=False)
             return None
         try:
-            for name in ("node_modules", ".venv"):
+            for name in ("node_modules", ".venv", "target", "vendor", ".bundle"):
                 if (self.layout.app / name).is_dir() and not (tree / name).exists():
                     (tree / name).symlink_to(self.layout.app / name)
             result = appcheck.check(
@@ -760,6 +770,7 @@ async def drive(run: Run, operator: Operator, models: Models) -> dict[str, objec
         await asyncio.to_thread(driver.record_merges)
         if not driver.usable:
             await asyncio.to_thread(driver.app_check, "final")
+    await asyncio.to_thread(record_audit, epilogue, driver)
     left = tidy(epilogue, operator.projects)
     after = fingerprints(operator.watched)
     run.log.emit(
@@ -776,6 +787,22 @@ async def drive(run: Run, operator: Operator, models: Models) -> dict[str, objec
     (run.layout.root / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", "utf-8")
     (run.layout.root / "table.md").write_text(reduce.table(metrics), "utf-8")
     return metrics
+
+
+def record_audit(run: Run, driver: Driver | None) -> None:
+    """Log what the run did about architecture, and where the plugin's own text named a stack."""
+    root = run.layout.root
+    branch = driver.default_branch() if driver is not None else None
+    if branch is not None:
+        files = audit.files_of(run.git, branch)
+        run.log.emit("architecture", **audit.architecture_event(files, root / "transcript.jsonl"))
+    answers = [
+        str(e.get("answer"))
+        for e in reduce.read(root / "events.jsonl")
+        if e.get("kind") == "question"
+    ]
+    leak = audit.leak_event(run.config.persona, answers, root / "transcript.jsonl")
+    run.log.emit("stack-leaks", **leak)
 
 
 def checked_root(path: Path, temp: Path) -> Path:

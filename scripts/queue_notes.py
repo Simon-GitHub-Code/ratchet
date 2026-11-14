@@ -29,8 +29,10 @@ SIZE, QUESTIONS, GUARD = "size", "questions", "guard"
 SPLIT = "split"
 # Why: the judge's reason codes the drain resolves itself: update, judge again, run the gates
 # again. A ticket left to the owner for these alone is retried, not held; any other code is the
-# owner's decision, and holds the ticket until its text changes.
-MECHANICAL = frozenset({"behind", "moved", "conflict", "gates", "refs"})
+# owner's decision, and holds the ticket until its text changes. ``errored`` (ADR 0055) is a
+# pipeline run that threw twice, an agent having died each time: the run is the thing to retry.
+ERRORED = "errored"
+MECHANICAL = frozenset({"behind", "moved", "conflict", "gates", "refs", ERRORED})
 # Why: how many times in a row those may leave a ticket waiting before it is the owner's.
 RETRIES = 3
 
@@ -142,6 +144,9 @@ class Hold:
     reasons: list[str]
     kinds: list[str]
     owes: list[str]
+    # Why: a note written before the drain kept the default branch's commit has no base, so
+    # landing the guard edits cannot release it; only a change to the ticket does.
+    based: bool = True
 
 
 def split_into(root: Path, branch: str, ticket: preflight.Ticket) -> list[str] | None:
@@ -165,4 +170,9 @@ def held(root: Path, branch: str, ticket: preflight.Ticket) -> Hold | None:
     note = read_note(root, branch)
     if note.get("hold") is not True or released(root, note, ticket):
         return None
-    return Hold(texts(note.get("reasons")), texts(note.get("holds")), texts(note.get("owes")))
+    return Hold(
+        texts(note.get("reasons")),
+        texts(note.get("holds")),
+        texts(note.get("owes")),
+        based=isinstance(note.get("base"), str),
+    )

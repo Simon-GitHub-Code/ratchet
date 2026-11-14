@@ -38,6 +38,30 @@ It writes, in that directory:
 
 The A/B comparison is two runs, one per checkout, and a diff of their `metrics.json`. Read the noise section before you trust a difference.
 
+## Personas and the matrix
+
+`--persona <stem>` runs one owner; `run.py personas` lists the stems and the stack each insists on. `read-later` leaves the stack to the assistant. The others state a firm language and shape in the owner's plain words, so a run shows whether the method works outside the two ecosystems it was first tried in:
+
+| Persona | The owner insists on | The first slice |
+| --- | --- | --- |
+| `go-todo-cli` | Go, a command-line tool with its list in a plain file | `cli`: run `add buy oat milk`, then `list`, and find the task in the output |
+| `rust-shortener` | Rust, one program that serves its own page | `html-form`: shorten an address, see it in the list |
+| `kotlin-recipes` | Kotlin on the JVM, server-made pages | `html-form`: save a recipe name, see it in the list |
+| `dotnet-chores` | C# on .NET, server-made pages | `html-form`: save a chore, see it in the list |
+| `ruby-plants` | Ruby, as a Rails app with server-made pages | `html-form`: save a plant, see it in the list |
+
+A persona file adds `stack` (a few words, for the matrix table) to the existing fields. The owner model's rule says a question about a language or shape its firm positions name is a product question, and it holds the position. The `cli` slice kind runs the program the way the repository says (the README's run line cut back before its arguments, or a `run` recipe), once per command of the slice, and looks for `expect` in the last output; the web slices are as before. The app check reads run lines for Go, Rust, .NET, Ruby and JVM projects as well as the original set.
+
+One command runs the matrix, the personas that state a stack one after another (never in parallel: each run is a whole session with builds, and two at once move each other's minutes), each in its own directory under `--dir`:
+
+```bash
+just first-hour-matrix /path/to/ratchet /tmp/first-hour-matrix
+# the same, without just; --personas go-todo-cli,ruby-plants picks some:
+uv run evals/first-hour/run.py matrix --plugin /path/to/ratchet --dir /tmp/first-hour-matrix
+```
+
+It takes the single run's `--minutes` (default 90 here), `--usd`, `--model` and `--owner-model`, applied to every persona. `matrix.md` and `matrix.json` are rewritten after each run, so a matrix that is stopped (Ctrl-C reaches the run in progress, which writes its measurements) keeps what it finished. The table has one row a persona: stack, why and when it stopped, minutes to the first feature merge (the first merge whose branch is not the adoption's or init's) and to the first usable merge, questions, product against other, guard prompts, automatic merges, the architecture measures on one line, stack leaks, and whether a usable app was merged. A run that fails still gets a row with its exit code. Expect about an hour to ninety minutes a persona, and up to the cost budget each.
+
 ## What the run does
 
 **The owner.** `personas/read-later.toml` says who the owner is, the idea ("a small read-later web app: I paste a link, it saves the title, I can mark it read and see what's left"), their firm positions (local only: no remote, no forge, no accounts) and the first slice a person can use. Every question goes to a small model given the persona and the question. It classifies the question first: `product` (the answer depends on what the owner wants, or on a firm position) or `default-able` (how it is built: tools, tests, git, the method). The rule is applied in code, not trusted to the model: a default-able question takes the option marked recommended whenever there is one. Each answer is logged with its class, whether a recommended option existed and whether it was taken. Questions arrive on three channels: a question dialog, a turn that ends by asking the owner something in prose, and a route `also:` line that proposes a life event. Another idea or application type is another persona file with its own slice; a new kind of slice check is one entry in `appcheck.SLICES`.
@@ -104,6 +128,9 @@ The session also sees its cost budget, which Claude Code enforces (`--usd`), and
 | `minutes.to_first_merge`, `minutes.to_first_usable_merge` | minutes from the start to the first merge on the default branch, and to the first after which the slice works |
 | `stop` | why the run ended (`usable-merged`, `wall-clock`, `cost`, `repeat`, `forge-stage`, `max-steps`, `interrupted`, `error`), with the detail and the minute |
 | `app` | the last app check: the start command and where the repository says it, whether it started and served `/`, `slice` (`works`, `fails` or `unchecked`), and the finding |
+| `minutes.to_first_feature_merge` | minutes to the first merge on the default branch whose branch name has neither `adopt` nor `init` in it |
+| `architecture` | the architecture measures, below |
+| `stack_leaks` | where the plugin's own text named a language or tool the owner never said, below |
 | `questions` | by class, by channel, recommended offered and taken (dialog and `also:` questions only: a prose question has no marked option), and every question with its answer and the owner model's reason |
 | `prompts` | prompts the owner answered: `guard` (the Ratchet guard's ask, or the `ask` rule adopt writes for a guard path, which Claude Code reports with no reason), `permission` (Claude Code's own), and how many the owner declined |
 | `guard_denials` | tool calls the guard denied the agent outright |
@@ -123,6 +150,24 @@ The session also sees its cost budget, which Claude Code enforces (`--usd`), and
 **Runs before the policy fix undercount the feature stage.** Until the fix that put `StructuredOutput` on the tool list and had the shell check read only what a shell uses as a path, the policy refused two things a normal session needs. A workflow agent with a `schema` returns its result through `StructuredOutput`, so the `/ratchet:feature` pipeline failed at its first step and the owner was told to type the command again. And a slash command named in a command line, a `sed` script such as `s/a/b/p`, a glob in a comment and a route such as `/items` were read as paths outside the run and refused. A run from before that fix shows these in `harness_denials` (the tool `StructuredOutput`, and "reaches outside the run directory" with a reason such as `(/p)`, `(/**)` or `(/ratchet:safeguard)`). Its feature-stage minutes, cost, prompts and merges describe the harness as much as the plugin: do not compare them with a run after the fix. A path in `harness_denials` that really is outside the run is still refused and still counts.
 
 **Runs before the registry fix undercount adoption.** Until the fix that let a session read registry metadata, `curl -s https://pypi.org/pypi/<name>/json` was refused ("opens a network connection"), and one session that met it concluded that the harness refused every network connection and stopped adoption at about eight minutes. The same run shows false positives in `harness_denials` that the fix removed: "publishes or logs in to a registry" and "runs inline code that opens a network connection" on a heredoc that only edited a file, and "reaches outside the run directory" on a `sed` script in a `for` loop. What stays refused and is correct: a `curl` to the session's own app with `-X POST` or `-X DELETE` (the network is shared with the machine's other services), a file written beside the owner's trees in the run directory, and a `..` one level too many.
+
+### The architecture measures
+
+`architecture` in `metrics.json`, read with no model: the question part from the logged questions, the rest from the default branch's files and the transcript at the end of the run (two events, `architecture` and `stack-leaks`, so `reduce` gives the same numbers again).
+
+| Key | What it is |
+| --- | --- |
+| `asked`, `options`, `recommended`, `enough_options`, `batched`, `round_questions` | an architecture question ("How should it be built?", the words `questions.toml` registers for `architecture.system`) came by the dialog, how many options it had, whether one was marked recommended, whether there were at least two, and whether it came in one round with at least one other dialog question of the same step |
+| `tools_asked`, `answer`, `took_recommended` | the tools question, the owner's answer and whether it was the recommendation |
+| `change_questions`, `change_list` | questions outside the adoption round that ask the owner to change the architecture (a new layer, a new kind of storage, a process boundary, a re-architecture); a wording match, so a floor and a lead to read, not a verdict |
+| `adr` | the record the binding's `- Decision:` names (or the first with a `## Considered options`): found, `chosen_by`, the count of considered options, whether `## Reversal cost` and `## Refutation criterion` are filled, and `complete` (all of them, at least two options) |
+| `binding`, `parts_declared` | the binding has an `## Architecture` section, the record it names exists, and the rows of its `\| Part \| Path \| May depend on \|` table |
+| `features` | each `docs/features/<slug>/spec.md` and whether it has a filled `## Design` section |
+| `reviews` | in the transcript: review results seen (by their `verdict` field), issues on axis `design`, and mentions of axis F. A review that approved with no design issue leaves nothing of the axis in the transcript, so the last two are floors |
+
+### The stack leak measure
+
+`stack_leaks` reads the transcript for the plugin's own text: hook output, a skill's text, and what a session read from the plugin's files. It looks in that text for the language and tool names in `first_hour/leaks.py` (eval data, so it may name stacks; the plugin may not) and keeps each name the owner never said, whether in the persona or in an answer, once per source with the surrounding words. A name found there is a plugin leak: the plugin put it in the session, and an agent can take it for the owner's wish. Zero is the goal. `python3` and `just` are not names (the plugin's scripts run on one and its contract is the other); a word that is also plain English is matched only in the shape that names the tool. Read the excerpts: a lexicon match is evidence, not proof.
 
 ## Tests
 
