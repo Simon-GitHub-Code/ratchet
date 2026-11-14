@@ -13,28 +13,31 @@ from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
 
 import drain
+import merge_ready
 from tests import drain_model as model
-from tests.drain_model import Kind, Name
-from tests.drain_world import BRANCH, DRAFT, World
+from tests.drain_model import Branch, Kind, Name
+from tests.drain_world import BRANCH, DRAFT, REF, World
 from tests.repos import git
 from tests.test_drain import scratch  # noqa: F401 # -- an autouse fixture of the drain's tests
 
-CAP, KEPT, JUDGED, NOT_STALE, ONCE, HELD, REFUSED, NO_TREE = model.RULES
+CAP, KEPT, JUDGED, NOT_STALE, ONCE, HELD, REFUSED, RECOVERS, NO_TREE = model.RULES
 
 OPEN_A = ["drain.py open a", "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
 PARK_A = "drain.py close --outcome parked a"
+EDIT_A = "the owner edits ticket a"
 # Why: a rule the code does not keep is pinned here by the shortest path from the initial state
 # to a step that breaks it, so the break is a recorded fact and not a red test; each pinned path
 # is replayed below on a real repository.
 COUNTEREXAMPLES: dict[str, list[str] | None] = {
-    CAP: [*OPEN_A, PARK_A, "drain.py open c", "the owner edits ticket a", "drain.py update a"],
+    CAP: [*OPEN_A, PARK_A, "drain.py open c", EDIT_A, "drain.py update a"],
     KEPT: None,
     JUDGED: None,
     NOT_STALE: None,
     ONCE: [*JUDGED_A, "drain.py land a", PARK_A],
     HELD: [*JUDGED_A, PARK_A, "drain.py land a"],
     REFUSED: None,
+    RECOVERS: [*JUDGED_A, EDIT_A, "a kill after the rebase stops drain.py update a"],
     NO_TREE: [
         PARK_A,
         "drain.py open c",
@@ -122,7 +125,8 @@ class Play:
 
 
 # Why: the families an action is drawn from, a family as often as it is listed. A landing runs
-# merge.py in a process of its own, several times the cost of any other step.
+# merge.py in a process of its own, several times the cost of any other step. The order is the
+# first-choice example's: it reaches first what the replays below do not take.
 WEIGHTED = [
     Kind.OPEN,
     Kind.OPEN,
@@ -130,16 +134,20 @@ WEIGHTED = [
     Kind.COMMIT,
     Kind.RECORD,
     Kind.RECORD,
-    Kind.CLOSE,
+    Kind.EDIT,
+    Kind.KILL_MID_REBASE,
+    Kind.KILL_AFTER_REBASE,
     Kind.UPDATE,
+    Kind.CLOSE,
     Kind.LAND,
+    Kind.WORK,
+    Kind.KILL_AFTER_STASH,
+    Kind.KILL_BEFORE_NOTE,
+    Kind.CLEAN,
     Kind.CLEAN_ALL,
     Kind.REPORT,
-    Kind.EDIT,
-    Kind.WORK,
     Kind.LOCK,
     Kind.UNLOCK,
-    Kind.CLEAN,
 ]
 
 
@@ -153,9 +161,17 @@ class DrainOnARepository(RuleBasedStateMachine):
 
     @rule(data=st.data())
     def act(self, data: st.DataObject) -> None:
-        moves = model.moves(self.play.state)
+        # Why: Hypothesis tries the first choice of every draw first. Listing the actions that
+        # change the state ahead of those that do not makes that example walk the lifecycle,
+        # not repeat one refused command.
+        state = self.play.state
+        moves = sorted(model.moves(state), key=lambda move: move[1] == state)
+        changes = [
+            kind for kind in WEIGHTED if any(a.kind is kind and b != state for a, b in moves)
+        ]
+        kinds = changes + [kind for kind in WEIGHTED if kind not in changes]
         open_to = {action.kind for action, _ in moves}
-        chosen = data.draw(st.sampled_from([kind for kind in WEIGHTED if kind in open_to]))
+        chosen = data.draw(st.sampled_from([kind for kind in kinds if kind in open_to]))
         action, after = data.draw(
             st.sampled_from([move for move in moves if move[0].kind is chosen]), label="action"
         )
@@ -232,17 +248,15 @@ def test_land_merges_a_held_ticket_and_a_close_after_it_unsays_the_merge(tmp_pat
     landed = play.named("drain.py land a", compare=False)
     assert play.path == COUNTEREXAMPLES[HELD]
     assert "merge: agent\nmerged: `feature/1-alpha` into `main`" in landed
-    play.named(PARK_A, compare=False)
-    play.agree()
+    play.named(PARK_A)
     note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
     assert (note["outcome"], note["reported"]) == ("parked", False)
-    play.world.command("report")
-    merged, parked = play.world.printed.split("## Parked")
+    merged, parked = play.named("drain.py report").split("## Parked")
     assert "Alpha" not in merged.split("## Merged")[1]
     assert "Alpha" in parked.split("## Not built")[0]
 
 
-def test_clean_all_leaves_a_tree_whose_work_git_cannot_stash_and_keeps_the_work(
+def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_work(
     tmp_path: Path,
 ) -> None:
     play = Play(tmp_path)
@@ -253,5 +267,25 @@ def test_clean_all_leaves_a_tree_whose_work_git_cannot_stash_and_keeps_the_work(
     assert printed.startswith(f"left: {tree}: the drain that made it was interrupted, and git")
     assert (tree / DRAFT).read_text(encoding="utf-8") == "half done\n"
     play.named("the owner removes the stale index lock of c", compare=False)
-    assert play.named("drain.py clean --all").startswith(f"removed: {tree}")
+    play.named("a kill after the stash stops drain.py close --outcome parked c")
+    play.named("a kill before the note stops drain.py close --outcome parked c")
+    assert not tree.exists()
+    assert play.named("drain.py close --outcome parked c") == f"closed: {REF[Name.C]}: parked\n"
     assert git(play.world.root, "show", f"stash@{{0}}^3:{DRAFT}") == "half done"
+
+
+def test_clean_all_after_an_update_killed_past_its_rebase_keeps_a_record_no_review_wrote(
+    tmp_path: Path,
+) -> None:
+    play = Play(tmp_path)
+    for name in COUNTEREXAMPLES[RECOVERS] or []:
+        play.named(name, compare=False)
+    play.agree()
+    assert play.state.of(Name.A).branch is Branch.STALE
+    play.named("drain.py clean --all")
+    assert play.named("drain.py update a") == '{"moved": false, "conflicts": []}\n'
+    tip = git(play.world.root, "rev-parse", BRANCH[Name.A])
+    asked = merge_ready.Asked(current=True)
+    reasons = merge_ready.judge(play.world.root, "refs/heads/main", tip, asked=asked)
+    assert [reason.code for reason in reasons] == ["record"]
+    assert "a commit came after the review" in reasons[0].text

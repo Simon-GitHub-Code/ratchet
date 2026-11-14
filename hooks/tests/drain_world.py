@@ -14,10 +14,14 @@ import hashlib
 import io
 import json
 import re
+import signal
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+from unittest import mock
 
 import drain
+import gatelib
 import merge_ready
 from tests import drain_model as model
 from tests.drain_model import Branch, Kind, Name, Note, Outcome, Status, Ticket, Tree
@@ -33,17 +37,26 @@ from tests.test_drain import (
     approval,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 REF = {Name.A: ALPHA, Name.B: BETA, Name.C: GAMMA}
 BRANCH = {Name.A: BRANCH_A, Name.B: BRANCH_B, Name.C: BRANCH_C}
 ANSWER = "\n## Answers\n\nWhich case? The lower.\n"
 CHANGE = "feat(core): the change"
 RECORD = "docs(core): the verdict record"
 DRAFT = "src/draft.py"
+VERDICT = "docs/features/alpha/verdict.json"
 STATUSES = {status.value: status for status in Status}
+COMMANDS = frozenset({Kind.OPEN, Kind.UPDATE, Kind.LAND, Kind.CLOSE})
 
 
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+class Killed(BaseException):
+    """The command's process died here: nothing after this point of it runs."""
 
 
 @dataclass(frozen=True)
@@ -68,9 +81,12 @@ class World:
         """``drain.py argv`` as a session runs it; what it printed is kept."""
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            self.code = drain.main(
-                ["drain", *argv, "--root", str(self.root), "--offline", "--concurrency", "1"]
-            )
+            try:
+                self.code = drain.main(
+                    ["drain", *argv, "--root", str(self.root), "--offline", "--concurrency", "1"]
+                )
+            except Killed:
+                self.code = -signal.SIGKILL
         self.printed = out.getvalue() + err.getvalue()
         token = re.search(r"^drain: (\w+)$", err.getvalue(), re.MULTILINE)
         self.token = token.group(1) if token else self.token
@@ -79,33 +95,86 @@ class World:
     def tree(self, name: Name) -> Path:
         return drain.tree_of(self.root, BRANCH[name])
 
-    def lock_of(self, name: Name) -> Path:
-        """The index lock of the ticket's work tree, where git keeps it for a linked tree."""
+    def gitdir(self, name: Name) -> Path:
+        """Where git keeps the state of the ticket's linked work tree."""
         pointer = (self.tree(name) / ".git").read_text(encoding="utf-8")
-        return Path(pointer.removeprefix("gitdir:").strip()) / "index.lock"
+        return Path(pointer.removeprefix("gitdir:").strip())
 
-    def perform(self, action: model.Action) -> None:  # noqa: C901 -- one arm per kind
+    def lock_of(self, name: Name) -> Path:
+        return self.gitdir(name) / "index.lock"
+
+    def argv(self, kind: Kind, ref: str) -> list[str]:
+        """The command line of a drain command; ``ref`` names the ticket of one that takes it."""
+        drained = ["--drain", self.token] if self.token else []
+        return {
+            Kind.OPEN: ["open", ref],
+            Kind.UPDATE: ["update", ref],
+            Kind.LAND: ["land", ref],
+            Kind.CLOSE: ["close", ref, "--outcome", "parked"],
+            Kind.CLEAN: ["clean"],
+            Kind.CLEAN_ALL: ["clean", "--all", *drained],
+            Kind.REPORT: ["report"],
+        }[kind]
+
+    def killer(self, kind: Kind, name: Name) -> contextlib.AbstractContextManager[object]:
+        """What stops the command at the point ``kind`` names, as SIGKILL would stop it there.
+
+        The command runs in this process, and an exception no ``except`` of the drain catches
+        stands for the kill. The drain lock it holds is freed either way, as the kernel frees it.
+        """
+        real_git, real_write = gatelib.git, drain.queue_notes.write_note
+
+        def git_until(stop: tuple[str, str]) -> Callable[..., str | None]:
+            def run(root: Path, *args: str) -> str | None:
+                if args[:2] != stop:
+                    return real_git(root, *args)
+                if stop[0] == "rebase":
+                    # Why: a rebase stopped at a `break` before its first pick is where git is
+                    # when the kill lands right after its first checkout: detached at the base.
+                    git(root, "-c", "sequence.editor=sed -i 1ibreak", "rebase", "-i", *args[1:])
+                raise Killed
+
+            return run
+
+        def write_until(path: Path, note: dict[str, object]) -> None:
+            if path == drain.queue_notes.note_path(self.root, BRANCH[name]):
+                raise Killed
+            real_write(path, note)
+
+        def dropped(_tree: Path) -> None:
+            raise Killed
+
+        killers = {
+            Kind.KILL_MID_REBASE: lambda: mock.patch.object(
+                gatelib, "git", git_until(("rebase", "--quiet"))
+            ),
+            Kind.KILL_AFTER_REBASE: lambda: mock.patch.object(drain, "drop_record", dropped),
+            Kind.KILL_AFTER_STASH: lambda: mock.patch.object(
+                gatelib, "git", git_until(("worktree", "remove"))
+            ),
+            Kind.KILL_BEFORE_NOTE: lambda: mock.patch.object(
+                drain.queue_notes, "write_note", write_until
+            ),
+        }
+        return killers[kind]()
+
+    def perform(self, action: model.Action) -> None:
         """Do what ``action`` names."""
         kind, name = action.kind, action.ticket
         if name is None:
-            drained = ["--drain", self.token] if self.token else []
-            argv = {
-                Kind.CLEAN: ["clean"],
-                Kind.CLEAN_ALL: ["clean", "--all", *drained],
-                Kind.REPORT: ["report"],
-            }[kind]
-            self.command(*argv)
-            return
+            self.command(*self.argv(kind, ""))
+        elif kind in model.KILLS:
+            with self.killer(kind, name):
+                self.command(*self.argv(model.KILLS[kind], REF[name]))
+        elif kind in COMMANDS:
+            self.command(*self.argv(kind, REF[name]))
+        else:
+            self.by_hand(kind, name)
+
+    def by_hand(self, kind: Kind, name: Name) -> None:
+        """What the agent, the owner or git does, outside the drain."""
         ref, tree = REF[name], self.tree(name)
-        if kind is Kind.OPEN:
-            self.command("open", ref)
-        elif kind is Kind.UPDATE:
-            self.command("update", ref)
-        elif kind is Kind.LAND:
-            self.command("land", ref)
-        elif kind is Kind.CLOSE:
-            self.command("close", ref, "--outcome", "parked")
-        elif kind is Kind.WORK:
+        if kind is Kind.WORK:
             write(tree, DRAFT, "half done\n")
         elif kind is Kind.COMMIT:
             text = (tree / ref).read_text(encoding="utf-8")
@@ -144,7 +213,8 @@ class World:
         for name, was in ghost.each():
             merged = name not in statuses
             tree = self.tree_state(name) if self.tree(name) in trees else Tree.NONE
-            branch, current = self.branch_state(branches.get(BRANCH[name]), merged=merged, was=was)
+            listed = branches.get(BRANCH[name])
+            branch, current = self.branch_state(name, listed, merged=merged, was=was)
             text = int(ANSWER in (self.root / REF[name]).read_text(encoding="utf-8"))
             note = self.note(name, merged=merged, was=was.note)
             ticket = Ticket(
@@ -163,10 +233,13 @@ class World:
     def tree_state(self, name: Name) -> Tree:
         if self.lock_of(name).exists():
             return Tree.LOCKED
+        if (self.gitdir(name) / "rebase-merge").is_dir():
+            return Tree.REBASING
         return Tree.DIRTY if git(self.tree(name), "status", "--porcelain") else Tree.CLEAN
 
-    @staticmethod
-    def branch_state(listed: list[str] | None, *, merged: bool, was: Ticket) -> tuple[Branch, bool]:
+    def branch_state(
+        self, name: Name, listed: list[str] | None, *, merged: bool, was: Ticket
+    ) -> tuple[Branch, bool]:
         """The branch and whether it holds the default tip; a merged one is as it landed."""
         if listed is None:
             return Branch.NONE, True
@@ -175,7 +248,12 @@ class World:
         ahead, behind, subject = listed
         if ahead == "0":
             return Branch.BARE, behind == "0"
-        return (Branch.JUDGED if subject == RECORD else Branch.DRAFT), behind == "0"
+        if subject != RECORD:
+            return Branch.DRAFT, behind == "0"
+        branch = BRANCH[name]
+        certified = json.loads(git(self.root, "show", f"{branch}:{VERDICT}"))["tree"]
+        reviewed = git(self.root, "rev-parse", f"{branch}~1^{{tree}}")
+        return (Branch.JUDGED if certified == reviewed else Branch.STALE), behind == "0"
 
     def note(self, name: Name, *, merged: bool, was: Note | None) -> Note | None:
         """The drain's note on the ticket; on a merged ticket its text is the model's."""
@@ -183,8 +261,9 @@ class World:
         if not held:
             return None
         outcome = held.get("outcome")
+        rebasing = bool(held.get("rebasing"))
         if outcome is None:
-            return Note(Outcome.OPENED)
+            return Note(Outcome.OPENED, rebasing=rebasing)
         texts = {digest(FILES[REF[name]]): 0, digest(FILES[REF[name]] + ANSWER): 1}
         written = texts.get(str(held.get("digest")), -1)
         attempts = held.get("attempts")
@@ -194,4 +273,5 @@ class World:
             text=was.text if merged and was is not None else written,
             fresh=outcome == "merged" and held.get("reported") is False,
             attempts=min(model.RETRIES, attempts if isinstance(attempts, int) else 0),
+            rebasing=rebasing,
         )
