@@ -990,3 +990,235 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "8. a killed command recovers by running again or by clean --all": recovers,
     "10. clean --all leaves no queue work tree": no_tree_left,
 }
+
+
+# --- the lease: one drain at a time -----------------------------------------------------------
+
+
+class Drain(Fact):
+    ONE = "drain 1"
+    TWO = "drain 2"
+
+
+class Lease(NamedTuple):
+    """Two drains on one repository as ``drain.lease`` reads them, and one ticket's work tree.
+
+    ``shared`` is ``None`` until the history says how the drains run: each in a session of its
+    own, or both under one long-lived process. The pairs hold drain 1's fact, then drain 2's.
+    """
+
+    shared: bool | None = None
+    holder: Drain | None = None
+    """Whose chain and token the lease file holds; ``None`` when there is no lease."""
+    alive: tuple[bool, bool] = (True, True)
+    """Whether the drain's session process is alive."""
+    draining: tuple[bool, bool] = (False, False)
+    """Whether the drain took the lease and has neither reported nor stopped. No file holds it."""
+    took: tuple[bool, bool] = (False, False)
+    """Whether the drain holds a token: its ``clean --all`` took the lease once."""
+    tree: Drain | None = None
+    """The drain that opened the ticket's work tree, while it is there."""
+    draft: bool = False
+    running: bool = False
+    """Whether a program the drain built runs from the tree. Its file is uncommitted work too."""
+    stashed: bool = False
+    """Whether a draft was kept as a stash. A history leaves one draft, so the graph ends."""
+
+
+def of(pair: tuple[bool, bool], drain: Drain) -> bool:
+    return pair[drain is Drain.TWO]
+
+
+def put(pair: tuple[bool, bool], drain: Drain, *, value: bool) -> tuple[bool, bool]:
+    return (pair[0], value) if drain is Drain.TWO else (value, pair[1])
+
+
+class Step(Fact):
+    SEPARATE = "each drain runs in a session of its own"
+    SHARED = "one long-lived process runs both drains"
+    CLEAN_ALL = "drain.py clean --all"
+    RESUME = "drain.py clean --all --drain with its token"
+    TAKE_OVER = "drain.py clean --all --take-over"
+    OPEN = "drain.py open a"
+    DRAFT = "its agent leaves a draft in its tree"
+    PROGRAM = "its agent starts a program built in its tree"
+    PROGRAM_ENDS = "the program built in the tree ends"
+    REPORT = "drain.py report"
+    REPORT_OWN = "drain.py report --drain with its token"
+    STOP = "stops, its session still open"
+    DIE = "its session ends"
+
+
+CLEANS = frozenset({Step.CLEAN_ALL, Step.RESUME, Step.TAKE_OVER})
+REPORTS = frozenset({Step.REPORT, Step.REPORT_OWN})
+OWN = frozenset({Step.RESUME, Step.REPORT_OWN})
+"""The steps that pass the drain's token: a drain that never took the lease has none."""
+
+
+def rival(lease: Lease, drain: Drain) -> bool:
+    """``drain.rival``: whether the lease names a drain still running, as ``drain`` sees it.
+
+    A live process of the holder's chain is evidence only when it is not above ``drain``'s
+    command too: in a session of its own. A program running from a queue tree always is.
+    """
+    holder = lease.holder
+    if holder is None:
+        return False
+    chain = of(lease.alive, holder) and not lease.shared and holder is not drain
+    return chain or lease.running
+
+
+def _clean_all(lease: Lease, drain: Drain, step: Step) -> Lease:
+    ours = step is Step.RESUME and lease.holder is drain
+    if step is not Step.TAKE_OVER and not ours and rival(lease, drain):
+        return lease
+    taken = lease._replace(
+        holder=drain,
+        took=put(lease.took, drain, value=True),
+        draining=put(lease.draining, drain, value=True),
+    )
+    if lease.tree is None:
+        return taken
+    stashed = lease.stashed or lease.draft
+    return taken._replace(tree=None, draft=False, running=False, stashed=stashed)
+
+
+def _release(lease: Lease, drain: Drain, step: Step) -> Lease:
+    """``drain.release``: the lease ends when the token is the holder's or no rival is alive."""
+    ours = step is Step.REPORT_OWN and lease.holder is drain
+    holder = lease.holder if not ours and rival(lease, drain) else None
+    return lease._replace(holder=holder, draining=put(lease.draining, drain, value=False))
+
+
+def _by_a_drain(lease: Lease, drain: Drain, step: Step) -> Lease | None:  # noqa: PLR0911
+    alive, mine = of(lease.alive, drain), lease.tree is drain
+    if step in OWN and not of(lease.took, drain):
+        return None
+    if step in CLEANS:
+        return _clean_all(lease, drain, step) if alive else None
+    if step in REPORTS:
+        return _release(lease, drain, step) if alive else None
+    if step is Step.OPEN:
+        ready = lease.holder is drain and of(lease.draining, drain) and lease.tree is None
+        return lease._replace(tree=drain) if alive and ready else None
+    if step is Step.DRAFT:
+        free = mine and alive and not lease.draft and not lease.stashed
+        return lease._replace(draft=True) if free else None
+    if step is Step.PROGRAM:
+        free = mine and alive and not lease.running and not lease.stashed
+        return lease._replace(running=True, draft=True) if free else None
+    if step is Step.STOP:
+        stopped = put(lease.draining, drain, value=False)
+        return lease._replace(draining=stopped) if of(lease.draining, drain) else None
+    if step is Step.DIE and alive:
+        if lease.shared:
+            return lease._replace(alive=(False, False), draining=(False, False))
+        dead = put(lease.alive, drain, value=False)
+        return lease._replace(alive=dead, draining=put(lease.draining, drain, value=False))
+    return None
+
+
+DRAIN_STEPS = tuple(
+    step for step in Step if step not in {Step.SEPARATE, Step.SHARED, Step.PROGRAM_ENDS}
+)
+LEASE_INITIAL = Lease()
+LeaseEdge = tuple[Lease, str, Lease]
+
+
+def lease_moves(lease: Lease) -> list[tuple[str, Lease]]:
+    """Every step open to the two drains, their agents and the program in ``lease``."""
+    if lease.shared is None:
+        return [
+            (Step.SEPARATE.value, lease._replace(shared=False)),
+            (Step.SHARED.value, lease._replace(shared=True)),
+        ]
+    found = []
+    for drain in Drain:
+        for step in DRAIN_STEPS:
+            after = _by_a_drain(lease, drain, step)
+            if after is not None:
+                found.append((f"{drain.value}: {step.value}", after))
+    if lease.running:
+        found.append((Step.PROGRAM_ENDS.value, lease._replace(running=False)))
+    return found
+
+
+LEASE_STEPS = {f"{drain.value}: {step.value}": (drain, step) for drain in Drain for step in Step}
+
+
+def lease_graph() -> tuple[frozenset[Lease], list[LeaseEdge]]:
+    """Every lease state reachable from ``LEASE_INITIAL`` and every step, breadth first."""
+    seen = {LEASE_INITIAL}
+    frontier = deque([LEASE_INITIAL])
+    edges: list[LeaseEdge] = []
+    while frontier:
+        lease = frontier.popleft()
+        for said, after in lease_moves(lease):
+            edges.append((lease, said, after))
+            if after not in seen:
+                seen.add(after)
+                frontier.append(after)
+    return frozenset(seen), edges
+
+
+def taken_from(before: Lease, said: str, after: Lease) -> Drain | None:
+    """The live, draining drain whose tree another drain's ``clean --all`` took in this step."""
+    drain, step = LEASE_STEPS.get(said, (None, None))
+    owner = before.tree
+    if step not in {Step.CLEAN_ALL, Step.RESUME} or owner is None or owner is drain:
+        return None
+    if after.tree is not None or not of(before.alive, owner):
+        return None
+    return owner if of(before.draining, owner) else None
+
+
+def spares_the_live(before: Lease, said: str, after: Lease) -> bool:
+    """A second drain's ``clean --all`` never removes a work tree a live first drain still uses."""
+    return taken_from(before, said, after) is None
+
+
+def spares_the_told(before: Lease, said: str, after: Lease) -> bool:
+    """A second drain's ``clean --all`` removes a live first drain's work tree only when one process runs both and nothing runs from that tree, and then it keeps its draft as a stash."""  # noqa: E501
+    if taken_from(before, said, after) is None:
+        return True
+    return bool(before.shared) and not before.running and (after.stashed or not before.draft)
+
+
+def refused_by(before: Lease, said: str, after: Lease) -> Drain | None:
+    """The lease's holder, when this step is a ``clean --all`` the lease refused."""
+    drain, step = LEASE_STEPS.get(said, (None, None))
+    if step not in {Step.CLEAN_ALL, Step.RESUME} or after.holder is drain:
+        return None
+    return before.holder
+
+
+def stopped_blocks_not(before: Lease, said: str, after: Lease) -> bool:
+    """A drain that has stopped draining never blocks the next one's ``clean --all``, unless a program runs from its tree."""  # noqa: E501
+    holder = refused_by(before, said, after)
+    return holder is None or of(before.draining, holder) or before.running
+
+
+def gone_blocks_not(before: Lease, said: str, after: Lease) -> bool:
+    """A drain whose processes are all gone never blocks the next one's ``clean --all``, unless a program runs from its tree."""  # noqa: E501
+    holder = refused_by(before, said, after)
+    return holder is None or of(before.alive, holder) or before.running
+
+
+def report_spares(before: Lease, said: str, after: Lease) -> bool:
+    """A drain's report never ends the lease of another drain that is still alive."""
+    drain, step = LEASE_STEPS.get(said, (None, None))
+    holder = before.holder
+    if step not in REPORTS or holder in {None, drain} or after.holder is not None:
+        return True
+    return not of(before.alive, holder) and not before.running
+
+
+LEASE_RULES: dict[str, Callable[[Lease, str, Lease], bool]] = {
+    "9. a second drain never removes a work tree a live first drain uses": spares_the_live,
+    "9a. a second drain removes it only where the docstring says the two look alike": (
+        spares_the_told
+    ),
+    "9b. a drain that has stopped never blocks the next": stopped_blocks_not,
+    "9c. a drain that is gone never blocks the next": gone_blocks_not,
+    "9d. a report ends no lease but its own drain's": report_spares,
+}

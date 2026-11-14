@@ -5,8 +5,9 @@ from __future__ import annotations
 import functools
 import shutil
 import tempfile
+from collections import deque
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import pytest
 from hypothesis import HealthCheck, Phase, settings
@@ -15,10 +16,13 @@ from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_a
 
 import drain
 from tests import drain_model as model
-from tests.drain_model import Branch, Kind, Name
-from tests.drain_world import BRANCH, DRAFT, REF, World
+from tests.drain_model import Branch, Kind, Name, Step
+from tests.drain_world import BRANCH, DRAFT, REF, LeaseWorld, World
 from tests.repos import git
 from tests.test_drain import scratch  # noqa: F401 # -- an autouse fixture of the drain's tests
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 CAP, KEPT, JUDGED, NOT_STALE, ONCE, HELD, HELD_EDITED, REFUSED, RECOVERS, NO_TREE = model.RULES
 
@@ -601,3 +605,271 @@ def test_a_ticket_parked_while_its_fast_forward_is_cut_off_is_landed_with_no_edi
     ), "and the owner never changed the ticket"
     assert "merged: `feature/1-alpha` into `main`" in play.named(path[-1])
     assert note_of(play)["outcome"] == "merged", "a ticket the drain parked has landed"
+
+
+# --- the lease ---------------------------------------------------------------------------------
+
+LIVE_SPARED, TOLD_APART, STOPPED_FREE, GONE_FREE, OWN_LEASE = model.LEASE_RULES
+APART = "each drain runs in a session of its own"
+UNDER_ONE = "one long-lived process runs both drains"
+D1_STARTS = ["drain 1: drain.py clean --all", "drain 1: drain.py open a"]
+TAKEN_UNDER_ONE = [UNDER_ONE, *D1_STARTS, "drain 2: drain.py clean --all"]
+REPORTED_AWAY = [APART, *D1_STARTS, "drain 2: drain.py report", "drain 2: drain.py clean --all"]
+PROGRAM = "drain 1: its agent starts a program built in its tree"
+STOPPED = [
+    APART,
+    "drain 1: drain.py clean --all",
+    "drain 1: stops, its session still open",
+    "drain 2: drain.py clean --all",
+]
+LEASE_COUNTEREXAMPLES: dict[str, list[str] | None] = {
+    # Why: 9 breaks where the drain's docstring accepts it: "two drains run by one process on one
+    # repository, with drain 1 between commands and nothing running from its tree, cannot be told
+    # apart". 9a, which allows only that, holds there.
+    LIVE_SPARED: TAKEN_UNDER_ONE,
+    # Why: a finding. Under one process a second drain's report ends the first's lease, which the
+    # docstring accepts; with no lease `rival` looks for no program, so once the first drain
+    # starts one in its tree the second's `clean --all` ends it and takes the tree.
+    TOLD_APART: [UNDER_ONE, *D1_STARTS, "drain 2: drain.py report", PROGRAM, TAKEN_UNDER_ONE[-1]],
+    # Why: 9b breaks where the docstring accepts it: "A drain is alive while a process of its own
+    # is", so one that stopped with its session open blocks the next until the owner says
+    # `--take-over`. 9c, which asks only that a drain whose processes are gone block nothing,
+    # holds.
+    STOPPED_FREE: STOPPED,
+    GONE_FREE: None,
+    # Why: 9d breaks only where the docstring accepts it: under one process a report cannot tell
+    # whose drain it ends. In sessions of their own it ends only its own drain's lease.
+    OWN_LEASE: [UNDER_ONE, D1_STARTS[0], "drain 2: drain.py report"],
+}
+
+
+@functools.cache
+def lease_search() -> tuple[dict[str, list[str]], frozenset[str]]:
+    """Each lease rule's shortest break, read off the lease graph; every step taken."""
+    _, edges = model.lease_graph()
+    came: dict[model.Lease, tuple[model.Lease, str] | None] = {model.LEASE_INITIAL: None}
+    breaks: dict[str, list[str]] = {}
+    for before, said, after in edges:
+        for name, rule_holds in model.LEASE_RULES.items():
+            if name not in breaks and not rule_holds(before, said, after):
+                path, at = [said], came[before]
+                while at is not None:
+                    path.append(at[1])
+                    at = came[at[0]]
+                breaks[name] = path[::-1]
+        came.setdefault(after, (before, said))
+    return breaks, frozenset(said for _, said, _ in edges)
+
+
+@pytest.mark.parametrize("name", list(model.LEASE_RULES))
+def test_each_lease_rule_holds_on_every_step_or_breaks_on_its_recorded_path(name: str) -> None:
+    found = lease_search()[0].get(name)
+    assert found == LEASE_COUNTEREXAMPLES[name], f"{name}: shortest break is\n" + "\n".join(
+        found or []
+    )
+
+
+def test_every_lease_step_is_taken_and_every_lease_rule_reads_as_one_sentence() -> None:
+    taken = lease_search()[1]
+    assert {said.rpartition(": ")[2] for said in taken} == {step.value for step in model.Step}
+    for name, rule_holds in model.LEASE_RULES.items():
+        sentence = (rule_holds.__doc__ or "").strip()
+        assert sentence.endswith("."), name
+        assert ". " not in sentence, name
+
+
+def lease_broken_by(path: list[str]) -> set[str]:
+    """The lease rules the last step of ``path`` breaks in the model."""
+    lease = before = model.LEASE_INITIAL
+    for said in path:
+        before = lease
+        lease = dict(model.lease_moves(lease))[said]
+    return {name for name, holds in model.LEASE_RULES.items() if not holds(before, path[-1], lease)}
+
+
+class LeasePlay:
+    """The lease model and two real drains taking the same steps, compared after each one."""
+
+    def __init__(self, directory: Path) -> None:
+        self.world = LeaseWorld(directory)
+        self.lease = model.LEASE_INITIAL
+        self.path: list[str] = []
+
+    def named(self, said: str) -> str:
+        """Take the step the model calls ``said``, compare, and return what the command printed."""
+        self.lease = dict(model.lease_moves(self.lease))[said]
+        self.path.append(said)
+        self.world.world.printed = ""
+        self.world.perform(said)
+        seen = self.world.seen(self.lease)
+        lines = ["path:", *(f"  {step}" for step in self.path), self.world.world.printed]
+        assert seen == self.lease, "\n".join([f"seen {seen}", f"not {self.lease}", *lines])
+        return self.world.world.printed
+
+
+@pytest.fixture
+def two_drains(tmp_path: Path) -> Iterator[LeasePlay]:
+    play = LeasePlay(tmp_path)
+    try:
+        yield play
+    finally:
+        play.world.close()
+
+
+def test_one_process_running_both_drains_lets_the_second_take_the_first_tree(
+    two_drains: LeasePlay,
+) -> None:
+    path = [*TAKEN_UNDER_ONE[:3], "drain 1: its agent leaves a draft in its tree"]
+    path.append(TAKEN_UNDER_ONE[3])
+    assert lease_broken_by(path) == {LIVE_SPARED}
+    for said in path:
+        printed = two_drains.named(said)
+    tree = two_drains.world.world.tree(Name.A)
+    assert f"removed: {tree}: the drain that made it was interrupted" in printed
+    stash = git(two_drains.world.world.root, "stash", "list", "--format=%gs")
+    assert stash == f"On {BRANCH[Name.A]}: {BRANCH[Name.A]}: interrupted run", "the draft is kept"
+
+
+def test_one_process_running_both_drains_spares_a_tree_a_program_runs_from(
+    two_drains: LeasePlay,
+) -> None:
+    path = [*TAKEN_UNDER_ONE[:3], PROGRAM, TAKEN_UNDER_ONE[3]]
+    assert lease_broken_by(path) == set()
+    for said in path:
+        printed = two_drains.named(said)
+    assert printed.startswith("drain: another drain is running on this repository (process ")
+
+
+def test_a_second_drains_report_leaves_the_first_drains_lease_and_its_clean_all_is_refused(
+    two_drains: LeasePlay,
+) -> None:
+    path = [*REPORTED_AWAY[:3], PROGRAM, *REPORTED_AWAY[3:]]
+    assert lease_broken_by(path) == set()
+    for said in path[:-2]:
+        two_drains.named(said)
+    session = two_drains.world.sessions[model.Drain.ONE].pid
+    reported = two_drains.named(path[-2])
+    assert reported.endswith(
+        f"report: the drain lease stays: another drain is running (process {session})\n"
+    )
+    refused = two_drains.named(path[-1])
+    assert refused.startswith(
+        f"drain: another drain is running on this repository (process {session})"
+    )
+    assert two_drains.world.world.code == 2, "the skill says: stop and report it"
+    program = two_drains.world.program
+    assert program is not None
+    assert program.poll() is None, "the first drain's program runs on"
+    own = two_drains.named("drain 1: drain.py report --drain with its token")
+    assert "lease stays" not in own, "the first drain's own report ends its lease"
+
+
+def test_a_report_under_one_process_ends_the_first_drains_lease_and_clean_all_its_program(
+    two_drains: LeasePlay,
+) -> None:
+    path = LEASE_COUNTEREXAMPLES[TOLD_APART] or []
+    assert lease_broken_by(path[:4]) == {OWN_LEASE}
+    assert lease_broken_by(path) == {LIVE_SPARED, TOLD_APART}
+    for said in path[:4]:
+        reported = two_drains.named(said)
+    assert "lease stays" not in reported, "under one process the report ends drain 1's lease"
+    two_drains.named(PROGRAM)
+    program = two_drains.world.program
+    assert program is not None
+    taken = two_drains.named(path[-1])
+    tree = two_drains.world.world.tree(Name.A)
+    assert f"ended: process {program.pid}, which ran a program of {tree}" in taken
+    assert f"removed: {tree}: the drain that made it was interrupted" in taken
+
+
+def decision(before: model.Lease, said: str) -> tuple[object, ...]:
+    """The branch of ``drain.lease`` or ``drain.release`` a step takes, and whether a ``clean --all`` takes another drain's tree; any other step is its own."""  # noqa: E501
+    drain_, step = model.LEASE_STEPS.get(said, (None, None))
+    if step not in model.CLEANS | model.REPORTS:
+        return (said.rpartition(": ")[2],)
+    holder = before.holder
+    branch = (
+        "no lease"
+        if holder is None
+        else "its own token"
+        if step in model.OWN and holder is drain_
+        else "taken over"
+        if step is Step.TAKE_OVER
+        else "a process of its chain"
+        if model.of(before.alive, holder) and not before.shared and holder is not drain_
+        else "a program in its tree"
+        if before.running
+        else "gone"
+    )
+    taken = step in model.CLEANS and before.tree not in {None, drain_}
+    return step in model.CLEANS, branch, taken
+
+
+Steps = dict[model.Lease, list[tuple[str, model.Lease]]]
+
+
+def nearest(out: Steps, start: model.Lease, untaken: set[tuple[object, ...]]) -> list[str]:
+    """The fewest steps from ``start`` to a decision in ``untaken``; none when none is reached."""
+    came: dict[model.Lease, tuple[model.Lease, str] | None] = {start: None}
+    frontier = deque([start])
+    while frontier:
+        lease = frontier.popleft()
+        for said, after in out.get(lease, []):
+            if decision(lease, said) in untaken:
+                leg = [said]
+                while (back := came[lease]) is not None:
+                    lease, step = back
+                    leg.append(step)
+                return leg[::-1]
+            if after not in came:
+                came[after] = (lease, said)
+                frontier.append(after)
+    return []
+
+
+@functools.cache
+def lease_tour() -> list[list[str]]:
+    """Walks from the initial lease that take every decision: each goes on to the nearest one not yet taken."""  # noqa: E501
+    _, edges = model.lease_graph()
+    out: Steps = {}
+    for before, said, after in edges:
+        out.setdefault(before, []).append((said, after))
+    untaken = {decision(before, said) for before, said, _ in edges}
+    walks: list[list[str]] = []
+    while untaken:
+        at, walk = model.LEASE_INITIAL, []
+        while leg := nearest(out, at, untaken):
+            for said in leg:
+                untaken.discard(decision(at, said))
+                at = dict(out[at])[said]
+            walk += leg
+        walks.append(walk)
+    return walks
+
+
+def test_two_real_drains_agree_with_the_lease_model_on_every_decision(tmp_path: Path) -> None:
+    # Why: every step of the lease graph is some 3,900 commands on real repositories. Each decision
+    # the code makes on a lease, for each kind of step, is a few dozen, chained into a few walks.
+    for at, walk in enumerate(lease_tour()):
+        play = LeasePlay(tmp_path / str(at))
+        try:
+            for said in walk:
+                play.named(said)
+        finally:
+            play.world.close()
+
+
+def test_a_stopped_drain_blocks_the_next_until_its_session_ends(two_drains: LeasePlay) -> None:
+    assert lease_broken_by(STOPPED) == {STOPPED_FREE}
+    for said in STOPPED[:-1]:
+        two_drains.named(said)
+    session = two_drains.world.sessions[model.Drain.ONE].pid
+    refused = two_drains.named(STOPPED[-1])
+    assert refused.startswith(
+        f"drain: another drain is running on this repository (process {session})"
+    )
+    two_drains.named("drain 1: its session ends")
+    taken = two_drains.named("drain 2: drain.py clean --all")
+    assert taken == f"drain: {two_drains.world.tokens[model.Drain.TWO]}\n", (
+        "a gone drain blocks not"
+    )

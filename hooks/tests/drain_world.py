@@ -17,6 +17,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +29,20 @@ import gatelib
 import merge
 import merge_ready
 from tests import drain_model as model
-from tests.drain_model import Branch, Kind, Name, Note, Outcome, Status, Ticket, Tree
+from tests import servers
+from tests.drain_model import (
+    Branch,
+    Drain,
+    Kind,
+    Lease,
+    Name,
+    Note,
+    Outcome,
+    Status,
+    Step,
+    Ticket,
+    Tree,
+)
 from tests.repos import git, repository, snapshot, write
 from tests.test_drain import (
     ALPHA,
@@ -369,3 +383,98 @@ class World:
             rebasing=rebasing,
             discarding=held.get("discarding") is True,
         )
+
+
+# --- the lease ---------------------------------------------------------------------------------
+
+REAL_ANCESTRY = drain.ancestry
+
+
+def session() -> subprocess.Popen[bytes]:
+    """A process that stands for a drain's session: the agent that runs its commands."""
+    return subprocess.Popen(["sleep", "600"])  # noqa: S607 # -- a sleep, no shell
+
+
+class LeaseWorld:
+    """Two drains on one repository: each session a real process, the program a real one too.
+
+    A drain's command runs in this process as its session would run it: ``drain.ancestry`` names
+    the session's process above the command, so the real ``drain.rival`` reads real processes.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self.world = World(directory)
+        self.sessions: dict[Drain, subprocess.Popen[bytes]] = {}
+        self.program: subprocess.Popen[bytes] | None = None
+        self.tokens: dict[Drain, str] = {}
+
+    def chain(self, which: Drain) -> list[str]:
+        session = self.sessions[which]
+        row = drain.process_row(session.pid)
+        return [f"{session.pid}:{row[1] if row else ''}", *REAL_ANCESTRY()]
+
+    def command(self, which: Drain, *argv: str) -> str:
+        with mock.patch.object(drain, "ancestry", return_value=self.chain(which)):
+            self.world.command(*argv)
+        return self.world.printed
+
+    def perform(self, said: str) -> None:
+        """Do what the lease step ``said`` names."""
+        if said in {Step.SEPARATE.value, Step.SHARED.value}:
+            first = session()
+            self.sessions = {
+                Drain.ONE: first,
+                Drain.TWO: first if said == Step.SHARED.value else session(),
+            }
+            return
+        if said == Step.PROGRAM_ENDS.value:
+            assert self.program is not None
+            self.program.kill()
+            self.program.wait()
+            return
+        which, step = model.LEASE_STEPS[said]
+        tree = self.world.tree(Name.A)
+        token = ["--drain", self.tokens[which]] if step in model.OWN else []
+        if step in model.CLEANS:
+            over = ["--take-over"] if step is Step.TAKE_OVER else []
+            self.command(which, "clean", "--all", *token, *over)
+            if self.world.code == 0:
+                self.tokens[which] = self.world.token
+        elif step in model.REPORTS:
+            self.command(which, "report", *token)
+        elif step is Step.OPEN:
+            self.command(which, "open", REF[Name.A])
+        elif step is Step.DRAFT:
+            write(tree, DRAFT, "half done\n")
+        elif step is Step.PROGRAM:
+            self.program = servers.sleeper(tree)
+        elif step is Step.DIE:
+            self.sessions[which].kill()
+            self.sessions[which].wait()
+
+    def seen(self, ghost: Lease) -> Lease:
+        """The repository and the processes read back; ``ghost`` gives what no file holds."""
+        lease = drain.state_dir(self.world.root) / drain.LEASE
+        held = json.loads(lease.read_text(encoding="utf-8")) if lease.exists() else {}
+        holder = next((d for d, token in self.tokens.items() if token == held.get("token")), None)
+        tree = self.world.tree(Name.A)
+        made = tree in drain.worktrees(self.world.root)
+        return ghost._replace(
+            holder=holder,
+            alive=(
+                self.sessions[Drain.ONE].poll() is None,
+                self.sessions[Drain.TWO].poll() is None,
+            ),
+            took=(Drain.ONE in self.tokens, Drain.TWO in self.tokens),
+            tree=ghost.tree if made else None,
+            draft=made and bool(git(tree, "status", "--porcelain")),
+            running=self.program is not None and self.program.poll() is None,
+            stashed=bool(git(self.world.root, "stash", "list")),
+        )
+
+    def close(self) -> None:
+        """End every process this world started."""
+        for process in [*self.sessions.values(), *([self.program] if self.program else [])]:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
