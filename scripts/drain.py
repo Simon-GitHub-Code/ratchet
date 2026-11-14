@@ -44,10 +44,12 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   rest too, their uncommitted work stashed as ``<branch>: interrupted run``. A drain starts with
   ``clean --all``: one drain runs on a repository at a time, so every work tree found then is
   left over. Which the script holds to: ``clean --all`` takes a lease naming the processes above
-  it, refuses while a process of another drain on this repository is alive, and ``report`` ends
-  the lease and prints the drain's token on stderr; ``--take-over`` replaces one whose drain
-  is gone for good. A drain is alive while a process of its own is: one below where its chain
-  parts from the new command's, or one running a program from a queue work tree or in one. A
+  it, refuses while a process of another drain on this repository is alive, and the drain's
+  token is printed on stderr; ``report`` ends the lease of its own drain only (by its token, or
+  when no other drain is alive) and says so when it leaves another's; ``--take-over`` replaces
+  one whose drain is gone for good. A drain is alive while a process of its own is: one below
+  where its chain parts from the new command's, or one running a program from a queue work tree
+  or in one. A
   process above both commands, as the service manager is, proves nothing; so a drain whose
   processes are all gone does not block the next, and two drains under one long-lived process
   are told apart by the first's program still running in its tree. ``clean --all --drain TOKEN``
@@ -460,9 +462,20 @@ def lease(root: Path, *, take_over: bool, token: str = "") -> None:
     print(f"drain: {token}", file=sys.stderr)
 
 
-def release(root: Path) -> None:
-    """End a drain: the report is its last command."""
-    (state_dir(root) / LEASE).unlink(missing_ok=True)
+def release(root: Path, token: str = "") -> str | None:
+    """End a drain: the report is its last command. ``None``, or whose lease it left standing.
+
+    Why: a report from a second drain must not end a live first drain's lease, or the second's
+    ``clean --all`` would end the first's programs. The lease is ended for the drain that holds
+    it, matched as ``lease`` matches it: by the token, or by no rival being alive.
+    """
+    path = state_dir(root) / LEASE
+    held = queue_notes.loaded(gatelib.read_text(path))
+    ours = bool(token) and token == held.get("token")
+    why = None if ours else rival(root, held)
+    if why is None:
+        path.unlink(missing_ok=True)
+    return why
 
 
 # --- the notes -------------------------------------------------------------------------------
@@ -1253,7 +1266,7 @@ def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -
     )
 
 
-def report(drain: Drain) -> int:
+def report(drain: Drain, token: str = "") -> int:
     """Write the report of every ticket closed since the last one, and print it."""
     directory = gatelib.state_dir(drain.root) / QUEUE
     paths = sorted((directory / "tickets").glob("*.json"))
@@ -1270,7 +1283,9 @@ def report(drain: Drain) -> int:
         queue_notes.write_note(path, {**note, "reported": True})
     print(text)
     print(f"report: {target}")
-    release(drain.root)
+    stays = release(drain.root, token)
+    if stays is not None:
+        print(f"report: the drain lease stays: another drain is running ({stays})")
     return 0
 
 
@@ -1356,7 +1371,7 @@ WHOLE: dict[str, Callable[[Drain, argparse.Namespace], int]] = {
         take_over=options.take_over,
         token=options.drain,
     ),
-    "report": lambda drain, _options: report(drain),
+    "report": lambda drain, options: report(drain, options.drain),
 }
 
 

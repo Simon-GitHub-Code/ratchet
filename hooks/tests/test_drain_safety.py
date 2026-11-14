@@ -211,6 +211,52 @@ def test_the_report_ends_the_drain_and_take_over_ends_a_lost_one(
             session.wait()
 
 
+def test_a_second_drains_report_leaves_the_first_drains_lease(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    first = other_session(monkeypatch)
+    try:
+        assert run(root, "clean", "--all") == 0
+        assert run(root, "open", ALPHA) == 0
+        tree = drain.tree_of(root, BRANCH_A)
+        service = servers.sleeper(tree)
+        own_session(monkeypatch)
+        try:
+            assert run(root, "clean", "--all") == 2
+            capsys.readouterr()
+            assert run(root, "report") == 0
+            out = capsys.readouterr().out
+            assert "report: the drain lease stays: another drain is running" in out
+            assert "## Merged" in out, "the report is still printed"
+            assert run(root, "clean", "--all") == 2, "the lease is still the first drain's"
+            assert service.poll() is None
+            assert tree in drain.worktrees(root)
+        finally:
+            service.kill()
+            service.wait()
+    finally:
+        first.kill()
+        first.wait()
+
+
+def test_the_holders_report_ends_its_lease_by_its_token(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    first = other_session(monkeypatch)
+    try:
+        assert run(root, "clean", "--all") == 0
+        token = capsys.readouterr().err.split("drain: ")[1].split()[0]
+        own_session(monkeypatch)
+        assert run(root, "report", "--drain", token) == 0
+        assert "lease stays" not in capsys.readouterr().out
+        assert run(root, "clean", "--all") == 0, "the holder's report released the lease"
+    finally:
+        first.kill()
+        first.wait()
+
+
 DRIVER = Path(__file__).with_name("drain_driver.py")
 
 
