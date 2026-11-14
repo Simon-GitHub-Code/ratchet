@@ -78,7 +78,7 @@ MANIFEST = (
 )
 THRESHOLDS = (
     '[python.coverage.core]\npaths = ["src/**"]\nabsolute = true\n\n'
-    "[ceilings.change]\nfiles = 1\nlines = 2\n"
+    "[ceilings.change]\nproduct_files = 1\nproduct_lines = 2\ntest_lines = 100\n"
 )
 # Why: the preflight reads a local ticket only where the guard asks about its label.
 TICKET_PATH = ".scratch/thing/issues/01-add-the-thing.md"

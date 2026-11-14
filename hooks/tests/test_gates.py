@@ -1,6 +1,5 @@
 """The shipped gates: markers, pins, prose, snapshots, commits and change size."""
 
-import json
 from pathlib import Path
 
 import pytest
@@ -335,7 +334,7 @@ def test_change_size_does_not_count_the_methods_own_records(tmp_path: Path) -> N
     write(root, ".scratch/changes/feature-1-a.md", "# a\n")
     write(root, "docs/features/f/helper.py", "x = 1\n")
     write(root, "docs/disputes/0001-slug.md", "# Dispute\n\nwhy\n")
-    assert change_size.measure(root, "main") == (2, 2), "the code and a file that is no record"
+    assert change_size.measure(root, "main") == change_size.Size(2, 2), "code, and no record"
 
 
 def test_change_size_does_not_count_the_lockfiles_the_merge_bases_binding_names(
@@ -351,7 +350,9 @@ def test_change_size_does_not_count_the_lockfiles_the_merge_bases_binding_names(
         write(root, name, "a\nb\n")
     write(root, "quality/snapshots/web__app.lock", "{}\n")
     write(root, "other.pins", "a\n")
-    assert change_size.measure(root, "main") == (1, 1), "other.pins is a file the binding omits"
+    assert change_size.measure(root, "main") == change_size.Size(1, 1), (
+        "other.pins is a file the binding omits"
+    )
 
 
 def test_change_size_counts_every_file_when_the_merge_base_names_no_lockfile(
@@ -361,7 +362,7 @@ def test_change_size_counts_every_file_when_the_merge_base_names_no_lockfile(
     commit(root, "feat(core): second")
     branch(root)
     write(root, "app.lock", "a\nb\n")
-    assert change_size.measure(root, "main") == (1, 2)
+    assert change_size.measure(root, "main") == change_size.Size(1, 2)
 
 
 def test_change_size_counts_a_moved_file_by_its_changed_lines(tmp_path: Path) -> None:
@@ -377,7 +378,7 @@ def test_change_size_counts_a_moved_file_by_its_changed_lines(tmp_path: Path) ->
     (root / "docs/features/f/spec.md").rename(root / "docs/features/f/plan.md")
     (root / "docs/features/f/plan.md").rename(root / "plan.md")
     commit(root, "refactor(core): move a")
-    assert change_size.measure(root, "main") == (2, 2), "the edit in the move, and the record out"
+    assert change_size.measure(root, "main") == change_size.Size(2, 2), "the edit, no record"
 
 
 def test_change_size_measures_against_the_ceiling(tmp_path: Path, capsys: Out) -> None:
@@ -390,14 +391,40 @@ def test_change_size_measures_against_the_ceiling(tmp_path: Path, capsys: Out) -
     write(root, "new.txt", "n\n")
     (root / "bin").write_bytes(b"\x00\x01")
     (root / "blob").write_bytes(b"\x00\x01")
-    assert change_size.measure(root, "main") == (4, 4), "binaries count as files, not lines"
+    assert change_size.measure(root, "main") == change_size.Size(4, 4), "binaries are files"
     assert run(change_size, root) == 0
     assert "no ceiling recorded" in capsys.readouterr().out
-    assert run(change_size, root, "--set", "--files", "2", "--lines", "10") == 0
-    assert run(change_size, root, "--set", "--files", "3", "--lines", "10") == 0
-    assert change_size.ceilings(root) == (3, 10)
+    assert (
+        run(
+            change_size,
+            root,
+            "--set",
+            "--product-files",
+            "2",
+            "--product-lines",
+            "10",
+            "--test-lines",
+            "50",
+        )
+        == 0
+    )
+    assert (
+        run(
+            change_size,
+            root,
+            "--set",
+            "--product-files",
+            "3",
+            "--product-lines",
+            "10",
+            "--test-lines",
+            "50",
+        )
+        == 0
+    )
+    assert change_size.ceilings(root) == change_size.Ceilings(3, 10, 50)
     assert run(change_size, root) == 1
-    assert "files: 5 changed, ceiling 3" in capsys.readouterr().out, "the new file counts"
+    assert "product files: 5 changed, ceiling 3" in capsys.readouterr().out, "the new file counts"
     commit(root, "chore(method): adopt the ratchet method")
     assert run(change_size, root) == 0
     assert "exempt" in capsys.readouterr().out
@@ -409,27 +436,32 @@ def test_change_size_measures_against_the_ceiling(tmp_path: Path, capsys: Out) -
 
 def test_change_size_ceilings_are_rewritten_in_place() -> None:
     before = "[ceilings.change]\nfiles = 1\nlines = 2\n"
-    after = "[ceilings.change]\nfiles = 3\nlines = 4\n"
+    after = "[ceilings.change]\nproduct_files = 3\nproduct_lines = 4\ntest_lines = 5\n"
     text = f"[python.coverage.core]\nline = 90.0\n\n{before}\n[x]\ny = 1\n"
-    assert change_size.with_ceilings(text, 3, 4) == (
+    assert change_size.with_ceilings(text, (3, 4, 5)) == (
         f"[python.coverage.core]\nline = 90.0\n\n{after}\n[x]\ny = 1\n"
-    )
-    assert change_size.with_ceilings("", 3, 4) == "[ceilings.change]\nfiles = 3\nlines = 4\n"
-    assert change_size.with_ceilings("[x]\ny = 1\n", 3, 4) == (
-        "[x]\ny = 1\n\n[ceilings.change]\nfiles = 3\nlines = 4\n"
-    )
-    assert change_size.over((2, 2), (None, 1)) == ["lines: 2 changed, ceiling 1"]
+    ), "the older keys go with the table"
+    assert change_size.with_ceilings("", (3, 4, 5)) == after
+    assert change_size.with_ceilings("[x]\ny = 1\n", (3, 4, 5)) == f"[x]\ny = 1\n\n{after}"
+    size, limits = change_size.Size(2, 2, 0, 9), change_size.Ceilings(None, 1, 8)
+    assert change_size.over(size, limits) == [
+        "product lines: 2 changed, ceiling 1",
+        "test lines: 9 changed, ceiling 8",
+    ]
 
 
 def test_change_size_ignores_non_integer_ceilings(tmp_path: Path) -> None:
     write(tmp_path, "quality/thresholds.toml", "[ceilings.change]\nfiles = true\nlines = 2.5\n")
-    assert change_size.ceilings(tmp_path) == (None, None)
-    assert json.dumps(change_size.ceilings(tmp_path)) == "[null, null]"
+    assert change_size.ceilings(tmp_path) == change_size.Ceilings()
+    assert not change_size.ceilings(tmp_path).recorded()
 
 
 @pytest.mark.parametrize(
     "case",
     [
+        ("product_files = 9.5", "ceilings.change.product_files"),
+        ("test_lines = true", "ceilings.change.test_lines"),
+        ("test_lines = -1", "ceilings.change.test_lines"),
         ("files = 9.5", "ceilings.change.files"),
         ("lines = 2.5", "ceilings.change.lines"),
         ("files = true", "ceilings.change.files"),
@@ -481,3 +513,76 @@ def test_change_size_on_the_default_branch_reports_a_merge_it_cannot_reopen(
     assert run(change_size, root) == 1, "uncommitted work on the default branch is still judged"
     commit(root, "feat(core): direct")
     assert run(change_size, root) == 1, "a direct commit on the default branch is still judged"
+
+
+# --- change size: product code and tests apart (ADR 0045) -----------------------------------
+
+BINDING_WITH_ROW = "# Binding\n\n## Test paths\n\nWhy.\n\n- Tests: {row}\n\n## Limits\n"
+CEILINGS = "[ceilings.change]\nproduct_files = 2\nproduct_lines = 5\ntest_lines = 20\n"
+
+
+def sized(tmp_path: Path, row: str | None) -> Path:
+    """A repository whose binding holds the row (or none).
+
+    The change is 3 product lines in one file and 12 lines in two test files.
+    """
+    binding = BINDING_WITH_ROW.format(row=row) if row is not None else "# Binding\n\n## Limits\n"
+    root = repository(
+        tmp_path, {"docs/process/binding.md": binding, "quality/thresholds.toml": CEILINGS}
+    )
+    commit(root, "feat(core): second")
+    branch(root)
+    write(root, "src/a.py", "a = 1\nb = 2\nc = 3\n")
+    write(root, "tests/test_a.py", "".join(f"t{n} = 1\n" for n in range(8)))
+    write(root, "src/a.test.ts", "x\ny\nz\nw\n")
+    return root
+
+
+def test_change_size_counts_tests_apart_when_the_binding_names_them(tmp_path: Path) -> None:
+    root = sized(tmp_path, "`tests/**`, `**/*.test.ts`")
+    assert change_size.test_globs(root, "main") == ["tests/**", "**/*.test.ts"]
+    assert change_size.measure(root, "main") == change_size.Size(1, 3, 2, 12)
+    assert run(change_size, root) == 0
+
+
+def test_change_size_is_red_on_product_lines_and_on_a_runaway_of_tests_alone(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = sized(tmp_path, "`tests/**`, `**/*.test.ts`")
+    write(root, "src/b.py", "".join(f"p{n} = 1\n" for n in range(3)))
+    assert run(change_size, root) == 1
+    assert "product lines: 6 changed, ceiling 5" in capsys.readouterr().out
+    (root / "src/b.py").unlink()
+    write(root, "tests/test_b.py", "".join(f"u{n} = 1\n" for n in range(9)))
+    assert run(change_size, root) == 1
+    assert "test lines: 21 changed, ceiling 20" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("row", [None, "<globs of the tests>", "", "tests/**", "none: no"])
+def test_change_size_counts_everything_as_product_without_a_filled_row(
+    tmp_path: Path, capsys: Out, row: str | None
+) -> None:
+    # Why: fail closed. The plugin names no stack, so with no row nothing is known to be a test.
+    root = sized(tmp_path, row)
+    assert change_size.test_globs(root, "main") is None
+    assert change_size.measure(root, "main") == change_size.Size(3, 15)
+    assert run(change_size, root) == 1
+    out = capsys.readouterr().out
+    assert "no filled `## Test paths` section" in out
+    assert "product files: 3 changed, ceiling 2" in out
+
+
+def test_change_size_reads_none_as_no_test_paths_and_says_nothing_is_missing(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = sized(tmp_path, "none: the repository has no tests yet")
+    assert change_size.test_globs(root, "main") == []
+    run(change_size, root)
+    assert "no filled `## Test paths` section" not in capsys.readouterr().out
+
+
+def test_change_size_reads_the_older_keys_as_the_product_ceilings(tmp_path: Path) -> None:
+    write(tmp_path, "quality/thresholds.toml", "[ceilings.change]\nfiles = 7\nlines = 9\n")
+    assert change_size.ceilings(tmp_path) == change_size.Ceilings(7, 9, None)
+    write(tmp_path, "quality/thresholds.toml", "[ceilings.change]\nfiles = 7\nproduct_files = 4\n")
+    assert change_size.ceilings(tmp_path).product_files == 4, "the new key wins"

@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 import application_types
+import change_size
 import gatelib
 import hooks_installed
 import installs
@@ -670,6 +671,17 @@ def check_binding(root: Path) -> Iterable[Finding]:
         yield missing_section(
             BINDING_PATH, problem, TESTS_SECTION, template_text=template_binding()
         )
+    paths, problems = change_size.test_paths(text)
+    if paths is None and problems[0].startswith("has no"):
+        # Why: ADR 0045. The change-size gate counts tests against a ceiling of their own, and the
+        # plugin names no stack, so which paths are tests is a section the project's agent writes.
+        problem = f"{problems[0]}, which names the files that are tests (ADR 0045)"
+        yield missing_section(
+            BINDING_PATH, problem, change_size.SECTION, template_text=template_binding()
+        )
+    else:
+        for problem in problems:
+            yield agent(f"{BINDING_PATH}: {problem}")
     gates = markdown_text.section(text, "## Gates")
     if not gates:
         yield agent(f"{BINDING_PATH}: has no '## Gates' section")
@@ -1890,6 +1902,13 @@ def check_quality(root: Path) -> Iterable[Finding]:
                 "write the method's first change-size ceiling", with_change_ceiling, Agent()
             )
             yield Finding("quality/thresholds.toml", problem, edit)
+        elif legacy_change_ceiling(data):
+            yield Finding(
+                "quality/thresholds.toml",
+                "`[ceilings.change]` holds `files` and `lines`, which counted tests; ADR 0045"
+                " moved them to `product_files` and `product_lines` and added `test_lines`",
+                Edit("move the change ceiling to its product keys", moved_change_ceiling, Agent()),
+            )
     if not (root / "quality/snapshots").is_dir():
         yield agent("quality/snapshots: missing")
 
@@ -1897,6 +1916,33 @@ def check_quality(root: Path) -> Iterable[Finding]:
 def has_change_ceiling(data: dict[str, object]) -> bool:
     ceilings = data.get("ceilings")
     return isinstance(ceilings, dict) and isinstance(ceilings.get("change"), dict)
+
+
+def legacy_change_ceiling(data: dict[str, object]) -> bool:
+    """Whether ``[ceilings.change]`` still holds the keys ADR 0045 moved."""
+    ceilings = data.get("ceilings")
+    table = ceilings.get("change") if isinstance(ceilings, dict) else None
+    return isinstance(table, dict) and any(key in table for key in ("files", "lines"))
+
+
+def moved_change_ceiling(text: str | None) -> str:
+    """The thresholds with the change ceiling's ``files`` and ``lines`` under their product names.
+
+    Why: ADR 0045. The values move unchanged, so nothing is loosened by the move itself
+    (``lowered.py`` judges the new keys against the old); ``test_lines`` is the method's own.
+    A project that recorded only one of the two takes the template's for the other.
+    """
+    text = text or ""
+    fresh = tomllib.loads(template_file("quality/thresholds.toml"))["ceilings"]["change"]
+    table = tomllib.loads(text).get("ceilings", {}).get("change", {})
+    return change_size.with_ceilings(
+        text,
+        (
+            table.get("files", fresh["product_files"]),
+            table.get("lines", fresh["product_lines"]),
+            table.get("test_lines", fresh["test_lines"]),
+        ),
+    )
 
 
 def with_change_ceiling(text: str | None) -> str:
@@ -2241,6 +2287,18 @@ def upgrade_mutations() -> list[Mutation]:
         (
             "thresholds without a live change-size ceiling",
             rewrite("quality/thresholds.toml", CHANGE_CEILING, f"# {CHANGE_CEILING}"),
+        ),
+        (
+            "thresholds whose change ceiling still counts tests",
+            rewrite("quality/thresholds.toml", "product_files", "files"),
+        ),
+        (
+            "binding without a Test paths section",
+            rewrite(BINDING_PATH, change_size.SECTION, "## Tested at"),
+        ),
+        (
+            "binding whose Test paths section is the template's",
+            rewrite(BINDING_PATH, "- Tests: `tests/**`", "- Tests: <x>"),
         ),
         (
             "binding without the tier0-tree row",
@@ -2742,6 +2800,7 @@ def record_mutations() -> list[Mutation]:
 UNBOUND_GROUP = re.compile(r"paths = \[\n(?:\s*# bind:[^\n]*\n)+\]")
 TYPES_PLACEHOLDER = re.compile(r"^- Application types: <[^\n]*>$", re.MULTILINE)
 EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
+TEST_PATHS_PLACEHOLDER = re.compile(r"^- Tests: <[^\n]*>$", re.MULTILINE)
 TRIGGERS_PLACEHOLDER = re.compile(r"^\| <kind> \|[^\n]*$", re.MULTILINE)
 SPEED_PLACEHOLDER = re.compile(r"^(- [A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
 INSTALL_PLACEHOLDER = re.compile(r"^- Install: <[^\n]*>$", re.MULTILINE)
@@ -2758,6 +2817,7 @@ def fill_binding(text: str) -> str:
     """A command line tool's binding: one row its type leaves out, a tool in every other."""
     text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40}")
     text = TYPES_PLACEHOLDER.sub("- Application types: cli", text)
+    text = TEST_PATHS_PLACEHOLDER.sub("- Tests: `tests/**`", text)
     text = text.replace("| contract drift | |", "| contract drift | none: not a service |")
     # Why: ADR 0028. One row waits on its trigger and so needs no bite; the rest are bound.
     text = text.replace(

@@ -115,7 +115,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | artefact and image scan | | 1 | | `just artefact-scan` |
 | type coverage, ratcheted | | 1 | `quality/thresholds.toml` | `just type-coverage` |
 | documentation coverage, ratcheted | | 1 | `quality/thresholds.toml` | `just doc-coverage` |
-| change size | `ratchet` plugin `scripts/change_size.py` | 1 | `quality/thresholds.toml` `[ceilings.change]` | `just change-size` |
+| change size | `ratchet` plugin `scripts/change_size.py` | 1 | `quality/thresholds.toml` `[ceilings.change]`, and the Test paths section below | `just change-size` |
 | guard paths changed | `ratchet` plugin `ratchet_guards.diff` | 1 | `guards/manifest.toml` | `just guard-diff` |
 | permission rules mirror the manifest | `ratchet` plugin `scripts/settings_rules.py` | 1 | `guards/manifest.toml` | `just settings-check` |
 | method conformance | `ratchet` plugin `scripts/conformance.py` | 1 | | `just conformance` |
@@ -200,6 +200,12 @@ Every Gates row whose question a directive can silence (the catalogue marks them
 ## Tests
 
 <The test frameworks and directories every role writes tests with, chosen and installed at adoption so the first feature has nothing to install: the test runner and its configuration file; the property-testing library, or `built in` where the runner has one; where unit and property tests live and how their files are named. The `unit, property and fitness tests` row stays `later: code:source` until the first module of logic arrives: no gate runs these tests until then, each role runs its own with `just test-files <file>...`, and `/ratchet:safeguard` binds the row to what this section names.>
+
+## Test paths
+
+What the change-size gate reads to count tests apart from product code (ADR 0045): the ceiling on product lines and files bounds the unguarded code a change brings, and test lines have a ceiling of their own that only stops a runaway. The method knows no stack, so name the files of this one, from what you know of its tools. The gate reads this section at the merge base, so a change cannot widen what it exempts; until it is filled every changed line counts as product.
+
+- Tests: <globs of every file that is a test, a fixture or test support, the critique directory included, each in backticks, or `none: <reason>`>
 
 ## Critique tests
 

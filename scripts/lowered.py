@@ -3,7 +3,9 @@
 
 Compares ``quality/thresholds.toml`` at head with the merge base. Every key only rises, except
 the keys under ``ceilings`` (the speed gate's seconds per tier and gate, the change-size
-ceiling), which only fall. A flag that is ``true`` (``absolute``) stays ``true``.
+ceilings), which only fall. The change ceiling's older keys ``files`` and ``lines`` may move to
+``product_files`` and ``product_lines`` (ADR 0045) at the same value or lower. A flag that is
+``true`` (``absolute``) stays ``true``.
 
 Relaxing a value is the owner's change with an ADR behind it, so a loosening passes when an ADR
 under ``docs/adr/`` names it exactly, on a line of its own:
@@ -36,6 +38,12 @@ import owed
 import plugin_pin
 
 CEILINGS = "ceilings."
+# Why: ADR 0045 moved the change ceiling to product-only keys. The old key's value is the bound the
+# new one is held to, so the move is a loosening only when the new ceiling is higher.
+MOVED = {
+    "ceilings.change.files": "ceilings.change.product_files",
+    "ceilings.change.lines": "ceilings.change.product_lines",
+}
 ADRS = "docs/adr"
 _VALUE = r"true|false|-?\d+(?:\.\d+)?"
 RELAXES = re.compile(
@@ -62,7 +70,21 @@ def show(value: Value) -> str:
     return str(value).lower() if isinstance(value, bool) else str(value)
 
 
+def renamed(before: dict[str, Value], after: dict[str, Value]) -> dict[str, Value]:
+    """``before`` with each moved key under the name ``after`` holds it by.
+
+    A key counts as moved when ``after`` dropped the old name and holds the new one, which the
+    base did not: the new value is then judged against the old one, as any ceiling is.
+    """
+    moved = dict(before)
+    for old, new in MOVED.items():
+        if old in moved and old not in after and new in after and new not in moved:
+            moved[new] = moved.pop(old)
+    return moved
+
+
 def _loosenings(before: dict[str, Value], after: dict[str, Value]) -> list[Loosening]:
+    before = renamed(before, after)
     found: list[Loosening] = []
     for key, old in sorted(before.items()):
         new = after.get(key)
