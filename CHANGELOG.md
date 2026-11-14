@@ -2,6 +2,8 @@
 
 ## 0.12.0
 
+Version 0.11.1 was an interim cut of this release, published so that an adopted project could pin it while the evaluation runs went on. It has no entry of its own: everything in it is listed here.
+
 The plugin's state machines are written down as models, and the real code is held to them. The route, one pipeline run, the queue drain and the merge, the safeguard a project owes, and the threshold ratchet each have a model under `hooks/tests`: every state it can reach, and the rules each state and step must keep. The tests prove every rule on every state, and play the real scripts against the model, so a change that breaks a rule is red. Each model has a page with its charts under `docs/model`: `route.md`, `pipeline.md`, `drain.md`, `safeguard.md` and `ratchet.md`. Most of the fixes below were found this way.
 
 The queue drain finishes what a killed or concurrent command left, and no longer lands a held ticket or loses track of a merge (ADR 0023).
@@ -13,6 +15,9 @@ The queue drain finishes what a killed or concurrent command left, and no longer
 - A `report` ends only its own drain's lease. `clean --all` is refused while a program runs in another drain's work tree, whether a lease is held or not.
 - A fast-forward cut off half-way is put back before any drain command reads a ticket, so a ticket parked meanwhile is held on its own text. While a git command still runs in that work tree, every drain command is refused and says to run it again.
 - `merge.py` removes an empty scratch directory a killed run left, once it has stood a minute.
+- A second `land` of a ticket is refused while its landing is still running, and says to run it again once that one ends. It went on with no lock, and could record the merge and remove the work tree under the landing that was alive.
+- `clean --all` leaves the work tree and the note of a live landing whose earlier close was cut off before it removed the tree.
+- A `--take-over` of a drain that is still alive is the owner's call. A landing that drain runs keeps its work tree while it runs, and the next `clean --all` takes it once the landing has ended.
 
 A gate's proof can no longer write into the real repository through a link. A setup left running could swap a directory of the scratch copy for a link into the real tree; the snapshot then held the link, and each restore wrote it back. `bite` now refuses any link that setup made or changed whose end lies outside the copy, and names it. It judges the link by its text in the snapshot, through every link on the way, not by the copy as it stands, and refuses a ring of links. A link the commit already holds is the repository's own and stays.
 
@@ -134,6 +139,7 @@ Smaller fixes.
 - The settings check no longer fails when the owner denies a rule the plugin writes as an ask, and regeneration writes such a rule back once.
 - With `--over report`, `budget.py` raises a run over its ceiling as a warning annotation, as well as printing it.
 - `conformance` and the upgrade read each justfile once, so an upgrade plan is several times faster.
+- `/ratchet:feature` starts the pipeline workflow by its name. On a fresh install the harness refused the script path the skill gave, because the session had not read that file; the path stays as the fallback for a harness that lists no workflow by name.
 
 ## 0.11.0
 
