@@ -674,6 +674,7 @@ def plan(drain: Drain) -> Plan:
     checkout = preflight.Report(ref="")
     preflight.check_checkout(checkout, root, base=base, branch=None)
     preflight.check_hooks(checkout, root)
+    preflight.check_fill_first(checkout, root)
     default = base.removeprefix("origin/")
     head = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
     if head != default:

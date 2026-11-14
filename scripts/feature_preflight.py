@@ -57,6 +57,7 @@ import application_types
 import change_size
 import gatelib
 import hooks_installed
+import owed
 import queue_notes
 
 # Why: a local ticket is the file the guard asks about the label on; both read its shape here.
@@ -605,6 +606,23 @@ def check_checkout(report: Report, root: Path, *, base: str, branch: str | None)
         report.fail("branch", f"`{branch}` is the base branch")
 
 
+def check_fill_first(report: Report, root: Path) -> None:
+    """Red while an owed item an agent writes from the repository alone is not yet written.
+
+    Why: ADR 0050. An upgrade owes rows the repository's own tree and tools state; one agent step
+    writes them, and no work starts before it, so the window has no owner step in it.
+    """
+    owing = owed.fill_first(root)
+    if owing:
+        rules = ", ".join(sorted({entry.rule for entry in owing}))
+        report.fail(
+            "fill",
+            f"{len(owing)} owed items an agent writes from the repository are not written"
+            f" yet ({rules})",
+            "/ratchet:fill",
+        )
+
+
 def check_critic(report: Report, root: Path) -> None:
     """Say whether the pipeline critiques: only a project people depend on (ADR 0028)."""
     text = binding_text(root)
@@ -644,6 +662,7 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
         check_ticket(report, ticket, report.label, root=root, gh=gh)
     check_checkout(report, root, base=base, branch=branch)
     check_hooks(report, root)
+    check_fill_first(report, root)
     check_critic(report, root)
     return report
 

@@ -34,7 +34,9 @@ The stages, in order; the first that does not hold is the answer:
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
    away, ``/pstack:poteto-mode`` when they stay). With more than one ticket ready the build is
    the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0023). Before any of
-   these, a safeguard the repository owes (``triggers.owed``: a kind of code has arrived, or a
+   these, rows an upgrade left owed that an agent writes from the repository alone
+   (``owed.fill_first``) are ``/ratchet:fill``, which asks the owner nothing (ADR 0050); then
+   a safeguard the repository owes (``triggers.owed``: a kind of code has arrived, or a
    life event is declared, and a row it fires is still ``later:``) is ``/ratchet:safeguard``,
    with the step it would otherwise name offered as the alternative (ADR 0028); after it, an
    architecture an upgrade left owed (``quality/owed.toml`` entries of the ``architecture``
@@ -104,6 +106,7 @@ WAIT = "nothing: the merge job merges it once `ci` is green, or comments why the
 MERGE_FALLBACK = "the binding's `merge` entry point"
 NEXT = "/ratchet:next"
 SAFEGUARD = "/ratchet:safeguard"
+FILL = "/ratchet:fill"
 ARCHITECTURE = "/ratchet:architecture"
 ARCHITECTURE_RULE = "architecture"
 EVENTS_LOG = "events.tsv"
@@ -756,7 +759,7 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         return dirty_step(checkout)
     if not checkout.on_default:
         return pull_request_step(checkout, gh)
-    waiting = records_waiting(checkout)
+    waiting = records_waiting(checkout) or fill_step(root)
     if waiting is not None:
         return waiting
     missing = records_missing(root)
@@ -766,6 +769,27 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         else ticket_step(root, gh, checkout)
     )
     return safeguard_step(root, step) or architecture_step(root, step) or step
+
+
+def fill_step(root: Path) -> Step | None:
+    """``/ratchet:fill`` when an upgrade left rows an agent writes from the repository (ADR 0050).
+
+    Why: the rows state what the project's own tree and tools say, so no owner answer is needed;
+    nothing else starts before them (the feature preflight and the drain refuse), so this is the
+    step right after an upgrade, ahead of a safeguard, the architecture, a build and a drain.
+    """
+    owing = owed.fill_first(root)
+    if not owing:
+        return None
+    rules = ", ".join(sorted({entry.rule for entry in owing}))
+    return Step(
+        FILL,
+        f"the upgrade to {owing[0].since} left {len(owing)} rows owed ({rules}) that an agent"
+        " writes from the repository alone: it reads the tree and its tools, proposes each row"
+        " and writes it, and nothing asks you. No feature or drain starts until they are written",
+        NEXT,
+        "fill",
+    )
 
 
 # --- safeguards and life events (ADR 0028) ---------------------------------------------------

@@ -21,11 +21,11 @@ ADR 0042 moved three gates' tool lists into the binding and left a residue that 
 
 **The guard hook and `guards.md` keep their lists.** Their interpreter and command lists are a security boundary. A project that could write its own row could loosen it, so they stay in the plugin, and `RESIDUE` says so.
 
-**An upgrade owes each section.** The files are the stack's, so nothing is derived from the tree: each is a `conformance` finding, owed through the ledger (ADR 0037), never a sudden red.
+**An upgrade owes each section, and one agent step writes them.** The files are the stack's, so the plugin derives nothing from the tree: each is a `conformance` finding, owed through the ledger (ADR 0037), never a sudden red. The owner chose that the agent fills the rows, with nothing for the owner to do. The ledger entries of the checks `signs`, `pins`, `suppressions`, `dependencies`, `installs` and `mutation` are filled first (`owed.FILL_FIRST`; an item an agent can write from the repository alone). The route names `/ratchet:fill` as the step right after an upgrade, ahead of a safeguard, the architecture, a build and a drain; it tells the agent to read the repository, propose each row and write it. The feature preflight and `drain.py open` refuse to start work while one is owed, and the refusal names the step. Once the rows are written the existing checks judge them as usual.
 
 ## Weakened or not
 
-Three guarantees are held by a row an agent writes and not by the plugin, and each is weaker until the row exists. The pins gate reads no container file, the coverage gate searches no exclusion on an absolute path, and the route proposes no `deployed` or `irreplaceable-data` event. Each says so on every run, and `conformance` names the row with what it stops (ADR 0042's precedent for the suppressions gate). The first two are guarantees a change could break unseen in the window, which the owed ledger bounds and does not remove. Red until filled was rejected, as ADR 0037 rejects it for every new check.
+Three guarantees are held by a row an agent writes and not by the plugin, and each is weaker until the row exists. The pins gate reads no container file, the coverage gate searches no exclusion on an absolute path, and the route proposes no `deployed` or `irreplaceable-data` event. Each says so on every run, and `conformance` names the row with what it stops (ADR 0042's precedent for the suppressions gate). The window is one agent step, since no feature and no drain starts while a fill-first item is owed, so a change cannot break one of these guarantees unseen in it. Red gates until filled were rejected, as ADR 0037 rejects it for every new check.
 
 A wrong row can also be weaker than the list it replaced: a pins pattern that misses a line, a Suppressions kind that omits a directive. `conformance` checks the table's shape and that each pattern compiles, not its coverage.
 
@@ -38,6 +38,7 @@ This is wrong if an adopter's agent, given the sections with no examples, writes
 - **Keep the converters and the lists as residue.** Rejected: they steer every adopter toward the named tools.
 - **Ship the lists as data the binding overrides.** Rejected by ADR 0042: a default is still an example.
 - **A binding row for the prose gate's source files.** Rejected: a row could only narrow what is scanned, and a second list of extensions in the binding is the first one moved.
+- **Accept the owed window and leave the rows to be filled whenever.** Rejected by the owner: the gates read nothing meanwhile, so the fill is one agent step that nothing may start before.
 - **Red while a section is missing.** Rejected: every adopted repository would stop at once (ADR 0037).
 - **Move the guard hook's lists into the binding.** Rejected: they are a boundary a project must not loosen.
 

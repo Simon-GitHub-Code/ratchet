@@ -9,6 +9,7 @@ import pytest
 
 import drain
 import hooks_installed
+import owed
 import queue_notes
 import route
 import triggers
@@ -1081,3 +1082,20 @@ def test_a_repository_with_no_default_branch_commit_has_no_tip(tmp_path: Path) -
     git(tmp_path, "init", "-q")
     assert queue_notes.tip(tmp_path) is None
     assert not queue_notes.caused(tmp_path, {"causes": ["a"], "base": "b"})
+
+
+def test_rows_an_upgrade_left_owed_for_an_agent_come_first_and_ask_the_owner_nothing(
+    tmp_path: Path,
+) -> None:
+    root = owing(tmp_path)
+    assert route.fill_step(root) is None
+    write(
+        root,
+        "quality/owed.toml",
+        owed.render([owed.Entry("docs/process/binding.md", "pins", "has no section", "0.12.0")]),
+    )
+    commit(root, "chore: the upgrade")
+    step = route.decide(root, None)
+    assert (step.command, step.stage) == (route.FILL, "fill")
+    assert "nothing asks you" in step.why
+    assert "pins" in step.why
