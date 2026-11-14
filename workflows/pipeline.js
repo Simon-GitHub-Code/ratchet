@@ -1313,10 +1313,11 @@ async function fixRound(findings, testsAdded, round, rounds) {
   return stop ? tooLarge(stop, spec, { filesChanged, disputes, checkOutput: fix.checkOutput }) : null
 }
 
-// Whether a review's refusal is one a fix pass can answer: it found blockers or majors in the
-// change, and none of them is the ticket's own promise lost or an input case left undecided.
+// Whether a review's findings are ones a fix pass can answer: it lists blockers or majors in the
+// change, and none of them is the ticket's own promise lost or an input case left undecided. The
+// verdict is not asked: the script forces request_changes on such issues whatever the review said.
 function fixableByReview(review) {
-  return review.verdict !== 'approve' && blocking(review.issues).length > 0 && ticketIssues(review).length === 0
+  return blocking(review.issues).length > 0 && ticketIssues(review).length === 0
 }
 
 // The stop for a change with no room left under a ceiling, or null. `stage` is the role that just

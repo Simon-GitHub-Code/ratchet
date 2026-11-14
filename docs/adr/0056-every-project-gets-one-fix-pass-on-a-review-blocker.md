@@ -11,7 +11,7 @@ In a first-hour eval on a young project, the independent review found one real b
 
 ## Decision
 
-**A review blocker gets one fix pass in every project.** When the project is not `depended-on`, the review's verdict is not approve, and it carries a blocker or major issue in the change, the script runs the fix round once: the same fresh fix agent the `depended-on` loop uses, given the review's blocking issues, then the review again. A second review that approves goes on as approve. One that does not leaves the ticket parked as before; there is no second pass.
+**A review blocker gets one fix pass in every project.** When the project is not `depended-on` and the review lists a blocker or major issue in the change, the script runs the fix round once: the same fresh fix agent the `depended-on` loop uses, given the review's blocking issues, then the review again. The pass keys on the review's blocking issues, not on its verdict: the script forces `request_changes` on such issues whatever the review said, so a review that approves and still lists one gets the pass too. A second review that approves goes on as approve. One that does not leaves the ticket parked as before; there is no second pass.
 
 The pass is the loop's own code, parameterised by the number of rounds: one for a project that is not `depended-on`, two (`MAX_FIX_ITERATIONS`) for one that is. The size read after a fix round (ADR 0055) applies to it.
 

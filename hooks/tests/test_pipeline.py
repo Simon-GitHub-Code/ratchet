@@ -664,6 +664,15 @@ def test_a_young_project_gets_one_fix_pass_on_a_review_blocker_and_one_more_revi
     assert result["reviewIssues"] == []
 
 
+def test_a_review_that_approves_with_a_blocker_of_its_own_still_gets_the_pass() -> None:
+    approving = {**BLOCKED, "verdict": "approve"}
+    answers = {"implement": IMPLEMENTED, "review": approving, "fix-1": IMPLEMENTED}
+    answers |= {"review-1": REVIEW}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+    assert ran["labels"] == [*YOUNG_LABELS, "review", "fix-1", "review-1"]
+    assert ran["result"]["verdict"] == "approve"
+
+
 def test_a_young_project_whose_second_review_still_blocks_is_parked_after_one_pass() -> None:
     answers = {"implement": IMPLEMENTED, "review": BLOCKED, "fix-1": IMPLEMENTED}
     answers |= {"review-1": BLOCKED, "fix-2": IMPLEMENTED, "review-2": REVIEW}
@@ -743,7 +752,10 @@ def test_the_review_does_not_name_findings_that_do_not_exist() -> None:
 def test_what_the_review_opens_is_open_without_a_critic() -> None:
     finding = {"severity": "major", "title": "loses the order"}
     review = {**REVIEW, "issues": [finding], "verdict": "approve"}
-    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, implement=IMPLEMENTED, review=review)
+    again = {"fix-1": IMPLEMENTED, "review-1": review}
+    ran = _run(
+        {"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, implement=IMPLEMENTED, review=review, **again
+    )
     result = ran["result"]
     assert result["verdict"] == "request_changes"
     assert result["verdictForcedBy"] == ["1 blocker/major review issue(s)"]
