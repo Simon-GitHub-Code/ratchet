@@ -1,6 +1,6 @@
 import * as c from "./view_common.mjs";
 
-// Drawn from DrainLandingShown. A kill of another command is one arrow, whichever it is.
+// Drawn from DrainLanding. A kill of another command is one arrow, whichever it is.
 export const title = "A kill of land after merge.py, and what finishes what it left";
 const KILL = {
   AKillBeforeTheNoteStopsDrainPyLandA: "a kill stops land before its note",

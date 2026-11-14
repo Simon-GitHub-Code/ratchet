@@ -1,6 +1,6 @@
 import * as c from "./view_common.mjs";
 
-// Drawn from DrainLandingShown. A kill of another command is one arrow, whichever it is.
+// Drawn from DrainLanding. A kill of another command is one arrow, whichever it is.
 export const title = "A kill of the merge.py that land runs, and what puts it back";
 const KILL = {
   AKillBeforeTheFastForwardStopsMergePyInDrainPyLandA: "a kill stops merge.py before the fast-forward",

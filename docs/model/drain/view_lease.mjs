@@ -20,7 +20,7 @@ const WORDS = {
   DrainPyReportDrainWithItsToken: "report",
   StopsItsSessionStillOpen: "stop",
 };
-export const step = (action, from) => {
+export const step = (action, from, to) => {
   if (action === "EachDrainRunsInASessionOfItsOwn") return "each drain starts in a session of its own";
   if (action === "OneLongLivedProcessRunsBothDrains") return "one process starts both drains";
   const taken = c.byDrain(action);
@@ -29,6 +29,11 @@ export const step = (action, from) => {
     return from.processes === "one" ? "the process ends" : "the holder's session ends";
   const who =
     from.holder === "none" ? "a drain" : taken.drain === from.holder ? "the holder" : "the other drain";
-  const word = Object.entries(WORDS).find(([key]) => action.endsWith(key))?.[1] ?? taken.words;
-  return word === "stop" ? `${who} stops` : `${who}'s ${word}`;
+  const found = Object.entries(WORDS).find(([key]) => action.endsWith(key))?.[1] ?? taken.words;
+  // Why: a take-over differs from a plain clean --all only where the other drain holds the lease.
+  const word = found === "clean --all --take-over" && who !== "the other drain" ? "clean --all" : found;
+  if (word === "stop") return `${who} stops`;
+  if (word === "report" && to.holder !== "none")
+    return `${who}'s report [while a program runs], which keeps the lease`;
+  return `${who}'s ${word}`;
 };

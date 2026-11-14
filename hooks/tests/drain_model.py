@@ -1530,10 +1530,12 @@ def lease_run() -> Run:
     return Run(tuple(dict.fromkeys([LEASE_INITIAL, *(after for _, _, after in edges)])), edges)
 
 
-SHOWN_LANDING = ("statusA", *(f"{fact}A" for fact in TICKET_FACTS), "scratch", "half")
-"""What the charts of the landing run read: ticket ``a``, and what a killed ``merge.py`` left."""
-SHOWN_LEASE = tuple(fact for fact in LEASE_FACTS if fact not in {"took1", "took2", "stashed"})
-"""What the charts of the lease read: all but the tokens and the stash."""
+SHOWN_LANDING = ("statusA", *(f"{fact}A" for fact in TICKET_FACTS))
+"""What the chart of a ticket's life reads: ticket ``a``."""
+SHOWN_LEASE = tuple(
+    fact for fact in LEASE_FACTS if fact not in {"took1", "took2", "draft", "stashed"}
+)
+"""What the charts of the lease read: all but the tokens, the draft and the stash."""
 
 
 def seen_through(
@@ -1558,12 +1560,11 @@ def exports() -> tuple[model_tla.Export, ...]:
 
     TLC checks the rules on the landing run, the work run and the whole lease graph; the search
     in the tests proves them on the whole main graph. The charts are drawn from those three, and
-    from summaries of the life run, the landing run and the lease graph.
+    from summaries of the life run and the lease graph.
     """
     landing, lease = landing_run(), lease_run()
     facts = state_facts(NAMES)
     main = step_rules(RULES)
-    ticket_a = {fact: facts[fact] for fact in SHOWN_LANDING}
     return (
         model_tla.export(
             "DrainLanding", landing, main, fields=(), derived=facts, action=model_tla.identifier
@@ -1580,8 +1581,7 @@ def exports() -> tuple[model_tla.Export, ...]:
             action=model_tla.identifier,
             deadlock=False,
         ),
-        seen_through("DrainLife", life_run(), ticket_a),
-        seen_through("DrainLandingShown", landing, ticket_a),
+        seen_through("DrainLife", life_run(), {fact: facts[fact] for fact in SHOWN_LANDING}),
         seen_through(
             "DrainLeaseShown",
             lease,

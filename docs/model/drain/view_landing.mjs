@@ -2,7 +2,7 @@ import * as c from "./view_common.mjs";
 
 // Drawn from DrainLeaseShown. land holds the drain's lock before merge.py runs and again for its
 // close, and not while merge.py runs, so the other drain's commands can run in between.
-export const title = "A landing in flight, and what the other drain does meanwhile";
+export const title = "A landing in flight, which the other drain leaves alone";
 export const state = (v) => {
   const inFlight = v.landing !== "none";
   if (v.merge === "none") return "Not landed";
@@ -13,13 +13,13 @@ export const state = (v) => {
   return inFlight ? "Printed by the other drain, the land not yet closed" : "Merged and printed";
 };
 const WORDS = [
-  ["DrainPyCleanAllTakeOver", "clean --all --take-over"],
+  ["DrainPyCleanAllTakeOver", "clean or clean --all"],
   ["DrainPyCleanAllDrainWithItsToken", "clean or clean --all"],
   ["DrainPyCleanAll", "clean or clean --all"],
   ["DrainPyClean", "clean or clean --all"],
   ["DrainPyReportDrainWithItsToken", "report"],
   ["DrainPyReport", "report"],
-  ["DrainPyLandAUpToTheMergeMergePyLands", "land runs merge.py, which merges"],
+  ["DrainPyLandAUpToTheMergeMergePyLands", "land runs merge.py, which merges it"],
   ["DrainPyLandATheCloseAfterTheMerge", "land closes"],
   ["AKillStopsItsLandAfterTheMergeBeforeTheClose", "killed"],
   ["ItsSessionEnds", "killed"],

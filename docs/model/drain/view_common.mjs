@@ -67,9 +67,10 @@ export const byDrain = (action) => {
   const found = /^Drain([12])(\w+)$/.exec(action);
   return found ? { drain: found[1], words: LEASE[found[2]] } : null;
 };
+// Why: Mermaid 11 reads a second colon in an arrow's label as an error, so a comma follows the drain.
 export const leaseNamed = (action) => {
   const step = byDrain(action);
-  return step ? `drain ${step.drain}: ${step.words}` : LEASE_WHOLE[action];
+  return step ? `drain ${step.drain}, ${step.words}` : LEASE_WHOLE[action];
 };
 
 // What a chart calls a command of the drain, or a step of the agent, the owner or git.
