@@ -584,3 +584,41 @@ def test_an_update_killed_after_the_rebase_still_says_it_moved(tmp_path: Path, c
     capsys.readouterr()
     assert update(root).stdout.strip() == json.dumps({"moved": True, "conflicts": []})
     assert json.loads(update(root).stdout) == {"moved": False, "conflicts": []}
+
+
+def test_an_update_killed_before_it_dropped_the_record_drops_it_on_the_rerun(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    tree = build(root, BRANCH_A, {"src/b.py": "B = 1\n"}, record=approval("alpha"))
+    tip = git(root, "rev-parse", BRANCH_A)
+    write(root, "src/m.py", "M = 1\n")
+    commit(root, "feat(core): merged meanwhile")
+    path = drain.queue_notes.note_path(root, BRANCH_A)
+    drain.queue_notes.write_note(path, {**note(root, BRANCH_A), "rebasing": tip})
+    git(tree, "rebase", "--quiet", "main")  # the run stopped here: the record is still on top
+    assert "verdict.json" in git(tree, "show", "--name-only", "--format=", "HEAD")
+    capsys.readouterr()
+    assert update(root).stdout.strip() == json.dumps({"moved": True, "conflicts": []})
+    assert "verdict.json" not in git(tree, "show", "--name-only", "--format=", "HEAD")
+    assert json.loads(update(root).stdout) == {"moved": False, "conflicts": []}
+
+
+def test_a_parked_close_of_a_kept_tree_resets_the_retry_count_and_says_it_stays(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    tree = drain.tree_of(root, BRANCH_A)
+    write(tree, "src/work.py", "work\n")
+    (gitdir(tree) / "index.lock").write_text("")
+    path = drain.queue_notes.note_path(root, BRANCH_A)
+    drain.queue_notes.write_note(path, {**note(root, BRANCH_A), "attempts": 2})
+    assert run(root, "close", ALPHA, "--outcome", "parked") == 0
+    closed = note(root, BRANCH_A)
+    assert closed["attempts"] == 0
+    assert closed["hold"] is True
+    assert any(
+        "the work tree stays" in reason for reason in drain.queue_notes.texts(closed["reasons"])
+    )

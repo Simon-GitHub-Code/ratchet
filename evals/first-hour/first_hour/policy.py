@@ -20,7 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from first_hour import shellpaths
+from first_hour import registry, shellpaths
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping
@@ -120,17 +120,10 @@ FORBIDDEN = (
     (r"\b(?:github|gitlab|bitbucket)\.(?:com|org|io)\b", "names a forge"),
     (
         (
-            rf"{_RUN}(?:curl|wget|ssh|scp|sftp|rsync|nc|ncat|netcat|socat|telnet|ftp|lftp|aria2c"
+            rf"{_RUN}(?:wget|ssh|scp|sftp|rsync|nc|ncat|netcat|socat|telnet|ftp|lftp|aria2c"
             rf"|cloudflared|ntfy){_END}"
         ),
         "opens a network connection",
-    ),
-    (
-        (
-            rf"{_RUN}(?:npm|pnpm|yarn|bun|uv|poetry|flit|hatch|cargo|gem|docker|podman)"
-            r"(?:\s+\S+)*?\s+(?:publish|push|login|adduser|owner|token)\b"
-        ),
-        "publishes or logs in to a registry",
     ),
     (rf"{_RUN}twine{_END}", "publishes to a registry"),
     (
@@ -138,17 +131,52 @@ FORBIDDEN = (
         "starts or changes Claude Code",
     ),
     (r"--dangerously-skip-permissions", "skips permissions"),
-    (
-        (
-            r"\b(?:python3?(?:\.\d+)?|node|deno|bun|perl|ruby)\s+(?:-\S*[ce]\b|-\s|<<)"
-            r"[\s\S]*\b(?:urllib|requests|http\.client|httpx|aiohttp|socket|fetch\(|https?\.request"
-            r"|net\.connect|Net::HTTP|open-uri|LWP)"
-        ),
-        "runs inline code that opens a network connection",
-    ),
     (SECRET.pattern, "reads the session's model credential"),
 )
 _FORBIDDEN = tuple((re.compile(pattern), why) for pattern, why in FORBIDDEN)
+
+# Why: judged on the commands the line runs (`shellpaths.scan`), not on its text, so a word in a
+# heredoc that writes a file or in a string literal of a script is not a command. A line that
+# cannot be read that way falls back to the text.
+_CURL = re.compile(rf"{_RUN}curl{_END}")
+PUBLISHERS = frozenset(
+    {
+        "npm",
+        "pnpm",
+        "yarn",
+        "bun",
+        "uv",
+        "poetry",
+        "flit",
+        "hatch",
+        "cargo",
+        "gem",
+        "docker",
+        "podman",
+    }
+)
+PUBLISH_VERBS = frozenset({"publish", "push", "login", "adduser", "owner", "token"})
+_PUBLISH_TEXT = re.compile(
+    rf"{_RUN}(?:{'|'.join(sorted(PUBLISHERS))})(?:[ \t]+\S+)*?[ \t]+"
+    rf"(?:{'|'.join(sorted(PUBLISH_VERBS))})\b"
+)
+# Why: the network modules of the languages a session writes inline. Module names are looked for
+# outside string literals, so a script that edits a file about `urllib` is not one that uses it.
+_NETWORK_CODE = re.compile(
+    r"\b(?:urllib|requests|http\.client|httpx|aiohttp|socket|fetch\(|https?\.request"
+    r"|net\.connect|Net::HTTP|open-uri|LWP)"
+)
+_DYNAMIC_IMPORT = re.compile(
+    r"(?:__import__|import_module|require)\s*\(\s*['\"](?:node:)?"
+    r"(?:socket|urllib\S*|http\S*|requests|httpx|aiohttp|net|tls)['\"]"
+)
+_STRING = re.compile(
+    r"\'\'\'[\s\S]*?\'\'\'|\"\"\"[\s\S]*?\"\"\"|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'|`[^`]*`"
+)
+_INLINE_TEXT = re.compile(
+    r"\b(?:python3?(?:\.\d+)?|node|deno|bun|perl|ruby)\s+(?:-\S*[ce]\b|-\s|<<)[\s\S]*"
+    + _NETWORK_CODE.pattern
+)
 # Why: inside the sandbox these are the run's own temp directory; outside it they are not.
 TEMP = ("/tmp", "/var/tmp")
 
@@ -165,12 +193,25 @@ class Scope:
     readonly: tuple[Path, ...] = ()
 
 
+# Why: a refusal that names only what is refused leaves a model to guess the rest, and it guessed
+# that the whole network was gone. Every refusal says what still works.
+STILL_WORKS = (
+    "Only this call is refused. Package installs and unauthenticated HTTPS GET reads of public "
+    "package-registry metadata still work, and so do the project's files, tests and gates."
+)
+
+
 @dataclass(frozen=True)
 class Decision:
-    """Whether a call may go ahead, and if not, why: the reason the session is told."""
+    """Whether a call may go ahead, and if not, why: ``why`` is a verb phrase the log keeps."""
 
     allowed: bool
     why: str = ""
+
+    @property
+    def told(self) -> str:
+        """What the session is told when the call is refused: what is refused, and what works."""
+        return f"This call is refused: it {self.why}. {STILL_WORKS}"
 
 
 ALLOW = Decision(allowed=True)
@@ -223,6 +264,9 @@ def shell(command: str, scope: Scope) -> Decision:
     for pattern, why in _FORBIDDEN:
         if pattern.search(command):
             return Decision(allowed=False, why=why)
+    refused = _refused_by_what_runs(command)
+    if refused is not None:
+        return Decision(allowed=False, why=refused)
     here = scope
     for word in shellpaths.words(command):
         path = _resolve(word.raw, here, sandboxed=True)
@@ -231,6 +275,41 @@ def shell(command: str, scope: Scope) -> Decision:
         if word.cd:
             here = replace(scope, cwd=Path(path))
     return ALLOW
+
+
+def _refused_by_what_runs(command: str) -> str | None:
+    """Why a line is refused for the commands it runs, or ``None``.
+
+    ``curl`` is allowed to read a public registry and nothing else (``registry.is_registry_read``);
+    a registry tool may not publish or sign in; inline code may not open a connection.
+    """
+    scanned = shellpaths.scan(command)
+    mentions = len(_CURL.findall(command))
+    if scanned is None:
+        return _refused_as_text(command, mentions=mentions)
+    curls = [call for call in scanned.calls if call.name == "curl"]
+    if mentions != len(curls) or not all(registry.is_registry_read(c.args) for c in curls):
+        return "opens a network connection"
+    if any(c.name in PUBLISHERS and PUBLISH_VERBS & set(c.args) for c in scanned.calls):
+        return "publishes or logs in to a registry"
+    if any(_opens_connection(code) for code in scanned.code):
+        return "runs inline code that opens a network connection"
+    return None
+
+
+def _refused_as_text(command: str, *, mentions: int) -> str | None:
+    """The same, for a line a shell would not read: any mention counts."""
+    if mentions:
+        return "opens a network connection"
+    if _PUBLISH_TEXT.search(command):
+        return "publishes or logs in to a registry"
+    if _INLINE_TEXT.search(command):
+        return "runs inline code that opens a network connection"
+    return None
+
+
+def _opens_connection(code: str) -> bool:
+    return bool(_DYNAMIC_IMPORT.search(code) or _NETWORK_CODE.search(_STRING.sub('""', code)))
 
 
 def decide(
@@ -243,12 +322,14 @@ def decide(
     """
     known = TOOLS.get(tool)
     if known is None:
-        return Decision(allowed=False, why=f"`{tool}` is not on the first-hour run's tool list")
+        return Decision(
+            allowed=False, why=f"uses `{tool}`, which is not on the first-hour run's tool list"
+        )
     if known.kind is Kind.SHELL:
         return shell(str(tool_input.get("command", "")), scope)
     if known.kind is Kind.MESSAGE:
         to_ours = str(tool_input.get("to", "")) in agents
-        elsewhere = "messages go only to a subagent this session started"
+        elsewhere = "sends a message to something other than a subagent this session started"
         return ALLOW if to_ours else Decision(allowed=False, why=elsewhere)
     for key in known.paths:
         raw = tool_input.get(key)

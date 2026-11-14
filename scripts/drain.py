@@ -8,18 +8,23 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   their ``Blocked by`` lines give: ``buildable`` (the ticket passes the preflight and nothing
   is built; while the checkout is not fit to build on, its ``why`` says what is missing),
   ``building`` (its work tree exists), ``built`` (its branch holds commits and is not merged, so
-  the judge is asked), ``waiting`` (blocked only by tickets this drain can still merge), ``held``
-  (its last run parked or was not approved, and the ticket has not changed since), ``merged``
-  (its branch is merged and the ticket is still open) and ``refused`` (the preflight is red, with
-  what produces each missing piece). ``start`` names the buildable tickets to start now: at most
-  ``--concurrency`` less those in a work tree, building or built and not yet settled, and none
-  while the checkout itself is not fit.
+  the judge is asked; when it is behind the default branch its ``why`` says it is brought up to
+  date and judged again first), ``waiting`` (blocked only by tickets this drain can still merge),
+  ``held`` (its last run parked or was not approved, and the ticket has not changed since; a hold
+  outranks commits on the branch, but a wait for a reason the drain resolves itself is
+  retried; a ticket waiting on a held one is refused naming it),
+  ``merged`` (its branch is merged and the ticket is still open) and ``refused`` (the preflight
+  is red, with what produces each missing piece). ``start`` names the buildable tickets to start
+  now: at most ``--concurrency`` less those in a work tree, building or built and not yet
+  settled, and none while the checkout is not fit.
 - ``open <ticket>`` is the gate: it makes the ticket's work tree and branch only when the plan
   starts that ticket, so the order and the cap are a script's exit code.
-- ``update <ticket>`` rebases the ticket's branch onto the default branch when that has moved.
+- ``update <ticket>`` rebases the ticket's branch onto the default branch when that has moved,
+  first making the work tree of a built branch that has none and dropping a last commit that is
+  the verdict record, which the rebase outdated.
   Exit 0 with ``moved``; exit 2 with the conflicted paths and the branch as it was. A run killed
   part-way is run again: the rebase it left is abandoned, which puts the branch back, and starts
-  over; one killed after the rebase finished still answers ``moved``.
+  over; one killed after the rebase finished still answers ``moved`` and drops the record.
 - ``land <ticket>`` runs the binding's ``merge`` entry point with no forge and closes the ticket
   with what the merge judge printed: merged, or waiting for the owner with every reason verbatim.
   Run again after the merge was killed, it first puts right what the merge left (``merge.py``'s
@@ -129,6 +134,10 @@ LOCKED = frozenset({"open", "update", "close", "clean", "report"})
 # Why: the triggers gate's red line; the kind it names is what the safeguard binds (ADR 0028).
 OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
 DEFAULT_WORDS = "the default branch"
+BEHIND = (
+    "behind the default branch: `update` it and judge it again before it lands, since its last"
+    " review was of a tree the default branch has moved past"
+)
 
 
 @dataclass(frozen=True)
@@ -541,14 +550,25 @@ def classify(ticket: preflight.Ticket, drain: Drain, seen: Seen) -> Entry:
     if branch in seen.merged:
         why = f"`{branch}` is merged, yet the ticket is still open: mark it resolved"
         return replace(entry, state=MERGED, why=(why,))
+    # Why: a hold outranks the commits: a ticket parked or left to the owner after its branch got
+    # commits is held until its text changes, and is not landed again for nothing (ADR 0023).
+    hold = queue_notes.held(drain.root, branch, ticket)
+    if hold is not None:
+        return replace(entry, state=HELD, why=tuple(hold.reasons))
     if ahead(drain.root, seen.base, branch):
-        return replace(entry, state=BUILT)
+        waited = queue_notes.read_note(drain.root, branch)
+        again = queue_notes.texts(waited.get("reasons")) if waited.get("outcome") == WAITS else []
+        behind = (
+            tuple(again)
+            if gatelib.git(
+                drain.root, "merge-base", "--is-ancestor", seen.base, f"refs/heads/{branch}"
+            )
+            == ""
+            else (BEHIND,)
+        )
+        return replace(entry, state=BUILT, why=behind)
     if tree in seen.trees:
         return replace(entry, state=BUILDING)
-    note = queue_notes.read_note(drain.root, branch)
-    held = note.get("hold") is True and note.get("digest") == queue_notes.digest(ticket)
-    if held and not queue_notes.safeguarded(drain.root, note):
-        return replace(entry, state=HELD, why=tuple(queue_notes.texts(note.get("reasons"))))
     return pending(entry, ticket, drain=drain, seen=seen)
 
 
@@ -563,7 +583,7 @@ def settled(entries: list[Entry]) -> list[Entry]:
             if key(entry.ref) not in live and live.issuperset(entry.waits_on):
                 live.add(key(entry.ref))
                 reached = True
-    states = {key(entry.ref): entry.state for entry in entries}
+    by_ref = {key(entry.ref): entry for entry in entries}
     return [
         entry
         if entry.state != WAITING or key(entry.ref) in live
@@ -572,7 +592,10 @@ def settled(entries: list[Entry]) -> list[Entry]:
             state=REFUSED,
             waits_on=(),
             why=tuple(
-                f"blocked: waits on {ref}, which this drain cannot merge ({states[ref]})"
+                f"blocked: waits on {ref}, which this drain cannot merge ({by_ref[ref].state})"
+                + "".join(
+                    f": {reason}" for reason in by_ref[ref].why[:1] if by_ref[ref].state == HELD
+                )
                 for ref in entry.waits_on
                 if ref not in live
             ),
@@ -688,54 +711,95 @@ def rebasing(tree: Path) -> bool:
     return False
 
 
+def revive(root: Path, branch: str, tree: Path) -> str | None:
+    """Check out a built branch in its queue work tree again; why it could not be, if not."""
+    for directory in (users_home(), tree.parent):
+        directory.mkdir(mode=OWNER_ONLY, exist_ok=True)
+    theirs = foreign(root)
+    if theirs is not None:
+        return f"{theirs}: {NOT_OURS}"
+    if gatelib.git(root, "worktree", "add", "--quiet", str(tree), branch) is None:
+        return f"no work tree of `{branch}` could be made at {tree}"
+    return None
+
+
+def drop_record(tree: Path) -> None:
+    """Drop a last commit that is the verdict record: the rebase outdated what it certified."""
+    last = gatelib.git(tree, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD") or ""
+    paths = last.splitlines()
+    if paths and all(merge_ready.RECORD.match(path) for path in paths):
+        gatelib.git(tree, "reset", "--quiet", "--hard", "HEAD~1")
+
+
+def tree_for_update(root: Path, branch: str, *, base: str) -> tuple[str | None, bool]:
+    """Why ``branch`` cannot be rebased in ``tree``, and whether it holds ``base`` already.
+
+    A built branch with no work tree gets one, unless it holds ``base`` and needs none.
+    """
+    tree = tree_of(root, branch)
+    if (
+        tree in worktrees(root)
+        and rebasing(tree)
+        and gatelib.git(tree, "rebase", "--abort") is None
+    ):
+        return "an earlier rebase stopped, git cannot abort it", False
+    if tree not in worktrees(root):
+        if not ahead(root, base, branch):
+            return f"`{branch}` has no queue work tree", False
+        if gatelib.git(root, "merge-base", "--is-ancestor", base, branch) == "":
+            return None, True
+        return revive(root, branch, tree), False
+    if dirty(tree):
+        return "its work tree holds uncommitted changes: commit the change first", False
+    return None, False
+
+
 def update(drain: Drain, ticket: preflight.Ticket) -> int:
     """Rebase the ticket's branch onto the default branch when that moved; never half-way.
 
     A run killed mid-rebase leaves the tree detached at the default branch with the rebase
     under way; the next run abandons that rebase, which puts the branch back as it was, and
     starts again. A run killed after the rebase finished and before it said so is told by the
-    branch tip the note recorded before the rebase began.
+    branch tip the note recorded before the rebase began, and still drops a verdict record the
+    rebase outdated.
+
+    A built branch an earlier drain left, with no work tree, gets one. A last commit that is the
+    verdict record is dropped after the rebase: it certified a tree that is gone, and the second
+    review writes the record that replaces it.
     """
     branch = route.own_branch(ticket)
     tree = tree_of(drain.root, branch)
     base = merge_ready.default_ref(drain.root)
-    registered = tree in worktrees(drain.root)
-    if registered and rebasing(tree) and gatelib.git(tree, "rebase", "--abort") is None:
-        print(
-            f"update: {ticket.ref} is not rebased: an earlier rebase stopped, git cannot abort it"
-        )
-        return 1
-    refusal = (
-        f"`{branch}` has no queue work tree"
-        if not registered
-        else "its work tree holds uncommitted changes: commit the change first"
-        if dirty(tree)
-        else None
-    )
+    refusal, current = tree_for_update(drain.root, branch, base=base)
+    if current:
+        print(json.dumps({"moved": False, "conflicts": []}))
+        return 0
     path = queue_notes.note_path(drain.root, branch)
     held = queue_notes.read_note(drain.root, branch)
     note = {k: v for k, v in held.items() if k != "rebasing"}
     before = str(held.get("rebasing") or "")
-    head = gatelib.git(tree, "rev-parse", "HEAD") if registered else None
-    moved = gatelib.git(tree, "merge-base", "--is-ancestor", base, "HEAD") == ""
-    if refusal is None and before:
+    head = gatelib.git(tree, "rev-parse", "HEAD") if refusal is None else None
+    current = (
+        refusal is None and gatelib.git(tree, "merge-base", "--is-ancestor", base, "HEAD") == ""
+    )
+    if current and before:
         queue_notes.write_note(path, note)
-        if head != before and moved:
+        if head != before:
+            # Why: the run was killed after the rebase; its record is still on top.
+            drop_record(tree)
             print(json.dumps({"moved": True, "conflicts": []}))
             return 0
-    if refusal is None and moved:
+    if current:
         print(json.dumps({"moved": False, "conflicts": []}))
         return 0
-    last = gatelib.git(tree, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD") or ""
     if refusal is None and gatelib.git(tree, "branch", "--remotes", "--contains", "HEAD"):
         refusal = "the branch is pushed, and a rebase would rewrite what the forge holds"
-    if refusal is None and merge_ready.RECORD.match(last):
-        refusal = "its last commit is a verdict record, which certifies the tree as it is"
     if refusal is not None:
         print(f"update: {ticket.ref} is not rebased: {refusal}")
         return 1
     queue_notes.write_note(path, {**note, "rebasing": head})
     if gatelib.git(tree, "rebase", "--quiet", base) is not None:
+        drop_record(tree)
         print(json.dumps({"moved": True, "conflicts": []}))
         queue_notes.write_note(path, note)
         return 0
@@ -755,11 +819,30 @@ def close(
     result: dict[str, object] | None = None,
 ) -> None:
     """Remove the ticket's work tree and write its note: the outcome and what the report prints."""
-    who = {
+    branch = route.own_branch(ticket)
+    prior = queue_notes.read_note(root, branch)
+    # Why: reasons the drain resolves itself leave the ticket built to be retried, a few times in
+    # a row; after that, or for any other reason, the owner decides and the ticket is held.
+    retry = outcome == WAITS and queue_notes.mechanical(reasons)
+    before = prior.get("attempts")
+    same = prior.get("digest") == queue_notes.digest(ticket) and isinstance(before, int)
+    attempts = (before if same and isinstance(before, int) else 0) + 1 if retry else 0
+    exhausted = retry and attempts >= queue_notes.RETRIES
+    if exhausted:
+        reasons = [
+            (
+                f"retried {attempts} times and each left it waiting for the same kind of reason,"
+                " which the drain cannot resolve itself"
+            ),
+            *reasons,
+        ]
+    who: dict[str, object] = {
         "ref": ticket.ref,
         "title": ticket.title,
         "digest": queue_notes.digest(ticket),
-        "branch": route.own_branch(ticket),
+        "branch": branch,
+        "hold": outcome != MERGED and (exhausted or not retry),
+        "attempts": attempts,
     }
     stays = settle(root, who, outcome=outcome, reasons=reasons, result=result)
     print(f"closed: {who['ref']}: {outcome}")
@@ -769,7 +852,7 @@ def close(
 
 def settle(
     root: Path,
-    who: dict[str, str],
+    who: dict[str, object],
     *,
     outcome: str,
     reasons: list[str],
@@ -780,7 +863,7 @@ def settle(
     A work tree that cannot be removed with its work saved stays, and the note says so; the lines
     returned say it too.
     """
-    branch = who["branch"]
+    branch = str(who["branch"])
     tree = tree_of(root, branch)
     change = change_of(root, merge_ready.default_ref(root), branch)
     gates = timings(tree)
@@ -788,6 +871,8 @@ def settle(
     stays = [f"the work tree stays at {tree}: {kept}"] if kept else []
     note = {
         **queue_notes.read_note(root, branch),
+        "hold": outcome != MERGED,
+        "attempts": 0,
         **who,
         "outcome": outcome,
         "reasons": [*reasons, *stays],
@@ -795,7 +880,6 @@ def settle(
         "additions": additions(change),
         "gates": gates,
         "closed": now().isoformat(timespec="seconds"),
-        "hold": outcome != MERGED,
         "owes": owed_kinds(result or {}),
         "holds": queue_notes.holds_of(result or {}),
         "reported": False,
@@ -817,7 +901,7 @@ def recorded_merge(root: Path, branch: str) -> bool:
 def record_merge(root: Path, branch: str) -> list[str]:
     """Finish what a landing cut off after the default branch moved: the note, and the tree."""
     note = queue_notes.read_note(root, branch)
-    who = {name: str(note.get(name) or "") for name in ("ref", "title", "digest")}
+    who: dict[str, object] = {n: str(note.get(n) or "") for n in ("ref", "title", "digest")}
     reason = "the merge landed, and the run that landed it stopped before it said so"
     return settle(root, {**who, "branch": branch}, outcome=MERGED, reasons=[reason])
 
