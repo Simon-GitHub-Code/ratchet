@@ -1093,7 +1093,7 @@ def under(absolute: str, bases: tuple[str, ...]) -> list[str] | None:
     return None
 
 
-def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...], copy: Path) -> bool:
+def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...], *, copy: Path) -> bool:
     """Whether the link ``path`` ends inside the copy, by the link texts ``targets`` hold.
 
     Judged from the text the snapshot holds, which is what restoring writes, never from the copy
@@ -1118,7 +1118,7 @@ def ends_inside(path: str, targets: dict[str, str], bases: tuple[str, ...], copy
             # tree through one (a package store) is what ``setup`` is for.
             target = targets.get(name)
             if target is None and (copy / name).is_symlink():
-                target = os.readlink(copy / name)
+                target = str((copy / name).readlink())
             if target is None:
                 here.append(part)
                 continue
@@ -1159,7 +1159,7 @@ def contained(copy: Path, head: str) -> None:
     }
     bases = (os.path.realpath(copy), str(copy))
     for path, oid in snapshot.items():
-        if committed.get(path) != oid and not ends_inside(path, snapshot_links, bases, copy):
+        if committed.get(path) != oid and not ends_inside(path, snapshot_links, bases, copy=copy):
             message = (
                 f"setup left {path}, a symbolic link that leads outside the scratch copy"
                 " (to the real tree or elsewhere); a later write through it would land there"

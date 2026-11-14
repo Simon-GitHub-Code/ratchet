@@ -1528,7 +1528,7 @@ def test_a_link_the_snapshot_holds_is_judged_though_the_directory_is_back_by_the
 
 @pytest.mark.parametrize("committed", [True, False], ids=["committed", "ignored"])
 def test_a_link_reached_back_up_through_another_link_is_judged_by_where_the_first_leads(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], committed: bool
+    tmp_path: Path, *, capsys: pytest.CaptureFixture[str], committed: bool
 ) -> None:
     # Why: `L/../x` is not `x` when L leads out: the link M that names it ends outside the copy,
     # though the path as written, collapsed, stays inside. L is the repository's own link or one
