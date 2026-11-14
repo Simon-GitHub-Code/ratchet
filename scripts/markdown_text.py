@@ -141,16 +141,8 @@ def _section_end(lines: Sequence[str], heading_index: int) -> int:
     )
 
 
-def table(text: str, heading: str) -> Table | None:
-    """The first table under ``heading``, or ``None`` when there is none or it does not split."""
-    lines = text.split("\n")
-    for at in _headings_at(lines, heading):
-        end = _section_end(lines, at)
-        first = next((i for i in range(at + 1, end) if lines[i].startswith("|")), None)
-        if first is not None:
-            break
-    else:
-        return None
+def _table_at(lines: Sequence[str], first: int, end: int) -> Table | None:
+    """The table whose lines start at ``first``, or ``None`` when they do not split."""
     last = first
     while last < end and lines[last].startswith("|"):
         last += 1
@@ -163,6 +155,52 @@ def table(text: str, heading: str) -> Table | None:
         return None
     aligns = tuple(_align(rule) for rule in rules if rule)
     return Table(split[0], aligns, tuple(split[2:]), first, last, tuple(block))
+
+
+def table(text: str, heading: str) -> Table | None:
+    """The first table under ``heading``, or ``None`` when there is none or it does not split."""
+    lines = text.split("\n")
+    for at in _headings_at(lines, heading):
+        end = _section_end(lines, at)
+        first = next((i for i in range(at + 1, end) if lines[i].startswith("|")), None)
+        if first is not None:
+            return _table_at(lines, first, end)
+    return None
+
+
+def tables(text: str, heading: str) -> list[Table]:
+    """Every table under ``heading`` that splits, in the order the text holds them."""
+    lines = text.split("\n")
+    found: list[Table] = []
+    for at in _headings_at(lines, heading):
+        end = _section_end(lines, at)
+        line = at + 1
+        while line < end:
+            if not lines[line].startswith("|"):
+                line += 1
+                continue
+            made = _table_at(lines, line, end)
+            found += [made] if made else []
+            while line < end and lines[line].startswith("|"):
+                line += 1
+    return found
+
+
+BULLET = re.compile(r"^- ([^:\n]+):[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+TICKED = re.compile(r"`([^`\n]+)`")
+
+
+def bullets(body: str) -> dict[str, str]:
+    """The ``- Label: value`` lines of a section body, by label; the first line of a label wins."""
+    found: dict[str, str] = {}
+    for label, value in BULLET.findall(body):
+        found.setdefault(label.strip(), value)
+    return found
+
+
+def ticked(cell: str) -> list[str]:
+    """The backticked items of a cell or a bullet's value, in order."""
+    return [item.strip() for item in TICKED.findall(cell) if item.strip()]
 
 
 def padded(text: str, heading: str) -> str:

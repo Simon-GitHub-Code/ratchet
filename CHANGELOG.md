@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The plugin names no language, package manager or stack tool in its gates, and the binding holds each stack fact (ADR 0042, ADR 0043, ADR 0044).
+
+- Three binding sections carry what the gates used to list: `## Install` (whether an install comes first, its lockfile and the recipes that need it), `## Dependencies` (manifest and lockfile globs, accepted registries, and a `just dependencies <dir>` entry point that prints records the plugin compares) and `## Suppressions` (the directive kinds the bound tools read). `conformance` is red when a needed row is missing or malformed, and when a manifest or lockfile the section declares is in no `guards/manifest.toml` group.
+- The merge base's entry point and table judge a change, so a change cannot loosen its own judge. The upgrade writes a section only from what the tree states and owes the rest.
+- Supersedes ADR 0039 and ADR 0011 in part.
+
 The queue drain and the merge no longer lose work, collide or stop half-way (ADR 0023).
 
 - A work tree is removed only once its uncommitted work is a stash. A stale `index.lock`, a merge left unfinished or a damaged index kept the stash from being made, and the tree was removed anyway; now it stays, nothing running from it is ended, and the note and the command say so.

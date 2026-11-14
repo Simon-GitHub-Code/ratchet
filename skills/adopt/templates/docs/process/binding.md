@@ -4,7 +4,7 @@ This repository's binding of the Ratchet method (`ratchet:method`; `skills/metho
 
 ## Runner
 
-<The task runner: `just`, `make`, `npm run`, `cargo xtask`, a script directory. The entry points below are its targets. The `justfile` shipped with the templates is the `just` example; delete it when the runner is something else.>
+<The task runner the entry points below are targets of. The `justfile` shipped with the templates is for `just`; delete it when the runner is something else.>
 
 - Ratchet plugin: <X.Y.Z> at <ratchet-sha>
 
@@ -15,7 +15,7 @@ The plugin version has this one home. Every workflow checks the plugin out at th
 - Default branch: `main`
 - Pull request template: `.github/pull_request_template.md`
 - Change flow: <one reviewed change at a time; the commit convention, if any, and its hook>
-- Commit hooks: `.pre-commit-config.yaml` (the `pre-commit` framework, the template's example. Another mechanism, such as lefthook, husky or a directory of plain scripts, names its own file or directory here, then `, installed by` and its install command in backticks. `hooks-installed` proves either by running the hooks.)
+- Commit hooks: `.pre-commit-config.yaml` (the `pre-commit` framework, the template's example. Another mechanism names its own file or directory here, then `, installed by` and its install command in backticks. `hooks-installed` proves either by running the hooks.)
 - Merge: the merge judge decides (`merge-ready`). The `merge` workflow merges a pull request the judge passes once `ci` is green, and comments why on one it leaves to the owner. With no forge, `merge <branch>` judges the branch, runs `check` on the merge result and merges it. The one-way doors are the `[[door]]` tables of `guards/manifest.toml`.
 
 ## Entry points
@@ -87,7 +87,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | prose vocabulary | `ratchet` plugin `scripts/prose.py` | 0 | `GLOSSARY.md` | `just prose` |
 | effective-config snapshots | `ratchet` plugin `scripts/snapshots.py` | 0 | `quality/snapshots/` | `just snapshots-check` |
 | no threshold lowered | `ratchet` plugin `scripts/lowered.py` | 0 | `quality/thresholds.toml` at the merge base | `just ratchet-lowered` |
-| no suppression kind rose, no focus marker | `ratchet` plugin `scripts/suppressions.py` | 0 | the merge base's own counts | `just suppressions` |
+| no suppression kind rose, no focus marker | `ratchet` plugin `scripts/suppressions.py` | 0 | the Suppressions section below, as the merge base holds it | `just suppressions` |
 | commit subjects follow the convention | `ratchet` plugin `scripts/commits.py` | 0 | | `just commits` |
 | unit, property and fitness tests | | 1 | | `just test` |
 | coverage, absolute and ratcheted | `ratchet` plugin `scripts/coverage_groups.py` over the suite's Cobertura or LCOV report | 1 | 100% for absolute paths; `quality/thresholds.toml` for the rest | `just coverage` |
@@ -149,6 +149,50 @@ Where each `code:<kind>` trigger of the Gates table finds its instances in this 
 | --- | --- | --- |
 | <kind> | <globs of the tracked files that hold one, or `none: <reason>`> | <optional regex> |
 
+## Install
+
+Whether a fresh checkout must install the tools before a recipe runs one (ADR 0043). `merge` runs the gates in a new work tree and CI runs each in a new checkout, so a tool that is on disk only after an install is missing there unless a recipe installs it first. Say which case this stack is, from what you know of the tools you bound; the method names no package manager. Write `- Install: \`just install\``, with the lockfile it is frozen to and the recipes that run a tool it provides, or `- Install: none: <reason>` and delete the two lines below when the tools arrive on demand. The `install` recipe names the lockfile, installs exactly what it says, and does nothing once that is installed. Each recipe listed depends on `install`, and each tier runs it before its gates start.
+
+- Install: <`just install`, or `none: <reason>`>
+- Lockfile: <the path of the file the install is frozen to>
+- Needed by: <the recipes that run a tool the install provides, each in backticks>
+
+## Dependencies
+
+What `guard-diff` and the merge judge read to tell a change that only adds or raises dependencies from one that changes a gate (ADR 0044, ADR 0011). A manifest or a lockfile is a guard path. The method knows no manifest or lockfile format: name the files of this stack, from what you know of its tools, and write the entry point. What this section cannot read is not dependency-only, and goes to the owner.
+
+- Manifests: <globs of the files that declare dependencies, each in backticks, or `none: <reason>`>
+- Lockfiles: <globs of the files that record what they resolved to, each in backticks, or `none: <reason>`>
+- Entry point: <`just dependencies`, or `none: <reason>`>
+- Registries: <the `source` of each registry this project accepts that its lockfiles do not use yet, each in backticks, or `none`>
+
+`just dependencies <dir>` reads the files under `<dir>`, each at its own path, as data. It does not run the project, install anything or reach the network, and it exits non-zero when it cannot read a file. It prints one record per line, fields separated by tabs, in the format below. The merge base's copy of the recipe reads the files at the merge base and at the head, so a change cannot rewrite what judges it.
+
+| Record | Fields after the record name |
+| --- | --- |
+| `declared` | file, table, name, spec, origin |
+| `locked` | file, scope, name, version, order, origin, source, integrity, sides |
+| `rest` | file, digest |
+
+- `declared`: one dependency a manifest asks for. `table` names the list it sits in, `spec` is its version requirement as the file writes it, and `origin` is `registry` when the spec fetches it from a registry by name and version range and `other` for any other means of fetching.
+- `locked`: one resolved version of a package in a lockfile. `scope` names the inventory it belongs to (one name when the file has only one), `version` is as the file writes it, `order` is dot-separated non-negative integers that make the versions of one name sort the way its registry sorts them (a pre-release below its release), `origin` is `registry`, `direct` for a version fetched by other means, or `local` for a path inside the project, `source` is where it comes from and `integrity` the value that identifies its contents (a lockfile that holds none for a `registry` or `direct` version cannot be judged, and goes to the owner), empty only for `local`. `sides` is `many` when several versions of the name can be installed beside each other in the scope, and `one` when only one runs.
+- `rest`: one line for each file given, with a digest of everything in it that can change what installs, less the dependency tables, the resolved packages and the package's own version: its settings, overrides, patches and the like. Two files with the same digest differ only in what the other records show.
+- Print every record of every file under `<dir>`. Write names as the registry compares them, so two spellings of one name are one name.
+
+## Suppressions
+
+How the tools bound in the Gates table are told, in the code, to skip a finding, and which markers narrow a suite to the part somebody was looking at (ADR 0042). The method names none: list each directive of the tools this stack binds, from what you know of them, as one row per kind. `Pattern` is an extended regular expression in backticks (a literal `|` in it is written `\|`); the `suppressions` gate counts the lines it matches at the merge base and at head. `Rule` is `rises` (red when the count rose) or `never` (red when a line matches at all). The merge base's table judges a change, so a change cannot loosen its own judge.
+
+| Kind | Pattern | Rule |
+| --- | --- | --- |
+| <suppression kind> | <`pattern`> | rises |
+
+Every Gates row whose question a directive can silence (the catalogue marks them `directives`; `skills/method/application-types.toml` in the `ratchet` plugin) and that is bound to a tool says here which kinds silence it, or `none: <reason>` when the tool has no such directive. The `conformance` gate is red while a bound row has no line, or names a kind the table above lacks.
+
+| Question | Kinds |
+| --- | --- |
+| <question> | <`kind`, ... or `none: <reason>`> |
+
 ## Absolute paths
 
 <The paths held at 100% line and branch coverage with no exclusion: the gate tools always, plus whatever the owner declares pure.>
@@ -171,7 +215,7 @@ Where each `code:<kind>` trigger of the Gates table finds its instances in this 
 
 ## Feature flags
 
-<The registry is `flags.toml`. Name the one module through which a flag is read (OpenFeature, or the stack's equivalent, behind it), the override it honours so the `flag-states` gate can force a flag off and on and the gates that request routes can boot with every flag due for removal on (an environment variable such as `FLAG_OVERRIDES=key=true`), and who may turn a flag on in production. New behaviour ships behind a flag that defaults to off; a spec that ships none says why.>
+<The registry is `flags.toml`. Name the one module through which a flag is read (a feature-flag library behind it, if the stack has one), the override it honours so the `flag-states` gate can force a flag off and on and the gates that request routes can boot with every flag due for removal on (an environment variable that lists the flags to force), and who may turn a flag on in production. New behaviour ships behind a flag that defaults to off; a spec that ships none says why.>
 
 ## Speed
 

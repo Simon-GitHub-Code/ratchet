@@ -1,4 +1,4 @@
-"""The shipped gates: markers, suppressions, pins, prose, snapshots, commits and change size."""
+"""The shipped gates: markers, pins, prose, snapshots, commits and change size."""
 
 import json
 from pathlib import Path
@@ -11,7 +11,7 @@ import markers
 import pins
 import prose
 import snapshots
-import suppressions
+from tests import dependency_stack as stack
 from tests.repos import branch, commit, git, repository, write
 
 Out = pytest.CaptureFixture[str]
@@ -41,88 +41,6 @@ def test_markers_rise_is_red_and_paydown_is_green(tmp_path: Path, capsys: Out) -
     assert run(markers, root) == 0
     assert markers.counts(root, None) == {"TODO": 1, "FIXME": 0, "HACK": 0, "XXX": 0}
     assert markers.grep_count(root, "TODOS", None) == 0, "whole words only"
-
-
-# --- suppressions ---------------------------------------------------------------------------
-
-
-def test_suppressions_count_per_kind_and_a_focus_marker_fails(tmp_path: Path, capsys: Out) -> None:
-    root = repository(tmp_path, {"a.py": "x = 1  # noqa: E501\n"})
-    commit(root, "feat(core): second")
-    branch(root)
-    assert run(suppressions, root) == 0
-    write(root, "a.py", "x = 1  # noqa: E501\ny = 2  # type: ignore[misc]\n")
-    assert run(suppressions, root) == 1
-    assert "type-ignore: rose from 0 to 1" in capsys.readouterr().out
-    write(root, "a.py", "x = 1  # noqa: E501\n")
-    write(root, "a.test.ts", "describe.only('x', () => {})\n")
-    assert run(suppressions, root) == 1
-    assert "focus marker at a.test.ts:1:" in capsys.readouterr().out
-    assert suppressions.focused(tmp_path / "nowhere") == []
-
-
-# Why: `#[allow(` sat in KINDS for months while whole-word matching made it unmatchable, so
-# every kind is held to a directive written the way its tool's users write it.
-DIRECTIVES = [
-    ("noqa", "a.py", "x = 1  # noqa: E501"),
-    ("type-ignore", "a.py", "y = f()  # type: ignore[misc]"),
-    ("no-cover", "a.py", "if x:  # pragma: no cover"),
-    ("no-mutate", "a.py", "x = 1  # pragma: no mutate"),
-    ("pylint-disable", "a.py", "# pylint: disable=invalid-name"),
-    ("eslint-disable", "a.ts", "// eslint-disable-next-line no-console"),
-    ("ts-ignore", "a.ts", "// @ts-expect-error the fixture is partial"),
-    ("coverage-ignore", "a.ts", "/* istanbul ignore next */"),
-    ("skipped-test", "a.test.ts", "it.skip('x', () => {})"),
-    ("skipped-test", "a.test.ts", "test.skip('x', () => {})"),
-    ("skipped-test", "a.test.ts", "describe.skip('x', () => {})"),
-    ("skipped-test", "a.test.ts", "context.skip('x', () => {})"),
-    ("skipped-test", "a.test.ts", "suite.skip('x', () => {})"),
-    ("skipped-test", "a.bench.ts", "bench.skip('x', () => {})"),
-    ("skipped-test", "a.test.ts", "xit('x', () => {})"),
-    ("skipped-test", "a.test.ts", "xdescribe('x', () => {})"),
-    ("skipped-test", "a.test.ts", "xtest('x', () => {})"),
-    ("skipped-test", "a.py", "@pytest.mark.skip(reason='x')"),
-    ("skipped-test", "A.java", "@skip"),
-    ("skipped-test", "a.rs", "#[ignore]"),
-    ("skipped-test", "b.rs", '#[ignore = "slow"]'),
-    ("skipped-test", "a_test.go", 't.Skip("flaky")'),
-    ("skipped-test", "b_test.go", 'b.Skip("slow")'),
-    ("nolint", "a.go", "x := f() //nolint:errcheck"),
-    ("allow", "a.rs", "#[allow(clippy::must_use_candidate)]"),
-    ("allow", "lib.rs", "#![allow(dead_code)]"),
-    ("allow", "b.rs", "#[expect(clippy::too_many_lines)]"),
-    ("nosec", "a.py", "subprocess.call(x)  # nosec B603"),
-]
-
-
-@pytest.mark.parametrize("directive", DIRECTIVES, ids=[line for _, _, line in DIRECTIVES])
-def test_every_suppression_kind_counts_its_directive(
-    tmp_path: Path, directive: tuple[str, str, str]
-) -> None:
-    kind, name, line = directive
-    root = repository(tmp_path, {"README.md": "x\n"})
-    write(root, name, line + "\n")
-    assert suppressions.counts(root, None)[kind] == 1
-
-
-@pytest.mark.parametrize(
-    ("name", "line"),
-    [
-        ("a.rs", "let rest: Vec<u32> = (0..9).skip(1).collect();"),
-        ("A.java", "stream.skip(2).forEach(print);"),
-        ("a.kt", "val tail = list.asSequence().drop(1).skip(3)"),
-        ("a.py", "def mark_skip(it_skip): return latest.skip(1)"),
-    ],
-)
-def test_an_iterator_skip_is_not_a_skipped_test(tmp_path: Path, name: str, line: str) -> None:
-    root = repository(tmp_path, {"README.md": "x\n"})
-    write(root, name, line + "\n")
-    assert suppressions.counts(root, None)["skipped-test"] == 0
-
-
-def test_suppressions_without_a_base_only_look_for_focus(tmp_path: Path) -> None:
-    root = repository(tmp_path, {"a.py": "x = 1  # noqa\n"})
-    assert run(suppressions, root) == 0
 
 
 # --- pins -----------------------------------------------------------------------------------
@@ -420,17 +338,30 @@ def test_change_size_does_not_count_the_methods_own_records(tmp_path: Path) -> N
     assert change_size.measure(root, "main") == (2, 2), "the code and a file that is no record"
 
 
-def test_change_size_does_not_count_generated_lockfiles_or_their_snapshots(tmp_path: Path) -> None:
+def test_change_size_does_not_count_the_lockfiles_the_merge_bases_binding_names(
+    tmp_path: Path,
+) -> None:
     # Why: a package manager writes the lockfile and `just snapshots` copies it, so a two-package
     # change measured twice a lockfile nobody reads; `pins` still fails a lockfile that drifts.
+    binding = stack.BINDING.replace("- Lockfiles: `*.lock`", "- Lockfiles: `*.lock`, `*/*.lock`")
+    root = repository(tmp_path, {"a.txt": "1\n", "docs/process/binding.md": binding})
+    commit(root, "feat(core): second")
+    branch(root)
+    for name in ("app.lock", "quality/snapshots/app.lock", "web/app.lock"):
+        write(root, name, "a\nb\n")
+    write(root, "quality/snapshots/web__app.lock", "{}\n")
+    write(root, "other.pins", "a\n")
+    assert change_size.measure(root, "main") == (1, 1), "other.pins is a file the binding omits"
+
+
+def test_change_size_counts_every_file_when_the_merge_base_names_no_lockfile(
+    tmp_path: Path,
+) -> None:
     root = repository(tmp_path, {"a.txt": "1\n"})
     commit(root, "feat(core): second")
     branch(root)
-    for name in ("pnpm-lock.yaml", "quality/snapshots/pnpm-lock.yaml", "web/uv.lock"):
-        write(root, name, "a\nb\n")
-    write(root, "quality/snapshots/web__package-lock.json", "{}\n")
-    write(root, "yarn.lock", "a\n")
-    assert change_size.measure(root, "main") == (1, 1), "yarn.lock is a lockfile nobody reads here"
+    write(root, "app.lock", "a\nb\n")
+    assert change_size.measure(root, "main") == (1, 2)
 
 
 def test_change_size_counts_a_moved_file_by_its_changed_lines(tmp_path: Path) -> None:

@@ -72,6 +72,9 @@ signs = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".github/ISSUE_
 #               fuzz targets, scenarios). Such a gate is red when the set is empty, and the
 #               repository proves it: a `remove` bite in `quality/bites.toml` empties the set
 #               and its `bite-all` entry point expects red.
+#   directives  true when the question's tool can be told by a directive in the code to skip a
+#               finding. Once its row is bound, the binding's `## Suppressions` section says which
+#               kinds of directive silence it, or `none: <reason>` (ADR 0042).
 #   proofs      the named proofs the question requires of a gate bound to it, beyond one fault of
 #               the repository's choosing. `[proofs]` below says what each one plants. A `[[bite]]`
 #               of `quality/bites.toml` claims one with `proof = "<name>"`, and the conformance
@@ -85,7 +88,16 @@ broken-flag-state = "a flag whose on state breaks a test that its off state pass
 erroring-route = "a route the smoke requests that answers with an error"
 
 [[question]]
+name = "lint, near-all rules"
+directives = true
+
+[[question]]
+name = "strict types"
+directives = true
+
+[[question]]
 name = "unit, property and fitness tests"
+directives = true
 trigger = "code:source"
 collection = true
 
@@ -175,10 +187,12 @@ collection = true
 # Questions asked of every type that start later than the first commit.
 [[question]]
 name = "coverage, absolute and ratcheted"
+directives = true
 trigger = "code:source"
 
 [[question]]
 name = "diff coverage"
+directives = true
 trigger = "code:source"
 
 [[question]]
@@ -187,10 +201,12 @@ trigger = "code:source"
 
 [[question]]
 name = "changed-code mutation"
+directives = true
 trigger = "life:depended-on"
 
 [[question]]
 name = "full mutation"
+directives = true
 trigger = "life:depended-on"
 
 [[question]]
@@ -203,6 +219,7 @@ trigger = "code:source"
 
 [[question]]
 name = "type coverage, ratcheted"
+directives = true
 trigger = "code:source"
 
 [[question]]

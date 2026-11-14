@@ -55,7 +55,7 @@ NEVER: dict[tuple[str, str | None], str] = {
     ("incidents", None): "the incidents gate runs this one check alone",
     (
         "installs",
-        None,
+        "justfile",
     ): "each recipe it names is red in the merge's work tree and in CI as it stands",
     ("glossary", "GLOSSARY.md (or GLOSSARY-MAP.md)"): "prose is red without GLOSSARY.md",
     ("quality", "quality/thresholds.toml"): "ratchet-lowered reads the file and is red without it",
