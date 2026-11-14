@@ -873,3 +873,12 @@ def test_the_merge_job_tells_the_owner_of_a_pull_request_it_leaves_alone_for_the
     for number, comment in ((1, 11), (2, 22), (3, 33)):
         assert f"-X PATCH repos/owner/repo/issues/comments/{comment}" in log
         assert f"-X POST repos/owner/repo/issues/{number}/comments" not in log
+
+
+def test_no_markdown_template_escapes_a_backtick_inside_inline_code() -> None:
+    """A backslash does not escape a backtick in a code span, so a formatter misreads the span."""
+    skills = TEMPLATES.parents[1]
+    files = [*TEMPLATES.rglob("*.md"), *(skills / "init/templates").rglob("*.md")]
+    assert files
+    bad = [str(f.relative_to(PLUGIN_ROOT)) for f in files if "\\`" in f.read_text("utf-8")]
+    assert not bad, f"use a double-backtick span instead of a backslash-escaped backtick: {bad}"

@@ -19,7 +19,7 @@ The main graph is one drain on one repository with no forge:
 - the owner edits a ticket at most once, the agent leaves work uncommitted once, and the retry count of a ticket left waiting stops at three, past which nothing reads it;
 - a judge that passes a branch only when its verdict record is its last commit and the branch holds the default tip; a `check` that is always green; and tickets no two of which change the same file, so nothing conflicts.
 
-The lease graph is two drains on one repository and one ticket's work tree. Its first step says how the drains run: each in a session of its own, or both under one long-lived process. Then each drain takes the lease, opens the ticket, leaves a draft or starts a program in its tree, lands the ticket, reports, cleans, stops or dies, in any order. `land` is two steps, split where `merge.py` runs, because `land` holds the drain's lock before `merge.py` runs and again for its close, and not while it runs. All the way through it holds a lock on its own ticket, which is how another command sees that the landing is alive. A kill can fall between the two.
+The lease graph is two drains on one repository and one ticket's work tree. Its first step says how the drains run: each in a session of its own, or both under one long-lived process. Then each drain takes the lease, opens the ticket, leaves a draft or starts a program in its tree, lands the ticket, reports, cleans, stops or dies, in any order. `land` is three steps: up to the `merge.py` it runs, the merge `merge.py` lands, and the close after it. `land` holds the drain's lock for its checks and again for its close, and not while `merge.py` runs, so every other command can run in between. All the way through it holds a lock on its own ticket, which is how another command sees that the landing is alive. A kill can stop `land` and its `merge.py` before the merge, or `land` after it. While the landing is alive, either drain's agent can also run `update`, `close --outcome parked` or a second `land` on the ticket. The landing drain's own agent does so when its shell gave up waiting on `land`.
 
 What it leaves out is listed [at the end](#left-out).
 
@@ -45,10 +45,11 @@ From the start the main graph reaches 12,863 states and 190,251 steps.
 | The lease | none, or held by drain 1 or drain 2 |
 | Each drain | its session alive or not; draining or stopped; whether it holds its token, which `clean --all` prints on stderr and a later command passes back as `--drain` |
 | The ticket's work tree | none, or opened by drain 1 or drain 2; a draft in it; a program running from it; a draft kept as a stash |
-| A landing | the drain whose `land` has seen `merge.py` land the merge and has not yet closed it. It is alive while it holds the lock on its ticket, which `land` takes before `merge.py` starts |
+| A landing | none, or the drain whose `land` is past its checks and has not yet closed, with its merge landed or not yet. It is alive while `land` holds the lock on its ticket, which it takes before its checks |
 | The merge | not merged; merged and no note says so; a note no report has printed says so; printed |
+| Whether the ticket's note holds it | no, in every state: no step writes a hold. The tests read the note's hold back after every step, so a hold written under a landing would show |
 
-From the start the lease graph reaches 1,203 states and 11,754 steps.
+From the start the lease graph reaches 1,399 states and 14,790 steps.
 
 ## Steps
 
@@ -67,11 +68,13 @@ From the start the lease graph reaches 1,203 states and 11,754 steps.
 
 Every command first puts back what a killed `merge.py` left, and so does a command that is then killed: it sweeps the scratch work tree and puts back a fast-forward cut off half-way. So no command reads a ticket's text while a cut-off fast-forward holds the merge's.
 
-On the lease graph, each drain can: `clean --all`, with its token, or with `--take-over`; `open a`; let its agent leave a draft or start a program in its tree; `land a` up to the merge `merge.py` lands, then the close after it, or be killed between the two; `report`, with its token or without; `clean`; stop with its session still open; or end its session. Under one process a session's end ends both drains. A program can end.
+On the lease graph, each drain can: `clean --all`, with its token, or with `--take-over`; `open a`; let its agent leave a draft or start a program in its tree; `land a` up to the `merge.py` it runs; `report`, with its token or without; `clean`; stop with its session still open; or end its session. Under one process a session's end ends both drains. A program can end. A landing goes on by its own steps: its `merge.py` lands the merge, then `land` closes the ticket. A kill can stop `land` and its `merge.py` together before the merge, as a session's end or a shell's timeout ends both, or stop `land` after the merge and before its close.
+
+While a landing is alive, either drain can also run `update a`, `close --outcome parked a` or `land a` on its ticket. Each is refused and changes nothing. `update` and `close` print ``<command>: a landing of `<branch>` is running in another command; nothing was done; wait for it to end, then run plan: the landing records the ticket's outcome itself`` and exit 3, and a second `land` prints its own line and exits 2. `open a` changes nothing there either: the plan does not start the ticket, whose branch has commits or has merged. The graph has `update` and `close` only while a landing is alive. Outside one they are the main graph's steps.
 
 ## Rules
 
-The promises are nineteen rules, each about a step. The model numbers them, and the tests and this page use the numbers. The module names each `Rule` and its number, as `Rule6a`.
+The promises are twenty-one rules, each about a step. The model numbers them, and the tests and this page use the numbers. The module names each `Rule` and its number, as `Rule6a`.
 
 | Rule | Says | In Python | In TLC |
 | --- | --- | --- | --- |
@@ -93,9 +96,13 @@ The promises are nineteen rules, each about a step. The model numbers them, and 
 | 9d | A report ends no lease but its own drain's. | breaks in 3 steps | breaks in 3 steps, by the same run |
 | 9e | A merge is printed by exactly one report across both drains. | holds | holds |
 | 9f | No drain discards the tree of a landing another live drain runs. | holds | holds |
-| 9g | A landing's close keeps a merge another drain recorded meanwhile. | holds | holds |
+| 9g | A landing's close keeps a merge another command recorded meanwhile. | holds | holds |
+| 9h | No command but the landing itself removes the tree or writes the note of a live landing. | holds | holds |
+| 9i | A ticket whose note holds it is not merged. | holds | holds |
 
-Rules 1 to 8 and 10 are on the main graph, 9 to 9g on the lease graph. In Python the main rules are proved on the whole main graph, and the lease rules on the whole lease graph. TLC checks the main rules on two runs of the main graph, as [below](#the-rules-in-the-modules) says, and the lease rules on the whole lease graph.
+Rules 1 to 8 and 10 are on the main graph, 9 to 9i on the lease graph. In Python the main rules are proved on the whole main graph, and the lease rules on the whole lease graph. TLC checks the main rules on two runs of the main graph, as [below](#the-rules-in-the-modules) says, and the lease rules on the whole lease graph.
+
+Rules 9g and 9i hold because no step reaches what they forbid. While a landing is alive no other command records its merge or writes a hold, which is rule 9h, so the landing's close never meets a merge recorded by another command and `merge.py` never meets a hold. They stay as rules so that a change that lets one in breaks them.
 
 ### Where a rule breaks
 
@@ -103,17 +110,27 @@ Each break is pinned in the tests by the shortest run to it, and each run is rep
 
 - 10, in 5 steps: `drain.py close --outcome parked a`; `drain.py open c`; `the agent leaves work uncommitted in c`; `git leaves a stale index lock in the tree of c`; `drain.py clean --all`. The docstring says: "A work tree whose uncommitted work git cannot stash (a stale lock, a merge left unfinished, a damaged index) is not removed". Rule 2 holds there: the work stays in the tree.
 - 9, in 4 steps: `one long-lived process runs both drains`; `drain 1: drain.py clean --all`; `drain 1: drain.py open a`; `drain 2: drain.py clean --all`. The docstring says that "two drains run by one process on one repository, with drain 1 between commands and nothing running from its tree, cannot be told apart". Rule 9a, which allows only that, holds there.
-- 9a, in 7 steps: `each drain runs in a session of its own`; `drain 1: drain.py clean --all`; `drain 1: drain.py open a`; `drain 1: drain.py land a, up to the merge merge.py lands`; `drain 2: drain.py clean --all --take-over`; `drain 1: a kill stops its land after the merge, before the close`; `drain 2: drain.py clean --all`. The owner takes over while drain 1 is alive, and the docstring says that "`--take-over` replaces one whose drain is gone for good". It accepts what follows: "a landing that drain runs keeps its tree while it runs, and the next `clean --all` takes the tree once that landing has ended, its work all committed". The take-over leaves the tree of drain 1's live landing. Once that landing is killed, drain 2's next `clean --all` takes the tree and records the merge.
+- 9a, in 7 steps: `each drain runs in a session of its own`; `drain 1: drain.py clean --all`; `drain 1: drain.py open a`; `drain 1: drain.py land a, up to the merge.py it runs`; `drain 2: drain.py clean --all --take-over`; `drain 1: a kill stops its land and its merge.py before the merge`; `drain 2: drain.py clean --all`. The owner takes over while drain 1 is alive, and the docstring says that "`--take-over` replaces one whose drain is gone for good". It accepts what follows: "a landing that drain runs keeps its tree while it runs, and the next `clean --all` takes the tree once that landing has ended, its work all committed". The take-over leaves the tree of drain 1's live landing. Once that landing is killed, drain 2's next `clean --all` takes the tree. The kill came before the merge, so it records no merge.
 - 9b, in 4 steps: `each drain runs in a session of its own`; `drain 1: drain.py clean --all`; `drain 1: stops, its session still open`; `drain 2: drain.py clean --all`. The docstring says: "A drain is alive while a process of its own is". A drain that stopped with its session open blocks the next until the owner says `--take-over`. Rule 9c, which asks only that a drain whose processes are all gone block nothing, holds.
 - 9d, in 3 steps: `one long-lived process runs both drains`; `drain 1: drain.py clean --all`; `drain 2: drain.py report`. The docstring says that `report` "ends the lease of its own drain only (by its token, or when no other drain is alive)", and under one process no other drain is seen alive. In sessions of their own a report ends another drain's lease only when none of that drain's processes is alive.
 
 ### What the model found, and the code now does
 
-The model found three defects, and the code was changed until none of them is a run of the model. The breaks that remain are the five above, which the docstring accepts. Each fix has a replay on a real repository:
+The model found six defects, and the code was changed until none of them is a run of the model. The breaks that remain are the five above, which the docstring accepts. Each fix has a replay on a real repository:
 
 1. A ticket parked while its fast-forward was cut off merged with no edit (rules 6a and 8). `close` read the ticket from the default branch's work tree, which the cut-off fast-forward left holding the merge's text, part-written, and held the ticket on that text. The next `land` put the text back, so the ticket was held no longer. Now every command first puts back what a killed `merge.py` left, so `close` holds the ticket on the owner's text and `land` refuses it (`test_a_close_after_a_cut_off_fast_forward_puts_it_back_first_and_holds_the_ticket_on_its_text`).
 2. Under one process a second drain's report ended the first drain's lease, and with no lease `rival` looked for no program, so the second drain's `clean --all` ended the first drain's program and took its tree (rule 9a). Now `rival` sees a program running from a queue tree with a lease or with none, and that `clean --all` is refused (`test_under_one_process_a_program_refuses_clean_all_once_a_report_ended_the_lease`).
 3. Under one process a second drain's `clean --all`, report or `clean` recorded the merge of a live landing and removed its tree (rule 9f). Now `clean --all` keeps the tree of a live landing (`drain.in_flight`), with `--take-over` or not, and report and `clean` leave a merge alone while its landing runs (`test_one_process_running_both_drains_leaves_a_live_landing_alone_and_it_is_printed_once`, `test_a_take_over_leaves_a_live_landing_and_takes_its_tree_once_the_landing_is_killed`).
+
+The next three came once the lease graph let either drain's agent run `update` and `close` on the ticket of a live landing, before its merge lands and after. `update`, `close` and `split` did not read the landing's lock.
+
+4. The other drain's `close --outcome parked` removed the tree of a landing whose `merge.py` still ran (rule 9f).
+5. `close`, and `update` once the merge had landed, wrote the note and removed the tree of a live landing, from either drain (rule 9h). `update` recorded the merge with the reason "the merge landed, and the run that landed it stopped before it said so", which was false: the landing was still running.
+6. A `close --outcome parked` while `merge.py` ran held the ticket, and `merge.py`, which reads no note, merged it anyway. The landing's close then wrote merged over the hold (rule 9i).
+
+One guard fixed all three. While a landing of the ticket runs, `update`, `close` and `split` print that it runs, change nothing and exit 3 (`drain.act_on`). The replays are `test_a_close_as_parked_while_the_merge_runs_is_refused_and_the_landing_merges_it`, `test_another_drains_close_as_parked_while_the_merge_runs_is_refused_and_reported_once` and `test_an_update_and_a_close_after_the_merge_are_refused_and_the_landing_records_it`. Two more replays go past the lease graph. In `test_an_update_while_the_merge_runs_is_refused_and_the_landing_waits_as_behind` the default branch moves before the landing. Before the guard, `update` rebased the branch under the landing and dropped its verdict record, so the merge refused it and the landing held it for the owner. Now `update` is refused, the merge refuses the branch as behind, and the landing closes it as waiting, not held. The plan then calls it built and says to `update` it and judge it again. `test_a_split_while_the_merge_runs_is_refused_and_files_no_part` shows `split` refused with no part filed.
+
+Two runs past the lease graph as it was then were fixed the same way, each replayed where a real landing is in flight. A second `land` of the ticket, from either drain, could run the merge again or close the ticket while the first was mid-merge. Now it is refused within about a second, changes nothing and exits 2, and the first landing records its merge once (`test_a_second_land_while_one_is_in_flight_is_refused_and_the_merge_printed_once`). That step is now on the lease graph. A `clean --all` under a live landing whose earlier close had been cut off before its discard finished that close and removed the tree the landing was using. Now it keeps the tree and the mark of a branch whose landing is alive (`test_clean_all_under_a_live_landing_keeps_the_tree_and_mark_a_killed_close_left`).
 
 ### The rules in the modules
 
@@ -123,7 +140,7 @@ The whole main graph is too large to export on every test run: its module is 15 
 
 - `DrainLanding`, the landing run: every step but those on `c`. Ticket `a` is built, judged, landed or parked, with every kill of `update`, `land` and `merge.py`, and `b` waits on it. It reaches 395 states and 4,157 steps. No step rule breaks, so the module has as many.
 - `DrainWork`, the work run: the steps on `c` and on the queue, and parking `a`, which lets the cap start `c`. The agent leaves work uncommitted, git locks the index, and kills stop `close`. It reaches 240 states and 2,337 steps. One step rule breaks, so the module has 270 states and 2,643 steps.
-- `DrainLease`: the whole lease graph, 1,203 states and 11,754 steps. Four step rules break, so the module has 1,361 states and 13,992 steps.
+- `DrainLease`: the whole lease graph, 1,399 states and 14,790 steps. Four step rules break, so the module has 1,589 states and 17,616 steps.
 
 Together the two runs reach 632 of the main graph's 12,863 states and 6,482 of its 190,251 steps. TLC does not check a step where both `a` and `c` have gone further than that: `c` building while `a` is built, judged or landed, `b` opened while `c` is, or `update` and `land` on `c`. So rule 1, the cap, never meets two trees there. The search in the tests proves every rule on every state and step of the whole main graph, and gives each break the same shortest run as TLC.
 
@@ -136,7 +153,7 @@ The tests hold the real `drain.py` and `merge.py` to the model in four ways:
 - every pinned run above, and the steps of past defects on the way, are replayed on a real repository, which must read back as the model says after each step new to the run;
 - each kind of kill is taken where it first leaves a state of its own, on a landed ticket and on one not landed: 10 runs, each followed by a report and the killed command run again;
 - random runs of 8 steps take the model's steps on a real repository, and compare after each one;
-- two real drains, as two sessions or under one process, take every decision the code makes on the lease: 46 decisions in 5 walks of 71 steps, with 5 landings. A `land` in flight runs as a process of its own. Each pinned lease run is replayed too.
+- two real drains, as two sessions or under one process, take every decision the code makes on the lease and on a live landing, the refusals included: 57 decisions in 6 walks of 91 steps, with 7 landings. A `land` in flight runs as a process of its own. Each pinned lease run is replayed too.
 
 Where a real command and the model disagree, the test prints the run and what each says.
 
@@ -144,9 +161,9 @@ Where a real command and the model disagree, the test prints the run and what ea
 
 The main rules were checked on `DrainLanding.tla`, SHA-256 `8a2c2c98b20b87d922d21f30c8c713203ae3f78c9f8e06daf473aebee5833821`, and `DrainWork.tla`, SHA-256 `6ac236aa2476a5a440a5ed908c22ac26c7d59e30ea151633026f6a9256141364`. On `DrainLanding` TLC reached 395 states. Run again with every rule, it counts 4,158 states generated: the start and 4,157 steps. Every main rule holds there. On `DrainWork` TLC reached 270 states, and run again with only the rules that hold, it counts 2,644 states generated: the start and 2,643 steps. Rule 10 breaks there, by the run above, and the others hold.
 
-The lease rules were checked on `DrainLease.tla`, SHA-256 `3464a682950aad7eee62c2a35f4cb3286944a4c16ff84388895c5964848cba9e`. TLC reached 1,361 states. Run again with only the rules that hold, it counts 13,993 states generated: the start and 13,992 steps. Rules 9c, 9e, 9f and 9g hold. Rules 9, 9a, 9b and 9d break, each by the run above. Once both drains' sessions have ended no step is left, so the module tells TLC that a state with no step out is no deadlock.
+The lease rules were checked on `DrainLease.tla`, SHA-256 `694ffc769d62d162af38fb29c245825cd88efeb92f7cbb50b1fa184b4371df33`. TLC reached 1,589 states. Run again with only the rules that hold, it counts 17,617 states generated: the start and 17,616 steps. Rules 9c, 9e, 9f, 9g, 9h and 9i hold. Rules 9, 9a, 9b and 9d break, each by the run above. Once both drains' sessions have ended no step is left, so the module tells TLC that a state with no step out is no deadlock.
 
-The charts of a kill are drawn from `DrainLanding.tla`, and the chart of uncommitted work from `DrainWork.tla`. Two charts are drawn from summaries, each the graph seen through the few values the chart shows. `DrainLife.tla`, SHA-256 `9cf44e9bd78a6f1c2f7447bcd17d18d9688e81b7c35913af6a1213e78bd90ee8`, is the landing run with no kill, seen through what the plan and the note say of ticket `a`. `DrainLeaseShown.tla`, SHA-256 `9614335ba1ffc83fd88c0a3aa181cdd55313469f73e3e2b3562f1b9cec0b0931`, is the whole lease graph seen through all but the tokens, the draft and the stash. A box groups states, and an arrow from a box leaves every state in it.
+The charts of a kill are drawn from `DrainLanding.tla`, and the chart of uncommitted work from `DrainWork.tla`. Two charts are drawn from summaries, each the graph seen through the few values the chart shows. `DrainLife.tla`, SHA-256 `9cf44e9bd78a6f1c2f7447bcd17d18d9688e81b7c35913af6a1213e78bd90ee8`, is the landing run with no kill, seen through what the plan and the note say of ticket `a`. `DrainLeaseShown.tla`, SHA-256 `4c182043cf396b459e3148fcf0d7c27873f571db73fec6eb09aeab88e4773500`, is the whole lease graph seen through how the drains run, the lease, each drain's session and whether it drains, the landing and the merge. A box groups states, and an arrow from a box leaves every state in it.
 
 ### One ticket's life
 
@@ -296,7 +313,7 @@ stateDiagram-v2
 
 ### The lease
 
-Drawn from `DrainLeaseShown.tla`, where TLC reached 391 states and 4,294 steps: 9 states and 18 arrows. It does not draw the 2,618 steps that stay in one state. The two drains are alike, so a step is named by its drain's part: the lease's holder, or the other drain. In sessions of their own, the other drain takes the lease from a holder that is gone, and from one that has stopped only with `--take-over`. Under one process it takes it from one that has stopped, and its report ends the lease of a holder still draining, which is where rule 9d breaks.
+Drawn from `DrainLeaseShown.tla`, where TLC reached 213 states and 3,136 steps: 9 states and 18 arrows. It does not draw the 2,126 steps that stay in one state. The two drains are alike, so a step is named by its drain's part: the lease's holder, or the other drain. In sessions of their own, the other drain takes the lease from a holder that is gone, and from one that has stopped only with `--take-over`. Under one process it takes it from one that has stopped, and its report ends the lease of a holder still draining, which is where rule 9d breaks. The holder's report without its token keeps the lease while a program runs from its tree.
 
 ```mermaid
 ---
@@ -323,41 +340,44 @@ stateDiagram-v2
   s7 --> s8: a drain's clean --all
   s8 --> s7: the holder's report or the other drain's report
   s8 --> s10: the process ends
-  s8 --> s9: the holder stops or the holder's report [while a program runs], which keeps the lease
+  s8 --> s9: the holder's report while a program runs or the holder stops
   s3 --> s2: the holder's report
-  s3 --> s4: the holder stops or the holder's report [while a program runs], which keeps the lease
+  s3 --> s4: the holder's report while a program runs or the holder stops
   s3 --> s5: the holder's session ends
   s4 --> s2: the holder's report
   s4 --> s3: the holder's clean --all or the other drain's clean --all --take-over
   s4 --> s5: the holder's session ends
   s5 --> s2: the other drain's report
-  s5 --> s3: the other drain's clean --all or the other drain's clean --all --take-over
+  s5 --> s3: the other drain's clean --all
   s9 --> s7: the holder's report or the other drain's report
-  s9 --> s8: the other drain's clean --all or the other drain's clean --all --take-over or the holder's clean --all
+  s9 --> s8: the other drain's clean --all or the holder's clean --all
   s9 --> s10: the process ends
 ```
 
 ### A landing in flight
 
-Drawn from `DrainLeaseShown.tla`: 5 states and 6 arrows. It does not draw the 3,368 steps that stay in one state. While `merge.py` runs, `land` holds no drain lock, so the other drain's commands can run. It holds the lock on its own ticket (`ratchet-landing-` and a hash of the branch), and by that lock none of them records the merge or removes the tree while the landing is alive. Its own close records it, or after a kill a report, `clean` or `clean --all` does.
+Drawn from `DrainLeaseShown.tla`: 6 states and 8 arrows. It does not draw the 2,526 steps that stay in one state. While `merge.py` runs, `land` holds no drain lock, so every other command can run, before the merge lands and after. `land` holds the lock on its own ticket (`ratchet-landing-` and a hash of the branch) from before its checks until it ends. By that lock no other command records the merge or removes the tree while the landing is alive. `report`, `clean` and `clean --all` leave the ticket alone. `update`, `close` and a second `land` are refused and change nothing, so they stay in one state and the chart does not draw them. The landing's own close records the merge. After a kill a report, `clean` or `clean --all` records it, and after a kill before the merge the ticket is not landed.
 
 ```mermaid
 ---
-title: "A landing in flight, which the other drain leaves alone"
+title: "A landing in flight, before its merge lands and after"
 ---
 stateDiagram-v2
   s0: Not landed
-  s1: Merged by merge.py, its land not yet closed
-  s2: Recorded, not yet printed
-  s3: Merged, and no note says so
-  s4: Merged and printed
+  s1: Its land runs merge.py
+  s2: Merged, its land not yet closed
+  s3: Recorded, not yet printed
+  s4: Merged, and no note says so
+  s5: Merged and printed
   [*] --> s0
-  s0 --> s1: a drain's land runs merge.py, which merges it
-  s1 --> s2: its drain's land closes
-  s1 --> s3: a kill stops the land, or its session ends
-  s2 --> s4: a drain's report
-  s3 --> s2: a drain's clean or clean --all
-  s3 --> s4: a drain's report
+  s0 --> s1: a drain's land
+  s1 --> s0: a kill stops the land, or its session ends
+  s1 --> s2: its merge.py merges it
+  s2 --> s3: its land closes
+  s2 --> s4: a kill stops the land, or its session ends
+  s3 --> s5: a drain's report
+  s4 --> s3: a drain's clean or clean --all
+  s4 --> s5: a drain's report
 ```
 
 ### Where two drains break a rule
@@ -385,9 +405,9 @@ stateDiagram-v2
   s5: Sessions of their own, drain 1 holds the lease, drain 1's tree open
   s6: Sessions of their own, drain 1 holds the lease and has stopped
   s7: One process, drain 1 holds the lease, drain 1's tree open
-  s8: Sessions of their own, drain 1 holds the lease, drain 1's land waits on merge.py
+  s8: Sessions of their own, drain 1 holds the lease, drain 1's merge.py runs
   s9: One process, drain 2 holds the lease
-  s10: Sessions of their own, drain 2 holds the lease, drain 1's land waits on merge.py
+  s10: Sessions of their own, drain 2 holds the lease, drain 1's merge.py runs
   s11: Sessions of their own, drain 2 holds the lease, drain 1's tree open
   s12: Sessions of their own, drain 2 holds the lease
   [*] --> s0
@@ -399,11 +419,11 @@ stateDiagram-v2
   s3 --> s6: drain 1, stops, its session still open
   s4 --> s7: drain 1, drain.py open a
   s4 --> s2: drain 2, drain.py report
-  s5 --> s8: drain 1, drain.py land a, up to the merge merge.py lands
+  s5 --> s8: drain 1, drain.py land a, up to the merge.py it runs
   s6 --> s6: drain 2, drain.py clean --all
   s7 --> s9: drain 2, drain.py clean --all
   s8 --> s10: drain 2, drain.py clean --all --take-over
-  s10 --> s11: drain 1, a kill stops its land after the merge, before the close
+  s10 --> s11: drain 1, a kill stops its land and its merge.py before the merge
   s11 --> s12: drain 2, drain.py clean --all
   classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
   classDef mayBreak fill:#fff3e6,stroke:#e8730c,stroke-width:2.5px,color:#b85a06
@@ -434,10 +454,12 @@ stateDiagram-v2
 - A kill at a point the model does not cut: in `open`, `report` or `clean`, and in `close` after its discard, which leaves what the whole `close` leaves but for the mark that only a retry reads. A kill in `merge.py` before its fast-forward, in the merge or in `check`, leaves its scratch work tree and nothing else, so the model takes one kill there.
 - A command refused while a git command still runs in the default branch's work tree, where the cut-off fast-forward left its files, so they cannot be put back yet. The command exits 2, reads no ticket and writes no note. It still sweeps the scratch work tree a killed `merge.py` left. `hooks/tests/test_drain_safety.py` tests it (`test_a_command_is_refused_while_a_cut_off_fast_forward_cannot_be_put_back`).
 - The line ``clean: a landing of `<branch>` is running in another command, so it is left alone``, which `clean` prints for a live landing whose tree is gone. A landing on the lease graph always has its tree.
-- A second `land` of a ticket while one is running, and a `clean --all` that meets a live landing whose earlier close was cut off before its discard. The lease graph has one landing at a time and no mark of a discard under way, and the main graph has one drain.
-- What `report` and `clean` do while another drain is seen alive and no landing runs: they record no merge then either, which the lease graph has from the round before.
+- A `clean --all` that meets a live landing whose earlier close was cut off before its discard. The lease graph has no mark of a discard under way, and the main graph has one drain. `test_clean_all_under_a_live_landing_keeps_the_tree_and_mark_a_killed_close_left` replays it.
+- An `update` while the merge runs on a default branch that has moved. On the lease graph only the merge moves the default branch. `test_an_update_while_the_merge_runs_is_refused_and_the_landing_waits_as_behind` replays it.
+- `close --outcome waits` and `close --outcome merged` while a landing runs. The lease graph has only `close --outcome parked` there. `hooks/tests/test_drain_safety.py` tests all three outcomes with the landing's lock held (`test_a_close_is_refused_while_a_landing_of_the_ticket_holds_its_lock`).
 - The other ways a command refuses or stops: `update` on uncommitted changes, a tree over the cap, a pushed branch or a rebase git cannot abort; `land` when the merge entry point exits with neither 0 nor 1, where it closes nothing and says to run it again; `close --outcome merged` typed by hand on a branch that is not merged; the 30 seconds a command waits for the drain's lock before it is refused.
-- `split`, and the processes `discard` ends when they run from a tree it removes.
+- `split`, as a step of either graph. `test_a_split_while_the_merge_runs_is_refused_and_files_no_part` replays it while a landing runs, and `test_a_split_is_refused_while_a_landing_holds_its_lock_and_files_nothing` in `hooks/tests/test_drain_safety.py` tests it with the landing's lock held.
+- The processes `discard` ends when they run from a tree it removes.
 - A `merge.py` killed after it took its scratch lock and before it made the work tree, and one killed after the fast-forward and before it exits.
 - A hold that ends because its cause landed: a path the run named, or a safeguard or review it owed. In the model only the owner's edit frees a held ticket.
 - How a process is known to be alive. The scripts read `/proc`; where it is missing no other drain is seen.
