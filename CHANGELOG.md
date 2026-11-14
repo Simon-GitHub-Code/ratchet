@@ -27,6 +27,8 @@ A project that is not yet depended-on gets one fix pass on a review blocker: a f
 
 The change size is read after each fix round and after a rejudge's reconcile, not only after the spec and the build (ADR 0055). A round that takes product code over its ceiling stops the run as too large, so the drain splits the ticket instead of parking it on a red check. A pipeline run that errors is resumed once, then closed to be tried again; after three such closes in a row the ticket is held, and the reason says the run errored each time. A guard hold written before the drain recorded its base commit is released by a change to the ticket, and the route names that step.
 
+The README is rewritten for a solo builder. It opens on the thesis, then a quick start, the day to day, what the method costs and how it works. The table of shipped gates moves to `docs/gates.md` and the map of the plugin to `docs/layout.md`. It says that contributions are not accepted yet.
+
 The last stack knowledge leaves the plugin's code and pages for the binding (ADR 0050).
 
 - The signs of `deployed` and `irreplaceable-data` are the binding's `## Life event signs` table; the pins gate reads the files that name an image from `## Image pins`; the coverage gate's exclusions are the Suppressions kinds that silence its question; the prose gate scans the comments of every tracked text file, with no extension list.
