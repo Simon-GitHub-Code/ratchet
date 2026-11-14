@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
+import os
 import shutil
 import signal
 import tempfile
@@ -17,10 +19,21 @@ from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
 
 import drain
+import gatelib
 from tests import drain_model as model
 from tests import model_tla
 from tests.drain_model import Branch, Kind, Merge, Name, Step
-from tests.drain_world import BRANCH, DRAFT, LANDING_WAIT, REF, LeaseWorld, World, digest
+from tests.drain_world import (
+    BRANCH,
+    DRAFT,
+    LANDING_WAIT,
+    REF,
+    LeaseWorld,
+    World,
+    digest,
+    lock_held,
+    running,
+)
 from tests.repos import git, snapshot, write
 from tests.support import PLUGIN_ROOT
 from tests.test_drain import (
@@ -556,6 +569,10 @@ def test_a_close_after_a_cut_off_fast_forward_puts_it_back_first_and_holds_the_t
     RECORD_KEPT,
     LANDING_UNTOUCHED,
     HOLD_KEPT,
+    SEEN_ALIVE,
+    UNSEEN_ENDED,
+    CLOSED_BY_OWNER,
+    ONE_MERGE,
 ) = model.LEASE_RULES
 APART = "each drain runs in a session of its own"
 UNDER_ONE = "one long-lived process runs both drains"
@@ -570,6 +587,14 @@ PARKS = "drain.py close --outcome parked a"
 REPORTED_UNDER_ONE = [UNDER_ONE, *D1_STARTS, "drain 2: drain.py report"]
 TAKEN_OVER = [APART, *D1_STARTS, LANDS, "drain 2: drain.py clean --all --take-over"]
 TAKEN_OVER += ["drain 1: a kill stops its land and its merge.py before the merge"]
+ORPHANED = f"drain 1: {Step.ORPHANED.value}"
+ORPHAN_MERGES = f"drain 1: {Step.ORPHAN_MERGES.value}"
+ORPHAN_ENDS = f"drain 1: {Step.ORPHAN_ENDS.value}"
+KILLED_AT_START = f"drain 1: {Step.KILLED_AT_START.value}"
+DOOMED_STOPS = Step.DOOMED_STOPS.value
+LOCKED_OUT = f"drain 1: {Step.LOCKED_OUT.value}"
+LEFT_RUNNING = [APART, *D1_STARTS, LANDS, ORPHANED]
+AT_START = [APART, *D1_STARTS, LANDS, KILLED_AT_START]
 STOPPED = [
     APART,
     "drain 1: drain.py clean --all",
@@ -597,14 +622,23 @@ LEASE_COUNTEREXAMPLES: dict[str, list[str] | None] = {
     # whose drain it ends. In sessions of their own it ends only its own drain's lease.
     OWN_LEASE: [UNDER_ONE, D1_STARTS[0], "drain 2: drain.py report"],
     PRINTED_ONCE: None,
+    # Why: 9f, 9h, 9i, 9j, 9l and 9m broke where `land` was killed alone and its merge.py ran on
+    # with no lock any command read. merge.py now holds its own lock on the branch from before its
+    # probe to its end, and every command reads it, so the merge past its probe is seen; one
+    # before its probe finds its land's private lock free and stops, merging nothing.
     LANDING_SPARED: None,
     # Why: no step meets it. No command but the landing records its merge while it is alive, so
     # its close never meets one recorded; the rule stays so that a change letting one in shows.
     RECORD_KEPT: None,
     LANDING_UNTOUCHED: None,
-    # Why: no step writes a hold, so this holds as 9h does: `close` refuses a ticket whose landing
-    # is alive, and the graph has no close outside one.
     HOLD_KEPT: None,
+    SEEN_ALIVE: None,
+    # Why: what `drain.landing_holder` reads are the locks of a `land` and of a merge.py alive,
+    # which a process either left behind does not hold; the replay of a check, and of a shell,
+    # that leaves one shows it on real drains.
+    UNSEEN_ENDED: None,
+    CLOSED_BY_OWNER: None,
+    ONE_MERGE: None,
 }
 
 
@@ -655,8 +689,8 @@ def lease_broken_by(path: list[str]) -> set[str]:
 class LeasePlay:
     """The lease model and two real drains taking the same steps, compared after each one."""
 
-    def __init__(self, directory: Path) -> None:
-        self.world = LeaseWorld(directory)
+    def __init__(self, directory: Path, check: str = "true", before_merge: str = "") -> None:
+        self.world = LeaseWorld(directory, check, before_merge)
         self.lease = model.LEASE_INITIAL
         self.path: list[str] = []
 
@@ -669,6 +703,10 @@ class LeasePlay:
         seen = self.world.seen(self.lease)
         lines = ["path:", *(f"  {step}" for step in self.path), self.world.world.printed]
         assert seen == self.lease, "\n".join([f"seen {seen}", f"not {self.lease}", *lines])
+        # Why: the model's merge lock is held only by a merge past its probe whose land is gone;
+        # a land's own merge here waits before the lock, or has ended.
+        merging = lock_held(drain.merge.merge_lock_path(self.world.world.root, BRANCH[Name.A]))
+        assert merging == (self.lease.orphan is not None), "\n".join(["merge lock", *lines])
         return self.world.world.printed
 
 
@@ -818,6 +856,8 @@ def test_a_take_over_leaves_a_live_landing_and_takes_its_tree_once_the_landing_i
     taken = two_drains.named(path[6])
     assert f"removed: {tree}: the drain that made it was interrupted\n" in taken
     assert "recorded:" not in taken, "the kill came before the merge, so none is recorded"
+    opened = two_drains.named("drain 2: drain.py open a")
+    assert opened.startswith(f"open: {REF[Name.A]} is not started: it is built"), opened
     assert "Alpha" not in listed_under(two_drains.named("drain 2: drain.py report"), "Merged")
 
 
@@ -842,13 +882,33 @@ def landing_runs(command: str) -> str:
     )
 
 
+def merge_runs(command: str) -> str:
+    """What ``update``, ``close`` or ``split`` prints when only a merge of the ticket is seen."""
+    return (
+        f"{command}: a merge of `{BRANCH[Name.A]}` is running in another command; nothing was"
+        " done; wait for it to end, then run plan\n"
+    )
+
+
+LAND_MEETS_A_MERGE = (
+    f"land: a merge of `{BRANCH[Name.A]}` is running in another command; run land again once it"
+    " ends\n"
+)
+LAND_GONE = (
+    "merge: the land that started this merge has stopped; nothing was merged; run land again\n"
+)
+LOCK_HELD = f"merge: a merge of `{BRANCH[Name.A]}` is already running; nothing was merged\n"
+
+
 def refused_in_flight(play: LeasePlay, said: str) -> None:
     """Take ``said``, a command on the ticket of a live landing: exit 3, and nothing changed."""
     before = read_back(play)
+    by_merge = model.seen_by(play.lease) == "merge"
     printed = play.named(said)
     command = "update" if said.endswith(Step.UPDATE.value) else "close"
+    said_by = merge_runs if by_merge else landing_runs
     # Why: the feature skill reads exit 3 as a live landing, and 1 and 2 are `update`'s own.
-    assert (play.world.world.code, printed) == (3, landing_runs(command)), said
+    assert (play.world.world.code, printed) == (3, said_by(command)), said
     assert read_back(play) == before, f"{said}: nothing changed"
 
 
@@ -1038,11 +1098,16 @@ TICKET_STEPS = frozenset({Step.OPEN, Step.UPDATE, Step.PARK, Step.LAND})
 def landing_decision(
     before: model.Lease, drain_: model.Drain | None, step: Step | None
 ) -> tuple[object, ...] | None:
-    """What a command on the ticket meets in a live landing, whether the landing's close meets a merge another command recorded, and whether a session's end ends it before its merge or after; ``None`` for any other step."""  # noqa: E501
-    if step in TICKET_STEPS and before.landing is not None:
-        # Why: each is refused, before the merge lands and after. Not whose agent typed it, which
-        # none of these commands reads, nor the tree, which none of them touches.
-        return (step.value, before.merge is Merge.NONE)
+    """What a command on the ticket meets in a live landing, by which lock, or while a doomed merge starts; whether the landing's close meets a merge another command recorded, and whether a session's end ends it before its merge or after; ``None`` for any other step."""  # noqa: E501
+    seen = model.seen_by(before)
+    if step in TICKET_STEPS and seen is not None:
+        # Why: each is refused, before the merge lands and after, with a line for each lock. Not
+        # whose agent typed it, which none of these commands reads, nor the tree, which none of
+        # them touches.
+        return (step.value, seen, before.merge is Merge.NONE)
+    if step in {Step.UPDATE, Step.PARK} and before.doomed:
+        # Why: no lock is held, so each runs as with no landing, on a merge that has landed or not.
+        return (step.value, "unseen", before.merge)
     if step is Step.LAND_REST:
         return (step.value, before.merge is Merge.UNSAID)
     if step is Step.DIE:
@@ -1052,10 +1117,12 @@ def landing_decision(
 
 
 def decision(before: model.Lease, said: str) -> tuple[object, ...]:
-    """The branch of ``drain.lease`` or ``drain.other_drain`` a step takes, whether a ``clean --all`` takes another drain's tree, whether a merge no note says is recorded or left alone, and what a step meets in a live landing; any other step is its own."""  # noqa: E501
+    """The branch of ``drain.lease`` or ``drain.other_drain`` a step takes, whether a ``clean --all`` takes another drain's tree, whether a merge no note says is recorded or left alone, what a step meets in a live landing, and whether `open` meets a branch with commits; any other step is its own."""  # noqa: E501
     drain_, step = model.LEASE_STEPS.get(said, (None, None))
     if (found := landing_decision(before, drain_, step)) is not None:
         return found
+    if step is Step.OPEN:
+        return (step.value, before.built)
     if step not in model.CLEANS | model.REPORTS | {Step.CLEAN}:
         return (said.rpartition(": ")[2],)
     holder = before.holder
@@ -1072,9 +1139,12 @@ def decision(before: model.Lease, said: str) -> tuple[object, ...]:
         if holder is None
         else "gone"
     )
-    landing = before.landing is not None
+    landing = model.seen_by(before)
     if step in model.CLEANS:
-        return "clean --all", branch, before.tree not in {None, drain_}, landing
+        # Why: the merge lock is read where the landing lock is, after the lease is taken, so
+        # each branch of the lease is taken under a live landing already.
+        lease = landing if landing == "merge" else branch
+        return "clean --all", lease, before.tree not in {None, drain_}, landing is not None
     said_by = "report" if step in model.REPORTS else "clean"
     if before.merge is Merge.UNSAID:
         return (
@@ -1139,6 +1209,312 @@ def test_two_real_drains_agree_with_the_lease_model_on_every_decision(tmp_path: 
                 play.named(said)
         finally:
             play.world.close()
+
+
+def test_the_runs_that_broke_on_a_land_killed_alone_now_meet_a_merge_that_is_seen() -> None:
+    lease = model.LEASE_INITIAL
+    for said in LEFT_RUNNING:
+        lease = dict(model.lease_moves(lease))[said]
+    assert model.seen_by(lease) == "merge"
+    moves = dict(model.lease_moves(lease))
+    for said in [
+        f"drain 1: {PARKS}",
+        f"drain 2: {PARKS}",
+        "drain 2: drain.py update a",
+        "drain 1: drain.py clean --all",
+        "drain 2: drain.py clean --all --take-over",
+        "drain 1: drain.py clean",
+        "drain 2: drain.py report",
+        LANDS,
+        f"drain 2: {Step.LAND.value}",
+    ]:
+        after = moves[said]
+        assert (after.tree, after.held, after.merge, after.orphan) == (
+            lease.tree,
+            lease.held,
+            lease.merge,
+            lease.orphan,
+        ), said
+        assert lease_broken_by([*LEFT_RUNNING, said]) == set(), said
+
+
+# Why: the replays below kill a `land` by its pid alone: past its merge's probe, once its
+# merge.py has judged and merged the branch in its scratch tree and is about to run the check,
+# or before the probe, while its merge.py waits to start.
+
+
+def merge_runs_seen(play: LeasePlay) -> int:
+    """Assert the killed land's merge.py runs and the drain sees a merge running; its pid."""
+    orphan = play.world.orphan
+    assert orphan is not None, "a land was killed alone"
+    assert running(orphan[1]), "its merge.py runs on"
+    holder = drain.landing_holder(play.world.world.root, BRANCH[Name.A])
+    assert holder == "merge", "only the merge lock is held"
+    return orphan[1]
+
+
+def merges_on_main(play: LeasePlay) -> int:
+    subjects = git(play.world.world.root, "log", "--format=%s", "main").splitlines()
+    return subjects.count(f"Merge branch '{BRANCH[Name.A]}'")
+
+
+def recorded_once(play: LeasePlay, holder: str) -> None:
+    """The merge no note says: the holder's report records and prints it, and no report again."""
+    assert merges_on_main(play) == 1
+    assert "outcome" not in lease_note(play), "no note says it merged"
+    assert plan_of_a(play) == [], "the merge resolved the ticket on the default branch"
+    reported = play.named(f"{holder}: drain.py report --drain with its token")
+    assert reported.startswith(RECORDED), "the report records the merge"
+    assert listed_under(reported, "Merged").count("Alpha") == 1
+    assert "Alpha" not in listed_under(reported, "Parked")
+    note = lease_note(play)
+    assert (note["outcome"], note["hold"]) == ("merged", False)
+    assert "Alpha" not in play.named(f"{holder}: drain.py report"), "printed once"
+
+
+def test_a_close_update_or_split_while_a_killed_lands_merge_runs_is_refused_and_it_lands_once(
+    two_drains: LeasePlay, tmp_path: Path
+) -> None:
+    world = two_drains.world.world
+    write(world.root, REF[Name.A], WHOLE[REF[Name.A]])
+    snapshot(world.root, "docs(tracker): the ticket's promises")
+    plan = plan_file(tmp_path, HALVES)
+    issues = (world.root / REF[Name.A]).parent
+    filed = sorted(path.name for path in issues.iterdir())
+    path = [*LEFT_RUNNING, f"drain 1: {PARKS}", f"drain 2: {PARKS}", "drain 2: drain.py update a"]
+    path += [ORPHAN_MERGES]
+    assert {name for at in range(1, len(path) + 1) for name in lease_broken_by(path[:at])} == set()
+    for said in LEFT_RUNNING:
+        two_drains.named(said)
+    merge_runs_seen(two_drains)
+    for said in path[len(LEFT_RUNNING) : -1]:
+        refused_in_flight(two_drains, said)
+    before = read_back(two_drains)
+    split = two_drains.world.command(model.Drain.TWO, "split", REF[Name.A], "--plan", str(plan))
+    assert (world.code, split) == (3, merge_runs("split"))
+    assert read_back(two_drains) == before, "nothing changed"
+    assert sorted(path.name for path in issues.iterdir()) == filed, "no part was filed"
+    assert lease_note(two_drains).get("hold") is not True, "no close held the ticket"
+    two_drains.named(path[-1])
+    recorded_once(two_drains, "drain 1")
+
+
+@pytest.mark.parametrize(
+    "cleans",
+    ["drain 1: drain.py clean --all", "drain 2: drain.py clean --all --take-over"],
+    ids=["same-drain", "take-over"],
+)
+def test_clean_all_while_a_killed_lands_merge_runs_keeps_its_tree_and_it_lands_once(
+    two_drains: LeasePlay, cleans: str
+) -> None:
+    path = [*LEFT_RUNNING, cleans, ORPHAN_MERGES]
+    assert {name for at in range(1, len(path) + 1) for name in lease_broken_by(path[:at])} == set()
+    for said in LEFT_RUNNING:
+        two_drains.named(said)
+    tree = two_drains.world.world.tree(Name.A)
+    merge_runs_seen(two_drains)
+    cleaned = two_drains.named(cleans)
+    assert two_drains.world.world.code == 0
+    assert f"kept: {tree}: `{BRANCH[Name.A]}` has a merge running\n" in cleaned
+    assert tree.exists(), "the tree under the merge in flight is kept"
+    two_drains.named(ORPHAN_MERGES)
+    recorded_once(two_drains, cleans.partition(":")[0])
+    assert not tree.exists(), "the report that records the merge removes the tree"
+
+
+@pytest.mark.parametrize("again", [LANDS, f"drain 2: {Step.LAND.value}"], ids=["same", "other"])
+def test_a_second_land_while_a_killed_lands_merge_runs_is_refused_and_closes_nothing(
+    two_drains: LeasePlay, again: str
+) -> None:
+    path = [*LEFT_RUNNING, again, ORPHAN_MERGES]
+    assert {name for at in range(1, len(path) + 1) for name in lease_broken_by(path[:at])} == set()
+    for said in LEFT_RUNNING:
+        two_drains.named(said)
+    merge_runs_seen(two_drains)
+    before = read_back(two_drains)
+    refused = two_drains.named(again)
+    assert (two_drains.world.world.code, refused) == (2, LAND_MEETS_A_MERGE)
+    assert read_back(two_drains) == before, "the second land changed nothing"
+    two_drains.named(ORPHAN_MERGES)
+    recorded_once(two_drains, "drain 1")
+
+
+def test_a_land_killed_before_its_merge_probes_it_merges_nothing_and_a_close_then_holds_it(
+    two_drains: LeasePlay,
+) -> None:
+    path = [*AT_START, f"drain 2: {PARKS}", "drain 1: drain.py clean", DOOMED_STOPS]
+    path.append("drain 2: drain.py report")
+    assert {name for at in range(1, len(path) + 1) for name in lease_broken_by(path[:at])} == set()
+    for said in AT_START:
+        two_drains.named(said)
+    world = two_drains.world.world
+    tree = world.tree(Name.A)
+    assert two_drains.world.doomed is not None, "its merge.py waits to start"
+    assert drain.landing_holder(world.root, BRANCH[Name.A]) is None, "no lock is held"
+    parked = two_drains.named(path[len(AT_START)])
+    assert (world.code, parked) == (0, f"closed: {REF[Name.A]}: parked\n"), "as with no landing"
+    assert not tree.exists()
+    two_drains.named(path[len(AT_START) + 1])
+    assert world.code == 0
+    two_drains.named(DOOMED_STOPS)
+    assert two_drains.world.stopped == (2, LAND_GONE), "its probe finds its land gone"
+    assert merges_on_main(two_drains) == 0, "nothing was merged"
+    note = lease_note(two_drains)
+    assert (note["outcome"], note["hold"]) == ("parked", True)
+    landed = two_drains.world.command(model.Drain.ONE, "land", REF[Name.A])
+    assert world.code == 2
+    assert f"land: {REF[Name.A]} is held and is not landed: " in landed
+    assert merges_on_main(two_drains) == 0
+    assert [state for state, _ in plan_of_a(two_drains)] == ["held"]
+    reported = two_drains.named(path[-1])
+    assert "Alpha" in listed_under(reported, "Parked")
+    assert "Alpha" not in listed_under(reported, "Merged")
+
+
+@pytest.mark.parametrize(
+    "order",
+    [[DOOMED_STOPS, MERGES], [MERGES, DOOMED_STOPS], [LOCKED_OUT]],
+    ids=["dead-lands-merge-first", "live-lands-merge-first", "locked-out"],
+)
+def test_two_lands_across_the_instant_land_once_under_the_live_land_or_close_nothing(
+    two_drains: LeasePlay, order: list[str]
+) -> None:
+    path = [*AT_START, LANDS, *order, CLOSES] if order != [LOCKED_OUT] else [*AT_START, LANDS]
+    if order == [LOCKED_OUT]:
+        path += [LOCKED_OUT, LANDS, MERGES, CLOSES]
+    path.append("drain 1: drain.py report --drain with its token")
+    assert {name for at in range(1, len(path) + 1) for name in lease_broken_by(path[:at])} == set()
+    for said in [*AT_START, LANDS]:
+        two_drains.named(said)
+    world = two_drains.world.world
+    assert drain.landing_holder(world.root, BRANCH[Name.A]) == "landing", "the second land runs"
+    for said in order:
+        two_drains.named(said)
+        if said == DOOMED_STOPS:
+            assert two_drains.world.stopped == (2, LAND_GONE), "the dead land's merge stops"
+    if order == [LOCKED_OUT]:
+        command = gatelib.entry_point(world.root, "merge")
+        assert (world.code, world.printed) == (
+            2,
+            f"{LOCK_HELD}land: `{command}` stopped (exit 2); run land again to finish it\n",
+        ), "the live land's merge gave up on the lock, and its land closed nothing"
+        assert two_drains.world.stopped == (2, LAND_GONE)
+        assert merges_on_main(two_drains) == 0
+        assert "outcome" not in lease_note(two_drains)
+        assert [state for state, _ in plan_of_a(two_drains)] == ["built"]
+        two_drains.named(LANDS)
+        two_drains.named(MERGES)
+    closed = two_drains.named(CLOSES)
+    assert closed.count(f"merged: `{BRANCH[Name.A]}` into `main`") == 1
+    assert closed.endswith(f"closed: {REF[Name.A]}: merged\n"), "the live land records its merge"
+    assert merges_on_main(two_drains) == 1
+    assert lease_note(two_drains)["outcome"] == "merged"
+    reported = two_drains.named(path[-1])
+    assert listed_under(reported, "Merged").count("Alpha") == 1
+
+
+@pytest.mark.parametrize("first", ["hand", "land", "land-then-lock"])
+def test_an_owners_hand_merge_is_seen_as_a_merge_running_and_one_merge_lands(
+    two_drains: LeasePlay, first: str
+) -> None:
+    for said in [APART, *D1_STARTS]:
+        two_drains.named(said)
+    lease_world, world = two_drains.world, two_drains.world.world
+    if first == "hand":
+        world.by_hand(Kind.COMMIT, Name.A)
+        world.by_hand(Kind.RECORD, Name.A)
+        hand = lease_world.hand_merge(hold=True)
+        before = read_back(two_drains)
+        for argv, code, said in [
+            (["update", REF[Name.A]], 3, merge_runs("update")),
+            (world.argv(Kind.CLOSE, REF[Name.A]), 3, merge_runs("close")),
+            (["land", REF[Name.A]], 2, LAND_MEETS_A_MERGE),
+        ]:
+            assert (lease_world.command(model.Drain.ONE, *argv), world.code) == (said, code)
+        assert read_back(two_drains) == before, "nothing changed"
+        lease_world.run_out(*hand)
+        assert lease_world.stopped is not None
+        assert lease_world.stopped[0] == 0, "the hand merge lands"
+        landed = lease_world.command(model.Drain.ONE, "land", REF[Name.A])
+        assert landed.startswith(RECORDED), "the next land records the owner's merge"
+    else:
+        lease_world.land(model.Drain.ONE)
+        if first == "land":
+            lease_world.past_the_probe()
+            lease_world.run_out(*lease_world.hand_merge(hold=False))
+            assert lease_world.stopped == (2, LOCK_HELD), "the hand merge merges nothing"
+            assert merges_on_main(two_drains) == 0
+            lease_world.close_the_landing()
+            assert world.printed.endswith(f"closed: {REF[Name.A]}: merged\n")
+        else:
+            hand = lease_world.hand_merge(hold=True)
+            note = lease_note(two_drains)
+            lease_world.close_the_landing()
+            command = gatelib.entry_point(world.root, "merge")
+            assert (world.code, world.printed) == (
+                2,
+                f"{LOCK_HELD}land: `{command}` stopped (exit 2); run land again to finish it\n",
+            ), "the land's merge meets the owner's and its land closes nothing"
+            assert lease_note(two_drains) == note
+            lease_world.run_out(*hand)
+            assert lease_world.stopped is not None
+            assert lease_world.stopped[0] == 0
+            lease_world.command(model.Drain.ONE, "land", REF[Name.A])
+            assert world.printed.startswith(RECORDED)
+    assert merges_on_main(two_drains) == 1, "one merge landed"
+    assert lease_note(two_drains)["outcome"] == "merged"
+    reported = lease_world.command(model.Drain.ONE, "report")
+    assert listed_under(reported, "Merged").count("Alpha") == 1
+
+
+LEFT = "left"
+"""The file a check or a shell that leaves a process behind writes that process's pid to."""
+
+
+@pytest.mark.parametrize(
+    ("ends", "by"),
+    [
+        ([MERGES, CLOSES], "check"),
+        ([ORPHANED, ORPHAN_MERGES], "check"),
+        ([MERGES, CLOSES], "shell"),
+    ],
+    ids=["land-ends", "land-killed-alone", "shell-before-the-merge"],
+)
+def test_a_process_the_merges_check_or_shell_leaves_running_does_not_keep_the_landing_seen(
+    tmp_path: Path, ends: list[str], by: str
+) -> None:
+    left = tmp_path / LEFT
+    leaves = f"sleep 600 >/dev/null 2>&1 & echo $! >> {left}"
+    play = (
+        LeasePlay(tmp_path, f"sh -c '{leaves}'")
+        if by == "check"
+        else LeasePlay(tmp_path, before_merge=leaves)
+    )
+    try:
+        for said in [APART, *D1_STARTS, LANDS, *ends]:
+            play.named(said)
+        pids = [int(pid) for pid in left.read_text(encoding="utf-8").split()]
+        assert [running(pid) for pid in pids] == [True], f"the {by} left a process running"
+        root = play.world.world.root
+        assert drain.landing_holder(root, BRANCH[Name.A]) is None, "no landing is seen"
+        if ends[-1] == CLOSES:
+            updated = play.world.command(model.Drain.ONE, "update", REF[Name.A])
+            assert (play.world.world.code, updated) == (
+                1,
+                f"update: {REF[Name.A]} is merged and is not rebased\n",
+            )
+        else:
+            parked = play.world.command(
+                model.Drain.ONE, *play.world.world.argv(Kind.CLOSE, REF[Name.A])
+            )
+            assert (play.world.world.code, parked) == (2, RECORDED + UNSAID)
+        reported = play.named("drain 1: drain.py report --drain with its token")
+        assert listed_under(reported, "Merged").count("Alpha") == 1
+    finally:
+        play.world.close()
+        for pid in left.read_text(encoding="utf-8").split() if left.exists() else []:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid), signal.SIGKILL)
 
 
 def test_a_stopped_drain_blocks_the_next_until_its_session_ends(two_drains: LeasePlay) -> None:
