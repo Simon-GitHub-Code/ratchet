@@ -222,12 +222,14 @@ class World:
         )
         branches = {line.split(" ", 1)[0]: line.split(" ", 3)[1:] for line in refs.splitlines()}
         stashes = git(self.root, "stash", "list", "--format=%gs").splitlines()
+        on_merge = drain.route.merged_features(self.root, "main")
         tickets = []
         for name, was in ghost.each():
             merged = name not in statuses
             tree = self.tree_state(name) if self.tree(name) in trees else Tree.NONE
             listed = branches.get(BRANCH[name])
-            branch, current = self.branch_state(name, listed, merged=merged, was=was)
+            landed = merged and BRANCH[name] in on_merge
+            branch, current = self.branch_state(name, listed, landed=landed, was=was)
             text = int(ANSWER in (self.root / REF[name]).read_text(encoding="utf-8"))
             note = self.note(name, merged=merged, was=was.note)
             ticket = Ticket(
@@ -240,7 +242,7 @@ class World:
                 text=text,
                 stashes=sum(f": {BRANCH[name]}: " in line for line in stashes),
             )
-            tickets.append(model.normal(name, ticket))
+            tickets.append(model.normal(ticket))
         return Seen(statuses, start, (tickets[0], tickets[1], tickets[2]))
 
     def tree_state(self, name: Name) -> Tree:
@@ -251,12 +253,12 @@ class World:
         return Tree.DIRTY if git(self.tree(name), "status", "--porcelain") else Tree.CLEAN
 
     def branch_state(
-        self, name: Name, listed: list[str] | None, *, merged: bool, was: Ticket
+        self, name: Name, listed: list[str] | None, *, landed: bool, was: Ticket
     ) -> tuple[Branch, bool]:
-        """The branch and whether it holds the default tip; a merged one is as it landed."""
+        """The branch and whether it holds the default tip; one on its merge is as it landed."""
         if listed is None:
             return Branch.NONE, True
-        if merged:
+        if landed:
             return was.branch, was.current
         ahead, behind, subject = listed
         if ahead == "0":

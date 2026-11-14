@@ -18,8 +18,8 @@ touch one file, so nothing conflicts.
 
 Bounds keep the graph small: the owner edits a ticket at most once, the agent leaves work
 uncommitted once, and the retry count of a ticket left waiting stops at ``RETRIES``, past which
-nothing reads it. ``settle``'s mark that it has not yet discarded the tree is kept only on the
-ticket a landing retries, the one ticket whose mark a close reads.
+nothing reads it. ``settle``'s mark that it has not yet discarded the tree is kept only while the
+tree stands: the drain reads it only then, and drops it whenever it makes the tree again.
 """
 
 from __future__ import annotations
@@ -112,8 +112,9 @@ class Note(NamedTuple):
     discarding: bool = False
     """``settle``'s mark that it wrote the note and has not yet removed the tree.
 
-    ``settle`` drops it once the tree is gone, and ``update`` drops it when it writes the note.
-    While it is set, ``close`` does not count its refusal again. A merged note never reads it.
+    ``settle`` drops it once the tree is gone; ``finish_close`` removes the tree and drops it;
+    ``open`` and ``update`` drop it when they write the note. While it is set and the tree stands,
+    ``close`` does not count its refusal again.
     """
 
 
@@ -137,29 +138,38 @@ class Ticket(NamedTuple):
         """Whether the branch holds a commit the default branch does not."""
         return self.branch in AHEAD and not self.merged
 
+    @property
+    def on_merge(self) -> bool:
+        """Whether git calls the branch merged: its tip is the one a merge brought in.
+
+        A landed branch that ``update`` rebased onto the default tip has no commit of its own, and
+        no merge brings that tip in.
+        """
+        return self.merged and self.branch is not Branch.BARE
+
 
 def tip_matters(ticket: Ticket) -> bool:
     """Whether anything the code does reads if the branch holds the default tip.
 
-    A merged branch, or one with no commit of its own and no work tree, is judged and refused the
-    same either way; ``open`` starts its branch at the tip again.
+    A branch with no commit of its own and no work tree is judged and refused the same either way,
+    and ``open`` starts it at the tip again. ``update`` always rebases a branch still on its merge,
+    and nothing else reads the tip of a merged one.
     """
-    if ticket.merged or ticket.branch is Branch.NONE:
+    if ticket.branch is Branch.NONE or ticket.on_merge:
         return False
     return ticket.branch is not Branch.BARE or ticket.tree is not Tree.NONE
 
 
-def normal(name: Name, ticket: Ticket) -> Ticket:
+def normal(ticket: Ticket) -> Ticket:
     """``ticket`` with what nothing reads set one way, so two states that differ only there are one.
 
-    Only a close that counts a retry reads ``settle``'s mark: never on a merged note, and never
-    on a ticket whose branch no verdict record is committed on, which is a bound.
+    ``settle``'s mark is read only while the tree stands: by the count of a close and by
+    ``finish_close``. A tree is made again only by ``open`` and ``update``, which drop the mark.
     """
     current = ticket.current or not tip_matters(ticket)
     reviewed = ticket.reviewed and ticket.branch is Branch.JUDGED and not ticket.merged
     note = ticket.note
-    unread = note is not None and (note.outcome is Outcome.MERGED or name not in JUDGES)
-    if unread and note.discarding:
+    if note is not None and note.discarding and ticket.tree is Tree.NONE:
         ticket = ticket._replace(note=note._replace(discarding=False))
     if (current, reviewed) == (ticket.current, ticket.reviewed):
         return ticket
@@ -182,7 +192,7 @@ class State:
 
     def with_ticket(self, name: Name, ticket: Ticket) -> State:
         tickets = list(self.tickets)
-        tickets[INDEX[name]] = normal(name, ticket)
+        tickets[INDEX[name]] = normal(ticket)
         return State((tickets[0], tickets[1], tickets[2]), self.worked)
 
     def __hash__(self) -> int:
@@ -325,11 +335,12 @@ def noted(ticket: Ticket, outcome: Outcome, *, retry: bool = False) -> Ticket:
 
     ``retry`` says every reason is one the drain resolves itself: the ticket is retried, not
     held, until it has waited ``RETRIES`` times in a row on one text. A refusal is not counted
-    again while the note it follows is still marked.
+    again while the note it follows is still marked and its tree still stands.
     """
     prior = ticket.note
     same = prior is not None and prior.text == ticket.text and prior.outcome is not Outcome.OPENED
-    counted = 0 if prior is not None and prior.discarding else 1
+    cut = prior is not None and prior.discarding and ticket.tree is not Tree.NONE
+    counted = 0 if cut else 1
     attempts = min(RETRIES, (prior.attempts if same and prior else 0) + counted) if retry else 0
     merged = outcome is Outcome.MERGED
     hold = not merged and (attempts >= RETRIES or not retry)
@@ -354,14 +365,17 @@ def recorded(ticket: Ticket) -> Ticket:
 
 
 def unrecorded(ticket: Ticket) -> bool:
-    """``drain.recorded_merge``: merged, and the run that landed it did not finish.
-
-    The note (one the drain wrote) does not say so, or it does and the tree still stands.
-    """
+    """``drain.recorded_merge``: merged, and no note (one the drain wrote) says so."""
     note = ticket.note
-    if not ticket.merged or note is None:
-        return False
-    return note.outcome is not Outcome.MERGED or ticket.tree is not Tree.NONE
+    return ticket.on_merge and note is not None and note.outcome is not Outcome.MERGED
+
+
+def finished(ticket: Ticket) -> Ticket:
+    """``drain.finish_close``: the discard a close was cut off before, its note kept as written."""
+    note = ticket.note
+    if note is None or not note.discarding or ticket.tree is Tree.NONE:
+        return ticket
+    return discard(ticket)._replace(note=note._replace(discarding=False))
 
 
 def _open(state: State, name: Name) -> State:
@@ -375,7 +389,7 @@ def _open(state: State, name: Name) -> State:
         tree=Tree.CLEAN,
         branch=Branch.BARE,
         note=(
-            prior._replace(hold=False, attempts=0, rebasing=False)
+            prior._replace(hold=False, attempts=0, rebasing=False, discarding=False)
             if prior and kept
             else Note(Outcome.OPENED)
         ),
@@ -444,9 +458,12 @@ def revived(state: State, name: Name) -> Ticket | None:
 
 
 def to_rebase(state: State, name: Name) -> Ticket | None:
-    """The ticket as ``update`` has it when its rebase starts; ``None`` when it starts none."""
+    """The ticket as ``update`` has it when its rebase starts; ``None`` when it starts none.
+
+    A kill of ``update`` on a merged branch is left out, a bound: ``_update`` takes it whole.
+    """
     ticket = revived(state, name)
-    if ticket is None or ticket.current or ticket.branch is Branch.NONE:
+    if ticket is None or ticket.current or ticket.branch is Branch.NONE or ticket.merged:
         return None
     return marked(ticket, rebasing=True)
 
@@ -460,6 +477,13 @@ def _update(state: State, name: Name) -> State:
     ticket = revived(state, name)
     if ticket is None:
         return state
+    if ticket.merged:
+        # Why: a landed branch whose tree stands is behind its own merge, and the rebase moves
+        # it to the default tip, off the merge: git no longer calls it merged.
+        if ticket.branch is Branch.BARE and ticket.current:
+            return state
+        off = ticket._replace(branch=Branch.BARE, current=True)
+        return state.with_ticket(name, marked(off, rebasing=False))
     if finishing(ticket):
         return state.with_ticket(name, rebased(marked(ticket, rebasing=False)))
     began = to_rebase(state, name)
@@ -479,8 +503,7 @@ def _kill_after_rebase(state: State, name: Name) -> State | None:
     """Where ``update`` is about to drop the record: after its rebase, or finishing one.
 
     A run that finishes what a killed run left drops the record before it clears the mark, so
-    a kill there leaves the mark. A merged branch is left out: after a ``--no-ff`` merge
-    ``update`` rebases it again rather than finish, and the model does not follow that run.
+    a kill there leaves the mark. A merged branch is left out, as ``to_rebase`` says.
     """
     began = to_rebase(state, name)
     if began is not None:
@@ -496,7 +519,7 @@ def parkable(ticket: Ticket) -> bool:
     """Whether ``close --outcome parked`` gets as far as its own note.
 
     A merge is refused, and one no note says yet is recorded first: the kills of ``close`` are
-    taken on a ticket that never merges, and do not follow that record.
+    taken on a ticket that never merges, and do not follow that record or ``finish_close``.
     """
     return not says_merged(ticket) and not unrecorded(ticket)
 
@@ -555,6 +578,11 @@ def landing(state: State, name: Name) -> Landing | None:
 
 
 def _land(state: State, name: Name) -> State:
+    ticket = state.of(name)
+    if not unrecorded(ticket) and (says_merged(ticket) or held_by_note(ticket)):
+        # Why: a merge recorded already is closed again, which finishes a cut-off discard, and a
+        # held ticket is refused once that discard is finished.
+        return state.with_ticket(name, finished(ticket))
     run = landing(state, name)
     if run is None:
         return state
@@ -594,21 +622,22 @@ def _close(state: State, name: Name) -> State:
         # Why: ``close`` records a merge no note says before it reads the note, and then refuses.
         return state.with_ticket(name, recorded(ticket))
     if says_merged(ticket):
-        return state
+        return state.with_ticket(name, finished(ticket))
     return state.with_ticket(name, closed(ticket, Outcome.CLOSED))
 
 
 def cleaned(state: State, *, everything: bool) -> State:
     """``drain.clean``: every tree of a merged branch removed, with ``everything`` every tree.
 
-    A merge no note says is recorded first, a tree or not. ``everything`` then clears the mark
-    of a rebase that did not finish (it was under way in the tree) or of a branch with no commit
-    of its own: ``drain.unmark``.
+    A merge no note says is recorded first, a tree or not, and a close cut off before its discard
+    is finished before its tree goes. ``everything`` then clears the mark of a rebase that did not
+    finish (it was under way in the tree) or of a branch with no commit of its own:
+    ``drain.unmark``.
     """
     for name, ticket in state.each():
         settled = recorded(ticket) if unrecorded(ticket) else ticket
-        if ticket.tree is not Tree.NONE and (ticket.merged or everything):
-            settled = discard(settled)
+        if ticket.tree is not Tree.NONE and (ticket.on_merge or everything):
+            settled = discard(finished(settled))
         note = settled.note
         unfinished = ticket.tree is Tree.REBASING or not settled.ahead
         if everything and note is not None and note.rebasing and unfinished:
@@ -699,8 +728,6 @@ PLAYS: dict[Kind, tuple[Name, ...]] = {
     Kind.KILL_LAND_BEFORE_DISCARD: (Name.A,),
     Kind.KILL_LAND_AFTER_DISCARD: (Name.A,),
 }
-JUDGES = PLAYS[Kind.RECORD]
-"""The tickets a landing can refuse only as behind, and so retry: ``normal`` keeps their mark."""
 
 
 KILLED = {kind.value: ON_TICKET[command] for kind, command in KILLS.items()}
@@ -790,13 +817,14 @@ def merge_said(ticket: Ticket) -> tuple[bool, bool]:
 
 
 def reported_once(before: State, action: str, after: State) -> bool:
-    """A ticket's merge is recorded when it lands, or left to recovery by a kill, is never closed as another outcome, and is printed by exactly one report."""  # noqa: E501
+    """A ticket's merge is recorded when it lands, or left by a kill where the drain records it, is never closed as another outcome, and is printed by exactly one report."""  # noqa: E501
     killed = action.rpartition(" ")[0] in KILLED
     for was, now in zip(before.tickets, after.tickets, strict=True):
         said, unprinted = merge_said(was)
         says, unprinting = merge_said(now)
         left = killed and unrecorded(now)
-        if now.merged and not was.merged and not unprinting and not left:
+        lost = now.merged and not says and not unrecorded(now)
+        if lost or (now.merged and not was.merged and not unprinting and not left):
             return False
         if says and not said and not unprinting:
             return False
