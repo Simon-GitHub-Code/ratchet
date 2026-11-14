@@ -394,7 +394,15 @@ def _ended(state: State, ending: Ending) -> State:
 
 
 def _too_large(state: State, ceiling: Ceiling, after: Role, *, parts: bool) -> State:
-    stop = Ending(Outcome.BLOCKED, Stop.TOO_LARGE, ceiling, after, parts=parts, split_unasked=True)
+    stop = Ending(
+        Outcome.BLOCKED,
+        Stop.TOO_LARGE,
+        ceiling,
+        after,
+        parts=parts,
+        split_unasked=True,
+        rejudged=state.rejudge,
+    )
     return _ended(state, stop)
 
 
