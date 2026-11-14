@@ -19,6 +19,8 @@ ADR 0011 made a change to a manifest or a lockfile that only adds or raises depe
 
 **The merge base's entry point reads both sides.** `guard-diff` and the merge judge copy the merge base's tree, run the recipe from it on the base files and on the head files, and compare. A change that rewrites the recipe, or the binding section that names it, cannot change how its own files are read. The guard hook that runs before every tool call does not call it, and never did: it asks on an edit of the manifest by path, as before. The cost is one archive of the tree and two runs of a recipe, only when a changed path matches a declared glob.
 
+**The declared files must be guarded.** The adopt flow told the agent to add the manifest and lockfile to `guards/manifest.toml` but named no file, so the guard was already the agent's row. `conformance` is now red for each file in the tree that the section's globs match (and each `quality/snapshots/` copy of one) that no group of `guards/manifest.toml` covers, so a missed row cannot drop the guard silently. A glob that matches no file yet asks nothing.
+
 **`change_size.py` takes its exempt lockfiles from the merge base's section** rather than a list of names.
 
 **The upgrade owes the section.** The files and the entry point are the stack's, so the upgrade cannot derive them from the tree. It adds the template's section for an agent to fill, and records that the dependency-only judgement and the lockfile exemption wait for it: until then every dependency change goes to the owner, which is the safe side.
@@ -33,7 +35,7 @@ This is wrong if a loosening of a gate reaches a merge as a dependency-only chan
 
 ## Considered options
 
-- **Keep the parsers, add a plugin-side registry of formats.** Rejected by ADR 0040.
+- **Keep the parsers, add a plugin-side registry of formats.** Rejected by ADR 0042.
 - **Have the entry point decide dependency-only itself and print a verdict.** Rejected: the security properties (a swap at the same version, a rollback, a new source) are the plugin's to hold, and a verdict from a recipe the agent writes would put them in the agent's hands. The recipe only reports facts, and the plugin compares them.
 - **Run the head's recipe.** Rejected: a change could then rewrite what judges it.
 - **Call the entry point from the guard hook.** Rejected: the hook runs before every tool call, must stay fast, and has no business executing project code. The judgement belongs to `guard-diff` and the merge judge, which run once per change.

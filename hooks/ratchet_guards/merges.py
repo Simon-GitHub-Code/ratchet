@@ -27,7 +27,7 @@ from collections.abc import Sequence
 from ratchet_guards.context import Context, Guard
 from ratchet_guards.gitcall import Invocation
 from ratchet_guards.options import Spec, expand_long, scan
-from ratchet_guards.refs import MAIN_BRANCHES, REMOTE, TRACKING
+from ratchet_guards.refs import MAIN_BRANCHES, REMOTE, tracking
 from ratchet_guards.verdict import Verdict
 
 _RESUMES = frozenset({"--abort", "--continue", "--quit", "--skip"})
@@ -64,11 +64,12 @@ def _tracks(names: Sequence[str], call: Invocation, context: Context, *, guard: 
     """
     if context.unread or context.unsettled:
         return False
-    mains = sorted(guard.branches(context, call.cwd) & MAIN_BRANCHES)
+    defaults = guard.defaults(context, call.cwd)
+    mains = sorted(guard.branches(context, call.cwd) & defaults)
     spelled = [
         f"{branch}{_UPSTREAM}" if name in _UPSTREAMS else name for name in names for branch in mains
     ]
-    return all(guard.repo.full_name(call.cwd, name) in TRACKING for name in spelled)
+    return all(guard.repo.full_name(call.cwd, name) in tracking(defaults) for name in spelled)
 
 
 def merge(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:

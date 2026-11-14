@@ -125,7 +125,7 @@ def dependency_notes(
     """For each dependency manifest or lockfile in ``paths``, what its change does.
 
     The binding's Dependencies section at the merge base says which paths those are and how to read
-    them; the entry point it names runs from the merge base's tree (ADR 0042).
+    them; the entry point it names runs from the merge base's tree (ADR 0044).
     """
     if not paths:
         return {}

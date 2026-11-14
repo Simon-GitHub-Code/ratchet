@@ -1,8 +1,8 @@
-"""The install a fresh checkout needs before a recipe runs a tool (ADR 0041, ADR 0039 in part).
+"""The install a fresh checkout needs before a recipe runs a tool (ADR 0043, ADR 0039 in part).
 
 ``merge.py`` runs the gates in a new work tree and every CI job is a fresh checkout. A tool that is
 on disk only after an install is missing there unless a recipe installs it. The plugin knows no
-package manager (ADR 0040): the binding's ``## Install`` section says, for the stack it bound,
+package manager (ADR 0042): the binding's ``## Install`` section says, for the stack it bound,
 whether an install must come first::
 
     - Install: `just install`

@@ -70,14 +70,19 @@ def test_a_checked_out_default_branch_moves_with_its_work_tree(tmp_path: Path) -
     assert git(root, "status", "--porcelain") == ""
 
 
-def test_check_runs_on_the_merge_result_and_not_on_the_branch(tmp_path: Path) -> None:
+def test_a_branch_behind_the_default_branch_is_the_owners_and_nothing_lands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     root = project(tmp_path, check=BOTH)
     git(root, "checkout", "-q", "main")
     write(root, "m", "main's\n")
     commit(root, "feat(core): merged meanwhile")
     git(root, "checkout", "-q", FEATURE)
-    assert not (root / "m").exists(), "the branch alone would fail the check"
-    assert run(root) == 0
+    before = tips(root)
+    capsys.readouterr()
+    assert run(root) == 1
+    assert "behind: the branch does not hold the tip of `main`" in capsys.readouterr().out
+    assert tips(root) == before, "its verdict was given on another tree: update, judge, then land"
 
 
 def test_a_change_the_judge_leaves_to_the_owner_is_not_merged(

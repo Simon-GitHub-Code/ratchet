@@ -33,10 +33,12 @@ import project_bite
 import settings_rules
 import suppressions
 import triggers
+from ratchet_guards import committed
 
 # Why: the dependency contract lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import dependencies
+from ratchet_guards import manifest as guard_manifest
 
 ENTRY_POINTS = (
     "tier0",
@@ -944,7 +946,7 @@ DEPENDENCY_RECIPE = "dependencies"
 def check_dependencies(root: Path) -> Iterable[Finding]:
     """The Dependencies section: which files hold a stack's dependencies and how to read them.
 
-    Why: ADR 0042. The plugin reads no manifest or lockfile format, so the binding names the files
+    Why: ADR 0044. The plugin reads no manifest or lockfile format, so the binding names the files
     and the entry point that prints their records, and a section that cannot be read leaves every
     dependency change to the owner, the one thing the judgement can never be wrong about.
     """
@@ -955,7 +957,7 @@ def check_dependencies(root: Path) -> Iterable[Finding]:
     if contract is None:
         problem = (
             f"has no '{dependencies.SECTION}' section; add the template's, naming the manifests"
-            " and lockfiles of this stack and the entry point that reads them (ADR 0042)"
+            " and lockfiles of this stack and the entry point that reads them (ADR 0044)"
         )
         found = missing_section(
             BINDING_PATH, problem, dependencies.SECTION, template_text=template_binding()
@@ -964,6 +966,7 @@ def check_dependencies(root: Path) -> Iterable[Finding]:
         return
     for problem in contract.problems:
         yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=DEPENDENCY_STOPS)
+    yield from unguarded_dependency_files(root, contract)
     justfile = read_justfile(root)
     if justfile is None or not contract.entry:
         return
@@ -985,6 +988,38 @@ def check_dependencies(root: Path) -> Iterable[Finding]:
         yield replace(agent(f"justfile: {problem}"), stops=DEPENDENCY_STOPS)
 
 
+def unguarded_dependency_files(root: Path, contract: dependencies.Contract) -> Iterable[Finding]:
+    """Each declared file that no guard group covers, tracked or new and not ignored.
+
+    Why: ADR 0044. The method names no lockfile, so the guard on one is whatever the adopting
+    agent wrote in ``guards/manifest.toml``. A row that declares a file the manifest misses would
+    otherwise drop the guard silently: a change to it would merge without the owner.
+    """
+    text = read(root / "guards/manifest.toml")
+    if text is None:
+        return
+    try:
+        guards = guard_manifest.parse(text)
+    except guard_manifest.ManifestError:
+        return  # the manifest check reports it
+    listed = gatelib.git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    tracked = (
+        listed.split("\0")
+        if listed is not None
+        else [
+            str(p.relative_to(root))
+            for p in root.rglob("*")
+            if p.is_file() and not any(x.startswith(".") for x in p.relative_to(root).parts)
+        ]
+    )
+    for path in sorted(p for p in tracked if p and contract.recognised(p)):
+        if guards.group_of(path) is None:
+            yield agent(
+                f"guards/manifest.toml: the Dependencies section declares {path}, which no group"
+                " guards; add it to a group, or a change to it merges without the owner"
+            )
+
+
 def bound(tool: str) -> bool:
     """Whether a Tool cell names a tool: it is not empty, ``later:`` or ``none``."""
     return bool(tool) and not later(tool) and application_types.NONE.match(tool) is None
@@ -994,7 +1029,7 @@ SUPPRESSIONS_STOPS = "the suppressions gate, which counts nothing until its sect
 
 
 def check_suppressions(root: Path) -> Iterable[Finding]:
-    """The Suppressions section: the directives of the tools this repository bound (ADR 0040).
+    """The Suppressions section: the directives of the tools this repository bound (ADR 0042).
 
     Why: the plugin names no directive of any tool, so the gate counts what the binding lists. A
     bound row whose tool a directive can silence must say which kinds do, or that none does, so
@@ -1007,7 +1042,7 @@ def check_suppressions(root: Path) -> Iterable[Finding]:
     if spec is None:
         problem = (
             f"has no '{suppressions.SECTION}' section; add the template's, one row per kind of"
-            " directive the bound tools read (ADR 0040)"
+            " directive the bound tools read (ADR 0042)"
         )
         found = missing_section(
             BINDING_PATH, problem, suppressions.SECTION, template_text=template_binding()
@@ -1181,6 +1216,24 @@ def check_manifest(root: Path) -> Iterable[Finding]:
         yield agent(f"guards/manifest.toml: '{pattern}' is not in an edit = \"deny\" group")
     for pattern in sorted(GUARDED_PATTERNS - guarded):
         yield agent(f"guards/manifest.toml: '{pattern}' is in no group")
+
+
+def check_default_branch(root: Path) -> Iterable[Finding]:
+    """ADR 0041: the default branch is found from refs, not from the main work tree's reflog.
+
+    A repository with no remote and no ``main`` or ``master`` has its default branch read from
+    the reflog, which git expires; until the owner names the branch one of those ways, the guards
+    are as strong as that log.
+    """
+    if committed.anchored_on_reflog(root):
+        yield owner(
+            "guards/manifest.toml: the default branch is found only through the main work tree's"
+            " history of branch switches, which git forgets after about three months",
+            "Add the forge remote (then fetch it and set its head), or name the default branch"
+            " `main` or `master`? Either is a one-time step, and the guards then read the branch"
+            " from git's own refs.",
+            assumed="the guards keep reading the branch the main work tree was first on",
+        )
 
 
 def check_doors(root: Path) -> Iterable[Finding]:
@@ -1410,7 +1463,7 @@ def missing_install_section(root: Path, text: str, justfile: str | None) -> Find
     """The Install section a binding lacks: what its justfile states, else the template's."""
     problem = (
         f"has no '{installs.SECTION}' section, which says whether a fresh checkout installs the"
-        " tools before a recipe runs one (ADR 0041)"
+        " tools before a recipe runs one (ADR 0043)"
     )
     found = (
         installs.derived(
@@ -1440,7 +1493,7 @@ def missing_install_section(root: Path, text: str, justfile: str | None) -> Find
 
 
 def check_installs(root: Path) -> Iterable[Finding]:
-    """What the binding says about an install first, held to the justfile (ADR 0041).
+    """What the binding says about an install first, held to the justfile (ADR 0043).
 
     Why: ADR 0039. ``merge.py`` runs the gates in a new work tree and CI runs each in a new
     checkout. The binding says whether this stack's tools need an install first; when they do,
@@ -2066,6 +2119,7 @@ CHECKS: tuple[Check, ...] = (
     check_operability,
     check_speed,
     check_manifest,
+    check_default_branch,
     check_doors,
     check_merge_workflow,
     check_weekly_workflow,
@@ -2407,7 +2461,7 @@ def type_mutations() -> list[Mutation]:
         ),
         (
             "binding with a gate bound to none under an ADR the repository lacks",
-            rebind("| format | a tool |", "| format | none: no formatter; ADR 0042 |"),
+            rebind("| format | a tool |", "| format | none: no formatter; ADR 0044 |"),
         ),
         (
             "binding saying 'not a service' of a row a service is asked",
@@ -2683,8 +2737,13 @@ def install_mutations() -> list[Mutation]:
     ]
 
 
+def unguarded_lockfile(root: Path) -> None:
+    """A lockfile in a tree whose guard manifest names no such file."""
+    (root / "self-test.lock").write_text("locked\n", encoding="utf-8")
+
+
 def dependency_mutations() -> list[Mutation]:
-    """The Dependencies section held to the justfile that reads it (ADR 0042)."""
+    """The Dependencies section held to the justfile that reads it (ADR 0044)."""
     none = "`none: the self-test has no such file`"
     entry = f"- Entry point: {none}"
     named = "- Entry point: `just dependencies`"
@@ -2710,6 +2769,10 @@ def dependency_mutations() -> list[Mutation]:
             "entry point with no recipe behind it",
             both(rebind(entry, named), rewrite("justfile", "dependencies dir:", "elsewhere dir:")),
         ),
+        (
+            "declared lockfile that no guard group covers",
+            both(rebind(f"- Lockfiles: {none}", "- Lockfiles: `*.lock`"), unguarded_lockfile),
+        ),
         ("entry point whose recipe is still the template's", rebind(entry, named)),
         (
             "entry point whose recipe takes no directory",
@@ -2722,7 +2785,7 @@ def dependency_mutations() -> list[Mutation]:
 
 
 def suppression_mutations() -> list[Mutation]:
-    """The Suppressions section held to the Gates rows it speaks for (ADR 0040)."""
+    """The Suppressions section held to the Gates rows it speaks for (ADR 0042)."""
     row = f"| strict types | `{SELF_TEST_KIND}` |"
     kind = f"| {SELF_TEST_KIND} | `self-test: silence` | rises |"
     return [
