@@ -70,8 +70,9 @@ class Ticket(StrEnum):
 
     None yet, open for triage, agent-ready with or without a conjecture; held by a blocked
     feature run's stash; held by the drain's note for open questions, for guard edits, for an owed
-    safeguard, or by a note written before the drain recorded kinds; held for guard edits the
-    owner has since landed; built on a branch, merged but still open, or resolved.
+    safeguard, or by a note written before the drain recorded kinds; built on a branch, merged but
+    still open, or resolved. A ticket parked for guard edits the owner has since landed is not a
+    state of its own: landing them releases the hold, so the route reads it as agent-ready again.
     """
 
     NONE = "none"
@@ -83,7 +84,6 @@ class Ticket(StrEnum):
     GUARDED = "guarded"
     OWED = "owed"
     PARKED = "parked"
-    LANDED = "landed"
     BUILT = "built"
     MERGED = "merged"
     RESOLVED = "resolved"
@@ -158,9 +158,7 @@ class ActionName(StrEnum):
 Slots = tuple[Ticket, Ticket]
 BLOCKED_BY: Final = {1: 0}
 HOLDS: Final = frozenset({Ticket.HELD, Ticket.ASKED, Ticket.GUARDED, Ticket.OWED, Ticket.PARKED})
-# Why LANDED is here: the pages say landing the guard edits releases the hold, so to the
-# specification the ticket is agent-ready with its conjecture again.
-STATED: Final = frozenset({Ticket.STATED, Ticket.LANDED})
+STATED: Final = frozenset({Ticket.STATED})
 LABELLED: Final = HOLDS | STATED | frozenset({Ticket.READY, Ticket.BUILT, Ticket.MERGED})
 OPEN: Final = LABELLED | {Ticket.TRIAGE}
 CLOSED: Final = frozenset({Ticket.NONE, Ticket.RESOLVED})
@@ -344,27 +342,7 @@ class Divergence:
     example: World
 
 
-def _as(old: Ticket, new: Ticket) -> Callable[[World], World]:
-    def reads(world: World) -> World:
-        first, second = (new if ticket is old else ticket for ticket in world.tickets)
-        return replace(world, tickets=(first, second))
-
-    return reads
-
-
-ROUTE_PAGE: Final = "skills/method/route.md"
-ADOPTED: Final = World(setup=Setup.BOUND, hooks=True, foundation=True)
-DIVERGENCES: Final = (
-    Divergence(
-        "a-guard-hold-outlives-its-edits",
-        lambda w: Ticket.LANDED in w.tickets,
-        _as(Ticket.LANDED, Ticket.GUARDED),
-        "it names the step that releases the hold for each kind the note records",
-        ROUTE_PAGE,
-        frozenset({"RealAdviceCanBeFollowed"}),
-        replace(ADOPTED, tickets=(Ticket.LANDED, Ticket.TRIAGE)),
-    ),
-)
+DIVERGENCES: Final[tuple[Divergence, ...]] = ()
 
 
 def divergence(world: World) -> Divergence | None:
@@ -590,7 +568,7 @@ per_ticket(
 per_ticket(
     ActionName.OWNER_LANDS_GUARD_EDITS,
     (Advice.LAND_GUARD,),
-    Move(one(Ticket.GUARDED), Ticket.LANDED),
+    Move(one(Ticket.GUARDED), Ticket.STATED),
 )
 per_ticket(
     ActionName.OWNER_CHANGES_TICKET,

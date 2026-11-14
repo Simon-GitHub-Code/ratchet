@@ -333,11 +333,13 @@ def park(repo: Repo, slot: int, result: dict[str, object]) -> None:
     )
 
 
+GUARD_PATH = "docs/process/layers.md"
 BLOCKS: Final[dict[Ticket, dict[str, object]]] = {
     Ticket.ASKED: {"openQuestions": [{"kind": "direction", "question": "which way?"}]},
-    Ticket.GUARDED: {"guardEdits": [{"path": "docs/process/layers.md", "edit": "allow it"}]},
+    Ticket.GUARDED: {"guardEdits": [{"path": GUARD_PATH, "edit": "allow it"}]},
     Ticket.PARKED: {},
 }
+NEWER: Final = frozenset({"holds", "causes", "base"})
 
 
 @does(ActionName.DRAIN_PARKS_TICKET)
@@ -345,10 +347,10 @@ def _drain_parks_ticket(repo: Repo, change: Change) -> None:
     kind = change.after.tickets[change.slot]
     park(repo, change.slot, {"verdict": "blocked", **BLOCKS[kind]})
     if kind is Ticket.PARKED:
-        # Why: a note an older drain wrote names no kind of hold at all.
+        # Why: a note an older drain wrote names no kind of hold, no cause and no base commit.
         path = queue_notes.note_path(repo.root, repo.ticket_branch(change.slot))
         note = queue_notes.read_note(repo.root, repo.ticket_branch(change.slot))
-        queue_notes.write_note(path, {k: v for k, v in note.items() if k != "holds"})
+        queue_notes.write_note(path, {k: v for k, v in note.items() if k not in NEWER})
 
 
 @does(ActionName.DRAIN_PARKS_FOR_A_SAFEGUARD)
@@ -371,7 +373,7 @@ def _owner_answers_on_the_ticket(repo: Repo, change: Change) -> None:
 @does(ActionName.OWNER_LANDS_GUARD_EDITS)
 def _owner_lands_guard_edits(repo: Repo, _change: Change) -> None:
     repo.edits += 1
-    write(repo.root, f"docs/process/edit{repo.edits}.md", "The guard edit the run named.\n")
+    write(repo.root, GUARD_PATH, f"The guard edit the run named ({repo.edits}).\n")
     snapshot(repo.root, "chore(guards): land the guard edits the run named")
 
 
