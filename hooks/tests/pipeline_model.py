@@ -21,7 +21,8 @@ through the stage a run is at, for the charts of docs/model/pipeline.md.
 
 The transitions follow the documents: skills/method/pipeline.md, skills/feature/SKILL.md and the
 ADRs they cite (0023 on judging a rebased branch again, 0028 on the critic, 0036 on the ticket
-check, 0040 and 0045 on the size stops, 0046 on splitting a ticket).
+check, 0040 and 0045 on the size stops, 0046 on splitting a ticket, 0055 on the size read after a
+fix round, 0056 on a young project's one fix pass).
 """
 
 from __future__ import annotations
@@ -774,7 +775,7 @@ def assumed(_: State, __: str, after: State) -> bool:
 
 
 def critic_waits(before: State, name: str, after: State) -> bool:
-    """The critic runs only once the project is depended-on, while the fix loop runs one round on the review's blocking issues before and up to two on the critic's findings after."""  # noqa: E501
+    """The critic runs only once the project is depended-on, a review blocker gets one fix pass in a project that is not yet depended-on, and the fix loop runs up to two rounds on the critic's findings once it is."""  # noqa: E501
     action = named(name)
     if action.role is Role.CRITIQUE:
         return before.critic is True
