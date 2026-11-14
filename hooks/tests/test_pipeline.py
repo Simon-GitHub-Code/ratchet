@@ -487,6 +487,7 @@ def test_a_reconcile_that_takes_the_product_code_over_its_ceiling_stops_before_t
     assert ran["labels"] == ["reconcile"]
     result = ran["result"]
     assert (result["verdict"], result["tooLarge"]["stage"]) == ("blocked", "the reconcile")
+    assert result["rejudged"] is True, "a rejudge that stops as too large is still a rejudge"
     assert result["filesChanged"] == ["flags.toml"]
     assert "change-size" in ran["prompts"]["reconcile"]
     fits = {**reconciled, "changeSize": {**OVER, "lines": 1000}}

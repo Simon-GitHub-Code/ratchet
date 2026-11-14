@@ -11,7 +11,7 @@ installed. Optional environment:
 - ``DRV_KILL_AT=drop_record`` ends this process with SIGKILL where ``update`` is about to drop
   the verdict record the rebase outdated: a run killed after its rebase.
 - ``DRV_KILL_AT=discard`` ends it where ``close`` is about to remove the work tree: a landing
-  killed after the merge, with its note written or not.
+  killed after the merge, with its note written: the note comes first.
 """
 
 import os
