@@ -25,7 +25,7 @@ What it leaves out is listed [at the end](#left-out).
 | A records branch waits for the owner's merge | yes or no |
 | The glossary and the design brief | written, or not |
 | A spec not yet split | none; written; stating its conjecture |
-| Each of the two tickets | none; needs triage; agent-ready; agent-ready with a conjecture; held by a blocked run's stash; parked by the drain for open questions, for guard edits, for an owed safeguard, or by a note older than the kinds of hold; built on its branch; merged but open; resolved |
+| Each of the two tickets | none; needs triage; agent-ready; agent-ready with a conjecture; held by a blocked run's stash; parked by the drain for open questions, for guard edits, for an owed safeguard, or by a note older than the kinds of hold or than the base commit a guard hold needs; built on its branch; merged but open; resolved |
 | The tickets inherit the spec's conjecture | yes or no |
 | A safeguard is owed | yes or no |
 
@@ -58,7 +58,7 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | `answer` | ... parked by the drain for open questions | answer them on the ticket |
 | `land-guard` | ... parked for guard edits | land the guard edits on the default branch |
 | `safeguard` | ... parked for an owed safeguard | `/ratchet:safeguard` |
-| `change-ticket` | ... parked by a note older than the kinds of hold | change the ticket |
+| `change-ticket` | ... parked by a note older than the kinds of hold or the base commit | change the ticket |
 | `drain` | an unblocked ticket states a conjecture, and so does another | `/ratchet:feature` with no ticket |
 | `build` | an unblocked ticket states a conjecture | `/ratchet:feature <ticket>` |
 | `conjecture` | any other case | `/ratchet:conjecture <ticket>` |
@@ -120,7 +120,7 @@ The tests also check that:
 
 - following the advice never comes back to a state it passed, except through rest;
 - every state reaches rest by some steps;
-- each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold waits for a change to the ticket;
+- each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold, or a guard hold with no base commit, waits for a change to the ticket;
 - the real route names what the model says in every one of the 276 states;
 - on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
 - on long runs of steps, a repository that loses its commit hooks is told to install them first, whatever else is true.

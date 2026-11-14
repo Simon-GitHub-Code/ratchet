@@ -239,7 +239,12 @@ def test_a_recorded_run_reduces_to_its_measurements() -> None:
     assert m["meta"]["plugin"] == {"commit": "abc"}
     assert m["meta"]["models_seen"] == ["m"]
     assert m["stop"] == {"reason": "usable-merged", "detail": "", "minute": 10.2}
-    assert m["minutes"] == {"total": 10.2, "to_first_merge": 2.5, "to_first_usable_merge": 10.2}
+    assert m["minutes"] == {
+        "total": 10.2,
+        "to_first_merge": 2.5,
+        "to_first_feature_merge": 2.5,
+        "to_first_usable_merge": 10.2,
+    }
     assert m["app"]["starts"]
     assert m["app"]["slice_works"]
     assert m["app"]["checks"] == 2
@@ -368,3 +373,90 @@ def test_a_call_the_harness_refused_counts_and_a_prompt_takes_its_origin_from_it
     assert metrics["prompts"]["denied"] == 1
     assert (metrics["prompts"]["guard"], metrics["prompts"]["permission"]) == (1, 1)
     assert "| Calls the harness refused | 2 |" in reduce.table(metrics)
+
+
+def test_the_first_merge_of_a_feature_skips_the_adoption_and_the_init() -> None:
+    merges = [
+        {"s": 60, "kind": "merge", "branch": "chore/adopt-ratchet", "how": "hand"},
+        {"s": 120, "kind": "merge", "branch": "chore/init", "how": "hand"},
+        {"s": 300, "kind": "merge", "branch": "feature/1-save", "how": "agent"},
+    ]
+    minutes = reduce.reduce(merges)["minutes"]
+    assert (minutes["to_first_merge"], minutes["to_first_feature_merge"]) == (1.0, 5.0)
+    assert reduce.reduce(merges[:2])["minutes"]["to_first_feature_merge"] is None
+    assert reduce.reduce([])["minutes"]["to_first_feature_merge"] is None
+
+
+ASKED = {
+    "kind": "question",
+    "channel": "dialog",
+    "step": "01-adopt",
+    "header": "Build",
+    "question": "How should it be built? Each choice says what it is made of.",
+    "options": ["Plain (Recommended)", "Split"],
+    "recommended": "Plain (Recommended)",
+    "answer": "Plain (Recommended)",
+    "class": "default-able",
+}
+REPO = {
+    "s": 900,
+    "kind": "architecture",
+    "adr": {"path": "docs/adr/0002-x.md", "found": True, "complete": True, "options": 2},
+    "binding": {"section": True, "parts": [{"part": "core"}, {"part": "web"}]},
+    "features": {"specs": 2, "with_design": 1, "without_design": ["b"]},
+    "reviews": {"results": 3, "design_issues": 1, "mentions": 2},
+}
+
+
+def test_the_architecture_measures_join_the_questions_and_the_repository() -> None:
+    later = {**ASKED, "step": "05-feature", "question": "This needs a new layer. Add one?"}
+    metrics = reduce.reduce([ASKED, later, REPO])
+    found = metrics["architecture"]
+    assert found["asked"]
+    assert found["recommended"]
+    assert found["change_questions"] == 1
+    assert found["read"]
+    assert found["parts_declared"] == 2
+    assert found["adr"]["complete"]
+    assert found["features"]["with_design"] == 1
+    assert found["reviews"]["mentions"] == 2
+    text = reduce.table(metrics)
+    assert "| Architecture asked (options / recommended / one round) | 2 / yes / no |" in text
+    assert (
+        "| Architecture record landed | yes (options 2, reversal cost no, refutation no) |" in text
+    )
+    assert "| Parts declared in the binding | 2 |" in text
+    assert "| Features with a Design section | 1 of 2 |" in text
+    assert "| Reviews seen / design-axis issues / axis F mentions | 3 / 1 / 2 |" in text
+    assert "| Architecture-change questions after adoption | 1 |" in text
+
+
+def test_a_run_whose_repository_was_not_read_says_so_in_every_architecture_row() -> None:
+    metrics = reduce.reduce([])
+    assert metrics["architecture"]["read"] is False
+    assert metrics["architecture"]["parts_declared"] == 0
+    text = reduce.table(metrics)
+    assert "| Architecture asked (options / recommended / one round) | not asked |" in text
+    assert "| Architecture record landed | not read |" in text
+    assert "| Parts declared in the binding | not read |" in text
+    assert "| Features with a Design section | not read |" in text
+    assert "| Stack names the plugin introduced (owner never said) | not read |" in text
+    missing = reduce.reduce([{"s": 1, "kind": "architecture", "adr": {"found": False}}])
+    assert "| Architecture record landed | no |" in reduce.table(missing)
+    assert missing["architecture"]["reviews"] == {}
+
+
+def test_the_stack_names_the_plugin_introduced_are_counted_and_named() -> None:
+    event = {
+        "s": 5,
+        "kind": "stack-leaks",
+        "count": 2,
+        "names": ["Go", "pytest"],
+        "items": [{"name": "Go", "source": "hook", "excerpt": "go test", "count": 1}],
+    }
+    metrics = reduce.reduce([event])
+    assert metrics["stack_leaks"]["count"] == 2
+    row = "| Stack names the plugin introduced (owner never said) | 2 (Go, pytest) |"
+    assert row in reduce.table(metrics)
+    clean = reduce.reduce([{**event, "count": 0, "names": []}])
+    assert "owner never said) | 0 (none) |" in reduce.table(clean)

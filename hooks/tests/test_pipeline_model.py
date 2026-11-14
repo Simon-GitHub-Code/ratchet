@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     STRICTER,
     CEILINGED,
     MEASURED,
-    CHECKED_LATE,
     LOOP_ENDS,
     UNPUBLISHED,
     REPORTED,
@@ -56,14 +55,8 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     BOUNDED: None,
     ORDERED: None,
     STRICTER: None,
-    # 5 breaks on a reconcile over a ceiling, because the script does not measure a fix round or
-    # a reconcile. 5a holds. It is pipeline.md step 3: "After the spec and again after the
-    # implementation the script reads the gate's numbers." 5b holds too. Step 7 forces
-    # request_changes on a red check from the last builder or the review, and tiers.md puts
-    # change size in tier 1, which `check` runs in an adopted project.
-    CEILINGED: RECONCILED_OVER,
+    CEILINGED: None,
     MEASURED: None,
-    CHECKED_LATE: None,
     LOOP_ENDS: None,
     UNPUBLISHED: None,
     # 8 breaks on a dead agent, because the script raises and returns no result. 8a holds. It is
@@ -72,11 +65,12 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     REPORTED: DIES_FIRST,
     RESUMABLE: None,
     JUDGED_AGAIN: None,
-    # 10 breaks on a change the spec measures over a ceiling, which names no parts. 10a holds.
+    # 10 breaks on a change a reconcile, a fix round, the implementer or the spec measures over a
+    # ceiling, none of which names parts (the shortest is a reconcile's). 10a holds.
     # pipeline.md step 3 says the stop on the spec's estimate comes "with a proposed split" and
     # says it of no other stop, and pipeline.js tells the orchestrator "with no `proposedSplit`,
     # divide the ticket's promises yourself".
-    SPLIT: MEASURED_OVER,
+    SPLIT: RECONCILED_OVER,
     SPLIT_UNASKED: None,
     ASSUMED: None,
     CRITIC_WAITS: None,
@@ -84,9 +78,12 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     NEVER_CRASHES: None,
     LOST: None,
 }
-# Why: rule 5's break and its twin in the fix loop, carried on to a review, so the real workflow
-# shows the approval they end in.
-FIXED_OVER_AND_APPROVED = [
+# Why: a fix round and a reconcile over a ceiling, which the real workflow stops as too large.
+RECONCILED_OVER = [
+    "the orchestrator judges a branch whose rebase conflicted again",
+    "reconcile measures product code over its ceiling",
+]
+FIXED_OVER = [
     "the orchestrator starts a build",
     "preflight is green for a project that is depended-on",
     "spec fits",
@@ -94,10 +91,7 @@ FIXED_OVER_AND_APPROVED = [
     "implement is green",
     "critique finds a major it does not see fixed",
     "fix-1 measures product code over its ceiling",
-    "critique-1 finds nothing",
-    "review approves",
 ]
-RECONCILED_OVER_AND_APPROVED = [*RECONCILED_OVER, "review-again approves"]
 
 
 @functools.cache
@@ -223,30 +217,23 @@ def ending_on(test: Callable[[model.Action], bool]) -> list[tuple[model.Action, 
     return [(actions[-1], real) for actions, _, real in played()[0] if test(actions[-1])]
 
 
-def test_on_the_real_workflow_a_change_the_spec_or_the_implementation_measures_over_stops() -> None:
+def test_on_the_real_workflow_a_change_any_measuring_role_finds_over_a_ceiling_stops() -> None:
     over = ending_on(lambda last: last.role in model.MEASURED_AT and last.answer in model.OVER)
-    stage = {model.Role.SPEC: "the spec", model.Role.IMPLEMENT: "the implementation"}
+    stage = {
+        model.Role.SPEC: "the spec",
+        model.Role.IMPLEMENT: "the implementation",
+        model.Role.FIX: "fix round ",
+        model.Role.RECONCILE: "the reconcile",
+    }
     assert over
     for last, real in over:
         result = real.raw.get("result") or {}
         assert result.get("verdict") == "blocked", (last.name, real.calls, real.ending)
         too = result["tooLarge"]
-        expected = (model.OVER[last.answer].value, stage[model.MEASURED_AT[last.role]])
-        assert (too["kind"], too["stage"]) == expected, last.name
-
-
-def test_on_the_real_workflow_a_fix_or_reconcile_over_is_approved_only_on_green_checks() -> None:
-    approved = [
-        actions
-        for actions, _, real in played()[0]
-        if any(a.role in model.LATE and a.answer in model.OVER for a in actions)
-        and real.raw.get("result", {}).get("verdict") == "approve"
-    ]
-    assert approved
-    for actions in approved:
-        builder = next(a for a in reversed(actions) if a.role in model.LATE)
-        assert builder.answer is not model.Build.RED, [a.name for a in actions]
-        assert actions[-1].answer is model.Review.APPROVES, [a.name for a in actions]
+        assert (too["kind"], too["stage"].startswith(stage[model.MEASURED_AT[last.role]])) == (
+            model.OVER[last.answer].value,
+            True,
+        ), last.name
 
 
 def test_on_the_real_workflow_every_dead_agent_ends_in_an_error_that_says_to_resume() -> None:
@@ -281,8 +268,8 @@ def test_on_the_real_workflow_a_too_large_stop_ends_there_and_leaves_the_split_u
 def replays() -> dict[str, world.Played]:
     named = {
         "dies": DIES_FIRST,
-        "fixed over": FIXED_OVER_AND_APPROVED,
-        "reconciled over": RECONCILED_OVER_AND_APPROVED,
+        "fixed over": FIXED_OVER,
+        "reconciled over": RECONCILED_OVER,
         "measured over": MEASURED_OVER,
     }
     batch = world.play([walked(names) for names in named.values()])
@@ -299,17 +286,18 @@ def test_an_agent_that_dies_ends_the_run_in_an_error_and_no_result() -> None:
     }
 
 
-def test_a_change_a_fix_round_or_a_reconcile_takes_over_the_ceiling_is_approved() -> None:
-    # Why: this is an agent's answer, a size over the ceiling with a green check, and not a
-    # measured tree. On a real tree of an adopted project the size gate is one of the gates
-    # `check` runs, so that builder and the review would report the check red.
-    measured = world.BUILDS[model.Build.PRODUCT_OVER]
-    assert isinstance(measured, dict)
-    assert measured["changeSize"]["lines"] > measured["changeSize"]["ceiling"]
-    assert measured["checkPasses"] is True
-    for name in ("fixed over", "reconciled over"):
-        result = replays()[name].raw["result"]
-        assert (result["verdict"], result["forcedBy"], result["tooLarge"]) == ("approve", [], None)
+def test_a_change_a_fix_round_or_a_reconcile_takes_over_the_ceiling_stops_as_too_large() -> None:
+    # Why: ADR 0055. The size was once read after the spec and the implementation only, and
+    # these two ended in an approval on an agent's green answer.
+    for name, stage, calls in (
+        ("fixed over", "fix round 1", ("fix-1", "Fix")),
+        ("reconciled over", "the reconcile", ("reconcile", "Reconcile")),
+    ):
+        real = replays()[name]
+        assert real.calls[-1] == calls
+        result = real.raw["result"]
+        assert result["verdict"] == "blocked"
+        assert (result["tooLarge"]["kind"], result["tooLarge"]["stage"]) == ("product", stage)
 
 
 def test_a_change_measured_over_a_ceiling_stops_with_no_parts_named() -> None:
