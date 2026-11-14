@@ -27,7 +27,7 @@ jobs:
         with:
           path: | # bind: the dependency directory and every tool cache tier 0 writes
             .cache
-          key: tier0-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('pyproject.toml', 'package.json') }} # bind: lockfiles and tool configs
+          key: tier0-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }} # bind: lockfiles and tool configs
           restore-keys: |
             tier0-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
@@ -83,7 +83,7 @@ jobs:
         with:
           path: | # bind: the dependency directory and every tool cache tier 1 writes
             .cache
-          key: tier1-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('pyproject.toml', 'package.json') }} # bind: lockfiles and tool configs
+          key: tier1-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }} # bind: lockfiles and tool configs
           restore-keys: |
             tier1-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
@@ -113,7 +113,7 @@ jobs:
         with:
           path: | # bind: the dependency directory and every tool cache tier 1 writes
             .cache
-          key: tier1-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('pyproject.toml', 'package.json') }} # bind: lockfiles and tool configs
+          key: tier1-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }} # bind: lockfiles and tool configs
           restore-keys: |
             tier1-${{ runner.os }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on

@@ -12,14 +12,14 @@ other half: the gates the plugin ships, against their synthetic violations.
 
 The registry::
 
-    setup = ["pnpm install --frozen-lockfile --offline"]  # run once in each scratch copy
+    setup = ["just install"]             # run once in each scratch copy
     include = [".env.test"]              # ignored paths a gate needs that setup cannot rebuild
 
     [[bite]]
     gate = "lint"                        # the last word of the Gates row's Entry point
     name = "an unused import"
-    write = { path = "src/pkg/_bite.py", content = "import os\n" }
-    expect = "F401"                      # what the gate prints when it is red on this fault
+    write = { path = "src/pkg/_bite.src", content = "<an unused import>" }
+    expect = "<the rule's code>"         # what the gate prints when it is red on this fault
 
     [[bite]]
     gate = "perf"
@@ -30,7 +30,7 @@ The registry::
     [[bite]]
     gate = "pins"
     name = "a floating range"
-    replace = { path = "package.json", old = '"vitest": "5.1.0"', new = '"vitest": "^5.1.0"' }
+    replace = { path = "<manifest>", old = "<an exact version>", new = "<a range>" }
     expect = "floating range"
 
     [[bite]]

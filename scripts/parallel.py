@@ -14,7 +14,7 @@ Usage::
 
 * Each ``GATE`` becomes ``RUNNER GATE`` and runs in ``--root`` (the current directory). The
   entry is split like a shell line, so ``"test-shard 1/4"`` passes two words. With no
-  ``--runner`` each entry is a whole command: ``-- "ruff check ." "mypy --strict ."``.
+  ``--runner`` each entry is a whole command: ``-- "./lint ." "./types --strict"``.
 * At most ``--jobs`` gates run at a time: ``RATCHET_JOBS`` by default, else the CPU count. A
   gate that is itself parallel shares the cores with the rest; the operating system schedules
   them. On a machine that is shared, or where each gate uses every core, give a smaller number.

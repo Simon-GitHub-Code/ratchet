@@ -229,7 +229,7 @@ What the change-size gate reads to count tests apart from product code (ADR 0045
 
 ## Telemetry
 
-<The signals every entry point emits and where they go: the OpenTelemetry SDK (or the stack's equivalent) and the one module that starts it; the seam through which every route, job and command is registered, so none can be added uninstrumented; the attributes a span must carry (the route template, the outcome, never a secret or a personal identifier); the metrics and the log fields; the exporter and the collector the end-to-end environment runs. A feature's spec names the signal that shows each criterion working in production.>
+<The signals every entry point emits and where they go: the telemetry library this stack uses and the one module that starts it; the seam through which every route, job and command is registered, so none can be added uninstrumented; the attributes a span must carry (the route template, the outcome, never a secret or a personal identifier); the metrics and the log fields; the exporter and the collector the end-to-end environment runs. A feature's spec names the signal that shows each criterion working in production.>
 
 ## Feature flags
 
