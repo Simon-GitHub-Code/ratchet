@@ -28,6 +28,6 @@ A map of the repository. [The README](../README.md) says what the method is and 
 | `docs/adr/` | the plugin's own decisions; 0004 is the harness decision, made for five and since extended to Antigravity, 0017 the one that removed the presets |
 | `docs/research/` | the sources behind the stance |
 | `docs/gates.md` | every shipped gate script, its tier and the question it answers |
-| `docs/model/` | one page per state machine in the plugin (the route, the ratchet, the safeguards, a pipeline run), each held to the code by tests |
+| `docs/model/` | one page per state machine in the plugin (the route, the ratchet, the safeguards, a pipeline run, the drain and its merge), each held to the code by tests |
 | `docs/acceptance.md` | the files an acceptance tester writes and the acceptance harness reads |
 | `evals/` | the measurements: whether the stance changes how an agent works, and what the first hour asks of a solo builder |
