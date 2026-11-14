@@ -172,6 +172,9 @@ def test_a_second_drain_does_not_clean_the_first(
             assert stashes(root) == ""
             first.kill()
             first.wait()
+            assert run(root, "clean", "--all") == 2, "a program of its trees still runs"
+            service.kill()
+            service.wait()
             assert run(root, "clean", "--all") == 0, "a drain whose session is gone is not held"
             assert not tree.exists()
             assert stashes(root) == f"On {BRANCH_A}: {BRANCH_A}: interrupted run"
@@ -302,19 +305,68 @@ def test_two_drains_under_one_long_lived_process_are_told_apart(tmp_path: Path) 
     assert not tree.exists()
 
 
-def test_a_lease_is_held_while_its_drain_was_active_and_a_process_above_it_lives(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_process_above_both_commands_is_no_evidence_of_a_drain(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    held: dict[str, object] = {"chain": drain.ancestry()}
+    assert drain.rival(root, held) is None, "every process of the chain is above this command"
+
+
+def test_a_program_running_from_a_queue_tree_is_a_drain_though_its_chain_is_gone(
+    tmp_path: Path,
 ) -> None:
-    chain = drain.ancestry()
-    held: dict[str, object] = {"chain": chain}
-    assert drain.rival(held) is None, "no command after the start: nothing says it is running"
-    held["beat"] = time.time() - 60
-    assert drain.rival(held) == "its last command ran 1 minutes ago"
-    held["beat"] = time.time() - drain.LEASE_FRESH - 1
-    assert drain.rival(held) is None, "idle for hours: gone"
-    monkeypatch.setattr(drain, "process_row", lambda _pid: None)
-    held["beat"] = time.time()
-    assert drain.rival(held) is None, "every process of the drain has ended"
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    tree = drain.tree_of(root, BRANCH_A)
+    service = servers.sleeper(tree)
+    try:
+        why = drain.rival(root, {"chain": ["4194300:1"]})
+        assert why == f"process {service.pid} runs in its work trees"
+    finally:
+        service.kill()
+        service.wait()
+    assert drain.rival(root, {"chain": ["4194300:1"]}) is None, "nothing left runs in it"
+
+
+DEAD = """
+echo $$ > {state}/pid
+{clean} > {state}/clean.out 2>&1
+{open} > {state}/open.out 2>&1
+mkdir -p {tree}/src && echo "drain 1's agent is mid-build" > {tree}/src/b.py
+touch {state}/ready
+sleep 300
+"""
+
+
+def test_a_drain_whose_processes_are_all_gone_does_not_block_the_next(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    tree = drain.tree_of(root, BRANCH_A)
+    state = tmp_path / "d1"
+    state.mkdir()
+
+    def command(*argv: str) -> str:
+        return " ".join([sys.executable, str(DRIVER), *argv, "--root", str(root), "--offline"])
+
+    script = DEAD.format(
+        state=state, clean=command("clean", "--all"), open=command("open", ALPHA), tree=tree
+    )
+    subprocess.run(["setsid", "-f", "bash", "-c", script], check=True)  # noqa: S603, S607
+    while not (state / "ready").exists():
+        time.sleep(0.05)
+    shell = int((state / "pid").read_text())
+    os.kill(shell, signal.SIGKILL)
+    while (
+        drain.process_row(shell) is not None and "Z" not in Path(f"/proc/{shell}/stat").read_text()
+    ):
+        time.sleep(0.05)
+    new = subprocess.run(  # noqa: S603 # -- this interpreter, no shell
+        [sys.executable, str(DRIVER), "clean", "--all", "--root", str(root), "--offline"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert new.returncode == 0, new.stdout
+    assert not tree.exists()
+    assert stashes(root) == f"On {BRANCH_A}: {BRANCH_A}: interrupted run"
 
 
 def test_a_rebase_git_cannot_abort_stops_the_update(tmp_path: Path, capsys: Out) -> None:

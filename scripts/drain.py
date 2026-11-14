@@ -43,9 +43,12 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   left over. Which the script holds to: ``clean --all`` takes a lease naming the processes above
   it, refuses while a process of another drain on this repository is alive, and ``report`` ends
   the lease and prints the drain's token on stderr; ``--take-over`` replaces one whose drain
-  is gone for good. Two drains under one long-lived process are told apart by the lease's
-  record of commands run since it started, and by the token: ``clean --all --drain TOKEN``
-  resumes the drain that holds it. Every command that
+  is gone for good. A drain is alive while a process of its own is: one below where its chain
+  parts from the new command's, or one running a program from a queue work tree or in one. A
+  process above both commands, as the service manager is, proves nothing; so a drain whose
+  processes are all gone does not block the next, and two drains under one long-lived process
+  are told apart by the first's program still running in its tree. ``clean --all --drain TOKEN``
+  resumes the drain that holds the token. Every command that
   changes a work tree also runs under a lock of the kernel's, freed when its holder dies however
   it dies, so two commands at once (two ``open`` of one ticket) are run one at a time.
 - ``report`` writes ``.ratchet/queue/<date>-<time>.md`` and prints it: per ticket merged, waiting
@@ -131,15 +134,12 @@ LOCK_WAIT, LOCK_POLL = 30.0, 0.05
 PROC_START = 19
 DEPTH = 64
 TOKEN_BYTES = 4
-# Why: a drain's agents build for an hour at a time between its commands.
-LEASE_FRESH = 2 * 60 * 60
 OTHERS_WRITE = 0o022
 NOT_OURS = "the queue's work trees go in a directory only this user can write; remove it"
 NOT_A_TREE = "it is not a work tree of this repository or an empty directory, so it stays"
 MERGE = "merge"
 SLOWEST = 3
 LOCKED = frozenset({"open", "update", "close", "clean", "report"})
-STAMPED = frozenset({"open", "update", "close"})
 # Why: the triggers gate's red line; the kind it names is what the safeguard binds (ADR 0028).
 OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
 DEFAULT_WORDS = "the default branch"
@@ -392,32 +392,42 @@ def ancestry() -> list[str]:
     return chain
 
 
-def rival(held: dict[str, object]) -> str | None:
+def in_the_trees(root: Path, mine: set[str]) -> str | None:
+    """A live process that runs a program of a queue work tree, or runs in one; its id, or ``None``.
+
+    Processes above this command are never it. A system without ``/proc`` has none to find.
+    """
+    home = queue_home(root)
+    for entry in Path("/proc").glob("[0-9]*"):
+        try:
+            places = [(entry / "exe").readlink(), (entry / "cwd").readlink()]
+        except OSError:
+            continue
+        if entry.name not in mine and any(place.is_relative_to(home) for place in places):
+            return entry.name
+    return None
+
+
+def rival(root: Path, held: dict[str, object]) -> str | None:
     """Why the lease ``held`` names a drain that is still running, or ``None`` when it is gone.
 
-    The lease holds the processes above the command that started the drain. A process of that
-    chain which is alive and not above this command is another session's. When only processes
-    above this command are alive (two drains under one long-lived process, which no process
-    tells apart) the drain's own record decides: its commands that came after it started, which
-    stamp the lease, were run within the last ``LEASE_FRESH`` seconds.
+    A process that is above this command is no evidence: it is above the next drain's too, as the
+    user's service manager is above every session. What a drain owns is evidence. Either a live
+    process of the chain the lease holds that is below where that chain parts from this one (the
+    other session's own), or a live process running a program from a queue work tree, or in one,
+    which is what ``clean --all`` would end. With neither, the drain is dead.
     """
-    mine = set(ancestry())
-    alive = []
+    if not held:
+        return None
+    chain = ancestry()
+    mine = {entry.partition(":")[0] for entry in chain}
     for entry in queue_notes.texts(held.get("chain")):
         pid, _, start = entry.partition(":")
         row = process_row(int(pid)) if pid.isdigit() else None
-        if row is not None and row[1] == start:
-            alive.append(entry)
-    elsewhere = [entry.partition(":")[0] for entry in alive if entry not in mine]
-    if elsewhere:
-        return f"process {elsewhere[0]}"
-    beat = held.get("beat")
-    age = time.time() - beat if isinstance(beat, float) else LEASE_FRESH
-    return (
-        f"its last command ran {round(age / 60)} minutes ago"
-        if alive and age < LEASE_FRESH
-        else None
-    )
+        if entry not in chain and row is not None and row[1] == start:
+            return f"process {pid}"
+    found = in_the_trees(root, mine)
+    return f"process {found} runs in its work trees" if found else None
 
 
 def lease(root: Path, *, take_over: bool, token: str = "") -> None:
@@ -428,7 +438,7 @@ def lease(root: Path, *, take_over: bool, token: str = "") -> None:
     """
     held = queue_notes.loaded(gatelib.read_text(state_dir(root) / LEASE))
     ours = bool(token) and token == held.get("token")
-    why = None if take_over or ours else rival(held)
+    why = None if take_over or ours else rival(root, held)
     if why is not None:
         message = (
             f"another drain is running on this repository ({why}), and `clean --all` would end"
@@ -439,14 +449,6 @@ def lease(root: Path, *, take_over: bool, token: str = "") -> None:
     token = token if ours else secrets.token_hex(TOKEN_BYTES)
     queue_notes.write_note(state_dir(root) / LEASE, {"chain": ancestry(), "token": token})
     print(f"drain: {token}", file=sys.stderr)
-
-
-def stamp(root: Path) -> None:
-    """Record that a drain command ran now, if a drain holds the lease."""
-    path = state_dir(root) / LEASE
-    held = queue_notes.loaded(gatelib.read_text(path))
-    if held:
-        queue_notes.write_note(path, {**held, "beat": time.time()})
 
 
 def release(root: Path) -> None:
@@ -960,7 +962,6 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
         return 2
     branch = route.own_branch(ticket)
     with exclusive(drain.root):
-        stamp(drain.root)
         for line in merge.recover(drain.root):
             print(line)
         if recorded_merge(drain.root, branch):
@@ -1244,8 +1245,6 @@ def main(argv: list[str]) -> int:
     try:
         # Why: `land` holds the lock only at its two ends, since the merge it runs takes minutes.
         with exclusive(root) if options.action in LOCKED else contextlib.nullcontext():
-            if options.action in STAMPED:
-                stamp(root)
             return action(drain, options)
     except RefusedError as refused:
         print(f"{options.action}: {refused}" if options.action == "open" else f"drain: {refused}")

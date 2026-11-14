@@ -962,6 +962,27 @@ def test_a_promise_the_spec_role_will_not_build_is_its_question_never_a_silent_d
     assert "is that what you want" not in json.dumps(ran)
 
 
+def test_the_spec_role_designs_the_placement_and_the_review_judges_it_on_axis_f() -> None:
+    # Why: no role used a design skill, so a change could pass every axis and the gates while
+    # bypassing a seam or placing logic in the wrong layer, with nothing the owner reads to show it.
+    ran = _built(REVIEW)
+    spec = _said(ran["prompts"]["spec"])
+    assert "mattpocock-skills:codebase-design" in spec
+    assert "Design: how the feature fits the project's architecture" in spec
+    assert "architecture ADR" in spec
+    assert "the layers AGENTS.md declares" in spec
+    assert "a new layer, a new kind of storage, a new process boundary" in spec
+    assert "open question of kind `direction`" in spec.split("A change that implies")[1]
+    review = _said(ran["prompts"]["review"])
+    assert "mattpocock-skills:codebase-design" in review
+    axis = review.split("F. Design.")[1].split("The script files every")[0]
+    assert "A layer violation is a blocker" in axis
+    assert "shallow wrapper" in axis
+    assert "are minor" in axis
+    issue = ran["schemas"]["review"]["properties"]["issues"]["items"]
+    assert "design" in issue["properties"]["axis"]["enum"]
+
+
 # What the owner reads in the pull request for a case the run assumed: the case in his words, the
 # safe answer that was built, and what would show it wrong.
 ASSUMED_CASES = {
