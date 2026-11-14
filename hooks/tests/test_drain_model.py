@@ -223,11 +223,19 @@ def broken_by(path: list[str]) -> set[str]:
     return {rule for rule, holds in model.RULES.items() if not holds(before, path[-1], state)}
 
 
+# Why: a path played on a new repository reads back the same at each step, so a step another
+# replay of this run compared after the same steps is not compared again; most replays begin
+# with the same few steps, and a comparison costs as much as the drain command it follows.
+COMPARED: set[tuple[str, ...]] = set()
+
+
 def replay(tmp_path: Path, path: list[str]) -> Play:
-    """``path`` played on the model and a repository, compared after every step."""
+    """``path`` played on the model and a repository, compared at its end and after each step new to this run."""  # noqa: E501
     play = Play(tmp_path)
-    for name in path:
-        play.named(name)
+    for at, name in enumerate(path, 1):
+        steps = (*play.path, name)
+        play.named(name, compare=at == len(path) or steps not in COMPARED)
+        COMPARED.add(steps)
     return play
 
 
@@ -340,28 +348,20 @@ def test_a_landing_killed_before_its_note_is_recorded_by_the_next_drains_clean_a
     assert "Alpha" in merged.split("## Merged")[1], "the next report says it merged"
 
 
-def test_clean_records_a_merge_whose_tree_is_gone_and_a_close_is_then_refused(
-    tmp_path: Path,
-) -> None:
-    play = replay(tmp_path, [*(COUNTEREXAMPLES[ONCE] or []), "drain.py clean"])
-    assert not play.world.tree(Name.A).exists()
-    note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
-    assert (note["outcome"], note["reported"]) == ("merged", False)
-    refused = f"drain: {REF[Name.A]} merged, and a merge is not unsaid by closing it as parked\n"
-    assert play.named(PARK_A) == refused
-    assert play.world.code == 2
-
-
-def test_a_merge_no_note_says_is_closed_as_parked_and_reported_so(tmp_path: Path) -> None:
+def test_a_merge_no_note_says_is_closed_as_parked_until_clean_records_it(tmp_path: Path) -> None:
     assert broken_by(COUNTEREXAMPLES[ONCE] or []) == {ONCE}
     play = replay(tmp_path, COUNTEREXAMPLES[ONCE] or [])
     assert play.world.printed == f"closed: {REF[Name.A]}: parked\n"
     first = play.named("drain.py report").split("## Parked")
     assert "Alpha" not in first[0].split("## Merged")[1]
     assert "Alpha" in first[1].split("## Not built")[0], "a merged ticket reported as parked"
-    assert play.named("drain.py land a") == f"closed: {REF[Name.A]}: merged\n"
+    assert play.named("drain.py clean") == "", "its tree is gone, and clean records it silently"
+    note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
+    assert (note["outcome"], note["reported"]) == ("merged", False)
+    refused = f"drain: {REF[Name.A]} merged, and a merge is not unsaid by closing it as parked\n"
+    assert (play.named(PARK_A), play.world.code) == (refused, 2), "a later close is refused"
     second = play.named("drain.py report").split("## Waits for you")[0]
-    assert "Alpha" in second, "and then reported again, as merged"
+    assert "Alpha" in second, "and the merge is reported again, as merged"
 
 
 def test_a_landing_killed_between_its_note_and_its_discard_is_not_finished_by_land_again(
