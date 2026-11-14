@@ -1935,7 +1935,7 @@ def test_a_report_says_a_merge_whose_land_was_killed_alone_is_left_alone(
     assert not drain.landing_alive(root, BRANCH_A, "report")
 
 
-def test_a_merge_finding_its_land_gone_merges_nothing_and_removes_the_private_lock(
+def test_a_merge_finding_its_land_gone_merges_nothing_and_leaves_the_private_lock(
     tmp_path: Path,
 ) -> None:
     root, gate, _ = wrapped(tmp_path)
@@ -1947,7 +1947,7 @@ def test_a_merge_finding_its_land_gone_merges_nothing_and_removes_the_private_lo
     result = release(gate, land)
     assert (result["code"], result["out"]) == (2, STOPPED)
     assert git(root, "rev-parse", "main") == head
-    assert not private.exists()
+    assert private.exists(), "the merge removes nothing; clean sweeps it"
     assert "outcome" not in note(root, BRANCH_A)
 
 
@@ -1971,6 +1971,8 @@ def test_a_second_land_in_the_window_lands_once_and_the_other_merge_stops(
     merges = git(root, "log", "--merges", "--format=%s", "main")
     assert merges.count(f"Merge branch '{BRANCH_A}'") == 1
     assert note(root, BRANCH_A)["outcome"] == "merged"
+    assert len(privates(root)) == 1, "only the dead land's file is left, for clean to sweep"
+    assert run(root, "clean") == 0
     assert privates(root) == []
 
 

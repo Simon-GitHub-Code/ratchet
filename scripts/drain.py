@@ -1143,7 +1143,7 @@ def private_lock(root: Path) -> Iterator[Path]:
     The merge holds its own lock on the branch, and probes this one to learn that its ``land`` is
     gone. Neither descriptor is inherited by the merge.
     """
-    path = state_dir(root) / f"{merge.PRIVATE}{secrets.token_hex(8)}"
+    path = merge.private_lock_path(root, secrets.token_hex(8))
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, merge.OWNER_FILE)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX)
@@ -1155,8 +1155,8 @@ def private_lock(root: Path) -> Iterator[Path]:
 
 def sweep_private_locks(root: Path) -> None:
     """Remove the private lock files whose lock is free: the ``land`` that made one is gone."""
-    for path in state_dir(root).glob(f"{merge.PRIVATE}*"):
-        if not merge.lock_held(path):
+    for path in merge.state_dir(root).glob(f"{merge.PRIVATE}*"):
+        if path.is_file() and not path.is_symlink() and not merge.lock_held(path):
             path.unlink(missing_ok=True)
 
 

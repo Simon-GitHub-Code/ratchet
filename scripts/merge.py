@@ -44,10 +44,13 @@ A run holds a lock of the kernel's on its branch, its merge lock, from its first
 is skipped for ``--records``. Two merges of one branch never run at once: the second prints that a
 merge of the branch is already running, merges nothing and exits 2. A ``drain.py land`` names a
 file of its own in ``RATCHET_LANDING``, which it holds a lock on until its close. The merge, once it
-holds its lock, tries that file: when it can take it, or the file is gone, the ``land`` that started
-this merge has stopped, so the merge prints that, merges nothing, removes the file and exits 2.
-A merge run by hand sets no variable and is not probed. Both locks die with their holders, so the
-drain sees a merge while its ``land`` or the merge itself is alive.
+holds its lock, tries that file read-only: when it can take it, or the file is gone, the ``land``
+that started this merge has stopped, so the merge prints that, merges nothing and exits 2. It never
+removes, creates or changes the file the variable names: ``clean`` sweeps free private locks. A
+variable naming anything but a regular private lock file (prefix ``ratchet-landed-by-``) directly
+in the repository's state directory, a symlink included, is refused with one line, and nothing is
+merged (exit 2). A merge run by hand sets no variable and is not probed. Both locks die with their
+holders, so the drain sees a merge while its ``land`` or the merge itself is alive.
 
 With a remote named ``origin`` the script refuses: the pull request's merge job is the one that
 merges there, and a local merge could not be pushed.
@@ -66,6 +69,7 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -192,9 +196,12 @@ def locked_retrying(path: Path, tries: int, poll: float) -> Iterator[int | None]
 
 
 def lock_held(path: Path) -> bool:
-    """Whether a process holds the lock of ``path``; a file that is not there is held by none."""
+    """Whether a process holds the lock of ``path``; a file that is not there is held by none.
+
+    The file is opened read-only, never created, and a symlink is not followed.
+    """
     try:
-        descriptor = os.open(path, os.O_RDWR)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return False
     try:
@@ -204,6 +211,31 @@ def lock_held(path: Path) -> bool:
     finally:
         os.close(descriptor)
     return False
+
+
+def private_lock_path(root: Path, name: str) -> Path:
+    """The private lock file ``name`` of a ``land``: the one place such a file may be."""
+    return state_dir(root) / f"{PRIVATE}{name}"
+
+
+def landing_state(root: Path, named: str) -> str:
+    """What ``named`` in ``RATCHET_LANDING`` shows: ``alive``, ``gone`` or ``invalid``.
+
+    Only a regular file directly in the state directory with the private prefix is probed; any
+    other path, a symlink among them, is ``invalid`` and is not opened. Nothing is created,
+    changed or removed.
+    """
+    given = Path(named)
+    path = given.parent.resolve() / given.name
+    if path.parent != state_dir(root) or not path.name.startswith(PRIVATE):
+        return "invalid"
+    try:
+        shown = os.lstat(path)
+    except OSError:
+        return "gone"
+    if not stat.S_ISREG(shown.st_mode):
+        return "invalid"
+    return "alive" if lock_held(path) else "gone"
 
 
 def land(root: Path, default: str, *, old: str, new: str) -> Reason | None:
@@ -668,8 +700,11 @@ def locked_run(root: Path, branch: str, run: Callable[[Path, str], int]) -> int:
         if held is None:
             print(f"merge: a merge of `{branch}` is already running; nothing was merged")
             return 2
-        if landing is not None and not lock_held(Path(landing)):
-            Path(landing).unlink(missing_ok=True)
+        state = "alive" if landing is None else landing_state(root, landing)
+        if state == "invalid":
+            print("merge: RATCHET_LANDING names no landing of this repository; nothing was merged")
+            return 2
+        if state == "gone":
             print(
                 "merge: the land that started this merge has stopped; nothing was merged; run"
                 " land again"
