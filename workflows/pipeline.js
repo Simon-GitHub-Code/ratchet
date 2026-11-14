@@ -1650,7 +1650,7 @@ if (REJUDGE) {
     log(`Reconcile: ${conflicts.length} conflicted path(s), check=${reconcile.checkPasses}`)
     // Why: ADR 0055. Bringing in what merged meanwhile can take the product code over its ceiling.
     const reconcileStop = noRoom('the reconcile', reconcile.changeSize, false)
-    if (reconcileStop) return tooLarge(reconcileStop, spec, { filesChanged: reconcile.filesChanged, disputes: reconcile.disputes || [], checkOutput: reconcile.checkOutput })
+    if (reconcileStop) return tooLarge(reconcileStop, spec, { rejudged: true, filesChanged: reconcile.filesChanged, disputes: reconcile.disputes || [], checkOutput: reconcile.checkOutput })
   }
   phase('Review')
   const review = must(await agent(reviewPrompt(spec, true, SETTLED), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')

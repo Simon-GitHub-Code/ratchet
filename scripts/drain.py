@@ -851,19 +851,22 @@ def update(drain: Drain, ticket: preflight.Ticket) -> int:
     if current:
         print(json.dumps({"moved": False, "conflicts": []}))
         return 0
-    note = {k: v for k, v in held.items() if k != "rebasing"}
+    note = {k: v for k, v in held.items() if k not in {"rebasing", "discarding"}}
     before = str(held.get("rebasing") or "")
     head = gatelib.git(tree, "rev-parse", "HEAD") if refusal is None else None
     current = (
         refusal is None and gatelib.git(tree, "merge-base", "--is-ancestor", base, "HEAD") == ""
     )
     if current and before:
-        queue_notes.write_note(path, note)
         if head != before:
-            # Why: the run was killed after the rebase; its record is still on top.
+            # Why: the run was killed after the rebase; its record is still on top. The record is
+            # dropped before the mark is cleared: a run killed between the two is told again by
+            # the mark, and one that cleared it first would leave the outdated record to land.
             drop_record(tree)
+            queue_notes.write_note(path, note)
             print(json.dumps({"moved": True, "conflicts": []}))
             return 0
+        queue_notes.write_note(path, note)
     if current:
         print(json.dumps({"moved": False, "conflicts": []}))
         return 0
@@ -896,6 +899,10 @@ def close(  # noqa: PLR0913 -- the note's parts
 ) -> None:
     """Remove the ticket's work tree and write its note: the outcome and what the report prints."""
     branch = route.own_branch(ticket)
+    if outcome != MERGED and recorded_merge(root, branch):
+        # Why: a merge no note says yet is recorded first, so that closing it as parked or waiting
+        # is refused as it is once the note says merged.
+        record_merge_aloud(root, branch)
     prior = queue_notes.read_note(root, branch)
     if prior.get("outcome") == MERGED:
         # Why: a merge is recorded once; a later close would unsay it and the report would list
@@ -910,7 +917,10 @@ def close(  # noqa: PLR0913 -- the note's parts
     retry = outcome == WAITS and queue_notes.mechanical(reasons)
     before = prior.get("attempts")
     same = prior.get("digest") == queue_notes.digest(ticket) and isinstance(before, int)
-    attempts = (before if same and isinstance(before, int) else 0) + 1 if retry else 0
+    # Why: a note still marked as being discarded was written by a run that stopped before it
+    # removed the tree, and this run is that refusal again, not a further one.
+    counted = 0 if prior.get("discarding") else 1
+    attempts = (before if same and isinstance(before, int) else 0) + counted if retry else 0
     exhausted = retry and attempts >= queue_notes.RETRIES
     if exhausted:
         errored = all(queue_notes.code_of(r) == queue_notes.ERRORED for r in reasons)
@@ -957,7 +967,11 @@ def settle(
     change = change_of(root, merge_ready.default_ref(root), branch)
     gates = timings(tree)
     note = {
-        **{k: v for k, v in queue_notes.read_note(root, branch).items() if k != "rebasing"},
+        **{
+            k: v
+            for k, v in queue_notes.read_note(root, branch).items()
+            if k not in {"rebasing", "discarding"}
+        },
         "hold": outcome != MERGED,
         "attempts": 0,
         **who,
@@ -977,20 +991,22 @@ def settle(
     # Why: the note goes first, so a run killed between the two leaves a merge that is recorded;
     # a tree left with its work is the one thing the note learns afterwards.
     path = queue_notes.note_path(root, branch)
-    queue_notes.write_note(path, note)
+    queue_notes.write_note(path, {**note, "discarding": True})
     kept = discard(root, tree, f"{branch}: {STASHED[outcome]} run")
     stays = [f"the work tree stays at {tree}: {kept}"] if kept else []
-    if stays:
-        queue_notes.write_note(path, {**note, "reasons": [*reasons, *stays]})
+    queue_notes.write_note(path, {**note, "reasons": [*reasons, *stays]})
     return stays
 
 
 def recorded_merge(root: Path, branch: str) -> bool:
-    """Whether ``branch`` is merged and no note says so: a landing that was cut off."""
+    """Whether ``branch`` is merged and the run that landed it did not finish: a landing cut off.
+
+    Either no note says it merged, or its note does and its work tree still stands.
+    """
     note = queue_notes.read_note(root, branch)
     return (
         branch in route.merged_features(root, merge_ready.default_ref(root))
-        and note.get("outcome") != MERGED
+        and (note.get("outcome") != MERGED or tree_of(root, branch) in worktrees(root))
         and isinstance(note.get("ref"), str)
     )
 
@@ -1001,6 +1017,13 @@ def record_merge(root: Path, branch: str) -> list[str]:
     who: dict[str, object] = {n: str(note.get(n) or "") for n in ("ref", "title", "digest")}
     reason = "the merge landed, and the run that landed it stopped before it said so"
     return settle(root, {**who, "branch": branch}, outcome=MERGED, reasons=[reason])
+
+
+def record_merge_aloud(root: Path, branch: str) -> None:
+    """``record_merge``, saying so, and saying what it kept."""
+    print(f"recorded: {branch}: merged, and the run that landed it stopped before it said so")
+    for line in record_merge(root, branch):
+        print(f"kept: {line}")
 
 
 def land(drain: Drain, ticket: preflight.Ticket) -> int:
@@ -1078,8 +1101,7 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
             print(f"kept: {tree}: `{branch}` is not merged")
             continue
         if branch is not None and tree in registered and recorded_merge(root, branch):
-            for line in record_merge(root, branch):
-                print(f"kept: {line}")
+            record_merge_aloud(root, branch)
         stays = discard(root, tree, f"{branch or tree.name}: {INTERRUPTED} run")
         print(f"removed: {tree}: {why}" if stays is None else f"left: {tree}: {why}, and {stays}")
     if everything:
@@ -1096,8 +1118,7 @@ def record_orphans(root: Path, branches: list[str], registered: frozenset[Path])
     """
     for branch in branches:
         if tree_of(root, branch) not in registered and recorded_merge(root, branch):
-            for line in record_merge(root, branch):
-                print(f"kept: {line}")
+            record_merge_aloud(root, branch)
 
 
 def unmark(root: Path, branch: str) -> None:
