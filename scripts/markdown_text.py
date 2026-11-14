@@ -222,13 +222,12 @@ def padded_tables(text: str) -> str:
             at += 1
             continue
         found = _table_at(lines, at, len(lines))
-        end = found.last if found else at + 1
         if found:
             lines[found.first : found.last] = found.render(found.rows)
-            end = found.first + len(found.lines)
-        while end < len(lines) and lines[end].startswith("|"):
-            end += 1
-        at = end
+            at = found.last
+            continue
+        while at < len(lines) and lines[at].startswith("|"):
+            at += 1
     return "\n".join(lines)
 
 
