@@ -13,6 +13,8 @@ what the last critique owes), the agents and fix rounds spent, and how the run e
 is every run the abstract answers allow: the fix loop's own bound keeps it finite, so it is every
 run, not a sample. ``RULES`` is what a reader of the method expects to stay true whatever the
 agents answer; every rule is a predicate over a step ``(before, action name, after)``.
+``export()`` writes the graph and the rules as a TLA+ module, and ``summary()`` the graph seen
+through the stage a run is at, for the charts of docs/model/pipeline.md.
 
 The transitions follow the documents: skills/method/pipeline.md, skills/feature/SKILL.md and the
 ADRs they cite (0023 on judging a rebased branch again, 0028 on the critic, 0036 on the ticket
@@ -23,9 +25,12 @@ from __future__ import annotations
 
 import functools
 import re
+from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
+
+from tests import model_tla
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -89,7 +94,8 @@ class Start(Enum):
     NO_TICKET = "starts with no ticket"
     REJUDGE = "judges a rebased branch again"
     REJUDGE_CONFLICT = "judges a branch whose rebase conflicted again"
-    REJUDGE_UNNAMED = "judges a branch again without the first run's slug"
+    REJUDGE_RED = "judges a branch whose check went red again"
+    REJUDGE_MISSING = "judges a branch again without the first run's slug or spec path"
 
 
 class Preflight(Enum):
@@ -340,7 +346,8 @@ STARTS: dict[Start, State] = {
     Start.NO_TICKET: State(started=True, ending=Ending(Outcome.BLOCKED, stop=Stop.NO_TICKET)),
     Start.REJUDGE: State(started=True, rejudge=True, awaiting=Role.REVIEW_AGAIN),
     Start.REJUDGE_CONFLICT: State(started=True, rejudge=True, awaiting=Role.RECONCILE),
-    Start.REJUDGE_UNNAMED: State(
+    Start.REJUDGE_RED: State(started=True, rejudge=True, awaiting=Role.RECONCILE),
+    Start.REJUDGE_MISSING: State(
         started=True, rejudge=True, ending=Ending(Outcome.ERROR, error=REFUSED)
     ),
 }
@@ -387,7 +394,15 @@ def _ended(state: State, ending: Ending) -> State:
 
 
 def _too_large(state: State, ceiling: Ceiling, after: Role, *, parts: bool) -> State:
-    stop = Ending(Outcome.BLOCKED, Stop.TOO_LARGE, ceiling, after, parts=parts, split_unasked=True)
+    stop = Ending(
+        Outcome.BLOCKED,
+        Stop.TOO_LARGE,
+        ceiling,
+        after,
+        parts=parts,
+        split_unasked=True,
+        rejudged=state.rejudge,
+    )
     return _ended(state, stop)
 
 
@@ -521,19 +536,27 @@ def moves(state: State) -> list[Move]:
 Edge = tuple[State, str, State]
 
 
-def graph() -> tuple[frozenset[State], list[Edge]]:
+class Graph(NamedTuple):
+    """Every state reachable from ``INITIAL`` in breadth-first order, and every step."""
+
+    states: tuple[State, ...]
+    edges: tuple[Edge, ...]
+
+
+@functools.cache
+def graph() -> Graph:
     """Every state reachable from ``INITIAL`` and every step between them."""
-    seen = {INITIAL}
-    frontier = [INITIAL]
+    seen = {INITIAL: None}
+    queue = deque([INITIAL])
     edges: list[Edge] = []
-    while frontier:
-        state = frontier.pop()
+    while queue:
+        state = queue.popleft()
         for action, after in moves(state):
             edges.append((state, action.name, after))
             if after not in seen:
-                seen.add(after)
-                frontier.append(after)
-    return frozenset(seen), edges
+                seen[after] = None
+                queue.append(after)
+    return Graph(tuple(seen), tuple(edges))
 
 
 ROUND = re.compile(r"-(\d+)$")
@@ -754,3 +777,102 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "14. a failed answer is never approved and never crashes the run": never_crashes,
     "15. a dropped promise is refused and handed to the next run": lost,
 }
+
+
+def spelled(value: Enum | None) -> str:
+    return "none" if value is None else str(value.value)
+
+
+def known(value: bool | None, yes: str, no: str) -> str:  # noqa: FBT001
+    return "unknown" if value is None else (yes if value else no)
+
+
+def outcome(state: State) -> str:
+    if state.ending is None:
+        return "running"
+    return "error" if state.ending.outcome is Outcome.ERROR else state.ending.outcome.value
+
+
+ENDED_AS: dict[str, Callable[[Ending], object]] = {
+    "stop": lambda ending: spelled(ending.stop),
+    "ceiling": lambda ending: spelled(ending.ceiling),
+    "measuredAfter": lambda ending: spelled(ending.measured_after),
+    "proposesParts": lambda ending: ending.parts,
+    "splitsUnasked": lambda ending: ending.split_unasked,
+    "error": lambda ending: ending.error or "none",
+    "resume": lambda ending: ending.resume,
+    "objections": lambda ending: frozenset(objection.value for objection in ending.objections),
+    "unresolved": lambda ending: ending.unresolved,
+    "returnsLost": lambda ending: ending.lost,
+    "assumesKept": lambda ending: ending.kept,
+    "record": lambda ending: spelled(ending.record),
+    "rejudged": lambda ending: ending.rejudged,
+}
+NOT_ENDED = Ending(Outcome.ERROR)
+"""What ``ENDED_AS`` reads of a run that has not ended: every field's default."""
+
+AS_STATE: dict[str, Callable[[State], object]] = {
+    "started": lambda state: state.started,
+    "waits": lambda state: spelled(state.awaiting),
+    "rejudge": lambda state: state.rejudge,
+    "critic": lambda state: known(state.critic, "runs", "waits"),
+    "phase": lambda state: spelled(state.phase),
+    "agents": lambda state: state.agents,
+    "rounds": lambda state: state.rounds,
+    "spec": lambda state: spelled(state.spec),
+    "kept": lambda state: state.kept,
+    "built": lambda state: state.built,
+    "check": lambda state: known(state.green, "green", "red"),
+    "owed": lambda state: state.owed,
+    "silent": lambda state: state.silent,
+    "outcome": outcome,
+    **{
+        name: lambda state, read=read: read(state.ending or NOT_ENDED)
+        for name, read in ENDED_AS.items()
+    },
+}
+
+
+def export() -> model_tla.Export:
+    """Every run as a TLA+ module, with the eighteen rules, each named after its predicate.
+
+    Every rule is about a step, so each is a ``model_tla.Step``. A run that has ended has no step
+    out, so the module tells TLC that its end is no deadlock.
+    """
+    return model_tla.export(
+        "Pipeline",
+        graph(),
+        {
+            model_tla.identifier(rule.__name__.replace("_", " ")): model_tla.Step(
+                (rule.__doc__ or "").strip(), rule
+            )
+            for rule in RULES.values()
+        },
+        fields=(),
+        derived=AS_STATE,
+        action=model_tla.identifier,
+        deadlock=False,
+    )
+
+
+class Stage(NamedTuple):
+    """Where a run is, as the charts show it: the agent it waits on, or how it ended and where."""
+
+    rejudge: bool
+    critic: str
+    waits: str
+    phase: str
+    rounds: int
+    outcome: str
+    stop: str
+    resume: bool
+
+
+def stage(state: State) -> Stage:
+    return Stage(*(AS_STATE[name](state) for name in Stage._fields))
+
+
+def summary() -> model_tla.Export:
+    """The graph seen through ``stage``, small enough for the statechart tool to draw whole."""
+    seen = model_tla.summary(graph(), stage, model_tla.identifier)
+    return model_tla.export("PipelineStage", seen, {}, fields=Stage._fields, deadlock=False)

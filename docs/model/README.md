@@ -5,7 +5,9 @@ A model here is a small state machine that says what one part of the plugin shou
 | Model | Page | Module | Tests |
 | --- | --- | --- | --- |
 | The route: the next command for the owner | [route.md](route.md) | `hooks/tests/route_model.py` | `hooks/tests/test_route_model.py` |
-| The threshold ratchet: what the default branch can hold | none yet | `hooks/tests/ratchet_model.py` | `hooks/tests/test_ratchet_model.py` |
+| The threshold ratchet: what the default branch can hold | [ratchet.md](ratchet.md) | `hooks/tests/ratchet_model.py` | `hooks/tests/test_ratchet_model.py` |
+| The safeguard a project owes as it grows | [safeguard.md](safeguard.md) | `hooks/tests/safeguard_model.py` | `hooks/tests/test_safeguard_model.py` |
+| One pipeline run: what the workflow does with any answer | [pipeline.md](pipeline.md) | `hooks/tests/pipeline_model.py` | `hooks/tests/test_pipeline_model.py` |
 
 ## What a model holds
 
@@ -15,7 +17,11 @@ A model module in `hooks/tests` is pure. It reads no file and runs no git. It de
 - `graph()`, every state reachable from the start and the edges between them;
 - `RULES`, the rules by name, each one a check the tests run on the graph.
 
-A model with a page also defines `export()`, the graph and the rules as a TLA+ module, written by `hooks/tests/model_tla.py`. There each rule is a sentence, and TLA+ text or a predicate on a state.
+A model with a page also defines `export()`, the graph and the rules as a TLA+ module, written by `hooks/tests/model_tla.py`. There each rule is a sentence, and TLA+ text, a predicate on a state, or a predicate on a step.
+
+TLA+ cannot see a step that leaves every variable as it was, and such a step can break a rule: a landing the gate refuses changes nothing. So a rule on a step is checked as an invariant. The module holds each state of the graph once for each set of step rules the step into it broke. Where no such rule breaks, the module has the graph's states and steps and no more.
+
+The statechart tool draws a module of at most 500 states. A model with more also defines `summary()`: its graph seen through the few values the charts show, one state for each set of values and one step for each action between two. Its charts are drawn from the summary, and its rules checked on the whole module. The page names the SHA-256 of each module.
 
 The tests prove each rule on the graph in Python. They do not run a model checker. The export is for the charts, and for anyone who wants to check the rules again with one.
 
@@ -49,4 +55,6 @@ statechart /tmp/route-model/Route.tla --config /tmp/route-model/Route.cfg \
   --view docs/model/route/view_work.mjs --out /tmp/route-model/work
 ```
 
-Put each `chart.mmd` in its block on the page, the counts from each `report.md` beside it, and the SHA-256 on the line that names it.
+A model with a summary writes it beside the module, as `RatchetDefault.tla` beside `Ratchet.tla`. Draw its views from the summary, and run the tool once on the whole module for the rules. Above 500 states the report counts the states but not the steps. The last line of `tlc.out`, `N states generated`, counts the start and each step. It is the first run of TLC, which stops at the first rule that breaks, so for the count run the tool again with a config that names only the rules that hold.
+
+Put each `chart.mmd` in its block on the page, the counts from each `report.md` beside it, and each SHA-256 on the line that names it.

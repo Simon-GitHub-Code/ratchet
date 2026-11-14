@@ -58,7 +58,8 @@ ARGS: dict[Start, object] = {
         "branch": BRANCH,
         "rejudge": {**REJUDGE, "conflicts": ["flags.toml"]},
     },
-    Start.REJUDGE_UNNAMED: {"ref": "4", "branch": BRANCH, "rejudge": {"slug": "expiry"}},
+    Start.REJUDGE_RED: {"ref": "4", "branch": BRANCH, "rejudge": {**REJUDGE, "checkRed": True}},
+    Start.REJUDGE_MISSING: {"ref": "4", "branch": BRANCH, "rejudge": {"slug": "expiry"}},
 }
 LOCAL = {"ref": TICKET_FILE, "base": "main"}
 
@@ -335,6 +336,7 @@ def stopped(result: dict[str, Any]) -> Ending:
             stage,
             parts=too["parts"] > 0,
             split_unasked=unasked,
+            rejudged=result["rejudged"],
         )
     stops = [
         (Stop.QUESTION, result["questions"] > 0),

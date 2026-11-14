@@ -11,11 +11,15 @@ import functools
 from collections import deque
 from typing import TYPE_CHECKING
 
+from tests import model_tla
 from tests import pipeline_model as model
 from tests import pipeline_world as world
+from tests.support import PLUGIN_ROOT
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+PAGE = PLUGIN_ROOT / "docs/model/pipeline.md"
 
 (
     EVIDENCED,
@@ -78,11 +82,8 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     NEVER_CRASHES: None,
     LOST: None,
 }
-# Why: a fix round and a reconcile over a ceiling, which the real workflow stops as too large.
-RECONCILED_OVER = [
-    "the orchestrator judges a branch whose rebase conflicted again",
-    "reconcile measures product code over its ceiling",
-]
+# Why: a fix round over a ceiling, which the real workflow stops as too large, as it does the
+# reconcile of RECONCILED_OVER.
 FIXED_OVER = [
     "the orchestrator starts a build",
     "preflight is green for a project that is depended-on",
@@ -95,7 +96,7 @@ FIXED_OVER = [
 
 
 @functools.cache
-def graph() -> tuple[frozenset[model.State], list[model.Edge]]:
+def graph() -> model.Graph:
     return model.graph()
 
 
@@ -133,6 +134,10 @@ def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_pa
     assert not changed, "shortest breaks that differ from the record:\n" + "\n".join(
         f"{name}: {path}" for name, path in changed.items()
     )
+
+
+def test_the_page_was_checked_and_drawn_from_the_current_export() -> None:
+    assert not (why := model_tla.stale(PAGE, model.export(), model.summary())), why
 
 
 def test_every_rule_reads_as_one_sentence() -> None:
