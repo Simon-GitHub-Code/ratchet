@@ -8,9 +8,7 @@ long runs of actions there; each divergence keeps a strict expected failure that
 the route is fixed. The exporter is held to a stable output, and the charts to the export.
 """
 
-import hashlib
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -240,14 +238,7 @@ def test_the_exporter_writes_the_same_bytes_whatever_the_hash_seed(tmp_path: Pat
 
 
 def test_the_charts_were_drawn_from_the_current_export() -> None:
-    drawn = re.search(r"SHA-256 `([0-9a-f]{64})`", CHARTS.read_text(encoding="utf-8"))
-    now = hashlib.sha256(model.export().module.encode()).hexdigest()
-    assert drawn is not None, f"{CHARTS} names no SHA-256 of the export its charts were drawn from"
-    assert drawn.group(1) == now, (
-        "the model changed since the charts in docs/model/route.md were drawn: regenerate them"
-        " as docs/model/README.md says (python3 -m tests.model_tla tests.route_model <dir>, then"
-        f" the statechart tool on each view) and write the new SHA-256 `{now}`"
-    )
+    assert not (why := model_tla.stale(CHARTS, model.export())), why
 
 
 def follow(repo: real.Repo, world: World, outcome: int) -> tuple[World, list[Advice]]:
