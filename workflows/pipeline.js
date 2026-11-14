@@ -18,13 +18,14 @@
 // once here as the first stage, through one low-effort agent, so the pipeline cannot be
 // entered around the skill.
 //
-// The critic and the fix loop run only for a project people depend on (ADR 0028): the preflight's
+// The critic and its fix loop run only for a project people depend on (ADR 0028): the preflight's
 // `critic` field, true when the binding declares the `depended-on` life event. Before that a
-// ticket is built by spec, the ticket check, implement and review, and the merge rule is unchanged.
+// ticket is built by spec, the ticket check, implement and review, and the merge rule is unchanged,
+// except that a review's fixable blocker gets one fix pass and one more review (ADR 0056).
 
 export const meta = {
   name: 'pipeline',
-  description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> ticket check (one amend of the spec when it finds a gap) -> implement -> adversarial critique -> fix loop (only when the project is depended-on) -> independent review',
+  description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> ticket check (one amend of the spec when it finds a gap) -> implement -> adversarial critique -> fix loop (up to two rounds when the project is depended-on, one pass on a review blocker before that) -> independent review',
   whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, assumptions?, settled? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
   phases: [
     { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
@@ -41,9 +42,10 @@ export const meta = {
 // The most agents one run spawns. scripts/drain.py reads this line to state what a drain costs, so
 // it stays one JSON object on one line; a test runs the script with every agent at its worst and
 // counts them. young: preflight, spec, the ticket check with its one amend and second read,
-// implement and review. dependedOn: those, the critic and MAX_FIX_ITERATIONS rounds of fix and
+// implement and review, then one fix and a second review when the first review blocks (ADR 0056).
+// dependedOn: the first seven, the critic and MAX_FIX_ITERATIONS rounds of fix and
 // re-critique. rejudge: the reconcile agent and the second review.
-const AGENTS_AT_MOST = {"young": 7, "dependedOn": 12, "rejudge": 2}
+const AGENTS_AT_MOST = {"young": 9, "dependedOn": 12, "rejudge": 2}
 
 // ---------------------------------------------------------------------------
 // Arguments. Everything that could vary between runs comes in via args so the
@@ -65,6 +67,8 @@ let BASE = typeof ARGS.base === 'string' && ARGS.base ? ARGS.base : ''
 const ROOT = typeof ARGS.root === 'string' && ARGS.root ? ARGS.root : ''
 const PREFLIGHT_SCRIPT = typeof ARGS.preflight === 'string' && ARGS.preflight ? ARGS.preflight : ''
 const MAX_FIX_ITERATIONS = 2
+// The rounds of fix a young project gets, on a blocker the review found (ADR 0056).
+const YOUNG_FIX_ROUNDS = 1
 // A branch brought up to date behind another merge is judged again, not built again (ADR 0023):
 // the skill passes what the first run returned, and only Reconcile and Review run.
 const REJUDGE = ARGS.rejudge && typeof ARGS.rejudge === 'object' ? ARGS.rejudge : null
@@ -992,20 +996,20 @@ believe the gate, not your code, is wrong, write a gate dispute and list it in \
 If you cannot get there, return anyway with \`checkPasses: false\` and explain in \`notes\`.`
 }
 
-function fixPrompt(spec, findings, testsAdded, iteration) {
+function fixPrompt(spec, findings, testsAdded, iteration, rounds) {
   const blockingFindings = owed(findings)
   const minors = findings.filter(f => f.severity === 'minor' && !blockingFindings.includes(f))
   return `${PREAMBLE}
-You are the FIX agent (iteration ${iteration} of ${MAX_FIX_ITERATIONS}) for feature \`${spec.slug}\` of this repository.
+You are the FIX agent (round ${iteration} of ${rounds}) for feature \`${spec.slug}\` of this repository.
 ${commonRules()}
-A previous implementer built this feature and an adversarial critic found problems. You start
+A previous implementer built this feature and a critic or reviewer found problems. You start
 fresh, from the spec and the code as they are; the previous implementer's reasoning is not
 among your inputs.
 
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The spec's tests: ${JSON.stringify(spec.testFiles)}
-- Tests the critic added (some currently fail on purpose): ${JSON.stringify(testsAdded)}
+- Tests a critic added, if any (some currently fail on purpose): ${JSON.stringify(testsAdded)}
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/, and the code under change
 
 Load the \`mattpocock-skills:tdd\` skill and work one slice at a time.
@@ -1288,6 +1292,33 @@ exits 0; otherwise \`request_changes\`. The script re-derives the verdict from y
 // ---------------------------------------------------------------------------
 // Helpers (pure)
 // ---------------------------------------------------------------------------
+// One round of the fix agent, the same for the critic's findings and for a review's blockers: a
+// fresh implementer resolves the findings owed a fix, and the change-size gate is read after it
+// (ADR 0055). Returns the too-large result when the round took the change over a ceiling, else null.
+async function fixRound(findings, testsAdded, round, rounds) {
+  log(`Fix ${round}/${rounds}: ${owed(findings).length} finding(s) owed a fix`)
+  const fix = must(
+    await agent(fixPrompt(spec, findings, testsAdded, round, rounds), {
+      label: `fix-${round}`, phase: 'Fix', schema: IMPLEMENT_SCHEMA,
+    }),
+    `fix-${round}`,
+  )
+  filesChanged = union(filesChanged, fix.filesChanged)
+  disputes.push(...(fix.disputes || []))
+  // Why: ADR 0055. A fix round can take the product code over its ceiling as the implementation
+  // can; the critic's tests, when there is a critic, are already in, so the tests have all of their ceiling.
+  const stop = noRoom(`fix round ${round}`, fix.changeSize, false)
+  lastCheckOutput = fix.checkOutput
+  lastCheckPasses = fix.checkPasses === true
+  return stop ? tooLarge(stop, spec, { filesChanged, disputes, checkOutput: fix.checkOutput }) : null
+}
+
+// Whether a review's refusal is one a fix pass can answer: it found blockers or majors in the
+// change, and none of them is the ticket's own promise lost or an input case left undecided.
+function fixableByReview(review) {
+  return review.verdict !== 'approve' && blocking(review.issues).length > 0 && ticketIssues(review).length === 0
+}
+
 // The stop for a change with no room left under a ceiling, or null. `stage` is the role that just
 // returned. The product lines may fill their ceiling; the test lines two thirds of theirs while the
 // critic's tests are still to come.
@@ -1807,21 +1838,8 @@ if (CRITIC) {
   phase('Fix')
   while (owed(critique.findings).length > 0 && iterations < MAX_FIX_ITERATIONS) {
     iterations += 1
-    log(`Fix ${iterations}/${MAX_FIX_ITERATIONS}: ${owed(critique.findings).length} finding(s) owed a fix`)
-    const fix = must(
-      await agent(fixPrompt(spec, critique.findings, critique.testsAdded, iterations), {
-        label: `fix-${iterations}`, phase: 'Fix', schema: IMPLEMENT_SCHEMA,
-      }),
-      `fix-${iterations}`,
-    )
-    filesChanged = union(filesChanged, fix.filesChanged)
-    disputes.push(...(fix.disputes || []))
-    // Why: ADR 0055. A fix round can take the product code over its ceiling as the implementation
-    // can; the critic's tests are already in, so the tests have all of their ceiling.
-    const fixStop = noRoom(`fix round ${iterations}`, fix.changeSize, false)
-    if (fixStop) return tooLarge(fixStop, spec, { filesChanged, disputes, checkOutput: fix.checkOutput })
-    lastCheckOutput = fix.checkOutput
-    lastCheckPasses = fix.checkPasses === true
+    const stop = await fixRound(critique.findings, critique.testsAdded, iterations, MAX_FIX_ITERATIONS)
+    if (stop) return stop
     critique = must(
       await agent(critiquePrompt(spec, filesChanged, critique), {
         label: `critique-${iterations}`, phase: 'Fix', schema: CRITIQUE_SCHEMA,
@@ -1843,7 +1861,18 @@ else if (CRITIC && iterations === 0) log('No blocking findings; fix loop skipped
 // Phase 5: Review (independent)
 // ---------------------------------------------------------------------------
 phase('Review')
-const review = must(await agent(reviewPrompt(spec, false, settled), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
+let review = must(await agent(reviewPrompt(spec, false, settled), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
+// Why: ADR 0056. A project nobody depends on has no fix loop, and a blocker the review found in a
+// young project's first feature parked a ticket one pass would have closed. The same fix round runs
+// once on the review's blockers, then the review again; what it still refuses is parked as before.
+if (!CRITIC && fixableByReview(review)) {
+  iterations += 1
+  const stop = await fixRound(review.issues, [], iterations, YOUNG_FIX_ROUNDS)
+  if (stop) return stop
+  phase('Review')
+  review = must(await agent(reviewPrompt(spec, false, settled), { label: `review-${iterations}`, phase: 'Review', schema: REVIEW_SCHEMA }), `review-${iterations}`)
+  log(`Re-review after the one fix pass: ${review.verdict}`)
+}
 // Why: the drain reads the owed kind from this output (scripts/drain.py OWED_RED). The reviewer
 // reports its own run of check, which may not repeat the line the implementer was stopped on.
 const builderOutput = lastCheckOutput
