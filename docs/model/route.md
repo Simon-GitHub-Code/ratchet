@@ -2,7 +2,7 @@
 
 `scripts/route.py` reads the checkout and names the one command the owner types next. [The route](../../skills/method/route.md) says what it names in each case. This page writes that down as a state machine: the states the route can tell apart, what it names in each, the steps that lead from one state to the next, and the rules the steps keep.
 
-The model is `hooks/tests/route_model.py`. The tests in `hooks/tests/test_route_model.py` prove the rules on it and ask the real route in each of its states.
+The model is `hooks/tests/route_model.py`. The tests in `hooks/tests/test_route_model.py` prove the rules on it, take each of its steps on a real repository, and ask the real route after each.
 
 ## Scope
 
@@ -30,12 +30,15 @@ What it leaves out is listed [at the end](#left-out).
 | A safeguard is owed | yes or no |
 | An architecture review is owed | yes or no |
 | An upgrade left rows an agent fills | yes or no |
+| The architecture | never asked, as before adoption and after an adoption by a plugin from before ADR 0049; owed since an upgrade; recorded |
 
-From an empty directory the model reaches 448 states and 1118 steps. Three of the states are at rest: adopted, nothing unfinished, nothing owed, and every ticket resolved or none written. At rest the route names the next spec.
+From an empty directory the model reaches 1223 states and 2917 steps. Six of the states are at rest: adopted, nothing unfinished, nothing owed, and every ticket resolved or none written; three with the architecture recorded and three with it never asked. At rest the route names the next spec.
+
+The architecture takes three values because each opens other steps. `/ratchet:adopt` asks it and records it (ADR 0049), so it is recorded from the adoption on. An adoption by an older plugin asked nothing, and the route reads nothing of that: it says the same as where the architecture is recorded. They part at an upgrade, which owes the architecture where it was never asked and owes nothing more where it is recorded. While it is owed the route names `/ratchet:architecture`, and recording it is the only step that ends that. In 645 states the architecture is recorded, in 406 it was never asked, and in 172 it is owed.
 
 ## What the route names
 
-The route asks in this order, and the first case that applies is its answer. Each answer is a label. There are 26 labels; `safeguard` is named in two places.
+The route asks in this order, and the first case that applies is its answer. Each answer is a label. There are 27 labels; `safeguard` is named in two places.
 
 | Label | When | What it names |
 | --- | --- | --- |
@@ -51,6 +54,7 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | `fill` | an upgrade left rows an agent writes from the repository | `/ratchet:fill` |
 | `review` | an architecture review is owed | `/ratchet:architecture` |
 | `safeguard` | a safeguard is owed | `/ratchet:safeguard` |
+| `architecture` | an upgrade left the architecture owed | `/ratchet:architecture`, offering beside it the step it would otherwise name |
 | `grill` | no glossary or design brief | `/mattpocock-skills:grill-with-docs` |
 | `triage` | no agent-ready ticket, and an unblocked one needs triage | agree that ticket |
 | `conjecture-spec` | no agent-ready ticket, and a spec with no conjecture | `/ratchet:conjecture` on the spec |
@@ -69,14 +73,15 @@ The route asks in this order, and the first case that applies is its answer. Eac
 
 ## Steps
 
-36 steps change the state. The owner's and an agent's steps each follow one label. The others are things that happen: a command that stops part-way, a run that blocks, a park, an edit.
+38 steps change the state. The owner's and an agent's steps each follow one label. The others are things that happen: a command that stops part-way, a run that blocks, a park, an edit.
 
 | Step | Follows |
 | --- | --- |
 | you run `/ratchet:init` | `init` |
 | init stops before its questions | |
 | you set up the tracker | `tracker` |
-| you run `/ratchet:adopt` | `adopt` |
+| you run `/ratchet:adopt`, which records the architecture | `adopt` |
+| an adoption by a plugin from before the architecture was asked | |
 | the adoption stops part-way: on its branch before the pin, committed; or after the pin, uncommitted | |
 | an agent installs the hooks | `hooks` |
 | you write the glossary and the brief, uncommitted | `grill` |
@@ -98,11 +103,12 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | you change the ticket | `change-ticket` |
 | you mark the merged ticket resolved | `resolve` |
 | a new kind of code arrives, and a safeguard is owed | |
-| an upgrade leaves rows for an agent to fill | |
+| an upgrade leaves rows for an agent to fill, and the architecture owed where it was never asked | |
 | an agent fills the rows | `fill` |
 | a kind of code that reopens the architecture arrives, and a review is owed | |
 | an agent lands the architecture review | `review` |
 | an agent binds the safeguard | `safeguard` |
+| you run `/ratchet:architecture`: the record and the parts on a branch, whose merge is yours | `architecture` |
 | someone edits code | |
 | an agent commits on a branch | `commit` |
 | the branch merges | `merge` |
@@ -112,7 +118,7 @@ The route asks in this order, and the first case that applies is its answer. Eac
 
 ## Rules
 
-The first three rules are on what the pages say. The last two are on what the real route names.
+The first three rules are on what the pages say, and the next two on what the real route names. The last four are on the architecture an upgrade leaves owed, on what the pages say. Each holds in Python and in TLC, on every state.
 
 | Rule | Says | On the model |
 | --- | --- | --- |
@@ -121,16 +127,27 @@ The first three rules are on what the pages say. The last two are on what the re
 | `FollowingAdviceLowersRank` | Each step the route names gets nearer to having nothing left to finish. | holds |
 | `RealAdviceCanBeFollowed` | The step the real route names can be taken. | holds |
 | `FollowingRealAdviceLowersRank` | Each step the real route names gets nearer to having nothing left to finish. | holds |
+| `ArchitectureNamedExactlyWhenOwed` | The owed architecture is named exactly when the ledger owes it and nothing named before it is open. | holds |
+| `OwedArchitectureNeverHidesTheWork` | Where the owed architecture is named, the step the route would otherwise name can be taken. | holds |
+| `OnlyAnUpgradeOwesTheArchitecture` | Only an upgrade leaves the architecture owed; an adoption never does. | holds |
+| `OnlyRecordingEndsTheOwedArchitecture` | Recording the architecture is the only step that ends it being owed. | holds |
 
-The rank of a state is the longest run of advised steps from it to rest. The highest rank is 21.
+The rank of a state is the longest run of advised steps from it to rest. The highest rank is 23.
+
+`ArchitectureNamedExactlyWhenOwed` names what comes before the architecture field by field, apart from the order the model asks in: the setup, the hooks, the checkout, a records branch, rows to fill, a review and a safeguard. So a change of that order breaks it. In 72 states the route names the owed architecture, and the step it would otherwise name is a build in 7 of them and the drain in 2.
 
 The tests also check that:
 
 - following the advice never comes back to a state it passed, except through rest;
 - every state reaches rest by some steps;
 - each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold, or a guard hold with no base commit, waits for a change to the ticket;
-- the real route names what the model says in every one of the 448 states;
+- on a real repository, the real route names what the model says after every one of the 2917 steps, each taken from its source state as the shortest path from an empty directory builds it;
+- where the real route names the owed architecture, its `then:` names the step it names once the architecture is no longer owed, and its `why:` offers carrying on with it; that step is the one the model gives beneath;
+- where the real route names a safeguard, its `then:` names the step it names once the rows are bound, which is the owed architecture exactly where the model owes one, and its `why:` still offers carrying on with the work;
 - on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
+- on a real repository, the architecture check finds nothing after `/ratchet:adopt`, and the upgrade's code then owes no architecture;
+- on a real repository an older plugin adopted, the upgrade's code owes exactly what the architecture check finds, the route names the fill, then `/ratchet:architecture`, then its branch's merge, and the check finds nothing after;
+- on a real repository that owes the architecture, a review and a safeguard that arrive beside it are each named before it;
 - a drain note older than a blocked run's stash, or one with no base commit, does not release the run;
 - on long runs of steps, a repository that loses its commit hooks is told to install them first, whatever else is true.
 
@@ -142,15 +159,17 @@ There are none. The model was written with one, a guard hold that outlived the e
 
 ## Charts
 
-The charts were drawn from the export with SHA-256 `b296393e5d1802958208bf4a7dc8a0e91727646fb35b89748d5507a8d36d4896`.
+The rules were checked on `Route.tla`, SHA-256 `90d623d2743761ce747ffda33a66f379f8d311a32e0e518ca0180dac8a208fe4`. TLC reached 1223 states. Its last line counts 2918 states generated: the start and 2917 steps. All nine rules hold, and nothing deadlocks.
 
-Each chart gives each state of the model one label, and draws an arrow where a step changes the label. A step that keeps the label is not drawn, except on the path to a broken rule; no rule breaks, so the charts have no such path and no legend. Each chart's report says that TLC reached 448 states and 1118 steps, that all five rules hold, and that nothing deadlocks.
+That module is too large for the statechart tool to draw. The charts are drawn from `RouteShown.tla`, SHA-256 `7ea6372cadb35428d77abd98d2a059f8e4c8466be73b68bfc913f766ba6c8168`: the same graph seen through what the charts show, which is what the route names, what it would name beneath, the checkout, and what is owed. Each chart's report says that TLC reached 349 states and 1045 steps there, and that nothing deadlocks.
+
+Each chart gives each of those states one label, and draws an arrow where a step changes the label. A step that keeps the label is not drawn. No rule breaks, so the charts have no path to a broken rule and no legend.
 
 ### The work
 
-What the route names once nothing in the checkout is unfinished, no records branch waits and no rows to fill, safeguard or review is owed. Four labels share one state: the drain's three kinds of park and the park for a safeguard are "Release the ticket the drain parked". `build` and `drain` are "Build the agent-ready tickets". A state where the real route names something else would say so after "yet the route names"; none does.
+What the route names once nothing in the checkout is unfinished, no records branch waits and no rows to fill, safeguard, review or architecture is owed. Four labels share one state: the drain's three kinds of park and the park for a safeguard are "Release the ticket the drain parked". `build` and `drain` are "Build the agent-ready tickets". A state where the real route names something else would say so after "yet the route names"; none does.
 
-16 states and 28 arrows. It does not draw the 632 steps that keep the label, which are most of the checkout's steps.
+16 states and 28 arrows. It does not draw the 703 steps that keep the label, which are most of the checkout's steps.
 
 ```mermaid
 ---
@@ -176,31 +195,31 @@ stateDiagram-v2
   [*] --> s0
   s0 --> s1: you run /ratchet:init
   s1 --> s2: you set up the tracker
-  s2 --> s3: you run /ratchet:adopt or the adoption stops part-way
+  s2 --> s3: you run /ratchet:adopt or an older plugin's adoption or the adoption stops part-way
   s3 --> s4: an agent installs the hooks
   s4 --> s5: you write the glossary and brief
   s5 --> s6: you write a spec
   s6 --> s7: you state the spec's conjecture
   s6 --> s8: you split the spec
   s7 --> s8: you split the spec
+  s8 --> s5: you finish a ticket yourself
   s8 --> s9: you agree a ticket
   s8 --> s10: you agree a ticket
+  s8 --> s11: you agree a ticket
   s9 --> s11: you state the ticket's conjecture
   s10 --> s9: you agree a ticket or you finish a ticket yourself
-  s8 --> s5: you finish a ticket yourself
-  s8 --> s11: you agree a ticket
+  s10 --> s11: you finish a ticket yourself or you agree a ticket
   s11 --> s12: an agent builds the ticket or the build stops part-way
   s11 --> s13: the build run blocks
   s11 --> s14: the drain builds and merges a ticket or the drain merges one and parks the next for a safeguard
   s11 --> s15: the drain parks a ticket
-  s10 --> s11: you finish a ticket yourself or you agree a ticket
   s12 --> s14: the branch merges
   s13 --> s11: you answer the blocked run
   s14 --> s8: you mark the ticket resolved
-  s15 --> s11: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
+  s14 --> s11: you mark the ticket resolved
   s14 --> s9: you mark the ticket resolved
   s14 --> s5: you mark the ticket resolved
-  s14 --> s11: you mark the ticket resolved
+  s15 --> s11: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
   s14 --> s15: you mark the ticket resolved
 ```
 
@@ -208,7 +227,7 @@ stateDiagram-v2
 
 What is unfinished in the checkout, which the route names before any work.
 
-7 states and 14 arrows. It does not draw the 662 steps that keep the label: the setup, the tickets, the safeguards and the reviews.
+7 states and 14 arrows. It does not draw the 501 steps that keep the label: the setup, the tickets, and what is owed.
 
 ```mermaid
 ---
@@ -223,12 +242,12 @@ stateDiagram-v2
   s5: A records branch waits for your merge
   s6: A landing run stopped part-way
   [*] --> s0
-  s0 --> s1: the adoption stops part-way or an agent builds the ticket
+  s0 --> s1: the adoption stops part-way or you run /ratchet:architecture or an agent builds the ticket
   s0 --> s2: the adoption stops part-way or the build stops part-way
   s1 --> s0: you run /ratchet:adopt or the branch merges
   s1 --> s2: the adoption stops part-way or someone edits code
-  s0 --> s3: you write the glossary and brief or someone edits code
   s2 --> s1: an agent commits on a branch
+  s0 --> s3: you write the glossary and brief or someone edits code
   s3 --> s1: an agent commits on a branch
   s0 --> s4: you write a spec or you state the spec's conjecture or you split the spec or you mark the ticket resolved
   s4 --> s0: an agent lands the records
@@ -243,14 +262,14 @@ stateDiagram-v2
 
 Rows an upgrade left for an agent to fill are named first of these, and no feature or drain starts until they are written (ADR 0050); the model takes the feature run and the drain away while they are owed. A safeguard or an architecture review that is owed is named before the next feature, and after anything unfinished in the checkout. A review comes before a safeguard (ADR 0052): with both owed, landing the review leaves the safeguard named.
 
-7 states and 13 arrows. It does not draw the 750 steps that keep the label.
+7 states and 13 arrows. It does not draw the 770 steps that keep the label.
 
 ```mermaid
 ---
 title: "Fills, safeguards and reviews: named before the next feature, never instead of it"
 ---
 stateDiagram-v2
-  s0: None owed
+  s0: No fill, review or safeguard owed
   s1: Rows to fill: the route names it
   s2: Review owed: the route names it
   s3: Owed: the route names it
@@ -262,15 +281,51 @@ stateDiagram-v2
   s0 --> s2: a kind that reopens the architecture arrives
   s0 --> s3: a new kind of code arrives or the drain merges one and parks the next for a safeguard
   s1 --> s0: an agent fills the rows
-  s1 --> s4: you write a spec or you state the spec's conjecture or you split the spec
+  s1 --> s4: you write a spec or you run /ratchet:architecture or you state the spec's conjecture or you split the spec
   s2 --> s0: an agent lands the architecture review
   s2 --> s5: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way or you mark the ticket resolved
   s3 --> s0: an agent binds the safeguard
-  s3 --> s6: you write a spec or you mark the ticket resolved or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way
-  s4 --> s1: an agent lands the records or you merge the records branch
+  s3 --> s6: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way or you mark the ticket resolved or you run /ratchet:architecture
+  s4 --> s1: an agent lands the records or the branch merges or you merge the records branch
   s5 --> s2: an agent lands the records or you merge the records branch or the branch merges
   s6 --> s3: an agent lands the records or you merge the records branch or the branch merges
   s2 --> s3: an agent lands the architecture review
+```
+
+### The architecture
+
+`/ratchet:adopt` records the architecture, and an adoption by an older plugin never asked it. An upgrade owes it where it was never asked (ADR 0049). The route names it after the rows to fill, a review and a safeguard, and offers beside it the step it would otherwise name, so it never hides a build or the drain. `/ratchet:architecture` leaves the record on a branch whose merge is the owner's: this chart draws that as recorded, and the checkout's chart draws the merge.
+
+7 states and 15 arrows. It does not draw the 957 steps that keep the label.
+
+```mermaid
+---
+title: "The architecture: asked at adoption, owed after an upgrade, never instead of the work"
+---
+stateDiagram-v2
+  s0: Not adopted yet
+  s1: Recorded
+  s2: Never asked: an older plugin adopted
+  s3: Owed: the rows to fill come first
+  s4: Owed: unfinished work comes first
+  s5: Owed: the route names it
+  s6: Owed: a safeguard comes first
+  [*] --> s0
+  s0 --> s1: you run /ratchet:adopt or the adoption stops part-way
+  s0 --> s2: an older plugin's adoption
+  s2 --> s3: an upgrade leaves rows for an agent to fill
+  s3 --> s4: you write a spec or you state the spec's conjecture or you split the spec
+  s3 --> s5: an agent fills the rows
+  s3 --> s1: you run /ratchet:architecture
+  s4 --> s3: an agent lands the records or you merge the records branch
+  s5 --> s1: you run /ratchet:architecture
+  s5 --> s4: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way or you mark the ticket resolved
+  s4 --> s5: an agent lands the records or you merge the records branch or the branch merges
+  s5 --> s6: the drain merges one and parks the next for a safeguard
+  s6 --> s5: an agent binds the safeguard
+  s6 --> s4: you mark the ticket resolved
+  s6 --> s1: you run /ratchet:architecture
+  s4 --> s6: an agent lands the records or you merge the records branch
 ```
 
 ## Left out
@@ -287,6 +342,7 @@ stateDiagram-v2
 - A note a drain wrote with its kinds of hold but before it recorded the default branch's commit. Landing its guard edits does not release it, and the route names them again; a change to the ticket does.
 - A kind that reopens the architecture and owes rows of its own as well, a declared life event that reopens it, and a ticket the drain parks while a review is owed. The model's arrival owes the review alone; `test_architecture_review.py` holds the route's order where rows are owed too, the review and then the safeguard, and the release of such a park.
 - Rows to fill owed together with a safeguard or a review. The model's upgrade arrives at rest and leaves rows to fill alone; `test_route.py` holds the route's order where they are owed together.
-- An architecture an upgrade left owed in `quality/owed.toml`, which the route names after an owed safeguard and in the same way (ADR 0049). The model's repositories never owe one.
+- A review or a new kind that arrives while the architecture is owed. The model's arrivals come at rest; a test walks a review and a safeguard that arrive beside it on a real repository. A safeguard beside it is in the model, from the drain.
+- An adoption by an older plugin that stops part-way, an upgrade that owes the architecture and no rows to fill, and an architecture recorded a second time to revisit it. An upgrade owes the architecture once: after it is recorded, an upgrade owes none.
 - The `also:` lines: signs of a life event, and standing answers.
 - Hooks lost after the setup. The model installs them once; the stateful test takes them away every seventh step and checks that the route names them first.

@@ -92,6 +92,19 @@ class Ticket(StrEnum):
     RESOLVED = "resolved"
 
 
+class Architecture(StrEnum):
+    """The architecture's record (ADR 0049).
+
+    Not asked: no decision record and no declared parts, before adoption or after an adoption by
+    a plugin from before the architecture was asked; owed: an upgrade wrote the ``architecture``
+    check's entries in ``quality/owed.toml``; recorded: the record and the binding's parts exist.
+    """
+
+    UNASKED = "unasked"
+    OWED = "owed"
+    RECORDED = "recorded"
+
+
 class Advice(StrEnum):
     """What the route tells the owner: one label per distinct next step."""
 
@@ -107,6 +120,7 @@ class Advice(StrEnum):
     FILL = "fill"
     REVIEW = "review"
     SAFEGUARD = "safeguard"
+    ARCHITECTURE = "architecture"
     GRILL = "grill"
     TRIAGE = "triage"
     CONJECTURE_SPEC = "conjecture-spec"
@@ -130,6 +144,7 @@ class ActionName(StrEnum):
     INIT_STOPS = "InitStops"
     OWNER_SETS_UP_TRACKER = "OwnerSetsUpTracker"
     OWNER_ADOPTS = "OwnerAdopts"
+    OLDER_PLUGIN_ADOPTS = "OlderPluginAdopts"
     ADOPTION_STOPS = "AdoptionStops"
     AGENT_INSTALLS_HOOKS = "AgentInstallsHooks"
     OWNER_GRILLS = "OwnerGrills"
@@ -156,6 +171,7 @@ class ActionName(StrEnum):
     KIND_THAT_REOPENS_THE_ARCHITECTURE_ARRIVES = "KindThatReopensTheArchitectureArrives"
     AGENT_LANDS_THE_REVIEW = "AgentLandsTheReview"
     AGENT_BINDS_SAFEGUARD = "AgentBindsSafeguard"
+    OWNER_RECORDS_ARCHITECTURE = "OwnerRecordsArchitecture"
     SOMEONE_EDITS_CODE = "SomeoneEditsCode"
     AGENT_COMMITS_ON_A_BRANCH = "AgentCommitsOnABranch"
     BRANCH_MERGES = "BranchMerges"
@@ -181,7 +197,8 @@ class World:
     design brief are written. ``inherits``: the tickets were split from a spec that states its
     conjecture, so none needs one of its own. ``owes``: a safeguard is owed. ``reviews``: an
     architecture review is owed (ADR 0052). ``fills``: an upgrade left rows an agent writes from
-    the repository alone (ADR 0050).
+    the repository alone (ADR 0050). ``architecture``: whether the architecture is recorded, owed
+    since an upgrade, or not yet asked (ADR 0049).
     """
 
     setup: Setup = Setup.BARE
@@ -196,6 +213,7 @@ class World:
     owes: bool = False
     reviews: bool = False
     fills: bool = False
+    architecture: Architecture = Architecture.UNASKED
 
 
 def adopted(world: World) -> bool:
@@ -225,6 +243,7 @@ def rest(world: World) -> bool:
         and not world.owes
         and not world.reviews
         and not world.fills
+        and world.architecture is not Architecture.OWED
         and all(ticket in CLOSED for ticket in world.tickets)
     )
 
@@ -293,8 +312,9 @@ def _no_ticket(world: World) -> bool:
 
 
 # The order is the order ``route.decide`` asks: setup, an unfinished change, the records, the rows
-# an upgrade left for an agent to fill, the architecture review, the safeguard, then the tickets.
-# The last rule holds for any world, so the chain is total.
+# an upgrade left for an agent to fill, the architecture review, the safeguard, the architecture an
+# upgrade left owed, then the glossary and the tickets. The last rule holds for any world, so the
+# chain is total.
 CHAIN: Final = (
     Rule(Advice.INIT, lambda w: w.setup in {Setup.BARE, Setup.STARTED}),
     Rule(Advice.TRACKER, lambda w: w.setup is Setup.NAMED),
@@ -308,6 +328,7 @@ CHAIN: Final = (
     Rule(Advice.FILL, lambda w: w.fills),
     Rule(Advice.REVIEW, lambda w: w.reviews),
     Rule(Advice.SAFEGUARD, lambda w: w.owes),
+    Rule(Advice.ARCHITECTURE, lambda w: w.architecture is Architecture.OWED),
     Rule(Advice.GRILL, lambda w: not w.foundation),
     Rule(Advice.TRIAGE, lambda w: _no_ticket(w) and triage_waits(w)),
     Rule(Advice.CONJECTURE_SPEC, lambda w: _no_ticket(w) and w.spec is Spec.BARE),
@@ -339,7 +360,8 @@ def beneath(world: World) -> str:
     if Ticket.BUILT in world.tickets:
         return "building"
     clean = replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False)
-    return advice(replace(clean, owes=False, reviews=False, fills=False))
+    recorded = replace(clean, architecture=Architecture.RECORDED)
+    return advice(replace(recorded, owes=False, reviews=False, fills=False))
 
 
 @dataclass(frozen=True)
@@ -434,7 +456,20 @@ def _owner_sets_up_tracker(world: World) -> Iterator[World]:
 @action(ActionName.OWNER_ADOPTS, Advice.ADOPT)
 def _owner_adopts(world: World) -> Iterator[World]:
     if world.setup in {Setup.TRACKED, Setup.ADOPTING}:
-        yield replace(world, setup=Setup.BOUND, head=Head.MAIN, tree=Tree.CLEAN)
+        yield replace(
+            world,
+            setup=Setup.BOUND,
+            head=Head.MAIN,
+            tree=Tree.CLEAN,
+            architecture=Architecture.RECORDED,
+        )
+
+
+@action(ActionName.OLDER_PLUGIN_ADOPTS)
+def _older_plugin_adopts(world: World) -> Iterator[World]:
+    """An adoption by a plugin from before ADR 0049, which asked no architecture."""
+    if world.setup is Setup.TRACKED:
+        yield replace(world, setup=Setup.BOUND)
 
 
 @action(ActionName.ADOPTION_STOPS)
@@ -443,7 +478,13 @@ def _adoption_stops(world: World) -> Iterator[World]:
     if world.setup is Setup.TRACKED:
         yield replace(world, setup=Setup.ADOPTING, head=Head.WORK)
     if world.setup in {Setup.TRACKED, Setup.ADOPTING}:
-        yield replace(world, setup=Setup.BOUND, head=Head.WORK, tree=Tree.CODE)
+        yield replace(
+            world,
+            setup=Setup.BOUND,
+            head=Head.WORK,
+            tree=Tree.CODE,
+            architecture=Architecture.RECORDED,
+        )
 
 
 @action(ActionName.AGENT_INSTALLS_HOOKS, Advice.HOOKS)
@@ -615,8 +656,12 @@ per_ticket(
 
 @action(ActionName.UPGRADE_LEAVES_ROWS_TO_FILL)
 def _upgrade_leaves_rows_to_fill(world: World) -> Iterator[World]:
+    """An upgrade at rest: rows to fill, and the architecture where none was asked (ADR 0049)."""
     if rest(world) and world.tickets == (Ticket.RESOLVED, Ticket.RESOLVED):
-        yield replace(world, fills=True)
+        owed = world.architecture is Architecture.UNASKED
+        yield replace(
+            world, fills=True, architecture=Architecture.OWED if owed else world.architecture
+        )
 
 
 @action(ActionName.AGENT_FILLS_ROWS, Advice.FILL)
@@ -654,6 +699,17 @@ def _agent_binds_safeguard(world: World) -> Iterator[World]:
     if calm(world) and world.owes:
         first, second = (Ticket.STATED if t is Ticket.OWED else t for t in world.tickets)
         yield replace(world, owes=False, tickets=(first, second))
+
+
+@action(ActionName.OWNER_RECORDS_ARCHITECTURE, Advice.ARCHITECTURE)
+def _owner_records_architecture(world: World) -> Iterator[World]:
+    """``/ratchet:architecture``: the record, the parts and the settled ledger, on a branch.
+
+    Why the branch is left to merge: the record and the binding are guard paths, so the merge
+    judge leaves the merge to the owner.
+    """
+    if calm(world) and world.architecture is Architecture.OWED:
+        yield replace(world, architecture=Architecture.RECORDED, head=Head.WORK)
 
 
 @action(ActionName.SOMEONE_EDITS_CODE)
@@ -780,6 +836,40 @@ def lowers_rank(label: str) -> str:
     return f"[][(rank > 0 /\\\n{following(label)}) => rank' < rank]_vars"
 
 
+def above_architecture_open(world: World) -> bool:
+    """Whether anything the route names before an owed architecture is open in ``world``.
+
+    Said apart from ``CHAIN``, field by field, so a change of the chain's order is a change here.
+    """
+    return not (
+        adopted(world)
+        and (world.head, world.tree, world.parked) == (Head.MAIN, Tree.CLEAN, False)
+        and not (world.fills or world.reviews or world.owes)
+    )
+
+
+ABOVE_ARCHITECTURE_CLEAR: Final = (
+    'setup = "bound" /\\ hooks /\\ head = "main" /\\ tree = "clean" /\\ ~parked'
+    " /\\ ~fills /\\ ~reviews /\\ ~owes"
+)
+
+
+def beside_architecture() -> str:
+    """TLA+ text: where the owed architecture is named, the step beneath it can be taken."""
+    return "\n".join(
+        f'  /\\ (advice = "{Advice.ARCHITECTURE}" /\\ beneath = "{a}" => ENABLED {act})'
+        for a, act in ADVISED.items()
+    )
+
+
+def only(action_name: ActionName, before: str, after: str) -> str:
+    """TLA+ text: a step from ``before`` to ``after`` on the architecture is ``action_name``."""
+    return (
+        f'[][(architecture {before} "{Architecture.OWED}" /\\'
+        f' architecture\' {after} "{Architecture.OWED}") => {action_name}]_vars'
+    )
+
+
 RULES: Final[dict[str, model_tla.Rule]] = {
     "AdviceCanBeFollowed": model_tla.Invariant(
         "The step the route names can be taken.", can_be_followed("advice")
@@ -798,7 +888,57 @@ RULES: Final[dict[str, model_tla.Rule]] = {
         "Each step the real route names gets nearer to having nothing left to finish.",
         lowers_rank("real_advice"),
     ),
+    "ArchitectureNamedExactlyWhenOwed": model_tla.Invariant(
+        "The owed architecture is named exactly when the ledger owes it and nothing named before"
+        " it is open.",
+        f'(advice = "{Advice.ARCHITECTURE}") <=>\n'
+        f'  (architecture = "{Architecture.OWED}" /\\ {ABOVE_ARCHITECTURE_CLEAR})',
+    ),
+    "OwedArchitectureNeverHidesTheWork": model_tla.Invariant(
+        "Where the owed architecture is named, the step the route would otherwise name can be"
+        " taken.",
+        beside_architecture(),
+    ),
+    "OnlyAnUpgradeOwesTheArchitecture": model_tla.Property(
+        "Only an upgrade leaves the architecture owed; an adoption never does.",
+        only(ActionName.UPGRADE_LEAVES_ROWS_TO_FILL, "#", "="),
+    ),
+    "OnlyRecordingEndsTheOwedArchitecture": model_tla.Property(
+        "Recording the architecture is the only step that ends it being owed.",
+        only(ActionName.OWNER_RECORDS_ARCHITECTURE, "=", "#"),
+    ),
 }
+
+
+class Shown(NamedTuple):
+    """What the charts read of a world: what the route names, the checkout, and what is owed."""
+
+    advice: str
+    real_advice: str
+    beneath: str
+    head: str
+    tree: str
+    parked: bool
+    fills: bool
+    reviews: bool
+    owes: bool
+    architecture: str
+
+
+def shown(world: World) -> Shown:
+    """What the charts read of ``world``."""
+    return Shown(
+        advice(world),
+        real_advice(world),
+        beneath(world),
+        world.head,
+        world.tree,
+        world.parked,
+        world.fills,
+        world.reviews,
+        world.owes,
+        world.architecture,
+    )
 
 
 def export() -> model_tla.Export:
@@ -814,4 +954,11 @@ def export() -> model_tla.Export:
             "rank": rank.__getitem__,
             "beneath": beneath,
         },
+    )
+
+
+def summary() -> model_tla.Export:
+    """The graph seen through what the charts show, small enough for the statechart tool."""
+    return model_tla.export(
+        "RouteShown", model_tla.summary(graph(), shown), {}, fields=Shown._fields
     )
