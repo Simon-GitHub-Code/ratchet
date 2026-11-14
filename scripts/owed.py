@@ -58,6 +58,10 @@ NEVER: dict[tuple[str, str | None], str] = {
         "justfile",
     ): "each recipe it names is red in the merge's work tree and in CI as it stands",
     ("glossary", "GLOSSARY.md (or GLOSSARY-MAP.md)"): "prose is red without GLOSSARY.md",
+    (
+        "mutation_filter",
+        None,
+    ): "the changed-code mutation gate fails on the recipe, whatever the ledger says",
     ("quality", "quality/thresholds.toml"): "ratchet-lowered reads the file and is red without it",
     ("quality", "quality/mutation-register.toml"): "the mutation gates read the register",
 }
