@@ -529,18 +529,24 @@ def test_a_service_that_names_the_missing_setting_and_exits_nonzero_refuses(
 
 
 @pytest.mark.parametrize(
-    ("mode", "said"),
+    ("mode", "said", "timeout"),
     [
-        ("boot", "the service became ready without DATABASE_URL: it did not refuse"),
-        ("zero", "the service exited with code 0 without DATABASE_URL: a refusal is non-zero"),
-        ("silent", "the service exited with code 2 without DATABASE_URL but did not name it"),
-        ("hang", "neither refused nor became ready within 0.8s without DATABASE_URL"),
+        ("boot", "the service became ready without DATABASE_URL: it did not refuse", "20"),
+        (
+            "zero",
+            "the service exited with code 0 without DATABASE_URL: a refusal is non-zero",
+            "20",
+        ),
+        ("silent", "the service exited with code 2 without DATABASE_URL but did not name it", "20"),
+        ("hang", "neither refused nor became ready within 0.8s without DATABASE_URL", "0.8"),
     ],
 )
 def test_each_way_of_not_refusing_is_red_with_the_boot_output(
-    mode: str, said: str, capsys: pytest.CaptureFixture[str]
+    mode: str, said: str, capsys: pytest.CaptureFixture[str], *, timeout: str
 ) -> None:
-    code, out = refuses(mode, "DATABASE_URL", capsys=capsys, timeout="0.8")
+    # Why: only the service that hangs is about the time running out; the others must boot or
+    # exit before it does, which 0.8 s does not allow on a busy machine.
+    code, out = refuses(mode, "DATABASE_URL", capsys=capsys, timeout=timeout)
     assert said in out, out
     assert code == 1
     assert out.endswith("with_service: red\n")

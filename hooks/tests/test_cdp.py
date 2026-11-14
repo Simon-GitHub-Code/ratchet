@@ -47,19 +47,21 @@ def test_a_script_that_throws_is_the_pages_error_not_the_browsers(
 
 
 @pytest.mark.parametrize(
-    ("url", "said"),
+    ("url", "said", "answer"),
     [
-        ("http://unreachable/", "did not open: net::ERR_NAME_NOT_RESOLVED"),
-        ("http://stuck/", "did not finish loading within 0.5s"),
-        ("http://crash/", "the browser closed while it was asked Page.loadEventFired"),
+        ("http://unreachable/", "did not open: net::ERR_NAME_NOT_RESOLVED", cdp.ANSWER),
+        ("http://stuck/", "did not finish loading within 0.5s", 0.5),
+        ("http://crash/", "the browser closed while it was asked Page.loadEventFired", cdp.ANSWER),
     ],
 )
 def test_a_page_that_does_not_open_is_a_browser_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, url: str, said: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, url: str, said: str, answer: float
 ) -> None:
+    # Why: only the page that never loads is about the wait running out; the others must be seen
+    # before it does, which a short wait does not allow on a busy machine.
     browsers.fake(tmp_path, monkeypatch)
     with tab(tmp_path) as page:  # type: ignore[attr-defined]
-        monkeypatch.setattr(cdp, "ANSWER", 0.5)
+        monkeypatch.setattr(cdp, "ANSWER", answer)
         with pytest.raises(cdp.BrowserError, match=re.escape(said)):
             page.open(url)
     assert products.processes_naming(str(tmp_path)) == []

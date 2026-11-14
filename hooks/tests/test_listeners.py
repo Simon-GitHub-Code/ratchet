@@ -23,10 +23,11 @@ from tests.servers import gone
 # socket beside it; it closes, shuts down, hides or forks on a line of stdin and answers each line.
 # Its shape, the first argument, is how it starts: ``plain``; ``hidden``, made non-dumpable so no
 # other process may look at its open files; ``hidden-worker``, with a non-dumpable child holding
-# the listener; ``own-session``, listening from a child in a session of its own; and ``helper``,
-# beside a double-forked helper of the group that holds only a UDP socket and, reparented away
-# from the gate, may not be copied from under Yama's ptrace_scope 1; ``two`` holds a second TCP
-# listener; ``zombie`` leaves a child that exited unreaped.
+# the listener, which says it has hidden before the service prints its port; ``own-session``,
+# listening from a child in a session of its own; and ``helper``, beside a double-forked helper
+# of the group that holds only a UDP socket and, reparented away from the gate, may not be copied
+# from under Yama's ptrace_scope 1; ``two`` holds a second TCP listener; ``zombie`` leaves a child
+# that exited unreaped.
 SERVICE = (
     "import ctypes, os, socket, sys, time\n"
     "shape = sys.argv[1]\n"
@@ -46,9 +47,13 @@ SERVICE = (
     "second = socket.create_server(('127.0.0.1', 0)) if shape == 'two' else None\n"
     "if shape == 'hidden': hide()\n"
     "if shape == 'zombie' and os.fork() == 0: os._exit(0)\n"
-    "if shape == 'hidden-worker' and os.fork() == 0:\n"
-    "    hide()\n"
-    "    time.sleep(60)\n"
+    "if shape == 'hidden-worker':\n"
+    "    hidden, hides = os.pipe()\n"
+    "    if os.fork() == 0:\n"
+    "        hide()\n"
+    "        os.write(hides, b'.')\n"
+    "        time.sleep(60)\n"
+    "    os.read(hidden, 1)\n"
     "print(listener.getsockname()[1], flush=True)\n"
     "for line in sys.stdin:\n"
     "    if line == 'fork\\n':\n"
