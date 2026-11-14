@@ -101,7 +101,7 @@ def _refused(call: Invocation, because: str = "") -> list[Verdict]:
 
 
 def _writes(
-    call: Invocation, written: Sequence[str | None], guard: Guard, context: Context
+    call: Invocation, written: Sequence[str | None], guard: Guard, *, context: Context
 ) -> list[Verdict]:
     """A verdict when any of ``written`` is a ref the call writes and the guard reads."""
     names = guard.defaults(context, call.cwd)
@@ -143,7 +143,7 @@ def _branch_names(call: Invocation, context: Context, guard: Guard) -> list[str]
 
 def branch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     """``git branch`` creating, forcing, deleting, renaming or copying onto a default branch."""
-    return _writes(call, _branch_names(call, context, guard), guard, context)
+    return _writes(call, _branch_names(call, context, guard), guard, context=context)
 
 
 def update_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -154,20 +154,22 @@ def update_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict
         return _refused(call)
     if ref == "HEAD" and "--no-deref" not in options.flags:
         return _refused(call) if guard.on_main(context, call.cwd) else []
-    return _writes(call, [ref], guard, context)
+    return _writes(call, [ref], guard, context=context)
 
 
 def symbolic_ref(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     """``git symbolic-ref`` setting or deleting a protected ref; reading one is fine."""
     options = scan(expand_long(call.args, _SYMBOLIC_REF_LONG), _SYMBOLIC_REF)
     writes = bool(options.flags & {"-d", "--delete"}) or len(options.operands) > 1
-    return _writes(call, options.operands[:1], guard, context) if writes else []
+    return _writes(call, options.operands[:1], guard, context=context) if writes else []
 
 
 def creates(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     """``git switch`` and ``git checkout`` creating or resetting a branch named like a default."""
     options = scan(expand_long(call.args, _CREATE_LONG), _CREATE)
-    return _writes(call, [options.values.get(flag) for flag in _CREATE_FLAGS], guard, context)
+    return _writes(
+        call, [options.values.get(flag) for flag in _CREATE_FLAGS], guard, context=context
+    )
 
 
 def worktree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -175,7 +177,9 @@ def worktree(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     if call.args[:1] != ("add",):
         return []
     options = scan(call.args[1:], _WORKTREE_ADD)
-    return _writes(call, [options.values.get("-b"), options.values.get("-B")], guard, context)
+    return _writes(
+        call, [options.values.get("-b"), options.values.get("-B")], guard, context=context
+    )
 
 
 def fetch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -187,7 +191,7 @@ def fetch(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     refspecs = [*options.operands[1:], options.values.get("--refmap", "")]
     tags = [f"refs/tags/{name}" for word, name in pairwise(refspecs) if word == "tag"]
     destinations = (spec.removeprefix("+").partition(":")[2] for spec in refspecs)
-    return _writes(call, [*tags, *destinations], guard, context)
+    return _writes(call, [*tags, *destinations], guard, context=context)
 
 
 def tag(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
@@ -195,7 +199,7 @@ def tag(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     options = scan(expand_long(call.args, _TAG_LONG), _TAG)
     reads = bool(options.flags & _TAG_READS)
     created = [f"refs/tags/{name}" for name in options.operands[:1]]
-    return [] if reads else _writes(call, created, guard, context)
+    return [] if reads else _writes(call, created, guard, context=context)
 
 
 def push_targets(refspecs: Sequence[str]) -> Iterator[str | None]:
@@ -241,7 +245,11 @@ def rebase(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     options = scan(expand_long(call.args, _REBASE_LONG), _REBASE)
     operands = options.operands
     named = operands[:1] if "--root" in options.flags else operands[1:2]
-    return _refused(call) if _writes(call, named, guard, context) or guard.on_main(context, call.cwd) else []
+    return (
+        _refused(call)
+        if _writes(call, named, guard, context=context) or guard.on_main(context, call.cwd)
+        else []
+    )
 
 
 def reset(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:

@@ -83,8 +83,8 @@ def default_branch(checkout: Path, git: Git = run_git) -> str | None:
     for ref in (*([remote_head] if remote_head else []), *FALLBACK_BRANCHES):
         if git(checkout, ["show-ref", "--verify", "--hash", ref]):
             return ref
-    ref = _main_worktree_branch(checkout, git)
-    return ref if ref and git(checkout, ["show-ref", "--verify", "--hash", ref]) else None
+    main = _main_worktree_branch(checkout, git)
+    return main if main and git(checkout, ["show-ref", "--verify", "--hash", main]) else None
 
 
 def committed_manifest(checkout: Path, git: Git = run_git) -> Committed | None:

@@ -69,9 +69,7 @@ def protects(ref: str, names: frozenset[str] = MAIN_BRANCHES) -> bool:
     name = ref.removeprefix("+")
     if name.startswith("refs/"):
         return protected(name, names)
-    return protected(
-        f"refs/{name}" if name.startswith(_QUALIFIED) else f"refs/heads/{name}", names
-    )
+    return protected(f"refs/{name}" if name.startswith(_QUALIFIED) else f"refs/heads/{name}", names)
 
 
 def pushed(ref: str) -> tuple[str, ...]:

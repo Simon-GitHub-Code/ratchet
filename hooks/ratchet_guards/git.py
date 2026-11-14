@@ -368,7 +368,9 @@ def _checked_out(call: Invocation, guard: Guard, *, here: bool) -> Switch | None
     created = next((options.values[flag] for flag in _SWITCH_FLAGS if flag in options.values), None)
     name = options.operands[0] if options.operands else None
     if created is not None:
-        return _anywhere(guard, call.cwd) if _unknown(created) else Switch(frozenset({created}), here)
+        return (
+            _anywhere(guard, call.cwd) if _unknown(created) else Switch(frozenset({created}), here)
+        )
     if name is None or paths or options.flags & _DETACHES:
         return None
     if options.flags & _TRACKS or _unknown(name):

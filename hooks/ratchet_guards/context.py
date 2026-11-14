@@ -130,11 +130,11 @@ class Guard:
         return context.maybe | (frozenset({here}) if here else frozenset())
 
     def defaults(self, context: Context, cwd: Path) -> frozenset[str]:
-        """The default branches of the repository ``cwd`` is in: ``main``, ``master`` and the one
-        the committed manifest is read from, whatever it is called.
+        """The default branches of the repository ``cwd`` is in, whatever they are called.
 
-        A command that names a repository the guard cannot read is judged against ``main`` and
-        ``master`` alone, as its branch is.
+        ``main``, ``master`` and the one the committed manifest is read from. A command that
+        names a repository the guard cannot read is judged against ``main`` and ``master``
+        alone, as its branch is.
         """
         return MAIN_BRANCHES if context.unread else self.repo.default_branches(cwd)
 

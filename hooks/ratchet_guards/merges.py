@@ -64,12 +64,12 @@ def _tracks(names: Sequence[str], call: Invocation, context: Context, *, guard: 
     """
     if context.unread or context.unsettled:
         return False
-    names = guard.defaults(context, call.cwd)
-    mains = sorted(guard.branches(context, call.cwd) & names)
+    defaults = guard.defaults(context, call.cwd)
+    mains = sorted(guard.branches(context, call.cwd) & defaults)
     spelled = [
         f"{branch}{_UPSTREAM}" if name in _UPSTREAMS else name for name in names for branch in mains
     ]
-    return all(guard.repo.full_name(call.cwd, name) in tracking(names) for name in spelled)
+    return all(guard.repo.full_name(call.cwd, name) in tracking(defaults) for name in spelled)
 
 
 def merge(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
