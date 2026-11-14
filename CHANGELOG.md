@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+A drain whose processes are all gone no longer blocks the next `clean --all`. The lease judged a drain alive by any process of its chain that was still running, including the service manager above every session; it now counts only a process below where the chains part, or a program running from a queue work tree, and the two-hour record of commands is gone.
+
 The drain's recovery reads a kill inside one file's write, and tells two drains under one process apart (ADR 0023). A fast-forward killed while git wrote a file puts that part-written file back, and keeps only what the owner had changed or left untracked before it began. `clean --all` prints the drain's token, and the drain's later commands stamp its lease, so a second drain started under the same long-lived process is refused while the first is active.
 
 The plugin names no language, package manager or stack tool in its gates, and the binding holds each stack fact (ADR 0042, ADR 0043, ADR 0044).
