@@ -642,6 +642,36 @@ def test_a_fast_forward_is_left_while_a_git_command_still_runs_in_the_tree(tmp_p
     assert not (root / "src/added.py").exists()
 
 
+def test_a_command_is_refused_while_a_cut_off_fast_forward_cannot_be_put_back(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, old, _new = half_landed(tmp_path)
+    running = subprocess.Popen(
+        ["git", "cat-file", "--batch"],  # noqa: S607
+        cwd=root,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+    )
+    line = f"merge: a git command still runs in {root}; run this again once it ends\n"
+    try:
+        capsys.readouterr()
+        assert run(root, "close", ALPHA, "--outcome", "parked") == 2
+        assert capsys.readouterr().out == line
+        assert note(root, BRANCH_A) == {}, "no ticket was read and no note written"
+        assert run(root, "land", ALPHA) == 2
+        assert capsys.readouterr().out == line
+        assert drain.main(["drain", "plan", "--root", str(root), "--offline"]) == 2
+        seen = capsys.readouterr()
+        assert (seen.out, seen.err) == ("", line)
+        assert git(root, "rev-parse", "main") == old
+    finally:
+        running.kill()
+        assert running.stdin is not None
+        running.stdin.close()
+        running.wait()
+    assert run(root, "plan") == 0, "once it ends, the next command puts the work tree back"
+
+
 def test_a_merge_cannot_land_while_another_is_landing(tmp_path: Path) -> None:
     root = project(tmp_path)
     old = git(root, "rev-parse", "main")

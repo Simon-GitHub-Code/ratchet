@@ -1520,8 +1520,13 @@ def main(argv: list[str]) -> int:
     # Why: a landing cut off half-way leaves the merge's files in the default branch's work tree,
     # the text of a ticket among them; it is put back before any command reads a ticket, or a hold
     # would be written on the merge's text and the owner's ticket would differ from it.
-    for line in merge.recover(root):
+    lines, finished = merge.recovery(root)
+    for line in lines:
         print(line, file=sys.stderr if options.action == "plan" else sys.stdout)
+    if not finished:
+        # Why: the half-written files are still in the work tree, a ticket's text among them; no
+        # command reads a ticket until a rerun has put them back.
+        return 2
     drain = Drain(root, None if options.offline else preflight.run_gh, options.concurrency)
     action = WHOLE.get(options.action, on_ticket)
     try:
