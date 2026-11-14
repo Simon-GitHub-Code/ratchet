@@ -31,8 +31,10 @@ from tests.safeguard_world import Attempt, Run, World
 # The owner's seven rules, as the model finds them. A path is the shortest run that breaks the
 # rule; ``None`` says it holds on every reachable state and landing.
 FOUND: dict[str, tuple[str, ...] | None] = {
-    # 1. The change that brings a kind is free, however many instances it brings.
+    # 1. The change that first brings a kind is free, however many instances it brings; a kind
+    # that went back to none and returns is not arriving (ADR 0048).
     "arrival is free": None,
+    "return is not arrival": None,
     # 2. Read as "a new instance", a move breaks it; read as "the count rises", it holds.
     "owed takes no new instance": (
         "another branch lands: add one instance",
@@ -48,17 +50,14 @@ FOUND: dict[str, tuple[str, ...] | None] = {
     "only binding leaves owed, with the guard": None,
     # 4. A declared event is never red.
     "event is never red": None,
-    # 5. Removing every instance makes the next arrival free again, with or without the guard.
+    # 5. Removing every instance used to make the next arrival free again; ADR 0048 closed it.
+    # The gate alone still lets a kind grow once its Triggers row points elsewhere.
     "owed never grows unbound": (
         "another branch lands: add one instance",
-        "another branch lands: remove every instance",
-        "another branch lands: add several instances",
-    ),
-    "owed never grows unbound, with the guard": (
+        "another branch lands: point the Triggers row elsewhere",
         "another branch lands: add one instance",
-        "another branch lands: remove every instance",
-        "another branch lands: add several instances",
     ),
+    "owed never grows unbound, with the guard": None,
     # 6. The gate on the merge result catches a branch that lands late.
     "late landing adds nothing": None,
     # 7. The gate alone lets the binding be loosened; the guard sends that change to the owner.
@@ -97,7 +96,7 @@ def walk(*names: str) -> tuple[State, list[Landing]]:
 def test_a_kind_arrives_free_with_several_instances_and_then_owes_its_row() -> None:
     state, [arrival] = walk("another branch lands: add several instances")
     assert arrival.landed
-    assert judge(arrival.tip, arrival.head).arrived
+    assert judge(arrival.tip, arrival.head, arrival.tip_held).arrived
     assert owed(state.main) == {Debt.KIND: 2}
     assert state.allowance == 2
 
@@ -135,9 +134,24 @@ def test_a_declared_event_owes_its_row_and_a_red_landing_is_the_kind_s_alone() -
     declared, arrival, second = landings
     assert declared.landed
     assert arrival.landed
-    assert judge(arrival.tip, arrival.merged or arrival.tip).event_owes
+    assert judge(arrival.tip, arrival.merged or arrival.tip, arrival.tip_held).event_owes
     assert not second.landed
     assert owed(state.main) == {Debt.KIND: 1, Debt.EVENT: 0}
+
+
+def replay(directory: Path, *names: str) -> tuple[World, State, list[Attempt]]:
+    """The actions taken on a real repository, each landing checked against the model's."""
+    world = World.create(directory / "repo")
+    state, seen = INITIAL, []
+    for name in names:
+        after, result = next(outcomes(STEPS[name], state))
+        attempt = world.take(STEPS[name], state, after=after, result=result)
+        assert attempt is not None, name
+        printed = attempt.merge_run.out if attempt.merge_run else attempt.branch_run.out
+        assert attempt.landing == result, f"{name}\n{printed}"
+        seen.append(attempt)
+        state = after
+    return world, state, seen
 
 
 @pytest.mark.parametrize("name", [name for name, path in FOUND.items() if path is not None])
@@ -146,17 +160,43 @@ def test_each_run_that_breaks_a_rule_lands_the_same_way_on_a_real_repository(
 ) -> None:
     # Why: the random run below may never take a pinned run, and a break the model alone shows
     # could be the model's mistake. Here the real gate lands every step of it as the model says.
-    world = World.create(tmp_path / "repo")
-    state = INITIAL
-    for action in FOUND[name] or ():
-        after, result = next(outcomes(STEPS[action], state))
-        seen = world.take(STEPS[action], state, after=after, result=result)
-        assert seen is not None, action
-        said = f"{action}\n{seen.branch_run.out}\n{seen.merge_run.out if seen.merge_run else ''}"
-        assert seen.landing == result, said
-        assert seen.landing.landed, said
-        state = after
+    world, state, seen = replay(tmp_path, *(FOUND[name] or ()))
+    assert all(attempt.landing.landed for attempt in seen)
     assert world.owed() == owed(state.main)
+
+
+def test_a_kind_that_went_back_to_none_and_returns_is_red_until_its_row_is_bound(
+    tmp_path: Path,
+) -> None:
+    # Why: the run that broke rule 5 before ADR 0048, and the way out the gate names.
+    world, state, seen = replay(
+        tmp_path,
+        "another branch lands: add one instance",
+        "another branch lands: remove every instance",
+        "another branch lands: add several instances",
+        "another branch lands: bind the row",
+        "another branch lands: add several instances",
+    )
+    _, _, back, bound, again = seen
+    assert not back.landing.landed
+    assert back.merge_run is not None
+    assert "returning, not arriving" in back.merge_run.out
+    assert bound.landing.landed
+    assert again.landing.landed
+    assert len(state.main.instances) == 2
+    assert world.owed() == {}
+
+
+def test_a_row_dropped_and_put_back_does_not_make_the_return_an_arrival(tmp_path: Path) -> None:
+    _, _, seen = replay(
+        tmp_path,
+        "another branch lands: add one instance",
+        "another branch lands: remove every instance",
+        "another branch lands: drop the row",
+        "another branch lands: put the dropped row back as later",
+        "another branch lands: add one instance",
+    )
+    assert [attempt.landing.landed for attempt in seen] == [True, True, True, True, False]
 
 
 class SafeguardMachine(RuleBasedStateMachine):
@@ -198,14 +238,14 @@ class SafeguardMachine(RuleBasedStateMachine):
     def compare(self, seen: Attempt, expected: Landing) -> None:
         said = self.explain(seen.branch_run, seen.merge_run)
         assert seen.landing == expected, f"seen:  {seen.landing}\nmodel: {expected}\n{said}"
-        on_branch = judge(expected.fork, expected.head)
+        on_branch = judge(expected.fork, expected.head, expected.fork_held)
         assert (seen.branch_run.arrived, seen.branch_run.event_owes) == (
             on_branch.arrived,
             on_branch.event_owes,
         ), said
         if expected.merged is not None:
             assert seen.merge_run is not None, said
-            on_merge = judge(expected.tip, expected.merged)
+            on_merge = judge(expected.tip, expected.merged, expected.tip_held)
             assert (seen.merge_run.arrived, seen.merge_run.event_owes) == (
                 on_merge.arrived,
                 on_merge.event_owes,
@@ -217,7 +257,8 @@ class SafeguardMachine(RuleBasedStateMachine):
             return
         main = self.world.tree()
         assert self.world.owed() == owed(expected.merged), said
-        self.history = State(main, allowance_after(self.history.allowance, main), None)
+        held = self.history.held or bool(main.instances)
+        self.history = State(main, allowance_after(self.history.allowance, main), None, held)
         for name in self.holding:
             check = RULES[name].state_check
             assert check is None or check(self.history), f"{name}\n{said}"

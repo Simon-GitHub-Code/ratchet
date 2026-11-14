@@ -187,10 +187,12 @@ class World:
             assert before.branch is not None
             fork, head = before.branch.fork, before.branch.head
             self.git("switch", "-q", self.open)
-            return self.land(self.open, (before.main, fork, head), self.gate())
+            held = (before.held, before.branch.held)
+            return self.land(self.open, (before.main, fork, head), self.gate(), held=held)
         assert result is not None
         name = self.fork(result.head, before.main, step)
-        return self.land(name, (before.main, before.main, result.head), None)
+        held = (before.held, before.held)
+        return self.land(name, (before.main, before.main, result.head), None, held=held)
 
     def fork(self, head: Tree, tip: Tree, step: Step) -> str:
         """Commit ``head`` on a new branch from the default branch; the branch's name."""
@@ -201,8 +203,19 @@ class World:
         self.commit(head, tip, f"feat(core): {step.change.value}")
         return name
 
-    def land(self, name: str, trees: tuple[Tree, Tree, Tree], branch_run: Run | None) -> Attempt:
-        """``merge.attempt`` of branch ``name``: merge, gate, and move the default branch."""
+    def land(
+        self,
+        name: str,
+        trees: tuple[Tree, Tree, Tree],
+        branch_run: Run | None,
+        *,
+        held: tuple[bool, bool],
+    ) -> Attempt:
+        """``merge.attempt`` of branch ``name``: merge, gate, and move the default branch.
+
+        ``held`` is the model's word on whether the tip's and the fork's past held an instance;
+        the gate reads that from the log, and its verdict is what is compared.
+        """
         self.git("switch", "-q", "--detach", "main")
         try:
             self.git("merge", "--no-ff", "-q", "-m", f"Merge branch '{name}'", name)
@@ -211,11 +224,20 @@ class World:
             assert branch_run is not None
             green = branch_run.code == 0
             return Attempt(
-                Landing(*trees, None, landed=False, branch_green=green), branch_run, None
+                Landing(
+                    *trees,
+                    None,
+                    landed=False,
+                    branch_green=green,
+                    tip_held=held[0],
+                    fork_held=held[1],
+                ),
+                branch_run,
+                None,
             )
         merge_run = self.gate()
         if merge_run.code == 0:
             self.git("update-ref", "refs/heads/main", "HEAD")
         branch_run = branch_run or merge_run
-        landing = Landing(*trees, self.tree(), merge_run.code == 0, branch_run.code == 0)
+        landing = Landing(*trees, self.tree(), merge_run.code == 0, branch_run.code == 0, *held)
         return Attempt(landing, branch_run, merge_run)
