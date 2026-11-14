@@ -586,3 +586,18 @@ def test_change_size_reads_the_older_keys_as_the_product_ceilings(tmp_path: Path
     assert change_size.ceilings(tmp_path) == change_size.Ceilings(7, 9, None)
     write(tmp_path, "quality/thresholds.toml", "[ceilings.change]\nfiles = 7\nproduct_files = 4\n")
     assert change_size.ceilings(tmp_path).product_files == 4, "the new key wins"
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        "# B\n\n## Test paths\n\nProse only.\n\n## Next\n\n- Tests: `t/**`\n",
+        "# B\n\n## Test paths\n\nProse only.\n",
+    ],
+    ids=["a later section names tests", "the section runs to the end"],
+)
+def test_a_test_paths_section_without_its_bullet_is_unfilled(binding: str) -> None:
+    # Why: only the section's own lines are read; a bullet under another heading is not its row.
+    globs, problems = change_size.test_paths(binding)
+    assert globs is None
+    assert any("still the template's" in problem for problem in problems)
