@@ -16,9 +16,11 @@ from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_a
 
 import drain
 from tests import drain_model as model
+from tests import model_tla
 from tests.drain_model import Branch, Kind, Merge, Name, Step
 from tests.drain_world import BRANCH, DRAFT, REF, LeaseWorld, World
 from tests.repos import git
+from tests.support import PLUGIN_ROOT
 from tests.test_drain import scratch  # noqa: F401 # -- an autouse fixture of the drain's tests
 
 if TYPE_CHECKING:
@@ -889,3 +891,8 @@ def test_a_stopped_drain_blocks_the_next_until_its_session_ends(two_drains: Leas
     assert taken == f"drain: {two_drains.world.tokens[model.Drain.TWO]}\n", (
         "a gone drain blocks not"
     )
+
+
+def test_the_page_was_checked_and_drawn_from_the_current_exports() -> None:
+    page = PLUGIN_ROOT / "docs/model/drain.md"
+    assert not (why := model_tla.stale(page, *model.exports())), why
