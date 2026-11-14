@@ -292,6 +292,7 @@ class State:
     kept: bool = False
     built: bool = False
     green: bool | None = None
+    late_over: bool = False
     owed: bool = False
     silent: bool = False
     ending: Ending | None = None
@@ -351,6 +352,9 @@ OVER: dict[Said, Ceiling] = {
     Build.TESTS_OVER: Ceiling.TESTS,
 }
 MARGINS = frozenset({Spec.TESTS_MARGIN, Build.TESTS_MARGIN})
+# Why: the amend is the spec role answering again, and the script names its stop "the spec".
+MEASURED_AT = {Role.SPEC: Role.SPEC, Role.AMEND: Role.SPEC, Role.IMPLEMENT: Role.IMPLEMENT}
+LATE = frozenset({Role.FIX, Role.RECONCILE})
 
 
 def stops_on(answer: Said, *, critic: bool | None) -> Ceiling | None:
@@ -422,13 +426,19 @@ def _critique(state: State, action: Action) -> State:
     return replace(state, owed=owed, silent=silent, awaiting=Role.FIX if again else Role.REVIEW)
 
 
-def _fix(state: State, action: Action) -> State:
+def _built_late(state: State, action: Action, awaiting: Role) -> State:
+    """A fix round's or a reconcile's answer, whose size the script does not read."""
     green = action.answer is not Build.RED
-    return replace(state, rounds=state.rounds + 1, green=green, awaiting=Role.CRITIQUE)
+    over = state.late_over or action.answer in OVER
+    return replace(state, green=green, late_over=over, awaiting=awaiting)
+
+
+def _fix(state: State, action: Action) -> State:
+    return replace(_built_late(state, action, Role.CRITIQUE), rounds=state.rounds + 1)
 
 
 def _reconcile(state: State, action: Action) -> State:
-    return replace(state, green=action.answer is not Build.RED, awaiting=Role.REVIEW_AGAIN)
+    return _built_late(state, action, Role.REVIEW_AGAIN)
 
 
 def _review(state: State, action: Action) -> State:
@@ -585,6 +595,29 @@ def ceilinged(_: State, name: str, after: State) -> bool:
     return ending is not None and ending.stop is Stop.TOO_LARGE and ending.ceiling is ceiling
 
 
+def measured(_: State, name: str, after: State) -> bool:
+    """A change the spec or the implementation measures or estimates over a ceiling stops the run at that stage as too large on that ceiling."""  # noqa: E501
+    action = named(name)
+    ceiling = OVER.get(action.answer)
+    if ceiling is None or action.role not in MEASURED_AT:
+        return True
+    ending = after.ending
+    return (
+        ending is not None
+        and ending.stop is Stop.TOO_LARGE
+        and ending.ceiling is ceiling
+        and ending.measured_after is MEASURED_AT[action.role]
+    )
+
+
+def checked_late(before: State, name: str, after: State) -> bool:
+    """A change a fix round or a reconcile takes over a ceiling, which the script does not measure, is approved only when the last builder and the review report the check green."""  # noqa: E501
+    ending = after.ending
+    if not before.late_over or ending is None or ending.outcome is not Outcome.APPROVE:
+        return True
+    return before.green is True and named(name).answer is not Review.APPROVES_RED
+
+
 def loop_ends(before: State, name: str, after: State) -> bool:
     """The fix loop runs at most two rounds, and a finding still owed after the last one reaches the result as unresolved."""  # noqa: E501
     action = named(name)
@@ -688,6 +721,10 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "3. stages run in order, and nothing is built before the spec asks nothing": ordered,
     "4. a verdict only gets stricter, but by a documented repair": stricter,
     "5. a change over a ceiling stops as too large and is never approved": ceilinged,
+    "5a. a change over a ceiling after the spec or the implementation stops as too large": measured,
+    "5b. a change over a ceiling after a fix or a reconcile is approved only on a green check": (
+        checked_late
+    ),
     "6. the fix loop ends, and what it leaves owed is in the result": loop_ends,
     "7. the run never commits, pushes or opens a pull request": unpublished,
     "8. a failed or malformed answer ends in a result that says so": reported,

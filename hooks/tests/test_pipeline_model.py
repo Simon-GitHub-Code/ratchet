@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     ORDERED,
     STRICTER,
     CEILINGED,
+    MEASURED,
+    CHECKED_LATE,
     LOOP_ENDS,
     UNPUBLISHED,
     REPORTED,
@@ -53,7 +55,14 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     BOUNDED: None,
     ORDERED: None,
     STRICTER: None,
+    # 5 breaks on a reconcile over a ceiling, because the script does not measure a fix round or
+    # a reconcile. 5a holds. It is pipeline.md step 3: "After the spec and again after the
+    # implementation the script reads the gate's numbers." 5b holds too. Step 7 forces
+    # request_changes on a red check from the last builder or the review, and tiers.md puts
+    # change size in tier 1, which `check` runs in an adopted project.
     CEILINGED: RECONCILED_OVER,
+    MEASURED: None,
+    CHECKED_LATE: None,
     LOOP_ENDS: None,
     UNPUBLISHED: None,
     # 8 breaks on a dead agent, because the script raises and returns no result. 8a holds. It is
@@ -208,6 +217,32 @@ def ending_on(test: Callable[[model.Action], bool]) -> list[tuple[model.Action, 
     return [(actions[-1], real) for actions, _, real in played()[0] if test(actions[-1])]
 
 
+def test_on_the_real_workflow_a_change_the_spec_or_the_implementation_measures_over_stops() -> None:
+    over = ending_on(lambda last: last.role in model.MEASURED_AT and last.answer in model.OVER)
+    stage = {model.Role.SPEC: "the spec", model.Role.IMPLEMENT: "the implementation"}
+    assert over
+    for last, real in over:
+        result = real.raw.get("result") or {}
+        assert result.get("verdict") == "blocked", (last.name, real.calls, real.ending)
+        too = result["tooLarge"]
+        expected = (model.OVER[last.answer].value, stage[model.MEASURED_AT[last.role]])
+        assert (too["kind"], too["stage"]) == expected, last.name
+
+
+def test_on_the_real_workflow_a_fix_or_reconcile_over_is_approved_only_on_green_checks() -> None:
+    approved = [
+        actions
+        for actions, _, real in played()[0]
+        if any(a.role in model.LATE and a.answer in model.OVER for a in actions)
+        and real.raw.get("result", {}).get("verdict") == "approve"
+    ]
+    assert approved
+    for actions in approved:
+        builder = next(a for a in reversed(actions) if a.role in model.LATE)
+        assert builder.answer is not model.Build.RED, [a.name for a in actions]
+        assert actions[-1].answer is model.Review.APPROVES, [a.name for a in actions]
+
+
 def test_on_the_real_workflow_every_dead_agent_ends_in_an_error_that_says_to_resume() -> None:
     dead = ending_on(lambda last: last.answer in model.FAILED)
     assert {last.role for last, _ in dead} == set(model.Role)
@@ -242,6 +277,9 @@ def test_an_agent_that_dies_ends_the_run_in_an_error_and_no_result() -> None:
 
 
 def test_a_change_a_fix_round_or_a_reconcile_takes_over_the_ceiling_is_approved() -> None:
+    # Why: this is an agent's answer, a size over the ceiling with a green check, and not a
+    # measured tree. On a real tree of an adopted project the size gate is one of the gates
+    # `check` runs, so that builder and the review would report the check red.
     measured = world.BUILDS[model.Build.PRODUCT_OVER]
     assert isinstance(measured, dict)
     assert measured["changeSize"]["lines"] > measured["changeSize"]["ceiling"]
