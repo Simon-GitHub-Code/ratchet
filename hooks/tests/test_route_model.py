@@ -3,9 +3,9 @@
 ``route_model`` is the machine, pure. ``advice`` is what the method's pages say the route names,
 and these tests hold it to every rule. ``real_advice`` is that with the named divergences applied:
 it may break a rule only where a divergence says, and the real ``route.decide`` must give it in
-every state. Walks follow the advice on a real repository; a stateful test takes long runs of
-actions there; each divergence keeps a strict expected failure that passes the day the route is
-fixed. The exporter is held to a stable output.
+every state. A sweep visits every state of the model on a real repository; a stateful test takes
+long runs of actions there; each divergence keeps a strict expected failure that passes the day
+the route is fixed. The exporter is held to a stable output.
 """
 
 import os
@@ -15,7 +15,9 @@ import sys
 import tempfile
 from collections import defaultdict
 from collections.abc import Callable
+from functools import cache
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from hypothesis import Phase, settings
@@ -38,6 +40,7 @@ from tests.support import PLUGIN_ROOT
 
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
 HOOKS_EVERY = 7  # the steps between the times a run takes the commit hooks away
+SWEEP_CHUNKS = 8
 
 # Why no shrinking: every step runs real git, and the message names the whole path to the first
 # disagreement, so a red run ends in seconds, not in the minutes Hypothesis spends shrinking.
@@ -260,6 +263,81 @@ def test_following_the_advice_through_a_whole_feature_returns_to_rest(
     assert model.rest(world)
     assert labels[0] is Advice.SPECIFY
     assert Advice.RESOLVE in labels
+
+
+class Spanning(NamedTuple):
+    """The graph's shortest-path tree, its states in the order a depth-first walk visits them."""
+
+    order: tuple[World, ...]
+    place: dict[World, int]
+    parent: dict[World, model.Edge]
+    children: dict[World, list[World]]
+    size: dict[World, int]
+
+    def trail(self, world: World) -> list[str]:
+        """The actions on the tree's path from the start to ``world``."""
+        names: list[str] = []
+        while world in self.parent:
+            names.insert(0, str(self.parent[world].action))
+            world = self.parent[world].source
+        return names
+
+
+@cache
+def spanning() -> Spanning:
+    """The tree, each state with its edge from its parent and the size of the tree below it."""
+    graph = model.graph()
+    parent: dict[World, model.Edge] = {}
+    children: dict[World, list[World]] = defaultdict(list)
+    for edge in graph.edges:
+        if edge.target not in parent and edge.target != graph.states[0]:
+            parent[edge.target] = edge
+            children[edge.source].append(edge.target)
+    order: list[World] = []
+    size: dict[World, int] = {}
+
+    def visit(state: World) -> int:
+        order.append(state)
+        size[state] = 1 + sum(visit(child) for child in children[state])
+        return size[state]
+
+    visit(graph.states[0])
+    place = {state: index for index, state in enumerate(order)}
+    return Spanning(tuple(order), place, parent, children, size)
+
+
+def sweep(repo: real.Repo, world: World, span: range, *, scratch: Path) -> int:
+    """Ask the route in each state below ``world`` whose place in the walk is in ``span``.
+
+    The repository is copied where the walk branches, so each state is reached once from its
+    parent, not replayed from an empty repository. Returns the number of states asked.
+    """
+    tree = spanning()
+    asked = 0
+    if tree.place[world] in span:
+        step = real.read(repo)
+        assert real.classify(step) is model.real_advice(world), disagreement(
+            world, step, tree.trail(world)
+        )
+        asked = 1
+    below = [
+        child
+        for child in tree.children[world]
+        if tree.place[child] < span.stop and tree.place[child] + tree.size[child] > span.start
+    ]
+    for index, child in enumerate(below):
+        here = repo if index == len(below) - 1 else repo.copy(scratch / str(tree.place[child]))
+        real.apply(here, tree.parent[child].action, real.Change(world, child))
+        asked += sweep(here, child, span, scratch=scratch)
+    return asked
+
+
+@pytest.mark.parametrize("chunk", range(SWEEP_CHUNKS))
+def test_the_route_names_what_the_model_says_in_every_state(tmp_path: Path, chunk: int) -> None:
+    count = len(spanning().order)
+    span = range(count * chunk // SWEEP_CHUNKS, count * (chunk + 1) // SWEEP_CHUNKS)
+    asked = sweep(real.Repo.start(tmp_path), World(), span, scratch=tmp_path / "copies")
+    assert asked == len(span)
 
 
 def disagreement(world: World, step: route.Step, path: list[str]) -> str:
