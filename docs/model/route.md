@@ -356,6 +356,7 @@ stateDiagram-v2
 - A ticket too large for one change, which the agent splits itself, and the hold left when its split is refused.
 - A red `check`. The model takes `just check` as green.
 - The merge judge's reasons. A records landing has two outcomes, merged alone or waiting for the owner, and the model allows both whatever the records change.
+- Which changes among the records are the owner's to merge. The merge judge decides it, and the judge's own tests test it. The model has only that a records branch waits for the owner or lands by an agent.
 - The owner's ticket edits as records. Agreeing a ticket, stating its conjecture and finishing a ticket yourself are one step each. Only marking a ticket resolved goes through records uncommitted and a landing.
 - A split that stops half-way, a grill that writes only part of its records, and a safeguard run that stops.
 - The drain's own states: its work trees, the merge job, and retries of a mechanical wait.
