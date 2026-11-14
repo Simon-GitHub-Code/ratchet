@@ -36,13 +36,26 @@ import feature_preflight as preflight
 import gatelib
 import markdown_text
 import merge
+import merge_ready
 import owed
 import queue_notes
 import route
 import triggers
 import upgrade
 from tests.repos import branch, git, install_hooks, repository, snapshot, write
-from tests.route_model import ActionName, Advice, Architecture, Head, Setup, Ticket, Tree, World
+from tests.route_model import (
+    STATED,
+    ActionName,
+    Advice,
+    Architecture,
+    Head,
+    Setup,
+    Ticket,
+    Tree,
+    World,
+    runnable_slots,
+)
+from tests.test_drain import MERGE
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -62,12 +75,12 @@ PIN = "- Ratchet plugin: {version} at " + "0" * 40 + "\n"
 UNPINNED = "- Ratchet plugin: <X.Y.Z> at <ratchet-sha>\n"
 BINDING = (
     "# Binding\n\n{pin}- Default branch: `main`\n- Life events: none\n\n"
-    "| Entry point | Command |\n| --- | --- |\n| check | `just check` |\n"
-    "| merge | `just merge` |\n\n"
+    "| Entry point | Command |\n| --- | --- |\n{entries}\n"
     "## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
     "| --- | --- | --- | --- | --- |\n{gates}\n"
     "## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n{triggers}{architecture}"
 )
+ENTRY_POINTS: Final = {"check": "just check", "merge": "just merge"}
 ARCHITECTURE_RECORD = (
     "# The architecture\n\n## Decision\n\nOne service, its rules apart from its web layer.\n\n"
     "- Chosen by: the owner\n\n## Considered options\n\n"
@@ -136,11 +149,27 @@ class Repo:
     reviewed: int = 0
     upgrades: int = 0
     architecture: str = ""
+    merged: str | None = None
+    entries: dict[str, str] = field(default_factory=lambda: dict(ENTRY_POINTS))
+    manifest: str = MANIFEST
 
     @classmethod
     def start(cls, parent: Path) -> Repo:
         """A repository on ``main`` holding a README, where nothing names the method."""
         return cls(repository(parent / "repo", {"README.md": "# A\n"}))
+
+    @classmethod
+    def merging(cls, parent: Path) -> Repo:
+        """``start``, adopted with entry points the real merge runs: ``merge.py`` and green gates.
+
+        Why the template's manifest: the merge judges the adoption by its own gates, and those
+        refuse a manifest that guards less than the template.
+        """
+        return replace(
+            cls.start(parent),
+            entries={"check": "true", "check-deep": "true", "merge": MERGE},
+            manifest=merge_ready.TEMPLATE.read_text(encoding="utf-8"),
+        )
 
     def copy(self, root: Path) -> Repo:
         """The same repository at ``root``, its counters with it.
@@ -175,6 +204,7 @@ class Repo:
         ) + "".join(f"| {kind} | `src/{kind}.py` | |\n" for kind in self.reopened)
         return BINDING.format(
             pin=PIN.format(version=self.version()) if pinned else UNPINNED,
+            entries="".join(f"| {name} | `{command}` |\n" for name, command in self.entries.items()),
             gates=gates + REVIEW_ROW,
             triggers=rows,
             architecture=self.architecture,
@@ -294,7 +324,7 @@ def on_adoption_branch(repo: Repo) -> None:
 def adoption(repo: Repo, change: Change, *, pinned: bool) -> None:
     """The binding, the manifest and the glossary's template; the architecture, where asked."""
     write(repo.root, "docs/process/binding.md", repo.binding(pinned=pinned))
-    write(repo.root, "guards/manifest.toml", MANIFEST)
+    write(repo.root, "guards/manifest.toml", repo.manifest)
     write(repo.root, "GLOSSARY.md", PLACEHOLDER)
     if change.after.architecture is Architecture.RECORDED:
         repo.record_architecture()
@@ -307,6 +337,7 @@ def adopt(repo: Repo, change: Change) -> None:
     snapshot(repo.root, "chore(method): adopt")
     git(repo.root, "switch", "-q", "main")
     git(repo.root, "merge", "-q", "--no-ff", "--no-edit", ADOPTION)
+    repo.merged = ADOPTION
 
 
 DO[ActionName.OWNER_ADOPTS] = adopt
@@ -385,6 +416,15 @@ def _agent_builds_ticket(repo: Repo, change: Change) -> None:
 
 @does(ActionName.BUILD_STOPS)
 def _build_stops(repo: Repo, change: Change) -> None:
+    """The build stops with its code uncommitted, or right after ``/ratchet:feature`` cut its branch.
+
+    Why the first ticket that can start: a stop before anything is written changes no ticket.
+    """
+    if change.after.head is Head.MERGED:
+        before = change.before
+        slot = next(s for s in runnable_slots(before) if before.tickets[s] in STATED)
+        git(repo.root, "switch", "-q", "-C", repo.ticket_branch(slot))
+        return
     name = repo.ticket_branch(change.slot)
     git(repo.root, "switch", "-q", "-C", name)
     write(repo.root, f"src/{name.split('/')[1]}.py", "x = 1\n")
@@ -409,6 +449,7 @@ def _drain_merges_ticket(repo: Repo, change: Change) -> None:
     name = build_on_branch(repo, change.slot)
     git(repo.root, "switch", "-q", "main")
     git(repo.root, "merge", "-q", "--no-ff", "--no-edit", name)
+    repo.merged = name
 
 
 def park(repo: Repo, slot: int, result: dict[str, object]) -> None:
@@ -449,6 +490,7 @@ def _drain_parks_for_a_safeguard(repo: Repo, _change: Change) -> None:
     name = build_on_branch(repo, 0, files)
     git(repo.root, "switch", "-q", "main")
     git(repo.root, "merge", "-q", "--no-ff", "--no-edit", name)
+    repo.merged = name
     owed = f"triggers: '{kind}' gained 1 instance(s) (src/b.py:2) while the base already held 1"
     park(repo, 1, {"verdict": "blocked", "checkOutput": owed})
 
@@ -558,11 +600,40 @@ def _agent_commits_on_a_branch(repo: Repo, change: Change) -> None:
     snapshot(repo.root, "feat: a change")
 
 
-@does(ActionName.BRANCH_MERGES)
-def _branch_merges(repo: Repo, _change: Change) -> None:
+def merge_branch(repo: Repo) -> str:
+    """Merge the branch checked out into the default branch, which is left checked out."""
     name = repo.head()
     git(repo.root, "switch", "-q", "main")
     git(repo.root, "merge", "-q", "--no-ff", "--no-edit", name)
+    repo.merged = name
+    return name
+
+
+@does(ActionName.BRANCH_MERGES)
+def _branch_merges(repo: Repo, change: Change) -> None:
+    """The merge, as the fixed entry point leaves it: merged, and the default branch checked out.
+
+    On a branch already merged it does nothing: the entry point's judge refuses that branch as
+    behind, and the tests that run the real entry point show it changes nothing.
+    """
+    if change.before.head is Head.WORK:
+        merge_branch(repo)
+
+
+@does(ActionName.MERGE_LEAVES_THE_BRANCH_CHECKED_OUT)
+def _merge_leaves_the_branch_checked_out(repo: Repo, _change: Change) -> None:
+    git(repo.root, "switch", "-q", merge_branch(repo))
+
+
+@does(ActionName.SOMEONE_CHECKS_OUT_A_MERGED_BRANCH)
+def _someone_checks_out_a_merged_branch(repo: Repo, _change: Change) -> None:
+    assert repo.merged, "a repository at rest has merged a branch, the adoption's at least"
+    git(repo.root, "switch", "-q", repo.merged)
+
+
+@does(ActionName.AGENT_SWITCHES_TO_THE_DEFAULT_BRANCH)
+def _agent_switches_to_the_default_branch(repo: Repo, _change: Change) -> None:
+    git(repo.root, "switch", "-q", "main")
 
 
 @does(ActionName.RECORDS_RUN_STOPS)
@@ -610,6 +681,7 @@ STAGES: Final = {
     "adopt": Advice.ADOPT,
     "hooks": Advice.HOOKS,
     "change": Advice.COMMIT,
+    "switch": Advice.SWITCH,
     "merge": Advice.MERGE,
     "fill": Advice.FILL,
     "architecture-review": Advice.REVIEW,
