@@ -573,9 +573,10 @@ LEASE_COUNTEREXAMPLES: dict[str, list[str] | None] = {
     # apart". 9a, which allows only that, holds there.
     LIVE_SPARED: TAKEN_UNDER_ONE,
     # Why: 9a breaks only after the owner's `--take-over` while the first drain is alive, which
-    # the docstring accepts: take over "when it is gone for good". The take-over leaves the tree of
-    # the first drain's live landing; once that landing is killed, the drain that took over takes
-    # the tree on its next `clean --all` and records the merge. The tree's work is all committed.
+    # the docstring accepts: "a landing that drain runs keeps its tree while it runs, and the next
+    # `clean --all` takes the tree once that landing has ended, its work all committed". The
+    # take-over leaves the tree of the first drain's live landing; once that landing is killed,
+    # the drain that took over takes the tree on its next `clean --all` and records the merge.
     TOLD_APART: [*TAKEN_OVER, "drain 2: drain.py clean --all"],
     # Why: 9b breaks where the docstring accepts it: "A drain is alive while a process of its own
     # is", so one that stopped with its session open blocks the next until the owner says
