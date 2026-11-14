@@ -715,8 +715,16 @@ def test_the_triggers_table_is_written_from_the_template_s_text(repo: Path) -> N
 def test_the_triggers_table_needs_a_row_per_kind_a_question_of_the_types_names(
     repo: Path,
 ) -> None:
-    assert "| listener |" not in (repo / BINDING).read_text(encoding="utf-8")
-    assert red(repo) == [], "a command line tool is never asked about listeners"
+    assert "| scheduled-work |" in (repo / BINDING).read_text(encoding="utf-8")
+    assert red(repo) == []
+    # Why: ADR 0052. A command line tool is asked no question about listeners, yet its first
+    # listener reopens the architecture, so its table still has to find one.
+    listener = "| listener | none: the self-test has none | |\n"
+    replace(BINDING, listener, "")(repo)
+    [line] = red(repo)
+    assert "no row for kind 'listener', whose arrival reopens the architecture (ADR 0052)" in line
+    replace(BINDING, "| config-read |", listener + "| config-read |")(repo)
+    assert red(repo) == []
     replace(BINDING, "| config-read | none: the self-test has none | |\n", "")(repo)
     [line] = red(repo)
     assert line.startswith(f"{GATE}: the Triggers table has no row for kind 'config-read', which")
@@ -766,7 +774,7 @@ def test_a_missing_types_line_names_the_triggers_each_type_will_ask(repo: Path) 
     [found] = conformance.findings(repo)
     assert found.problem.startswith("has no '- Application types:' line")
     assert isinstance(found.fix, conformance.Agent)
-    asks = application_types.load().kinds_asked({"service"})
+    asks = application_types.load().kinds_required({"service"})
     assert f"`service` asks the Triggers table for the kinds {', '.join(sorted(asks))}" in (
         found.fix.then
     )

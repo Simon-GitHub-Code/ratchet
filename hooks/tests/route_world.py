@@ -21,11 +21,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Final
 
+import application_types
 import drain
 import feature_preflight as preflight
 import merge
 import queue_notes
 import route
+import triggers
 from tests.repos import branch, git, install_hooks, repository, snapshot, write
 from tests.route_model import ActionName, Advice, Head, Setup, Ticket, Tree, World
 
@@ -52,6 +54,22 @@ BINDING = (
     "## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
     "| --- | --- | --- | --- | --- |\n{gates}\n"
     "## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n{triggers}"
+)
+REVIEW_ROW = (
+    f"| {triggers.REVIEW_QUESTION} | `ratchet` plugin `scripts/triggers.py` | 1 | |"
+    " `just triggers` |\n"
+)
+# Why each arrival takes a kind of its own: a kind reviewed once is reviewed, so the next arrival
+# that reopens the architecture is the first of another kind.
+REOPENING: Final = tuple(
+    kind
+    for key in application_types.load().architecture
+    for kind in application_types.code_kinds(key)
+)
+REVIEW = (
+    "# The architecture holds\n\n- Architecture review: {keys}\n- Outcome: holds\n"
+    "- Decided: 2026-11-14\n\n## Decision\n\nThe new kind sits in the part that owns it.\n\n"
+    "## Refutation criterion\n\nAn instance outside that part.\n"
 )
 GLOSSARY = "# Glossary\n\n**Customer**: who pays.\n"
 PLACEHOLDER = "# <project>\n"
@@ -87,6 +105,8 @@ class Repo:
     edits: int = 0
     tools: list[str | None] = field(default_factory=list)
     parked: str | None = None
+    reopened: list[str] = field(default_factory=list)
+    reviewed: int = 0
 
     @classmethod
     def start(cls, parent: Path) -> Repo:
@@ -100,7 +120,7 @@ class Repo:
         and they are most of the files a copy would write.
         """
         shutil.copytree(self.root, root, symlinks=True, copy_function=share_objects)
-        return replace(self, root=root, tools=list(self.tools))
+        return replace(self, root=root, tools=list(self.tools), reopened=list(self.reopened))
 
     def feature(self) -> str:
         """The directory of the current spec, relative to the root."""
@@ -111,15 +131,20 @@ class Repo:
         return git(self.root, "rev-parse", "--abbrev-ref", "HEAD")
 
     def binding(self, *, pinned: bool = True) -> str:
-        """The binding: each safeguard row owed (``later:``) or bound to a tool."""
+        """The binding: each safeguard row owed (``later:``) or bound to a tool, and the review's.
+
+        The review's row is there from the adoption, so the reviews start with it (ADR 0052).
+        """
         gates = "".join(
             f"| q{n} | {tool or f'later: code:kind{n}'} | 1 | | `just q{n}` |\n"
             for n, tool in enumerate(self.tools, 1)
         )
-        triggers = "".join(
+        rows = "".join(
             f"| kind{n} | `src/kind{n}.py` | |\n" for n, _tool in enumerate(self.tools, 1)
+        ) + "".join(f"| {kind} | `src/{kind}.py` | |\n" for kind in self.reopened)
+        return BINDING.format(
+            pin=PIN if pinned else UNPINNED, gates=gates + REVIEW_ROW, triggers=rows
         )
-        return BINDING.format(pin=PIN if pinned else UNPINNED, gates=gates, triggers=triggers)
 
     def ticket_path(self, slot: int) -> str:
         """The local ticket in ``slot``: ``.scratch/f<n>/issues/NN-<letter><n>.md``."""
@@ -391,6 +416,24 @@ def _kind_of_code_arrives(repo: Repo, _change: Change) -> None:
     snapshot(repo.root, "feat: the first of a kind")
 
 
+@does(ActionName.KIND_THAT_REOPENS_THE_ARCHITECTURE_ARRIVES)
+def _kind_that_reopens_the_architecture_arrives(repo: Repo, _change: Change) -> None:
+    assert len(repo.reopened) < len(REOPENING), "every kind that reopens it has arrived"
+    kind = REOPENING[len(repo.reopened)]
+    repo.reopened.append(kind)
+    write(repo.root, "docs/process/binding.md", repo.binding())
+    write(repo.root, f"src/{kind}.py", "x = 1\n")
+    snapshot(repo.root, "feat: the first of a kind that reopens the architecture")
+
+
+@does(ActionName.AGENT_LANDS_THE_REVIEW)
+def _agent_lands_the_review(repo: Repo, _change: Change) -> None:
+    keys = ", ".join(f"`code:{kind}`" for kind in repo.reopened[repo.reviewed :])
+    repo.reviewed = len(repo.reopened)
+    write(repo.root, f"docs/adr/{repo.reviewed:04d}-review.md", REVIEW.format(keys=keys))
+    snapshot(repo.root, "docs(adr): architecture review")
+
+
 @does(ActionName.AGENT_BINDS_SAFEGUARD)
 def _agent_binds_safeguard(repo: Repo, _change: Change) -> None:
     repo.tools = [tool or "`just safe`" for tool in repo.tools]
@@ -464,6 +507,7 @@ STAGES: Final = {
     "hooks": Advice.HOOKS,
     "change": Advice.COMMIT,
     "merge": Advice.MERGE,
+    "architecture-review": Advice.REVIEW,
     "safeguard": Advice.SAFEGUARD,
     "triage": Advice.TRIAGE,
     "resolve": Advice.RESOLVE,

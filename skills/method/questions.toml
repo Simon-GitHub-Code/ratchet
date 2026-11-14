@@ -4,7 +4,7 @@
 # kind `product`, with the text written here word for word; an `[[assume]]` key must appear in
 # its skill as the default the hand-over states. The one exception is the kind `architecture`
 # (ADR 0049): the system and the tools that check it, asked once at adoption, or when the owner
-# revisits them, in the same round as the product questions. Only keys under `architecture.` may
+# revisits them or an arrival reopens them (ADR 0052), in the same round as the product questions. Only keys under `architecture.` may
 # carry it, and their words are held to the same plain words as a product question's.
 #
 # A product question is a choice that decides what becomes of something of the user's (kept,
@@ -105,6 +105,16 @@ skills = ["adopt", "architecture"]
 kind = "architecture"
 text = "Which tools should check the work? Each set names one tool for each kind of check, for the design I recommend."
 
+# ADR 0052: when an arrival or a life event reopens the architecture and the review finds it no
+# longer fits, the ways to change it go to the owner in one message. Each way is a different
+# product to live with (what is kept and where, who can reach it, what happens when something is
+# down), and undoing it later rewrites the project, so it is his.
+[[ask]]
+key = "architecture.change"
+skills = ["architecture"]
+kind = "architecture"
+text = "<what the project now does that the way it is built did not plan for, and two or three ways forward, each with what someone using it would notice, what it costs, and how hard it is to undo, the recommended one first>"
+
 # Questions the first-hour dogfood of 2026-11-13 recorded, or the skills asked before ADR 0034,
 # that a sensible default answers. Each is taken, acted on, and stated in the hand-over.
 
@@ -132,3 +142,8 @@ replaces = "Which life events already hold for this app?"
 key = "safeguard.tools"
 skills = ["safeguard"]
 replaces = "Accept the proposed tools, or name others for any row?"
+
+[[assume]]
+key = "architecture.holds"
+skills = ["architecture"]
+replaces = "Does the way the project is built still fit, now that this has arrived?"

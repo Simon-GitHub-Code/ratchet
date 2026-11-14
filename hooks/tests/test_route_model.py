@@ -508,6 +508,7 @@ def first_outcomes_meet() -> set[Advice]:
 DETOURS = [
     Advice.FINISH_RECORDS,
     Advice.MERGE_RECORDS,
+    Advice.REVIEW,
     Advice.SAFEGUARD,
     Advice.BLOCKED,
     Advice.BLOCKED_RUN,
