@@ -64,8 +64,7 @@ the client saturates at a few thousand requests a second on a quiet machine, and
 it prints describes that client as much as the service. Never take a capacity number from
 it, and never compare two runs. The tier 2 ``load`` question (arrival rate, percentile
 latency, error rate against the binding's Limits, soak and breaking point) needs a real
-tool the adopter chooses, such as k6, Locust, wrk, oha, Gatling or vegeta, on a host built
-for it.
+load tool the adopter chooses, on a host built for it.
 """
 
 from __future__ import annotations

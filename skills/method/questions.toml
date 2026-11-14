@@ -2,7 +2,10 @@
 # became an assumption instead (ADR 0034). `hooks/tests/test_owner_questions.py` holds the skills
 # to this file: a skill line that asks the owner something must name an `[[ask]]` key below, of
 # kind `product`, with the text written here word for word; an `[[assume]]` key must appear in
-# its skill as the default the hand-over states.
+# its skill as the default the hand-over states. The one exception is the kind `architecture`
+# (ADR 0049): the system and the tools that check it, asked once at adoption, or when the owner
+# revisits them or an arrival reopens them (ADR 0052), in the same round as the product questions. Only keys under `architecture.` may
+# carry it, and their words are held to the same plain words as a product question's.
 #
 # A product question is a choice that decides what becomes of something of the user's (kept,
 # deleted, merged, duplicated, overwritten, shared), who may see or do it, or what the user can
@@ -90,6 +93,18 @@ skills = ["feature"]
 kind = "product"
 text = "<the question the build stopped on, in the words of someone using the product>"
 
+[[ask]]
+key = "architecture.system"
+skills = ["adopt", "architecture"]
+kind = "architecture"
+text = "How should it be built? Each choice says what it is made of, where it runs, where your things are kept, and what changing it later would cost."
+
+[[ask]]
+key = "architecture.tools"
+skills = ["adopt", "architecture"]
+kind = "architecture"
+text = "Which tools should check the work? Each set names one tool for each kind of check, for the design I recommend."
+
 # ADR 0052: when an arrival or a life event reopens the architecture and the review finds it no
 # longer fits, the ways to change it go to the owner in one message. Each way is a different
 # product to live with (what is kept and where, who can reach it, what happens when something is
@@ -97,7 +112,7 @@ text = "<the question the build stopped on, in the words of someone using the pr
 [[ask]]
 key = "architecture.change"
 skills = ["architecture"]
-kind = "product"
+kind = "architecture"
 text = "<what the project now does that the way it is built did not plan for, and two or three ways forward, each with what someone using it would notice, what it costs, and how hard it is to undo, the recommended one first>"
 
 # Questions the first-hour dogfood of 2026-11-13 recorded, or the skills asked before ADR 0034,
@@ -107,11 +122,6 @@ text = "<what the project now does that the way it is built did not plan for, an
 key = "init.defaults"
 skills = ["init"]
 replaces = "Accept the defaults table (name, tracker, private remote, platform)?"
-
-[[assume]]
-key = "init.stack"
-skills = ["init"]
-replaces = "Which stack? (your recommendation, plain static HTML and CSS, or one the owner names)"
 
 [[assume]]
 key = "init.interface"
@@ -127,11 +137,6 @@ replaces = "What kind of software is this app? (the application types)"
 key = "adopt.events"
 skills = ["adopt"]
 replaces = "Which life events already hold for this app?"
-
-[[assume]]
-key = "adopt.tools"
-skills = ["adopt"]
-replaces = "Do you accept the proposed tools for the floor?"
 
 [[assume]]
 key = "safeguard.tools"

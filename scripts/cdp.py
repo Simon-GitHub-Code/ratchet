@@ -37,8 +37,8 @@ ENV = "RATCHET_BROWSER"
 NAMES = ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome")
 # Why `--no-sandbox`: Ubuntu 23.10 and later refuse the user namespaces Chromium's sandbox needs
 # unless the browser came with its own AppArmor profile, and a browser a tool downloaded did not.
-# Playwright drives Chromium the same way by default. The page under test is the project's own,
-# and the resolver rule below keeps every other site unreachable.
+# Browser automation libraries drive it the same way by default. The page under test is the
+# project's own, and the resolver rule below keeps every other site unreachable.
 FLAGS = (
     "--headless=new",
     "--no-sandbox",

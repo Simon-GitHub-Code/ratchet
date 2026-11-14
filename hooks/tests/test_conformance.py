@@ -225,10 +225,10 @@ def test_claude_md_stands_in_for_agents_md_and_a_glossary_map_for_the_glossary(
             "docs/design-brief.md: has no '## Slice one' section",
         ),
         (remove("docs/adr"), "docs/adr: missing"),
-        (remove(ADR), "docs/adr: no NNNN-<slug>.md record"),
+        (remove(ADR, conformance.SELF_TEST_RECORD), "docs/adr: no NNNN-<slug>.md record"),
         (
-            write("docs/adr/0003-later.md", "# Later\n"),
-            "docs/adr: numbering has gaps or duplicates: [1, 3]",
+            write("docs/adr/0004-later.md", "# Later\n"),
+            "docs/adr: numbering has gaps or duplicates: [1, 2, 4]",
         ),
         (
             write(ADR, "No heading here.\n"),

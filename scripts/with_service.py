@@ -77,8 +77,9 @@ Green only when it exits non-zero before the ready URL answers, within ``--timeo
 wrote names NAME. Red, with the boot output, if it becomes ready, hangs, exits 0, or exits without
 naming the setting. A setting the service reads from a file it finds itself is not removed.
 
-The boot command stays in the foreground: ``docker compose up`` and ``pnpm start`` do,
-``docker compose up -d`` does not, and a boot that returns is "exited before it answered".
+The boot command stays in the foreground: a command that starts the service and waits on it
+does, one that starts it in the background and returns does not, and a boot that returns is
+"exited before it answered".
 
 Pair it with ``load_smoke.py`` and ``telemetry_sink.py``, which are commands to run inside it.
 """

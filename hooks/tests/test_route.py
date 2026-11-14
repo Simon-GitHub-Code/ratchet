@@ -807,6 +807,27 @@ def test_an_owed_safeguard_comes_first_and_offers_the_build_beside_it(tmp_path: 
     assert "(3 instances)" in route.decide(root, None).why
 
 
+ARCHITECTURE_OWED = (
+    '[[owed]]\nrule = "architecture"\npath = "docs/process/binding.md"\n'
+    'problem = "the Architecture section declares no part"\nsince = "0.12.0"\n'
+)
+
+
+def test_an_owed_architecture_comes_next_and_offers_the_build_beside_it(tmp_path: Path) -> None:
+    # Why: ADR 0049. An adopted repository owes its architecture through the ledger, never as a
+    # red; the route makes it next, and the owner may carry on instead.
+    root = owing(tmp_path, **{"quality/owed.toml": ARCHITECTURE_OWED})
+    step = route.decide(root, None)
+    assert step.command == route.ARCHITECTURE
+    assert step.why.startswith("the architecture is owed since the upgrade to 0.12.0:")
+    assert step.why.endswith(f"Or carry on with {route.SPEC}: nothing is red for it")
+    assert (step.then, step.stage) == (route.SPEC, "architecture")
+    other = ARCHITECTURE_OWED.replace('"architecture"', '"bites"')
+    assert route.decide(owing(tmp_path / "b", **{"quality/owed.toml": other}), None).command == (
+        route.SPEC
+    )
+
+
 def test_a_declared_event_owes_its_rows_and_is_never_red(tmp_path: Path) -> None:
     root = owing(tmp_path, events="irreplaceable-data", **{"GLOSSARY.md": "# <project>\n"})
     step = route.decide(root, None)

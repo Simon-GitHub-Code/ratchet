@@ -40,7 +40,9 @@ The stages, in order; the first that does not hold is the answer:
    an architecture review the repository owes (``triggers.reviews_owed``: a kind that reopens
    the architecture has arrived for the first time, or such a life event is declared, and no
    decision record names it) is ``/ratchet:architecture``, with ``/ratchet:safeguard`` after it
-   when rows are owed too, since the review may move where the safeguards go (ADR 0052).
+   when rows are owed too, since the review may move where the safeguards go (ADR 0052). After
+   the safeguard, an architecture an upgrade left owed (``quality/owed.toml`` entries of the
+   ``architecture`` check) is ``/ratchet:architecture``, offered the same way (ADR 0049).
 
 After the three lines come the ``also:`` lines, when there are any: the upgrade, when the plugin
 in use is newer than the one the binding pins (ADR 0027); each question the owner has answered
@@ -68,6 +70,7 @@ import gatelib
 import hooks_installed
 import merge
 import merge_ready
+import owed
 import plugin_pin
 import questions
 import queue_notes
@@ -106,6 +109,7 @@ MERGE_FALLBACK = "the binding's `merge` entry point"
 NEXT = "/ratchet:next"
 SAFEGUARD = "/ratchet:safeguard"
 ARCHITECTURE = "/ratchet:architecture"
+ARCHITECTURE_RULE = "architecture"
 EVENTS_LOG = "events.tsv"
 EVENTS_HEADER = "date\tevent\tsign\tanswer"
 DECLINED = "declined"
@@ -759,7 +763,12 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         if missing
         else ticket_step(root, gh, checkout)
     )
-    return review_step(root, step) or safeguard_step(root, step) or step
+    return (
+        review_step(root, step)
+        or safeguard_step(root, step)
+        or architecture_step(root, step)
+        or step
+    )
 
 
 # --- architecture reviews, safeguards and life events (ADR 0028, ADR 0052) -----------------
@@ -795,7 +804,7 @@ def review_step(root: Path, instead: Step) -> Step | None:
         if code
         else "a declared event is never red"
     )
-    then = SAFEGUARD if triggers.owed(root) else instead.command
+    then = (safeguard_step(root, instead) or architecture_step(root, instead) or instead).command
     return Step(
         ARCHITECTURE,
         f"{'; '.join(said)}. Or carry on with {instead.command}: {cost}",
@@ -839,6 +848,27 @@ def safeguard_step(root: Path, instead: Step) -> Step | None:
         f"{'; '.join(said)}. Or carry on with {instead.command}: {cost}",
         instead.command,
         "safeguard",
+    )
+
+
+def architecture_step(root: Path, instead: Step) -> Step | None:
+    """``/ratchet:architecture`` when an upgrade left the architecture owed (ADR 0049).
+
+    Why: an adopted repository that predates the asked architecture owes its record and its
+    parts, not as a red gate but as the ledger's entries (ADR 0037). Nothing else proposes owed
+    work, so the route names this one; like a safeguard it never hides the build.
+    """
+    owing = [entry for entry in owed.read(root).entries if entry.rule == ARCHITECTURE_RULE]
+    if not owing:
+        return None
+    return Step(
+        ARCHITECTURE,
+        f"the architecture is owed since the upgrade to {owing[0].since}: no decision record"
+        " says how the system is built, what was weighed against it and what changing it would"
+        " cost, or the binding declares no parts; an agent drafts the options from the code and"
+        f" asks you once. Or carry on with {instead.command}: nothing is red for it",
+        instead.command,
+        "architecture",
     )
 
 

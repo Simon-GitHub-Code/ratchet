@@ -18,6 +18,18 @@ The plugin version has this one home. Every workflow checks the plugin out at th
 - Commit hooks: `.pre-commit-config.yaml` (the `pre-commit` framework, the template's example. Another mechanism names its own file or directory here, then `, installed by` and its install command in backticks. `hooks-installed` proves either by running the hooks.)
 - Merge: the merge judge decides (`merge-ready`). The `merge` workflow merges a pull request the judge passes once `ci` is green, and comments why on one it leaves to the owner. With no forge, `merge <branch>` judges the branch, runs `check` on the merge result and merges it. The one-way doors are the `[[door]]` tables of `guards/manifest.toml`.
 
+## Architecture
+
+The shape of the system, chosen with the owner at adoption (ADR 0049 in the `ratchet` plugin; the method's `architecture.md` says what the record holds). Every agent reads this before it places code, a review judges a change against it, and the `dependency direction` gate holds the table. The `conformance` gate is red while the decision record is missing, records fewer than two alternatives, or lacks who chose it, a reversal cost or a refutation criterion, and while the table declares no part or lets a part depend on one it does not declare.
+
+- Decision: <`docs/adr/NNNN-<slug>.md`, the decision record of the architecture>
+
+One row per part, inner to outer. `Path` is the globs of the files that belong to the part, each in backticks. `May depend on` names other parts of this table, comma-separated, or `nothing`.
+
+| Part | Path | May depend on |
+| --- | --- | --- |
+| <part> | <`glob` of its files> | <parts, or `nothing`> |
+
 ## Entry points
 
 Every entry point is one command that exits non-zero on any failure. `check` is tier 0 plus tier 1; `check-deep` adds tier 2; `check-fast` is `check` stopped at the first red, the inner loop. `tier0-tree` is tier 0 less the history gate, which the pre-commit hook runs; `hooks-installed` is red while a commit would not run tier 0, and `hooks-install` installs the repository's own hooks and asks it again; `settings` writes the permission rules from the manifest; `bite-one <gate>` shows one gate's bites while its recipe is written. The method's skills and hooks call every entry point of the first table below by name, and the conformance gate requires each. Each tier runs its gates at once, and the `justfile`'s lists are the only list of a tier's gates: CI builds its matrices from them.
@@ -218,7 +230,7 @@ What the change-size gate reads to count tests apart from product code (ADR 0045
 
 ## Telemetry
 
-<The signals every entry point emits and where they go: the OpenTelemetry SDK (or the stack's equivalent) and the one module that starts it; the seam through which every route, job and command is registered, so none can be added uninstrumented; the attributes a span must carry (the route template, the outcome, never a secret or a personal identifier); the metrics and the log fields; the exporter and the collector the end-to-end environment runs. A feature's spec names the signal that shows each criterion working in production.>
+<The signals every entry point emits and where they go: the telemetry library this stack uses and the one module that starts it; the seam through which every route, job and command is registered, so none can be added uninstrumented; the attributes a span must carry (the route template, the outcome, never a secret or a personal identifier); the metrics and the log fields; the exporter and the collector the end-to-end environment runs. A feature's spec names the signal that shows each criterion working in production.>
 
 ## Feature flags
 

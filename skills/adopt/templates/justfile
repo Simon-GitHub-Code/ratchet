@@ -393,7 +393,7 @@ sast:
     @echo "bind: static security analysis with the stack's rule set"; exit 1
 
 iac:
-    @echo "bind: configuration scanner over the Dockerfile, manifests and infrastructure code"; exit 1
+    @echo "bind: configuration scanner over the container build files, manifests and infrastructure code"; exit 1
 
 artefact-scan:
     @echo "bind: scan the shipped artefact or base image for known vulnerabilities"; exit 1
