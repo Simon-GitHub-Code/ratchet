@@ -1215,10 +1215,11 @@ def _merges(lease: Lease, _: Drain, __: Step) -> Lease | None:
 
 
 def _land_rest(lease: Lease, _: Drain, __: Step) -> Lease | None:
-    """``land``'s close: ``settle`` on the merge it made, which no other command records first."""
-    if lease.merge is not Merge.UNSAID:
+    """``land``'s close: ``settle`` on a merge no note says; nothing on one another command recorded."""  # noqa: E501
+    if lease.merge is Merge.NONE:
         return None
-    return merge_recorded(lease)._replace(landing=None)
+    done = merge_recorded(lease) if lease.merge is Merge.UNSAID else lease
+    return done._replace(landing=None)
 
 
 def _land_killed(lease: Lease, _: Drain, __: Step) -> Lease | None:

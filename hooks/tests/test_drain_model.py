@@ -1038,11 +1038,13 @@ TICKET_STEPS = frozenset({Step.OPEN, Step.UPDATE, Step.PARK, Step.LAND})
 def landing_decision(
     before: model.Lease, drain_: model.Drain | None, step: Step | None
 ) -> tuple[object, ...] | None:
-    """What a command on the ticket meets in a live landing, and whether a session's end ends it before its merge or after; ``None`` for any other step."""  # noqa: E501
+    """What a command on the ticket meets in a live landing, whether the landing's close meets a merge another command recorded, and whether a session's end ends it before its merge or after; ``None`` for any other step."""  # noqa: E501
     if step in TICKET_STEPS and before.landing is not None:
         # Why: each is refused, before the merge lands and after. Not whose agent typed it, which
         # none of these commands reads, nor the tree, which none of them touches.
         return (step.value, before.merge is Merge.NONE)
+    if step is Step.LAND_REST:
+        return (step.value, before.merge is Merge.UNSAID)
     if step is Step.DIE:
         ends = before.landing is drain_ or (bool(before.shared) and before.landing is not None)
         return (step.value, ends, ends and before.merge is Merge.NONE)
