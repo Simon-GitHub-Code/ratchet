@@ -82,11 +82,8 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     NEVER_CRASHES: None,
     LOST: None,
 }
-# Why: a fix round and a reconcile over a ceiling, which the real workflow stops as too large.
-RECONCILED_OVER = [
-    "the orchestrator judges a branch whose rebase conflicted again",
-    "reconcile measures product code over its ceiling",
-]
+# Why: a fix round over a ceiling, which the real workflow stops as too large, as it does the
+# reconcile of RECONCILED_OVER.
 FIXED_OVER = [
     "the orchestrator starts a build",
     "preflight is green for a project that is depended-on",
