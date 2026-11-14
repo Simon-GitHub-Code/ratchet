@@ -35,21 +35,43 @@ which chooses the tool, writes the recipe and the fault and binds the row.
 A change that binds the row itself is green. A declared life event owes its rows too, and is never
 red: the route puts binding them first.
 
+**The architecture review** (ADR 0052). Some triggers reopen the architecture: the catalogue's
+``[architecture]`` table names them (``code:stored-format``, ``life:deployed``, ...). When one of
+those kinds arrives for the first time ever, or one of those events is declared, an architecture
+review is owed beside any rows, and is owed the same way: the arrival is free and noted, and a
+later change that adds another instance of the kind while the review is owed is red and says to
+run ``/ratchet:architecture``; an event is never red. The review is done when a decision record
+under ``docs/adr/`` at the merge base names the trigger on its ``- Architecture review:`` line,
+says ``- Outcome: holds`` or ``- Outcome: changes`` and ``- Decided: YYYY-MM-DD``, and has a
+``## Decision`` and a ``## Refutation criterion``; one that changes the architecture also has
+``## Considered options`` with at least two options. A record written in the change that adds
+the instance does not count: the review lands on its own, before the code that would grow under
+it.
+
+The review is asked only where the binding's Gates table holds the row ``architecture reviewed
+when its shape changes``, bound to this script. The first commit on the default line whose binding
+held it starts the reviews: a kind that had an instance at or before that commit, or an event
+declared on it, counts as reviewed by the adoption (or by the upgrade that added the row), so an
+adopted repository does not turn red for what it already had.
+
 The Triggers table, the Gates rows and the life events that judge are read at the merge base
 (ADR 0028): a change cannot loosen its own judge. Instances are counted at the merge base and at
 head, the work tree's tracked files. On the adoption (the base holds no binding) nothing is judged.
 
-Other scripts import ``owed(root)`` and ``instances(root, ref)``. ``--json`` prints ``owed`` for
-the route as a list of ``{"question", "trigger", "name", "count"}`` objects. ``--count`` prints
-each kind of the work tree's table with its instances and the table's problems, so whoever writes
-a row sees at once what it finds; it judges nothing.
+Other scripts import ``owed(root)``, ``reviews_owed(root)`` and ``instances(root, ref)``.
+``--json`` prints ``owed`` for the route as a list of ``{"question", "trigger", "name", "count"}``
+objects; ``--reviews`` prints ``reviews_owed`` the same way, each with what it ``reopens``.
+``--count`` prints each kind of the work tree's table with its instances and the table's
+problems, so whoever writes a row sees at once what it finds; it judges nothing.
 
-Usage: ``triggers.py [--root DIR] [--base REF] [--json | --count]``. Exits 1 when red.
+Usage: ``triggers.py [--root DIR] [--base REF] [--json | --reviews | --count]``. Exits 1 when
+red.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import sys
@@ -59,15 +81,28 @@ from typing import TYPE_CHECKING
 
 import application_types
 import gatelib
+import markdown_text
 import project_bite
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping, Sequence
+    from collections.abc import Callable, Collection, Mapping, Sequence
 
 SECTION = "\n## Triggers\n"
 NEVER = "none:"
 SHOWN = 5
 CELL_BREAK = re.compile(r"(?<!\\)\|")
+# Why: ADR 0052. The Gates row that holds the architecture review, and where its reviews start.
+REVIEW_QUESTION = "architecture reviewed when its shape changes"
+REVIEW = "architecture review"
+ARCHITECTURE = "/ratchet:architecture"
+ADRS = "docs/adr/"
+REVIEW_LINE = re.compile(r"^- Architecture review:(.*)$", re.MULTILINE)
+OUTCOME_LINE = re.compile(r"^- Outcome:\s*`?(\w+)`?\s*$", re.MULTILINE)
+DECIDED_LINE = re.compile(r"^- Decided:\s*\d{4}-\d{2}-\d{2}\s*$", re.MULTILINE)
+HOLDS, CHANGES = "holds", "changes"
+DECISION, REFUTATION, OPTIONS = "## Decision", "## Refutation criterion", "## Considered options"
+OPTION = re.compile(r"^(?:[-*]|\d+\.) \S", re.MULTILINE)
+MIN_OPTIONS = 2
 
 
 @dataclass(frozen=True)
@@ -191,17 +226,27 @@ def held_before(root: Path, base: str, kind: Kind) -> str | None:
     the kind finds, and stops at the first hit. A kind with no history reads as never held, so a
     shallow clone makes every arrival free: CI must fetch full history for this gate.
     """
-    listed = gatelib.git(
-        root, "log", "-m", "--first-parent", "--name-only", "--format=%x00%H", base
-    )
-    for block in (listed or "").split("\0")[1:]:
-        commit, _, names_text = block.partition("\n")
+    for commit, names_text in touched(root, base):
         if (
             any(kind.finds(path) for path in names_text.split("\n") if path)
             and instances(root, commit, {kind.name: kind})[kind.name]
         ):
             return commit
     return None
+
+
+@functools.lru_cache(maxsize=16)
+def touched(root: Path, base: str) -> tuple[tuple[str, str], ...]:
+    """Each first-parent commit up to ``base``, newest first, with the names it touched.
+
+    Why: the architecture review asks it of several kinds in one run (ADR 0052), so the log is
+    read once per commit. ``base`` is a commit, never a name that moves.
+    """
+    listed = gatelib.git(
+        root, "log", "-m", "--first-parent", "--name-only", "--format=%x00%H", base
+    )
+    blocks = (block.partition("\n") for block in (listed or "").split("\0")[1:])
+    return tuple((commit, names_text) for commit, _, names_text in blocks)
 
 
 def later_trigger(tool: str) -> str | None:
@@ -251,6 +296,172 @@ def owed(root: Path) -> list[Owed]:
     )
 
 
+# --- the architecture review (ADR 0052) ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Review:
+    """A decision record that names triggers on its ``- Architecture review:`` line.
+
+    ``problems`` says why it does not count as a review yet; a record with none settles ``keys``.
+    """
+
+    path: str
+    keys: tuple[str, ...]
+    problems: tuple[str, ...]
+
+
+def review_of(path: str, text: str) -> Review | None:
+    """The review a decision record holds, or ``None`` when it names no trigger."""
+    match = REVIEW_LINE.search(text)
+    if match is None:
+        return None
+    keys = tuple(unwrap(key) for key in match.group(1).split(",") if unwrap(key))
+    problems: list[str] = []
+    outcome = OUTCOME_LINE.search(text)
+    said = outcome.group(1) if outcome else None
+    if said not in (HOLDS, CHANGES):
+        problems.append(f"has no '- Outcome: {HOLDS}' or '- Outcome: {CHANGES}' line")
+    if DECIDED_LINE.search(text) is None:
+        problems.append("has no '- Decided: YYYY-MM-DD' line")
+    problems += [
+        f"has no '{heading}' section that says something"
+        for heading in (DECISION, REFUTATION)
+        if markdown_text.empty_body(text, heading)
+    ]
+    options = len(OPTION.findall(markdown_text.section(text, OPTIONS)))
+    if said == CHANGES and options < MIN_OPTIONS:
+        problems.append(
+            f"changes the architecture and lists {options} option(s) under '{OPTIONS}';"
+            f" it lists {MIN_OPTIONS} or more, with what each costs to undo"
+        )
+    return Review(path, keys, tuple(problems))
+
+
+def reviews_at(root: Path, ref: str | None) -> list[Review]:
+    """Every decision record at ``ref`` (the work tree when ``None``) that names a trigger.
+
+    At a commit, one ``git grep`` finds the records that hold the line, so a judgement reads only
+    those and not every record the repository keeps.
+    """
+    if ref is None:
+        paths = [p for p in gatelib.tracked_paths(root) if p.startswith(ADRS) and p.endswith(".md")]
+    else:
+        listed = gatelib.git(root, "grep", "-l", "-E", REVIEW_LINE.pattern, ref, "--", ADRS)
+        paths = [line.removeprefix(f"{ref}:") for line in (listed or "").splitlines()]
+    found = []
+    for path in paths:
+        review = review_of(path, file_text(root, ref, path))
+        if review is not None:
+            found.append(review)
+    return found
+
+
+def reviewed(reviews: Sequence[Review]) -> frozenset[str]:
+    """The triggers a review that counts names."""
+    return frozenset(key for review in reviews if not review.problems for key in review.keys)
+
+
+def why_not(reviews: Sequence[Review], key: str) -> str:
+    """Why the records that name ``key`` do not count, or that none names it."""
+    said = [
+        f"{review.path} {'; '.join(review.problems)}" for review in reviews if key in review.keys
+    ]
+    return "; ".join(said) if said else f"no decision record names `{key}`"
+
+
+def reviews_bound(binding: str) -> bool:
+    """Whether the binding's Gates table holds the review's row, bound to the plugin's script."""
+    return any(
+        row.question == REVIEW_QUESTION and project_bite.SHIPPED.fullmatch(row.tool)
+        for row in project_bite.gate_rows(binding)
+    )
+
+
+def reviews_start(root: Path, ref: str) -> str | None:
+    """The first commit on the default line up to ``ref`` whose binding held the review's row.
+
+    Why: ADR 0052. What was there when the reviews started was reviewed by the adoption, or by
+    the upgrade that added the row. One first-parent search for the commits that added or removed
+    a binding line naming the row's question, oldest first; the first that holds the row bound is
+    the start. A line, not a count: a row whose Tool cell is bound later keeps its count.
+    """
+    listed = gatelib.git(
+        root,
+        "log",
+        "-m",
+        "--first-parent",
+        "--reverse",
+        "--format=%H",
+        f"-G{REVIEW_QUESTION}",
+        ref,
+        "--",
+        str(gatelib.BINDING),
+    )
+    for commit in dict.fromkeys((listed or "").split()):
+        if reviews_bound(binding_at(root, commit)):
+            return commit
+    return None
+
+
+@dataclass
+class Start:
+    """Where a repository's reviews start, found once and only when a judgement needs it."""
+
+    root: Path
+    ref: str
+
+    @functools.cached_property
+    def commit(self) -> str | None:
+        """The first commit up to ``ref`` whose binding held the review's row."""
+        return reviews_start(self.root, self.ref)
+
+    def had(self, kind: Kind) -> bool:
+        """Whether ``kind`` had an instance at or before the start: reviewed by the adoption."""
+        return self.commit is None or held_before(self.root, self.commit, kind) is not None
+
+    def declared(self, event: str) -> bool:
+        """Whether ``event`` was declared at the start: reviewed by the adoption."""
+        if self.commit is None:
+            return True
+        return event in application_types.life_events(binding_at(self.root, self.commit))
+
+
+def reviews_owed(root: Path) -> list[Owed]:
+    """The architecture reviews head owes: each trigger that reopens it, fired since the start.
+
+    ``question`` is ``architecture review``; ``name`` and ``count`` are as for a row. A trigger a
+    review in the work tree names, or one that had fired when the reviews started, is not owed.
+    """
+    binding = binding_at(root, None)
+    if not reviews_bound(binding):
+        return []
+    kinds, _ = parse(binding)
+    reopening = application_types.load().architecture
+    named = {kind for key in reopening for kind in application_types.code_kinds(key)}
+    found = instances(root, None, {name: kinds[name] for name in named if name in kinds})
+    events = application_types.life_events(binding)
+    done = reviewed(reviews_at(root, None))
+    head = gatelib.git(root, "rev-parse", "--verify", "--quiet", "HEAD")
+    if head is None:
+        return []
+    start = Start(root, head)
+    owing: list[Owed] = []
+    for key in reopening:
+        if key in done:
+            continue
+        code = application_types.code_kinds(key)
+        if code:
+            kind = code[0]
+            if found.get(kind) and not start.had(kinds[kind]):
+                owing.append(Owed(REVIEW, key, kind, len(found[kind])))
+            continue
+        event = key.removeprefix(application_types.LIFE)
+        if event in events and not start.declared(event):
+            owing.append(Owed(REVIEW, key, event, 0))
+    return owing
+
+
 def listing(labels: Sequence[str]) -> str:
     """A few instances, then how many more."""
     more = len(labels) - SHOWN
@@ -280,12 +491,13 @@ def judge(root: Path, base: str) -> tuple[list[str], list[str]]:
     ]
     problems: list[str] = []
     notes: list[str] = []
+    history = functools.cache(lambda kind: held_before(root, base, kinds[kind]))
     for kind in kinds:
         rows = [row for row in owing if application_types.code_kinds(row.trigger)[:1] == [kind]]
         before_count, now = len(at_base[kind]), len(at_head[kind])
         if not rows or now <= before_count:
             continue
-        earlier = held_before(root, base, kinds[kind]) if before_count == 0 else None
+        earlier = history(kind) if before_count == 0 else None
         if before_count == 0 and earlier is None:
             notes.append(
                 f"triggers: note: '{kind}' has arrived ({listing(at_head[kind])}) and owes"
@@ -313,6 +525,85 @@ def judge(root: Path, base: str) -> tuple[list[str], list[str]]:
             f"triggers: note: life event '{event}' is declared and owes {names(rows)};"
             " run /ratchet:safeguard to bind them (ADR 0028)"
         )
+    if reviews_bound(before):
+        reviewing = judge_reviews(Judged(root, base, before, kinds, at_base, at_head), history)
+        problems += reviewing[0]
+        notes += reviewing[1]
+    return problems, notes
+
+
+@dataclass(frozen=True)
+class Judged:
+    """What a judgement read: the merge base, its binding and table, and each kind's instances."""
+
+    root: Path
+    base: str
+    before: str
+    kinds: Mapping[str, Kind]
+    at_base: Mapping[str, list[str]]
+    at_head: Mapping[str, list[str]]
+
+
+def judge_reviews(
+    judged: Judged, history: Callable[[str], str | None]
+) -> tuple[list[str], list[str]]:
+    """The problems and notes of the architecture review (ADR 0052), for a base that asks it.
+
+    ``history`` is the newest commit up to the base that held a kind, as ``held_before`` finds.
+    """
+    reopening = application_types.load().architecture
+    grown = [
+        kind
+        for kind in judged.kinds
+        if application_types.CODE + kind in reopening
+        and len(judged.at_head[kind]) > len(judged.at_base[kind])
+    ]
+    events = [
+        event
+        for event in sorted(application_types.life_events(judged.before))
+        if application_types.LIFE + event in reopening
+    ]
+    if not grown and not events:
+        return [], []
+    found = reviews_at(judged.root, judged.base)
+    done = reviewed(found)
+    start = Start(judged.root, judged.base)
+    problems: list[str] = []
+    notes: list[str] = []
+    for kind in grown:
+        key = application_types.CODE + kind
+        if key in done:
+            continue
+        before_count = len(judged.at_base[kind])
+        earlier = history(kind) if before_count == 0 else None
+        if before_count == 0 and earlier is None:
+            notes.append(
+                f"triggers: note: '{kind}' has arrived ({listing(judged.at_head[kind])}) and"
+                f" reopens the architecture ({reopening[key]}); the change that brings a kind is"
+                f" free. Run {ARCHITECTURE} next to review it before another is added (ADR 0052)"
+            )
+            continue
+        if start.had(judged.kinds[kind]):
+            continue
+        added = [label for label in judged.at_head[kind] if label not in set(judged.at_base[kind])]
+        held = (
+            f"the base already held {before_count}"
+            if earlier is None
+            else f"the base holds none but {earlier[:9]} did, so it is returning, not arriving,"
+        )
+        problems.append(
+            f"triggers: architecture review owed: '{kind}' gained {len(added)} instance(s)"
+            f" ({listing(added)}) while {held} and the review it reopens has not landed:"
+            f" {why_not(found, key)}. Run {ARCHITECTURE} and land its decision record before"
+            " adding more (ADR 0052)"
+        )
+    for event in events:
+        key = application_types.LIFE + event
+        if key not in done and not start.declared(event):
+            notes.append(
+                f"triggers: note: life event '{event}' is declared and reopens the architecture"
+                f" ({reopening[key]}); run {ARCHITECTURE} to review it (ADR 0052)"
+            )
     return problems, notes
 
 
@@ -334,6 +625,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--base")
     parser.add_argument("--json", action="store_true", help="print the rows head owes, as JSON")
     parser.add_argument("--count", action="store_true", help="print each kind's instances")
+    parser.add_argument(
+        "--reviews", action="store_true", help="print the architecture reviews head owes, as JSON"
+    )
     options = parser.parse_args(argv[1:])
     root = options.root.resolve()
     if options.count:
@@ -341,6 +635,11 @@ def main(argv: list[str]) -> int:
         return 0
     if options.json:
         print(json.dumps([asdict(row) for row in owed(root)]))
+        return 0
+    if options.reviews:
+        reopening = application_types.load().architecture
+        owing = [{**asdict(row), "reopens": reopening[row.trigger]} for row in reviews_owed(root)]
+        print(json.dumps(owing))
         return 0
     base = gatelib.base_commit(root, options.base)
     if base is None:

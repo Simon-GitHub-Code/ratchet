@@ -28,12 +28,13 @@ What it leaves out is listed [at the end](#left-out).
 | Each of the two tickets | none; needs triage; agent-ready; agent-ready with a conjecture; held by a blocked run's stash; parked by the drain for open questions, for guard edits, for an owed safeguard, or by a note older than the kinds of hold or than the base commit a guard hold needs; built on its branch; merged but open; resolved |
 | The tickets inherit the spec's conjecture | yes or no |
 | A safeguard is owed | yes or no |
+| An architecture review is owed | yes or no |
 
-From an empty directory the model reaches 276 states and 659 steps. Three of the states are at rest: adopted, nothing unfinished, nothing owed, and every ticket resolved or none written. At rest the route names the next spec.
+From an empty directory the model reaches 409 states and 1024 steps. Three of the states are at rest: adopted, nothing unfinished, nothing owed, and every ticket resolved or none written. At rest the route names the next spec.
 
 ## What the route names
 
-The route asks in this order, and the first case that applies is its answer. Each answer is a label. There are 24 labels; `safeguard` is named in two places.
+The route asks in this order, and the first case that applies is its answer. Each answer is a label. There are 25 labels; `safeguard` is named in two places.
 
 | Label | When | What it names |
 | --- | --- | --- |
@@ -46,6 +47,7 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | `commit` | anything else is uncommitted | `just check`, then a commit on a branch |
 | `merge` | a working branch is checked out | `just merge <branch>` |
 | `merge-records` | a records branch waits | the owner's merge of it |
+| `review` | an architecture review is owed | `/ratchet:architecture` |
 | `safeguard` | a safeguard is owed | `/ratchet:safeguard` |
 | `grill` | no glossary or design brief | `/mattpocock-skills:grill-with-docs` |
 | `triage` | no agent-ready ticket, and an unblocked one needs triage | agree that ticket |
@@ -65,7 +67,7 @@ The route asks in this order, and the first case that applies is its answer. Eac
 
 ## Steps
 
-32 steps change the state. The owner's and an agent's steps each follow one label. The others are things that happen: a command that stops part-way, a run that blocks, a park, an edit.
+34 steps change the state. The owner's and an agent's steps each follow one label. The others are things that happen: a command that stops part-way, a run that blocks, a park, an edit.
 
 | Step | Follows |
 | --- | --- |
@@ -94,6 +96,8 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | you change the ticket | `change-ticket` |
 | you mark the merged ticket resolved | `resolve` |
 | a new kind of code arrives, and a safeguard is owed | |
+| a kind of code that reopens the architecture arrives, and a review is owed | |
+| an agent lands the architecture review | `review` |
 | an agent binds the safeguard | `safeguard` |
 | someone edits code | |
 | an agent commits on a branch | `commit` |
@@ -121,8 +125,9 @@ The tests also check that:
 - following the advice never comes back to a state it passed, except through rest;
 - every state reaches rest by some steps;
 - each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold, or a guard hold with no base commit, waits for a change to the ticket;
-- the real route names what the model says in every one of the 276 states;
+- the real route names what the model says in every one of the 409 states;
 - on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
+- a drain note older than a blocked run's stash, or one with no base commit, does not release the run;
 - on long runs of steps, a repository that loses its commit hooks is told to install them first, whatever else is true.
 
 ## Divergences
@@ -133,15 +138,15 @@ There are none. The model was written with one, a guard hold that outlived the e
 
 ## Charts
 
-The charts were drawn from the export with SHA-256 `a4e672ffefa7dcf22e1d8db44e8decbbef2d04d8a2c532ba38923a6ddf3a484c`.
+The charts were drawn from the export with SHA-256 `076240ce7a140a0e893c9255e00ddd45d20a45ca68a0bdd3f3de162accc24097`.
 
-Each chart gives each state of the model one label, and draws an arrow where a step changes the label. A step that keeps the label is not drawn, except on the path to a broken rule; no rule breaks, so the charts have no such path and no legend. Each chart's report says that TLC reached 276 states and 659 steps, that all five rules hold, and that nothing deadlocks.
+Each chart gives each state of the model one label, and draws an arrow where a step changes the label. A step that keeps the label is not drawn, except on the path to a broken rule; no rule breaks, so the charts have no such path and no legend. Each chart's report says that TLC reached 409 states and 1024 steps, that all five rules hold, and that nothing deadlocks.
 
 ### The work
 
-What the route names once nothing in the checkout is unfinished, no records branch waits and no safeguard is owed. Four labels share one state: the drain's three kinds of park and the park for a safeguard are "Release the ticket the drain parked". `build` and `drain` are "Build the agent-ready tickets". A state where the real route names something else would say so after "yet the route names"; none does.
+What the route names once nothing in the checkout is unfinished, no records branch waits and no safeguard or review is owed. Four labels share one state: the drain's three kinds of park and the park for a safeguard are "Release the ticket the drain parked". `build` and `drain` are "Build the agent-ready tickets". A state where the real route names something else would say so after "yet the route names"; none does.
 
-16 states and 28 arrows. It does not draw the 352 steps that keep the label, which are most of the checkout's steps.
+16 states and 28 arrows. It does not draw the 566 steps that keep the label, which are most of the checkout's steps.
 
 ```mermaid
 ---
@@ -199,7 +204,7 @@ stateDiagram-v2
 
 What is unfinished in the checkout, which the route names before any work.
 
-7 states and 14 arrows. It does not draw the 371 steps that keep the label: the setup, the tickets and the safeguards.
+7 states and 14 arrows. It does not draw the 597 steps that keep the label: the setup, the tickets, the safeguards and the reviews.
 
 ```mermaid
 ---
@@ -230,25 +235,32 @@ stateDiagram-v2
   s6 --> s5: an agent lands the records
 ```
 
-### Safeguards
+### Safeguards and reviews
 
-A safeguard that is owed is named before the next feature, and after anything unfinished in the checkout.
+A safeguard or an architecture review that is owed is named before the next feature, and after anything unfinished in the checkout. A review comes before a safeguard (ADR 0052): with both owed, landing the review leaves the safeguard named.
 
-3 states and 4 arrows. It does not draw the 497 steps that keep the label.
+5 states and 9 arrows. It does not draw the 702 steps that keep the label.
 
 ```mermaid
 ---
-title: "Safeguards: named before the next feature, never instead of it"
+title: "Safeguards and reviews: named before the next feature, never instead of it"
 ---
 stateDiagram-v2
   s0: None owed
-  s1: Owed: the route names it
-  s2: Owed: unfinished work comes first
+  s1: Review owed: the route names it
+  s2: Owed: the route names it
+  s3: Review owed: unfinished work comes first
+  s4: Owed: unfinished work comes first
   [*] --> s0
-  s0 --> s1: a new kind of code arrives or the drain merges one and parks the next for a safeguard
-  s1 --> s0: an agent binds the safeguard
-  s1 --> s2: you write a spec or you mark the ticket resolved or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way
-  s2 --> s1: an agent lands the records or you merge the records branch or the branch merges
+  s0 --> s1: a kind that reopens the architecture arrives
+  s0 --> s2: a new kind of code arrives or the drain merges one and parks the next for a safeguard
+  s1 --> s0: an agent lands the architecture review
+  s1 --> s3: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way or you mark the ticket resolved
+  s2 --> s0: an agent binds the safeguard
+  s2 --> s4: you write a spec or you mark the ticket resolved or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way
+  s3 --> s1: an agent lands the records or you merge the records branch or the branch merges
+  s4 --> s2: an agent lands the records or you merge the records branch or the branch merges
+  s1 --> s2: an agent lands the architecture review
 ```
 
 ## Left out
@@ -261,8 +273,9 @@ stateDiagram-v2
 - The owner's ticket edits as records. Agreeing a ticket, stating its conjecture and finishing a ticket yourself are one step each. Only marking a ticket resolved goes through records uncommitted and a landing.
 - A split that stops half-way, a grill that writes only part of its records, and a safeguard run that stops.
 - The drain's own states: its work trees, the merge job, and retries of a mechanical wait.
-- A blocked run's stash and a drain note on the same ticket, and a note with more than one kind of hold.
+- A drain note written after a blocked run's stash on the same ticket, and a note with more than one kind of hold. The other order is in the model: a ticket the drain parked, then changed by the owner, then held by a run that blocked. The note is older than the run, so the route judges the run as if the drain had written no note, and names it until the ticket changes again.
 - A note a drain wrote with its kinds of hold but before it recorded the default branch's commit. Landing its guard edits does not release it, and the route names them again; a change to the ticket does.
+- A kind that reopens the architecture and owes rows of its own as well, a declared life event that reopens it, and a ticket the drain parks while a review is owed. The model's arrival owes the review alone; `test_architecture_review.py` holds the route's order where rows are owed too, the review and then the safeguard, and the release of such a park.
 - An architecture an upgrade left owed in `quality/owed.toml`, which the route names after an owed safeguard and in the same way (ADR 0049). The model's repositories never owe one.
 - The `also:` lines: signs of a life event, and standing answers.
 - Hooks lost after the setup. The model installs them once; the stateful test takes them away every seventh step and checks that the route names them first.
