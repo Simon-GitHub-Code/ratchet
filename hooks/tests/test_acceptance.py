@@ -195,6 +195,18 @@ def test_a_session_whose_work_tree_was_removed_is_stale(
     assert out[0] == f"session {directory.name} is stale: {acceptance.acceptance_record.STALE}"
 
 
+def test_a_session_that_cannot_say_what_it_served_is_stale(tmp_path: Path) -> None:
+    # Why: a work tree that is gone, or a session file that lost its facts, cannot be shown to
+    # hold the tree that was served. This is the except of `still_served`, reached here with no
+    # boot and no timing, so the coverage gate does not lean on a test that boots a product.
+    directory = tmp_path / "session"
+    directory.mkdir()
+    assert not acceptance.still_served(directory)
+    facts = {"root": str(tmp_path / "gone"), "slug": SLUG, "tree": "0" * 40}
+    (directory / "session.json").write_text(json.dumps(facts), encoding="utf-8")
+    assert not acceptance.still_served(directory)
+
+
 def test_a_session_whose_directory_was_removed_stops_all_it_started(
     product: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
