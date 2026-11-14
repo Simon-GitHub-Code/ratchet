@@ -622,3 +622,20 @@ def test_a_parked_close_of_a_kept_tree_resets_the_retry_count_and_says_it_stays(
     assert any(
         "the work tree stays" in reason for reason in drain.queue_notes.texts(closed["reasons"])
     )
+
+
+def test_a_marker_for_a_rebase_that_changed_nothing_is_cleared(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    tree = build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    path = drain.queue_notes.note_path(root, BRANCH_A)
+    drain.queue_notes.write_note(
+        path, {**note(root, BRANCH_A), "rebasing": git(tree, "rev-parse", "HEAD")}
+    )
+    assert json.loads(update(root).stdout) == {"moved": False, "conflicts": []}
+    assert "rebasing" not in note(root, BRANCH_A)
+
+
+def test_a_process_that_cannot_be_read_is_not_a_git_in_the_tree(tmp_path: Path) -> None:
+    (tmp_path / "proc" / "4242").mkdir(parents=True)
+    assert not merge.git_running_in(tmp_path, proc=tmp_path / "proc")
