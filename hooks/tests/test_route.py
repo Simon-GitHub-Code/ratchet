@@ -488,7 +488,6 @@ def test_a_path_the_drain_recorded_as_the_cause_releases_a_blocked_run(tmp_path:
     queue_notes.write_note(
         queue_notes.note_path(root, "feature/2-b"), {"causes": queue_notes.causes_of(result)}
     )
-    assert queue_notes.causes(root, "feature/2-b") == ["package.json"]
     write(root, "unrelated.txt", "x\n")
     commit(root, "build: something else")
     assert route.decide(root, None).stage == "blocked-run"
@@ -505,6 +504,27 @@ def test_a_run_that_named_no_path_is_released_only_by_dropping_its_stash(tmp_pat
     write(root, "package.json", "{}\n")
     commit(root, "build: a move")
     assert not route.answered(root, "main", "stash@{0}", asked=[])
+
+
+FORGE_TEXT = "X." + CONJECTURE
+
+
+@pytest.mark.parametrize(("answered", "stage"), [(False, "blocked-run"), (True, "build")])
+def test_a_forge_ticket_is_released_by_the_text_the_drain_compares(
+    tmp_path: Path, *, answered: bool, stage: str
+) -> None:
+    # Why: a forge ticket has no file, so only its text, as the drain compares it, can say the
+    # owner answered in the issue.
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    ticket = route.tracker_tickets(root, FakeGh(issues=issues((5, "Five", FORGE_TEXT))))
+    assert ticket
+    blocked(root, route.own_branch(ticket[0]))
+    queue_notes.write_note(
+        queue_notes.note_path(root, route.own_branch(ticket[0])),
+        {"digest": queue_notes.digest(ticket[0])},
+    )
+    text = FORGE_TEXT + ("\n## Answers\n\nQ: a? A: b.\n" if answered else "")
+    assert route.decide(root, FakeGh(issues=issues((5, "Five", text)))).stage == stage
 
 
 def test_only_a_blocked_run_holds_a_ticket(tmp_path: Path) -> None:

@@ -46,6 +46,15 @@ def digest(ticket: preflight.Ticket) -> str:
     return hashlib.sha256(ticket.body.encode()).hexdigest()
 
 
+def edited(note: dict[str, object], ticket: preflight.Ticket) -> bool:
+    """Whether ``ticket``'s text differs from the text the note was written on.
+
+    Why: the one test of "the ticket changed", for a local file and a forge issue alike. The drain
+    holds a parked ticket until it is true, and the route releases a blocked run when it is.
+    """
+    return note.get("digest") != digest(ticket)
+
+
 def loaded(text: str | None) -> dict[str, object]:
     """``text`` as a JSON object, or an empty one when it is not."""
     try:
@@ -102,11 +111,6 @@ def causes_of(result: dict[str, object]) -> list[str]:
     return list(dict.fromkeys(path for path in [*edits, *filed] if isinstance(path, str) and path))
 
 
-def causes(root: Path, branch: str) -> list[str]:
-    """The paths the note for ``branch`` recorded as the cause; none if unrecorded."""
-    return texts(read_note(root, branch).get("causes"))
-
-
 @dataclass(frozen=True)
 class Hold:
     """A parked ticket the drain still holds: why, and which kinds of release it needs."""
@@ -119,7 +123,7 @@ class Hold:
 def held(root: Path, branch: str, ticket: preflight.Ticket) -> Hold | None:
     """The drain's hold on ``ticket``; ``None`` once its text changed or its safeguard is bound."""
     note = read_note(root, branch)
-    if note.get("hold") is not True or note.get("digest") != digest(ticket):
+    if note.get("hold") is not True or edited(note, ticket):
         return None
     if safeguarded(root, note):
         return None

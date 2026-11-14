@@ -357,16 +357,26 @@ def blocked_runs(
         ref, _, subject = line.partition("\t")
         run = subject.split(": ", 1)[-1]
         branch = run.removesuffix(BLOCKED_RUN)
-        asked = asked_paths(by_branch.get(branch), queue_notes.causes(root, branch))
-        if run.endswith(BLOCKED_RUN) and not answered(root, default_branch, ref, asked=asked):
+        if not run.endswith(BLOCKED_RUN):
+            continue
+        ticket, note = by_branch.get(branch), queue_notes.read_note(root, branch)
+        recorded = isinstance(note.get("digest"), str)
+        if ticket is not None and recorded and queue_notes.edited(note, ticket):
+            continue
+        asked = asked_paths(ticket, queue_notes.texts(note.get("causes")), recorded=recorded)
+        if not answered(root, default_branch, ref, asked=asked):
             found.setdefault(branch, run)
     return found
 
 
-def asked_paths(ticket: preflight.Ticket | None, causes: list[str]) -> list[str]:
-    """The repo paths whose change answers a blocked run: its ticket, that ticket's spec, causes."""
-    own = [] if ticket is None else [ticket.ref, ticket.parent or ""]
-    return [path for path in [*own, *causes] if path and not path.startswith("#")]
+def asked_paths(ticket: preflight.Ticket | None, causes: list[str], *, recorded: bool) -> list[str]:
+    """The repo paths whose change answers a blocked run: its spec, the causes, and its ticket.
+
+    The ticket's own file counts only when no note recorded its text: with one, ``edited`` has
+    compared the text, so a forge issue is judged as a file is.
+    """
+    own = [] if ticket is None else [ticket.parent or ""] + ([] if recorded else [ticket.ref])
+    return [path for path in [*own, *causes] if path and not path.lstrip("#").isdigit()]
 
 
 def answered(root: Path, default_branch: str, stash: str, *, asked: list[str]) -> bool:
