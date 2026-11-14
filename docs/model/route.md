@@ -263,5 +263,6 @@ stateDiagram-v2
 - The drain's own states: its work trees, the merge job, and retries of a mechanical wait.
 - A blocked run's stash and a drain note on the same ticket, and a note with more than one kind of hold.
 - A note a drain wrote with its kinds of hold but before it recorded the default branch's commit. Landing its guard edits does not release it, and the route names them again; a change to the ticket does.
+- An architecture an upgrade left owed in `quality/owed.toml`, which the route names after an owed safeguard and in the same way (ADR 0049). The model's repositories never owe one.
 - The `also:` lines: signs of a life event, and standing answers.
 - Hooks lost after the setup. The model installs them once; the stateful test takes them away every seventh step and checks that the route names them first.
