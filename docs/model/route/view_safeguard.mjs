@@ -7,7 +7,7 @@ export const state = (v) => {
   if (v.reviews) {
     return v.advice === "review" ? "Review owed: the route names it" : "Review owed: unfinished work comes first";
   }
-  if (!v.owes) return "None owed";
+  if (!v.owes) return "No fill, review or safeguard owed";
   return v.advice === "safeguard" ? "Owed: the route names it" : "Owed: unfinished work comes first";
 };
 export const step = (action, from, to) =>
