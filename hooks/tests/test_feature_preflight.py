@@ -707,3 +707,33 @@ def test_the_readers_of_a_ticket_read_only_what_reads_names(
     for name, read in readers.items():
         assert opened_by(tmp_path, read) <= whole | status, name
     assert opened_by(tmp_path, readers["preflight"]) == whole | status
+
+
+def test_a_ticket_that_states_a_size_over_the_product_ceiling_is_refused_before_a_spec_run(
+    tmp_path: Path,
+) -> None:
+    # Why: ADR 0045. The ticket's own estimate is the earliest size there is, and a spec run costs
+    # several agents; the part of the work the agent splits is named in `produce`.
+    root = repository(
+        tmp_path,
+        {
+            "docs/process/binding.md": "# Binding\n\n- Life events: none\n",
+            "quality/thresholds.toml": (
+                "[ceilings.change]\nproduct_files = 25\nproduct_lines = 1000\ntest_lines = 3000\n"
+            ),
+        },
+    )
+    install_hooks(root)
+
+    def sized(text: str) -> preflight.Report:
+        body = BODY + text
+        return run(root, "4", gh_returning(issue(body=body, labels=("ready-for-agent",))))
+
+    assert sized("\n## Size\n\n- Product lines: 1000\n- Product files: 25\n").ok
+    assert sized("").ok, "no estimate stated: the spec stage estimates the whole change"
+    report = sized("\n## Size\n\n- Product lines: ~1,200\n- Product files: 9\n")
+    assert checks(report) == ["size"]
+    assert "1200 product lines, ceiling 1000" in report.failures[0].detail
+    assert "9 product files" not in report.failures[0].detail
+    assert "orchestrator splits the ticket itself" in report.failures[0].produce
+    assert checks(sized("\n## Size\n\n- Product files: 26\n")) == ["size"]
