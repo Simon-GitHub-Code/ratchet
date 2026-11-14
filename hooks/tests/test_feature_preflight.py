@@ -148,6 +148,21 @@ def spec(body: str) -> str:
     )
 
 
+@pytest.mark.parametrize(
+    ("line", "parent"),
+    [
+        ("Parent: 02-b.md", ".scratch/f/issues/02-b.md"),
+        ("Parent: ./02-b.md", ".scratch/f/issues/02-b.md"),
+        ("Parent: `../spec.md`", ".scratch/f/issues/../spec.md"),
+        ("Parent: 02", "02"),
+        ("Parent: #2", "#2"),
+    ],
+)
+def test_a_parent_line_reads_a_path_before_a_number(line: str, parent: str) -> None:
+    # Why: a file name that starts with digits is a path, not the number it starts with.
+    assert preflight.local_ticket(TICKET, f"# T\n\n{line}\n").parent == parent
+
+
 def test_a_ticket_inherits_the_conjecture_of_its_parent_spec(tmp_path: Path) -> None:
     root = repository(tmp_path)
     child = issue(
