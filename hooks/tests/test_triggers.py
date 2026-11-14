@@ -369,3 +369,83 @@ def test_a_compound_row_is_noted_by_its_kind_and_never_red_for_its_event(
     )
     assert run(held) == 0
     assert "life event" not in capsys.readouterr().out
+
+
+def land(root: Path, subject: str) -> None:
+    """Commit the work tree and make it the default branch, as a landed change does."""
+    commit(root, subject)
+    git(root, "branch", "-f", "main")
+
+
+def test_a_kind_that_went_back_to_none_and_returns_is_owed_not_arriving(
+    tmp_path: Path, capsys: Out
+) -> None:
+    # Why: ADR 0048. Arrive, remove, arrive again left the row `later:` and the kind unbounded.
+    root = project(tmp_path, None, LATER_CALL)
+    write(root, "src/a.py", CALL)
+    assert run(root) == 0
+    land(root, "feat(core): one call")
+    (root / "src/a.py").unlink()
+    assert run(root) == 0
+    land(root, "refactor(core): no calls")
+    capsys.readouterr()
+    write(root, "src/a.py", CALL)
+    write(root, "src/b.py", CALL)
+    assert run(root) == 1
+    out = capsys.readouterr().out
+    assert "'outbound-call' gained 2 instance(s)" in out
+    assert "returning, not arriving" in out
+    assert "note: 'outbound-call' has arrived" not in out
+
+
+def test_a_kind_that_never_existed_still_arrives_free_after_other_history(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, {"src/server.py": "x = 1\n"}, LATER_CALL, LATER_LISTENER)
+    land(root, "feat(core): a listener")
+    write(root, "src/a.py", CALL)
+    write(root, "src/b.py", CALL)
+    assert run(root) == 0
+    assert "'outbound-call' has arrived (src/a.py:2, src/b.py:2)" in capsys.readouterr().out
+
+
+def test_a_kind_bound_after_its_return_takes_instances(tmp_path: Path) -> None:
+    root = project(tmp_path, {"src/a.py": CALL}, LATER_CALL)
+    (root / "src/a.py").unlink()
+    land(root, "refactor(core): no calls")
+    write(root, "src/a.py", CALL)
+    text = (root / "docs/process/binding.md").read_text(encoding="utf-8")
+    write(root, "docs/process/binding.md", text.replace("later: code:outbound-call", "a timeout"))
+    assert run(root) == 0
+
+
+def rebind(root: Path, old: str, new: str) -> None:
+    path = "docs/process/binding.md"
+    write(root, path, (root / path).read_text(encoding="utf-8").replace(old, new))
+
+
+def test_a_row_bound_while_the_kind_is_gone_takes_it_back_green(tmp_path: Path) -> None:
+    root = project(tmp_path, {"src/a.py": CALL}, LATER_CALL)
+    (root / "src/a.py").unlink()
+    land(root, "refactor(core): no calls")
+    rebind(root, "later: code:outbound-call", "a timeout")
+    land(root, "feat(core): bind the row")
+    write(root, "src/a.py", CALL)
+    write(root, "src/b.py", CALL)
+    assert run(root) == 0
+
+
+def test_a_row_dropped_and_put_back_later_does_not_make_the_return_an_arrival(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, {"src/a.py": CALL}, LATER_CALL)
+    (root / "src/a.py").unlink()
+    land(root, "refactor(core): no calls")
+    rebind(root, LATER_CALL + "\n", "")
+    land(root, "chore(core): drop the row")
+    rebind(root, "| format |", LATER_CALL + "\n| format |")
+    land(root, "chore(core): put the row back")
+    capsys.readouterr()
+    write(root, "src/a.py", CALL)
+    assert run(root) == 1
+    assert "returning, not arriving" in capsys.readouterr().out
