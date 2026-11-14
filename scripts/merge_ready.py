@@ -87,7 +87,7 @@ import plugin_pin
 
 # Why: the manifest and the two classifiers the judge shares with the hook live under hooks/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
-from ratchet_guards import dependencies, records
+from ratchet_guards import dependencies, records, splits
 from ratchet_guards.dependency_entry import Entry
 from ratchet_guards.gh import LABELS_RECORD, READY_ROLE, label_for_role
 from ratchet_guards.globs import matches
@@ -868,7 +868,39 @@ def closes(change: Change, path: str) -> str | None:
     return None
 
 
+def part_of_a_split(change: Change, path: str) -> bool:
+    """Whether ``path`` is a part of a ticket split by size, which inherits the owner's label.
+
+    Why: ADR 0046. The parent is read as the default branch's tip holds it, never as the part's
+    own text says, it must carry the label there and be no part itself, and the parts at the
+    head carry its promises verbatim and exactly once between them.
+    """
+    text = change.after(path) or ""
+    ref = splits.split_from(text)
+    if ref is None:
+        return False
+    folder = PurePosixPath(path).parent
+    parent = change.tip(ref if "/" in ref else (folder / ref).as_posix())
+    listed = git(change.root, "ls-tree", "--name-only", "-z", change.head, "--", f"{folder}/")
+    others = [name for name in (listed or "").split("\0") if name not in ("", path)]
+    siblings = [
+        found
+        for name in others
+        if (found := change.after(name)) is not None and splits.split_from(found) == ref
+    ]
+    return (
+        parent is not None
+        and not splits.scope_problems(parent, [text, *siblings])
+        and any(
+            splits.refusal(text, parent, label, siblings=siblings) is None
+            for label in spellings(change)
+        )
+    )
+
+
 def label_given(change: Change, path: str) -> str | None:
+    if part_of_a_split(change, path):
+        return None
     before, after = (change.before(path) or "").casefold(), (change.after(path) or "").casefold()
     for label in spellings(change):
         if after.count(label.casefold()) > before.count(label.casefold()):

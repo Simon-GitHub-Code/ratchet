@@ -424,7 +424,8 @@ def test_a_change_with_no_room_under_the_ceilings_stops_before_the_next_stage() 
     assert (result["verdict"], result["tooLarge"]["stage"]) == ("blocked", "the spec")
     assert result["tooLarge"]["kind"] == "tests"
     assert "2001 test lines after the spec" in result["verdictForcedBy"][0]
-    assert "splits the ticket" in result["requiredByOrchestrator"][1]
+    assert "orchestrator splits it" in result["requiredByOrchestrator"][0]
+    assert "drain.py split" in result["requiredByOrchestrator"][1]
 
     fits = {
         **SPECIFIED,

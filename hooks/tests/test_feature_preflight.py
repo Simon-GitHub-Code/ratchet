@@ -640,6 +640,8 @@ def opened_by(root: Path, read: Callable[[], object]) -> set[str]:
         posixpath.normpath(os.path.relpath(path, root))
         for path in seen
         if os.path.normpath(path).startswith(f"{root}{os.sep}")
+        # Why: the drain's notes are untracked state, which no change to the tracker can steer.
+        and not os.path.relpath(path, root).startswith(".ratchet")
     }
 
 

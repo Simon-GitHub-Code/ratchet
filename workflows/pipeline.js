@@ -243,8 +243,9 @@ const ESTIMATE_FIELD = {
           properties: {
             title: { type: 'string' },
             criteria: { type: 'array', items: { type: 'string' } },
+            promises: { type: 'array', items: { type: 'string' }, description: 'The ticket\'s own acceptance criteria this part carries, each a `- [ ]` line of the ticket copied verbatim without its checkbox; together the parts carry every such line of the ticket exactly once, and none is reworded' },
           },
-          required: ['title', 'criteria'],
+          required: ['title', 'criteria', 'promises'],
         },
       },
     },
@@ -816,8 +817,9 @@ Your tasks, in order:
    The test side is the tests already measured (spec, fixtures), ${criticEstimate(CRITIC)}
    held to the test ceiling. Be honest and not hopeful: the fix agent cannot cut a change down by
    revising code. When either side passes its ceiling, put the split in \`proposedSplit\`: two or
-   more tickets, each of which fits both, each with the acceptance criteria it carries. The run
-   then stops, and the orchestrator files the parts as tickets itself.
+   more tickets, each of which fits both, each with the acceptance criteria it carries and, in
+   \`promises\`, the ticket's own \`- [ ]\` lines it carries, copied verbatim, every such line in
+   exactly one part. The run then stops, and the orchestrator files the parts as tickets itself.
 
 An undecided point is the owner's in two cases, and yours in every other.
 
@@ -1323,8 +1325,8 @@ function tooLarge(stop, spec, extra) {
     branch: BRANCH,
     ...extra,
     requiredByOrchestrator: [
-      'Commit nothing and open no PR. Tell the owner the ticket is too large to build as one change, with the two numbers',
-      'The owner splits the ticket into smaller ones (`/mattpocock-skills:to-tickets` on the same spec); the spec this run wrote, at `specPath`, says which criteria and tests there are to divide, and `tooLarge.proposedSplit`, when the spec stage gave one, is where to start',
+      'Commit nothing and open no PR. The ticket is too large to build as one change; splitting it is no product decision, so the orchestrator splits it and the owner is not asked',
+      'Write a plan from `tooLarge.proposedSplit` (each part\'s `title` and `promises`, `summary` from its `criteria`) and run `drain.py split <ticket> --plan <file>`, which files the parts with the parent\'s label, each waiting on the one before, and closes the parent as split with its text untouched. It refuses a plan that adds, drops, rewords or doubles one of the ticket\'s `- [ ]` promises, and names the line; with no `proposedSplit`, divide the ticket\'s promises yourself, by what a person can use, and the spec at `specPath` says which criteria and tests there are to divide',
     ],
   }
 }
