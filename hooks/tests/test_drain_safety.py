@@ -840,3 +840,104 @@ def test_an_update_killed_after_the_rebase_by_a_real_kill_drops_the_record_on_th
     out, _ = again.communicate(timeout=60)
     assert json.loads(out) == {"moved": True, "conflicts": []}
     assert "verdict.json" not in git(tree, "show", "--name-only", "--format=", "HEAD")
+
+
+# --- findings of the drain's model, each replayed on a real repository ------------------------
+
+
+def judged(root: Path, *, resolved: bool = True) -> Path:
+    """Open ticket A and commit its change and an approving verdict record, as a run would."""
+    run(root, "open", ALPHA)
+    done = {ALPHA: ticket(1, "Alpha", status="resolved")} if resolved else {}
+    return build(root, BRANCH_A, {"src/b.py": "B = 1\n", **done}, record=approval("alpha"))
+
+
+def test_a_held_ticket_is_not_landed(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    judged(root)
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "the owner decides") == 0
+    before = git(root, "rev-parse", "main")
+    capsys.readouterr()
+    assert run(root, "land", ALPHA) == 2
+    out = capsys.readouterr().out
+    assert "is held" in out
+    assert "the owner decides" in out
+    assert git(root, "rev-parse", "main") == before, "nothing landed"
+    assert note(root, BRANCH_A)["outcome"] == "parked"
+
+
+def test_a_close_after_the_landing_does_not_unsay_the_merge(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    judged(root)
+    assert run(root, "land", ALPHA) == 0
+    merged = note(root, BRANCH_A)
+    assert merged["outcome"] == "merged"
+    capsys.readouterr()
+    assert run(root, "close", ALPHA, "--outcome", "parked") != 0
+    assert "merged" in capsys.readouterr().out
+    assert note(root, BRANCH_A) == merged
+    assert run(root, "report") == 0
+    report = capsys.readouterr().out
+    assert "## Parked\n\n- none" in report
+    assert "## Merged\n\n- none" not in report
+
+
+def test_an_update_killed_after_its_rebase_and_a_clean_all_drops_the_record_on_the_rerun(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    tree = judged(root, resolved=False)
+    write(root, "src/m.py", "M = 1\n")
+    base = commit(root, "feat(core): merged meanwhile")
+    killed = start(root, "update", ALPHA, DRV_KILL_AT="drop_record")
+    killed.communicate(timeout=60)
+    assert killed.returncode == -signal.SIGKILL
+    assert run(root, "clean", "--all") == 0
+    assert not tree.exists(), "the sweep took the tree"
+    again = start(root, "update", ALPHA)
+    out, _ = again.communicate(timeout=60)
+    assert json.loads(out) == {"moved": True, "conflicts": []}
+    assert git(root, "merge-base", "--is-ancestor", base, BRANCH_A) == ""
+    assert "verdict.json" not in git(root, "show", "--name-only", "--format=", BRANCH_A)
+    assert json.loads(update(root).stdout) == {"moved": False, "conflicts": []}
+
+
+def test_update_does_not_make_a_tree_beyond_the_cap(tmp_path: Path, capsys: Out) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA, "--concurrency", "1") == 0
+    build(root, BRANCH_A, {"src/b.py": "B = 1\n"})
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "x") == 0
+    assert run(root, "open", GAMMA, "--concurrency", "1") == 0
+    write(root, ALPHA, ticket(1, "Alpha", "the owner answered\n\n"))
+    commit(root, "docs: the owner edits ticket 1")
+    capsys.readouterr()
+    assert run(root, "update", ALPHA, "--concurrency", "1") == 1
+    assert "1 tickets are building: the cap" in capsys.readouterr().out
+    assert len(drain.worktrees(root)) == 1
+
+
+def test_open_keeps_a_parked_outcome_the_report_has_not_listed(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    assert run(root, "close", ALPHA, "--outcome", "parked", "--reason", "needs a decision") == 0
+    write(root, ALPHA, ticket(1, "Alpha", "the owner answered\n\n"))
+    commit(root, "docs: the owner edits ticket 1")
+    assert run(root, "open", ALPHA) == 0
+    kept = note(root, BRANCH_A)
+    assert (kept["outcome"], kept["reported"]) == ("parked", False)
+    assert kept["reasons"] == ["needs a decision"]
+
+
+def test_split_waits_for_the_drain_lock(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    parts = tmp_path / "plan.json"
+    parts.write_text(json.dumps({"parts": []}), encoding="utf-8")
+    monkeypatch.setattr(drain, "LOCK_WAIT", 0.2)
+    capsys.readouterr()
+    with drain.exclusive(root):
+        assert run(root, "split", ALPHA, "--plan", str(parts)) == 2
+    assert "another drain command is running" in capsys.readouterr().out
+    assert "outcome" not in note(root, BRANCH_A)
