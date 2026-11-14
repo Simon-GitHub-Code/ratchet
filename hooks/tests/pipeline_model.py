@@ -9,10 +9,13 @@ refuses, or approves against its own evidence; and any agent can die.
 
 The state is the agent the run waits on, what the answers so far established (whether the critic
 runs, the spec's last answer, a promise the run kept from the ticket, the last builder's check,
-what the last critique owes), the agents and fix rounds spent, and how the run ended. ``graph()``
-is every run the abstract answers allow: the fix loop's own bound keeps it finite, so it is every
-run, not a sample. ``RULES`` is what a reader of the method expects to stay true whatever the
-agents answer; every rule is a predicate over a step ``(before, action name, after)``.
+what the last critique owes, whether the last review holds a blocking issue), the agents and fix
+rounds spent, and how the run ended. The fix loop runs on what the critic owes once the project is
+depended-on, and before that for one round on the review's blocking issues, which a second review
+then judges. ``graph()`` is every run the abstract answers allow: the fix loop's own bound keeps it
+finite, so it is every run, not a sample. ``RULES`` is what a reader of the method expects to stay
+true whatever the agents answer; every rule is a predicate over a step ``(before, action name,
+after)``.
 ``export()`` writes the graph and the rules as a TLA+ module, and ``summary()`` the graph seen
 through the stage a run is at, for the charts of docs/model/pipeline.md.
 
@@ -36,7 +39,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
 MAX_FIX_ROUNDS = 2
-MOST_YOUNG = 7
+YOUNG_FIX_ROUNDS = 1
+MOST_YOUNG = 9
 MOST_DEPENDED_ON = 12
 MOST_REJUDGE = 2
 
@@ -233,11 +237,13 @@ REVIEW_OBJECTIONS: dict[Said, frozenset[Objection]] = {
     Review.APPROVES_GUARD: frozenset({Objection.GUARD}),
 }
 # Why: the amend returns the whole spec as it now stands, a fix round's check is "the last
-# implement or fix", and the re-critique re-checks every finding by title (pipeline.md, the loop).
+# implement or fix", the re-critique re-checks every finding by title (pipeline.md, the loop), and
+# the second review of a project nobody depends on judges the change the fix pass left.
 REPAIRS: dict[Role, frozenset[Objection]] = {
     Role.AMEND: frozenset({Objection.SPEC_EVIDENCE}),
     Role.FIX: frozenset({Objection.BUILDER_RED}),
     Role.CRITIQUE: frozenset({Objection.OWED}),
+    Role.REVIEW: frozenset({Objection.REVIEW_ISSUE}),
 }
 
 READS = frozenset(
@@ -302,6 +308,7 @@ class State:
     green: bool | None = None
     owed: bool = False
     silent: bool = False
+    issue: bool = False
     ending: Ending | None = None
 
 
@@ -317,8 +324,8 @@ class Action:
     def label(self) -> str:
         if self.role is Role.FIX:
             return f"fix-{self.rounds + 1}"
-        if self.role is Role.CRITIQUE and self.rounds:
-            return f"critique-{self.rounds}"
+        if self.role in {Role.CRITIQUE, Role.REVIEW} and self.rounds:
+            return f"{self.role.value}-{self.rounds}"
         return self.role.value if self.role else ""
 
     @property
@@ -370,6 +377,11 @@ MEASURED_AT = {
 }
 
 
+def fix_rounds(state: State) -> int:
+    """The rounds the fix loop may spend: two once the project is depended-on, one before."""
+    return MAX_FIX_ROUNDS if state.critic else YOUNG_FIX_ROUNDS
+
+
 def stops_on(answer: Said, *, critic: bool | None) -> Ceiling | None:
     """The ceiling a measure stops the run on: one it passes, or the critic's room (ADR 0040)."""
     if answer in MARGINS and critic:
@@ -385,6 +397,7 @@ def standing(state: State) -> frozenset[Objection]:
         red: state.green is False,
         Objection.OWED: state.owed,
         Objection.SILENT: state.silent,
+        Objection.REVIEW_ISSUE: state.issue,
     }
     return frozenset(objection for objection, on in raised.items() if on)
 
@@ -442,7 +455,7 @@ def _implement(state: State, action: Action) -> State:
 
 def _critique(state: State, action: Action) -> State:
     owed = action.answer is Critique.OWED
-    again = owed and state.rounds < MAX_FIX_ROUNDS
+    again = owed and state.rounds < fix_rounds(state)
     silent = action.answer is Critique.SILENT
     return replace(state, owed=owed, silent=silent, awaiting=Role.FIX if again else Role.REVIEW)
 
@@ -460,7 +473,8 @@ def _built_late(state: State, action: Action, awaiting: Role) -> State:
 
 
 def _fix(state: State, action: Action) -> State:
-    return replace(_built_late(state, action, Role.CRITIQUE), rounds=state.rounds + 1)
+    judge = Role.CRITIQUE if state.critic else Role.REVIEW
+    return replace(_built_late(state, action, judge), rounds=state.rounds + 1)
 
 
 def _reconcile(state: State, action: Action) -> State:
@@ -468,6 +482,16 @@ def _reconcile(state: State, action: Action) -> State:
 
 
 def _review(state: State, action: Action) -> State:
+    """The review's verdict, or for a project nobody depends on its blocking issues to the fix pass.
+
+    Why: before the critic runs, the review is the only finder, so its blocking issues take the
+    place the critic's owed findings take once the project is depended-on. A rebased branch has no
+    fix loop, so its review always ends the run.
+    """
+    issue = Objection.REVIEW_ISSUE in REVIEW_OBJECTIONS[action.answer]
+    state = replace(state, issue=issue)
+    if issue and state.critic is False and state.rounds < fix_rounds(state):
+        return replace(state, awaiting=Role.FIX)
     objections = standing(state) | REVIEW_OBJECTIONS[action.answer]
     approved = action.answer is not Review.REFUSES and not objections
     outcome = Outcome.APPROVE if approved else Outcome.REQUEST_CHANGES
@@ -515,10 +539,21 @@ def _start(state: State) -> Iterator[Move]:
             yield Action(start), STARTS[start]
 
 
+def numbered(state: State) -> int:
+    """The round the answer of the agent ``state`` waits on is numbered by.
+
+    Why: a re-critique is numbered by the round it judges, and so is the second review of a project
+    nobody depends on; the review of a project that is depended-on runs once, after the loop.
+    """
+    if state.awaiting is Role.REVIEW and state.critic:
+        return 0
+    return state.rounds
+
+
 def _answer(state: State) -> Iterator[Move]:
     if state.awaiting is not None:
         for answer in ANSWERS[state.awaiting]:
-            action = Action(answer, state.awaiting, state.rounds)
+            action = Action(answer, state.awaiting, numbered(state))
             yield action, answered(state, action)
 
 
@@ -586,24 +621,25 @@ def evidenced(before: State, name: str, after: State) -> bool:
     """A run ends approved only when the review that runs last approves with its own check green and nothing open, and the last builder's check was green."""  # noqa: E501
     action = named(name)
     if action.role in REVIEWS and after.ending is None:
-        return False
+        return after.awaiting is Role.FIX
     if after.ending is None or after.ending.outcome is not Outcome.APPROVE:
         return True
     return action.role in REVIEWS and action.answer is Review.APPROVES and before.green is not False
 
 
 def bounded(_: State, __: str, after: State) -> bool:
-    """A run never spawns more agents than the documents allow, seven before the project is depended-on, twelve after, and two to judge a rebased branch again."""  # noqa: E501
+    """A run never spawns more agents than the documents allow, nine before the project is depended-on, twelve after, and two to judge a rebased branch again."""  # noqa: E501
     return after.agents <= most(after)
 
 
 def ordered(before: State, name: str, _: State) -> bool:
-    """Agents run in the documented order of stages, and the implementer runs only after a spec with no open question has been through the ticket check."""  # noqa: E501
+    """Agents run in the documented order of stages, save the fix pass a review of a project nobody depends on hands back, and the implementer runs only after a spec with no open question has been through the ticket check."""  # noqa: E501
     action = named(name)
     if action.phase is None:
         return True
     if before.phase is not None and PHASES.index(action.phase) < PHASES.index(before.phase):
-        return False
+        handed_back = before.critic is False and before.phase is Phase.REVIEW
+        return action.role is Role.FIX and handed_back
     if action.role is not Role.IMPLEMENT:
         return True
     asked = before.spec is None or before.spec in SPEC_STOPS
@@ -617,7 +653,7 @@ def stricter(before: State, name: str, after: State) -> bool:
     if not standing(before) - standing(after) <= repairs:
         return False
     approved = after.ending is not None and after.ending.outcome is Outcome.APPROVE
-    return not approved or not standing(before)
+    return not approved or not standing(after)
 
 
 def ceilinged(_: State, name: str, after: State) -> bool:
@@ -645,9 +681,9 @@ def measured(_: State, name: str, after: State) -> bool:
 
 
 def loop_ends(before: State, name: str, after: State) -> bool:
-    """The fix loop runs at most two rounds, and a finding still owed after the last one reaches the result as unresolved."""  # noqa: E501
+    """The fix loop runs at most one round before the project is depended-on and two after, and a critic finding still owed after the last one reaches the result as unresolved."""  # noqa: E501
     action = named(name)
-    if after.rounds > MAX_FIX_ROUNDS:
+    if after.rounds > fix_rounds(after):
         return False
     if action.role not in REVIEWS or not before.owed or after.ending is None:
         return True
@@ -724,8 +760,13 @@ def assumed(_: State, __: str, after: State) -> bool:
 
 
 def critic_waits(before: State, name: str, _: State) -> bool:
-    """The critic and its fix loop run only once the project is depended-on."""
-    return named(name).role not in {Role.CRITIQUE, Role.FIX} or before.critic is True
+    """The critic runs only once the project is depended-on, while the fix loop runs one round on the review's blocking issues before and up to two on the critic's findings after."""  # noqa: E501
+    role = named(name).role
+    if role is Role.CRITIQUE:
+        return before.critic is True
+    if role is Role.FIX:
+        return before.owed if before.critic else before.critic is False and before.issue
+    return True
 
 
 def check_asks_nothing(_: State, name: str, after: State) -> bool:
@@ -825,6 +866,7 @@ AS_STATE: dict[str, Callable[[State], object]] = {
     "check": lambda state: known(state.green, "green", "red"),
     "owed": lambda state: state.owed,
     "silent": lambda state: state.silent,
+    "issue": lambda state: state.issue,
     "outcome": outcome,
     **{
         name: lambda state, read=read: read(state.ending or NOT_ENDED)
