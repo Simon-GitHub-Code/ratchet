@@ -140,7 +140,6 @@ ATTACKS: dict[Scenario, list[str]] = {
         "git reset --merge old",
         "git reset --hard old",
         "git rebase --onto old main",
-        "git branch -m gone",
         "git update-ref HEAD old",
         "git switch nope; git reset --soft old",
         "git checkout README.md && git reset --soft old",

@@ -1245,7 +1245,7 @@ def test_a_checkout_with_no_default_branch_or_no_commit_has_no_merge_base(tmp_pa
         "-m",
         "x",
     )
-    assert filesystem.merge_base(trunk, "GLOSSARY.md") is None
+    assert filesystem.merge_base(trunk, "GLOSSARY.md") == records.Before(None, ())
     (tmp_path / "orphan").mkdir()
     orphan = repos.repository(tmp_path / "orphan", {"GLOSSARY.md": GLOSSARY})
     repos.git(orphan, "checkout", "-q", "--orphan", "island")

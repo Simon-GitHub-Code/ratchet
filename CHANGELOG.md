@@ -9,6 +9,12 @@ The change-size ceiling counts product code, not tests (ADR 0045). Tests were 85
 - Which paths are tests is the binding's `## Test paths` section, written at adoption by the project's agent: the plugin names no stack. Until it is filled every changed line counts as product, as before, and conformance names the missing section.
 - An existing repository's `files` and `lines` become `product_files` and `product_lines` at the same values, by `upgrade.py --apply`; the lowered gate reads the move and refuses a higher value. `test_lines` is new, and the one loosening, which the upgrade says plainly.
 
+The queue drain and the merge no longer lose work, collide or stop half-way (ADR 0023).
+
+- A work tree is removed only once its uncommitted work is a stash. A stale `index.lock`, a merge left unfinished or a damaged index kept the stash from being made, and the tree was removed anyway; now it stays, nothing running from it is ended, and the note and the command say so.
+- One drain runs on a repository at a time. `clean --all` is refused while a process of another drain is alive, every command that changes a work tree runs under a lock the kernel frees when its holder dies, and a built ticket still in its work tree counts against the cap.
+- A run killed part-way finishes when it is run again. `update` abandons a rebase it left and starts over, `land` records a merge that landed and puts back what a killed `merge.py` left (its scratch work tree, a fast-forward cut off half-way), and `clean` records a merge no note said.
+
 A ticket that fits the change-size ceiling is no longer parked as too large before the critic exists (ADR 0040). Until the binding declares `depended-on` the early size stop is the ceiling itself; with the critic it stays at two thirds.
 
 The route no longer loops a non-engineer on a parked ticket or a half-finished adoption. It reads the drain's note of why a ticket is held and names the step that releases that kind of hold (a size block names the split, never a bare `/ratchet:feature`), and a binding with no plugin pin names `/ratchet:adopt` to resume, ahead of the hooks install.
