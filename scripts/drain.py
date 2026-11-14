@@ -137,6 +137,7 @@ QUEUE = queue_notes.QUEUE
 QUEUE_HOME = "ratchet-queue"
 OWNER_ONLY = 0o700
 OWNER_FILE = 0o600
+LANDING_MAY_RUN = "a landing may be in flight in another drain"
 LOCK, LEASE = "ratchet-drain.lock", "ratchet-drain.lease"
 LOCK_WAIT, LOCK_POLL = 30.0, 0.05
 # Why: the start time is the 22nd field of /proc/<pid>/stat, the 20th after the command's name.
@@ -469,13 +470,20 @@ def release(root: Path, token: str = "") -> str | None:
     ``clean --all`` would end the first's programs. The lease is ended for the drain that holds
     it, matched as ``lease`` matches it: by the token, or by no rival being alive.
     """
-    path = state_dir(root) / LEASE
-    held = queue_notes.loaded(gatelib.read_text(path))
-    ours = bool(token) and token == held.get("token")
-    why = None if ours else rival(root, held)
+    why = other_drain(root, token)
     if why is None:
-        path.unlink(missing_ok=True)
+        (state_dir(root) / LEASE).unlink(missing_ok=True)
     return why
+
+
+def other_drain(root: Path, token: str = "") -> str | None:
+    """Why another drain than the one ``token`` names is running here, or ``None``.
+
+    The lease is matched as ``lease`` matches it: by the token, or by no rival being alive.
+    """
+    held = queue_notes.loaded(gatelib.read_text(state_dir(root) / LEASE))
+    ours = bool(token) and token == held.get("token")
+    return None if ours else rival(root, held)
 
 
 # --- the notes -------------------------------------------------------------------------------
@@ -1159,7 +1167,10 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
     heads = gatelib.git(root, "for-each-ref", "--format=%(refname:short)", "refs/heads/") or ""
     owners = {tree_of(root, branch): branch for branch in heads.splitlines()}
     registered = worktrees(root)
-    record_orphans(root, heads.splitlines(), registered)
+    # Why: a merge no note says may be a landing in flight in another drain, whose run is about to
+    # write the note; recording it here would discard the tree that run still uses.
+    busy = None if everything else other_drain(root, token)
+    record_orphans(root, heads.splitlines(), registered, busy=busy)
     for tree in sorted(registered | set(queue_home(root).glob("*"))):
         branch = owners.get(tree)
         why = (
@@ -1176,6 +1187,9 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
         if why is None:
             print(f"kept: {tree}: `{branch}` is not merged")
             continue
+        if in_flight(root, branch, busy):
+            print(f"kept: {tree}: `{branch}` is merged and no note says so")
+            continue
         if branch is not None and tree in registered:
             if recorded_merge(root, branch):
                 record_merge_aloud(root, branch)
@@ -1189,12 +1203,23 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
     return 0
 
 
-def record_orphans(root: Path, branches: list[str], registered: frozenset[Path]) -> None:
+def in_flight(root: Path, branch: str | None, busy: str | None) -> bool:
+    """Whether ``branch`` holds a merge no note says while another drain runs: its landing's."""
+    return busy is not None and branch is not None and recorded_merge(root, branch)
+
+
+def record_orphans(
+    root: Path, branches: list[str], registered: frozenset[Path], *, busy: str | None
+) -> None:
     """Record each merge no note says whose work tree is gone: it is no tree's to sweep.
 
     Why: a landing killed after the default branch moved, and after the tree was removed, leaves
-    only this; the next drain's report must still list the ticket as merged.
+    only this; the next drain's report must still list the ticket as merged. While another drain
+    runs, none is recorded: its landing may be the one that has not written its note yet.
     """
+    if busy is not None:
+        print(f"clean: {LANDING_MAY_RUN} ({busy}), so a merge no note says is left alone")
+        return
     for branch in branches:
         if tree_of(root, branch) not in registered and recorded_merge(root, branch):
             record_merge_aloud(root, branch)
@@ -1301,7 +1326,10 @@ def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -
 def report(drain: Drain, token: str = "") -> int:
     """Write the report of every ticket closed since the last one, and print it."""
     heads = gatelib.git(drain.root, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
-    for branch in (heads or "").splitlines():
+    busy = other_drain(drain.root, token)
+    # Why: another drain's landing may have merged and not yet written its note; recording it here
+    # would discard its tree and report the merge twice. The lease line at the end says so.
+    for branch in (heads or "").splitlines() if busy is None else []:
         # Why: a merge no note says is reported as merged, not as the close `open` kept for the
         # ticket; recording it writes the note a landing would have.
         if recorded_merge(drain.root, branch):
@@ -1323,7 +1351,10 @@ def report(drain: Drain, token: str = "") -> int:
     print(f"report: {target}")
     stays = release(drain.root, token)
     if stays is not None:
-        print(f"report: the drain lease stays: another drain is running ({stays})")
+        print(
+            f"report: the drain lease stays: another drain is running ({stays}); {LANDING_MAY_RUN},"
+            " so a merge no note says is left alone"
+        )
     return 0
 
 
