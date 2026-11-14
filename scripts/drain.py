@@ -144,6 +144,7 @@ QUEUE = queue_notes.QUEUE
 QUEUE_HOME = "ratchet-queue"
 OWNER_ONLY = 0o700
 OWNER_FILE = 0o600
+LANDING_TRIES, LANDING_POLL = 20, 0.05
 LANDING_MAY_RUN = "a landing may be in flight in another drain"
 LOCK, LEASE = "ratchet-drain.lock", "ratchet-drain.lease"
 LOCK_WAIT, LOCK_POLL = 30.0, 0.05
@@ -1112,6 +1113,24 @@ def landing_path(root: Path, branch: str) -> Path:
     return state_dir(root) / f"ratchet-landing-{hashlib.sha256(branch.encode()).hexdigest()[:16]}"
 
 
+@contextlib.contextmanager
+def landing_lock(root: Path, branch: str) -> Iterator[int | None]:
+    """The landing lock of ``branch``, tried for about a second; ``None`` when it stays held.
+
+    Why: ``landing_running`` takes the same lock for an instant to see whether it is held, and a
+    ``land`` that tried at that moment would refuse for a landing that is not running. A probe
+    holds the lock for microseconds, a real landing for minutes.
+    """
+    for _ in range(LANDING_TRIES - 1):
+        with merge.locked(landing_path(root, branch)) as held:
+            if held is not None:
+                yield held
+                return
+        time.sleep(LANDING_POLL)
+    with merge.locked(landing_path(root, branch)) as held:
+        yield held
+
+
 def landing_running(root: Path, branch: str) -> bool:
     """Whether a ``land`` of ``branch`` is alive: it holds its lock, which dies with it."""
     if not landing_path(root, branch).exists():
@@ -1150,7 +1169,15 @@ def land(drain: Drain, ticket: preflight.Ticket) -> int:
     branch = route.own_branch(ticket)
     # Why: `land` holds no drain lock while the merge runs, and the merge takes minutes; this lock
     # is what tells another command, in this process or another, that the landing is alive.
-    with merge.locked(landing_path(drain.root, branch)):
+    with landing_lock(drain.root, branch) as held:
+        if held is None:
+            # Why: two landings of one ticket would run the merge at once, or one would close the
+            # ticket while the other is mid-merge.
+            print(
+                f"land: a landing of `{branch}` is already running in another command; run land"
+                " again once it ends"
+            )
+            return 2
         return landed(drain, ticket, branch, command=command)
 
 
@@ -1230,10 +1257,20 @@ def clean(root: Path, *, everything: bool, take_over: bool = False, token: str =
         stays = discard(root, tree, f"{branch or tree.name}: {INTERRUPTED} run")
         print(f"removed: {tree}: {why}" if stays is None else f"left: {tree}: {why}, and {stays}")
     if everything:
-        for branch in heads.splitlines():
+        end_marks(root, heads.splitlines())
+    return 0
+
+
+def end_marks(root: Path, branches: list[str]) -> None:
+    """Clear the marks of runs that stopped; a branch whose landing is alive keeps its own.
+
+    Why: a live landing's note may still carry the mark of an earlier close that was cut off, and
+    finishing that close here would discard the tree the landing is using.
+    """
+    for branch in branches:
+        if not landing_running(root, branch):
             unmark(root, branch)
             finish_close(root, branch)
-    return 0
 
 
 def in_flight(root: Path, branch: str | None, busy: str | None) -> str | None:

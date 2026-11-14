@@ -448,14 +448,32 @@ class LeaseWorld:
         """The agent's commits and its verdict record, then ``land`` up to the end of its merge."""
         self.world.by_hand(Kind.COMMIT, Name.A)
         self.world.by_hand(Kind.RECORD, Name.A)
-        gate = Path(tempfile.mkdtemp(prefix="landing-", dir=self.directory))
+        self.land_held(which)
+
+    def landing_argv(self) -> list[str]:
         root = str(self.world.root)
+        return [sys.executable, str(DRIVER), "land", REF[Name.A], "--root", root, "--offline"]
+
+    def land_killed_at_discard(self) -> int:
+        """``land``, ended by SIGKILL where its close is about to remove the tree; its exit code."""
+        return subprocess.run(  # noqa: S603 # -- this interpreter, no shell
+            self.landing_argv(),
+            capture_output=True,
+            cwd=self.world.root,
+            env={**os.environ, "DRV_KILL_AT": "discard"},
+            check=False,
+            timeout=LANDING_WAIT,
+        ).returncode
+
+    def land_held(self, which: Drain) -> None:
+        """``land`` up to the end of its merge, whether the merge lands or is refused."""
+        gate = Path(tempfile.mkdtemp(prefix="landing-", dir=self.directory))
         with (gate / "printed").open("w", encoding="utf-8") as printed:
             process = subprocess.Popen(  # noqa: S603 # -- this interpreter, no shell
-                [sys.executable, str(DRIVER), "land", REF[Name.A], "--root", root, "--offline"],
+                self.landing_argv(),
                 stdout=printed,
                 stderr=subprocess.STDOUT,
-                cwd=root,
+                cwd=self.world.root,
                 env={**os.environ, HOLD_AT: str(gate)},
             )
         self.landing = (which, process, gate)
