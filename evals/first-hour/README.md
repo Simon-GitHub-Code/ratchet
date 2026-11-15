@@ -34,7 +34,7 @@ It writes, in that directory:
 | `stderr.log` | the product session's Claude Code error output |
 | `bin/` | the shell prefix that puts each of the session's commands in the sandbox, and links to the tools the run uses |
 
-`uv run evals/first-hour/run.py reduce <dir>` rewrites `metrics.json` and `table.md` from `events.jsonl`. `uv run evals/first-hour/run.py oneoff <logs> <out>` reduces the logs of the hand-driven dogfood run of 2026-11-13, as a cross-check of the reducer.
+`uv run evals/first-hour/run.py reduce <dir>` rewrites `metrics.json` and `table.md` from `events.jsonl`. It parses each pasted command's gate run again from its output in `logs/` and leaves `events.jsonl` as recorded, so a run whose driver read the runner's lines with an older parser reduces as a run driven today. `uv run evals/first-hour/run.py table <dir>... [--dir <out>]` prints the matrix table of runs already reduced, one row a run in the order given, and with `--dir` writes `matrix.md` and `matrix.json` there as a matrix does. It reads each `metrics.json` as it is, so reduce the runs first; it refuses a directory whose `metrics.json` is missing or names no shipped persona, and two runs of one persona, and then writes nothing. `uv run evals/first-hour/run.py oneoff <logs> <out>` reduces the logs of the hand-driven dogfood run of 2026-11-13, as a cross-check of the reducer.
 
 The A/B comparison is two runs, one per checkout, and a diff of their `metrics.json`. Read the noise section before you trust a difference.
 
@@ -60,7 +60,7 @@ just first-hour-matrix /path/to/ratchet /tmp/first-hour-matrix
 uv run evals/first-hour/run.py matrix --plugin /path/to/ratchet --dir /tmp/first-hour-matrix
 ```
 
-It takes the single run's `--minutes` (default 90 here), `--usd`, `--model` and `--owner-model`, applied to every persona. `matrix.md` and `matrix.json` are rewritten after each run, so a matrix that is stopped (Ctrl-C reaches the run in progress, which writes its measurements) keeps what it finished. The table has one row a persona: stack, why and when it stopped, minutes to the first feature merge (the first merge whose branch is not the adoption's or init's) and to the first usable merge, questions, product against other, guard prompts, automatic merges, the architecture measures on one line, stack leaks, and whether a usable app was merged. A run that fails still gets a row with its exit code. Expect about an hour to ninety minutes a persona, and up to the cost budget each.
+It takes the single run's `--minutes` (default 90 here), `--usd`, `--model` and `--owner-model`, applied to every persona. `matrix.md` and `matrix.json` are rewritten after each run, so a matrix that is stopped (Ctrl-C reaches the run in progress, which writes its measurements) keeps what it finished. The table has one row a persona: stack, the harness (the first seven characters of the eval code's commit that drove the run, `(dirty)` when its tree had changes, `not recorded` for a run older than that record), why and when it stopped, minutes to the first feature merge (the first merge whose branch is not the adoption's or init's) and to the first usable merge, questions, product against other, guard prompts, automatic merges, the architecture measures on one line, stack leaks, and whether a usable app was merged. A run that fails still gets a row with its exit code. Expect about an hour to ninety minutes a persona, and up to the cost budget each.
 
 ## What the run does
 
@@ -128,7 +128,7 @@ The session also sees its cost budget, which Claude Code enforces (`--usd`), and
 | `minutes.to_first_merge`, `minutes.to_first_usable_merge` | minutes from the start to the first merge on the default branch, and to the first after which the slice works |
 | `stop` | why the run ended (`usable-merged`, `wall-clock`, `cost`, `repeat`, `forge-stage`, `max-steps`, `interrupted`, `error`), with the detail and the minute |
 | `app` | the last app check: the start command and where the repository says it, whether it started and served `/`, `slice` (`works`, `fails` or `unchecked`), and the finding |
-| `minutes.to_first_feature_merge` | minutes to the first merge on the default branch whose branch name has neither `adopt` nor `init` in it |
+| `minutes.to_first_feature_merge` | minutes to the first merge on the default branch of a branch named `feature/…`, the name the feature step gives the branch it builds; the adoption's, a spec's and a `records/…` merge do not count |
 | `architecture` | the architecture measures, below |
 | `stack_leaks` | where the plugin's own text named a language or tool the owner never said, below |
 | `questions` | by class, by channel, recommended offered and taken (dialog and `also:` questions only: a prose question has no marked option), and every question with its answer and the owner model's reason |

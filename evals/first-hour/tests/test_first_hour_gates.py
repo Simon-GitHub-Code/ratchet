@@ -1,5 +1,11 @@
+import subprocess
+import sys
+from pathlib import Path
+
 from first_hour import gates
 from first_hour.gates import Gate, Status
+
+PARALLEL = Path(__file__).resolve().parents[3] / "scripts" / "parallel.py"
 
 RUN = """\
 parallel: fmt-check: started
@@ -39,6 +45,31 @@ def test_a_newer_runner_says_judged_nothing_and_why() -> None:
         Gate("imports", Status.LATER, "code:layer"),
         Gate("load", Status.NONE, "not a service or a job"),
         Gate("lint", Status.GREEN),
+    ]
+
+
+def test_the_plugins_runner_reads_as_each_gate_stood(tmp_path: Path) -> None:
+    bodies = {
+        "imports": "echo later: code:layer",
+        "load": "echo none: not a service or a job",
+        "lint": "true",
+        "bite": "exit 3",
+    }
+    for name, body in bodies.items():
+        (tmp_path / name).write_text(f"{body}\n", encoding="utf-8")
+    runner = [sys.executable, str(PARALLEL), "--runner", "sh", "--jobs", "1", "--root", "."]
+    done = subprocess.run(
+        [*runner, "--", *bodies],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert gates.parse(done.stdout + done.stderr) == [
+        Gate("imports", Status.LATER, "code:layer"),
+        Gate("load", Status.NONE, "not a service or a job"),
+        Gate("lint", Status.GREEN),
+        Gate("bite", Status.RED),
     ]
 
 

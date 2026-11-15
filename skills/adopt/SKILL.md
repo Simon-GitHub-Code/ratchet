@@ -1,6 +1,6 @@
 ---
 name: adopt
-description: "Bring a repository onto the Ratchet method in minutes: declare what kind of software it is, bind the floor and the rows whose code already exists with current tools, and leave every other row waiting for the trigger that will ask it."
+description: "Bring a repository onto the Ratchet method: declare what kind of software it is, bind the floor and the rows whose code already exists with current tools, and leave every other row waiting for the trigger that will ask it."
 disable-model-invocation: true
 ---
 
@@ -58,7 +58,7 @@ Each one is listed under **Assumed** as "you asked for", or as not applied with 
 
 ## What it costs
 
-Adoption installs the tools of the rows it binds and the test runner, runs those gates, plants each one's fault in a scratch copy, rehearses the first slice in another, and runs `check-deep` once, in step 12. On an empty repository the only rows it binds are those whose trigger is `always`: with the test runner and the rehearsal, about 25 minutes on an idle machine, an estimate. A repository with code also binds the rows its code has already triggered.
+Adoption installs the tools of the rows it binds and the test runner, runs those gates, plants each one's fault in a scratch copy, rehearses the first slice in another, and runs `check-deep` once, in step 12. On an empty repository the only rows it binds are those whose trigger is `always`: with the test runner and the rehearsal, about 35 to 45 minutes on an idle machine, and over an hour when adoption first installs the language's tools or they are slow to set up. A repository with code also binds the rows its code has already triggered.
 
 Tell the owner this before step 1. It is not a question.
 

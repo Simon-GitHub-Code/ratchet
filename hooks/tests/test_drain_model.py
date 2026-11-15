@@ -660,11 +660,17 @@ def lease_search() -> tuple[dict[str, list[str]], frozenset[str]]:
     return breaks, frozenset(said for _, said, _ in edges)
 
 
-@pytest.mark.parametrize("name", list(model.LEASE_RULES))
-def test_each_lease_rule_holds_on_every_step_or_breaks_on_its_recorded_path(name: str) -> None:
-    found = lease_search()[0].get(name)
-    assert found == LEASE_COUNTEREXAMPLES[name], f"{name}: shortest break is\n" + "\n".join(
-        found or []
+def test_each_lease_rule_holds_on_every_step_or_breaks_on_its_recorded_path() -> None:
+    # Why: one test and not one a rule, so a run that spreads the tests over processes builds the
+    # lease graph in fewer of them; a red run names every rule whose break moved.
+    breaks = lease_search()[0]
+    moved = {
+        name: breaks.get(name)
+        for name in model.LEASE_RULES
+        if breaks.get(name) != LEASE_COUNTEREXAMPLES[name]
+    }
+    assert not moved, "\n".join(
+        f"{name}: shortest break is\n" + "\n".join(path or []) for name, path in moved.items()
     )
 
 
@@ -705,7 +711,7 @@ class LeasePlay:
         assert seen == self.lease, "\n".join([f"seen {seen}", f"not {self.lease}", *lines])
         # Why: the model's merge lock is held only by a merge past its probe whose land is gone;
         # a land's own merge here waits before the lock, or has ended.
-        merging = lock_held(drain.merge.merge_lock_path(self.world.world.root, BRANCH[Name.A]))
+        merging = lock_held(self.world.merge_lock)
         assert merging == (self.lease.orphan is not None), "\n".join(["merge lock", *lines])
         return self.world.world.printed
 
