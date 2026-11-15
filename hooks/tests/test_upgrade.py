@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Sequence
@@ -176,8 +177,18 @@ def test_what_the_project_wrote_survives_the_upgrade(name: str, tmp_path: Path) 
     assert all(row in rows for row in kept.rows), "every row the project wrote, in its order"
     assert DENY in after[".claude/settings.json"]
     assert [f for f in result.owner if DENY in str(f)]
-    for sections in ("AGENTS.md", ".github/pull_request_template.md"):
-        assert keeps_in_order(before[sections], after[sections]), sections
+    names = conformance.companions()
+    plugin_written = {
+        line.rstrip("\r\n")
+        for _, _, line in conformance.companion_lines(before["AGENTS.md"], names)
+    }
+    project_written = "\n".join(
+        line for line in before["AGENTS.md"].splitlines() if line not in plugin_written
+    )
+    assert keeps_in_order(project_written, after["AGENTS.md"]), "AGENTS.md"
+    assert all(conformance.plain_companion(name) in after["AGENTS.md"] for name in names)
+    template = ".github/pull_request_template.md"
+    assert keeps_in_order(before[template], after[template]), template
 
 
 def test_a_padded_table_is_padded_again_with_the_new_row(tmp_path: Path) -> None:
@@ -458,6 +469,49 @@ def test_only_what_git_sees_is_copied_and_a_link_stays_a_link(tmp_path: Path) ->
     assert (sandbox / ".git").is_dir()
 
 
+ABSENT = re.compile(r"\('(.+?)' absent\)")
+BEFORE_ISSUES_CLOSE = "d2b36ab^"
+MERGE = ".github/workflows/merge.yml"
+
+
+@pytest.mark.parametrize("name", ["0.8.2", "0.9.2"])
+def test_an_upgrade_lists_a_finding_for_each_marker_the_old_workflows_lack(
+    name: str, tmp_path: Path
+) -> None:
+    root = fixture(name, tmp_path)
+    upgrade.apply(root, planned(root).changes)
+    found = [str(f) for f in conformance.findings(root)]
+    for workflow in ("ci.yml", "deep.yml"):
+        path = f".github/workflows/{workflow}"
+        text = (root / path).read_text(encoding="utf-8")
+        owed = {m for m in conformance.workflow_markers(workflow) if m not in text}
+        named = {
+            marker
+            for line in found
+            if line.startswith(f"{path}: nothing ")
+            for marker in ABSENT.findall(line)
+        }
+        assert named == owed
+
+
+def test_a_merge_workflow_from_before_it_closed_issues_is_owed_both_markers(
+    tmp_path: Path,
+) -> None:
+    root = fixture("0.9.2", tmp_path)
+    upgrade.apply(root, planned(root).changes)
+    template = (root / MERGE).read_text(encoding="utf-8")
+    old = adopted.history("show", f"{BEFORE_ISSUES_CLOSE}:skills/adopt/templates/{MERGE}")
+    commit = re.search(r"ref: \"([0-9a-f]{40})\"", template)
+    assert commit
+    (root / MERGE).write_text(old.replace("<ratchet-sha>", commit.group(1)) + "\n")
+    found = [f.problem for f in conformance.findings(root) if f.path == MERGE]
+    assert found == [
+        f"nothing {meaning} ('{marker}' absent)"
+        for marker, meaning in conformance.MERGE_SHAPE
+        if marker in {"issues: write", "closingIssuesReferences"}
+    ]
+
+
 def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -468,7 +522,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
     assert "Would write 13 files (run with --apply):" in out
-    assert "  quality/owed.toml\n    - write down 88 things owed since " in out
+    assert "  quality/owed.toml\n    - write down 90 things owed since " in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
@@ -480,7 +534,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 67 edits in 13 files. 88 items are owed")
+    assert verdict(out).startswith("upgrade: would write 68 edits in 13 files. 90 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -488,8 +542,8 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 67 changes in 13"
-                " files. The project owes 88 things since the upgrade. None of them turns a check"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 68 changes in 13"
+                " files. The project owes 90 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
                 " make all the fixes in one change on a branch, and you decide at that one merge."

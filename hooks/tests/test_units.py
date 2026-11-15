@@ -24,7 +24,14 @@ from ratchet_guards.paths import Hit, Locator
 from ratchet_guards.refs import MAIN_BRANCHES
 from ratchet_guards.shell import HEREDOC_MARK, PLACEHOLDER, SimpleCommand, lex, unquote
 from ratchet_guards.shell import parse as parse_shell
-from ratchet_guards.verdict import DISPUTE, RULES, Decision, Verdict, strictest
+from ratchet_guards.verdict import (
+    DISPUTE,
+    RULES,
+    WITHOUT_REWRITING,
+    Decision,
+    Verdict,
+    strictest,
+)
 from ratchet_guards.writes import Touched, touched
 from tests.support import (
     HOME,
@@ -127,6 +134,7 @@ def test_the_rule_catalogue_is_pinned() -> None:
 def test_only_a_rule_with_a_way_out_of_its_own_points_somewhere_other_than_a_dispute() -> None:
     elsewhere = {rule for rule, spec in RULES.items() if spec.way_out != DISPUTE}
     allow = {"workflow-write", "instructions-write", "agent-ready-label"}
+    rewriting = {"force-push", "amend-pushed"}
     assert elsewhere == {
         "guard-path-default",
         "guard-path-unseen-switch",
@@ -136,9 +144,12 @@ def test_only_a_rule_with_a_way_out_of_its_own_points_somewhere_other_than_a_dis
         "merge-default",
         "unreadable",
         *allow,
+        *rewriting,
     }
-    assert len({RULES[rule].way_out for rule in elsewhere - allow}) == len(elsewhere - allow)
+    own = elsewhere - allow - rewriting
+    assert len({RULES[rule].way_out for rule in own}) == len(own)
     assert {RULES[rule].way_out for rule in allow} == {"Allow it?"}
+    assert {RULES[rule].way_out for rule in rewriting} == {WITHOUT_REWRITING}
     assert "git switch -c" in RULES["guard-path-default"].way_out
 
 

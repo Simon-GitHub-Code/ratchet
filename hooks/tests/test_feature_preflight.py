@@ -410,7 +410,7 @@ def test_main_prints_json_and_the_verdict(
     out, err = capsys.readouterr()
     assert [f["check"] for f in json.loads(out)["failures"]] == ["ticket", "branch"]
     assert "preflight: ticket: 9: no such ticket" in err
-    assert "produce: mattpocock-skills:to-spec" in err
+    assert "produce: /mattpocock-skills:to-spec" in err
     assert err.rstrip().endswith("preflight: red")
 
 
@@ -608,6 +608,7 @@ def test_a_repository_that_is_not_adopted_is_not_asked_for_hooks(tmp_path: Path)
 
 
 LIVE = "- Life events: deployed\n"
+FLAGGED = "\n## Operability\n\n- Flag: `notes`, default off\n"
 
 
 def events(names: str) -> tuple[str, str]:
@@ -631,11 +632,20 @@ def test_a_line_whose_row_waits_is_not_yet_asked(tmp_path: Path) -> None:
     assert "`Load:`" in asked.failures[0].detail
 
 
-def test_the_flag_line_waits_for_the_deployed_event(tmp_path: Path) -> None:
-    assert adopted(tmp_path / "young", "cli", BODY, extra=events("none")).ok
-    assert adopted(tmp_path / "other", "cli", BODY, extra=events("depended-on")).ok
-    live = adopted(tmp_path / "live", "cli", BODY, extra=events("irreplaceable-data, deployed"))
-    assert "lacks `Flag:`" in live.failures[0].detail
+def test_the_flag_line_is_asked_whatever_the_life_events_and_its_row(tmp_path: Path) -> None:
+    for name, life in (
+        ("young", "none"),
+        ("other", "depended-on"),
+        ("live", "irreplaceable-data, deployed"),
+    ):
+        report = adopted(tmp_path / name, "cli", BODY, extra=events(life))
+        assert "lacks `Flag:`" in report.failures[0].detail, name
+    unlined = adopted(tmp_path / "unlined", "cli", BODY, extra=("", ""))
+    assert "lacks `Flag:`" in unlined.failures[0].detail
+    waiting = row("changed flags off and on", "later: code:entry-point")
+    held = adopted(tmp_path / "held", "cli", BODY, extra=(LIVE, waiting))
+    assert "lacks `Flag:`" in held.failures[0].detail
+    assert adopted(tmp_path / "said", "cli", BODY + FLAGGED, extra=events("none")).ok
 
 
 def test_the_critic_runs_only_for_a_project_that_is_depended_on(tmp_path: Path) -> None:

@@ -269,7 +269,8 @@ def test_tickets_on_the_tracker_route_to_conjecture_then_feature(tmp_path: Path)
         root, FakeGh(issues=issues((3, "Three", "Body."), (5, "Five", "X." + CONJECTURE)))
     )
     assert built.command == f"{route.FEATURE} 5"
-    assert f"{route.POTETO} 5" in built.why
+    assert "or ask this session to build ticket 5 with you here" in built.why
+    assert "poteto" not in built.why
     inherited = FakeGh(
         issues=issues((7, "Seven", "**Parent:** #12\n\nBody.")),
         issue_12=json.dumps(
@@ -715,21 +716,6 @@ def test_a_spec_without_a_conjecture_is_stated_before_it_is_split(tmp_path: Path
     assert route.decide(root, None).command == f"{route.TICKETS} {spec}"
 
 
-def test_plugin_lines_older_than_the_template_send_the_owner_to_init(tmp_path: Path) -> None:
-    template = (route.PLUGIN_ROOT / "skills/init/templates/AGENTS.md").read_text()
-    lines = [line for line in template.splitlines() if line.startswith("- **")][:4]
-    current = STANZA + "\n" + "\n".join(lines) + "\n"
-    root = repository(tmp_path, {**ADOPTED, "AGENTS.md": current})
-    assert route.decide(root, None).command != route.INIT
-    stale = current.replace(lines[1], lines[1].split("`poteto-mode`")[0] + "refused to an agent.")
-    write(root, "AGENTS.md", stale)
-    commit(root, "docs: an older stanza")
-    step = route.decide(root, None)
-    assert step.command == route.INIT
-    assert "In what style, with which levers?" in step.why
-    assert step.then == route.NEXT
-
-
 def test_missing_hooks_come_before_everything_a_commit_would_do(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1099,6 +1085,38 @@ def test_a_ticket_held_for_a_safeguard_names_it_until_it_is_bound(
     assert route.ticket_step(root, None, checkout).command == f"{route.FEATURE} {HELD}"
 
 
+ASK_GUARD = "ask this session to make the guard edits with you here; their merge is yours"
+
+
+def test_a_parked_ticket_offers_the_guard_edits_to_the_session_only_for_a_guard_hold(
+    tmp_path: Path,
+) -> None:
+    guarded = held_root(tmp_path / "guard")
+    parked(guarded, GUARD_BLOCK, stash=False)
+    step = route.decide(guarded, None)
+    assert step.then == f"{route.FEATURE}, or {ASK_GUARD}"
+    sized = held_root(tmp_path / "size")
+    parked(sized, SIZE_BLOCK, stash=False)
+    assert route.decide(sized, None).then == route.FEATURE
+
+
+@pytest.mark.parametrize("holds", [[queue_notes.GUARD], [queue_notes.QUESTIONS]])
+def test_a_stashed_blocked_run_offers_the_guard_edits_only_when_its_note_records_them(
+    tmp_path: Path, holds: list[str]
+) -> None:
+    root = held_root(tmp_path)
+    ticket = route.agent_ready(root, None)[0][0]
+    note = {"digest": queue_notes.digest(ticket), "base": queue_notes.tip(root), "holds": holds}
+    queue_notes.write_note(queue_notes.note_path(root, "feature/2-b"), note)
+    blocked(root)
+    step = route.decide(root, None)
+    assert step.stage == "blocked-run"
+    assert "feature/2-b: blocked run" in step.command
+    assert step.then == f"{route.FEATURE} {HELD}" + (
+        f", or {ASK_GUARD}" if queue_notes.GUARD in holds else ""
+    )
+
+
 def test_a_note_without_a_hold_leaves_the_ticket_buildable(tmp_path: Path) -> None:
     root = held_root(tmp_path)
     assert queue_notes.holds_of({"verdict": "approve"}) == []
@@ -1214,3 +1232,24 @@ def test_a_dirty_tree_on_a_merged_branch_is_finished_before_the_switch(tmp_path:
     step = route.decide(root, None)
     assert step.stage == "change"
     assert step.why == "the working tree has uncommitted changes"
+
+
+def test_a_switch_past_its_removal_date_is_named_beside_the_step(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    assert route.expired_switches(root) == []
+    (root / "flags.toml").write_text(
+        '[[flag]]\nkey = "old-checkout"\nowner = "o"\ndefault = false\n'
+        'remove-by = 2000-01-01\nreason = "Hidden until the owner switches it on."\n'
+        '[[flag]]\nkey = "new-search"\nowner = "o"\ndefault = false\n'
+        'remove-by = 2999-01-01\nreason = "Hidden until the owner switches it on."\n',
+        encoding="utf-8",
+    )
+    [line] = route.expired_switches(root)
+    assert "flag 'old-checkout'" in line
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [x for x in capsys.readouterr().out.splitlines() if x.startswith("also:")]
+    assert len(also) == 1
+    assert "old-checkout" in also[0]

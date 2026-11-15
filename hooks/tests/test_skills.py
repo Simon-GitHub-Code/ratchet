@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import commits
+import conformance
 import feature_preflight as preflight
 import snapshots
 from tests.repos import commit, repository, write
@@ -340,29 +341,55 @@ def test_a_config_the_manifest_does_not_list_is_said_to_be_unguarded(tmp_path: P
     assert "each gate's effective configuration is snapshotted" not in readme
 
 
-def test_no_method_page_tells_an_agent_to_load_a_user_invoked_skill() -> None:
-    # Why: the harness refuses those skills to an agent; a page that says "load pstack:interrogate"
-    # sends the agent into a refusal or an imitation. Only the owner's slash form may appear.
-    owners = (
-        "interrogate",
-        "architect",
-        "benchmark-checklist",
-        "poteto-mode",
-        "to-spec",
-        "to-tickets",
-        "triage",
-        "wayfinder",
-        "grill-with-docs",
-        "setup-matt-pocock-skills",
-        "correct",
-        "reflect",
-    )
-    for page in (SKILLS / "method").glob("*.md"):
-        text = page.read_text(encoding="utf-8")
-        for skill in owners:
-            for prefix in ("pstack:", "mattpocock-skills:"):
-                bad = f"`{prefix}{skill}`"
-                assert bad not in text, f"{page.name} names {bad}; write /{prefix}{skill}"
+PLUGIN_ROOT = SKILLS.parent
+OWN_FILES = (
+    *(PLUGIN_ROOT / name for name in ("skills", "workflows", "scripts")),
+    PLUGIN_ROOT / "README.md",
+    *(path for path in sorted((PLUGIN_ROOT / "docs").iterdir()) if path.name != "adr"),
+)
+
+
+def own_texts() -> dict[str, str]:
+    """Every text file of Ratchet's own: skills, workflows, scripts, the README, docs but ADRs."""
+    found: dict[str, str] = {}
+    for root in OWN_FILES:
+        for path in [root] if root.is_file() else sorted(root.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                try:
+                    found[str(path.relative_to(PLUGIN_ROOT))] = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+    return found
+
+
+def companion_references() -> list[tuple[str, int, str, str, bool]]:
+    """Each companion token: file, line, plugin, skill, and whether it has the slash."""
+    names = "|".join(re.escape(name) for name in conformance.companions())
+    token = re.compile(rf"(?<![\w/:.-])(/?)({names}):([a-z][a-z0-9-]*)(?![\w:])")
+    return [
+        (name, number, match.group(2), match.group(3), match.group(1) == "/")
+        for name, text in own_texts().items()
+        for number, line in enumerate(text.splitlines(), 1)
+        for match in token.finditer(line)
+    ]
+
+
+@pytest.mark.xfail(strict=True, reason="pages land in the companion PR")
+def test_each_companion_skill_is_named_in_one_form_and_no_pstack_command_appears() -> None:
+    forms: dict[str, set[bool]] = {}
+    where: dict[str, list[str]] = {}
+    for name, number, plugin, skill, slash in companion_references():
+        forms.setdefault(f"{plugin}:{skill}", set()).add(slash)
+        where.setdefault(f"{plugin}:{skill}", []).append(f"{name}:{number}{'/' if slash else ''}")
+    mixed = {skill: where[skill] for skill, used in forms.items() if len(used) > 1}
+    assert not mixed, f"named both as a command and as a load: {mixed}"
+    commands = [
+        f"{name}:{number}"
+        for name, text in own_texts().items()
+        for number, line in enumerate(text.splitlines(), 1)
+        if "/pstack:" in line
+    ]
+    assert not commands, f"names a pstack command: {commands}"
 
 
 def test_the_remote_needs_an_accepting_answer() -> None:
@@ -524,6 +551,20 @@ def test_the_size_estimate_is_written_on_the_ticket_and_never_on_a_spec() -> Non
         "**A spec that has not been split:** write no `## Size`. Make the estimate all the same,"
         " for the ceiling case below." in step_2
     )
+
+
+def test_a_ticket_that_lacks_only_its_size_gets_the_size_and_a_large_one_is_written() -> None:
+    # Why: the owner chose on 2026-11-15 that a ticket written before sizes were gets its size
+    # alone, and that a ticket over a ceiling is written with its size for the feature run to
+    # split (ADR 0046), where the page had stopped and handed the split back to them.
+    step_1 = conjecture_step(1)
+    assert "and the ticket states no `## Size`:** it was written before sizes were." in step_1
+    assert "Write the size alone" in step_1
+    step_2 = conjecture_step(2)
+    assert "**The estimate passes a ceiling:** write it as it is, and the ticket with it." in step_2
+    assert "not written as one" not in step_2
+    step_5 = flat("conjecture/SKILL.md").split(" 5. **", 1)[1]
+    assert "**Green, or red on `size` alone:** the last line is the next command" in step_5
 
 
 def test_the_conjecture_is_printed_once_at_the_hand_over() -> None:

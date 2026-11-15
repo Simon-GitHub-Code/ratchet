@@ -1307,10 +1307,6 @@ def test_a_switch_past_its_removal_date_outranks_no_step(tmp_path: Path) -> None
     assert asked > 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="route.py names no switch past its removal date: flip this pin with that change",
-)
 def test_the_route_names_each_switch_past_its_removal_date(tmp_path: Path) -> None:
     """ADR 0061: the route lists what ``flags.py --expired`` lists, as an ``also:`` line.
 

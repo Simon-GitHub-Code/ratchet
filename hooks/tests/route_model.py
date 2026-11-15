@@ -370,6 +370,10 @@ def _no_ticket(world: World) -> bool:
     return not labelled(world)
 
 
+def _spec_unstated(world: World) -> bool:
+    return world.spec is Spec.BARE or (world.spec is Spec.STATED and world.flag is Flag.MISSING)
+
+
 # The order is the order ``route.decide`` asks: setup, an unfinished change, the records, the rows
 # an upgrade left for an agent to fill, the architecture review, the safeguard, the architecture an
 # upgrade left owed, then the glossary and the tickets. The last rule holds for any world, so the
@@ -391,7 +395,7 @@ CHAIN: Final = (
     Rule(Advice.ARCHITECTURE, lambda w: w.architecture is Architecture.OWED),
     Rule(Advice.GRILL, lambda w: not w.foundation),
     Rule(Advice.TRIAGE, lambda w: _no_ticket(w) and triage_waits(w)),
-    Rule(Advice.CONJECTURE_SPEC, lambda w: _no_ticket(w) and w.spec is Spec.BARE),
+    Rule(Advice.CONJECTURE_SPEC, lambda w: _no_ticket(w) and _spec_unstated(w)),
     Rule(Advice.SPLIT, lambda w: _no_ticket(w) and w.spec is Spec.STATED),
     Rule(Advice.SPECIFY, _no_ticket),
     Rule(Advice.RESOLVE, lambda w: Ticket.MERGED in w.tickets),
@@ -443,11 +447,6 @@ class Divergence:
     example: World
 
 
-def as_before_the_flag_line(world: World) -> World:
-    """``world`` as the preflight reads it while the ``Flag:`` line waits for ``deployed``."""
-    return replace(world, flag=Flag.WAITS)
-
-
 def as_proved_by_its_pin(world: World) -> World:
     """``world`` as the route reads it while a pinned binding counts as a finished adoption."""
     return replace(world, setup=Setup.BOUND)
@@ -477,28 +476,6 @@ DIVERGENCES: Final[tuple[Divergence, ...]] = (
             tickets=(Ticket.STATED, Ticket.TRIAGE),
             inherits=True,
             architecture=Architecture.RECORDED,
-        ),
-    ),
-    Divergence(
-        name="flag-line-waits-for-deployed",
-        holds=lambda world: world.flag is Flag.MISSING,
-        reads=as_before_the_flag_line,
-        contradicts=(
-            "The preflight asks every ticket of an asked type for its `Flag:` line, before"
-            " deployment as after, whatever its row's `later:` says."
-        ),
-        source=(
-            "docs/adr/0061-before-deployment-the-owner-is-asked-whether-new-behaviour-arrives"
-            "-switched-off.md"
-        ),
-        breaks=frozenset({"RealAdviceCanBeFollowed", "RealFlagLineBeforeTheBuild"}),
-        example=World(
-            setup=Setup.BOUND,
-            hooks=True,
-            foundation=True,
-            tickets=(Ticket.STATED, Ticket.TRIAGE),
-            architecture=Architecture.RECORDED,
-            flag=Flag.MISSING,
         ),
     ),
     Divergence(
@@ -693,8 +670,9 @@ def _owner_writes_spec(world: World) -> Iterator[World]:
 
 @action(ActionName.OWNER_STATES_SPEC_CONJECTURE, Advice.CONJECTURE_SPEC)
 def _owner_states_spec_conjecture(world: World) -> Iterator[World]:
-    if calm(world) and world.spec is Spec.BARE:
-        yield replace(world, spec=Spec.STATED, tree=Tree.RECORDS)
+    if calm(world) and _spec_unstated(world):
+        flag = Flag.ASKED if world.flag is Flag.MISSING else world.flag
+        yield replace(world, spec=Spec.STATED, tree=Tree.RECORDS, flag=flag)
 
 
 @action(ActionName.OWNER_SPLITS_SPEC, Advice.SPLIT)
