@@ -22,9 +22,10 @@ Usage::
   exit is usually the first thing it said; that also says the command as it ran, where, and for
   how long, and says so when the command printed nothing.
 * ``{port}`` in ``--boot``, ``--ready``, an ``--env`` value or the command is replaced by a free
-  port the kernel picked, and ``PORT`` is exported with it, so parallel CI jobs on one host do
-  not collide on a fixed port. The boot output is shown only when the run is red.
-* The kernel's pick is only free until the service binds it, and another gate can take it in
+  port picked below the range outgoing connections draw from, and ``PORT`` is exported with it,
+  so parallel CI jobs on one host do not collide on a fixed port. The boot output is shown only
+  when the run is red.
+* The pick is only free until the service binds it, and another gate's service can bind it in
   between. So when a service on a port picked that way exits before it answers, the gate says so
   on stderr with that first boot's output and boots once more on a new port. A second failure is
   red as before, and a service that always fails ends red after the one retry. A port the caller
@@ -400,8 +401,8 @@ def main(argv: list[str]) -> int:
         return gatelib.report("with_service", found)
     code, problems, exited = attempt()
     if exited and picked:
-        # Why: the kernel's pick is free only until the service binds it, and another gate may
-        # have taken it first. A service that always fails still ends red, after this one retry.
+        # Why: the pick is free only until the service binds it, and another gate's service may
+        # have bound it first. A service that always fails still ends red, after this one retry.
         print(
             "with_service: exited before answering; booting once more on a new port",
             file=sys.stderr,
