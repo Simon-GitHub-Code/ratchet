@@ -12,7 +12,9 @@ The conformance gate holds every workflow's plugin checkout to that commit. This
 the plugin a tier runs from to it, before any gate runs.
 
 Usage: ``plugin_pin.py [--root DIR] [--plugin DIR]``. The plugin is the one this script runs
-from unless ``--plugin`` names another.
+from unless ``--plugin`` names another. A ``--plugin`` that is empty or names nothing is red with
+one line: no plugin is recorded for the repository (the session hook records it, ADR 0068), and
+``RATCHET_PLUGIN`` names one instead.
 
 * A git checkout (the Claude Code marketplace clone, the Codex and Grok plugin folders, a clone
   made for pi or OpenCode, CI's own checkout) is green when its HEAD is the pinned commit and
@@ -63,6 +65,10 @@ RUNNER = "## Runner"
 WORKFLOWS = Path(".github/workflows")
 UNREADABLE = "a commit git cannot read"
 DOTTED = re.compile(r"\d+(?:\.\d+)*")
+NONE_RECORDED = (
+    "plugin-pin: no plugin recorded for this repository: start an agent session here once, or set"
+    " RATCHET_PLUGIN to the plugin's folder"
+)
 
 
 class Relation(Enum):
@@ -296,10 +302,12 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="plugin_pin.py")
     parser.add_argument("--root", type=Path, default=Path())
-    parser.add_argument("--plugin", type=Path, default=PLUGIN)
+    parser.add_argument("--plugin", default=str(PLUGIN))
     options = parser.parse_args(argv[1:])
+    if not options.plugin or not Path(options.plugin).exists():
+        return gatelib.report("plugin-pin", [NONE_RECORDED])
     line, problem = judged(
-        pinned(gatelib.read_text(options.root / gatelib.BINDING)), options.plugin
+        pinned(gatelib.read_text(options.root / gatelib.BINDING)), Path(options.plugin)
     )
     if not problem:
         print(line)

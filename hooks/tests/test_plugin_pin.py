@@ -413,3 +413,34 @@ def test_a_copy_with_no_history_of_the_pinned_version_may_write(tmp_path: Path) 
     assert plugin_pin.write_refusal(refs_only, used) is not None
     two = pinned_repository(tmp_path / "z", pin=FIRST, refs=(SECOND,))
     assert plugin_pin.write_refusal(two, used) is not None
+
+
+NONE_RECORDED = (
+    "plugin-pin: no plugin recorded for this repository: start an agent session here once, or set"
+    " RATCHET_PLUGIN to the plugin's folder\nplugin-pin: red\n"
+)
+
+
+@pytest.mark.parametrize("used", ["", "absent"])
+def test_no_plugin_recorded_and_none_set_is_red_in_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], used: str
+) -> None:
+    root = repos.repository(tmp_path / "repo")
+    code = plugin_pin.main(
+        ["plugin_pin.py", "--root", str(root), "--plugin", str(tmp_path / used) if used else ""]
+    )
+    assert code == 1
+    assert capsys.readouterr().out == NONE_RECORDED
+
+
+def test_a_newer_copy_names_both_versions_and_its_own_upgrade_script(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    used, _ = plugin(tmp_path / "plugin", "1.3.0")
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE}")
+    code, out = run(root, used, capsys)
+    first = out.splitlines()[0]
+    assert code == 0
+    assert "1.3.0" in first
+    assert "newer than the 1.2.3" in first
+    assert str(used / "scripts/upgrade.py") in first

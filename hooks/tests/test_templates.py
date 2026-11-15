@@ -579,7 +579,7 @@ def test_the_plugin_version_has_one_home_the_binding() -> None:
     assert "https://github.com/Simon-GitHub-Code/ratchet" in text
 
 
-def pin_recipe(root: Path, plugin: Path) -> tuple[int, str]:
+def pin_recipe(root: Path, plugin: Path | str) -> tuple[int, str]:
     just = shutil.which("just")
     assert just
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
@@ -600,6 +600,16 @@ def test_a_tier_says_what_to_set_when_no_plugin_is_where_the_justfile_looks(
     assert code == 1
     assert f"plugin-pin: no Ratchet plugin at {tmp_path / 'absent'}" in said
     assert "set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins" in said
+
+
+def test_a_tier_says_no_plugin_is_recorded_when_nothing_names_one(tmp_path: Path) -> None:
+    needs_just()
+    code, said = pin_recipe(tmp_path, "")
+    assert code == 1
+    assert said == (
+        "plugin-pin: no plugin recorded for this repository: start an agent session here once,"
+        " or set RATCHET_PLUGIN to the plugin's folder\n"
+    )
 
 
 def test_a_tier_is_red_until_the_binding_pins_the_plugin_it_runs_from(tmp_path: Path) -> None:

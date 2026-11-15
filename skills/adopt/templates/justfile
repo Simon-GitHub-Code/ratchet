@@ -9,10 +9,10 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# The plugin the recipes run. The fallback is where Claude Code keeps it, built from the home
-# directory since `just` never expands `~`. Under another harness export RATCHET_PLUGIN; the
-# plugin's docs/harness pages name the path. `plugin-pin` is red when nothing is there.
-ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", home_directory() / ".claude/plugins/marketplaces/ratchet")
+# The plugin the recipes run: the folder an agent session in this repository last started the
+# plugin from, which the session hook records in the git directory. For another harness, or CI,
+# export RATCHET_PLUGIN as the plugin's folder. `plugin-pin` is red when there is neither.
+ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", `cat "$(git rev-parse --git-common-dir 2>/dev/null)/ratchet-plugin" 2>/dev/null || true`)
 
 # The deliverable as a running thing, for `start` and the three service gates the plugin ships
 # (`smoke`, `load-smoke`, `telemetry-e2e`). Adoption fills `boot`, `ready` and `service` for every
@@ -132,6 +132,7 @@ dependencies dir:
 # the commit CI checks out. Red before any gate runs when it is older, another commit of the same
 # version, or not there; a newer one is green and says on every run what to change.
 plugin-pin:
+    @if [ -z "{{ratchet_plugin}}" ]; then echo "plugin-pin: no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
     @test -f "{{ratchet_plugin}}/scripts/plugin_pin.py" || { echo "plugin-pin: no Ratchet plugin at {{ratchet_plugin}}, or one older than the pin check; set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins"; exit 1; }
     @python3 "{{ratchet_plugin}}/scripts/plugin_pin.py"
 
