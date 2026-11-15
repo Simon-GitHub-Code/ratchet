@@ -760,15 +760,14 @@ def test_an_older_adoption_owes_the_architecture_after_an_upgrade_until_it_is_re
     assert owes(repo, FILLED_BY_THE_UPGRADE | {route.ARCHITECTURE_RULE}) == []
 
 
-def test_the_real_upgrade_owes_more_than_the_model_and_leaves_the_world_two_quality_files_red(
+def test_the_real_upgrade_owes_more_than_the_model_and_leaves_a_faithful_adoption_green(
     tmp_path: Path,
 ) -> None:
     """What the real upgrade leaves on the world's older adoption beyond the model's two debts.
 
     Why it is pinned: the model's upgrade leaves rows to fill and the architecture. The real one
-    also owes every other finding red at the merge base, which the route never names. And the
-    world's adoption never wrote the quality files a template adoption writes; no entry may excuse
-    their absence, so conformance stays red, and the merge would refuse this upgrade.
+    also owes every other finding red at the merge base, which the route never names. The world's
+    adoption writes the quality files the templates hold, so nothing is left red.
     """
     world = replace(DONE, architecture=Architecture.UNASKED)
     repo = built(tmp_path, world)
@@ -787,10 +786,7 @@ def test_the_real_upgrade_owes_more_than_the_model_and_leaves_the_world_two_qual
         "speed",
     }
     red, _ = conformance.owed_split(repo.root, conformance.findings(repo.root))
-    assert [str(finding) for finding in red] == [
-        "quality/thresholds.toml: missing",
-        "quality/mutation-register.toml: missing",
-    ]
+    assert [str(finding) for finding in red] == []
 
 
 def test_a_review_and_a_safeguard_owed_beside_the_architecture_come_before_it(

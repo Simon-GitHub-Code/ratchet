@@ -1,12 +1,12 @@
 """The route's reference model made real: each model action done on a git repository.
 
 ``apply`` leaves a scratch repository as the documented command leaves it: ``/ratchet:init``
-commits ``AGENTS.md``, ``/ratchet:adopt`` commits the binding and the manifest on its own branch
-and merges it, the spec skills leave records uncommitted on the default branch, ``merge --records``
-commits them on a ``records/<time>`` branch and merges it or leaves it parked, and the drain
-writes its note through ``drain.close``, parking for the safeguard on what the real triggers gate
-printed. An owner's edit of a ticket is committed on the default branch at once, as the model has
-it. ``classify`` reads a real ``route.Step`` back as the model's
+commits ``AGENTS.md``, ``/ratchet:adopt`` commits the binding, the manifest and the templates'
+quality files on its own branch and merges it, the spec skills leave records uncommitted on the
+default branch, ``merge --records`` commits them on a ``records/<time>`` branch and merges it or
+leaves it parked, and the drain writes its note through ``drain.close``, parking for the safeguard
+on what the real triggers gate printed. An owner's edit of a ticket is committed on the default
+branch at once, as the model has it. ``classify`` reads a real ``route.Step`` back as the model's
 advice label.
 
 ``apply`` never runs ``scripts/merge.py``. Each merge it makes, of a working branch, of a records
@@ -128,6 +128,8 @@ REVIEW = (
 )
 GLOSSARY = "# Glossary\n\n**Customer**: who pays.\n"
 PLACEHOLDER = "# <project>\n"
+ADOPT_TEMPLATES: Final = plugin_pin.PLUGIN / "skills/adopt/templates"
+QUALITY: Final = ("quality/thresholds.toml", "quality/mutation-register.toml")
 ADOPTION = "adopt-ratchet"
 STATUS: Final = {
     Ticket.TRIAGE: "needs-triage",
@@ -355,10 +357,15 @@ def on_adoption_branch(repo: Repo) -> None:
 
 
 def adoption(repo: Repo, change: Change, *, pinned: bool) -> None:
-    """The binding, the manifest and the glossary's template; the architecture, where asked."""
+    """The binding, the manifest, the glossary's template and the quality files the templates hold.
+
+    The architecture is written where it was asked.
+    """
     write(repo.root, "docs/process/binding.md", repo.binding(pinned=pinned))
     write(repo.root, "guards/manifest.toml", repo.manifest)
     write(repo.root, "GLOSSARY.md", PLACEHOLDER)
+    for path in QUALITY:
+        write(repo.root, path, (ADOPT_TEMPLATES / path).read_text(encoding="utf-8"))
     if change.after.architecture is Architecture.RECORDED:
         repo.record_architecture()
 
@@ -623,7 +630,7 @@ def plugin_at(version: str) -> Path:
 def run_upgrade(repo: Repo) -> str:
     """What ``upgrade.py --apply`` prints, run as a process from the plugin the pin names.
 
-    A refusal or a plan that does not settle fails the step; red items leave it at exit 1.
+    Anything but exit 0 fails the step: a refusal, a plan that does not settle, or a red item.
     """
     plugin = plugin_at(repo.version())
     ran = subprocess.run(  # noqa: S603 # -- the plugin's own upgrade, no shell
@@ -632,7 +639,7 @@ def run_upgrade(repo: Repo) -> str:
         text=True,
         check=False,
     )
-    assert ran.returncode in {0, 1}, f"upgrade.py exited {ran.returncode}:\n{ran.stdout}"
+    assert ran.returncode == 0, f"upgrade.py exited {ran.returncode}:\n{ran.stdout}"
     return ran.stdout
 
 
