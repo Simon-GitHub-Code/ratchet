@@ -18,9 +18,10 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - **The ticket, or its parent, states a conjecture:** check that it is current. Run the digest command of [The criteria digest](#the-criteria-digest) on the body that holds the conjecture, with the heading its `- Criteria:` line names.
      - **The command prints another digest than the line names:** the criteria changed after the conjecture was written. Redraft it: run steps 2 to 5, each as its *redraft* case says. The case below does not apply.
      - **It prints the same digest, or the conjecture has no `- Criteria:` line:** the conjecture is current, and the case below decides.
-   - **The ticket, or its parent, already states a current conjecture and its operability:** there is nothing to write. Say so and stop.
+   - **The ticket, or its parent, already states a current conjecture and its operability, and the ticket states no `## Size`:** it was written before sizes were. Write the size alone: estimate it by the `## Size` block of step 2, write that block as step 4 says, and hand over as step 5 says, with the two size lines in place of the conjecture. Ask nothing, and draft nothing else.
+   - **The ticket, or its parent, already states a current conjecture and its operability, and the ticket states its `## Size`, or the argument is a spec:** there is nothing to write. Say so and stop.
 
-   Done when you hold the ticket, and its parent spec when it has one; when a conjecture is stated, you know from the digest whether it is current or is to be redrafted; and, when there is nothing to write, you have said so and stopped.
+   Done when you hold the ticket, and its parent spec when it has one; when a conjecture is stated, you know from the digest whether it is current or is to be redrafted; when only the size is missing, it is written and handed over; and, when there is nothing to write, you have said so and stopped.
 
 2. **Draft from the record.** The conversation that produced the ticket (`grill-with-docs`, `to-spec`, `to-tickets`) already chose an approach and killed the alternatives, and the ADRs and the glossary hold the rest. That is how it will be built, so draft from that record, not from imagination.
    - **The ticket's siblings share a parent spec:** draft the conjecture and the operability once, for the spec. Its tickets inherit them.
@@ -68,7 +69,8 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - **A spec that has not been split:** write no `## Size`. Make the estimate all the same, for the ceiling case below.
    - The ceilings are `product_lines` and `product_files` of `[ceilings.change]` in `quality/thresholds.toml`. The feature preflight refuses a ticket whose stated size passes either.
    - Be honest and not hopeful: the spec stage estimates the whole change again and stops it when it is larger.
-   - **The estimate passes a ceiling:** the ticket is not written as one. Say so in the reply, with the parts it divides into, each a vertical slice a person could use and each under the ceilings. `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so name in the reply the argument that asks it for slices under both ceilings, with both numbers in it.
+   - **The estimate passes a ceiling:** write it as it is, and the ticket with it. The feature run splits a ticket whose `## Size` passes a ceiling before it builds, by size and without a question, as ADR 0046 says.
+   - **A spec that has not been split, whose estimate passes a ceiling:** `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so name in the reply the argument that asks it for slices under both ceilings, with both numbers in it.
 
    **The `## Operability` block.** Write one line per concern the binding's application types are asked; the preflight of step 5 names any it still wants. Take each line from the ticket and the binding's Feature flags, Telemetry and Limits sections, or write `none` and why.
    - `- Flag:` the flag the behaviour ships behind.
@@ -76,7 +78,7 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - `- Load:` the route or input the load gates gain.
    - `- Security:` the surface it adds: routes, inputs, who may call.
 
-   Done when the draft holds the five parts, a table row for every thing the owner said that the ticket or spec touches and for every behaviour of the spec nothing they said asked for, the two size lines for a ticket (none for a spec that has not been split) and an operability line for every concern asked. When the estimate passes a ceiling, it is done instead when the reply names the parts the ticket divides into and the `/mattpocock-skills:to-tickets` argument, and nothing is written to that ticket.
+   Done when the draft holds the five parts, a table row for every thing the owner said that the ticket or spec touches and for every behaviour of the spec nothing they said asked for, the two size lines for a ticket (none for a spec that has not been split) and an operability line for every concern asked. When the estimate of a spec that has not been split passes a ceiling, the reply also names the `/mattpocock-skills:to-tickets` argument.
 
 3. **One conjecture for the whole spec, and no dialog to confirm it.**
    - **The ticket's siblings share a parent spec:** the conjecture is the spec's, drafted once in step 2.
@@ -123,10 +125,11 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - **The merge job will leave the pull request to the owner** (step 4, a forge): say that it will, with a comment on the pull request saying why.
    - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" <ticket> --root .` in one Bash call and report its verdict.
    - **Red on the label:** say that the ticket needs the agent-ready label and that applying it is the owner's keystroke.
-   - **Green:** the last line is the next command, `/ratchet:feature <ticket>` (or `/pstack:poteto-mode <ticket>` when the owner stays).
+   - **Red on `size`:** say that the ticket's size passes a ceiling and that `/ratchet:feature` splits it by size before it builds, asking the owner nothing.
+   - **Green, or red on `size` alone:** the last line is the next command, `/ratchet:feature <ticket>` (or `/pstack:poteto-mode <ticket>` when the owner stays).
    - **The owner counters the conjecture:** an alternative they name goes in with its criticism. An approach they change replaces the draft's. Write the changed conjecture again as step 4 says, and print it again.
 
-   Done when the reply holds the conjecture with its whole *What you asked for* table, its **Assumed** block and the count of answered questions, after a redraft preceded by each change under *Was* and *Now*; and the preflight's verdict, with, when the verdict is red on the label, that applying the label is the owner's keystroke, and, when it is green, the next command last. When the merge job will leave the pull request to the owner, the reply says so. When the owner counters it, the conjecture holds the alternative they named with its criticism, or the approach they changed, written again as step 4 says and printed again.
+   Done when the reply holds the conjecture with its whole *What you asked for* table, its **Assumed** block and the count of answered questions, after a redraft preceded by each change under *Was* and *Now*; and the preflight's verdict, with, when the verdict is red on the label, that applying the label is the owner's keystroke, when it is red on `size`, that the feature run splits the ticket, and, when it is green or red on `size` alone, the next command last. When the merge job will leave the pull request to the owner, the reply says so. When the owner counters it, the conjecture holds the alternative they named with its criticism, or the approach they changed, written again as step 4 says and printed again.
 
 ## The criteria digest
 
