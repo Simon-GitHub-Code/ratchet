@@ -589,8 +589,7 @@ def test_the_critic_and_the_review_grade_from_the_one_severity_list() -> None:
         assert "a span attribute or log field carrying a secret or a personal identifier" in blocker
         assert "behaviour shipped on with no flag" in major.split("- Minor:")[0], role
         assert "- Design axis: A layer violation is a blocker" in prompt, role
-    critic = " ".join(ran["prompts"]["critique"].split())
-    assert "The critic's findings carry no axis, so it applies every line." in critic
+        assert "A finding that carries no axis takes every line." in prompt, role
 
 
 def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> None:

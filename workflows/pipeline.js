@@ -101,8 +101,9 @@ const PREAMBLE = 'Load the `ratchet:method` skill (the method this repository fo
 // block as the dispute signal the first time.
 // Why: the reviewer had no definition and filed a binary that drops an expense with exit 0 as
 // minor; critic and reviewer now grade by the same words.
-const SEVERITY = `Severity, the one list every grade you apply comes from. The critic's findings carry no
-axis, so it applies every line. In the review, the axis a line names is the axis of the issue.
+const SEVERITY = `Severity, the one list every grade you apply comes from. A finding that carries no
+axis takes every line. Where a finding carries an axis, the axis a line names is the axis of
+the issue.
 - Blocker: wrong result (a wrong output, or a wrong input accepted with exit 0), data loss, a
   violated AGENTS.md non-negotiable, a declared-path or contract violation, a crash the fuzz
   harness finds, a span attribute or log field carrying a secret or a personal identifier.
