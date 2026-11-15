@@ -100,18 +100,8 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     REFUSED: None,
     REFUSED_UNOPENED: None,
     RELEASED_BY_THE_LINE: None,
-    # Why: `drain.pending` reads a blocker's open or closed state alone, never the note that says
-    # it was split into parts, so a split blocker the owner closes no longer holds its dependent
-    # back while the parts are unbuilt.
-    PARTS_FIRST: [
-        "drain.py open a",
-        "drain.py split a",
-        "the owner closes ticket a",
-        "drain.py open b",
-    ],
-    # Why: the same. A split blocker stays open and held, so `drain.settled` refuses its
-    # dependent as waiting on a ticket the drain cannot merge, while the parts are built and after.
-    PARTS_AWAITED: ["drain.py open a", "drain.py split a"],
+    PARTS_FIRST: None,
+    PARTS_AWAITED: None,
     RECOVERS: None,
     # Why: the docstring accepts it: "A work tree whose uncommitted work git cannot stash (a stale
     # lock, a merge left unfinished, a damaged index) is not removed".
@@ -697,38 +687,33 @@ def built_and_landed(name: Name) -> list[str]:
     ]
 
 
-def test_a_ticket_waiting_on_a_split_ticket_the_owner_closed_starts_before_its_parts(
+def test_a_ticket_waiting_on_a_split_ticket_the_owner_closed_waits_for_its_parts(
     tmp_path: Path,
 ) -> None:
-    path = COUNTEREXAMPLES[PARTS_FIRST] or []
-    assert broken_by(path) == {PARTS_FIRST}
-    play = replay(tmp_path, path[:-1])
+    path = ["drain.py open a", "drain.py split a", "the owner closes ticket a", "drain.py open b"]
+    assert broken_by(path) == set()
+    play = replay(tmp_path, path)
     drafted = plan_of(play)
+    parts = tuple(drain.key(REF[part]) for part in model.PARTS[Name.A])
     beta = drafted[BRANCH[Name.B]]
-    assert (beta.state, beta.waits_on) == ("buildable", ()), "a closed blocker is met"
-    parts = [drafted[BRANCH[part]].state for part in model.PARTS[Name.A]]
-    assert parts == ["buildable", "waiting"], "no part of it is built"
-    assert play.named(path[-1]).startswith("{"), "the drain opens b"
-    assert play.world.code == 0
-    assert play.world.tree(Name.B).is_dir()
+    assert (beta.state, beta.waits_on) == ("waiting", parts), "a closed split blocker is its parts"
+    assert play.world.code == 1
+    assert not play.world.tree(Name.B).is_dir()
 
 
-def test_a_ticket_waiting_on_a_split_ticket_is_refused_and_stays_refused_once_its_parts_land(
+def test_a_ticket_waiting_on_a_split_ticket_waits_for_its_parts_then_starts(
     tmp_path: Path,
 ) -> None:
-    path = COUNTEREXAMPLES[PARTS_AWAITED] or []
-    assert broken_by(path) == {PARTS_AWAITED}
+    path = ["drain.py open a", "drain.py split a"]
     landed = [*path, PARK_C, *built_and_landed(Name.D), *built_and_landed(Name.E)]
-    assert broken_by(landed) == {PARTS_AWAITED}
-    play = replay(tmp_path, landed)
-    assert all(play.state.of(part).merged for part in model.PARTS[Name.A]), "both parts landed"
-    parts = ", ".join(REF[part] for part in model.PARTS[Name.A])
-    why = (
-        f"blocked: waits on {REF[Name.A]}, which this drain cannot merge (held):"
-        f" too large; split into {parts}"
-    )
+    assert broken_by(landed) == set()
+    play = replay(tmp_path, path)
+    parts = tuple(drain.key(REF[part]) for part in model.PARTS[Name.A])
     beta = plan_of(play)[BRANCH[Name.B]]
-    assert (beta.state, beta.why) == ("refused", (why,)), "b waits on the split a, still held"
+    assert (beta.state, beta.waits_on) == ("waiting", parts), "b waits on the parts, not on a"
+    play = replay(tmp_path / "landed", landed)
+    assert all(play.state.of(part).merged for part in model.PARTS[Name.A]), "both parts landed"
+    assert plan_of(play)[BRANCH[Name.B]].state == "buildable"
 
 
 def test_open_keeps_a_close_the_report_has_not_printed(tmp_path: Path) -> None:
