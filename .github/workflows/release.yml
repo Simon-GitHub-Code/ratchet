@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
     paths: [.claude-plugin/plugin.json]
+  workflow_dispatch:
 permissions:
   contents: write
 concurrency:
@@ -10,6 +11,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -19,8 +21,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - id: tag
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
-          made="$(python3 scripts/release.py)"
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then made="$(python3 scripts/release.py --existing)"; else made="$(python3 scripts/release.py)"; fi
           echo "$made"
           case "$made" in
             created*) made="${made#created }"; echo "name=${made%% *}" >> "$GITHUB_OUTPUT"; echo "fresh=true" >> "$GITHUB_OUTPUT" ;;
@@ -34,11 +39,12 @@ jobs:
         run: |
           set -euo pipefail
           tag="$TAG"
-          if [ "$FRESH" = "true" ]; then git push origin "$tag"; fi
-          python3 scripts/release_check.py "$tag" --main origin/main
+          python3 scripts/release.py --notes "${tag#v}" > "$RUNNER_TEMP/notes.md"
+          if [ "$FRESH" = "true" ]; then git push origin "refs/tags/$tag"; fi
+          git fetch --quiet --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          python3 scripts/release_check.py "$tag"
           if gh release view "$tag" > /dev/null 2>&1; then
             echo "release page for $tag exists; left alone"
             exit 0
           fi
-          python3 scripts/release.py --notes "${tag#v}" > "$RUNNER_TEMP/notes.md"
           gh release create "$tag" --title "$tag" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag

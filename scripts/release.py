@@ -2,19 +2,23 @@
 """The release: the tag ``vV`` on M plus its commit file, made once per version. ADR 0068.
 
 The release workflow runs this on a push to main that changed ``.claude-plugin/plugin.json``.
-Run from a checkout whose ``HEAD`` is M, it reads the version V from M's manifest. When the tag
-``vV`` exists it says so and does nothing. Otherwise it makes the release commit C, which is M
-plus ``.claude-plugin/commit`` holding M's full sha and a newline, with M as its only parent,
-and tags C as a lightweight tag ``vV``. Author and committer come from the environment, as for
-any ``git commit``. It never pushes; the workflow pushes the tag and then runs
+Run from a checkout of main at any commit, it reads the version V from ``HEAD``'s manifest. When
+the tag ``vV`` exists it says so and does nothing. Otherwise it needs the ``## V`` section of
+``CHANGELOG.md`` to be there with a body, and finds M, the commit on ``HEAD``'s first-parent line
+where the version became V: M holds V and its first parent holds another version. A late or
+dropped workflow run therefore tags the same commit as an on-time one. It makes the release commit
+C, which is M plus ``.claude-plugin/commit`` holding M's full sha and a newline, with M as its
+only parent, and tags C as a lightweight tag ``vV``. Author and committer come from the
+environment, as for any ``git commit``. It never pushes; the workflow pushes the tag and then runs
 ``scripts/release_check.py``.
 
-Usage: ``release.py [--repo DIR]``. It prints ``created vV C`` when it made a tag and
-``exists vV`` when it did nothing, and exits 1 with a line on stderr when it cannot go on.
+Usage: ``release.py [--repo DIR] [--existing]``. It prints ``created vV C`` when it made a tag and
+``exists vV`` when it did nothing, and exits 1 with a line on stderr when it cannot go on. With
+``--existing`` it never makes a tag: a version with no tag is exit 1.
 
 ``release.py --notes V [--repo DIR]`` prints the ``## V`` section of ``CHANGELOG.md`` in the
 checkout, from the line after the heading to the next ``## `` heading, with the blank lines at
-its ends dropped; a version with no section is exit 1.
+its ends dropped; a version with no section, or an empty one, is exit 1.
 
 Cutting a release:
 
@@ -25,8 +29,8 @@ Cutting a release:
   strict ``xfail`` mark on the marketplace-entry test.
 * Merging it to main runs ``.github/workflows/release.yml``, which makes and pushes the tag, runs
   ``scripts/release_check.py`` and publishes the release page. When the tag already exists, the
-  run checks it again and publishes the page only if it is missing, so a rerun mends a page step
-  that failed.
+  run checks it again and publishes the page only if it is missing. A manual run of the workflow
+  does that alone and never makes or moves a tag, so it mends a page step that failed.
 * A person's token merges the version PR, not a workflow's ``GITHUB_TOKEN``: GitHub starts no
   workflow from a push made with that token, so ``release.yml`` would not run.
 """
@@ -55,7 +59,9 @@ def stop(reason: str) -> NoReturn:
     raise Stop(reason)
 
 
-def git(repo: Path, *args: str, stdin: str | None = None, env: dict[str, str] | None = None) -> str:
+def try_git(
+    repo: Path, *args: str, stdin: str | None = None, env: dict[str, str] | None = None
+) -> str | None:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
         input=stdin,
@@ -64,24 +70,50 @@ def git(repo: Path, *args: str, stdin: str | None = None, env: dict[str, str] | 
         check=False,
         env=env,
     )
-    if result.returncode:
-        stop(f"git {args[0]} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def git(repo: Path, *args: str, stdin: str | None = None, env: dict[str, str] | None = None) -> str:
+    out = try_git(repo, *args, stdin=stdin, env=env)
+    if out is None:
+        stop(f"git {args[0]} failed")
+    return out
+
+
+def version_in(repo: Path, commit: str) -> str | None:
+    """The ``version`` of the manifest ``commit`` holds; ``None`` when it holds none."""
+    try:
+        manifest = json.loads(try_git(repo, "show", f"{commit}:{MANIFEST}") or "")
+    except ValueError:
+        return None
+    version = manifest.get("version") if isinstance(manifest, dict) else None
+    return version if isinstance(version, str) else None
+
+
+def bump_commit(repo: Path, ref: str, version: str) -> str | None:
+    """The commit on ``ref``'s first-parent line where the version became ``version``.
+
+    It holds ``version`` and its first parent, if it has one, holds another. ``None`` when no
+    commit on the line is that.
+    """
+    listed = try_git(repo, "log", "--first-parent", "--format=%H", ref, "--", MANIFEST) or ""
+    for commit in listed.splitlines():
+        if version_in(repo, commit) != version:
+            continue
+        before = try_git(repo, "rev-parse", "-q", "--verify", f"{commit}^1^{{commit}}")
+        if before is None or version_in(repo, before) != version:
+            return commit
+    return None
 
 
 def version_at_head(repo: Path) -> str:
-    try:
-        manifest = json.loads(git(repo, "show", f"HEAD:{MANIFEST}"))
-    except ValueError:
-        stop(f"{MANIFEST} at HEAD is not JSON")
-    version = manifest.get("version") if isinstance(manifest, dict) else None
-    if not isinstance(version, str):
-        stop(f"{MANIFEST} at HEAD has no version")
+    version = version_in(repo, "HEAD")
+    if version is None:
+        stop(f"{MANIFEST} at HEAD is missing, not JSON or has no version")
     return version
 
 
-def release_commit(repo: Path, version: str) -> str:
-    base = git(repo, "rev-parse", "HEAD")
+def release_commit(repo: Path, base: str, version: str) -> str:
     with tempfile.TemporaryDirectory() as scratch:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
         git(repo, "read-tree", base, env=env)
@@ -91,23 +123,27 @@ def release_commit(repo: Path, version: str) -> str:
     return git(repo, "commit-tree", tree, "-p", base, "-m", f"release: v{version}")
 
 
-def release(repo: Path) -> str:
+def release(repo: Path, *, create: bool = True) -> str:
     version = version_at_head(repo)
     tag = f"v{version}"
-    existing = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
-        capture_output=True,
-        check=False,
-    )
-    if existing.returncode == 0:
+    if try_git(repo, "rev-parse", "-q", "--verify", f"refs/tags/{tag}") is not None:
         return f"exists {tag}"
-    commit = release_commit(repo, version)
+    if not create:
+        stop(f"{tag} has no tag, and a manual run never makes one")
+    notes(repo, version)
+    base = bump_commit(repo, "HEAD", version)
+    if base is None:
+        stop(f"no commit on HEAD's first-parent line is where the version became {version}")
+    commit = release_commit(repo, base, version)
     git(repo, "tag", tag, commit)
     return f"created {tag} {commit}"
 
 
 def notes(repo: Path, version: str) -> str:
-    lines = (repo / CHANGELOG).read_text(encoding="utf-8").splitlines()
+    try:
+        lines = (repo / CHANGELOG).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        stop(f"{CHANGELOG} cannot be read")
     heading = f"## {version}"
     if heading not in lines:
         stop(f"{CHANGELOG} has no section {heading}")
@@ -116,16 +152,24 @@ def notes(repo: Path, version: str) -> str:
         if line.startswith("## "):
             break
         body.append(line)
-    return "\n".join(body).strip()
+    text = "\n".join(body).strip()
+    if not text:
+        stop(f"{CHANGELOG} section {heading} is empty")
+    return text
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="release.py")
     parser.add_argument("--repo", type=Path, default=Path())
     parser.add_argument("--notes", metavar="V")
+    parser.add_argument("--existing", action="store_true")
     options = parser.parse_args(argv[1:])
     try:
-        print(notes(options.repo, options.notes) if options.notes else release(options.repo))
+        print(
+            notes(options.repo, options.notes)
+            if options.notes
+            else release(options.repo, create=not options.existing)
+        )
     except Stop as stop:
         print(f"release: {stop}", file=sys.stderr)
         return 1
