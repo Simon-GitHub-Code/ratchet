@@ -207,7 +207,7 @@ Tell the owner this before step 1. It is not a question.
    - A row whose question requires a proof by name (`[proofs]` in `application-types.toml`: telemetry emitted, changed flags off and on, load smoke) gets a bite that plants that fault and claims it with `proof = "<name>"`.
    - A shipped service gate bound now needs one, since its row names your `boot`: `smoke` a deliverable that exits, `load-smoke` a route that answers with an error, `telemetry-e2e` a deliverable that exports nothing.
    - A `later:` row needs none.
-   - `just bite-one <gate>` proves one gate in a scratch copy. A whole-tree gate's bite narrows it with `args`, and the registry's `setup` holds the build.
+   - `just bite-one <gate>` proves one gate in a scratch copy. A whole-tree gate's bite narrows it with `args`, and the registry's `setup` holds the build. When the stack compiles, `setup` also fills the compiler cache as [tiers.md](../method/tiers.md#speed) says, before the first bite.
    - A verdict other than `bites` is a defect of the recipe or the fault ([tiers.md](../method/tiers.md#every-bound-gate-is-shown-to-bite)): fix it, never loosen `expect`.
    - A gate you cannot plant a fault for is bound `none`, with its reason and ADR.
 
@@ -219,7 +219,7 @@ Tell the owner this before step 1. It is not a question.
     - Have each long gate hand `{{shard}}` and `{{shards}}` to its tool.
     - Add a gate to its tier's list at the top of the `justfile` and nowhere else: CI reads the same lists.
     - Run `tier0-tree` and `tier1` three times each. A gate red in parallel and green alone shares state, which tiers.md says how to separate.
-    - Fill each `bind:` cache line of the CI templates with this stack's caches, keyed on its lockfiles and tool configs, and keep their shape.
+    - Fill each `bind:` cache line of the CI templates with this stack's caches, a compiled stack's content-addressed compiler cache outside the tree included, keyed on its lockfiles and tool configs, and keep their shape.
     - Fill the binding's Speed section, one line per concept, saying how this stack will meet it where nothing is bound yet. Leave `- Shards: 1`.
     - Run `just budget tier0 --set` and `just budget tier1 --set` once. Take those readings on a quiet machine or the CI runner, and vet each with `pstack:benchmark-checklist`. On a shared machine, cap the gates with `RATCHET_JOBS`.
 
@@ -259,7 +259,7 @@ Tell the owner this before step 1. It is not a question.
        - and `PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/hooks" python3 -m ratchet_guards.diff --root . --base HEAD` lists no guard path but the dependency manifest, its lockfile and their snapshots.
     7. **Fix in the adoption.** Any other edit the rehearsal needed is a config the adoption owes, or a key it removed: make it in the adoption, commit, run `check`, and rehearse once more in a fresh worktree. Rehearse at most twice: an edit the second round still needs is not chased, but named with its file for the hand-over.
 
-    Remove each worktree when its round ends.
+    The rehearsal may reuse that compiler cache and nothing else; it still cannot supply a missing config or tool. Remove each worktree when its round ends.
 
     Run `check-deep` once. Its last gate is the proof: the `bite-all` entry point plants each fault of `quality/bites.toml` in a scratch copy and is green only when each gate was green without its fault and red with it.
 

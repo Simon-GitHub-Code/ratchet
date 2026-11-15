@@ -14,7 +14,7 @@ An option is a whole system, not a list of parts. Each states the following, in 
 - **How its parts talk**: calls in one process, requests over a network, messages, files. Which of those cross a boundary the project does not control.
 - **Its parts**: the modules or layers, inner to outer, what each owns, and which may depend on which. The innermost holds the rules of the product and depends on nothing that does I/O. The outer parts adapt it to the world. Each seam between them is named, so a test can stand in for what is outside.
 - **Its tools**, by concept: the formatter, the linter, the type checker, the test runner and the property-testing library, the mutation tool, the dependency-direction checker, the coverage tool, and any other the rows bound now need. One concrete tool for each, current and maintained. Prefer one tool for several concepts, and the one the package manager locks.
-- **Trade-offs**: what it is good at for this product and what it costs: speed of building, running cost, what the owner must look after, what it makes hard.
+- **Trade-offs**: what it is good at for this product and what it costs: speed of building, running cost, what the owner must look after, what it makes hard. A split into separately compiled units costs build time on every gate.
 - **Reversal cost**: what changing it later costs, part by part: what changes, roughly how much work, and whether anything built is redone. A store's format and where the data lives usually cost the most. A formatter costs the least.
 
 ## How fit is judged
