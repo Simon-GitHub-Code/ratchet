@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """The route: the one command the owner types next, decided from the checkout, never guessed.
 
-Four plugins build software on the method, and most of their skills are the owner's
-keystrokes: the harness refuses them to an agent. So the method's job at every stage is to say
-which keystroke comes next. This script reads the checkout (and the tracker, unless
+Four plugins build software on the method. The method's job at every stage is to say which
+keystroke comes next. This script reads the checkout (and the tracker, unless
 ``--offline``) and prints that command with its reason and the step after it. The
 ``/ratchet:next`` skill relays it, every ratchet skill ends with it, and the session hook prints
 its offline form, so a session never opens without its next step.
@@ -33,10 +32,11 @@ The stages, in order; the first that does not hold is the answer:
    for an agent when it passes); the glossary and design brief (``grill-with-docs``), then an
    agent-ready ticket (``to-spec`` and ``to-tickets``) whose blockers are done, its conjecture
    (``/ratchet:conjecture``), and then the build (``/ratchet:feature`` when the owner steps
-   away, ``/pstack:poteto-mode`` when they stay). With more than one ticket ready the build is
-   the drain: ``/ratchet:feature`` with no ticket builds them all (ADR 0023). Before any of
-   these, rows an upgrade left owed that an agent writes from the repository alone
-   (``owed.fill_first``) are ``/ratchet:fill``, which asks the owner nothing (ADR 0050); then
+   away, or words the owner says to the session when they stay). With more than one ticket
+   ready the build is the drain: ``/ratchet:feature`` with no ticket builds them all (ADR
+   0023). Before any of these, rows an upgrade left owed that an agent writes from the
+   repository alone (``owed.fill_first``) are ``/ratchet:fill``, which asks the owner nothing
+   (ADR 0050); then
    a safeguard the repository owes (``triggers.owed``: a kind of code has arrived, or a
    life event is declared, and a row it fires is still ``later:``) is ``/ratchet:safeguard``,
    with the step it would otherwise name offered as the alternative (ADR 0028). Before that,
@@ -99,7 +99,6 @@ SPEC = "/mattpocock-skills:to-spec"
 TICKETS = "/mattpocock-skills:to-tickets"
 CONJECTURE = "/ratchet:conjecture"
 FEATURE = "/ratchet:feature"
-POTETO = "/pstack:poteto-mode"
 PULL_REQUEST = (
     "open the pull request (`mattpocock-skills:pr` fills the body); its merge job merges it when"
     " the merge judge passes it, and comments why when the merge is yours"
@@ -491,8 +490,8 @@ def build_step(ready: list[preflight.Ticket], queue: int, checkout: Checkout) ->
             FEATURE,
             f"{queue} agent-ready tickets state a conjecture: with no ticket named the command"
             " builds them at once, each in a work tree of its own, and merges what the merge judge"
-            f" passes; {FEATURE} <ticket> builds one, and {POTETO} <ticket> when you stay at the"
-            " keyboard",
+            f" passes; {FEATURE} <ticket> builds one, or ask this session to build one of them"
+            " with you here",
             "the drain's one report: what merged, what waits for you and why, every assumption",
             "drain",
         )
@@ -500,10 +499,24 @@ def build_step(ready: list[preflight.Ticket], queue: int, checkout: Checkout) ->
     return Step(
         f"{FEATURE} {ticket.ref}",
         f'ticket {ticket.ref} "{ticket.title}" is agent-ready with a conjecture;'
-        f" {POTETO} {ticket.ref} instead when you stay at the keyboard",
+        f" or ask this session to build ticket {ticket.ref} with you here",
         review(checkout),
         "build",
     )
+
+
+def guard_words(kinds: list[str]) -> str:
+    """The words that offer the guard edits to this session, only where the hold is a guard's."""
+    return (
+        ", or ask this session to make the guard edits with you here; their merge is yours"
+        if queue_notes.GUARD in kinds
+        else ""
+    )
+
+
+def blocked_kinds(root: Path, ticket: preflight.Ticket) -> list[str]:
+    """The kinds of hold the queue note records for the run that blocked on ``ticket``."""
+    return queue_notes.texts(queue_notes.read_note(root, own_branch(ticket)).get("holds"))
 
 
 def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> Step:
@@ -546,7 +559,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
                 f'the drain parked ticket {held.ref} "{held.title}" and holds it until its text'
                 f" changes or the cause it names lands ({why});"
                 f" {FEATURE} would be refused again",
-                f"{FEATURE}, or {POTETO} {held.ref} now to make the change as the guard asks",
+                FEATURE + guard_words(hold.kinds),
                 "blocked-run",
             )
         return Step(
@@ -555,7 +568,7 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             " elsewhere, as an issue comment, releases it once you drop that stash",
             f"the last {FEATURE} run on every agent-ready ticket blocked, and"
             f" {checkout.default_branch} has not moved since; a rerun would block the same way",
-            f"{FEATURE} {held.ref}, or {POTETO} {held.ref} now to make the edits as the guard asks",
+            f"{FEATURE} {held.ref}" + guard_words(blocked_kinds(root, held)),
             "blocked-run",
         )
     first = tickets[0]
