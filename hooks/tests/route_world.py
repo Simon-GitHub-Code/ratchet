@@ -755,10 +755,10 @@ def _upgrade_asks_the_flag_line(repo: Repo, _change: Change) -> None:
 
     Why a type, not an upgrade to a copy of the plugin: the scripts under test are this checkout's,
     so the plugin that ships ADR 0061 is the one the tests run. Before this step the binding
-    declares no type, which no plugin asks the line of; after it, the line is asked as far as the
-    scripts ask it. It touches no ticket and no spec, and lands on the default branch, from a work
-    tree of its own while the build's branch is checked out. It keeps the pin as the last real
-    upgrade wrote it, so the fill that upgrade owes still runs from the plugin it names.
+    declares no type, which no plugin asks the line of; after it, the line is asked. It touches no
+    ticket and no spec, and lands on the default branch, from a work tree of its own while the
+    build's branch is checked out. It keeps the pin as the last real upgrade wrote it, so the fill
+    that upgrade owes still runs from the plugin it names.
     """
     repo.asked = True
     tree = repo.root
