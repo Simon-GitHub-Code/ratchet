@@ -163,7 +163,7 @@ The script is a pure function of its arguments and the agents' structured result
 **Agents.** Each role is one agent. The ticket check adds two when it finds a gap (the amend and the second read), the fix loop two per round (the fix pass on a young project's review is one such round, which re-reviews instead of re-critiquing), and a change judged again behind another merge two more (reconcile and review). `AGENTS_AT_MOST` in the script holds the most a run spawns before and after `depended-on`.
 
 - Agents leave every change uncommitted. The orchestrator commits and publishes.
-- An agent blocked by a guard path writes a dispute and returns it.
+- An agent blocked by a guard path writes a dispute and returns it. A guard path an open dispute in the change names is not a finding of the critic or the review, so the verdict stands on the rest, and the merge judge leaves the merge to the owner (ADR 0067).
 
 **A run that dies.** A run in which an agent dies throws and returns no result. The drain resumes it once, and on a second error closes the ticket with the retryable reason code `errored`, which becomes the owner's only after three closes in a row.
 

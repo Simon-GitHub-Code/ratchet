@@ -26,6 +26,17 @@ decides everything about a drain that needs no judgement, and keeps what must ou
   Exit 0 with ``moved``; exit 2 with the conflicted paths and the branch as it was. A run killed
   part-way is run again: the rebase it left is abandoned, which puts the branch back, and starts
   over; one killed after the rebase finished still answers ``moved`` and drops the record.
+- ``check <ticket>`` runs the publish check of ADR 0060 in the ticket's work tree against the
+  start ``open`` recorded in its note (``scripts/publish_check.py``). A branch with commits of its
+  own and no work tree gets one under the cap. Green exits 0 and, with ``--final``, marks the
+  start ``passed``; without it nothing is marked, and ``land`` refuses a start not passed. A
+  branch that moved is parked as a role that published, held until the ticket's text changes, and
+  exits 1; only a rebase left unfinished waits to be retried, its start passed with ``--final``,
+  and exits 3; a present state it cannot read waits to be retried with no mark and exits 3; a note
+  with no start exits 2. ``update`` runs the same check first on a branch with commits of its own
+  whose start is not passed, marks it passed before it rebases, and is refused with exit 3, closing
+  nothing, when the check cannot read. A rebase that moves the branch records the new head as the
+  start, unpassed.
 - ``land <ticket>`` runs the binding's ``merge`` entry point with no forge and closes the ticket
   with what the merge judge printed: merged, or waiting for the owner with every reason verbatim.
   Run again after the merge was killed, it first puts right what the merge left (``merge.py``'s
@@ -84,8 +95,8 @@ and repository that only that user can write. The script refuses one that is a l
 user's, and empties only what git lists as a work tree of this repository. The notes and reports
 live in ``.ratchet/``, which no commit carries.
 
-Usage: ``drain.py plan|open|update|land|close|clean|report [ticket] [--root DIR]
-[--concurrency N] [--offline] [--outcome O] [--reason TEXT]... [--result FILE] [--all]``.
+Usage: ``drain.py plan|open|update|check|land|close|clean|report [ticket] [--root DIR]
+[--concurrency N] [--offline] [--outcome O] [--reason TEXT]... [--result FILE] [--all] [--final]``.
 """
 
 from __future__ import annotations
@@ -115,6 +126,7 @@ import feature_preflight as preflight
 import gatelib
 import merge
 import merge_ready
+import publish_check
 import queue_notes
 import route
 import split
@@ -125,7 +137,7 @@ from ratchet_guards import records
 from ratchet_guards.manifest import Manifest
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Sequence
 
 CONCURRENCY = 3
 # Why: the workflow declares the most agents a run spawns, by role, and a test counts them in a
@@ -155,6 +167,7 @@ OWNER_FILE = 0o600
 LANDING_TRIES, LANDING_POLL = 20, 0.05
 # Why: `update` uses 1 and 2 for its own answers, so a refusal for a live landing has its own code.
 LANDING_RUNNING = 3
+UNREAD = 3
 LANDING_MAY_RUN = "a landing may be in flight in another drain"
 LOCK, LEASE = "ratchet-drain.lock", "ratchet-drain.lease"
 LOCK_WAIT, LOCK_POLL = 30.0, 0.05
@@ -167,12 +180,14 @@ NOT_OURS = "the queue's work trees go in a directory only this user can write; r
 NOT_A_TREE = "it is not a work tree of this repository or an empty directory, so it stays"
 MERGE = "merge"
 SLOWEST = 3
-LOCKED = frozenset({"open", "update", "close", "clean", "report", "split"})
+LOCKED = frozenset({"open", "update", "check", "close", "clean", "report", "split"})
 # Why: the triggers gate's red line; the kind it names is what the safeguard binds (ADR 0028).
 OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
 # Why: ADR 0052. The red line of a kind whose architecture review is owed; the review releases it.
 REVIEW_RED = re.compile(r"triggers: architecture review owed: '([^']+)' gained \d+ instance")
 DEFAULT_WORDS = "the default branch"
+UNREADABLE_CODE = "refs"
+START_DROPPED = frozenset({"hold", "attempts", "rebasing", "discarding", "start", "passed"})
 BEHIND = (
     "behind the default branch: `update` it and judge it again before it lands, since its last"
     " review was of a tree the default branch has moved past"
@@ -767,6 +782,22 @@ def not_started(entry: Entry | None, drafted: Plan) -> list[str]:
     return list(drafted.blocked) or [f"{drafted.concurrency} tickets are building: the cap"]
 
 
+def forge_gh(drain: Drain) -> preflight.Runner:
+    if drain.gh is not preflight.run_gh:
+        return drain.tracker
+
+    def run(args: Sequence[str]) -> str | None:
+        try:
+            done = subprocess.run(
+                ["gh", *args], capture_output=True, text=True, check=False, cwd=drain.root
+            )
+        except OSError:
+            return None
+        return done.stdout if done.returncode == 0 else None
+
+    return run
+
+
 def open_ticket(drain: Drain, ref: str) -> int:
     """Make the work tree of ``ref`` when the plan starts it; say why not when it does not."""
     drafted = plan(drain)
@@ -788,19 +819,25 @@ def open_ticket(drain: Drain, ref: str) -> int:
         print(f"open: no work tree of `{entry.branch}` could be made at {tree}")
         discard(drain.root, tree, f"{entry.branch}: {INTERRUPTED} run")
         return 1
+    try:
+        start = asdict(publish_check.start_of(tree, entry.branch, forge_gh(drain)))
+    except publish_check.UnreadableError as error:
+        print(f"open: the start of `{entry.branch}` cannot be read: {error}")
+        discard(drain.root, tree, f"{entry.branch}: {INTERRUPTED} run")
+        return 1
     opened = now().isoformat(timespec="seconds")
     path = queue_notes.note_path(drain.root, entry.branch)
     prior = queue_notes.loaded(gatelib.read_text(path))
     # Why: a close nobody has reported yet is still owed to the report; the run now starting
     # replaces it only when it closes. The hold ends here, since the ticket was released.
     keep = prior.get("reported") is False and prior.get("outcome") not in {None, MERGED}
-    kept = (
-        {k: v for k, v in prior.items() if k not in {"hold", "attempts", "rebasing", "discarding"}}
-        if keep
-        else {}
+    kept = {k: v for k, v in prior.items() if k not in START_DROPPED} if keep else {}
+    queue_notes.write_note(path, {**kept, **asdict(entry), "opened": opened, "start": start})
+    print(
+        json.dumps(
+            {**asdict(entry), "state": BUILDING, "base": drafted.base, "start": start}, indent=2
+        )
     )
-    queue_notes.write_note(path, {**kept, **asdict(entry), "opened": opened})
-    print(json.dumps({**asdict(entry), "state": BUILDING, "base": drafted.base}, indent=2))
     return 0
 
 
@@ -869,12 +906,9 @@ def tree_for_update(
 def update(drain: Drain, ticket: preflight.Ticket) -> int:
     """Bring the ticket's branch up to date, unless its merge landed: that is recorded instead."""
     branch = route.own_branch(ticket)
-    if recorded_merge(drain.root, branch):
-        record_merge_aloud(drain.root, branch)
-    if queue_notes.read_note(drain.root, branch).get("outcome") == MERGED:
+    if merged_by_note(drain.root, branch):
         # Why: a branch whose merge landed is not rebased: that would move it off its merge, and
         # the merge would no longer be seen as landed.
-        say_kept(finish_close(drain.root, branch))
         print(f"update: {ticket.ref} is merged and is not rebased")
         return 1
     # Why: an update may revive a tree and then refuse without writing the note; the mark of a
@@ -883,12 +917,146 @@ def update(drain: Drain, ticket: preflight.Ticket) -> int:
     return rebase(drain, ticket)
 
 
+def merged_by_note(root: Path, branch: str) -> bool:
+    if recorded_merge(root, branch):
+        record_merge_aloud(root, branch)
+    if queue_notes.read_note(root, branch).get("outcome") != MERGED:
+        return False
+    say_kept(finish_close(root, branch))
+    return True
+
+
 def drop_mark(root: Path, branch: str) -> None:
     """Clear the ``discarding`` mark of a note, when it has one."""
     note = queue_notes.read_note(root, branch)
     if note.get("discarding"):
         done = {k: v for k, v in note.items() if k != "discarding"}
         queue_notes.write_note(queue_notes.note_path(root, branch), done)
+
+
+def noted_start(root: Path, branch: str) -> publish_check.Start | None:
+    start = queue_notes.read_note(root, branch).get("start")
+    try:
+        return publish_check.parse(json.dumps({"start": start}))
+    except publish_check.MalformedError:
+        return None
+
+
+def passed(root: Path, branch: str) -> bool:
+    return queue_notes.read_note(root, branch).get("passed") is True
+
+
+def mark_passed(root: Path, branch: str) -> None:
+    note = queue_notes.read_note(root, branch)
+    queue_notes.write_note(queue_notes.note_path(root, branch), {**note, "passed": True})
+
+
+def read_present(
+    drain: Drain, tree: Path, start: publish_check.Start
+) -> tuple[list[str], bool, str | None]:
+    try:
+        return publish_check.check(tree, start, forge_gh(drain))
+    except publish_check.UnreadableError as error:
+        return [], False, str(error)
+
+
+def park_published(drain: Drain, ticket: preflight.Ticket, moves: list[str]) -> None:
+    for move in moves:
+        print(f"{publish_check.SAID} {move}")
+    print(publish_check.RED)
+    reasons = [f"a role published: {move}" for move in moves]
+    close(drain.root, ticket, outcome=PARKED, reasons=reasons)
+
+
+def unreadable_line(why: str) -> str:
+    return f"{publish_check.SAID} the present state cannot be read: {why}; {publish_check.NEVER}"
+
+
+def checkable(drain: Drain, ticket: preflight.Ticket) -> tuple[publish_check.Start, Path] | int:
+    root, branch = drain.root, route.own_branch(ticket)
+    if merged_by_note(root, branch):
+        print(f"check: {ticket.ref} is merged and is not checked")
+        return 1
+    start = noted_start(root, branch)
+    if start is None:
+        print(f"check: {ticket.ref} has no start to check against: `open` records it")
+        return 2
+    if queue_notes.held(root, branch, ticket) is not None:
+        print(f"check: {ticket.ref} is held and is not checked: its text must change first")
+        return UNREAD
+    tree = tree_of(root, branch)
+    if tree in worktrees(root):
+        return start, tree
+    refusal = (
+        revive(drain, branch, tree)
+        if ahead(root, merge_ready.default_ref(root), branch)
+        else f"`{branch}` has no commit of its own and no work tree, so nothing is to be read"
+    )
+    if refusal is not None:
+        print(f"check: {ticket.ref} is not checked: {refusal}")
+        return UNREAD
+    drop_mark(root, branch)
+    return start, tree
+
+
+def check(drain: Drain, ticket: preflight.Ticket, *, final: bool) -> int:
+    ready = checkable(drain, ticket)
+    if isinstance(ready, int):
+        return ready
+    start, tree = ready
+    root, branch = drain.root, route.own_branch(ticket)
+    moves, halted, unread = read_present(drain, tree, start)
+    if moves:
+        park_published(drain, ticket, moves)
+        return 1
+    if unread is not None:
+        line = unreadable_line(unread)
+        print(line)
+        close(root, ticket, outcome=WAITS, reasons=[f"{UNREADABLE_CODE}: {line}"])
+        return UNREAD
+    if final:
+        mark_passed(root, branch)
+    if halted:
+        print(f"{publish_check.SAID} {publish_check.HALTED}; {publish_check.NEVER}")
+        base = (start.rebase or publish_check.Rebase(DEFAULT_WORDS, ())).base
+        why = f"conflict: the rebase onto `{base}` was left unfinished"
+        close(root, ticket, outcome=WAITS, reasons=[why])
+        return UNREAD
+    print(publish_check.GREEN)
+    return 0
+
+
+def first_check(drain: Drain, ticket: preflight.Ticket, tree: Path) -> int | None:
+    root, branch = drain.root, route.own_branch(ticket)
+    start = noted_start(root, branch)
+    if start is None or passed(root, branch):
+        return None
+    moves, _, unread = read_present(drain, tree, start)
+    if moves:
+        park_published(drain, ticket, moves)
+        return 1
+    if unread is not None:
+        print(f"update: {ticket.ref} is not rebased: {unreadable_line(unread)}")
+        return UNREAD
+    mark_passed(root, branch)
+    return None
+
+
+def restarted(
+    drain: Drain,
+    tree: Path,
+    note: dict[str, object],
+    *,
+    branch: str,
+    rebase_onto: str | None = None,
+) -> dict[str, object]:
+    kept = {k: v for k, v in note.items() if k not in {"start", "passed"}}
+    try:
+        start = publish_check.start_of(tree, branch, forge_gh(drain), rebase_onto=rebase_onto)
+    except publish_check.UnreadableError as error:
+        print(f"update: the start of `{branch}` cannot be read: {error}", file=sys.stderr)
+        return kept
+    return {**kept, "start": asdict(start)}
 
 
 def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
@@ -915,6 +1083,11 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
     if current:
         print(json.dumps({"moved": False, "conflicts": []}))
         return 0
+    if refusal is None and ahead(drain.root, base, branch):
+        stopped = first_check(drain, ticket, tree)
+        if stopped is not None:
+            return stopped
+        held = queue_notes.read_note(drain.root, branch)
     note = {k: v for k, v in held.items() if k not in {"rebasing", "discarding"}}
     before = str(held.get("rebasing") or "")
     head = gatelib.git(tree, "rev-parse", "HEAD") if refusal is None else None
@@ -927,7 +1100,7 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
             # dropped before the mark is cleared: a run killed between the two is told again by
             # the mark, and one that cleared it first would leave the outdated record to land.
             drop_record(tree)
-            queue_notes.write_note(path, note)
+            queue_notes.write_note(path, restarted(drain, tree, note, branch=branch))
             print(json.dumps({"moved": True, "conflicts": []}))
             return 0
         queue_notes.write_note(path, note)
@@ -940,14 +1113,20 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
         print(f"update: {ticket.ref} is not rebased: {refusal}")
         return 1
     queue_notes.write_note(path, {**note, "rebasing": head})
+    return rebase_tree(drain, tree, note, branch=branch)
+
+
+def rebase_tree(drain: Drain, tree: Path, note: dict[str, object], *, branch: str) -> int:
+    base = merge_ready.default_ref(drain.root)
+    path = queue_notes.note_path(drain.root, branch)
     if gatelib.git(tree, "rebase", "--quiet", base) is not None:
         drop_record(tree)
         print(json.dumps({"moved": True, "conflicts": []}))
-        queue_notes.write_note(path, note)
+        queue_notes.write_note(path, restarted(drain, tree, note, branch=branch))
         return 0
     conflicts = (gatelib.git(tree, "diff", "--name-only", "--diff-filter=U") or "").splitlines()
     gatelib.git(tree, "rebase", "--abort")
-    queue_notes.write_note(path, note)
+    queue_notes.write_note(path, restarted(drain, tree, note, branch=branch, rebase_onto=base))
     print(json.dumps({"moved": False, "conflicts": conflicts}))
     return 2
 
@@ -1249,6 +1428,12 @@ def landed(
             say_kept(finish_close(drain.root, branch))
             print(f"land: {ticket.ref} is held and is not landed: " + "; ".join(hold.reasons))
             return 2
+        if noted_start(drain.root, branch) is None or not passed(drain.root, branch):
+            print(
+                f"land: {ticket.ref} is not landed: no publish check has passed its start; run"
+                f" `drain.py check {ticket.ref} --final` first"
+            )
+            return UNREAD
     argv = [*shlex.split(command), branch]
     try:
         done = subprocess.run(
@@ -1545,6 +1730,8 @@ def act_on(drain: Drain, ticket: preflight.Ticket, options: argparse.Namespace) 
         return LANDING_RUNNING
     if options.action == "update":
         return update(drain, ticket)
+    if options.action == "check":
+        return check(drain, ticket, final=options.final)
     if options.action == "split":
         return split_ticket(drain, ticket, options)
     result = queue_notes.loaded(gatelib.read_text(options.result) if options.result else None)
@@ -1612,7 +1799,7 @@ WHOLE: dict[str, Callable[[Drain, argparse.Namespace], int]] = {
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=[*WHOLE, "update", "land", "close", "split"])
+    parser.add_argument("action", choices=[*WHOLE, "update", "check", "land", "close", "split"])
     parser.add_argument(
         "ref",
         nargs="?",
@@ -1626,6 +1813,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--result", type=Path, help="the pipeline's result, as JSON")
     parser.add_argument("--plan", type=Path, help="the split of a ticket too large, as JSON")
     parser.add_argument("--all", action="store_true", dest="everything")
+    parser.add_argument(
+        "--final", action="store_true", help="with check: the run is over, so mark the start passed"
+    )
     parser.add_argument("--drain", default="", help="the token `clean --all` printed")
     parser.add_argument(
         "--take-over", action="store_true", help="with --all: another drain is gone"

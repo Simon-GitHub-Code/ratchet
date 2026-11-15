@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.12.1
+
+A ticket that waits on a split ticket now waits on its parts (ADR 0046). The drain used to refuse it for good while the split ticket stayed open, and started it early when the owner closed the split ticket by hand. One reader, `preflight.blockers()`, now reads a split blocker as its parts, whether it is open or closed, for the drain and for the one-ticket preflight. The drain model found both breaks before the fix was written.
+
+The guard keeps a log (ADR 0060). Each tool call it denies or asks about appends one line to `ratchet-guard-events.jsonl` in the repository's git common directory, shared by every work tree and never shown by `git status`. The guard's answer is written first and never waits on the log. The log is a guard path of its own.
+
+`/ratchet:conjecture` notices criteria that changed after the conjecture was written. `## Conjecture` ends with a `- Criteria:` line that holds a digest of the acceptance criteria. When the digest no longer matches, the skill drafts the conjecture again, keeps every answer, asks only the forks the change opened and shows what moved. The route and the preflight do not read the digest yet.
+
+The first parts of the publish check are in, and nothing calls them yet (ADR 0060). `scripts/publish_check.py` says whether a pipeline role committed, pushed or opened a pull request during its run, and the feature preflight records the start state the check reads. `scripts/comments.py` judges the comment records a project's lister prints, for the zero-comments rule, and is not wired to a gate.
+
+Gates and proofs:
+
+- The graceful-stop proof no longer races its own stop signal, and `check` shares the machine's cores with other runs.
+- A gate that needs a port picks one below the range the system hands out to outgoing connections, so a busy machine no longer takes it first.
+- The jobs cap reads git's `ratchet.jobs` setting after `RATCHET_JOBS`.
+- A red conformance finding prints what it asks next under it.
+- CI cache keys carry the run, so a cache saves again after its first save. Conformance asks an adopted project for the same change and writes the fix.
+- The merge job closes the issues that a pull request it merges says it closes.
+
+The pipeline grades from one severity list. The critic and the reviewer both cite `SEVERITY` in `workflows/pipeline.js`. The critic is stricter for it: a secret or a personal identifier in a span attribute or log field is a blocker, and behaviour shipped on with no flag is a major finding.
+
+The models took six more turns, each ahead of the script change it describes: a pipeline role that publishes unseen, the drain's split step and its publish check, the safeguard that binds a row and adds an instance, and the route's `Flag:` line before deployment. Where a script lags its record, a strict expected failure pins the gap and turns red when the script is fixed.
+
+Decisions recorded, with their scripts still to come: formal verification of the first risky code of each kind (ADR 0062), the zero-comments rule (ADRs 0063 to 0066), and installs that come only from a tagged release (ADR 0068). ADR 0059 says a stack that compiles builds once and reuses its cache.
+
+The agent-facing pages under `skills/` and the harness pages are rewritten for the agents that read them. Intent and pinned phrases are unchanged.
+
 ## 0.12.0
 
 Version 0.11.1 was an interim cut of this release, published so that an adopted project could pin it while the evaluation runs went on. It has no entry of its own: everything in it is listed here.

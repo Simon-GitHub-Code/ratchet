@@ -110,14 +110,16 @@ the issue.
 - Major: unhandled edge case the spec covers, survived mutant on a stated invariant, missing
   contract, behaviour shipped on with no flag where spec.md does not say "none" with a reason.
 - Minor: everything else.
-- Guard paths: a changed guard path is a blocker on the standards axis when no gate dispute in
-  the change names that exact path, and a major one when one does: the owner, not the
-  pipeline, changes a gate. A dependency the spec decided, as the guard rules above define it,
-  is no finding; an added package spec.md does not name is a major issue on the spec axis (a
-  decision the spec did not make). A
+- Guard paths: a changed guard path that no gate dispute in the change names is a blocker on
+  the standards axis. A path a dispute names exactly is no finding: the owner, not the
+  pipeline, changes a gate, and the merge judge leaves that merge to the owner. A dependency
+  the spec decided, as the guard rules above define it, is no finding; an added package
+  spec.md does not name is a major issue on the spec axis (a decision the spec did not make). A
   record the change only adds to (an \`additions:\` note) is no finding for the path; a new term
   that restates a concept the glossary already names, or a new ADR that contradicts one in
   docs/adr/ without the owner's superseding record, is a major issue on the standards axis.
+- Spec axis: a criterion of the ticket the change does not meet is major, as a promise of the
+  ticket it drops is.
 - Design axis: A layer violation is a blocker, and so is a module that reaches around a seam
   that is a layer boundary; around any other seam it is major. A dependency direction the
   architecture ADR rules out, and an architecture decision made without the owner, are major.
