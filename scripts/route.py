@@ -50,8 +50,10 @@ The stages, in order; the first that does not hold is the answer:
 After the three lines come the ``also:`` lines, when there are any: the upgrade, when the plugin
 in use is newer than the one the binding pins (ADR 0027); each question the owner has answered
 with the recommendation three times running, offered as a standing answer (``questions.py``, ADR
-0022); and each life event the tree shows a sign of and the binding does not declare. They are
-proposals and change nothing. ``--decline EVENT`` records that the owner said no to an event, in
+0022); each life event the tree shows a sign of and the binding does not declare; and each switch
+in ``flags.toml`` past its removal date, as ``flags.py --expired`` lists it, whatever the forge and
+whatever the safeguard rows say (ADR 0061), outranking no step. They are proposals and change
+nothing. ``--decline EVENT`` records that the owner said no to an event, in
 ``.ratchet/events.tsv``, so it is not proposed again until a sign of it appears that was not
 there when they said no.
 
@@ -61,6 +63,7 @@ Usage: ``route.py [--root DIR] [--offline] [--json] [--decline EVENT]``.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import sys
 from dataclasses import asdict, dataclass
@@ -68,6 +71,7 @@ from pathlib import Path
 
 import application_types
 import feature_preflight as preflight
+import flags
 import gatelib
 import hooks_installed
 import merge
@@ -1000,6 +1004,14 @@ def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
     ]
 
 
+def expired_switches(root: Path) -> list[str]:
+    """One line per switch in ``flags.toml`` past its removal date; none without the file."""
+    text = gatelib.read_text(root / flags.REGISTRY)
+    if text is None:
+        return []
+    return flags.expired(flags.parse(text)[0], dt.datetime.now(tz=dt.UTC).date())
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
@@ -1011,7 +1023,12 @@ def main(argv: list[str]) -> int:
     if options.decline:
         return decline(root, options.decline)
     step = decide(root, None if options.offline else preflight.run_gh)
-    also = pin_proposals(root) + questions.proposals(root) + event_proposals(root)
+    also = (
+        pin_proposals(root)
+        + questions.proposals(root)
+        + event_proposals(root)
+        + expired_switches(root)
+    )
     if options.as_json:
         print(json.dumps({**asdict(step), "also": also}, indent=2))
     else:
