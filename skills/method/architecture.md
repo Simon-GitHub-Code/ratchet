@@ -1,6 +1,6 @@
 # The architecture
 
-How a project's foundations are chosen with the owner, recorded, and held. The owner is asked about the architecture and the tools once, at adoption, in the same round as the product questions. `/ratchet:architecture` asks again when an adopted repository owes the record or the owner wants to revisit it. Every other choice of how it is built stays an assumption ([records.md](records.md#asking-the-owner)).
+How a project's foundations are chosen with the owner, recorded, and held. The owner is asked about the architecture and the tools once, at adoption, in the same round as the product questions. `/ratchet:architecture` asks again when an adopted repository owes the record or the owner wants to revisit it. Every other choice of how it is built stays an assumption ([records.md](records.md#questions-assumptions-and-standing-answers)).
 
 The plugin names no language, runtime, framework, store, host or tool, here or anywhere. Every concrete option comes from your own knowledge, checked now against current documentation, and from what the owner has said: the purpose, who uses it, where it is used, what must not be lost. A name you remember is a conjecture until you have looked it up.
 
@@ -44,9 +44,7 @@ The skill that asks puts `architecture.system` and `architecture.tools` in the s
 - Put the recommendation first, in plain words with no method term: what the person will notice (it works on their phone too; their list survives the laptop dying; it costs a few a month to keep online) before what it is made of.
 - The tools question names a concrete tool per concept for the recommended system. It offers a second set only where two tools are close for a concept that matters.
 - An answer of "you decide", or no answer, takes the recommendation.
-- When the owner picks another system, that option's tools hold and the tools answer is set aside.
-
-Both answers are written in the record.
+- When the owner picks another system, that option's tools hold and the tools answer is set aside. Both are written in the record.
 
 ## The record
 

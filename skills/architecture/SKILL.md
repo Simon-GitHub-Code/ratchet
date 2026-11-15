@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # The architecture
 
-Choose how an adopted repository is built, record it and declare its parts, or review that choice when the project's shape has changed. Load the `ratchet:method` skill first, then read its [architecture.md](../method/architecture.md).
+Choose how an adopted repository is built, record it and declare its parts, or review that choice when the project's shape has changed. Load the `ratchet:method` skill first, then read its [architecture.md](../method/architecture.md): it says what an option states, how fit is judged, what the record holds and what the binding declares.
 
 - **Review:** run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call. When it lists an owed review, and the owner did not ask to revisit the choice, follow [Review the architecture](#review-the-architecture).
 - **Choose:** for a repository adopted before the architecture was asked, which the route sends here while `quality/owed.toml` lists an `architecture` entry, and for an owner who wants to revisit the choice, follow [Choose the architecture](#choose-the-architecture). Adoption does this at its step 3 on a new repository.
@@ -16,10 +16,10 @@ Choose how an adopted repository is built, record it and declare its parts, or r
 
 ### What the owner is asked when choosing
 
-The architecture and its tools, in one round, as [architecture.md](../method/architecture.md#the-round-of-questions) says.
+The architecture and its tools, in one round, recommendation first, in plain words with no method term. On a repository with code the first option is "keep what is here", described from the code. Offer another only when the code shows a reason, and never a rewrite by default.
 
 1. **Ask** `architecture.system`: "How should it be built? Each choice says what it is made of, where it runs, where your things are kept, and what changing it later would cost." The options are the systems, recommended first, and "You decide", which takes the recommendation.
-2. **Ask** `architecture.tools`: "Which tools should check the work? Each set names one tool for each kind of check, for the design I recommend." On a repository already adopted, the options are the tools bound now, first; a second set only where the code shows a reason to change one; and "You decide", which takes the first.
+2. **Ask** `architecture.tools`: "Which tools should check the work? Each set names one tool for each kind of check, for the design I recommend." On a repository already adopted, the options are the tools bound now, first; a second set only where the code shows a reason to change one; and "You decide", which takes the first. When the owner picks another system, that system's own set holds and this answer is set aside.
 
 Skip a question whose choice the owner's words already make. Assume everything else and list it under **Assumed** in the hand-over.
 
@@ -38,7 +38,7 @@ Skip a question whose choice the owner's words already make. Assume everything e
 
    Done when both questions are answered or left to you.
 
-3. **Write the record.** Write it under the next free number in `docs/adr/`, with these sections:
+3. **Write the record.** Write it under the next free number in `docs/adr/`, laid out as [The record](../method/architecture.md#the-record) shows, with these sections:
    - `## Decision`, with its `- Chosen by:` line;
    - `## Considered options`: at least two alternatives, each offered or set aside, with why not;
    - `## Reversal cost`;
@@ -59,20 +59,20 @@ Skip a question whose choice the owner's words already make. Assume everything e
    - Delete each `[[owed]]` entry of `quality/owed.toml` whose `rule` is `architecture`, with the Edit tool. `conformance` is red on an entry whose finding is gone, and a ledger only shrinks between upgrades, so dropping them loosens nothing.
    - Run `conformance` again and see it green on them.
    - Commit with the subject `chore(method): record the architecture`.
-   - Push and open the pull request with every template section filled, the options and the answers under its summary.
-   - With no forge, write the change description at `.scratch/changes/chore/architecture.md` and run `just merge chore/architecture`.
-   - **The owner chose a system other than what is here:** build none of it in this change. Name the tickets it needs for `/mattpocock-skills:to-spec`: moving each part, and replacing each tool as *Overturning an assumption* in the records page says.
+   - **With a forge:** push and open the pull request with every template section filled, the options and the answers under its summary.
+   - **With no forge:** write the change description at `.scratch/changes/chore/architecture.md` and run `just merge chore/architecture`.
+   - **The chosen system is other than what is here:** build none of it in this change. Name the tickets it needs for `/mattpocock-skills:to-spec`: moving each part, and replacing each tool as *Overturning an assumption* in the records page says.
 
    A new record and the binding are guard paths, so the merge is the owner's, and the judge says so.
 
-   Done when `quality/owed.toml` holds no `architecture` entry, `conformance` is green on the deleted entries, the change is open or handed to `just merge`, and, for another system, its tickets are named.
+   Done when `quality/owed.toml` holds no `architecture` entry, `conformance` is green on the deleted entries, the change is committed under that subject and is open with the options and the answers under its summary, or handed to `just merge`, and, for another system, its tickets are named.
 
 6. **Hand over.**
    - Under **You chose**: the system and the tools, one plain line each with what changing it later costs, or "I took my recommendation, as you left it to me".
    - Then the **Assumed** block for anything else you chose, and the number of questions the owner answered.
    - The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
 
-   Done when the route's lines are the last you print.
+   Done when the reply holds **You chose**, the **Assumed** block and the number of questions answered, and ends with the route's lines.
 
 ## Review the architecture
 
@@ -150,8 +150,8 @@ At most one message, and only when the review finds that the architecture should
 5. **Prove it and open the change.**
    - Run `conformance` and `check`, both to green. Fix a changed part that the `dependency direction` gate finds broken in the parts you declared, never by loosening the gate.
    - Commit with the subject `docs(adr): architecture review for <what>`, at most 72 characters.
-   - Push and open the pull request with every template section filled. Under Criticism, write what in the code the decision does not yet explain.
-   - With no forge, write the change description at `.scratch/changes/<branch>.md` and run `just merge <branch>`.
+   - **With a forge:** push and open the pull request with every template section filled. Under Criticism, write what in the code the decision does not yet explain.
+   - **With no forge:** write the change description at `.scratch/changes/<branch>.md` and run `just merge <branch>`.
 
    The change brings an ADR, so the merge judge leaves the merge to the owner, and says so. The review counts once it is on the default branch: a record written in the change that adds another instance does not.
 
@@ -163,4 +163,4 @@ At most one message, and only when the review finds that the architecture should
 
    The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are. When safeguards are owed, it names `/ratchet:safeguard` next.
 
-   Done when the route's lines are the last you print.
+   Done when the reply says what arrived, what the review found and what now holds, lists a decision that holds under **Assumed**, and ends with the route's lines.
