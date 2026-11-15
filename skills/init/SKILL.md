@@ -1,6 +1,6 @@
 ---
 name: init
-description: "Set up a repository for agents to build in: git, an AGENTS.md naming the four plugins, their one-time setups, the first commit and the remote, then the owner's next command. Asks four or five questions about the product, in one message."
+description: "Set up a repository for agents to build in: git, an AGENTS.md naming the four plugins, the pstack and impeccable one-time setups, the first commit and the remote, then the owner's next command. Asks four or five questions about the product, in one message."
 disable-model-invocation: true
 ---
 
@@ -27,20 +27,18 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
 4. **Ask** `init.place`: "Where will people use it: on this computer only, on other devices at home, or from anywhere?"
 5. **Ask** `init.online`: "Should this project be kept on this computer only, or also as a private copy on your GitHub account?" Only when `gh auth status` succeeds and `origin` is missing (`glab` and GitLab alike). Otherwise the repository stays local and the hand-over says why. The remote is created only from an answer that asks for it.
 
-Questions 2 and 3 are `impeccable init`'s own first two. Step 5 passes their answers to it, so it does not ask them again.
-
 **What the owner asked for wins.** Anything typed after the command (`/ratchet:init no GitHub`) is a preference. It chooses among the options a choice allows and never loosens a safeguard, as [the rule on preferences](../method/records.md#a-preference-typed-after-a-command) says: read it before you act on one. Within that, it settles the choice it names and wins over the defaults below. A question it answers is not asked ("no GitHub" answers `init.online`). Each one is listed under **Assumed** as "you asked for", or as not applied with the route that exists.
 
 **Everything else is assumed.** Take each default below from the evidence and act on it. The hand-over lists it under **Assumed** (step 9) with what changing it later costs, where the owner reads it and overturns it in their own words. Leave out a row whose step is already done.
 
 - **Assume** `init.defaults`:
   - The repository name is the directory name, or the `gh repo view` name when `origin` exists.
-  - The issue tracker is GitHub Issues when the repository has a GitHub remote or gets one from `init.online`, GitLab's likewise, and local markdown otherwise. The tracker's record, labels and domain-doc layout are written by `/mattpocock-skills:setup-matt-pocock-skills`, which the owner types after init.
+  - The issue tracker is GitHub Issues when the repository has a GitHub remote or gets one from `init.online`, GitLab's likewise, and local markdown otherwise.
   - pstack's models are the tiered mix at `medium` when `~/.claude/rules/pstack-models.md` is missing.
   - A missing companion plugin is installed by the harness page's commands.
 - **Assume** `init.interface`: a web interface that works on a phone and a laptop, unless the purpose names something else (a native app, a command-line tool, a service with no screen) or the code has one already.
 
-**The stack is not chosen here.** How it is built (what it is written in, where it runs, where its data is kept, its parts and the tools that check it) is offered to the owner at `/ratchet:adopt`, as whole systems to choose between, recommendation first. Init records only what the owner said about where it is used, and adoption drafts those options from it. A repository with code has its stack already, and adoption offers to keep it.
+**The stack is not chosen here.** How it is built (what it is written in, where it runs, where its data is kept, its parts and the tools that check it) is offered to the owner at `/ratchet:adopt`, as whole systems to choose between, recommendation first. Init records only what the owner said about where it is used, and adoption drafts those options from it.
 
 ## Steps
 
@@ -70,7 +68,7 @@ Questions 2 and 3 are `impeccable init`'s own first two. Step 5 passes their ans
    - Run `ln -s AGENTS.md CLAUDE.md` at the root, replacing a plain `CLAUDE.md` whose content step 2 moved. Skipped when `CLAUDE.md` is a symlink to `AGENTS.md`.
    - Append to `.gitignore` (create it if missing) each line of `${CLAUDE_SKILL_DIR}/templates/gitignore` it lacks: the agent worktrees pstack's panels leave under `.claude/worktrees/` and impeccable's caches, which whole-tree gates would otherwise judge. Skipped when every line is present.
 
-   Done when `CLAUDE.md` is a symlink to `AGENTS.md` and `.gitignore` holds every line of the template.
+   Done when `CLAUDE.md` is a symlink to `AGENTS.md` and `.gitignore` holds every line of `${CLAUDE_SKILL_DIR}/templates/gitignore`.
 
 4. **Fill the title and "What this is".**
    - Replace `# <project>` with the repository name.
@@ -78,13 +76,12 @@ Questions 2 and 3 are `impeccable init`'s own first two. Step 5 passes their ans
    - Record the tracker, so the tracker setup does not ask again for what init settled. Under the "Agent skills" heading, above its placeholder, add one line naming the tracker `init.defaults` settled and why, such as `Tracker chosen at init: local markdown, because the repository has no remote.` The tracker setup reads this file and takes it as its answer.
    - Leave the placeholders of the sections below: "Agent skills" for the tracker setup, the rest for `/ratchet:adopt`.
 
-   Done, and skipped, when the title and "What this is" have no angle-bracket placeholder.
+   Skipped when the title and "What this is" have no angle-bracket placeholder. Done when neither has one and "Agent skills" holds the tracker line or the tracker setup's block.
 
 5. **Run the other plugins' setup once, from the answers already given.** Resolve a plugin's files at `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, with the marketplace and version from step 1. When in doubt, run `find ~/.claude/plugins/cache -path '*/<plugin>/*/SKILL.md'`.
    - **`mattpocock-skills`: not run here.** Its `setup-matt-pocock-skills` skill is user-invoked (`disable-model-invocation: true`). The Skill tool refuses it to an agent, and its author's rule is that no skill calls or imitates it. So the owner types `/mattpocock-skills:setup-matt-pocock-skills` after init, and the hand-over names it as the next command.
-     - It writes `docs/agents/issue-tracker.md`, `triage-labels.md` and `domain.md`, fills the `## Agent skills` section of `AGENTS.md`, and creates the labels on the forge. The guard allows `gh label create` for a name in the record it just wrote. Init creates the remote first (step 7) so that those labels have somewhere to go.
      - Skipped, and said so in the hand-over, when `docs/agents/issue-tracker.md` already exists.
-     - A forge tracker needs a repository, so a repository with no remote has local markdown as its tracker, and the hand-over says why.
+     - Init creates the remote first (step 7), so that the labels that setup creates have somewhere to go.
      - Put its `## Agent skills` block in the template's "Agent skills" section of `AGENTS.md`. Edit `AGENTS.md`, the link target, not `CLAUDE.md`.
    - **`pstack`: skipped when `~/.claude/rules/pstack-models.md` exists.** Say so in the hand-over, since the owner may not remember writing it. Otherwise:
      1. Read `<pstack>/docs/harness/claude-code.md` first. It maps the skill's Cursor names and says the rule is written to that path.
@@ -98,15 +95,16 @@ Questions 2 and 3 are `impeccable init`'s own first two. Step 5 passes their ans
 
    Done when each has run, was already done, or the owner declined.
 
-6. **Commit.** Run `git add -A && git commit -m "chore(method): initialise the repository"`. The pstack rule lives in `~/.claude/rules/`, outside the repository, and is not part of it.
+6. **Commit.** Run `git add -A && git commit -m "chore(method): initialise the repository"`.
 
    Done, and skipped, when `git status --porcelain` prints nothing.
 
 7. **Remote and push.**
+   - **`origin` exists:** skipped.
    - **The answer to `init.online` asked for a private copy and `git remote get-url origin` fails:** run, in a Bash call of its own, `gh repo create <name> --private --source . --remote origin --push` (`glab repo create` for GitLab). This is the one outward-facing action in init. It needs that answer and nothing else, never from the tracker choice alone.
    - **The question was not asked, or the owner kept it on this computer:** skipped, with "local only".
 
-   Done, and skipped, when `origin` exists.
+   Done when `origin` exists, or the hand-over will say "local only".
 
 8. **Labels.** Only on a rerun where `docs/agents/triage-labels.md` exists (the tracker setup wrote it) and the tracker is GitHub or GitLab with `origin` present. Not applicable for a local tracker.
    - Run `gh label list` in one Bash call.
@@ -121,9 +119,9 @@ Questions 2 and 3 are `impeccable init`'s own first two. Step 5 passes their ans
    - **The labels.** Created (the count), already present, not applicable (local tracker), not yet (the tracker setup creates them), or refused (the dispute's path).
    - **Assumed.** The block the method's rule on asking describes, with no question key or method term in it. One line per assumption this run took (each part of the defaults that applied, the interface) and per preference the owner typed: "you asked for", or, where the rule on preferences kept it from applying, as not applied, with what was asked for, why not and the route that exists. Each line says what was chosen and why in a clause, what changing it later costs (what changes, roughly how much work, and whether anything built is redone), and what the owner can say to change it, such as ``Screen: a web page that works on your phone and your laptop, because you said you will use it on both. Changing it before you run `/ratchet:adopt` is one line in the project notes, and nothing built is redone; adoption then offers ways to build it that fit what you say. Say "make it an app" or "no screen" to change it.``
    - **The questions.** The count of questions the owner answered, and each one a companion plugin's setup still asked.
-   - **The route, as the last lines.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root . --offline` in one Bash call and print its lines (`next:`, `why:`, `then:`, and any `also:`) as they are. After a default run they name `/mattpocock-skills:setup-matt-pocock-skills` (it writes the tracker's records and labels, taking the tracker this run chose), then `/ratchet:adopt` (it asks what the first usable part is, what can wait, and how it should be built and checked, recommendation first). Close with the bare command on its own line.
+   - **The route, as the last lines.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root . --offline` in one Bash call and print its lines (`next:`, `why:`, `then:`, and any `also:`) as they are. Close with the bare command on its own line.
 
-   That bare command is the only command in the hand-over. Everything init can do, it has done; what it cannot do is the owner's keystroke, and the route names it.
+   Give the owner no command to paste besides that one.
 
    Done when the reply holds each part above, in that order, and ends with the bare command.
 
