@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 HEADER = (
     "Persona",
     "Stack",
+    "Harness",
     "Stopped",
     "Min to first feature merge",
     "Min to first usable merge",
@@ -107,6 +108,14 @@ def architecture_cell(metrics: Mapping[str, object]) -> str:
     )
 
 
+def harness_cell(metrics: Mapping[str, object]) -> str:
+    """The commit of the eval code that drove the run, marked when its tree had changes."""
+    commit = _at(metrics, "meta.harness.commit")
+    if not commit:
+        return "not recorded"
+    return str(commit)[:7] + (" (dirty)" if _at(metrics, "meta.harness.dirty") else "")
+
+
 def stopped(metrics: Mapping[str, object], error: str) -> str:
     """Why the run stopped and when, led by its exit code when that was not zero."""
     reason, minute = _cell(_at(metrics, "stop.reason")), _cell(_at(metrics, "stop.minute"))
@@ -116,9 +125,10 @@ def stopped(metrics: Mapping[str, object], error: str) -> str:
 def row(persona: Persona, metrics: Mapping[str, object] | None, error: str = "") -> list[str]:
     """One persona's cells; a run with no measurements says why in its first cells."""
     if metrics is None:
-        return [persona.name, _cell(persona.stack or "unstated"), error or "no measurements"] + [
-            "n/a"
-        ] * (len(HEADER) - 3)
+        why = error or "no measurements"
+        return [persona.name, _cell(persona.stack or "unstated"), "n/a", why] + ["n/a"] * (
+            len(HEADER) - 4
+        )
     merges = _at(metrics, "merges")
     total = len(merges) if isinstance(merges, list) else 0
     hand = _at(metrics, "hand_merges")
@@ -129,6 +139,7 @@ def row(persona: Persona, metrics: Mapping[str, object] | None, error: str = "")
     return [
         persona.name,
         _cell(persona.stack or "unstated"),
+        harness_cell(metrics),
         stopped(metrics, error),
         _cell(_at(metrics, "minutes.to_first_feature_merge")),
         _cell(_at(metrics, "minutes.to_first_usable_merge")),
@@ -178,13 +189,14 @@ def run_all(
             metrics = read_metrics(directory)
             rows.append(row(persona, metrics, "" if code == 0 else f"exit {code}"))
             raw[persona.name] = metrics
-            _write(root, rows, raw)
+            write(root, rows, raw)
     finally:
-        _write(root, rows, raw)
+        write(root, rows, raw)
     return rows
 
 
-def _write(root: Path, rows: Sequence[Sequence[str]], raw: Mapping[str, object]) -> None:
+def write(root: Path, rows: Sequence[Sequence[str]], raw: Mapping[str, object]) -> None:
+    """Write the rows as ``matrix.md`` and each run's measurements by persona as ``matrix.json``."""
     (root / "matrix.md").write_text(table(rows), encoding="utf-8")
     (root / "matrix.json").write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
 
