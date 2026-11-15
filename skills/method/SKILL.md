@@ -5,7 +5,7 @@ description: The Ratchet method says what must be true before a merge. Load when
 
 # The Ratchet method
 
-Every change is a **conjecture** that **stands** only while no **criticism** of it is **open**, and the **gates** are criticism made deterministic: they run in **tiers**, they only **ratchet** tighter, and every exception to them is a written **record**. This page defines the method's words and holds the eleven commitments every repository keeps, the stance, and how work runs.
+Every change is a **conjecture** that **stands** only while no **criticism** of it is **open**. The **gates** are criticism made deterministic: they run in **tiers**, they only **ratchet** tighter, and every exception to them is a written **record**.
 
 ## The four plugins
 
@@ -13,7 +13,7 @@ Four plugins compose, and each owns one question.
 
 - `mattpocock-skills`: how the work is done. `tdd`, `codebase-design`, `domain-modeling`, `code-review`, `diagnosing-bugs`, `grilling`, `pr`, `research`.
 - `pstack`: in what style and with which levers. `poteto-mode`, `architect`, `interrogate`, `arena`, `correct`, the formal verification skills.
-- `impeccable`: how anything a person sees is designed. Every user interface goes through it, and its `PRODUCT.md` and `DESIGN.md` are records.
+- `impeccable`: how anything a person sees is designed. Every user interface goes through it.
 - This method: what must be true before a merge, and which of those skills comes next at each stage (the **route**).
 
 ## Words
@@ -24,9 +24,9 @@ Use these words in code, tests, records and prose.
 
 - **gate**: one deterministic check answering one question the method asks. It is *red* or *green*, nothing in between.
 - **red**, **green**: a test or gate's observable state. A test that was never red proves nothing.
-- **bite**: a gate shown to go red on a planted fault, and on an empty collection when it judges one. `quality/bites.toml` holds the faults.
+- **bite**: a gate shown to go red on a planted fault, and on an empty collection when it judges one. `quality/bites.toml` holds the faults. A gate nobody has seen fail is a gate nobody can trust.
 - **tier**: when a gate runs. Tier 0 on every commit, tier 1 on every pull request, tier 2 on the default branch and nightly.
-- **entry point**: one named command per tier and per method gate, in whatever runner the binding names. `check` is tier 0 plus tier 1.
+- **entry point**: one named command per tier and per method gate, in whatever runner the binding names.
 - **binding**: `docs/process/binding.md`, the repository's table mapping each question to the tool that answers it, or to `none` with a reason. It names the runner and the forge too. It also declares the repository's **application types** (`service`, `web-ui`, `app`, `cli`, `job`, `library`), which decide the questions that apply and never the tool.
 - **ratchet**: a recorded threshold that only rises. The `ratchet` entry point raises it to the measured value.
 - **ceiling**: a recorded wall-clock limit per tier or gate, in seconds, that only falls. The `budget` entry point measures against it.
@@ -39,7 +39,7 @@ Use these words in code, tests, records and prose.
 - **instance**: one occurrence of a kind of code: an entry point, an outbound call, a listener, a configuration read, a stored format, a user interface. The binding's `## Triggers` table says what marks one in this stack, and `scripts/triggers.py` counts them at the merge base and at head.
 - **life event**: something that happens to the project, not to its code: `deployed` (others can reach it), `irreplaceable-data` (it holds data the owner could not recreate), `depended-on` (people outside rely on it). The owner declares it on the binding's `- Life events:` line. The route proposes one when it sees a sign of it, and never declares it.
 - **owed**: a row whose trigger has fired and which is not yet bound.
-  - **The first one is free**: the change that brings a kind is never red for it, however many files it touches. The route makes binding the owed rows the next step (`/ratchet:safeguard`).
+  - **The first one is free**: the change that brings a kind is never red for it, however many files it touches.
   - A later change that adds another instance while a row is still owed is red.
   - A declared life event makes its rows owed too, and is never red.
   - An **architecture review** is owed the same way when a kind that changes the project's shape first arrives, or a life event is declared, until a decision record names that trigger (`/ratchet:architecture`).
@@ -80,7 +80,7 @@ Every repository on the method keeps all eleven. The conformance gate checks the
 
    Read [tiers.md](tiers.md) before you choose a tier for a question.
 3. **The ratchet.** Thresholds live in `quality/thresholds.toml` and only rise, checked against the merge base. Absolute paths need 100%. Counts that could be gamed (suppressions, test counts) are computed from both trees on every run, never stored. Each gate config the `tool-config` group of the guard manifest lists is snapshotted, so loosening it shows as a reviewed diff, and a config the group does not list is neither guarded nor recorded. Mutation testing gates on zero unexplained survivors: kill the mutant, or register it with a reason tied to the function's hash. Read [ratchet.md](ratchet.md) before you change a threshold, a listed config or the mutant register.
-4. **Guards.** Guard paths are enforced by the harness, which the model cannot override, and surfaced in the diff for whatever slips past. Read [guards.md](guards.md) for the manifest, the hook and the diff check.
+4. **Guards.** Guard paths are enforced by the harness, which the model cannot override, and surfaced in the diff for whatever slips past. A denial is the dispute signal. Read [guards.md](guards.md) for the manifest, the hook and the diff check.
 5. **Disputes.** When a gate blocks and you believe the gate is wrong, stop on that gate and write `docs/disputes/NNNN-<slug>.md`. The owner upholds or rejects it. An upheld dispute that relaxes a rule also needs an ADR. Read [guards.md](guards.md#disputes) for the format before you write one.
 6. **Records.** Each repository keeps:
    - a dated design brief with a first slice and an explicit out-list;
@@ -99,13 +99,13 @@ Every repository on the method keeps all eleven. The conformance gate checks the
    - everything cached;
    - only what the change can affect run.
 
-   The binding's Speed section says how this stack meets each, and the conformance gate checks what a machine can. Each tier's ceiling is set at adoption from the first run. A tier over its ceiling on the default branch is the next piece of work. Read [tiers.md](tiers.md#speed) when a tier is slow.
-10. **The merge rule.** A change is merged when no criticism of it is open. A dispute is a counter. The stance below says how to work by the rule.
+   The binding's Speed section says how this stack meets each, and the conformance gate checks what a machine can. Each tier has a ceiling in seconds that only falls, measured by the `budget` entry point and set at adoption from the first run. A tier over its ceiling on the default branch is the next piece of work. Read [tiers.md](tiers.md#speed) when a tier is slow.
+10. **The merge rule.** A change is merged when no criticism of it is open. A test is a refuter made executable, a gate is a refuter made deterministic, a review finding is a criticism, a dispute is a counter. A criticism is answered by revision or by a counter, in writing. Before you write a counter, read [epistemology.md](epistemology.md) for where it goes.
 11. **Operable by the time it matters.** A safeguard arrives with the first thing it guards, and the first one is free. The floor holds from the first commit.
     - A question about a kind of code is asked once the first instance of that kind exists: a span and a load smoke with the first entry point, a timeout and a failing-dependency test with the first outbound call, a refusal of bad configuration with the first setting read, a graceful shutdown with the first listener.
     - A question about the project's life is asked once the owner declares the event: the scans and a check that production answers once it is `deployed`, a restore drill once it holds `irreplaceable-data`, load and performance budgets once it is `depended-on`.
 
-    Each safeguard is split across the tiers so the pull request pays only for the cheap part. Three gates ship with the method for any service, whatever it is written in: it boots and answers, it holds under a load smoke, and its telemetry arrives. The binding names the seams and what marks an instance; the conformance gate keeps the rows. Read [tiers.md](tiers.md#triggers) when a trigger fires.
+    The change that brings a kind is never red for it, however many files it touches. A later one that adds another while a safeguard is owed is red. Each safeguard is split across the tiers so the pull request pays only for the cheap part. Three gates ship with the method for any service, whatever it is written in: it boots and answers, it holds under a load smoke, and its telemetry arrives. The binding names the seams and what marks an instance; the conformance gate keeps the rows. Read [tiers.md](tiers.md#triggers) when a trigger fires.
 
 ## The stance
 
@@ -129,7 +129,7 @@ The words behind this stance are on the merge-rule page of the `ratchet:method` 
 
 ### Start of a session
 
-Read `AGENTS.md`, `docs/process/binding.md` (its `## Architecture` section first, and the record it names), the glossary and the titles in `docs/adr/`. The session hook's last line is the route's next step. `/ratchet:next` prints it again, with the tracker read.
+Read `AGENTS.md`, `docs/process/binding.md` (its `## Architecture` section first, and the record it names), the glossary and the titles in `docs/adr/`. The session hook's last line is the route's next step. `/ratchet:next` prints it again, with the tracker read. Read [route.md](route.md) for the stage that step belongs to.
 
 Done when you can name the project's parts and what each may depend on, its declared paths, its non-negotiables, its runner and the entry point for each tier.
 
@@ -139,15 +139,16 @@ Done when you can name the project's parts and what each may depend on, its decl
 2. Work the loop as `mattpocock-skills:tdd` describes: the test goes red for the right reason, then green, then refactor.
 3. Run `check`.
 4. Open one pull request with every section of the template filled and the tail of `check` pasted.
-5. Leave the merge to the merge judge: the merge job merges a change the judge passes, and the owner merges the rest. Never merge by hand.
+
+Leave the merge to the merge judge: the merge job merges a change the judge passes, and the owner merges the rest. Never merge by hand.
 
 Done when the pull request is open and green.
 
 ### A feature
 
 1. The owner types the ticket into being with `mattpocock-skills`: `/mattpocock-skills:wayfinder` when the effort is too big for one session, `/mattpocock-skills:grill-with-docs` to decide, `/mattpocock-skills:to-spec` and `to-tickets` to write it, `/mattpocock-skills:triage` for an issue that arrived.
-2. Then `/ratchet:conjecture <ticket>`, for the `## Conjecture` that [records.md](records.md) describes. The agent-ready label those skills apply is the agreement.
-3. Then `/ratchet:feature <ticket>` when the owner steps away, or `/pstack:poteto-mode <ticket>` when they stay. The preflight refuses anything less before an agent exists.
+2. The owner types `/ratchet:conjecture <ticket>`, for the `## Conjecture` that [records.md](records.md) describes. The agent-ready label those skills apply is the agreement.
+3. The owner types `/ratchet:feature <ticket>` when they step away, or `/pstack:poteto-mode <ticket>` when they stay. The preflight refuses anything less before an agent exists.
 
 Read [route.md](route.md) for the stages around these and [pipeline.md](pipeline.md) for what each role does once the feature runs.
 
@@ -158,7 +159,7 @@ A part of the architecture, a dependency, a representation, a tool, a rule. Writ
 ### Branches you will meet
 
 - **A gate goes red:** fix the code. Split the unit, write the test, narrow the change.
-- **You believe the gate is wrong:** write a dispute, report it, and continue with the work the gate leaves open. Read [guards.md](guards.md) for how the owner decides it.
+- **You believe the gate is wrong:** write a dispute, report it, and continue with the work the gate leaves open. Read [guards.md](guards.md#disputes) for the format before you write it.
 - **An edit or command is denied, or asks for approval you cannot give:** that is the dispute signal. Stop on that gate there. A denied Bash call runs no part of itself, so keep a command the guard may refuse (a forge CLI call, a push, anything near a guard path) in a tool call of its own. An unrelated write chained with it is lost with it.
 - **The change brings the first of a kind of code** (the first route, outbound call, setting read, listener or migration), in one file or several: it is not red for it. Say in the pull request which rows it made owed, and whether it reopened the architecture. The route makes `/ratchet:architecture` the next step when it did, then `/ratchet:safeguard`, where an agent chooses the tool, writes the recipe and the fault, and binds the row.
 - **A gate is red because the change adds another instance while a row is still owed:** bind the row first, in a change of its own, or take the instance out of this change. Never bind the row `none` to get past it.
@@ -170,7 +171,7 @@ A part of the architecture, a dependency, a representation, a tool, a rule. Writ
 - **A measured value is above its threshold:** run `ratchet`, and commit the result with the change that earned it.
 - **A tier runs over its ceiling:** make it faster in the same change (cache, split, raise the binding's shard count, run less), never by quarantining a test or raising the ceiling. Raising it is an ADR.
 - **The change touches a user interface:** load `impeccable:impeccable` yourself. Use its `shape` before you build the surface and its `polish` before you open the pull request. `DESIGN.md` is the standard the review judges it against.
-- **You need a word the glossary lacks:** read the glossary for the concept under another name first. Then add the entry with its *Avoid* list, through `domain-modeling`, before using it in code. The guard lets an added term and an added *Avoid* item through. If it asks, your edit changed or removed something that was there, and that is the owner's.
+- **You need a word the glossary lacks:** read the glossary for the concept under another name first. Then add the entry with its *Avoid* list, through `domain-modeling`, before using it in code. The guard lets an added term and an added *Avoid* item through. If it asks, your edit changed or removed something that was there, and that is the owner's. Read [records.md](records.md) for the glossary's shape when you add the entry.
 - **You need a dependency:** that is a design decision. Say why in the pull request body, or in an ADR when it shapes the architecture.
 - **A tool reports a finding you think is wrong:** it is a criticism. Answer it in writing (a dispute, an ADR, a register entry with a reason) or fix the code.
-- **A bug:** `mattpocock-skills:diagnosing-bugs` builds the loop. The diagnosis names an alternative explanation before the fix, and the fix ships with the test that was red.
+- **A bug:** `mattpocock-skills:diagnosing-bugs` builds the loop. The method asks that the diagnosis name an alternative explanation before the fix and that the fix ship with the test that was red.
