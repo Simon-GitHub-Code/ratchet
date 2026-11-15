@@ -1,6 +1,8 @@
 """The publish check: red when a role committed, pushed or opened a pull request during the run."""
 
+import hashlib
 import json
+import subprocess
 from dataclasses import asdict
 from pathlib import Path
 from typing import Protocol
@@ -28,9 +30,11 @@ def checkout(tmp_path: Path, *, forge: bool = False) -> Path:
     return root
 
 
-def started(tmp_path: Path, root: Path, prs: str = NONE_OPEN) -> Path:
+def started(
+    tmp_path: Path, root: Path, prs: str = NONE_OPEN, *, rebase_onto: str | None = None
+) -> Path:
     """The start state, read as the check reads the present, in the preflight's whole report."""
-    start = publish_check.start_of(root, BRANCH, gh_returning(prs))
+    start = publish_check.start_of(root, BRANCH, gh_returning(prs), rebase_onto=rebase_onto)
     path = tmp_path / "start.json"
     path.write_text(json.dumps({"ok": True, "branch": BRANCH, "start": asdict(start)}), "utf-8")
     return path
@@ -402,3 +406,306 @@ def test_a_start_with_a_forge_and_its_open_pull_requests_is_read_whole() -> None
     assert publish_check.parse(text) == publish_check.Start(
         BRANCH, HEAD, publish_check.Forge(other, (3, 9))
     )
+
+
+WHEN = "2026-11-01T09:00:00+02:00"
+LATER = "2026-11-02T09:00:00+02:00"
+README_EDIT = "feat(core): the branch edits the readme\n\nWith a body the rebase keeps."
+HALTED = (
+    "publish check: a rebase is under way in the checkout and was not finished: a role stopped"
+    " halfway, which is not publishing, and a branch half rebased cannot be judged; that is never"
+    " a pass"
+)
+
+
+def rejudged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, forge: bool = False) -> Path:
+    """A ticket's branch whose rebase onto `main` conflicts, left as the drain leaves it."""
+    monkeypatch.setenv("GIT_AUTHOR_DATE", WHEN)
+    monkeypatch.setenv("GIT_EDITOR", "true")
+    root = checkout(tmp_path, forge=forge)
+    write(root, "README.md", "# From the branch\n")
+    commit(root, README_EDIT)
+    write(root, "notes.txt", "notes\n")
+    commit(root, "docs(core): the branch adds notes")
+    git(root, "switch", "-q", "main")
+    write(root, "README.md", "# From main\n")
+    commit(root, "feat(core): main edits the readme")
+    git(root, "switch", "-q", BRANCH)
+    return root
+
+
+def stopped(root: Path) -> None:
+    """Start the rebase onto `main`: it stops on the readme both sides edited."""
+    with pytest.raises(subprocess.CalledProcessError):
+        git(root, "rebase", "main")
+
+
+def finished(root: Path) -> None:
+    """Finish the rebase as the Reconcile role is told to: resolve, add, continue."""
+    stopped(root)
+    write(root, "README.md", "# From main and the branch\n")
+    git(root, "add", "README.md")
+    git(root, "rebase", "--continue")
+
+
+def not_matched(root: Path, old: str, *, then: int, now: int) -> list[str]:
+    return [
+        (
+            f"publish check: `{BRANCH}` is at {git(root, 'rev-parse', 'HEAD')[:12]}, which does"
+            f" not hold {old[:12]}, where it started, and the commits ahead of `main` are not the"
+            f" ones it had, by author date and message in the same order ({then} then, {now} now):"
+            " a role amended, reset or rebased it"
+        ),
+        RED,
+    ]
+
+
+def test_a_reconcile_that_finishes_the_rebase_is_not_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    old = git(root, "rev-parse", "HEAD")
+    readme = hashlib.sha256(f"{README_EDIT}\n".encode()).hexdigest()
+    rebase = json.loads(path.read_text("utf-8"))["start"]["rebase"]
+    assert rebase["base"] == "main"
+    assert [entry["author_date"] for entry in rebase["commits"]] == [WHEN] * 3
+    assert rebase["commits"][1]["message_sha256"] == readme
+    finished(root)
+    assert git(root, "merge-base", "--is-ancestor", "main", BRANCH) == ""
+    assert git(root, "rev-parse", "HEAD") != old
+    assert checked(path, root) == (0, [GREEN])
+
+
+def test_the_rebase_member_on_a_branch_that_did_not_move_is_green(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    assert checked(path, root) == (0, [GREEN])
+
+
+def test_a_rebase_that_skips_the_conflicted_commit_drops_it_and_is_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    old = git(root, "rev-parse", "HEAD")
+    stopped(root)
+    git(root, "rebase", "--skip")
+    assert checked(path, root) == (1, not_matched(root, old, then=3, now=2))
+
+
+def test_a_rebase_finished_with_a_commit_added_is_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    old = git(root, "rev-parse", "HEAD")
+    finished(root)
+    commit(root, "fix(core): the reconcile commits its fix")
+    assert checked(path, root) == (1, not_matched(root, old, then=3, now=4))
+
+
+def test_a_rebase_that_rewords_a_message_is_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    old = git(root, "rev-parse", "HEAD")
+    finished(root)
+    git(root, "commit", "-q", "--amend", "-m", "docs(core): the notes, reworded")
+    assert checked(path, root) == (1, not_matched(root, old, then=3, now=3))
+
+
+def test_a_rebase_that_reorders_the_commits_is_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    old = git(root, "rev-parse", "HEAD")
+    finished(root)
+    readme, notes = git(root, "rev-parse", "HEAD~1"), git(root, "rev-parse", "HEAD")
+    git(root, "reset", "-q", "--hard", "HEAD~2")
+    git(root, "cherry-pick", notes)
+    git(root, "cherry-pick", readme)
+    assert checked(path, root) == (1, not_matched(root, old, then=3, now=3))
+
+
+def test_a_rebase_that_changes_an_author_date_is_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    old = git(root, "rev-parse", "HEAD")
+    finished(root)
+    monkeypatch.setenv("GIT_AUTHOR_DATE", LATER)
+    git(root, "commit", "-q", "--amend", "--no-edit", "--reset-author")
+    assert git(root, "log", "-1", "--format=%aI") == LATER
+    assert checked(path, root) == (1, not_matched(root, old, then=3, now=3))
+
+
+def test_a_rebase_onto_a_base_that_is_gone_is_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    old = git(root, "rev-parse", "HEAD")
+    finished(root)
+    git(root, "branch", "-q", "-D", "main")
+    new = git(root, "rev-parse", "HEAD")
+    assert checked(path, root) == (
+        1,
+        [
+            (
+                f"publish check: `{BRANCH}` is at {new[:12]}, which does not hold {old[:12]},"
+                " where it started, and `main`, the base it was to be rebased onto, names no"
+                " commit: a role amended, reset or rebased it"
+            ),
+            RED,
+        ],
+    )
+
+
+def test_with_the_rebase_member_commits_on_top_of_the_start_are_still_a_move(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    old = git(root, "rev-parse", "HEAD")
+    new = commit(root, "feat(core): a role committed")
+    assert checked(path, root) == (
+        1,
+        [
+            (
+                f"publish check: `{BRANCH}` moved from {old[:12]} to {new[:12]}, which holds it"
+                " with commits on top: a role committed"
+            ),
+            RED,
+        ],
+    )
+
+
+def test_a_rebase_left_unfinished_is_never_a_pass_and_is_not_called_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    stopped(root)
+    assert checked(path, root) == (3, [HALTED])
+
+
+def test_a_rebase_left_unfinished_does_not_hide_a_push(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch, forge=True)
+    path = started(tmp_path, root, rebase_onto="main")
+    head = git(root, "rev-parse", "HEAD")
+    git(root, "push", "-q", "origin", BRANCH)
+    stopped(root)
+    assert checked(path, root) == (
+        1,
+        [
+            f"publish check: the forge gained the branch `{BRANCH}` at {head[:12]}: a role pushed",
+            HALTED,
+            RED,
+        ],
+    )
+
+
+def test_without_the_rebase_member_a_rebase_left_unfinished_is_head_detached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    path = started(tmp_path, root)
+    stopped(root)
+    assert checked(path, root) == (
+        1,
+        [f"publish check: HEAD is detached, not on `{BRANCH}`, the branch the run started on", RED],
+    )
+
+
+def test_a_finished_rebase_that_was_then_pushed_is_red(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch, forge=True)
+    path = started(tmp_path, root, rebase_onto="main")
+    finished(root)
+    git(root, "push", "-q", "origin", BRANCH)
+    head = git(root, "rev-parse", "HEAD")
+    assert checked(path, root) == (
+        1,
+        [
+            f"publish check: the forge gained the branch `{BRANCH}` at {head[:12]}: a role pushed",
+            RED,
+        ],
+    )
+
+
+def test_the_start_of_a_rebase_cannot_be_read_onto_a_base_that_does_not_exist(
+    tmp_path: Path,
+) -> None:
+    root = checkout(tmp_path)
+    with pytest.raises(publish_check.UnreadableError, match="there is no base `nope`"):
+        publish_check.start_of(root, BRANCH, gh_returning(NONE_OPEN), rebase_onto="nope")
+
+
+DIGEST = "c" * 64
+AHEAD = {"author_date": WHEN, "message_sha256": DIGEST}
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ({"rebase": True}, "`start.rebase` is neither null nor an object"),
+        ({"rebase": {"commits": []}}, "`start.rebase.base` is missing"),
+        ({"rebase": {"base": "", "commits": []}}, "`start.rebase.base` is not a ref's name"),
+        ({"rebase": {"base": ["main"], "commits": []}}, "`start.rebase.base` is not a ref's name"),
+        ({"rebase": {"base": "main"}}, "`start.rebase.commits` is missing"),
+        ({"rebase": {"base": "main", "commits": {}}}, "`start.rebase.commits` is not a list"),
+        *(
+            (
+                {"rebase": {"base": "main", "commits": [AHEAD, entry]}},
+                (
+                    "`start.rebase.commits[1]` is not an object with an ISO 8601 `author_date`"
+                    " and a SHA-256 `message_sha256`"
+                ),
+            )
+            for entry in (
+                DIGEST,
+                {"message_sha256": DIGEST},
+                {"author_date": WHEN},
+                AHEAD | {"author_date": "yesterday"},
+                AHEAD | {"author_date": 1762000000},
+                AHEAD | {"message_sha256": "C" * 64},
+                AHEAD | {"message_sha256": "c" * 40},
+            )
+        ),
+    ],
+)
+def test_a_rebase_member_missing_a_part_or_malformed_is_refused(
+    tmp_path: Path, checked: Check, case: tuple[dict[str, object], str]
+) -> None:
+    member, why = case
+    path = tmp_path / "start.json"
+    path.write_text(json.dumps({"start": START | member}), "utf-8")
+    code, lines = checked(path, tmp_path)
+    assert code == 2
+    assert lines == [
+        f"publish check: the start state in {path} cannot be read: {why}; that is never a pass"
+    ]
+
+
+def test_a_start_with_a_rebase_is_read_whole_and_a_null_one_is_none() -> None:
+    later = {"author_date": "2026-11-15T10:13:20Z", "message_sha256": "d" * 64}
+    rebase = {"base": "origin/main", "commits": [AHEAD, later]}
+    assert publish_check.parse(json.dumps({"start": START | {"rebase": rebase}})).rebase == (
+        publish_check.Rebase(
+            "origin/main",
+            (
+                publish_check.Commit(WHEN, DIGEST),
+                publish_check.Commit("2026-11-15T10:13:20Z", "d" * 64),
+            ),
+        )
+    )
+    assert publish_check.parse(json.dumps({"start": START | {"rebase": None}})).rebase is None

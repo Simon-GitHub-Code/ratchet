@@ -20,6 +20,18 @@ held for the branch: ``remote``, the commit of the branch there, or ``null`` whe
 are ignored, so a report that carries ``start`` is passed as it was printed. ``start_of`` reads a
 start state the way this script reads the present one.
 
+On a rejudge whose rebase conflicted, the branch was left as it was and the Reconcile role is
+told to finish the rebase itself. That start carries one more member, ``rebase``, which is
+``null`` or absent on any other run::
+
+    {"branch": "feature/4-x", "head": "<commit>", "forge": null, "rebase": {"base": "main",
+     "commits": [{"author_date": "2026-11-15T10:13:20Z", "message_sha256": "<64 hex digits>"}]}}
+
+``base`` names the ref the branch is to be rebased onto, read by its name when the check runs;
+``commits`` are the commits ahead of it at the start, oldest first, each as its author date in
+git's strict ISO 8601 and the SHA-256 of its whole message. ``start_of(..., rebase_onto=base)``
+records it.
+
 What counts as moved, each said in a line of its own:
 
 - ``HEAD`` is not on the branch: a role switched to another branch or detached it;
@@ -28,13 +40,22 @@ What counts as moved, each said in a line of its own:
 - with a forge: the branch appeared there, moved or is gone; a pull request for the branch is
   open that was not, or one that was open is not.
 
+With ``rebase``, a branch at a commit that does not hold where it started is not a move when the
+commits ahead of the base now have the recorded author dates and messages, in the same count and
+order: a reconcile that finished the rebase did not publish (ADR 0060). Any other rewrite is a
+move, and so is a base that names no commit. A rebase left under way in the checkout is never a
+pass: it is said in a line of its own, in place of ``HEAD`` being detached, and with nothing
+else moved the exit is 3, since a role that stopped halfway did not publish.
+
 Uncommitted, staged and untracked changes are not a move: the roles write files and leave them.
 
 What it does not see: a tag, a stash or another branch a role made, locally or on the forge; a
 remote other than ``origin``, and any remote at all when the start had no forge; a pull request
 whose head is another branch, and an edit to one that stays open; whatever was undone before the
-check ran, such as a pull request opened and closed again; and a start file a role rewrote, so
-the orchestrator keeps that file outside the work tree.
+check ran, such as a pull request opened and closed again; a start file a role rewrote, so
+the orchestrator keeps that file outside the work tree; and, with ``rebase``, a role that changed
+what a commit holds and kept its message and author date, and a role that moved the base: the
+merge judge and the gates judge the content.
 
 It reads the forge's branch with ``git ls-remote``, which fetches nothing and moves no ref, and
 the open pull requests through ``gh`` as the preflight does, in the repository of the working
@@ -46,7 +67,8 @@ Exit status:
 - 1: a role published: a line for each thing that moved, then the verdict; a forge that could not
   be read is named too, since what moved already decides;
 - 2: the start state cannot be read: no file, not JSON, or a member missing or malformed;
-- 3: the present state cannot be read: not a git checkout, or the forge cannot be reached.
+- 3: the present state cannot be read: not a git checkout, the forge cannot be reached, or, with
+  ``rebase``, a rebase left unfinished.
 
 Neither 2 nor 3 is ever a pass.
 
@@ -56,6 +78,7 @@ Usage: ``publish_check.py START [--root DIR]``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -66,10 +89,17 @@ import feature_preflight as preflight
 import gatelib
 
 COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+DATE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:Z|[+-]\d\d:\d\d)")
+SHA256 = re.compile(r"[0-9a-f]{64}")
+REBASING = ("rebase-merge", "rebase-apply")
 REMOTE = "origin"
 SHORT = 12
 SAID = "publish check:"
 NEVER = "that is never a pass"
+HALTED = (
+    "a rebase is under way in the checkout and was not finished: a role stopped halfway, which"
+    " is not publishing, and a branch half rebased cannot be judged"
+)
 GREEN = f"{SAID} green, nothing was committed, pushed or opened since the run started"
 RED = (
     f"{SAID} red, a role published: the ticket ends as a role that published, never as an approval"
@@ -93,12 +123,29 @@ class Forge:
 
 
 @dataclass(frozen=True)
+class Commit:
+    """A commit ahead of the base, as a finished rebase keeps it: author date and message."""
+
+    author_date: str
+    message_sha256: str
+
+
+@dataclass(frozen=True)
+class Rebase:
+    """The rebase a role is to finish: the base's name and the commits ahead of it, oldest first."""
+
+    base: str
+    commits: tuple[Commit, ...]
+
+
+@dataclass(frozen=True)
 class Start:
-    """The state a run started from: the branch, its commit, and the forge when there is one."""
+    """The state a run started from: the branch, its commit, the forge, and a rebase to finish."""
 
     branch: str
     head: str
     forge: Forge | None
+    rebase: Rebase | None = None
 
 
 # --- the start state -------------------------------------------------------------------------
@@ -134,9 +181,13 @@ def parse(text: str) -> Start:
         message = "`start.branch` is not a branch's name"
         raise MalformedError(message)
     head = a_commit(member(start, "head", "start"), "start.head")
-    forge = member(start, "forge", "start")
+    forge = a_forge(member(start, "forge", "start"))
+    return Start(branch, head, forge, a_rebase(start.get("rebase")))
+
+
+def a_forge(forge: object) -> Forge | None:
     if forge is None:
-        return Start(branch, head, None)
+        return None
     if not isinstance(forge, dict):
         message = "`start.forge` is neither null nor an object"
         raise MalformedError(message)
@@ -147,14 +198,50 @@ def parse(text: str) -> Start:
     ):
         message = "`start.forge.pull_requests` is not a list of pull request numbers"
         raise MalformedError(message)
-    return Start(
-        branch,
-        head,
-        Forge(
-            None if remote is None else a_commit(remote, "start.forge.remote"),
-            tuple(sorted(set(numbers))),
+    return Forge(
+        None if remote is None else a_commit(remote, "start.forge.remote"),
+        tuple(sorted(set(numbers))),
+    )
+
+
+def a_rebase(rebase: object) -> Rebase | None:
+    if rebase is None:
+        return None
+    if not isinstance(rebase, dict):
+        message = "`start.rebase` is neither null nor an object"
+        raise MalformedError(message)
+    base = member(rebase, "base", "start.rebase")
+    if not isinstance(base, str) or not base:
+        message = "`start.rebase.base` is not a ref's name"
+        raise MalformedError(message)
+    commits = member(rebase, "commits", "start.rebase")
+    if not isinstance(commits, list):
+        message = "`start.rebase.commits` is not a list"
+        raise MalformedError(message)
+    return Rebase(
+        base,
+        tuple(
+            a_commit_ahead(entry, f"start.rebase.commits[{index}]")
+            for index, entry in enumerate(commits)
         ),
     )
+
+
+def a_commit_ahead(entry: object, path: str) -> Commit:
+    date = entry.get("author_date") if isinstance(entry, dict) else None
+    digest = entry.get("message_sha256") if isinstance(entry, dict) else None
+    if not (
+        isinstance(date, str)
+        and DATE.fullmatch(date)
+        and isinstance(digest, str)
+        and SHA256.fullmatch(digest)
+    ):
+        message = (
+            f"`{path}` is not an object with an ISO 8601 `author_date` and a SHA-256"
+            " `message_sha256`"
+        )
+        raise MalformedError(message)
+    return Commit(date, digest)
 
 
 def read_start(path: Path) -> Start:
@@ -209,14 +296,54 @@ def forge_of(root: Path, branch: str, gh: preflight.Runner) -> Forge:
     return Forge(remote, numbers)
 
 
-def start_of(root: Path, branch: str, gh: preflight.Runner) -> Start:
-    """The start state of a run on ``branch``, read the way the check reads the present."""
+def ahead_of(root: Path, base: str, head: str) -> tuple[Commit, ...] | None:
+    """The commits on ``head`` that ``base`` does not hold, oldest first; ``None`` with no base."""
+    tip = gatelib.git(
+        root, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{base}^{{commit}}"
+    )
+    listed = (
+        None
+        if tip is None
+        else gatelib.git(root, "log", "-z", "--reverse", "--format=%aI%n%B", f"{tip}..{head}")
+    )
+    if listed is None:
+        return None
+    return tuple(
+        Commit(date, hashlib.sha256(message.encode()).hexdigest())
+        for date, _, message in (entry.partition("\n") for entry in listed.split("\0") if entry)
+    )
+
+
+def rebasing(root: Path) -> bool:
+    """Whether a rebase is under way in the checkout at ``root``."""
+    return any(
+        (path := gatelib.git(root, "rev-parse", "--git-path", name)) is not None
+        and (root / path).is_dir()
+        for name in REBASING
+    )
+
+
+def start_of(
+    root: Path, branch: str, gh: preflight.Runner, *, rebase_onto: str | None = None
+) -> Start:
+    """The start state of a run on ``branch``, read the way the check reads the present.
+
+    With ``rebase_onto``, the start of a rejudge whose rebase onto that base conflicted: it
+    records the commits ahead of the base, which a reconcile that finishes the rebase keeps.
+    """
     head = head_of(root, branch)
     if head is None:
         message = f"there is no branch `{branch}`"
         raise UnreadableError(message)
     has_forge = gatelib.git(root, "remote", "get-url", REMOTE) is not None
-    return Start(branch, head, forge_of(root, branch, gh) if has_forge else None)
+    forge = forge_of(root, branch, gh) if has_forge else None
+    if rebase_onto is None:
+        return Start(branch, head, forge)
+    commits = ahead_of(root, rebase_onto, head)
+    if commits is None:
+        message = f"there is no base `{rebase_onto}`"
+        raise UnreadableError(message)
+    return Start(branch, head, forge, Rebase(rebase_onto, commits))
 
 
 # --- what moved ------------------------------------------------------------------------------
@@ -226,14 +353,17 @@ def short(commit: str) -> str:
     return commit[:SHORT]
 
 
-def branch_moves(root: Path, start: Start) -> list[str]:
-    """How ``HEAD`` and the local branch moved since ``start``."""
+def branch_moves(root: Path, start: Start, *, halted: bool) -> list[str]:
+    """How ``HEAD`` and the local branch moved since ``start``.
+
+    ``halted``: a rebase the start asked for is under way, so a detached ``HEAD`` is said apart.
+    """
     on = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
     if on is None:
         message = f"{root} is not a git checkout with a commit"
         raise UnreadableError(message)
     moves = []
-    if on != start.branch:
+    if on != start.branch and not halted:
         where = "detached" if on == "HEAD" else f"on `{on}`"
         moves.append(f"HEAD is {where}, not on `{start.branch}`, the branch the run started on")
     head = head_of(root, start.branch)
@@ -241,21 +371,35 @@ def branch_moves(root: Path, start: Start) -> list[str]:
         moves.append(
             f"`{start.branch}` is gone; it was at {short(start.head)} when the run started"
         )
-    elif head != start.head:
-        moves.append(head_move(root, start.branch, old=start.head, new=head))
+    elif head != start.head and (move := head_move(root, start, head)) is not None:
+        moves.append(move)
     return moves
 
 
-def head_move(root: Path, branch: str, *, old: str, new: str) -> str:
-    """How the local branch moved from ``old`` to ``new``: on top of it, or rewritten."""
-    if gatelib.git(root, "merge-base", "--is-ancestor", old, new) is not None:
+def head_move(root: Path, start: Start, new: str) -> str | None:
+    """How the local branch moved to ``new``; ``None`` when it finished the start's rebase."""
+    branch, old = start.branch, short(start.head)
+    if gatelib.git(root, "merge-base", "--is-ancestor", start.head, new) is not None:
         return (
-            f"`{branch}` moved from {short(old)} to {short(new)}, which holds it with commits on"
+            f"`{branch}` moved from {old} to {short(new)}, which holds it with commits on"
             " top: a role committed"
         )
+    rewritten = f"`{branch}` is at {short(new)}, which does not hold {old}, where it started"
+    if start.rebase is None:
+        return f"{rewritten}: a role amended, reset or rebased it"
+    base, was = start.rebase.base, start.rebase.commits
+    now = ahead_of(root, base, new)
+    if now is None:
+        return (
+            f"{rewritten}, and `{base}`, the base it was to be rebased onto, names no commit:"
+            " a role amended, reset or rebased it"
+        )
+    if now == was:
+        return None
     return (
-        f"`{branch}` is at {short(new)}, which does not hold {short(old)}, where it started:"
-        " a role amended, reset or rebased it"
+        f"{rewritten}, and the commits ahead of `{base}` are not the ones it had, by author date"
+        f" and message in the same order ({len(was)} then, {len(now)} now): a role amended, reset"
+        " or rebased it"
     )
 
 
@@ -289,19 +433,20 @@ def forge_moves(branch: str, start: Forge, now: Forge) -> list[str]:
     return remote_move(branch, start.remote, now.remote) + opened + closed
 
 
-def check(root: Path, start: Start, gh: preflight.Runner) -> tuple[list[str], str | None]:
-    """Every move since ``start``, and why the forge could not be read, if it could not.
+def check(root: Path, start: Start, gh: preflight.Runner) -> tuple[list[str], bool, str | None]:
+    """Every move since ``start``, a rebase it asked for left halfway, and an unread forge's why.
 
     Raises ``UnreadableError`` when the checkout cannot be read.
     """
-    moves = branch_moves(root, start)
+    halted = start.rebase is not None and rebasing(root)
+    moves = branch_moves(root, start, halted=halted)
     if start.forge is None:
-        return moves, None
+        return moves, halted, None
     try:
         now = forge_of(root, start.branch, gh)
     except UnreadableError as error:
-        return moves, str(error)
-    return moves + forge_moves(start.branch, start.forge, now), None
+        return moves, halted, str(error)
+    return moves + forge_moves(start.branch, start.forge, now), halted, None
 
 
 def main(argv: list[str]) -> int:
@@ -315,12 +460,14 @@ def main(argv: list[str]) -> int:
         print(f"{SAID} the start state in {options.start} cannot be read: {error}; {NEVER}")
         return 2
     try:
-        moves, unread = check(Path(options.root).resolve(), start, preflight.run_gh)
+        moves, halted, unread = check(Path(options.root).resolve(), start, preflight.run_gh)
     except UnreadableError as error:
         print(f"{SAID} the present state cannot be read: {error}; {NEVER}")
         return 3
     for move in moves:
         print(f"{SAID} {move}")
+    if halted:
+        print(f"{SAID} {HALTED}; {NEVER}")
     if moves and unread is not None:
         print(f"{SAID} the forge cannot be read either: {unread}")
     if moves:
@@ -328,6 +475,8 @@ def main(argv: list[str]) -> int:
         return 1
     if unread is not None:
         print(f"{SAID} the present state cannot be read: {unread}; {NEVER}")
+        return 3
+    if halted:
         return 3
     print(GREEN)
     return 0
