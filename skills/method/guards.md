@@ -139,7 +139,7 @@ An edit in a group marked `edit = "deny"` is denied: the harness and local git. 
 - the plugin's own files, every harness's installed plugins and the settings that enable them: `~/.claude/plugins/**` and `settings.json`, `~/.grok/installed-plugins/**`, `~/.grok/hooks/**` and `config.toml`, `~/.codex/plugins/**`, `hooks.json` and `config.toml`, `~/.pi/agent/extensions/**` and `settings.json`, `~/.config/opencode/plugins/**` and `opencode.json`
 - the `git-state` group in every checkout, adopted or not: `.git/refs/**`, `packed-refs`, `HEAD`, `info/grafts`, `shallow` and `objects/info/**`, because the default branch's ref is what the path rules are read through
 
-`guards/manifest.toml` is denied too, on every branch, to every change but an addition ([Changing the manifest](#changing-the-manifest)).
+`guards/manifest.toml` is denied too: on the default branch to every change, and on any other branch to every change but an addition ([Changing the manifest](#changing-the-manifest)).
 
 ### A command that bypasses a gate or rewrites history: deny
 
@@ -148,7 +148,7 @@ The hook denies:
 - **Gate bypasses:** `--no-verify` and its spellings (`-n`, any prefix git accepts), `git commit-tree`, `SKIP=` and `RATCHET_HOOK_PROBE=` (the answer the template recipes give a hook probe, which skips the gates), hook uninstalls, hook-path changes and a `chmod` of a guard path.
 - **History rewrites:** force pushes in every spelling, pushes to main, resets and rebases that move main, amending a pushed commit, history filters.
 - **The default branch's ref:** any command that moves, deletes or re-points the default branch's ref or a ref or setting it is read through: `git branch -f`, `-d`, `-m` or `-c` on `main` or `master`, `update-ref`, `symbolic-ref` set or delete, `checkout`/`switch -B`, `-C` or `-b` naming a default branch, a fetch or push refspec ending in a protected ref, `remote add origin`, `set-url`, `set-head`, `rename`, `remove`, a `git config` or `git -c` on `remote.*`, `url.*`, `alias.*` or `include.*`, and `replace`, `fast-import`, `send-pack` and `receive-pack` whole.
-- **Forge settings:** forge CLI calls (`gh` on GitHub) that change branch protection, rulesets, labels, repository settings, secrets or variables. Reads of labels and runs pass: `gh label list`, a `GET` on a labels endpoint, `gh run list`.
+- **Forge settings:** forge CLI calls (`gh` on GitHub) that change branch protection, rulesets, labels, repository settings, secrets, variables, workflows or runs. Reads of labels and runs pass: `gh label list`, a `GET` on a labels endpoint, `gh run list`.
 - **Harness switches:** nested `claude` invocations given settings or plugin flags, and `claude`, `grok`, `codex` and `pi` commands that disable or remove a plugin, package or marketplace.
 - **Shell writes of a guard path:** any shell write, move, copy, link or delete of a locked guard path, or of any guard path where the commit lands on the default branch, including through wrappers, substitutions, `eval`, heredocs and `-c` strings.
 
@@ -170,6 +170,12 @@ Every deny message ends in the way out:
 - for a relative path after a `cd` the hook cannot follow, an absolute path, since it may be either
 
 A verdict covers the whole tool call. Claude Code runs none of a denied command line, so a file write chained before the refused command is lost with it. The deny message says so and names the matched command. Keep a command the guard may refuse (a forge CLI call, a push, anything near a guard path) in a tool call of its own, so an unrelated write is never lost with it.
+
+### The guard's log
+
+The guard writes one line for each tool call it denies or asks about to `ratchet-guard-events.jsonl` in the repository's git directory, shared by every worktree. Each line holds the time, the decision, the tool, the rule, what the guard matched and the branch. The file is local, never committed and never shown by `git status`, and the hook denies every edit of it. With no forge it shows whether work reached the default branch past the guard.
+
+The hook writes its answer first and the line after, so the log never changes a verdict. Three cases write no line: the ask the guard falls back to when it cannot load, a hook that timed out, and a harness's own prompt. A deny on a path in another checkout is logged in the repository the session works in.
 
 ### When the path rules are on
 
@@ -303,7 +309,7 @@ Its manifest must instead guard at least what the template's does: every templat
 - A run counts as green only when it tested that pull request against the default branch, so one that was retargeted, or whose branch has had a pull request against another base, is the owner's to merge.
 - The workflow is triggered by `workflow_run`, which takes the workflow file, the judge and the manifest from the default branch, so a pull request cannot change what judges it. The job reads the pull request's commits without checking them out or running them.
 - It merges what the judge passes with a merge commit and starts tier 2 on the default branch.
-- On everything else it leaves one comment with the reasons, edited in place on each run.
+- On every pull request it judges it leaves one comment with the verdict and its reasons, edited in place on each run.
 
 **With no forge** the `merge` entry point (`scripts/merge.py <branch>`) merges the branch in a scratch work tree, asks the judge, runs `check` on the merge result, and moves the default branch only when both pass. For the adoption it runs `check-deep` there instead. `merge.py --records` lands the records a skill left uncommitted on the default branch: it commits them on a branch of their own, `records/<time>`, and merges that branch the same way, so nothing is committed on the default branch itself.
 

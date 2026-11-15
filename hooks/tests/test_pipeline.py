@@ -223,8 +223,11 @@ PREFLIGHT = {
     "ok": True,
     "slug": "expiry",
     "branch": "feature/4-expiry",
-    "number": "4",
+    "number": 4,
     "title": "T",
+    "label": "ready-for-agent",
+    "failures": [],
+    "output": "preflight: green",
 }
 SPECIFIED = {
     "slug": "expiry",
@@ -246,6 +249,9 @@ CRITIQUED = {
     "attempted": ["an expiry in the past"],
     "fitnessSabotageConfirmed": True,
     "fitnessSabotageSummary": "",
+    "mutationSummary": "not applicable: the binding names no mutation gate",
+    "fuzzSummary": "not applicable: no value type is touched",
+    "checkOutput": "1 passed",
 }
 REJUDGE = {"slug": "expiry", "specPath": "docs/features/expiry/spec.md"}
 ASKED = {
@@ -569,6 +575,21 @@ def test_the_critic_is_pointed_at_the_binding_s_critique_directory() -> None:
     assert "Critique tests section names" in prompt
     assert "<slug>.<layer>.critique.test.<ext>" in prompt
     assert "next to the spec's tests" not in prompt
+
+
+def test_the_critic_and_the_review_grade_from_the_one_severity_list() -> None:
+    # Why: the critic graded from the general list alone, so a secret in a span or a behaviour
+    # shipped with no flag could be minor for it and a blocker or major for the review.
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    for role in ("critique", "review"):
+        prompt = " ".join(ran["prompts"][role].split())
+        assert prompt.count("Severity, the one list every grade you apply comes from.") == 1, role
+        blocker, major = prompt.split("- Blocker:", 1)[1].split("- Major:", 1)
+        assert "a span attribute or log field carrying a secret or a personal identifier" in blocker
+        assert "behaviour shipped on with no flag" in major.split("- Minor:")[0], role
+        assert "- Design axis: A layer violation is a blocker" in prompt, role
+        assert "A finding that carries no axis takes every line." in prompt, role
 
 
 def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> None:
@@ -1097,9 +1118,10 @@ def test_the_spec_role_designs_the_placement_and_the_review_judges_it_on_axis_f(
     assert "mattpocock-skills:codebase-design" in review
     axis = review.split("F. Design.")[1].split("The script files every")[0]
     assert "the `## Architecture` section of docs/process/binding.md" in axis
-    assert "A layer violation is a blocker" in axis
     assert "shallow wrapper" in axis
-    assert "are minor" in axis
+    grades = review.split("- Design axis:")[1].split("A defect the spec defers")[0]
+    assert "A layer violation is a blocker" in grades
+    assert "are minor" in grades
     issue = ran["schemas"]["review"]["properties"]["issues"]["items"]
     assert "design" in issue["properties"]["axis"]["enum"]
 

@@ -45,7 +45,17 @@ from tests import model_tla
 from tests import route_model as model
 from tests import route_world as real
 from tests.repos import git, snapshot
-from tests.route_model import ActionName, Advice, Architecture, Head, Setup, Ticket, Tree, World
+from tests.route_model import (
+    ActionName,
+    Advice,
+    Architecture,
+    Flag,
+    Head,
+    Setup,
+    Ticket,
+    Tree,
+    World,
+)
 from tests.support import PLUGIN_ROOT
 from tests.test_drain import approval
 
@@ -165,6 +175,54 @@ def changed_by_another(name: ActionName, *, enters: bool) -> Callable[[Label], s
     return check
 
 
+def builds_without_the_line(label: Label) -> set[World]:
+    """The states where a ticket's ``Flag:`` line is missing and ``label`` names a build."""
+    return {
+        s
+        for s in model.graph().states
+        if s.flag is Flag.MISSING and label(s) in {Advice.BUILD, Advice.DRAIN}
+    }
+
+
+def builds_unproved(label: Label) -> set[World]:
+    """The states where the adoption stopped before its proof and ``label`` names a build."""
+    return {
+        s
+        for s in model.graph().states
+        if s.setup is Setup.PINNED and label(s) in {Advice.BUILD, Advice.DRAIN}
+    }
+
+
+def runs_without_the_line(_label: Label) -> set[World]:
+    """The states with a feature run or a drain that starts while the line is missing."""
+    return {
+        source
+        for source, act, _target in model.graph().edges
+        if source.flag is Flag.MISSING and act in model.RUNS
+    }
+
+
+def missing_by_another(_label: Label) -> set[World]:
+    """The states with a step other than the upgrade that leaves the line missing."""
+    return {
+        source
+        for source, act, target in model.graph().edges
+        if source.flag is not Flag.MISSING
+        and target.flag is Flag.MISSING
+        and act is not ActionName.UPGRADE_ASKS_THE_FLAG_LINE
+    }
+
+
+def upgrade_moves_a_ticket(_label: Label) -> set[World]:
+    """The states where the upgrade that asks the line moves a ticket or the inheritance."""
+    return {
+        source
+        for source, act, target in model.graph().edges
+        if act is ActionName.UPGRADE_ASKS_THE_FLAG_LINE
+        and (source.tickets, source.inherits) != (target.tickets, target.inherits)
+    }
+
+
 CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "AdviceCanBeFollowed": (cannot_be_followed, model.advice),
     "AdviceReachesRest": (never_rests, model.advice),
@@ -185,6 +243,13 @@ CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
         changed_by_another(ActionName.OWNER_RECORDS_ARCHITECTURE, enters=False),
         model.advice,
     ),
+    "FlagLineBeforeTheBuild": (builds_without_the_line, model.advice),
+    "RealFlagLineBeforeTheBuild": (builds_without_the_line, model.real_advice),
+    "NoRunStartsWithoutTheFlagLine": (runs_without_the_line, model.advice),
+    "OnlyTheUpgradeLeavesTheFlagLineMissing": (missing_by_another, model.advice),
+    "TheUpgradeMovesNoTicket": (upgrade_moves_a_ticket, model.advice),
+    "UnprovedAdoptionNeverBuilds": (builds_unproved, model.advice),
+    "RealUnprovedAdoptionNeverBuilds": (builds_unproved, model.real_advice),
 }
 
 
@@ -194,15 +259,23 @@ def test_every_rule_the_export_names_is_checked_here() -> None:
 
 @pytest.mark.parametrize("name", list(CHECKS))
 def test_a_rule_breaks_only_where_a_divergence_says_it_does(name: str) -> None:
-    """On ``advice`` every rule holds; on ``real_advice`` it fails exactly where an entry says."""
+    """On ``advice`` every rule holds; on ``real_advice`` it fails only where an entry says.
+
+    Each entry that names the rule breaks it in some state of its own. Why not in each: an
+    adoption stopped after its pin is read as finished everywhere, and the route names a build
+    in only some of those states.
+    """
     check, label = CHECKS[name]
-    explained = {
-        state
-        for state in model.graph().states
-        if (entry := model.divergence(state)) and name in entry.breaks
-    }
-    assert check(label) == explained
-    assert label is model.real_advice or not explained
+    broken = check(label)
+    where: dict[str, set[World]] = defaultdict(set)
+    for state in model.graph().states:
+        if (entry := model.divergence(state)) and name in entry.breaks:
+            where[entry.name].add(state)
+    assert broken <= set().union(*where.values())
+    assert all(broken & states for states in where.values()), sorted(where)
+    named = {entry.name for entry in model.DIVERGENCES if name in entry.breaks}
+    assert set(where) == named
+    assert label is model.real_advice or not broken
 
 
 def test_the_architecture_rules_are_met_where_they_bite() -> None:
@@ -717,22 +790,32 @@ DONE = World(
 )
 
 
+FILLED_BY_THE_UPGRADE = frozenset({"dependencies", "installs", "pins", "signs", "suppressions"})
+
+
+def owes(repo: real.Repo, rules: frozenset[str]) -> list[owed.Entry]:
+    """The ledger's entries of ``rules``."""
+    return [entry for entry in owed.read(repo.root).entries if entry.rule in rules]
+
+
 def test_an_adoption_records_the_architecture_so_an_upgrade_owes_none(tmp_path: Path) -> None:
-    """The architecture check finds nothing after an adoption, and the upgrade's code owes none."""
+    """The architecture check finds nothing after an adoption, and the real upgrade owes none."""
     world = replace(DONE, architecture=Architecture.RECORDED)
     repo = built(tmp_path, world)
     assert architecture_found(repo) == []
     world = upgraded(repo, world)
     assert world.architecture is Architecture.RECORDED
-    assert [entry.rule for entry in owed.read(repo.root).entries] == ["pins"]
+    assert owes(repo, frozenset({route.ARCHITECTURE_RULE})) == []
+    assert {entry.rule for entry in owed.fill_first(repo.root)} == FILLED_BY_THE_UPGRADE
     _, labels = follow(repo, world, 0)
     assert labels == [Advice.FILL]
+    assert owed.fill_first(repo.root) == []
 
 
 def test_an_older_adoption_owes_the_architecture_after_an_upgrade_until_it_is_recorded(
     tmp_path: Path,
 ) -> None:
-    """The upgrade owes what the architecture check finds, named after the fill until it merges."""
+    """The real upgrade owes what the architecture check finds, named after the fill till merged."""
     world = replace(DONE, architecture=Architecture.UNASKED)
     repo = built(tmp_path, world)
     assert ActionName.OLDER_PLUGIN_ADOPTS in [step.action for step in path_to(world)]
@@ -747,7 +830,36 @@ def test_an_older_adoption_owes_the_architecture_after_an_upgrade_until_it_is_re
     assert labels == [Advice.FILL, Advice.ARCHITECTURE, Advice.MERGE]
     assert model.rest(world)
     assert architecture_found(repo) == []
-    assert owed.read(repo.root).entries == ()
+    assert owes(repo, FILLED_BY_THE_UPGRADE | {route.ARCHITECTURE_RULE}) == []
+
+
+def test_the_real_upgrade_owes_more_than_the_model_and_leaves_a_faithful_adoption_green(
+    tmp_path: Path,
+) -> None:
+    """What the real upgrade leaves on the world's older adoption beyond the model's two debts.
+
+    Why it is pinned: the model's upgrade leaves rows to fill and the architecture. The real one
+    also owes every other finding red at the merge base, which the route never names. The world's
+    adoption writes the quality files the templates hold, so nothing is left red.
+    """
+    world = replace(DONE, architecture=Architecture.UNASKED)
+    repo = built(tmp_path, world)
+    upgraded(repo, world)
+    beyond = {e.rule for e in owed.read(repo.root).entries} - FILLED_BY_THE_UPGRADE
+    assert beyond - {route.ARCHITECTURE_RULE} == {
+        "adrs",
+        "binding",
+        "brief",
+        "commit_hooks",
+        "doors",
+        "glossary",
+        "manifest",
+        "operability",
+        "quality",
+        "speed",
+    }
+    red, _ = conformance.owed_split(repo.root, conformance.findings(repo.root))
+    assert [str(finding) for finding in red] == []
 
 
 def test_a_review_and_a_safeguard_owed_beside_the_architecture_come_before_it(
@@ -777,7 +889,7 @@ def test_a_review_and_a_safeguard_owed_beside_the_architecture_come_before_it(
 
 ADOPTED = World(setup=Setup.BOUND, hooks=True, architecture=Architecture.RECORDED)
 BRANCHES = {
-    "the adoption's branch": (replace(ADOPTED, head=Head.WORK), ()),
+    "the adoption's branch": (replace(ADOPTED, setup=Setup.PINNED, head=Head.WORK), ()),
     "a working branch": (
         replace(ADOPTED, foundation=True),
         (ActionName.SOMEONE_EDITS_CODE, ActionName.AGENT_COMMITS_ON_A_BRANCH),
@@ -812,7 +924,9 @@ def test_after_the_real_merge_the_route_never_names_that_merge_again(
     leaves the checkout on the branch it merged. The adoption's branch is judged by its own gates,
     a working branch by its verdict record. The merge keeps the branch: checked out again, the
     route names the switch, the merge run there changes nothing, as the model's merge does, and
-    the switch the route names goes back.
+    the switch the route names goes back. The adoption's branch exists only before its proof,
+    where the model takes no step but the resume and the route's own, so its switch back is read
+    off the rules alone.
     """
     world, steps = BRANCHES[case]
     repo = real.Repo.merging(tmp_path)
@@ -842,7 +956,7 @@ def test_after_the_real_merge_the_route_never_names_that_merge_again(
     assert git(repo.root, "branch", "--list", branch), "the merge keeps the branch"
     git(repo.root, "switch", "-q", branch)
     again = replace(merged, head=Head.MERGED)
-    assert again in model.graph().states
+    assert again in model.graph().states or again.setup is Setup.PINNED
     path.append(f"switch to {branch}")
     ask(repo, again, path)
     was = unchanged(repo)
@@ -1066,3 +1180,74 @@ class RouteMachine(RuleBasedStateMachine):
 
 def test_the_route_names_what_the_model_says_on_long_runs_of_a_real_repository() -> None:
     run_state_machine_as_test(RouteMachine, settings=STEPS)
+
+
+EXPIRED_SWITCH = "old-checkout"
+EXPIRED = (
+    f'[[flag]]\nkey = "{EXPIRED_SWITCH}"\nowner = "the owner"\ndefault = false\n'
+    'remove-by = 2000-01-01\nreason = "Hidden until the owner switches it on."\n'
+)
+ROUTE = Path(route.__file__)
+
+
+def routed(repo: real.Repo) -> dict[str, object]:
+    """What ``route.py --offline --json`` prints for ``repo``: the step and its ``also:`` lines."""
+    ran = subprocess.run(  # noqa: S603 # -- the plugin's own route, no shell
+        [sys.executable, str(ROUTE), "--root", str(repo.root), "--offline", "--json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(ran.stdout)
+
+
+def with_an_expired_switch(repo: real.Repo, root: Path) -> real.Repo:
+    """A copy of ``repo`` whose default branch declares a switch past its removal date."""
+    copy = repo.copy(root)
+    (copy.root / "flags.toml").write_text(EXPIRED, encoding="utf-8")
+    snapshot(copy.root, "feat: a switch past its removal date")
+    return copy
+
+
+def test_a_switch_past_its_removal_date_outranks_no_step(tmp_path: Path) -> None:
+    """With no forge and no safeguard bound, an expired switch changes no step the route names.
+
+    Why no state of the model holds it: an ``also:`` line comes after ``next:``, ``why:`` and
+    ``then:``, and the label is the ``next:`` line alone. So at every stop of a walk from an empty
+    directory through a whole feature where the default branch is checked out clean, the route
+    with the switch names what it names without it.
+    """
+    repo, world, asked = real.Repo.start(tmp_path), World(), 0
+    for _ in range(2):
+        while True:
+            if model.settled(world):
+                asked += 1
+                expired = with_an_expired_switch(repo, tmp_path / f"expired-{asked}")
+                without, beside = routed(repo), routed(expired)
+                assert {k: v for k, v in beside.items() if k != "also"} == {
+                    k: v for k, v in without.items() if k != "also"
+                }
+                shutil.rmtree(expired.root)
+            name = model.ADVISED[model.advice(world)]
+            after = next(model.ACTIONS[name].successors(world))
+            real.apply(repo, name, real.Change(world, after))
+            world = after
+            if model.rest(world):
+                break
+    assert asked > 1
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="route.py names no switch past its removal date: flip this pin with that change",
+)
+def test_the_route_names_each_switch_past_its_removal_date(tmp_path: Path) -> None:
+    """ADR 0061: the route lists what ``flags.py --expired`` lists, as an ``also:`` line.
+
+    The shortest run: from an empty directory to the first state the model calls adopted, with
+    no forge and no safeguard bound, then a commit on the default branch that declares a switch
+    past its removal date.
+    """
+    repo = built(tmp_path / "start", ADOPTED)
+    also = routed(with_an_expired_switch(repo, tmp_path / "expired"))["also"]
+    assert any(EXPIRED_SWITCH in line for line in also), also

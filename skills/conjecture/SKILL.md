@@ -16,10 +16,9 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - Run `gh issue view <n> --json number,title,body,comments` in one Bash call, or read the file.
    - Read its parent spec too: the one a `Parent:` line or a `## Parent` section names, or, for a local ticket under `<feature>/issues/`, the `<feature>/spec.md` beside that directory, which the preflight reads as its parent.
    - **The ticket, or its parent, states a conjecture:** check that it is current. Run the digest command of [The criteria digest](#the-criteria-digest) on the body that holds the conjecture, with the heading its `- Criteria:` line names.
-     - **The command prints another digest than the line names:** the criteria changed after the conjecture was written. Redraft it: run steps 2 to 5, each as its *redraft* case says. The cases below do not apply.
-     - **It prints the same digest, or the conjecture has no `- Criteria:` line:** the conjecture is current, and the cases below decide.
-   - **The ticket, or its parent, already states a conjecture and its operability, and the ticket itself has a `## Size` block:** there is nothing to write. Say so and stop. When the argument is a spec that has not been split, the conjecture and its operability are enough: a spec gets no `## Size`.
-   - **The ticket, or its parent, states a conjecture and its operability, and the ticket has no `## Size` block of its own:** estimate the size by the `## Size` block of step 2 and write only `## Size` by step 4. Skip the rest of step 2, and step 3. When the estimate passes a ceiling, that block's ceiling case holds.
+     - **The command prints another digest than the line names:** the criteria changed after the conjecture was written. Redraft it: run steps 2 to 5, each as its *redraft* case says. The case below does not apply.
+     - **It prints the same digest, or the conjecture has no `- Criteria:` line:** the conjecture is current, and the case below decides.
+   - **The ticket, or its parent, already states a current conjecture and its operability:** there is nothing to write. Say so and stop.
 
    Done when you hold the ticket, and its parent spec when it has one; when a conjecture is stated, you know from the digest whether it is current or is to be redrafted; and, when there is nothing to write, you have said so and stopped.
 
@@ -69,7 +68,7 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - **A spec that has not been split:** write no `## Size`. Make the estimate all the same, for the ceiling case below.
    - The ceilings are `product_lines` and `product_files` of `[ceilings.change]` in `quality/thresholds.toml`. The feature preflight refuses a ticket whose stated size passes either.
    - Be honest and not hopeful: the spec stage estimates the whole change again and stops it when it is larger.
-   - **The estimate passes a ceiling:** the ticket is not written as one. Say so in the reply, with the parts it divides into, each a vertical slice a person could use and each under the ceilings. `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so name in the reply the argument that asks it for slices under both ceilings, with both numbers in it. Then stop: write nothing to that ticket, and do not run steps 3 to 5 for it.
+   - **The estimate passes a ceiling:** the ticket is not written as one. Say so in the reply, with the parts it divides into, each a vertical slice a person could use and each under the ceilings. `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so name in the reply the argument that asks it for slices under both ceilings, with both numbers in it.
 
    **The `## Operability` block.** Write one line per concern the binding's application types are asked; the preflight of step 5 names any it still wants. Take each line from the ticket and the binding's Feature flags, Telemetry and Limits sections, or write `none` and why.
    - `- Flag:` the flag the behaviour ships behind.
@@ -100,7 +99,7 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
 
    Done when every fork the owner was asked has its line under `## Answers` and a **built** row, every other fork's row is `(not asked)` and **assumed**, and no row says `(left open)`.
 
-4. **Write it.** Append `## Conjecture`, `## Size` and `## Operability` with the agreed text to the ticket body, or only `## Size` when step 1 found the other two.
+4. **Write it.** Append `## Conjecture`, `## Size` and `## Operability` with the agreed text to the ticket body.
    - End the `## Conjecture` you write with its `- Criteria:` line, by [The criteria digest](#the-criteria-digest), run on the body as you will write it.
    - **A redraft:** replace each section this run drafted, where it stands, instead of appending it. `## Answers` keeps every earlier line. It lands as below, as the first write did.
    - **The ticket's siblings share a parent spec:** write the conjecture and the operability on the spec, and say that its tickets inherit them. `## Size` goes on the ticket.
@@ -117,19 +116,17 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    Done when each section you appended or replaced is where this step puts it, `## Conjecture` ending with its `- Criteria:` line when the body has a criteria heading, in the issue body or in the file, merged, waiting on the owner's merge, or in an open pull request. When they are on the spec, you have said that its tickets inherit them. When the merge is the owner's, you have relayed why, or, with a forge, you have gone on to step 5 without waiting for the merge job.
 
 5. **Hand over.**
-   - **This run drafted a conjecture:**
-     - Print the conjecture with *What you asked for* whole. It is where the owner sees what each thing they said became.
-     - Its **assumed** rows are the reply's **Assumed** block, each with what changing it later costs.
-     - Say how many questions the owner answered.
    - **This run redrafted a conjecture** (step 1): before the conjecture, say that the criteria changed since it was written, and print what changed in it. Give each part, table row, size line and operability line that the redraft changed, dropped or added, the old words under *Was* and the new under *Now*.
-   - **Only `## Size` was written** (step 1): say what was written. Print no conjecture: this run drafted none.
+   - Print the conjecture with *What you asked for* whole. It is where the owner sees what each thing they said became.
+   - Its **assumed** rows are the reply's **Assumed** block, each with what changing it later costs.
+   - Say how many questions the owner answered.
    - **The merge job will leave the pull request to the owner** (step 4, a forge): say that it will, with a comment on the pull request saying why.
    - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" <ticket> --root .` in one Bash call and report its verdict.
    - **Red on the label:** say that the ticket needs the agent-ready label and that applying it is the owner's keystroke.
    - **Green:** the last line is the next command, `/ratchet:feature <ticket>` (or `/pstack:poteto-mode <ticket>` when the owner stays).
    - **The owner counters the conjecture:** an alternative they name goes in with its criticism. An approach they change replaces the draft's. Write the changed conjecture again as step 4 says, and print it again.
 
-   Done when the reply holds the conjecture with its whole *What you asked for* table, its **Assumed** block and the count of answered questions, after a redraft preceded by each change under *Was* and *Now*, or, when only `## Size` was written, what was written and no conjecture; and the preflight's verdict, with, when the verdict is red on the label, that applying the label is the owner's keystroke, and, when it is green, the next command last. When the merge job will leave the pull request to the owner, the reply says so. When the owner counters it, the conjecture holds the alternative they named with its criticism, or the approach they changed, written again as step 4 says and printed again.
+   Done when the reply holds the conjecture with its whole *What you asked for* table, its **Assumed** block and the count of answered questions, after a redraft preceded by each change under *Was* and *Now*; and the preflight's verdict, with, when the verdict is red on the label, that applying the label is the owner's keystroke, and, when it is green, the next command last. When the merge job will leave the pull request to the owner, the reply says so. When the owner counters it, the conjecture holds the alternative they named with its criticism, or the approach they changed, written again as step 4 says and printed again.
 
 ## The criteria digest
 

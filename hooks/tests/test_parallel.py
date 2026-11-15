@@ -18,6 +18,7 @@ import pytest
 import budget
 import gatelib
 import parallel
+from tests.repos import git
 from tests.servers import gone
 
 PYTHON = shlex.quote(sys.executable)
@@ -133,12 +134,75 @@ def test_ratchet_jobs_caps_how_many_run_at_once_when_no_jobs_is_given(
 
 @pytest.mark.parametrize("value", ["", "many", "0", "-2"])
 def test_a_ratchet_jobs_that_is_no_count_leaves_every_core(
-    monkeypatch: pytest.MonkeyPatch, value: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
     monkeypatch.setenv("RATCHET_JOBS", value)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    monkeypatch.chdir(tmp_path)
     assert gatelib.default_jobs() == (os.cpu_count() or 1)
     monkeypatch.setattr(os, "cpu_count", lambda: None)
     assert gatelib.default_jobs() == 1
+
+
+def configured_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    if value is not None:
+        git(repo, "config", "ratchet.jobs", value)
+    monkeypatch.delenv("RATCHET_JOBS", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    monkeypatch.chdir(repo)
+    return repo
+
+
+def test_the_git_config_caps_the_gates_when_the_environment_says_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = configured_repo(tmp_path, monkeypatch, "3")
+    assert gatelib.default_jobs() == 3
+    assert gatelib.default_jobs(repo) == 3
+
+
+def test_the_environment_wins_over_the_git_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured_repo(tmp_path, monkeypatch, "3")
+    monkeypatch.setenv("RATCHET_JOBS", "2")
+    assert gatelib.default_jobs() == 2
+
+
+@pytest.mark.parametrize("value", ["many", "0", "-2", ""])
+def test_a_git_config_that_is_no_count_leaves_every_core(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    configured_repo(tmp_path, monkeypatch, value)
+    assert gatelib.default_jobs() == (os.cpu_count() or 1)
+
+
+def test_an_unset_git_config_leaves_every_core(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured_repo(tmp_path, monkeypatch, None)
+    assert gatelib.default_jobs() == (os.cpu_count() or 1)
+
+
+def test_outside_a_repository_every_core_is_left_and_nothing_is_printed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("RATCHET_JOBS", raising=False)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    assert gatelib.default_jobs() == (os.cpu_count() or 1)
+    assert capfd.readouterr() == ("", "")
+
+
+def test_a_missing_git_leaves_every_core(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RATCHET_JOBS", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert gatelib.default_jobs(tmp_path) == (os.cpu_count() or 1)
 
 
 def test_jobs_caps_how_many_run_at_once(tmp_path: Path) -> None:
@@ -178,7 +242,9 @@ def test_outputs_are_never_interleaved(capsys: pytest.CaptureFixture[str]) -> No
 
 
 def test_the_closing_lines_name_the_slowest_gate(capsys: pytest.CaptureFixture[str]) -> None:
-    options = argparse.Namespace(root=Path(), jobs=1, fail_fast=False, report=None, alone=[])
+    options = argparse.Namespace(
+        root=Path(), jobs=1, fail_fast=False, report=None, alone=[], wide=[]
+    )
     scheduler = parallel.Scheduler([], [], options)
     scheduler.finished = [
         parallel.Finished("fast", 0.2, 0, ""),
@@ -429,6 +495,32 @@ def test_a_gate_measured_alone_runs_after_the_others_with_nothing_beside_it(
         "+also",
         "-also",
     ]
+
+
+JOBS = "import os, sys; print(sys.argv[1], os.environ.get('RATCHET_JOBS', 'unset'))"
+
+
+def test_wide_gates_split_the_jobs_and_every_other_gate_keeps_its_environment(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RATCHET_JOBS", raising=False)
+    suite, floor, first, then = (gate(JOBS, name) for name in ("suite", "floor", "first", "then"))
+    plain, timed = gate(JOBS, "plain"), gate(JOBS, "timed")
+    wide = ["--wide", suite, floor, first, then, timed, "not-in-this-tier"]
+    serial = ["--serial", first, then]
+    arguments = ["--jobs", "7", *wide, *serial, "--alone", timed]
+    assert run(*arguments, "--", suite, floor, first, then, plain, timed) == 0
+    out = capsys.readouterr().out
+    for said in ("suite 2", "floor 2", "first 2", "then 2", "plain unset", "timed 7"):
+        assert f"\n{said}\n" in out
+
+
+def test_a_wide_gate_gets_at_least_one_job(capsys: pytest.CaptureFixture[str]) -> None:
+    a, b = gate(JOBS, "a"), gate(JOBS, "b")
+    assert run("--jobs", "1", "--wide", a, b, "--", a, b) == 0
+    out = capsys.readouterr().out
+    assert "\na 1\n" in out
+    assert "\nb 1\n" in out
 
 
 def test_fail_fast_names_a_gate_measured_alone_that_never_started(

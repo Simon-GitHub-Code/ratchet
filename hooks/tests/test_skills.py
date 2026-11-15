@@ -130,10 +130,13 @@ def test_a_red_preflight_on_the_branch_stops_the_build() -> None:
 def test_the_drain_reads_a_refusal_with_exit_2_as_no_conflict() -> None:
     # Why: the page read every exit 2 of `update` as a rebase that conflicted. `drain.py` also
     # exits 2 when it refuses before any work on the ticket, with a `drain:` or `merge:` line, and
-    # a rejudge over that would judge a branch nothing moved. The page now sends only a non-empty
-    # `conflicts` to the rejudge, and leaves the ticket for every refusal.
+    # a rejudge over that would judge a branch nothing moved. One exit 2 can carry both a
+    # `merge:` recovery line and the rebase's JSON, so the JSON decides, and a line alone is a
+    # refusal that leaves the ticket.
+    assert "When it prints JSON, the JSON decides" in FEATURE
     assert (
-        "**Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line:** the"
+        "**Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line and no JSON:**"
+        " the"
         " command refused before any work on the ticket. Report the line, leave the ticket as it"
         " is, and go on at step 5 (`D plan`)." in FEATURE
     )
@@ -156,10 +159,14 @@ def test_a_split_plan_is_checked_before_drain_split_runs_it() -> None:
     # checks the plan with `split.py check`, which files nothing, and runs `split` only on a pass.
     too_large = FEATURE.split("## Too large: the agent splits it", 1)[1].split(" ## ", 1)[0]
     checked = (
-        'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file>'
-        " --root .`. It judges the plan as `split` will and files nothing.",
-        'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file>'
-        " --root .`, only with a plan the check passed.",
+        (
+            'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file>'
+            " --root .`. It judges the plan as `split` will and files nothing."
+        ),
+        (
+            'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file>'
+            " --root .`, only with a plan the check passed."
+        ),
     )
     assert all(sentence in too_large for sentence in checked)
 
@@ -296,7 +303,8 @@ def test_fill_names_where_the_template_is_and_how_its_change_lands() -> None:
     # Why: "hand it to the merge" named no action. The page now says how a change lands, in the
     # safeguard skill's words.
     assert (
-        "With no forge, write the change description at `.scratch/changes/<branch>.md` and run"
+        "With no forge, write the change description at `.scratch/changes/<branch>.md` (the"
+        " branch's `/` written as `-`) and run"
         " `just merge <branch>`." in fill
     )
 
@@ -500,24 +508,6 @@ def test_the_conjecture_steps_say_how_each_fork_is_written() -> None:
 def conjecture_step(number: int) -> str:
     page = flat("conjecture/SKILL.md")
     return page.split(f" {number}. **", 1)[1].split(f" {number + 1}. **", 1)[0]
-
-
-def test_the_conjecture_writes_nothing_to_a_ticket_too_large_for_one_change() -> None:
-    # Why: a ticket over a change-size ceiling "is not written as one" left open whether its
-    # conjecture was still asked and written. The reply now names the parts and the `to-tickets`
-    # argument, and the skill stops there.
-    step_2 = conjecture_step(2)
-    assert "Then stop: write nothing to that ticket, and do not run steps 3 to 5 for it." in step_2
-
-
-def test_the_conjecture_adds_a_missing_size_to_a_ticket_that_states_the_rest() -> None:
-    # Why: the skill stopped once a conjecture and its operability were there, so a ticket written
-    # before it estimated size kept no `## Size`. It now stops only when all three are there.
-    step_1 = conjecture_step(1)
-    assert (
-        "estimate the size by the `## Size` block of step 2 and write only `## Size` by step 4"
-        in step_1
-    )
 
 
 def test_the_size_estimate_is_written_on_the_ticket_and_never_on_a_spec() -> None:
