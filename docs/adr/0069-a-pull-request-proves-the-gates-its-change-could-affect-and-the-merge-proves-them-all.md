@@ -25,11 +25,11 @@ The proof prints, for each gate in its set, why it is there: `lint: bite x chang
 
 **This record stays proposed until the measurement.** The last two kinds of path fall back to every gate, and the adopted project's two red merges touched scripts. If the measurement shows that most changes still fall back, the targeted proof buys little there. The exact route would then be an optional line on each gate row naming the paths its gate reads, with a missing line counted as every gate. That is a new binding field and the owner's question, so it is asked then, not decided here. What tier 1 does when it falls back is open item 3, below.
 
-**The full proof is tier 2's, with a ceiling of its own.** `bite-all` proves every gate, on the default branch and nightly, as tier 2 runs today. It is held to its own key under `[ceilings.seconds]`, never to the tier 1 ceiling. Adopt and the upgrade set that key from the first measured run with headroom (`budget --set`). A red `bite-all` is a red tier 2, with what that stops (below).
+**The full proof is tier 2's, with a ceiling of its own.** `bite-all` proves every gate, on the default branch and nightly, as tier 2 runs today. It is held to its own key under `[ceilings.seconds]`, never to the tier 1 ceiling. Adopt sets that key from the first measured run with headroom (`budget --set`). In a project adopted before this record, the upgrade writes the missing key to the owed list (ADR 0037), and the first measured run sets it. A red `bite-all` is a red tier 2, with what that stops (below).
 
 **A green run says how close it came.** The `budget` gate prints, on a green run, its wall clock as a share of its ceiling. At 75 percent or more it raises a warning on the run's page as it does for a red on a pull request, so the owner sees a tier drifting toward its ceiling before runner variance turns it red.
 
-**Each verdict says how long it took and why it went red.** The proof prints each fault's wall time and lane on its verdict line, so every run measures itself. A verdict caused by the gate's time limit is `TIMED OUT`, in its own words, and never `NOT PROVEN`, `DOES NOT BITE` or `RED BEFORE THE FAULT`. `TIMED OUT` is red, never a pass.
+**Each verdict says how long it took and why it went red.** The proof prints each fault's wall time and lane on its verdict line, so every run measures itself. A verdict caused by the gate's time limit is `TIMED OUT`, in its own words, and never `NOT PROVEN`, `DOES NOT BITE` or `RED BEFORE THE FAULT`. `TIMED OUT` is red, never a pass. One run of a gate is limited to the gate's own `[ceilings.seconds]` key where it has one, and else to its tier's key, since one run never needs longer than the gate is allowed in CI. With neither key set, the limit is 900 seconds, the tier 1 budget of the tier table. `--limit` overrides it for one proof.
 
 ## Refutation criterion
 
@@ -51,7 +51,7 @@ This is wrong if any of these is seen:
 
 - `scripts/project_bite.py`: `--changed` reads the change's paths and proves the gates the per-path rule names, or every tier 0 and tier 1 gate where it cannot tell, and prints why each gate is in its set. Each verdict line gains the fault's wall time and lane. A gate stopped by its time limit is `TIMED OUT`.
 - `scripts/budget.py`: a green run prints its share of the ceiling and warns at 75 percent or more.
-- `skills/adopt/templates/quality/thresholds.toml` and the upgrade: a `[ceilings.seconds]` key for `bite-all`.
+- `skills/adopt/templates/quality/thresholds.toml`: a `[ceilings.seconds]` key for `bite-all`. The upgrade owes it where it is missing.
 - `skills/method/tiers.md`, the bite section: tier 1 proves what the change could affect; `bite-all` has a ceiling of its own; the `TIMED OUT` verdict.
 - ADR 0020, point 6: a pointer to this record.
 
