@@ -29,18 +29,17 @@ from tests.drain_world import (
     LANDING_WAIT,
     PUBLISHED,
     REF,
+    TEXTS,
     LeaseWorld,
     World,
     digest,
     lock_held,
     running,
 )
-from tests.repos import git, snapshot, write
+from tests.repos import git
 from tests.support import PLUGIN_ROOT
 from tests.test_drain import (
-    FILES,
     HALVES,
-    WHOLE,
     plan_file,
     scratch,  # noqa: F401 # -- an autouse fixture of the drain's tests
 )
@@ -60,6 +59,8 @@ if TYPE_CHECKING:
     REFUSED,
     REFUSED_UNOPENED,
     RELEASED_BY_THE_LINE,
+    PARTS_FIRST,
+    PARTS_AWAITED,
     RECOVERS,
     NO_TREE,
     UNPUBLISHED,
@@ -94,6 +95,18 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     REFUSED: None,
     REFUSED_UNOPENED: None,
     RELEASED_BY_THE_LINE: None,
+    # Why: `drain.pending` reads a blocker's open or closed state alone, never the note that says
+    # it was split into parts, so a split blocker the owner closes no longer holds its dependent
+    # back while the parts are unbuilt.
+    PARTS_FIRST: [
+        "drain.py open a",
+        "drain.py split a",
+        "the owner closes ticket a",
+        "drain.py open b",
+    ],
+    # Why: the same. A split blocker stays open and held, so `drain.settled` refuses its
+    # dependent as waiting on a ticket the drain cannot merge, while the parts are built and after.
+    PARTS_AWAITED: ["drain.py open a", "drain.py split a"],
     RECOVERS: None,
     # Why: the docstring accepts it: "A work tree whose uncommitted work git cannot stash (a stale
     # lock, a merge left unfinished, a damaged index) is not removed".
@@ -271,6 +284,8 @@ WEIGHTED = [
     Kind.REPORT,
     Kind.LOCK,
     Kind.UNLOCK,
+    Kind.SPLIT,
+    Kind.RESOLVE,
 ]
 
 
@@ -470,6 +485,49 @@ def test_the_upgrade_refuses_a_ticket_with_no_flag_line_and_its_line_releases_th
     assert play.world.code == 0
 
 
+def built_and_landed(name: Name) -> list[str]:
+    return [
+        f"drain.py open {name.value}",
+        f"the agent commits {name.value}",
+        f"the agent commits the verdict record of {name.value}",
+        f"drain.py land {name.value}",
+    ]
+
+
+def test_a_ticket_waiting_on_a_split_ticket_the_owner_closed_starts_before_its_parts(
+    tmp_path: Path,
+) -> None:
+    path = COUNTEREXAMPLES[PARTS_FIRST] or []
+    assert broken_by(path) == {PARTS_FIRST}
+    play = replay(tmp_path, path[:-1])
+    drafted = plan_of(play)
+    beta = drafted[BRANCH[Name.B]]
+    assert (beta.state, beta.waits_on) == ("buildable", ()), "a closed blocker is met"
+    parts = [drafted[BRANCH[part]].state for part in model.PARTS[Name.A]]
+    assert parts == ["buildable", "waiting"], "no part of it is built"
+    assert play.named(path[-1]).startswith("{"), "the drain opens b"
+    assert play.world.code == 0
+    assert play.world.tree(Name.B).is_dir()
+
+
+def test_a_ticket_waiting_on_a_split_ticket_is_refused_and_stays_refused_once_its_parts_land(
+    tmp_path: Path,
+) -> None:
+    path = COUNTEREXAMPLES[PARTS_AWAITED] or []
+    assert broken_by(path) == {PARTS_AWAITED}
+    landed = [*path, PARK_C, *built_and_landed(Name.D), *built_and_landed(Name.E)]
+    assert broken_by(landed) == {PARTS_AWAITED}
+    play = replay(tmp_path, landed)
+    assert all(play.state.of(part).merged for part in model.PARTS[Name.A]), "both parts landed"
+    parts = ", ".join(REF[part] for part in model.PARTS[Name.A])
+    why = (
+        f"blocked: waits on {REF[Name.A]}, which this drain cannot merge (held):"
+        f" too large; split into {parts}"
+    )
+    beta = plan_of(play)[BRANCH[Name.B]]
+    assert (beta.state, beta.why) == ("refused", (why,)), "b waits on the split a, still held"
+
+
 def test_open_keeps_a_close_the_report_has_not_printed(tmp_path: Path) -> None:
     play = replay(tmp_path, [PARK_A, EDIT_A, "drain.py open a"])
     note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
@@ -607,7 +665,7 @@ def test_a_close_after_a_cut_off_fast_forward_puts_it_back_first_and_holds_the_t
         "merge: a run that stopped was moving `main`; its work tree is put back\n"
         f"closed: {REF[Name.A]}: parked\n"
     ), "the work tree is put back before the close reads the ticket"
-    assert note_of(play)["digest"] == digest(FILES[REF[Name.A]]), "the hold is on the owner's text"
+    assert note_of(play)["digest"] == digest(TEXTS[REF[Name.A]]), "the hold is on the owner's text"
     held = f"land: {REF[Name.A]} is held and is not landed: "
     for name in path[-2:]:
         assert held in play.named(name), name
@@ -1108,8 +1166,6 @@ def test_a_split_while_the_merge_runs_is_refused_and_files_no_part(
     two_drains: LeasePlay, tmp_path: Path
 ) -> None:
     world = two_drains.world.world
-    write(world.root, REF[Name.A], WHOLE[REF[Name.A]])
-    snapshot(world.root, "docs(tracker): the ticket's promises")
     plan = plan_file(tmp_path, HALVES)
     issues = (world.root / REF[Name.A]).parent
     filed = sorted(path.name for path in issues.iterdir())
@@ -1342,8 +1398,6 @@ def test_a_close_update_or_split_while_a_killed_lands_merge_runs_is_refused_and_
     two_drains: LeasePlay, tmp_path: Path
 ) -> None:
     world = two_drains.world.world
-    write(world.root, REF[Name.A], WHOLE[REF[Name.A]])
-    snapshot(world.root, "docs(tracker): the ticket's promises")
     plan = plan_file(tmp_path, HALVES)
     issues = (world.root / REF[Name.A]).parent
     filed = sorted(path.name for path in issues.iterdir())
