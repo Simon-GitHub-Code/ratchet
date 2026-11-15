@@ -873,6 +873,13 @@ def test_every_question_of_the_catalogue_has_a_row_in_the_template_binding() -> 
 
 
 WEEKLY = ".github/workflows/weekly.yml"
+TEMPLATE_WORKFLOWS = sorted((SKILLS / "adopt/templates/.github/workflows").glob("*.yml"))
+SHAPES = {
+    "merge.yml": conformance.MERGE_SHAPE,
+    "weekly.yml": conformance.WEEKLY_SHAPE,
+    "ci.yml": conformance.CI_SHAPE + conformance.TIER_STEP_SHAPE,
+    "deep.yml": conformance.CI_SHAPE + conformance.TIER_STEP_SHAPE,
+}
 
 
 def test_a_workflow_with_the_toolchain_placeholder_in_front_of_the_template_s_step_is_red(
@@ -956,3 +963,60 @@ def test_a_default_branch_found_only_through_the_reflog_is_red(repo: Path) -> No
     assert "found only through the main work tree's history of branch switches" in lines[0]
     git(repo, "branch", "-m", "trunk", "main")
     assert red(repo) == []
+
+
+@pytest.mark.parametrize("path", TEMPLATE_WORKFLOWS, ids=lambda path: path.name)
+def test_every_marker_of_a_workflow_shape_is_in_its_own_template(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    absent = [m for m in conformance.workflow_markers(path.name) if m not in text]
+    assert absent == [], f"{path.name} lacks its own shape's markers"
+    for marker, _ in SHAPES[path.name]:
+        assert marker in text
+
+
+@pytest.mark.parametrize("path", TEMPLATE_WORKFLOWS, ids=lambda path: path.name)
+def test_every_permission_and_run_step_of_a_template_is_named_by_a_marker_of_its_shape(
+    path: Path,
+) -> None:
+    unmarked = conformance.unmarked_template_lines(path.name, path.read_text(encoding="utf-8"))
+    assert unmarked == [], "\n".join(
+        f"{path.name}:{number}: {line}: add a marker with its meaning to the shape beside"
+        " MERGE_SHAPE, or declare it in EXEMPT_STEPS with a reason"
+        for number, line in unmarked
+    )
+
+
+def test_every_exemption_is_still_in_a_template_and_gives_its_reason() -> None:
+    texts = [path.read_text(encoding="utf-8") for path in TEMPLATE_WORKFLOWS]
+    for held, reason in conformance.EXEMPT_STEPS:
+        assert any(held in text for text in texts), held
+        assert len(reason.split()) > 3
+
+
+def test_a_step_or_permission_no_marker_names_is_listed_with_its_line() -> None:
+    text = (
+        "permissions:\n"
+        "  # a comment is no entry\n"
+        "  contents: read\n"
+        "\n"
+        "  issues: write\n"
+        "  models: read\n"
+        "jobs:\n"
+        "  merge:\n"
+        "    permissions: read-all\n"
+        "    steps:\n"
+        "      - run: python3 merge_ready.py\n"
+        "      - run: echo nothing\n"
+        "      - name: a block\n"
+        "        run: |\n"
+        "          # forge_runs.py is only a comment\n"
+        "          echo still nothing\n"
+        "        if: always()\n"
+        "      - run: |\n"
+        "          echo closingIssuesReferences\n"
+    )
+    assert conformance.unmarked_template_lines("merge.yml", text) == [
+        (6, "models: read"),
+        (12, "- run: echo nothing"),
+        (14, "run: |\n          echo still nothing"),
+    ]

@@ -24,6 +24,7 @@
 # tier0 = 60
 # tier1 = 600
 # tier2 = 3600
+# bite-all = 3600
 
 # The change-size ceilings per pull request, against the merge base (ADR 0045). The first two bound
 # the product code a change brings: files, and added-plus-deleted lines of what is not a test. The

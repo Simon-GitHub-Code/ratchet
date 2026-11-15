@@ -57,12 +57,11 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
 
    Done when the directory is the top level of a git repository, the four plugins are listed (or the hand-over will name the one missing) and each question that was asked is answered. A question that a record or a typed preference answers, or whose condition does not hold, is not asked.
 
-2. **Write `AGENTS.md`.** The template is `${CLAUDE_SKILL_DIR}/templates/AGENTS.md`. Its opening stanza is the four plugins and their questions.
+2. **Write `AGENTS.md`.** The template is `${CLAUDE_SKILL_DIR}/templates/AGENTS.md`. Its opening stanza names the four plugins.
    - **No `AGENTS.md`:** copy the template to the repository root. If a `CLAUDE.md` with content exists, move that content under the stanza.
    - **`AGENTS.md` exists without the stanza:** insert the template's opening stanza above its first heading and keep the rest.
-   - **The stanza is there but a plugin line differs from the template's** (an older ratchet wrote it): replace those lines with the template's, and name them in the hand-over. The route sends the owner here when they differ.
 
-   Done, and skipped on a rerun, when `AGENTS.md` opens with the four-plugin stanza and its plugin lines match the template.
+   Done, and skipped on a rerun, when `AGENTS.md` opens with the four-plugin stanza.
 
 3. **Link `CLAUDE.md` and extend `.gitignore`.**
    - Run `ln -s AGENTS.md CLAUDE.md` at the root, replacing a plain `CLAUDE.md` whose content step 2 moved. Skipped when `CLAUDE.md` is a symlink to `AGENTS.md`.
@@ -113,7 +112,7 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
    Done, and skipped, when every recorded label is listed.
 
 9. **Hand over.** Report, in this order:
-   - **The plugins.** Four lines, one per plugin, saying what it now does in this repository. A line says so when this run installed its plugin, or when the plugin is missing because it has no package for this harness. The `mattpocock-skills` line says so when its setup was skipped because `docs/agents/issue-tracker.md` exists. The pstack line says where the rule lives and whether this run wrote it or found it. Then name the plugin lines of `AGENTS.md` this run replaced, if any.
+   - **The plugins.** Four lines, one per plugin, saying what it now does in this repository. A line says so when this run installed its plugin, or when the plugin is missing because it has no package for this harness. The `mattpocock-skills` line says so when its setup was skipped because `docs/agents/issue-tracker.md` exists. The pstack line says where the rule lives and whether this run wrote it or found it.
    - **The commit and the remote.** The commit hash, and the remote URL or "local only" with the reason (no forge login, or the owner kept it on this computer, and so local markdown is the tracker).
    - **The labels.** Created (the count), already present, not applicable (local tracker), not yet (the tracker setup creates them), or refused (the dispute's path).
    - **Assumed.** The block the method's rule on asking describes, with no question key or method term in it. One line per assumption this run took (each part of the defaults that applied, the interface) and per preference the owner typed: "you asked for", or, where the rule on preferences kept it from applying, as not applied, with what was asked for, why not and the route that exists. Each line says what was chosen and why in a clause, what changing it later costs (what changes, roughly how much work, and whether anything built is redone), and what the owner can say to change it, such as ``Screen: a web page that works on your phone and your laptop, because you said you will use it on both. Changing it before you run `/ratchet:adopt` is one line in the project notes, and nothing built is redone; adoption then offers ways to build it that fit what you say. Say "make it an app" or "no screen" to change it.``
