@@ -146,7 +146,7 @@ Done when you can name the project's parts and what each may depend on, its decl
 3. Run `check`.
 4. Hand the change over:
    - **With a forge:** open one pull request with every section of the template filled and the tail of `check` pasted.
-   - **With no forge:** write the change description at `.scratch/changes/<branch>.md` with every section of the template filled and the tail of `check` pasted, then run `just merge <branch>`.
+   - **With no forge:** write the change description at `.scratch/changes/<branch>.md` (the branch's `/` written as `-`) with every section of the template filled and the tail of `check` pasted, then run `just merge <branch>`.
 
 Leave the merge to the merge judge: the merge job, or with no forge the `merge` entry point, merges a change the judge passes, and the owner merges the rest. Never merge by hand.
 

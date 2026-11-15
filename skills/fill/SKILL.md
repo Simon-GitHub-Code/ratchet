@@ -47,7 +47,7 @@ An upgrade adds sections to the binding whose rows state what this project's own
 6. **Land it.**
    - Commit the change on the branch.
    - With a forge, push and open the pull request.
-   - With no forge, write the change description at `.scratch/changes/<branch>.md` and run `just merge <branch>`.
+   - With no forge, write the change description at `.scratch/changes/<branch>.md` (the branch's `/` written as `-`) and run `just merge <branch>`.
 
    The binding is a guard path, so the merge judge leaves the merge to the owner, who reads one change.
 

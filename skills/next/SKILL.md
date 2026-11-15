@@ -25,9 +25,9 @@ disable-model-invocation: true
 2. **Run only the two commands that are an agent's.** Every command the route names is the owner's keystroke: leave it for them to type, and do not run it. The agent-callable stage (a dirty tree: run `check`, commit) is still the owner's to start. Two exceptions are yours: run the command, then run step 1 again.
    - **`next:` names the `hooks-install` entry point or `hooks_install.py`:** run it. It installs the repository's own commit hooks and changes nothing else.
    - **`next:` names the `merge` entry point** (`just merge <branch>`, or `just merge --records` for records the owner's conversation left on the default branch or a run of it that stopped on its `records/<time>` branch): run it. It merges only what the merge judge and `check` pass. Otherwise it prints `merge: owner` with the reasons and the owner's command: relay those as they are. That line is the merge's answer, not a failure, so the command is not run again.
-   - **The command fails, or the route names it again:** run it once more, then step 1 again. When it fails a second time, or the route still names it, stop there and relay what the command printed, as it is.
+   - **The command fails, or the route names it again, and it did not print `merge: owner`:** run it once more, then step 1 again. When it fails a second time, or the route still names it, stop there and relay what the command printed, as it is.
 
-   Done when the latest `next:` line names neither exception, or you have run its command twice and relayed what it printed.
+   Done when the latest `next:` line names neither exception, the merge printed `merge: owner` and you relayed it, or you have run its command twice and relayed what it printed.
 
 3. **Report the route.** The reply runs in this order: the route's three lines, the one sentence on what the command will produce, each `also:` line with what it needs (step 4), then the owed line (step 5).
    - Print the three lines as they are.

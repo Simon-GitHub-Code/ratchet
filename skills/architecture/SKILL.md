@@ -60,7 +60,7 @@ Skip a question whose choice the owner's words already make. Assume everything e
    - Run `conformance` again and see it green on them.
    - Commit with the subject `chore(method): record the architecture`.
    - **With a forge:** push and open the pull request with every template section filled, the options and the answers under its summary.
-   - **With no forge:** write the change description at `.scratch/changes/chore/architecture.md` and run `just merge chore/architecture`.
+   - **With no forge:** write the change description at `.scratch/changes/chore-architecture.md` and run `just merge chore/architecture`.
    - **The chosen system is other than what is here:** build none of it in this change. Name the tickets it needs for `/mattpocock-skills:to-spec`: moving each part, and replacing each tool as *Overturning an assumption* in the records page says.
 
    A new record and the binding are guard paths, so the merge is the owner's, and the judge says so.
@@ -152,7 +152,7 @@ At most one message, and only when the review finds that the architecture should
    - Run `conformance` and `check`, both to green. Fix a changed part that the `dependency direction` gate finds broken in the parts you declared, never by loosening the gate.
    - Commit with the subject `docs(adr): architecture review for <what>`, at most 72 characters.
    - **With a forge:** push and open the pull request with every template section filled. Under Criticism, write what in the code the decision does not yet explain.
-   - **With no forge:** write the change description at `.scratch/changes/<branch>.md` and run `just merge <branch>`.
+   - **With no forge:** write the change description at `.scratch/changes/<branch>.md` (the branch's `/` written as `-`) and run `just merge <branch>`.
 
    The change brings an ADR, so the merge judge leaves the merge to the owner, and says so. The review counts once it is on the default branch: a record written in the change that adds another instance does not.
 
