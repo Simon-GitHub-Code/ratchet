@@ -53,6 +53,22 @@ This is wrong if any of these is seen:
 
 ## For the builders
 
+### What may be built now, and what waits
+
+Built in 0.12.2 (#179): each verdict's wall time and lane, `TIMED OUT` and the limit of one gate run, the budget's share of its ceiling and its 75 percent warning.
+
+Settled, and built next:
+
+- The per-path rule, with the line saying why each gate is in the set.
+- The `bite-all` ceiling key in the adopt template, and the upgrade owing it where it is missing.
+- The fallback, built to item 3's default (b) and behind one switch, so the owner's answer changes one value.
+- The plugin pin line alone, built to item 4's default, affecting no gate. It is a single case in the per-path rule, so the owner's answer changes one branch.
+
+Waiting on the owner:
+
+- Item 5. The judge reading the `ci` run on the default branch changes the adopted `merge.yml`, so it waits for the answer.
+- Item 6. The per-row paths line is a new binding field, so it waits for the answer.
+
 ### What changes where
 
 - `scripts/project_bite.py`: `--changed` reads the change's paths and proves the gates the per-path rule names, or every tier 0 and tier 1 gate where it cannot tell, and prints why each gate is in its set. Each verdict line gains the fault's wall time and lane. A gate stopped by its time limit is `TIMED OUT`.
@@ -76,7 +92,7 @@ This is wrong if any of these is seen:
 
 ## Open for the owner
 
-- **3. What tier 1 does when it cannot target.** In every fallback case above, tier 1 would run the same 15 to 25 minute proof under the tier 1 ceiling, and go red on the budget the way the two merges did. It is asked once the measurement says how often the fallback fires, and what the full proof costs with one shared build.
+- **3. What tier 1 does when it cannot target.** In every fallback case above, tier 1 runs the full proof: 665 seconds locally in the measured project, and 867 to 1473 in CI, against a tier 1 ceiling of 900. It goes red on the budget the way the two merges did.
   - (a) Prove every gate under the tier 1 ceiling, as today. Honest, slow, and red on runner variance.
   - (b) Prove every gate, held to the full proof's own ceiling, not the tier 1 ceiling. Slow, and green when the gates bite.
   - (c) Prove nothing it cannot target, and say so in one line. The full proof after the merge catches it, and a red there stops every further merge (item 2).
