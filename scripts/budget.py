@@ -8,6 +8,10 @@ thresholds file. Exit status: the command's own when it fails; 1 when it passed 
 its ceiling; 0 otherwise. A missing ceiling reports and passes: that is the first adoption.
 ``--report`` appends one JSON line per run so CI can publish the timings.
 
+A green run prints its wall clock as a share of its ceiling, and at 75 percent or more of it a
+warning line follows, raised as an annotation: a warning is not red, and shows a tier drifting
+toward its ceiling before runner variance turns it red.
+
 ``--tier TIER`` is for CI, where a tier is one job per gate and its wall clock is therefore its
 slowest gate: the gate is also held to ``ceilings.seconds.TIER``, and the lower of the two
 ceilings is the one judged. So the tier ceilings adopt sets are measured in CI with no job that
@@ -41,6 +45,7 @@ from pathlib import Path
 
 CEILINGS_TABLE = "ceilings.seconds"
 DEFAULT_HEADROOM = 1.5
+WARN_SHARE = 75.0
 TIER_BUDGETS = {"tier0": 60.0, "tier1": 900.0}
 _TABLE_HEADER = re.compile(r"^\[ceilings\.seconds\]\s*$", re.MULTILINE)
 _ANY_HEADER = re.compile(r"^\[", re.MULTILINE)
@@ -63,6 +68,16 @@ class Outcome:
         return self.ceiling is not None and self.seconds > self.ceiling
 
     @property
+    def share(self) -> float | None:
+        """The percentage of the ceiling the run took, or ``None`` with no ceiling."""
+        return None if not self.ceiling else 100.0 * self.seconds / self.ceiling
+
+    @property
+    def near(self) -> bool:
+        """Whether a green run took ``WARN_SHARE`` percent or more of its ceiling."""
+        return self.status == "green" and (self.share or 0.0) >= WARN_SHARE
+
+    @property
     def status(self) -> str:
         """``failed``, ``unbounded`` (no ceiling), ``red`` (over) or ``green``."""
         if self.exit_code != 0:
@@ -80,9 +95,11 @@ class Outcome:
         """The one line the gate prints."""
         whose = f" of {self.tier}" if self.tier else ""
         bound = "no ceiling recorded" if self.ceiling is None else f"ceiling {self.ceiling:g}s"
+        green = self.status == "green" and self.share is not None
+        used = f", {self.share:.0f}% used" if green else ""
         reported = self.status == "red" and not self.blocks
         tail = "red, reported and not blocking (--over report)" if reported else self.status
-        return f"ratchet-budget: {self.key} took {self.seconds:.1f}s ({bound}{whose}): {tail}"
+        return f"ratchet-budget: {self.key} took {self.seconds:.1f}s ({bound}{whose}{used}): {tail}"
 
 
 def held(text: str, key: str, tier: str | None) -> tuple[float | None, str | None]:
@@ -181,6 +198,12 @@ def main(argv: list[str]) -> int:
         # Why: a pull request's run stays green over its ceiling, so the line is raised where the
         # run's page and `gh run view` show it; printed alone, it waited for the default branch.
         print(f"::warning title=ratchet-budget::{outcome.line()}")
+    if outcome.near:
+        print(
+            f"::warning title=ratchet-budget::ratchet-budget: {outcome.key} used"
+            f" {outcome.share:.0f}% of its ceiling, over the {WARN_SHARE:g}% a green run may take"
+            " before runner variance turns it red"
+        )
     if options.report:
         report(root / options.report, outcome)
     if options.headroom is not None and exit_code == 0:

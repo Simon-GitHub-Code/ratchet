@@ -83,8 +83,11 @@ one proof in two, and those reds are named ``RED BEFORE THE FAULT`` or ``NOT PRO
 One line per bite: ``bites``, ``DOES NOT BITE`` (green with the fault), ``RED BEFORE THE FAULT``
 (red with no fault planted, on the copy as setup made it or as an earlier bite left it), ``RED
 FOR ANOTHER REASON`` (red, and ``expect`` no more often than when green), ``THE FAULT WAS NOT
-PLANTED`` or ``NOT PROVEN`` (red with ``expect``, then red again with no fault planted). A
-gate's lines come once its last run ends. The run is red on anything but ``bites``, on a
+PLANTED``, ``NOT PROVEN`` (red with ``expect``, then red again with no fault planted) or ``TIMED
+OUT`` (a run of the gate hit its time limit, ``--limit`` seconds, and was ended: red, and it takes
+the place of the verdict its exit code alone would give). Each line ends with the wall time of
+the bite's runs and the lane they ran in, as ``(12.3s, lane 1)``. A gate's lines come once its
+last run ends. The run is red on anything but ``bites``, on a
 registry that does not parse, on a tool-bound gate with no bite, and on one whose question
 requires a proof no bite of it claims.
 
@@ -120,8 +123,8 @@ process group is ended when the command exits. A process that left the group, as
 daemon does, is not ended, and runs on, and a copy it is still writing in when the proof ends is
 left behind.
 
-Usage: ``project_bite.py [--root DIR] [--changed] [--gate NAME]... [--jobs N]``. ``--changed`` is
-the pull-request form: it proves nothing unless the change touches a path that defines a gate
+Usage: ``project_bite.py [--root DIR] [--changed] [--gate NAME]... [--jobs N] [--limit S]``.
+``--changed`` is the pull-request form: it proves nothing unless the change touches a path that defines a gate
 (the manifest's ``tool-config``, ``gate-commands``, ``fitness``, ``gate-tools`` and ``formal``
 groups, the registry and the binding), and then proves the gates of tiers 0 and 1. It proves
 nothing on the adoption either, the change whose base holds no binding: every gate is new
@@ -147,10 +150,10 @@ import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import application_types
 import gatelib
@@ -207,6 +210,7 @@ UNSUPPORTED = (
 )
 TAIL = 15
 MAX_LANES = 4
+GATE_LIMIT = 900.0
 # Seconds the main thread waits on the lanes at a time: the most a signal waits for its handler.
 WAKE = 0.1
 # Why: a Tool cell that is the plugin's script and nothing else is a gate `bite.py` proves.
@@ -807,17 +811,29 @@ def failures(root: Path) -> list[str]:
     return [f"{REGISTRY}: {problem}" for problem in problems + gaps]
 
 
+class Run(NamedTuple):
+    """One command's end: exit code, output, wall time, and whether the limit ended it."""
+
+    code: int
+    output: str
+    seconds: float = 0.0
+    timed_out: bool = False
+
+
 class Shell:
     """Runs each command in a session of its own, and can stop every one still running."""
 
-    def __init__(self) -> None:
-        """Start with nothing running."""
+    def __init__(self, limit: float | None = None) -> None:
+        """Start with nothing running; ``limit`` seconds ends a command that runs longer."""
+        self.limit = limit
         self.lock = threading.Lock()
         self.live: set[subprocess.Popen[bytes]] = set()
         self.stopped = False
 
-    def run(self, command: Sequence[str], cwd: Path) -> tuple[int, str]:
+    def run(self, command: Sequence[str], cwd: Path) -> Run:
         """The exit code and everything the command wrote; 127 when it cannot start.
+
+        A command still running after the limit is ended with its group and the run says so.
 
         What the command started and left running in its process group ends with it, and the
         output says so; a process that left the group runs on. The output goes to a file, not a
@@ -826,7 +842,7 @@ class Shell:
         with tempfile.TemporaryFile() as log:
             with self.lock:
                 if self.stopped:
-                    return 130, "stopped"
+                    return Run(130, "stopped")
                 try:
                     process = subprocess.Popen(
                         command,
@@ -838,15 +854,26 @@ class Shell:
                         start_new_session=True,
                     )
                 except OSError as error:
-                    return 127, f"cannot run {command[0]}: {error}"
+                    return Run(127, f"cannot run {command[0]}: {error}")
                 self.live.add(process)
-            code = process.wait()
+            started = time.monotonic()
+            timed_out = False
+            try:
+                code = process.wait(timeout=self.limit)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                gatelib.stop_group(process)
+                code = process.returncode
+            seconds = time.monotonic() - started
             with self.lock:
                 self.live.discard(process)
             left = gatelib.end_group(process.pid)
             log.seek(0)
             output = log.read().decode("utf-8", errors="replace")
-        return code, output + (f"bite: {gatelib.LEFT_RUNNING}\n" if left else "")
+        output += f"bite: timed out after {self.limit:g}s\n" if timed_out else ""
+        return Run(
+            code, output + (f"bite: {gatelib.LEFT_RUNNING}\n" if left else ""), seconds, timed_out
+        )
 
     def stop(self) -> None:
         """Stop every running command and refuse the next ones."""
@@ -889,6 +916,7 @@ class Verdict(Enum):
     OTHER_REASON = "RED FOR ANOTHER REASON"
     NOT_PLANTED = "THE FAULT WAS NOT PLANTED"
     NOT_PROVEN = "NOT PROVEN"
+    TIMED_OUT = "TIMED OUT"
 
 
 @dataclass(frozen=True)
@@ -898,28 +926,41 @@ class Outcome:
     bite: Bite
     verdict: Verdict
     detail: str = ""
+    seconds: float = 0.0
+    lane: int = 0
 
     def lines(self) -> str:
-        """The verdict on one line, and the detail indented under it."""
-        head = f"bite: {self.bite.gate}: {self.bite.name}: {self.verdict.value}"
+        """The verdict, its wall time and lane on one line, and the detail indented under it."""
+        head = (
+            f"bite: {self.bite.gate}: {self.bite.name}: {self.verdict.value}"
+            f" ({self.seconds:.1f}s, lane {self.lane})"
+        )
         return "\n".join([head, *(f"  {line}" for line in self.detail.splitlines())])
 
-    def unproven(self, red: str) -> Outcome:
-        """This bite, not proven: a later run with no fault planted printed ``red`` and was red."""
+    def unproven(self, later: Run) -> Outcome:
+        """This bite, not proven: a later run with no fault planted was red; timed out, say so."""
+        if later.timed_out:
+            return self.timed_out(later.output)
         why = (
             "the gate did not return to green once the fault was gone, so its red may come from"
             " what its own runs leave and not from the fault"
         )
-        return Outcome(self.bite, Verdict.NOT_PROVEN, f"{why}\n{tail(red)}")
+        return replace(self, verdict=Verdict.NOT_PROVEN, detail=f"{why}\n{tail(later.output)}")
+
+    def timed_out(self, output: str) -> Outcome:
+        """This bite, ended by the time limit: red, whatever its exit code alone would say."""
+        return replace(self, verdict=Verdict.TIMED_OUT, detail=tail(output))
 
 
 def tail(output: str) -> str:
     return "\n".join(output.splitlines()[-TAIL:])
 
 
-def judge(bite: Bite, green: str, planted: tuple[int, str]) -> Outcome:
+def judge(bite: Bite, green: str, planted: Run) -> Outcome:
     """The verdict on a gate that printed ``green`` before the fault; ``planted`` is its run."""
-    code, output = planted
+    code, output = planted.code, planted.output
+    if planted.timed_out:
+        return Outcome(bite, Verdict.TIMED_OUT, tail(output))
     if code == 0:
         why = "the gate is green with the fault planted"
         return Outcome(bite, Verdict.GREEN, f"{why}\n{tail(output)}")
@@ -943,6 +984,7 @@ class Copy:
     head: str
     staged: bytes
     exclude: bytes
+    lane: int = 0
 
     @property
     def path(self) -> Path:
@@ -963,7 +1005,7 @@ class Copy:
         # Why: defence in depth; the snapshot was checked, and what it now writes is checked again.
         contained(self.path, self.head)
 
-    def run(self, command: Sequence[str]) -> tuple[int, str]:
+    def run(self, command: Sequence[str]) -> Run:
         """What the gate does to the copy as it now stands; then the copy as it stood."""
         result = self.shell.run(command, self.path)
         self.restore()
@@ -983,9 +1025,13 @@ class Copy:
                 return
             # Why: a green run taken before an earlier fault says nothing of what that fault left
             # behind (a cache, a mark in an ignored file), so each fault gets its own green run.
-            code, green = self.unfaulted(row, bite.args, outcomes)
-            if code != 0:
-                outcomes.append(Outcome(bite, Verdict.RED_BEFORE, tail(green)))
+            before = self.unfaulted(row, bite.args, outcomes)
+            green = before.output
+            if before.code != 0:
+                verdict = Verdict.TIMED_OUT if before.timed_out else Verdict.RED_BEFORE
+                outcomes.append(
+                    self.outcome(bite, verdict, detail=tail(green), seconds=before.seconds)
+                )
                 continue
             try:
                 bite.plant(self.tree)
@@ -993,29 +1039,37 @@ class Copy:
             except (Unprovable, OSError) as error:
                 self.restore()
                 why = str(error).replace(f"{self.path}/", "")
-                outcomes.append(Outcome(bite, Verdict.NOT_PLANTED, why))
+                outcomes.append(
+                    self.outcome(bite, Verdict.NOT_PLANTED, detail=why, seconds=before.seconds)
+                )
                 continue
-            outcomes.append(judge(bite, green, self.run([*shlex.split(row.command), *bite.args])))
+            planted = self.run([*shlex.split(row.command), *bite.args])
+            verdict = judge(bite, green, planted)
+            outcomes.append(
+                replace(verdict, seconds=before.seconds + planted.seconds, lane=self.lane)
+            )
         # Why: a gate red from its second run on, by state it keeps, is red on every fault.
         for args in dict.fromkeys(o.bite.args for o in outcomes if o.verdict is Verdict.BITES):
             self.unfaulted(row, args, outcomes)
         if not self.shell.stopped:
             yield from outcomes
 
-    def unfaulted(
-        self, row: Row, args: tuple[str, ...], outcomes: list[Outcome]
-    ) -> tuple[int, str]:
+    def outcome(self, bite: Bite, verdict: Verdict, *, detail: str, seconds: float) -> Outcome:
+        """A verdict of this bite, timed, in this copy's lane."""
+        return Outcome(bite, verdict, detail, seconds, self.lane)
+
+    def unfaulted(self, row: Row, args: tuple[str, ...], outcomes: list[Outcome]) -> Run:
         """A run with no fault planted; red, it leaves no bite before it with ``args`` standing."""
-        code, output = self.run([*shlex.split(row.command), *args])
-        if code != 0:
+        result = self.run([*shlex.split(row.command), *args])
+        if result.code != 0:
             outcomes[:] = [
-                o.unproven(output) if o.verdict is Verdict.BITES and o.bite.args == args else o
+                o.unproven(result) if o.verdict is Verdict.BITES and o.bite.args == args else o
                 for o in outcomes
             ]
-        return code, output
+        return result
 
 
-def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Copy:
+def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane: int = 0) -> Copy:
     """``root`` as git sees it, as a repository of its own at ``copy``, with ``setup`` run."""
 
     def git_path(name: str) -> Path:
@@ -1044,9 +1098,10 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Co
         if gatelib.git(copy, "rev-parse", "-q", "--verify", ref) is not None:
             git_in(copy, "update-ref", ref, head)
     for command in registry.setup:
-        code, output = shell.run(shlex.split(command), copy)
-        if code != 0:
-            message = f"setup `{command}` exited {code} in the scratch copy\n{tail(output)}"
+        result = shell.run(shlex.split(command), copy)
+        if result.code != 0:
+            how = "timed out" if result.timed_out else f"exited {result.code}"
+            message = f"setup `{command}` {how} in the scratch copy\n{tail(result.output)}"
             raise Unprovable(message)
     snapshot(copy)
     made = Copy(
@@ -1055,6 +1110,7 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Co
         git_in(copy, "rev-parse", "HEAD"),
         tree.read(INDEX) or b"",
         tree.read(EXCLUDE) or b"",
+        lane,
     )
     # Why: every run then starts from the copy as restoring leaves it, the first green run too;
     # where setup left what restoring takes away (an empty directory), every run judges without it.
@@ -1172,17 +1228,17 @@ Task = tuple[Row, list[Bite]]
 
 
 def run_lanes(
-    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int
+    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float | None
 ) -> list[Outcome]:
     """Every task, ``lanes`` at once, each lane in a scratch copy of its own; then no copy."""
     pending: queue.SimpleQueue[Task] = queue.SimpleQueue()
     for task in tasks:
         pending.put(task)
-    shell = Shell()
+    shell = Shell(limit)
     printing = threading.Lock()
 
-    def lane(path: Path, made: Copy | None) -> list[Outcome]:
-        copy = made or make_copy(root, path, registry=registry, shell=shell)
+    def lane(number: int, path: Path, made: Copy | None) -> list[Outcome]:
+        copy = made or make_copy(root, path, registry=registry, shell=shell, lane=number)
         outcomes: list[Outcome] = []
         while not shell.stopped:
             try:
@@ -1209,7 +1265,7 @@ def run_lanes(
             # the pool does not wait for, writing into a copy that is being removed.
             with gatelib.signals_held():
                 futures = [
-                    pool.submit(lane, path, None if n else first) for n, path in enumerate(paths)
+                    pool.submit(lane, n, path, None if n else first) for n, path in enumerate(paths)
                 ]
             # Why: the kernel may hand a signal to a lane's thread, and its handler runs only when
             # this thread runs Python, which a wait with no end would put off until the gate ends.
@@ -1221,12 +1277,14 @@ def run_lanes(
             raise
 
 
-def proof(root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int) -> int:
+def proof(
+    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float | None
+) -> int:
     """Run the tasks and say what bit; the exit code."""
     started = time.monotonic()
     try:
         with gatelib.interrupts_raise():
-            outcomes = run_lanes(root, registry, tasks, lanes=lanes)
+            outcomes = run_lanes(root, registry, tasks, lanes=lanes, limit=limit)
     # Why: a copy no walk can reach, or a system that refuses one, is a run that proves nothing.
     except (Unprovable, OSError) as error:
         return gatelib.report("bite", [str(error)])
@@ -1263,6 +1321,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--changed", action="store_true", help="only when a gate changed")
     parser.add_argument("--gate", action="append", default=[], help="only this gate's bites")
     parser.add_argument("--jobs", type=int, default=min(MAX_LANES, gatelib.default_jobs()))
+    parser.add_argument("--limit", type=float, default=GATE_LIMIT, help="seconds a run may take")
     options = parser.parse_args(argv[1:])
     if os.environ.get(BITING):
         return gatelib.report("bite", ["a bite cannot plant a fault for the gate that runs it"])
@@ -1293,7 +1352,8 @@ def main(argv: list[str]) -> int:
     tasks = [task for task in tasks if task[1]]
     if not tasks:
         return gatelib.report("bite", ["no bite to run: a gate with nothing to run is red"])
-    return proof(root, registry, tasks, lanes=max(1, min(options.jobs, len(tasks))))
+    lanes = max(1, min(options.jobs, len(tasks)))
+    return proof(root, registry, tasks, lanes=lanes, limit=options.limit)
 
 
 if __name__ == "__main__":

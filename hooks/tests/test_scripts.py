@@ -109,6 +109,32 @@ def test_a_ceiling_passed_on_a_pull_request_is_reported_and_does_not_block() -> 
     assert (under.verdict, under.line().endswith(": green")) == (0, True)
 
 
+def test_a_green_run_says_its_share_of_the_ceiling_and_warns_from_75_percent() -> None:
+    quiet = budget.Outcome("bite-all", 30.0, 100.0, 0)
+    assert quiet.line() == "ratchet-budget: bite-all took 30.0s (ceiling 100s, 30% used): green"
+    assert not quiet.near
+    assert budget.Outcome("bite-all", 75.0, 100.0, 0).near
+    assert not budget.Outcome("bite-all", 101.0, 100.0, 0).near, "red is not a warning"
+    assert not budget.Outcome("bite-all", 90.0, 100.0, 1).near, "a failed command is not green"
+
+
+def test_main_warns_on_a_green_run_near_its_ceiling_and_stays_green(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality/thresholds.toml").write_text(
+        budget.with_ceiling("", "bite-all", 1.0), encoding="utf-8"
+    )
+    slow = ["--", sys.executable, "-c", "import time; time.sleep(0.9)"]
+    assert budget.main(["budget", "bite-all", "--root", str(tmp_path), *slow]) == 0
+    out = capsys.readouterr().out
+    assert "% used): green" in out
+    assert "::warning title=ratchet-budget::ratchet-budget: bite-all used" in out
+    fast = ["--", sys.executable, "-c", "pass"]
+    assert budget.main(["budget", "bite-all", "--root", str(tmp_path), *fast]) == 0
+    assert "::warning" not in capsys.readouterr().out
+
+
 def test_a_gate_in_ci_is_held_to_the_lower_of_its_own_ceiling_and_its_tier_s() -> None:
     assert budget.held(THRESHOLDS, "test", "tier1") == (600.0, "tier1")
     assert budget.held(THRESHOLDS, "test", None) == (None, None)
