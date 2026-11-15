@@ -20,8 +20,8 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
 
    Done when you hold the ticket, and its parent spec when it has one, and, when there is nothing to write, you have said so and stopped.
 
-2. **Draft from the record.** The conversation that produced the ticket (`grill-with-docs`, `to-spec`, `to-tickets`) already chose an approach and killed the alternatives, and the ADRs and the glossary hold the rest. That is how it will be built, so draft from that record, not from imagination. What it does for the user is another matter: a behaviour the spec chose is the owner's only where their own words settle it (step 3).
-   - **The ticket's siblings share a parent spec:** draft the conjecture and the operability once, for the spec. Its tickets inherit them. The `## Size` block stays the ticket's own.
+2. **Draft from the record.** The conversation that produced the ticket (`grill-with-docs`, `to-spec`, `to-tickets`) already chose an approach and killed the alternatives, and the ADRs and the glossary hold the rest. That is how it will be built, so draft from that record, not from imagination.
+   - **The ticket's siblings share a parent spec:** draft the conjecture and the operability once, for the spec. Its tickets inherit them.
 
    Draft five parts. Each of the first four is a sentence or two.
    - *Approach*: the one way this ticket will be built, stated so it can be shown wrong.
