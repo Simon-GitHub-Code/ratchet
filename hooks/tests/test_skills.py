@@ -180,6 +180,31 @@ def test_the_safeguard_skill_guards_a_new_config_on_its_own_branch() -> None:
     assert "the agent adds it to `guards/manifest.toml` on its branch" in guards
 
 
+def test_next_says_what_the_upgrade_does_and_bounds_its_own_retries() -> None:
+    next_page = flat("next/SKILL.md")
+    # Why: the route's upgrade line had no case on the page, so an agent relayed it bare or
+    # guessed what the upgrade leaves. The page now says what to add and that no count is given.
+    assert "give no count of what is owed: only the upgrade's run knows it" in next_page
+    # Why: the two commands an agent runs looped back to the route with no end when one failed or
+    # was named again. The page now allows one more run, then stops and relays the output.
+    assert (
+        "When it fails a second time, or the route still names it, stop there and relay what the"
+        " command printed, as it is." in next_page
+    )
+
+
+def test_fill_names_where_the_template_is_and_how_its_change_lands() -> None:
+    fill = flat("fill/SKILL.md")
+    # Why: the template's path was written as if it sat in the project, where it does not exist.
+    assert "`${CLAUDE_PLUGIN_ROOT}/skills/adopt/templates/docs/process/binding.md`" in fill
+    # Why: "hand it to the merge" named no action. The page now says how a change lands, in the
+    # safeguard skill's words.
+    assert (
+        "With no forge, write the change description at `.scratch/changes/<branch>.md` and run"
+        " `just merge <branch>`." in fill
+    )
+
+
 UNLISTED = '[[group]]\nname = "tool-config"\nreason = "Rule sets."\npaths = ["lint.toml"]\n'
 
 

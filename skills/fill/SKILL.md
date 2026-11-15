@@ -22,7 +22,7 @@ An upgrade adds sections to the binding whose rows state what this project's own
 
    Done when `chore/fill-owed` is checked out.
 
-3. **Read the repository, then write each row.** For each section the list names, read the template's text for it in `skills/adopt/templates/docs/process/binding.md`. Then write its rows in the binding from what the tree and its tools show:
+3. **Read the repository, then write each row.** For each section the list names, read the template's text for it in `${CLAUDE_PLUGIN_ROOT}/skills/adopt/templates/docs/process/binding.md`. Then write its rows in the binding from what the tree and its tools show:
    - **Life event signs:** the files that mark a deployment or a store of records.
    - **Image pins:** the files that name a container image, and the pattern that finds the reference.
    - **Suppressions:** the directives the bound tools read, including the kinds that silence the coverage question.
@@ -36,7 +36,7 @@ An upgrade adds sections to the binding whose rows state what this project's own
 
 4. **Prove it.**
    - Run `conformance.py` until the findings you filled are gone.
-   - Run each gate whose section you wrote (`pins`, `suppressions`, `coverage`, the mutation gate) on the tree. A row that finds nothing in a tree that has the thing is wrong.
+   - Run each gate whose section you wrote (`pins`, `suppressions`, `coverage`, the mutation gate) on the tree, by its entry point: the command in the Entry point column of the gate's row in the binding, such as `just pins`. A row that finds nothing in a tree that has the thing is wrong.
 
    Done when `conformance.py` prints none of the findings you filled, and each gate you ran finds what the tree has.
 
@@ -44,6 +44,11 @@ An upgrade adds sections to the binding whose rows state what this project's own
 
    Done when `owed.py --fill-first` prints nothing.
 
-6. **Land it.** Commit the change on the branch and hand it to the merge as any change to a guard path. The binding is one, so the merge judge leaves the merge to the owner, who reads one change.
+6. **Land it.**
+   - Commit the change on the branch.
+   - With a forge, push and open the pull request.
+   - With no forge, write the change description at `.scratch/changes/<branch>.md` and run `just merge <branch>`.
 
-   Done when the change is committed on `chore/fill-owed` and handed to the merge.
+   The binding is a guard path, so the merge judge leaves the merge to the owner, who reads one change.
+
+   Done when the change is committed on `chore/fill-owed` and its pull request is open, or, with no forge, its change description is written and `just merge <branch>` has run.
