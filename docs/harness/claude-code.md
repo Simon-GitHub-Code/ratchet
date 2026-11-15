@@ -1,6 +1,6 @@
 # Ratchet in Claude Code
 
-The home harness. Everything in the plugin is written for it; the other harness pages map from here.
+Claude Code is the home harness. Everything in the plugin is written for it, and the other harness pages map from here.
 
 ## Install
 
@@ -12,11 +12,11 @@ claude plugin marketplace add Simon-GitHub-Code/ratchet
 claude plugin install ratchet@ratchet
 ```
 
-The ratchet marketplace entry declares `mattpocock-skills`, `pstack` and `impeccable` as dependencies, so the last line installs all four once the three marketplaces are known. `claude plugin list` shows each with its marketplace and version.
+The ratchet marketplace entry declares `mattpocock-skills`, `pstack` and `impeccable` as dependencies. So once the three marketplaces are known, the last line installs all four. `claude plugin list` shows each with its marketplace and version.
 
 ## The guard
 
-`hooks/hooks.json` registers `hooks/guard.py` on PreToolUse for `Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch` and `hooks/session.py` on SessionStart and SubagentStart. Nothing to wire.
+Nothing to wire. `hooks/hooks.json` registers `hooks/guard.py` on PreToolUse for `Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch`, and `hooks/session.py` on SessionStart and SubagentStart.
 
 ## Names
 
@@ -24,13 +24,13 @@ The ratchet marketplace entry declares `mattpocock-skills`, `pstack` and `impecc
 | --- | --- |
 | `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | unset: the template `justfile` falls back to the marketplace clone, `~/.claude/plugins/marketplaces/ratchet` |
 | `${CLAUDE_SKILL_DIR}` | set by Claude Code to the skill's folder |
-| `${CLAUDE_PLUGIN_ROOT}` | set by Claude Code to the plugin's install folder; `hooks/hooks.json` and the script commands in the skills rely on it |
-| `disable-model-invocation: true` | the Skill tool refuses it to an agent, in the main session and in every subagent, with the instruction not to reproduce it another way; the command is the owner's keystroke and the route names it (`skills/method/route.md`). pstack's own adapter lets a pstack skill read another pstack skill's file; that holds between pstack skills only |
+| `${CLAUDE_PLUGIN_ROOT}` | set by Claude Code to the plugin's install folder. `hooks/hooks.json` and the script commands in the skills rely on it |
+| `disable-model-invocation: true` | the Skill tool refuses it to an agent, in the main session and in every subagent, with the instruction not to reproduce it another way. The command is the owner's keystroke, and the route names it (`skills/method/route.md`). pstack's own adapter lets a pstack skill read another pstack skill's file. That holds between pstack skills only |
 | the question tool | `AskUserQuestion`, up to four questions per dialog |
-| subagents | `Agent`; `pstack:poteto-agent` and friends by name |
+| subagents | `Agent`, with `pstack:poteto-agent` and friends by name |
 | the plugin cache | `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` |
 | `/ratchet:init`, `/ratchet:adopt`, `/ratchet:feature`, `/ratchet:conjecture`, `/ratchet:safeguard`, `/ratchet:architecture`, `/ratchet:next` | as written |
 
 ## What is Claude Code only
 
-`workflows/pipeline.js` runs on the Workflow tool. The pipeline's roles and sight lines are in `skills/method/pipeline.md` for any harness with subagents.
+`workflows/pipeline.js` runs on the Workflow tool. On any harness with subagents, the pipeline's roles and sight lines are in `skills/method/pipeline.md`.
