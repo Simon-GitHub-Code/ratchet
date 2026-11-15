@@ -134,6 +134,11 @@ REVIEW = (
 # Why `cli`: the catalogue asks it the flag question and no other question an operability line
 # carries, so the line is the only one a ticket is asked once the type is declared.
 ASKED_TYPES = "- Application types: cli\n"
+# Why: once a type is declared, conformance asks a Triggers row of each kind the type needs, and
+# the fill an upgrade owes runs it. The world's project has none of them until one arrives.
+ASKED_KINDS: Final = application_types.load().kinds_required(
+    set(application_types.declared(ASKED_TYPES) or [])
+)
 FLAG_ANSWER = (
     "## Answers\n\n- `conjecture.flag`: it settles one route: should it stay hidden until you"
     " switch it on, or appear as soon as it is finished? Appear as soon as it is finished.\n\n"
@@ -236,6 +241,11 @@ class Repo:
             f"| kind{n} | `src/kind{n}.py`, `src/kind{n}-*.py` | |\n"
             for n, _tool in enumerate(self.tools, 1)
         ) + "".join(f"| {kind} | `src/{kind}.py` | |\n" for kind in self.reopened)
+        if self.asked:
+            rows += "".join(
+                f"| {kind} | none: the project has none yet | |\n"
+                for kind in sorted(ASKED_KINDS - set(self.reopened))
+            )
         made = BINDING.format(
             pin=PIN.format(version=self.version()) if pinned else UNPINNED,
             types=ASKED_TYPES if self.asked else "",
@@ -747,14 +757,18 @@ def _upgrade_asks_the_flag_line(repo: Repo, _change: Change) -> None:
     so the plugin that ships ADR 0061 is the one the tests run. Before this step the binding
     declares no type, which no plugin asks the line of; after it, the line is asked as far as the
     scripts ask it. It touches no ticket and no spec, and lands on the default branch, from a work
-    tree of its own while the build's branch is checked out.
+    tree of its own while the build's branch is checked out. It keeps the pin as the last real
+    upgrade wrote it, so the fill that upgrade owes still runs from the plugin it names.
     """
     repo.asked = True
     tree = repo.root
     if repo.head() != "main":
         tree = repo.root.parent / f"{repo.root.name}.upgrade"
         git(repo.root, "worktree", "add", "-q", str(tree), "main")
-    write(tree, "docs/process/binding.md", repo.binding())
+    pin = re.compile(r"^- Ratchet plugin: .*$", re.MULTILINE)
+    kept = pin.search(gatelib.read_text(tree / route.BINDING) or "")
+    made = repo.binding()
+    write(tree, str(route.BINDING), pin.sub(lambda _line: kept.group(), made) if kept else made)
     snapshot(tree, "chore(method): the project is a command, not yet deployed")
     if tree != repo.root:
         git(repo.root, "worktree", "remove", str(tree))
