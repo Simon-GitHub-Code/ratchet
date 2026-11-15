@@ -456,6 +456,7 @@ def test_a_clone_at_a_release_tag_is_at_the_commit_its_release_file_names(
     repos.write(work, "CHANGELOG.md", "# Changelog\n\n## 1.2.3\n\nThe release.\n")
     repos.commit(work, "docs(core): the changelog")
     assert release.main(["release.py", "--repo", str(work)]) == 0
+    capsys.readouterr()
     clone = tmp_path / "clone"
     repos.git(tmp_path, "clone", "-q", "--branch", "v1.2.3", str(work), str(clone))
     assert repos.git(clone, "rev-parse", "HEAD") != merged

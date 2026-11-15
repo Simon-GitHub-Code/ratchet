@@ -2882,7 +2882,9 @@ def upgrade_mutations() -> list[Mutation]:
         ),
         (
             "justfile whose ratchet recipe does not ask whether hooks run",
-            rewrite("justfile", "ratchet:\n    just hooks-installed\n", "ratchet:\n"),
+            rewrite(
+                "justfile", "ratchet: _plugin\n    just hooks-installed\n", "ratchet: _plugin\n"
+            ),
         ),
         (
             "justfile capping the gates at once by another variable",

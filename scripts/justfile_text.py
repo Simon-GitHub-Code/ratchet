@@ -218,6 +218,11 @@ def template_recipe(template: str, name: str) -> tuple[list[str], Block, Head] |
     return lines, block, block.parsed
 
 
+def private_helper(template: str, name: str) -> bool:
+    """Whether ``name`` is a private recipe of the template, which a copied recipe brings along."""
+    return name.startswith("_") and template_recipe(template, name) is not None
+
+
 def unmet(template: str, project: str, name: str) -> tuple[str, ...]:
     """Why the template's recipe ``name`` cannot be copied as it stands; empty when it can."""
     found = template_recipe(template, name)
@@ -233,7 +238,11 @@ def unmet(template: str, project: str, name: str) -> tuple[str, ...]:
     lacking = [
         f"`{word}`"
         for word in sorted(named - set(parsed.params))
-        if not (defines_recipe(project, word) or defines_variable(project, word))
+        if not (
+            defines_recipe(project, word)
+            or defines_variable(project, word)
+            or private_helper(template, word)
+        )
     ]
     if lacking:
         *head, last = lacking
@@ -262,12 +271,20 @@ def with_recipe(template: str, name: str) -> Want:
     if found is None:
         message = f"the template has no recipe {name!r}"
         raise ValueError(message)
-    template_lines, wanted, _ = found
+    template_lines, wanted, head = found
     copy = template_lines[wanted.start : wanted.end]
     rank = {block.name: place for place, block in enumerate(blocks(template_lines))}
 
+    helpers = [
+        with_recipe(template, word)
+        for word in (*head.before, *head.after)
+        if private_helper(template, word)
+    ]
+
     def want(current: str | None) -> str:
         text = current or ""
+        for helper in helpers:
+            text = helper(text)
         lines = text.split("\n")
         present = blocks(lines)
         if any(block.name == name for block in present):

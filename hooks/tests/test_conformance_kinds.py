@@ -145,7 +145,7 @@ def test_an_entry_point_row_is_left_to_an_agent_when_the_table_cannot_take_it(
 
 def test_a_ratchet_recipe_that_cannot_ask_first_is_left_to_an_agent(repo: Path) -> None:
     replace(JUSTFILE, "ratchet: _plugin\n    just hooks-installed\n", "ratchet: _plugin\n")(repo)
-    replace(JUSTFILE, "hooks-installed:\n", "hooks-asked:\n")(repo)
+    replace(JUSTFILE, "hooks-installed: _plugin\n", "hooks-asked: _plugin\n")(repo)
     replace(JUSTFILE, "ratchet_plugin", "plugin_home")(repo)
     [found] = [f for f in conformance.findings(repo) if "`ratchet` recipe" in f.problem]
     assert isinstance(found.fix, conformance.Agent)

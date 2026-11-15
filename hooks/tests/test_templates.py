@@ -47,7 +47,7 @@ def gate_list(name: str) -> list[str]:
 
 
 def recipe(name: str) -> str:
-    match = re.search(rf"^{name}:\n((?:    .*\n)+)", JUSTFILE, re.MULTILINE)
+    match = re.search(rf"^{name}:(?: _plugin)?\n((?:    .*\n)+)", JUSTFILE, re.MULTILINE)
     assert match, name
     return match.group(1)
 

@@ -175,8 +175,18 @@ def guarded_recipes() -> list[tuple[str, list[str]]]:
             ),
         )
         for name, recipe in recipes.items()
-        if name != "_plugin" and "_plugin" in [d["recipe"] for d in recipe["dependencies"]]
+        if name != "_plugin"
+        and (
+            "_plugin" in [d["recipe"] for d in recipe["dependencies"]]
+            or calls_guard(recipe["body"])
+        )
     ]
+
+
+def calls_guard(node: object) -> bool:
+    if isinstance(node, list):
+        return any(calls_guard(item) for item in node)
+    return isinstance(node, str) and "just _plugin;" in node
 
 
 def mentions(node: object) -> bool:
@@ -202,6 +212,7 @@ def test_every_recipe_that_runs_a_file_of_the_plugin_goes_through_the_guard() ->
         if name != "_plugin"
         and mentions(recipe["body"])
         and not {d["recipe"] for d in recipe["dependencies"]} & {"_plugin", "plugin-pin"}
+        and not calls_guard(recipe["body"])
     ]
     assert unguarded == []
     assert justfile_text.first_dependents(JUSTFILE, "_plugin")

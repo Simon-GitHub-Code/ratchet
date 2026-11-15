@@ -159,8 +159,9 @@ tier0-tree: plugin-pin
 pre-commit:
     @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo pre-commit > "$RATCHET_HOOK_PROBE"; else just tier0-tree; fi
 
-commit-msg file: _plugin
-    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo commit-msg > "$RATCHET_HOOK_PROBE"; else python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"; fi
+[no-exit-message]
+commit-msg file:
+    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo commit-msg > "$RATCHET_HOOK_PROBE"; else just _plugin; python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"; fi
 
 tier1: plugin-pin
     {{parallel}} {{serial1}} -- {{tier1_gates}}
