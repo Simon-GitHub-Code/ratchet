@@ -59,6 +59,8 @@ A ticket that is too large is split by the agent, not handed back to the owner (
 
 A part of a split no longer carries the size its parent was too large for. Copied into each part, the parent's `## Size` stopped every part at its preflight, and a part is never split again, so every part was parked as too large. A part now states no size, and the spec stage estimates it.
 
+On a forge, a ticket waiting only on `behind` or `gates` is retried by the drain again, not held for the owner. The judge's pull request comment lists each reason as "- `code`: text", and the drain read the list marker as part of the code.
+
 The change-size ceiling counts product code, not tests (ADR 0045). Tests were 85% of the lines counted on recent changes, so the ceiling mostly limited them. `[ceilings.change]` is now `product_files = 25`, `product_lines = 1000` and a loose `test_lines = 3000` that only stops a runaway, and the early stops follow: product code has no margin for what is still to come, tests keep two thirds of their ceiling while the critic runs.
 
 - Which paths are tests is the binding's `## Test paths` section, written at adoption by the project's agent: the plugin names no stack. Until it is filled every changed line counts as product, as before, and conformance names the missing section.
