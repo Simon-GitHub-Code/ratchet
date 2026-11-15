@@ -27,17 +27,17 @@ The owner is asked nothing. A tool the architecture record names was their choic
 2. **Choose a tool for each row.**
    - **The architecture record names a tool for the row's concept:** take it. The owner chose it, so it is not an assumption.
    - **The row is a shipped gate** (`smoke`, `load-smoke`, `telemetry-e2e`, `config-refusal`, `graceful-stop`, `prod-probe`): fill its `bind:` words; it needs no tool. The first entry point of a service also fills `boot`, `ready`, `service` and `flags_on` as [adopt step 9](../adopt/SKILL.md) says, with its table for the other types.
-   - **Any other row:** choose as [adopt step 5](../adopt/SKILL.md) says. What is there wins. Look each tool up now, in its current documentation. Take its version from the registry, through the package manager. Prefer a tool that already answers another row.
+   - **Any other row:** choose as [adopt step 5](../adopt/SKILL.md) says. What is there wins. Look each tool up now, in its current documentation. Take its version from the registry, through the package manager, never from memory and never from this plugin. Prefer a tool that already answers another row.
 
    Print one table: each row, its trigger and instances, the tool, and where you checked it.
 
    Done when every row has a tool, or `none` with the reason this project will never have the property.
 
 3. **Bind each row.** Read [what a recipe must get right](../method/tiers.md#what-a-recipe-must-get-right) first. Then, for each row, in this order:
-   1. **Install.** Install the tool through the package manager and add what it writes to `.gitignore`. A tool adoption provisioned, such as the test runner the binding's Tests section names, is already installed: write that runner into the recipe (`{{test_runner}}` with its shard flags).
+   1. **Install.** Install the tool through the package manager and add what it writes to `.gitignore`. A tool adoption provisioned, such as the test runner the binding's Tests section names, is already installed: write that runner into the recipe (`{{test_runner}}` with its shard flags), and install nothing.
    2. **Recipe.** Replace the recipe's `@echo "later: <trigger>"` body in the `justfile` with the real command. The recipe is red when it finds nothing to run; the trigger fired, so what it judges has a member.
    3. **Binding.** Change the row's Tool cell in `docs/process/binding.md` from `later: <trigger>` to the tool, and fill its threshold source. A row whose Telemetry or Feature flags section was one line says how it is met now.
-   4. **Bite.** Add the row's `[[bite]]` to `quality/bites.toml`: the smallest fault the gate exists to catch, and the words it prints for it. Add a second bite that empties a collection, and a `proof = "<name>"` bite where the question requires one. A fault inside a file other changes also edit (a manifest, a lockfile) is a `replace`, not a `patch`. Run `just bite-one <gate>` and see it red with the fault and green without. Any verdict but `bites` is a defect of the recipe or the fault: fix that, and leave `expect` as it is.
+   4. **Bite.** Add the row's `[[bite]]` to `quality/bites.toml`: the smallest fault the gate exists to catch, and the words it prints for it. Add a second bite that empties a collection, and a `proof = "<name>"` bite where the question requires one. A fault inside a file other changes also edit (a manifest, a lockfile) is a `replace`, not a `patch`. Run `just bite-one <gate>` and see it red with the fault and green without. Any verdict but `bites` is a defect of the recipe or the fault: fix it, never loosen `expect`.
    5. **Guard.** Add the tool's config path to the `tool-config` paths of `guards/manifest.toml`. The hook and the merge judge read the manifest as the default branch holds it, so the path is guarded once the owner merges this change. `.claude/settings.json` needs no change.
 
    The `justfile`, the binding, `quality/` and the manifest are guard paths: on this branch they take no prompt, and the merge judge sends the change to the owner.
