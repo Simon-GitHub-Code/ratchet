@@ -141,14 +141,25 @@ def show(root: Path, ref: str, path: str) -> str | None:
     return git(root, "show", f"{ref}:{path}")
 
 
-def default_jobs() -> int:
-    """``RATCHET_JOBS`` when it is a count, else every core: the cap on what runs at once.
+def default_jobs(root: Path | None = None) -> int:
+    """``RATCHET_JOBS``, else git's ``ratchet.jobs``, when it is a count, else every core.
 
     Why: the gates a tier runs at once and the scratch copies a bite proof runs at once share
-    one machine, so one number caps both, the one a shared machine sets.
+    one machine, so one number caps both, the one a shared machine sets. Git's configuration
+    reaches agents that do not inherit the owner's shell, and every work tree of a clone.
     """
-    value = os.environ.get("RATCHET_JOBS", "")
-    return int(value) if value.isdigit() and int(value) > 0 else os.cpu_count() or 1
+    for value in (os.environ.get("RATCHET_JOBS", ""), configured_jobs(root or Path.cwd())):
+        if value.isdigit() and int(value) > 0:
+            return int(value)
+    return os.cpu_count() or 1
+
+
+def configured_jobs(root: Path) -> str:
+    """Git's ``ratchet.jobs`` in ``root``, empty when git, the repository or the key is missing."""
+    try:
+        return git(root, "config", "--get", "ratchet.jobs") or ""
+    except OSError:
+        return ""
 
 
 def entry_point(root: Path, name: str) -> str | None:

@@ -15,9 +15,10 @@ Usage::
 * Each ``GATE`` becomes ``RUNNER GATE`` and runs in ``--root`` (the current directory). The
   entry is split like a shell line, so ``"test-shard 1/4"`` passes two words. With no
   ``--runner`` each entry is a whole command: ``-- "./lint ." "./types --strict"``.
-* At most ``--jobs`` gates run at a time: ``RATCHET_JOBS`` by default, else the CPU count. A
-  gate that is itself parallel shares the cores with the rest; the operating system schedules
-  them. On a machine that is shared, or where each gate uses every core, give a smaller number.
+* At most ``--jobs`` gates run at a time: ``RATCHET_JOBS`` by default, else git's
+  ``ratchet.jobs``, else the CPU count. A gate that is itself parallel shares the cores with the
+  rest; the operating system schedules them. On a machine that is shared, or where each gate
+  uses every core, give a smaller number.
 * ``--alone GATE...`` names gates that are measured alone: each runs once every other gate has
   finished, one at a time, with nothing beside it. It is for a gate that judges elapsed time (a
   benchmark, a load run), whose reading the other gates would disturb. A name that is not among
