@@ -181,6 +181,7 @@ BITING = "RATCHET_BITING"
 # Why: the copy as it stood after setup, as an index of its own: restoring from it rewrites only
 # the files a run changed, so no build tool sees a tree of new timestamps.
 SNAPSHOT = ".git/bite-index"
+FRESH = ".git/bite-fresh-index"
 # Why: a chain of links longer than this is a loop, or as good as one, and is refused.
 MAX_LINK_HOPS = 40
 # Why: a gate that adds a rule here hides from the restore what it, or a fault, left behind.
@@ -986,6 +987,7 @@ class Copy:
     tree: Tree
     shell: Shell
     head: str
+    snapshot_tree: str
     staged: bytes
     exclude: bytes
 
@@ -1004,14 +1006,17 @@ class Copy:
         self.tree.write(INDEX, self.staged)
         self.tree.write(EXCLUDE, self.exclude)
         # Why: git only lists here; every delete and write goes through a descriptor of the copy.
-        # The refresh drops the files whose stat changed but not their content, so those stay.
-        run_git(self.path, "update-index", "-q", "--refresh", index=snapshot)
+        # A fresh index holds no stat data, so the refresh compares every file's content and
+        # a gate that kept a file's size and times cannot hide its change.
+        fresh = self.path / FRESH
+        git_in(self.path, "read-tree", self.snapshot_tree, index=fresh)
+        run_git(self.path, "update-index", "-q", "--refresh", index=fresh)
         listed = ("ls-files", "-z", "--others", "--directory", "--exclude-standard")
         for path in git_in(self.path, *listed, index=snapshot).split("\0"):
             if path:
                 self.tree.clear(path)
         held = staged(self.path, snapshot)
-        raw = git_in(self.path, "diff-files", "-z", "--raw", "--no-renames", index=snapshot)
+        raw = git_in(self.path, "diff-files", "-z", "--raw", "--no-renames", index=fresh)
         fields = raw.split("\0")
         for path in sorted(fields[1::2]):
             mode, blob = held[path]
@@ -1115,6 +1120,7 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell) -> Co
         tree,
         shell,
         git_in(copy, "rev-parse", "HEAD"),
+        git_in(copy, "write-tree", index=copy / SNAPSHOT),
         tree.read(INDEX) or b"",
         tree.read(EXCLUDE) or b"",
     )

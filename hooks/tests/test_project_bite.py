@@ -1603,6 +1603,23 @@ def test_a_directory_swapped_for_a_link_between_listing_and_restoring_never_reac
     assert (root / "src/junk.txt").read_text(encoding="utf-8") == "real\n"
 
 
+def test_a_file_a_gate_changed_to_the_same_length_with_its_times_put_back_is_restored(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    old = 1_000_000_000_000_000_000
+    os.utime(root / "src/code.txt", ns=(old, old))
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    target = copy.path / "src/code.txt"
+    assert target.stat().st_mtime_ns == old
+    target.write_text("dirty\n", encoding="utf-8")
+    os.utime(target, ns=(old, old))
+    copy.restore()
+    assert target.read_text(encoding="utf-8") == "clean\n"
+
+
 def test_a_link_standing_where_a_directory_belongs_is_replaced_and_the_real_tree_is_untouched(
     tmp_path: Path,
 ) -> None:
