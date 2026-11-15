@@ -55,7 +55,7 @@ This is wrong if any of these is seen:
 - An upgrade that touches the binding's rows proves the gates of those rows, not all of them.
 - The default branch runs the full proof after each merge that touches a gate-defining path, under a budget sized for it.
 
-## Open for the owner
+## Settled by the owner, 2026-11-15
 
-- **1. Which runs own the full proof.** Default taken: both the default branch and the nightly run, as tier 2 runs today. Recommendation: keep both. The default branch finds a gate a merge broke on the merge that broke it, and the nightly run finds a gate a tool's own change broke with no merge at all. Cost: one full proof per merge that touches a gate-defining path.
-- **2. What a red full proof stops.** Default taken: what any red tier 2 stops. It is fixed before anything else merges, and while it is red the merge judge leaves every merge to the owner. Recommendation: keep it. A gate that cannot fail lets every later change through unjudged on what it was for. Cost: a `TIMED OUT` on a loaded runner stops merges until someone runs the proof again, which the 75 percent warning makes rarer.
+- **1. Which runs own the full proof.** Both the default branch and the nightly run, as tier 2 runs today. The default branch finds a gate a merge broke on the merge that broke it, and the nightly run finds a gate a tool's own change broke with no merge at all. Cost: one full proof per merge that touches a gate-defining path.
+- **2. What a red full proof stops.** What any red tier 2 stops. It is fixed before anything else merges, and while it is red the merge judge leaves every merge to the owner. A gate that cannot fail lets every later change through unjudged on what it was for. Cost: a `TIMED OUT` on a loaded runner stops merges until someone runs the proof again, which the 75 percent warning makes rarer.
