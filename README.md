@@ -239,7 +239,7 @@ Until a tagged release is installed (ADR 0068), that clone follows the default b
 ```bash
 plugin=$(mktemp -d)
 git clone --quiet https://github.com/Simon-GitHub-Code/ratchet "$plugin"
-git -C "$plugin" checkout --quiet "$(git -C "$plugin" log --first-parent -1 --format=%H -S'"version": "<version>"' -- .claude-plugin/plugin.json)"
+git -C "$plugin" checkout --quiet "$(git -C "$plugin" log --first-parent --reverse --format=%H -S'"version": "<version>"' -- .claude-plugin/plugin.json | head -n 1)"
 python3 "$plugin/scripts/upgrade.py" --apply
 ```
 
