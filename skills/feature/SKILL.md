@@ -33,7 +33,7 @@ Pick the mode from what the owner typed:
 
 2. **The branch.**
    - When `git rev-parse --verify --quiet <branch>` finds the branch, `git switch <branch>`. Otherwise `git switch -c <branch> <base>`.
-   - Run the preflight again with `--branch <branch>`. It must stay green.
+   - Run the preflight again with `--branch <branch>`, its report written to a file made with `mktemp`, outside the work tree. It must stay green. The report also holds `start`, the state of the branch and the forge that the publish check of step 3 compares with.
    - **Red with `--branch`:** report `verdict: blocked` and, for each failure, its `check`, `detail` and `produce`. Spawn nothing. Stop.
 
    Done when you are on the branch and the preflight with `--branch` is green, or you have reported every failure and stopped.
@@ -47,9 +47,14 @@ Pick the mode from what the owner typed:
 
    The run is the one [pipeline.md](../method/pipeline.md) describes. It never commits, pushes or opens a pull request. The critic runs only when `critic` is true (the binding declares the `depended-on` life event).
 
+   **The publish check, each time the run returns or errors,** before anything is committed and before a resume: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/publish_check.py" <the report file of step 2> --root .` in one Bash call.
+   - **Exit 0:** nothing moved. Go on.
+   - **Exit 1:** a role committed, pushed or opened a pull request. Run `git stash push -u -m "<branch>: blocked run"`, then `git switch <base>`. Tell the owner what the check printed, and stop. Never commit on that branch.
+   - **Exit 2 or 3:** the start or the present state cannot be read, and neither is a pass. Report what it printed and stop.
+
    **The run errors instead of returning** (an agent died): resume it once. If it errors again, tell the owner which stage died and stop.
 
-   Done when the workflow has returned a result, or you have told the owner which stage died.
+   Done when the workflow has returned a result and the publish check is green, or you have stopped as the check or a second error says.
 
 4. **A result that is not approved.** A `verdict` other than `approve`, an open `unresolvedBlockingFindings` or a red `checkOutput` tail commits nothing. An approved result goes to step 5.
    - Clear what the agents left with `git stash push -u -m "<branch>: <verdict> run"`, then `git switch <base>`.
@@ -119,6 +124,7 @@ Run every command below from the repository's own checkout, on the default branc
    ```
 
    **A run that errors.** An agent that dies ends the run in a thrown error ("resume the run to retry") and no result.
+   - First run `D check <ticket> --root .`, with no `--final`, since a role can still commit in the resume. On any exit but 0, settle it as [The publish check](#the-publish-check) says, and do not resume.
    - Resume that run once: the same Workflow call with its resume.
    - If it errors again, the ticket is not parked and the drain does not stop. Run `D close <ticket> --outcome waits --reason "errored: the pipeline run errored twice: <the error's first line>" --root .`.
    - The next drain builds the ticket again, from the start.
@@ -135,6 +141,7 @@ Run every command below from the repository's own checkout, on the default branc
       - A `triggers:` red in the result's `checkOutput` adds a reason that names `/ratchet:safeguard`, or `/ratchet:architecture` for an owed review. That ticket is held only until the safeguard is bound or the review has landed.
       - Keep the result's `openQuestions` for step 7.
    2. **Commit.** On `approve`:
+      - First run `D check <ticket> --final --root .`. On any exit but 0, settle it as [The publish check](#the-publish-check) says, and commit nothing.
       - Commit everything the work tree holds (`git add -A`) with the subject `<type>(<scope>): <the slug, hyphens as spaces>`. The type is `feat` for a ticket that adds behaviour and `fix` for one that repairs it.
       - The subject is at most 72 characters (tier 0 refuses more). When it is longer, drop whole words from the end of the slug until it fits, never cutting a word or leaving a trailing `and`, `a`, `the`, `of` or `to`, and put the ticket's full title in the body.
       - The body holds `Closes <ref>`, whether or not the subject was shortened.
@@ -154,7 +161,7 @@ Run every command below from the repository's own checkout, on the default branc
       - One agent finishes the rebase and gets `check` green, only when there was a conflict or a red `check`.
       - Then the reviewer judges the change as it stands, held to the readings the first run's ticket check settled (`settled`), so a case the first run assumed is not read as open again.
       - **Not `approve`:** park as in step 4.1.
-      - **Otherwise:** commit its `filesChanged`, if any, and use its `verdictRecord` in place of the first.
+      - **Otherwise:** run `D check <ticket> --final --root .` first, since the rebase recorded a new start that `land` refuses until a final check passes it. On any exit but 0, settle it as [The publish check](#the-publish-check) says. On 0, commit its `filesChanged`, if any, and use its `verdictRecord` in place of the first.
    5. **The records.** Make them as [The records of an approved change](#the-records-of-an-approved-change) says, with the verdict record from the latest result.
    6. **Land it.**
       - **With no forge:** `D land <ticket> --root .` runs the binding's `merge` entry point, prints the judge's lines, removes the work tree and records merged or waiting with every reason. Exit 2 means it could not ask: report what it printed and leave the ticket.
@@ -191,6 +198,15 @@ Run every command below from the repository's own checkout, on the default branc
    - **Otherwise:** the last lines are the route. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
 
    Done when the drain runs again for what was released, or the route's lines are the last lines you print.
+
+### The publish check
+
+`D check <ticket>` compares the ticket's branch and the forge with the start that `open`, or a rebasing `update`, recorded in the ticket's note (ADR 0060). Only `--final` marks the start passed, and `land` refuses a start that no final check passed. Pass `--final` only on the check just before a commit.
+
+- **Exit 0:** nothing moved. Go on.
+- **Exit 1:** a role committed, pushed or opened a pull request. The check has parked the ticket, kept what was uncommitted as a stash, and holds the ticket until its text changes. Commit nothing and land nothing. Go on at step 5 (`D plan`), and the report names it. When the line is `check: <ref> is merged and is not checked`, the ticket has landed instead: go on at step 5.
+- **Exit 2:** the note holds no start, which `open` records. Report the line, leave the ticket, and go on at step 5.
+- **Exit 3:** either the check found a rebase left unfinished or a state it cannot read, and has closed the ticket as waiting for a later drain to retry; or it refused before checking, since the ticket is held or its branch has no commit of its own and no work tree. Report the line and go on at step 5.
 
 ### Tickets the drain holds or retries
 
