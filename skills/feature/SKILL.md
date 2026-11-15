@@ -130,7 +130,7 @@ Run every command below from the repository's own checkout, on the default branc
 4. **Settle each result, one ticket at a time,** in the order they arrive, finishing one before the next: two changes that passed apart can fail together. Each sub-step runs in the ticket's work tree.
 
    1. **Not approved.**
-      - **A result with `tooLarge`** is split, not parked, as [Too large](#too-large-the-agent-splits-it) says. The parts join the plan and the drain goes on.
+      - **A result with `tooLarge`** is split as [Too large](#too-large-the-agent-splits-it) says, or parked there when its split is refused. The parts join the plan and the drain goes on.
       - **Any other `verdict` than `approve`** parks the ticket. Write the result to a file made with `mktemp` and run `D close <ticket> --outcome parked --result <file> --root .`. It removes the work tree, keeps what the agents left as the stash `<branch>: blocked run`, and holds the ticket until the ticket changes.
       - A `triggers:` red in the result's `checkOutput` adds a reason that names `/ratchet:safeguard`, or `/ratchet:architecture` for an owed review. That ticket is held only until the safeguard is bound or the review has landed.
       - Keep the result's `openQuestions` for step 7.
@@ -141,8 +141,9 @@ Run every command below from the repository's own checkout, on the default branc
    3. **Bring it up to date.** Run `D update <ticket> --root .`.
       - **Exit 0 with `"moved": false`:** go to step 4.5.
       - **Exit 0 with `"moved": true`:** run `check` and note whether it is red. Then step 4.4.
-      - **Exit 2:** the rebase stopped on the `conflicts` it prints, and the branch is as it was. Then step 4.4.
-      - **Exit 1:** close the ticket with `--outcome waits --reason "<the line it printed>"`.
+      - **Exit 2 with JSON whose `conflicts` is not empty:** the rebase stopped on those conflicts, and the branch is as it was. Then step 4.4.
+      - **Exit 1 with `update: <ref> is merged and is not rebased`:** the ticket has landed. Do not close it. Go on at step 5 (`D plan`); the report lists it under Merged.
+      - **Any other exit 1** (`update: <ref> is not rebased: <why>`): close the ticket with `--outcome waits --reason "<the line it printed>"`.
    4. **Judge it again.** After a rebase or a conflict the first review no longer describes the change:
 
       ```
@@ -163,11 +164,13 @@ Run every command below from the repository's own checkout, on the default branc
 
    **Exit 3 from `update`, `close` or `split`:** a landing of that ticket is still running (for example a `land` the shell gave up waiting on), or only its merge is (its line says "a merge"). Leave the ticket: do not close, reconcile or split it. Wait for that landing to end, and go on at step 5 (`D plan`). The landing records the outcome itself; with only a merge running, a `report` or an `update` records it afterwards.
 
+   **Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line:** the command refused before any work on the ticket. Report the line, leave the ticket as it is, and go on at step 5 (`D plan`). The line says why, for example: no such ticket, or a number more than one local ticket starts with; a fast-forward that was cut off and cannot be put back yet; the drain lock, not free in time; a close that would unsay a merge.
+
    **A ticket the plan lists as `built`** was committed by an earlier drain and has no run.
    - When its `why` says it is behind the default branch, start it at step 4.3. `update` makes its work tree again, rebases it and drops the verdict record the move outdated. Then step 4.4 judges it again and 4.5 writes the new record.
    - Otherwise start it at step 4.6.
 
-   Done when the ticket is closed, split, or left as step 4.6 or exit 3 says.
+   Done when the ticket is closed, split, landed as `update` said, or left as step 4.6, exit 3 or a refusal with exit 2 says.
 
 5. **Start what a merge released.** After each ticket is closed, run `D plan --root .` again and start every ticket now in `start` as in step 3.
 
@@ -225,14 +228,21 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
 
    Done when every `- [ ]` line of the ticket is in exactly one part, word for word.
 
-2. **File it.** In the repository's own checkout, run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file> --root .`.
-   - It checks the plan, files the parts with the agent-ready label the parent holds now, closes the parent as `split` with its text unedited, and prints the parts.
-   - **Exit 1:** the plan was refused, naming the line. Fix the plan and run it again, once.
-   - **A ticket that is itself a part** is not split again. It is parked as too large and the report names it, which is the owner's.
+2. **Check the plan.** In the repository's own checkout, run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file> --root .`. It judges the plan as `split` will and files nothing.
+   - **Exit 0:** go to step 3.
+   - **Exit 1 or 2:** it prints `split: refused: <line>` for each line it refuses, or `split: the plan does not read: <why>`. Fix the plan once and check it again.
+   - **Refused a second time:** do not run the plan. Park the ticket as too large, which is the owner's. Write the pipeline's result to a file made with `mktemp`, or `{"tooLarge": true}` when the preflight's `size` failure sent you here, and run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" close <ticket> --outcome parked --result <file> --root .` with one `--reason "too large, and the split was refused: <line>"` per line the second check refused.
+   - **A ticket that is itself a part** is not split again: the check refuses every plan for it, so it is parked as too large and the report names it, which is the owner's.
 
-   Done when the parts are printed, or the second run was refused, or the ticket is itself a part and is parked as too large.
+   Done when the check has passed the plan, or has refused it twice and the ticket is parked as too large.
 
-3. **Go on.** The parts are tickets the plan now lists, so the drain builds them in order. The hand-over says the ticket was split, into what, and why.
+3. **File it.** In the repository's own checkout, run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file> --root .`, only with a plan the check passed.
+   - It checks the plan again, files the parts with the agent-ready label the parent holds now, closes the parent as `split` with its text unedited, and prints the parts.
+   - **Exit 1:** it refused the plan and has already parked the ticket as too large: it prints `closed: <ref>: parked`, and the report gives the reason. The ticket is the owner's. Do not run it again.
+
+   Done when the parts are printed, or `split` has parked the ticket as too large.
+
+4. **Go on.** The parts are tickets the plan now lists, so the drain builds them in order. The hand-over says the ticket was split, into what, and why.
 
    Done when you hold the split's parts and its reason for the hand-over.
 

@@ -126,6 +126,43 @@ def test_a_red_preflight_on_the_branch_stops_the_build() -> None:
     )
 
 
+def test_the_drain_reads_a_refusal_with_exit_2_as_no_conflict() -> None:
+    # Why: the page read every exit 2 of `update` as a rebase that conflicted. `drain.py` also
+    # exits 2 when it refuses before any work on the ticket, with a `drain:` or `merge:` line, and
+    # a rejudge over that would judge a branch nothing moved. The page now sends only a non-empty
+    # `conflicts` to the rejudge, and leaves the ticket for every refusal.
+    assert (
+        "**Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line:** the"
+        " command refused before any work on the ticket. Report the line, leave the ticket as it"
+        " is, and go on at step 5 (`D plan`)." in FEATURE
+    )
+
+
+def test_the_drain_does_not_close_a_ticket_that_update_says_has_merged() -> None:
+    # Why: the page closed the ticket as waiting on every exit 1 of `update`. When `update` says
+    # the ticket is merged, its note already records the merge, and `close` refuses any other
+    # outcome. The page now leaves that ticket to the report's Merged list.
+    step = FEATURE.split("3. **Bring it up to date.**", 1)[1].split("4. **Judge it again.**", 1)[0]
+    assert (
+        "**Exit 1 with `update: <ref> is merged and is not rebased`:** the ticket has landed. Do"
+        " not close it. Go on at step 5 (`D plan`); the report lists it under Merged." in step
+    )
+
+
+def test_a_split_plan_is_checked_before_drain_split_runs_it() -> None:
+    # Why: the page said to fix a refused plan and run `drain.py split` again, once. That command
+    # parks the ticket as too large on its first refusal, so there was no second run. The page now
+    # checks the plan with `split.py check`, which files nothing, and runs `split` only on a pass.
+    too_large = FEATURE.split("## Too large: the agent splits it", 1)[1].split(" ## ", 1)[0]
+    checked = (
+        'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file>'
+        " --root .`. It judges the plan as `split` will and files nothing.",
+        'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file>'
+        " --root .`, only with a plan the check passed.",
+    )
+    assert all(sentence in too_large for sentence in checked)
+
+
 def test_the_fork_test_has_one_wording_the_spec_role_and_the_conjecture_skill_share() -> None:
     # Why: the conjecture skill asked the owner what the pipeline's Spec role would have assumed,
     # because only the role's prompt held the examples. A prompt cannot follow a link, so the
