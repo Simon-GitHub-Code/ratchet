@@ -23,7 +23,7 @@ OLD = (
     "- `pstack` is the only builder.\n"
     "- **Local rule** `impeccable` reviews the surfaces.\n"
 )
-SECTION = "## Moved from the companion lines"
+SECTION = "## Moved by the Ratchet upgrade"
 PLAIN = (
     OLD.replace(OLD.splitlines()[4], "- `mattpocock-skills`")
     .replace(OLD.splitlines()[5], "- `pstack`")
@@ -126,7 +126,7 @@ def test_the_rules_on_the_lines_move_word_for_word_to_the_end_of_the_file(repo: 
 def test_the_finding_says_the_project_s_text_moves_and_is_not_deleted(repo: Path) -> None:
     agents(repo, OLD)
     [found] = shape(repo)
-    assert "moves to '## Moved from the companion lines' and is not deleted" in found.problem
+    assert "moves to '## Moved by the Ratchet upgrade' and is not deleted" in found.problem
 
 
 def test_an_existing_section_is_appended_to_and_not_made_twice(repo: Path) -> None:
