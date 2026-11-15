@@ -571,10 +571,7 @@ def render(root: Path, result: Plan, *, applied: bool) -> str:
             lines += [f"    - {did}" for did in result.done.get(name, [])]
             moved = moved_lines(result.changes[name]) if name in INSTRUCTION_FILES else []
             if moved:
-                heading = conformance.MOVED
-                lines.append(
-                    f"    - moved {len(moved)} lines to '{heading}' for the owner to read:"
-                )
+                lines.append(f"    - moved to '{conformance.MOVED}' for the owner to read:")
                 lines += [f"      {line}" for line in moved]
         blocks.append("\n".join(lines))
     if result.red:

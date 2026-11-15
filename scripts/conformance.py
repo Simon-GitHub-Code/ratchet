@@ -20,6 +20,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 import application_types
 import architecture
@@ -269,6 +270,7 @@ MOVED = "## Moved by the Ratchet upgrade"
 MARKETPLACE = Path(__file__).resolve().parents[1] / ".claude-plugin/marketplace.json"
 BOLD_NAME = re.compile(r"^- \*\*([^*]+)\*\*")
 BACKTICKED_WORD = re.compile(r"`([^`\s]+)`")
+ITEM_BREAK = re.compile(r"^(#|[-*+] |\d+[.)] |>|```|~~~|\||<|---|\*\*\*|___)")
 RUNS_JUST = re.compile(r"^just\s+@?([A-Za-z_][\w-]*)")
 # Why: a gate over the change compares with a base; `changed.py` hands it one, and judges nothing
 # on the adoption, whose base holds no binding.
@@ -549,31 +551,74 @@ def companion_of(line: str, names: Sequence[str]) -> str | None:
     return ticked.group(1) if ticked and ticked.group(1) in names else None
 
 
-def companion_lines(text: str, names: Sequence[str]) -> Iterator[tuple[int, str, str]]:
-    """Each companion line before the first ``## `` heading: its index, its name, its line."""
-    for index, line in enumerate(text.splitlines(keepends=True)):
-        if line.startswith("##"):
-            return
-        if (name := companion_of(line, names)) is not None:
-            yield index, name, line
+class CompanionItem(NamedTuple):
+    """A companion list item: its lines' span, the plugin it names, and its lines as written."""
+
+    start: int
+    stop: int
+    name: str
+    lines: tuple[str, ...]
+
+
+def item_end(lines: Sequence[str], start: int) -> int:
+    """Where the list item that starts at ``start`` ends: past every line that continues it."""
+    stop = start + 1
+    index = stop
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            index += 1
+            continue
+        if not line[0].isspace() and (index > stop or ITEM_BREAK.match(line)):
+            break
+        index += 1
+        stop = index
+    return stop
+
+
+def companion_items(text: str, names: Sequence[str]) -> Iterator[CompanionItem]:
+    """Each companion item before the first ``## `` heading, with its wrapped and nested lines."""
+    lines = text.splitlines(keepends=True)
+    index = 0
+    while index < len(lines) and not lines[index].startswith("##"):
+        name = companion_of(lines[index], names)
+        if name is None:
+            index += 1
+            continue
+        stop = item_end(lines, index)
+        yield CompanionItem(index, stop, name, tuple(lines[index:stop]))
+        index = stop
 
 
 def plain_companion(name: str) -> str:
     return f"- `{name}`"
 
 
+def is_plain(item: CompanionItem) -> bool:
+    return len(item.lines) == 1 and item.lines[0].rstrip("\r\n") == plain_companion(item.name)
+
+
+def newline_of(text: str) -> str:
+    """The file's own line ending: its first line's, or a newline when it has none."""
+    first = text.splitlines(keepends=True)[:1]
+    return first[0][len(first[0].rstrip("\r\n")) :] or "\n" if first else "\n"
+
+
 def with_moved_items(text: str, items: Sequence[str]) -> str:
-    """The text with each item appended to the moved section, which is made at the end if absent."""
-    lines = text.split("\n")
+    """The text with each line appended to the moved section, which is made at the end if absent."""
+    newline = newline_of(text)
+    added = [f"{item}{newline}" for item in items]
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += newline
     starts = [i for i, line in enumerate(lines) if line.rstrip() == MOVED]
     if not starts:
-        body = text if text.endswith("\n") or not text else text + "\n"
-        return "".join([body, "\n", MOVED, "\n\n", *(f"{item}\n" for item in items)])
+        return "".join([*lines, newline, MOVED, newline, newline, *added])
     start = starts[-1]
     end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
     last = next((i for i in range(end - 1, start, -1) if lines[i].strip()), start)
-    lines[last + 1 : last + 1] = items
-    return "\n".join(lines)
+    lines[last + 1 : last + 1] = added
+    return "".join(lines)
 
 
 def moved_items(text: str) -> list[str]:
@@ -589,12 +634,15 @@ def with_plain_companions(names: Sequence[str]) -> gatelib.Want:
 
     def want(text: str | None) -> str:
         lines = (text or "").splitlines(keepends=True)
-        moved = []
-        for index, name, line in companion_lines(text or "", names):
-            bare = line.rstrip("\r\n")
-            if bare != plain_companion(name):
-                moved.append(bare)
-            lines[index] = plain_companion(name) + line[len(bare) :]
+        moved: list[str] = []
+        for item in reversed(list(companion_items(text or "", names))):
+            if is_plain(item):
+                continue
+            first = item.lines[0]
+            moved[:0] = [line.rstrip("\r\n") for line in item.lines]
+            lines[item.start : item.stop] = [
+                plain_companion(item.name) + first[len(first.rstrip("\r\n")) :]
+            ]
         made = "".join(lines)
         return with_moved_items(made, moved) if moved else made
 
@@ -608,13 +656,9 @@ def check_companion_lines(root: Path) -> Iterable[Finding]:
     if text is None:
         name, text = "CLAUDE.md", read(root / "CLAUDE.md")
     names = companions()
-    stale = [
-        (plugin, line)
-        for _, plugin, line in companion_lines(text or "", names)
-        if line.rstrip("\r\n") != plain_companion(plugin)
-    ]
+    stale = [item.name for item in companion_items(text or "", names) if not is_plain(item)]
     if stale:
-        plugins = ", ".join(plugin for plugin, _ in stale)
+        plugins = ", ".join(stale)
         problem = (
             f"the lines for {plugins} are not exactly `- `<plugin>``; the project's own text on"
             f" them moves to '{MOVED}' and is not deleted"
@@ -622,7 +666,7 @@ def check_companion_lines(root: Path) -> Iterable[Finding]:
         edit = Edit(
             f"write each companion line as the plugin's name alone, its text moved to '{MOVED}'",
             with_plain_companions(names),
-            Agent(start=tuple(plain_companion(plugin) for plugin, _ in stale)),
+            Agent(start=tuple(plain_companion(plugin) for plugin in stale)),
         )
         yield Finding(name, problem, edit)
 

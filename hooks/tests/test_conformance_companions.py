@@ -159,6 +159,54 @@ def test_the_upgrade_report_names_the_file_and_lists_the_lines_it_moved(repo: Pa
     assert isinstance(result, upgrade.Plan)
     report = upgrade.render(repo, result, applied=False)
     assert "  AGENTS.md\n" in report
-    assert f"    - moved 3 lines to '{SECTION}' for the owner to read:" in report
+    assert f"    - moved to '{SECTION}' for the owner to read:" in report
     for line in MOVED:
         assert f"      {line}\n" in report
+
+
+WRAPPED = (
+    "- **In what style?** `pstack`: `poteto-mode` routes a task,\n  and the owner reads its plan.\n"
+)
+NESTED = (
+    "- **How is it designed?** `impeccable`: two rules.\n"
+    "  - every surface goes through it\n"
+    "  - no screen ships unreviewed\n"
+)
+AFTER = (
+    "- **What must be true before a merge?** `ratchet`: load the `ratchet:method` skill.\n"
+    "\n## Next\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("items", "newline"),
+    [((WRAPPED,), "\n"), ((NESTED,), "\n"), ((WRAPPED, NESTED), "\r\n")],
+    ids=["wrapped", "nested", "both-crlf"],
+)
+def test_an_item_that_wraps_or_nests_moves_whole_and_in_order(
+    repo: Path, items: tuple[str, ...], newline: str
+) -> None:
+    old = ("# P\n\n" + "".join(items) + AFTER).replace("\n", newline)
+    moved = [line for item in items for line in item.splitlines()]
+    plain = [f"- `{'pstack' if item is WRAPPED else 'impeccable'}`" for item in items]
+    want = newline.join(["# P", "", *plain, *AFTER.splitlines(), "", SECTION, "", *moved, ""])
+    fix = fix_of(repo, old)
+    edited = fix.want(old)
+    assert edited == want
+    assert fix.want(edited) == edited
+    agents(repo, edited)
+    assert shape(repo) == []
+
+
+def test_a_plain_bullet_with_lines_beneath_it_is_red(repo: Path) -> None:
+    agents(repo, "# P\n\n- `pstack`\n  routes a task.\n\n## Next\n")
+    [found] = shape(repo)
+    assert found.problem.startswith("the lines for pstack are not exactly")
+
+
+def test_a_blank_line_then_text_ends_the_item(repo: Path) -> None:
+    old = "# P\n\n- **x** `pstack`: styles.\n\nFour plugins build here.\n"
+    edited = fix_of(repo, old).want(old)
+    assert edited == (
+        f"# P\n\n- `pstack`\n\nFour plugins build here.\n\n{SECTION}\n\n- **x** `pstack`: styles.\n"
+    )
