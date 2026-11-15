@@ -35,7 +35,8 @@ Each role does its work with the other plugins' skills. The method fixes what a 
 - A point is an open question in two cases. It is `irreversible` when a wrong guess cannot be taken back (stored data lost, a public contract fixed, money spent, a security or privacy rule weakened). It is `direction` when the options are different products, which [the fork test](#the-fork-test) decides. A choice the user could not tell apart is the role's own.
 - A promise of the ticket it believes cannot or should not be built as written is a question under the fork test too, never one it leaves out.
 - A change that implies a change to the architecture (a new layer, a new kind of storage, a new process boundary) is a `direction` question under the fork test, with options and a recommendation, never decided silently.
-- Each question carries its kind, two to four options with the recommended one first, and why. The role never asks the owner to confirm. Open questions stay open.
+- Each question carries its kind, two to four options with the recommended one first, and why. The role never asks the owner to confirm.
+- Open questions stay open.
 
 **The amend.** When the ticket check finds a gap, the same role amends `spec.md` and its tests once, with the findings in hand:
 
@@ -43,9 +44,9 @@ Each role does its work with the other plugins' skills. The method fixes what a 
 - nothing the gaps do not touch: every other criterion keeps its wording exactly;
 - nothing another ticket of the feature promises.
 
-**The estimate.** It estimates the whole change (spec, tests, the critic's share, implementation, records) against the change-size ceiling, and proposes a split when the ticket cannot fit.
+**The estimate.** It estimates the whole change (spec, tests, the critic's share, implementation, records) against the change-size ceiling, and proposes a split when the ticket cannot fit. It omits the estimate when the binding binds no change-size gate.
 
-Done when `spec.md` holds every part listed above, the failing tests exist and each fails for the right reason with its failure quoted, tier 0 is green and the new tests are red, and the whole change is estimated.
+Done when `spec.md` holds every part listed above, the failing tests exist and each fails for the right reason with its failure quoted in the result and in the spec, tier 0 is green and the new tests are red, the whole change is estimated or the binding binds no change-size gate, and, when the ticket check found a gap, the amend has closed each one.
 
 ### Ticket check
 
@@ -64,7 +65,7 @@ Done when every promise of the ticket has its reading in `ticketPromises`, and e
 - **Never sees:** the ticket, the spec author's reasoning.
 - A test that cannot be made to pass is left red.
 
-Done when every listed test passes and `check` exits 0.
+Done when every listed test passes and `check` exits 0, or the test that cannot be made to pass is left red and the result says so.
 
 ### Critic
 
@@ -75,8 +76,8 @@ The critic runs only once the binding's `- Life events:` line declares `depended
 - **Never sees:** the implementer's notes, the ticket.
 - **Attacks:**
   - property and edge-case tests written;
-  - changed-code mutation run;
-  - fuzzing run;
+  - changed-code mutation run, or "not applicable" and why where the binding names no mutation gate;
+  - fuzzing run, or "not applicable" and why where the binding names no fuzz harness;
   - every new entry point attacked and overloaded, its telemetry read for a secret, its flag flipped;
   - the fitness tests sabotaged in a scratch copy and seen to bite;
   - vocabulary and contracts checked;
@@ -85,7 +86,7 @@ The critic runs only once the binding's `- Life events:` line declares `depended
 - The critic runs `tier0` and its own tests, not `check`.
 - A finding whose kept test passes (`heldByKeptTest`) is resolved by that test.
 
-Done when every attack above is done, every finding carries the command and output that proves it, and `attempted` lists every command run, so "nothing found" carries its severity.
+Done when every attack above is done, every finding carries the command and output that proves it, and `attempted` lists every command run, so "nothing found" refutes only the attempts that would have hit.
 
 ### Review
 
@@ -107,7 +108,7 @@ Done when axes A to F are judged and the verdict approves only under that rule.
 Three roles read the ticket: the spec role, which writes the spec from it; the ticket check, which reads only the ticket and `spec.md` before anything is built; and the review, which reads the change against the readings the check settled. Every other role works from the spec alone, so a spec that drops or bends a promise of the ticket would be built to the letter and pass every other check.
 
 - Each of the three reads a local ticket file as the base branch holds it (`git show <base>:<path>`), not the copy in the working tree that an agent of the run could have edited.
-- The check and the review return the same two axes, `ticketPromises` and `acceptedInputs`, from one definition. The schema makes each role answer both and gives each reading the evidence that shows it. It cannot make an answer complete: a list that leaves a promise out fits it, and so does an empty `acceptedInputs`.
+- The check and the review return the same two axes, `ticketPromises` and `acceptedInputs`, from one definition.
 
 ### Severity
 
@@ -117,14 +118,16 @@ Three roles read the ticket: the spec role, which writes the spec from it; the t
 
 ## The loop
 
+The script is a pure function of its arguments and the agents' structured results, so it resumes cleanly.
+
 0. **Preflight.** `scripts/feature_preflight.py` on the ticket checks that it is open, `## Conjecture` is stated, the agent-ready label is present, the tree is clean, `HEAD` is on the branch, and, in an adopted repository, that a commit would run tier 0 (`scripts/hooks_installed.py`, which prints the repair when the commit hooks are missing, since the pipeline's commits would otherwise skip tier 0).
    - The skill runs it before the workflow and spawns nothing while it is red.
    - The workflow runs it again as its first stage, through one low-effort agent that types the command and relays its JSON.
    - Red stops the run with `verdict: "blocked"` and, per failure, what produces the missing piece.
 1. **Spec.**
    - A non-empty `openQuestions` stops the run with `verdict: "blocked"`. The orchestrator asks the owner each one as the registered product question `feature.open-question` ([questions.toml](questions.toml)), writes the answer on the ticket under `## Answers`, and builds the ticket again.
-   - So does a non-empty `guardEdits`: criteria that need a guard path changed (an import contract, a shared test fixture, a row of the binding's Architecture table, the definition of a term the glossary already has) cannot be met by a run with no owner at the keyboard. The owner lands those edits first, or builds the ticket with `/pstack:poteto-mode` while present and merges the change.
-   - A word the glossary lacks is not one: the spec role adds the term with its *Avoid* list, the guard lets an addition through, and the pull request lists it.
+   - A non-empty `guardEdits` stops the run the same way: criteria that need a guard path changed (an import contract, a shared test fixture, a row of the binding's Architecture table, the definition of a term the glossary already has) cannot be met by a run with no owner at the keyboard. The owner lands those edits first, or builds the ticket with `/pstack:poteto-mode` while present and merges the change.
+   - A word the glossary lacks is not a guard edit: the spec role adds the term with its *Avoid* list, the guard lets an addition through, and the pull request lists it.
 2. **Ticket check.** A gap the check finds, a promise `dropped` or `bent` or an input case no criterion decides, goes back to the spec role, which amends `spec.md` once while no code exists, and the check reads it again. After that the run decides, and the script asks the owner nothing.
    - **A promise still `dropped`** is kept from the ticket. The readings the script settles say, in the ticket's words, that the app does it. The implementer builds it with a test, and the review judges the build against it. It joins the `assumptions` as "the plan left this out, so it was built as your ticket says", which the owner overrules as he would any assumption. A ticket line about how the change is built, such as a tool to run, is kept the same way.
    - **A case still undecided** takes the safe answer the same way (an empty value: nothing is saved and nothing breaks; an oversized one refused with a message; a hostile one kept as plain text that does nothing), and joins the `assumptions` under the input's plain name.
@@ -140,6 +143,7 @@ Three roles read the ticket: the spec role, which writes the spec from it; the t
 4. **Critique,** once the project is `depended-on`; skipped before.
 5. **Fix loop,** once the project is `depended-on`. While a blocker or major finding remains that no kept passing test resolves, or a test the critic kept is failing (whatever the finding's severity), up to two rounds: a *fresh* fix agent (it has not seen the previous implementer's reasoning), then re-critique by title plus a search for new breakage.
 6. **Review.** Before the project is `depended-on`, a review that lists fixable blockers, whatever its verdict says, gets one fix pass: the same fresh fix agent, given those issues, then the review again. A fixable blocker is a blocker or major issue in the change itself; not a promise of the ticket the change lost, not a question for the owner, not a too-large stop. If the second review approves, the run goes on as approved. If it still refuses, the ticket is parked as before.
+   - A `dropped` promise or an undecided case at the review, and a `bent` or `assumed` reading at either role, follow the rules under step 2.
 7. **Forced verdict.** The script forces `request_changes`, and `verdictForcedBy` says which, when:
    - blocking findings are unresolved;
    - the last implement or fix reported `checkPasses: false`;
@@ -148,12 +152,12 @@ Three roles read the ticket: the spec role, which writes the spec from it; the t
    - the critic ran and found nothing and attempted nothing;
    - a guard path changed without a dispute naming it, unless it is a dependency the spec named or a record whose `guard-diff` note is `additions:`.
 
-**Agents.** Each role is one agent. The ticket check adds two when it finds a gap (the amend and the second read), the fix loop two per round (the fix pass on a young project's review is one such round, which re-reviews instead of re-critiquing), and a change judged again behind another merge two more (reconcile and review). `AGENTS_AT_MOST` in the script holds the most a run spawns before and after `depended-on`; the drain's plan reads it, and a test counts a worst-case run against it.
+**Agents.** Each role is one agent. The ticket check adds two when it finds a gap (the amend and the second read), the fix loop two per round (the fix pass on a young project's review is one such round, which re-reviews instead of re-critiquing), and a change judged again behind another merge two more (reconcile and review). `AGENTS_AT_MOST` in the script holds the most a run spawns before and after `depended-on`.
 
 - Agents leave every change uncommitted. The orchestrator commits and publishes.
 - An agent blocked by a guard path writes a dispute and returns it.
 
-**A run that dies.** The script is a pure function of its arguments and the agents' structured results, so it resumes cleanly. A run in which an agent dies throws and returns no result. The drain resumes it once, and on a second error closes the ticket with the retryable reason code `errored`, which becomes the owner's only after three closes in a row.
+**A run that dies.** A run in which an agent dies throws and returns no result. The drain resumes it once, and on a second error closes the ticket with the retryable reason code `errored`, which becomes the owner's only after three closes in a row.
 
 ## The fork test
 
@@ -174,7 +178,7 @@ The owner's, for example: "When you paste a link you already saved, should it st
 
 ### The Spec role's copy
 
-The pipeline's Spec role reads the test from its prompt in `workflows/pipeline.js`, which a test holds to the text below. That copy is older and asks more than the rule in one place: it also sends a difference only in what the user sees, such as the expired-link page, to the owner. It never asks less. Bringing the prompt to the rule is a change to the pipeline of its own.
+The pipeline's Spec role reads the test from its prompt in `workflows/pipeline.js`, which a test holds to the text below. That copy is older and asks more than the rule in one place: it also sends a difference only in what the user sees, such as the expired-link page, to the owner. It never asks less.
 
 The test: describe the product to one of its users after each option, in the user's words and with no code in the sentence. When the two descriptions differ in what the user sees, what they can do, who may do it or what becomes of something that is theirs, the owner chooses. When the user could not tell which option was built, the agent chooses.
 
@@ -187,7 +191,7 @@ The test: describe the product to one of its users after each option, in the use
 
 ## The orchestrator
 
-The orchestrator is the `/ratchet:feature` skill's session. It runs the preflight, creates the branch, runs the workflow, reads its result and the spec, and nothing else: reading the implementation would anchor it on one agent's reasoning and defeat the independence the pipeline exists for. If the result is not enough to decide, add the missing field to the schema.
+The orchestrator is the `/ratchet:feature` skill's session. It runs the preflight, creates the branch, runs the workflow, reads its result and the spec, and nothing else: reading the implementation would anchor it on one agent's reasoning and defeat the independence the pipeline exists for.
 
 1. **Check the result.** Check `verdict === "approve"`, empty `unresolvedBlockingFindings`, and a green tail in `checkOutput`. Otherwise stash what the agents left (`git stash push -u`), switch back to the base branch, and rerun `/ratchet:feature <ticket>` after the ticket has been adjusted, or stop and report.
 2. **Report every dispute** to the owner in the hand-over, in plain words: what the rule stopped and what changing it would allow. It is a report, not a question. The owner answers in their own words if they want the rule changed, and any gate change is theirs.
