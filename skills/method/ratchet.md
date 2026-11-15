@@ -21,10 +21,10 @@ Done when the pull request holds the config change and its rewritten copy.
 ### Answer a surviving mutant
 
 - **A test can kill it:** write that test.
-- **It is equivalent:** `scripts/mutation_survivors.py` prints the entry to paste for every unregistered survivor. Paste this one's into `quality/mutation-register.toml`, with a reason of twenty characters or more.
+- **It is equivalent:** the plugin's `scripts/mutation_survivors.py` prints the entry to paste for every unregistered survivor. Paste this one's into `quality/mutation-register.toml`, with a reason of twenty characters or more.
 - **It timed out and the register holds an entry for it:** rerun it with less load. If it times out again on its own, it is killed: remove the entry.
 
-Done when every surviving mutant is killed by a test or has an entry of its own, and no mutant that timed out again on its own keeps an entry.
+Done when every surviving mutant is killed by a test or has an entry of its own with its reason, and the mutation gate reports no registered mutant as timed out.
 
 ## 1. Thresholds only rise
 
@@ -89,7 +89,7 @@ date = 2026-11-06
 - **The identity is stable.** Tools number mutants per run, so it is the file, the mutator, the replacement and the mutant's place in its unit, `@<line>:<column>-<line>:<column>` counted from the unit's first line, plus a hash of the unit. An edit elsewhere in the file leaves the entry valid; an edit inside the unit changes the hash. The plugin's `scripts/mutation_survivors.py` computes both.
 - **Any mutation tool feeds the gate.** Its report is converted to one JSON line per mutant: the file, the mutator, the replacement, the status, the start and end of the mutated text, and the lines of the enclosing unit when the tool gives them. The converter is a few lines the repository keeps as a gate tool, and the script's docstring gives the format and a worked one. A report the script already reads as it is needs no converter; its `--help` says which.
 - **An entry excuses one mutant.** Entries and live survivors match one to one: a register with fewer entries than live survivors is red and names the unmatched ones. So a second survivor added to a function with a registered one needs an entry of its own.
-- **The reason's honesty is for the owner's review**: the register is a guard path.
+- **The reason has twenty characters or more.** Its honesty is for the owner's review: the register is a guard path.
 - **A stale entry fails.** An entry is stale when its mutant is now killed or gone, or its function hash changed, so editing a function forces its equivalents to be reviewed again.
 - **A timeout counts as a kill**, as mutation tools count it, unless the register holds an entry for the mutant. Then the run cannot tell it from a survivor, and the gate is red and says so.
 - **An entry without the `@` suffix** is from a register written before the place was part of the identity, for a tool that numbers its mutants per run. Each is red until replaced: the gate names it as the old identity, lists the live mutants it matched, and prints an entry to paste for each unregistered survivor. The owner reviews them and writes one entry per mutant they judge equivalent, with a reason of their own. Nothing carries over unreviewed. Entries for a tool that names its mutants keep their identity.
@@ -101,7 +101,7 @@ date = 2026-11-06
 
 ## 6. Ceilings only fall
 
-`[ceilings.seconds]` in the same file holds the wall-clock ceiling of each tier, and of any gate with its own runner.
+`[ceilings.seconds]` in `quality/thresholds.toml` holds the wall-clock ceiling of each tier, and of any gate with its own runner.
 
 - The `budget` entry point wraps the run and goes red over the ceiling. That blocks everywhere but on a pull request, where the runner varies and CI asks it to report (`--over report`).
 - `ratchet-lowered` fails a raised ceiling exactly as it fails a lowered threshold.
