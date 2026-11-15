@@ -2,17 +2,20 @@
 
 Each event is one JSON object with ``s`` (seconds since the run started), ``step`` and ``kind``.
 The reducer reads nothing else, so a run reduced twice gives the same numbers, and a run recorded
-by another driver (the one-off run, through ``oneoff.py``) reduces the same way.
+by another driver (the one-off run, through ``oneoff.py``) reduces the same way. ``reread`` puts
+the gate runs of a run's pasted commands right from the output the driver saved, for a run whose
+driver parsed them with a parser older than the runner's lines.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from first_hour import architecture, owner
+from first_hour import architecture, gates, owner
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -27,6 +30,50 @@ def read(path: Path) -> Iterator[Event]:
         for line in lines:
             if line.strip():
                 yield json.loads(line)
+
+
+def reread(events: Iterable[Event], logs: Path) -> Iterator[Event]:
+    """``events``, each paste's first gate run parsed again from the output saved in ``logs``.
+
+    The driver saves the ``n``-th paste's output as ``<step>-paste-<n>.txt`` under a ``$ <command>``
+    line and logs the paste's gate run, when it has one, as the next event. A fresh run takes the
+    recorded one's place and number; a paste the recorded parser found no gates in gets one. A
+    paste with no saved output, and a rerun of a red gate, whose output is not saved, keep what was
+    recorded.
+    """
+    pastes = 0
+    fresh: Event | None = None
+    for event in events:
+        if fresh is not None:
+            replaces = event.get("kind") == "gates" and event.get("attempt") == 1
+            yield {**fresh, "id": event.get("id")} if replaces else fresh
+            fresh = None
+            if replaces:
+                continue
+        if event.get("kind") == "paste":
+            pastes += 1
+            fresh = _gate_run(event, logs / f"{event.get('step')}-paste-{pastes}.txt")
+        yield event
+    if fresh is not None:
+        yield fresh
+
+
+def _gate_run(paste: Event, saved: Path) -> Event | None:
+    try:
+        head, _, output = saved.read_text(encoding="utf-8").partition("\n")
+    except FileNotFoundError:
+        return None
+    found = gates.parse(output) if head == f"$ {paste.get('command')}" else []
+    if not found:
+        return None
+    return {
+        "s": paste.get("s"),
+        "step": paste.get("step"),
+        "kind": "gates",
+        "attempt": 1,
+        "command": paste.get("command"),
+        "gates": [dataclasses.asdict(g) for g in found],
+    }
 
 
 def _minute(event: Event) -> float:
