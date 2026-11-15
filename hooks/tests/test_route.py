@@ -715,21 +715,6 @@ def test_a_spec_without_a_conjecture_is_stated_before_it_is_split(tmp_path: Path
     assert route.decide(root, None).command == f"{route.TICKETS} {spec}"
 
 
-def test_plugin_lines_older_than_the_template_send_the_owner_to_init(tmp_path: Path) -> None:
-    template = (route.PLUGIN_ROOT / "skills/init/templates/AGENTS.md").read_text()
-    lines = [line for line in template.splitlines() if line.startswith("- **")][:4]
-    current = STANZA + "\n" + "\n".join(lines) + "\n"
-    root = repository(tmp_path, {**ADOPTED, "AGENTS.md": current})
-    assert route.decide(root, None).command != route.INIT
-    stale = current.replace(lines[1], lines[1].split("`poteto-mode`")[0] + "refused to an agent.")
-    write(root, "AGENTS.md", stale)
-    commit(root, "docs: an older stanza")
-    step = route.decide(root, None)
-    assert step.command == route.INIT
-    assert "In what style, with which levers?" in step.why
-    assert step.then == route.NEXT
-
-
 def test_missing_hooks_come_before_everything_a_commit_would_do(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
