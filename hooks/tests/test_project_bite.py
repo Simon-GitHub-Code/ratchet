@@ -455,7 +455,7 @@ REGISTRY = "quality/bites.toml"
 PATCH_FILE = "--- a/src/code.txt\n+++ b/src/code.txt\n@@ -1 +1 @@\n-clean\n+planted\n"
 COMMANDS_MANIFEST = MANIFEST + (
     '[[group]]\nname = "gate-commands"\nreason = "What a gate runs."\n'
-    'paths = ["justfile", "scripts/check.sh"]\n'
+    'paths = ["justfile", "scripts/check.sh", "sub/justfile", "scripts/lint.sh"]\n'
 )
 JUSTFILE = (
     "lint:\n    sh gate lint\n"
@@ -466,7 +466,7 @@ JUSTFILE = (
 )
 JUST_ROWS = ROWS.replace("`sh gate ", "`just ")
 PIN = "- Ratchet plugin: 0.1.0 at " + "0" * 40
-NOTHING = "bite: green: the change touches no path that defines a gate; nothing to prove\n"
+NOTHING = "bite: green: the change affects no gate of tiers 0 and 1; nothing to prove\n"
 
 
 def every(why: str) -> str:
@@ -688,6 +688,54 @@ def test_a_gate_whose_bullet_names_none_of_the_changed_paths_is_left_out(
     assert out[1] == "bite: lint: lint.cfg changed, and `lint` reads it"
     assert proved(out) == ["lint"]
     assert not any(line.startswith("bite: fallback") for line in out)
+
+
+def test_a_path_that_is_not_tool_config_ignores_the_bullets_and_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = targeted(tmp_path, reads="- lint: scripts/lint.sh\n- tests: src/**\n")
+    write(root, "scripts/check.sh", "changed\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    why = "scripts/check.sh changed, and no record says which gate runs it"
+    assert out[1] == every(why)
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_a_justfile_below_the_root_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = targeted(tmp_path, rows=JUST_ROWS, files={"justfile": JUSTFILE, "sub/justfile": "x:\n"})
+    write(root, "sub/justfile", "x:\n    echo changed\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == every("sub/justfile changed, and no record says which gate runs it")
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_a_question_in_two_rows_sends_a_binding_change_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    twin = row("lint", "1", tool="none").replace("`sh gate lint`", "`sh gate other`")
+    root = targeted(tmp_path, rows=ROWS + twin)
+    replaced(root, BINDING, "| tests | a tool | 1 |", "| tests | a tool | 0 |")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    why = f"{BINDING} has two gate rows for one question, so one could hide behind the other"
+    assert out[1] == every(why)
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_a_change_that_affects_only_a_tier_2_gate_says_so_and_proves_nothing(
+    tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = targeted(tmp_path)
+    replaced(root, BINDING, "| slow | a tool | 2 |", "| slow | a tool | 3 |")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys)
+    assert out.endswith(NOTHING)
+    assert "touches no path" not in out
+    assert list(scratch.iterdir()) == []
 
 
 def test_a_pull_request_with_nothing_to_compare_with_proves_the_gates(

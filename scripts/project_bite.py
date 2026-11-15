@@ -1454,7 +1454,7 @@ class Touched(NamedTuple):
 
 
 Cause = justfile_dump.Cause
-JUSTFILE_NAMES = ("justfile", ".justfile")
+JUSTFILE_NAMES = ("justfile", ".justfile", "Justfile")
 READER = {"gate-commands": "runs it"}
 READS = "## What each gate reads"
 READS_BULLET = re.compile(r"^- ([^:\s]+):[ \t]*(.*)$")
@@ -1519,6 +1519,9 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
     (old_rows, old_rest), (new_rows, new_rest) = split_gates(old), split_gates(new)
     if plugin_pin.PIN_LINE.sub("", old_rest) != plugin_pin.PIN_LINE.sub("", new_rest):
         return [Cause(None, f"{binding} changed outside its gate rows, which a gate may read")]
+    if any(len({row.question for row in rows}) != len(rows) for rows in (old_rows, new_rows)):
+        why = f"{binding} has two gate rows for one question, so one could hide behind the other"
+        return [Cause(None, why)]
     before = {row.question: row for row in old_rows}
     after = {row.question: row for row in new_rows}
     causes = []
@@ -1565,11 +1568,11 @@ def reading(path: str, entry: str) -> bool:
 def unnamed_causes(root: Path, path: str, group: str) -> list[Cause]:
     """The gates a path no gate's row names could affect.
 
-    Those whose bullet reads it, and those with no bullet; every gate where the binding holds no
-    bullet at all.
+    A tool-config path goes to the gates whose bullet reads it and those with no bullet. Any other
+    path, and a tool-config path with no bullet in the binding at all, goes to every gate.
     """
     binding = gatelib.read_text(root / gatelib.BINDING) or ""
-    reads = gate_reads(binding)
+    reads = gate_reads(binding) if group == "tool-config" else {}
     if not reads:
         who = READER.get(group, "reads it")
         return [Cause(None, f"{path} changed, and no record says which gate {who}")]
@@ -1600,7 +1603,7 @@ def could_affect(root: Path, base: str | None, touched: Sequence[Touched] | None
             causes += patch_causes(root, base, path)
         elif path == str(gatelib.BINDING):
             causes += binding_causes(root, base)
-        elif group == "gate-commands" and PurePosixPath(path).name.lower() in JUSTFILE_NAMES:
+        elif group == "gate-commands" and path in JUSTFILE_NAMES:
             causes += justfile_causes(root, base, path)
         else:
             causes += unnamed_causes(root, path, group)
@@ -1680,7 +1683,7 @@ def main(argv: list[str]) -> int:
         causes = could_affect(root, base, touched)
         chosen = targeted(rows, causes)
         if not chosen:
-            print("bite: green: the change touches no path that defines a gate; nothing to prove")
+            print("bite: green: the change affects no gate of tiers 0 and 1; nothing to prove")
             return 0
         print("\n".join(explain(rows, causes)))
     tasks: list[Task] = [
