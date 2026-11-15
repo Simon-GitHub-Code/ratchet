@@ -1370,7 +1370,11 @@ def per_run_keys(current: str | None) -> str:
     for index in bare_cache_keys(current or ""):
         match = CACHE_KEY.match(lines[index])
         if match:
-            lines[index] = f"{match['head']}{match['value']}-${{{{ github.sha }}}}{match['note']}"
+            value = match["value"]
+            quote = value[-1:] if len(value) > 1 and value[0] == value[-1] in "\"'" else ""
+            body = value[: len(value) - len(quote)]
+            ended = f"{body}-${{{{ github.sha }}}}{quote}"
+            lines[index] = f"{match['head']}{ended}{match['note'] or ''}"
     return "\n".join(lines)
 
 

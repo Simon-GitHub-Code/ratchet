@@ -626,6 +626,26 @@ def test_a_cache_key_with_no_per_run_part_is_red_and_the_edit_clears_it_keeping_
     assert cache_findings(repo) == []
 
 
+@pytest.mark.parametrize(
+    ("key", "ended"),
+    [
+        ("tier0-${{ runner.os }}", "tier0-${{ runner.os }}-${{ github.sha }}"),
+        ('"tier0-${{ runner.os }}"', '"tier0-${{ runner.os }}-${{ github.sha }}"'),
+        ("'tier0'", "'tier0-${{ github.sha }}'"),
+    ],
+)
+def test_the_edit_ends_a_plain_or_quoted_key_inside_its_quotes(
+    repo: Path, key: str, ended: str
+) -> None:
+    cached(repo, key)
+    (found,) = cache_findings(repo)
+    assert isinstance(found.fix, conformance.Edit)
+    after = found.fix.want(text(repo, CI))
+    assert f"key: {ended}\n" in after
+    (repo / CI).write_text(after, encoding="utf-8")
+    assert cache_findings(repo) == []
+
+
 @pytest.mark.parametrize("part", ["github.sha", "github.run_id"])
 def test_a_cache_key_ending_in_the_run_is_green(repo: Path, part: str) -> None:
     cached(repo, "tier0-${{ runner.os }}-${{ " + part + " }}")
