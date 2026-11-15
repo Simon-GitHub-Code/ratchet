@@ -133,7 +133,7 @@ Gates that accumulate become gates that get skipped. So speed is a property the 
 
 **Shard before you need to.** The long gates (the suite, mutation, end to end) run in CI as a matrix over a shard count, and the count is one line of the binding, `- Shards: 1` on day one. Each job receives `SHARD` and `SHARDS`, and the recipe hands them to its tool (the test runner's or the mutation tool's own sharding, or what the stack adds for it); a local run is shard 1 of 1. Adding runners later is that one number, never a restructuring.
 
-**Cache everything, keyed on what it depends on.** Dependencies and every tool cache (type checker, linter, test, mutation, build), keyed on the lockfile and the tool's config with fallback keys; the toolchain pinned, with the setup action's own cache on. Locally the tools' incremental caches stay on.
+**Cache everything, keyed on what it depends on.** Dependencies and every tool cache (type checker, linter, test, mutation, build), keyed on the lockfile and the tool's config with fallback keys; the toolchain pinned, with the setup action's own cache on. Each key ends in the commit, and the fallback key is the same key without it, so every run restores the newest cache and saves its own: a key that hits exactly is never saved again, and a tool cache behind it stays as its first run left it. A job per gate keys its own cache by its gate. Locally the tools' incremental caches stay on.
 
 **Run only what the change can affect.** Mutation of changed functions, coverage of changed lines, the flag states of changed flags, incremental type checking and builds; path filters, and an affected-only tool in a monorepo. The default branch runs everything.
 
