@@ -1,6 +1,7 @@
 """The skills' text: what the owner-free run promises, pinned so an edit cannot drift it."""
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -551,7 +552,11 @@ def criteria_digest(command: str, body: str, tmp_path: Path) -> str:
     path = tmp_path / "ticket.md"
     path.write_bytes(body.encode("utf-8"))
     run = command.replace("<file>", str(path)).replace("<heading>", "## Acceptance criteria")
-    done = subprocess.run(["bash", "-c", run], capture_output=True, text=True, check=True)
+    bash = shutil.which("bash")
+    assert bash
+    done = subprocess.run(  # noqa: S603 # -- the page's own command, run on a file the test wrote
+        [bash, "-c", run], capture_output=True, text=True, check=True
+    )
     return done.stdout.strip()
 
 
@@ -583,7 +588,7 @@ def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
     last = "# Save links\n\n## Acceptance criteria\n\n- A re-pasted link is refused.\n"
     spaced = last.replace("criteria\n\n- ", "criteria\n- ") + "\n\n## Answers\n- Yes.\n"
     assert criteria_digest(command, spaced, tmp_path) == criteria_digest(command, last, tmp_path)
-    changed =CRITERIA_BODY.replace("is refused", "is kept twice")
+    changed = CRITERIA_BODY.replace("is refused", "is kept twice")
     assert criteria_digest(command, changed, tmp_path) != written
     step_1 = conjecture_step(1)
     assert "**The command prints another digest than the line names:**" in step_1
