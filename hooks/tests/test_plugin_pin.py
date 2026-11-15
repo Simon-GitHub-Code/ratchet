@@ -7,6 +7,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 import plugin_pin
+import release
 from tests import repos
 
 MANIFEST = ".claude-plugin/plugin.json"
@@ -26,7 +27,9 @@ def adopted(root: Path, line: str) -> Path:
 
 def run(root: Path, used: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
     code = plugin_pin.main(["plugin_pin.py", "--root", str(root), "--plugin", str(used)])
-    return code, capsys.readouterr().out
+    first, _, rest = capsys.readouterr().out.partition("\n")
+    assert first == f"plugin-pin: using {plugin_pin.in_use(used)}, in {used}"
+    return code, rest
 
 
 def test_a_checkout_at_the_pinned_commit_and_version_is_green(
@@ -444,3 +447,25 @@ def test_a_newer_copy_names_both_versions_and_its_own_upgrade_script(
     assert "1.3.0" in first
     assert "newer than the 1.2.3" in first
     assert str(used / "scripts/upgrade.py") in first
+
+
+def test_a_clone_at_a_release_tag_is_at_the_commit_its_release_file_names(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    work, merged = plugin(tmp_path / "work")
+    repos.write(work, "CHANGELOG.md", "# Changelog\n\n## 1.2.3\n\nThe release.\n")
+    repos.commit(work, "docs(core): the changelog")
+    assert release.main(["release.py", "--repo", str(work)]) == 0
+    clone = tmp_path / "clone"
+    repos.git(tmp_path, "clone", "-q", "--branch", "v1.2.3", str(work), str(clone))
+    assert repos.git(clone, "rev-parse", "HEAD") != merged
+    assert plugin_pin.commit_of(clone) == merged
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {merged}")
+    assert run(root, clone, capsys)[0] == 0
+    other = adopted(tmp_path / "other", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE}")
+    assert run(other, clone, capsys)[0] == 1
+
+
+def test_a_clone_that_tracks_no_release_file_is_at_its_head(tmp_path: Path) -> None:
+    used, head = plugin(tmp_path / "plugin")
+    assert plugin_pin.commit_of(used) == head

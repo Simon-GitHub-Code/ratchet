@@ -105,32 +105,42 @@ def version_of(plugin: Path) -> str | None:
     return version if isinstance(version, str) else None
 
 
-def commit_of(plugin: Path) -> str | None:
-    """The commit a plugin is at.
+def release_commit(recorded: str | None) -> str | None:
+    """The commit a release file holds: ``None`` for no file, ``UNREADABLE`` for another content."""
+    if recorded is None:
+        return None
+    text = recorded.removesuffix("\n")
+    return text if COMMIT.fullmatch(text) else UNREADABLE
 
-    With ``.git``, the checkout's ``HEAD``. Without it, the 40 lowercase hex digits of
-    ``.claude-plugin/commit``, which a release commit carries (ADR 0068); ``None`` when that file
-    is missing, ``UNREADABLE`` when it holds anything else.
-    """
-    if not (plugin / ".git").exists():
-        recorded = gatelib.read_text(plugin / COMMIT_FILE)
-        if recorded is None:
-            return None
-        return (
-            recorded.removesuffix("\n")
-            if COMMIT.fullmatch(recorded.removesuffix("\n"))
-            else UNREADABLE
-        )
+
+def git_output(plugin: Path, *args: str) -> str | None:
     # Why: git exports GIT_DIR to a hook, and `git -C` obeys it over the directory it is given.
     env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
     result = subprocess.run(
-        ["git", "-C", str(plugin), "rev-parse", "HEAD"],
+        ["git", "-C", str(plugin), *args],
         capture_output=True,
         text=True,
         check=False,
         env=env,
     )
-    return result.stdout.strip() if result.returncode == 0 else UNREADABLE
+    return result.stdout if result.returncode == 0 else None
+
+
+def commit_of(plugin: Path) -> str | None:
+    """The commit a plugin is at.
+
+    A tree that tracks ``.claude-plugin/commit`` is a release commit (ADR 0068), and the commit is
+    the one that file names, in a checkout as in a copy. Otherwise the checkout's ``HEAD``, or
+    ``None`` for a copy with no file. ``UNREADABLE`` when the file holds anything but a commit.
+    """
+    if not (plugin / ".git").exists():
+        return release_commit(gatelib.read_text(plugin / COMMIT_FILE))
+    head = git_output(plugin, "rev-parse", "HEAD")
+    if head is None:
+        return UNREADABLE
+    if git_output(plugin, "ls-tree", "--name-only", "HEAD", "--", str(COMMIT_FILE)):
+        return release_commit(git_output(plugin, "show", f"HEAD:{COMMIT_FILE}"))
+    return head.strip()
 
 
 def line_for(plugin: Path) -> str:
@@ -306,9 +316,9 @@ def main(argv: list[str]) -> int:
     options = parser.parse_args(argv[1:])
     if not options.plugin or not Path(options.plugin).exists():
         return gatelib.report("plugin-pin", [NONE_RECORDED])
-    line, problem = judged(
-        pinned(gatelib.read_text(options.root / gatelib.BINDING)), Path(options.plugin)
-    )
+    plugin = Path(options.plugin)
+    print(f"plugin-pin: using {in_use(plugin)}, in {plugin}")
+    line, problem = judged(pinned(gatelib.read_text(options.root / gatelib.BINDING)), plugin)
     if not problem:
         print(line)
     return gatelib.report("plugin-pin", [line] if problem else [])
