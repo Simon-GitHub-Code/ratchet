@@ -182,6 +182,9 @@ CHANGE_CEILING = "[ceilings.change]"
 FLAG_REGISTRY = Path("flags.toml")
 FIRST_CELL = re.compile(r"^\|\s*([^|]+?)\s*\|", re.MULTILINE)
 WORKFLOWS = Path(".github/workflows")
+CACHE_USES = "uses: actions/cache"
+CACHE_KEY = re.compile(r"^(?P<head>\s*key:\s*)(?P<value>.*?)(?P<note>\s+#.*)?$")
+PER_RUN_PARTS = ("github.sha", "github.run_id")
 CI_SHAPE = (("concurrency:", "cancels superseded runs"), ("cache", "caches between runs"))
 ADR_STATUS = re.compile(r"^(proposed|accepted|deprecated|rejected|superseded( by ADR-\d{4})?)$")
 ADR_FRONT_MATTER = re.compile(
@@ -1309,11 +1312,67 @@ def check_speed(root: Path) -> Iterable[Finding]:
                 )
                 edit = Edit(does, budget_flags(name), Agent())
                 yield Finding(str(path.relative_to(root)), problem, edit)
+        yield from bare_cache_finding(root, path, content)
         if path.name in TIER_WORKFLOWS and SHARD_MATRIX not in content:
             yield agent(
                 f"{path.relative_to(root)}: no long gate runs over the binding's shard count "
                 f"('{SHARD_MATRIX}' absent)"
             )
+
+
+def bare_cache_finding(root: Path, path: Path, content: str) -> Iterable[Finding]:
+    if not bare_cache_keys(content):
+        return
+    problem = (
+        "a cache key has no per-run part, so it hits exactly after its first save and "
+        "never saves again (add '-${{ github.sha }}')"
+    )
+    does = "end each cache key with '-${{ github.sha }}', leaving restore-keys as they are"
+    then = (
+        "scope the cache key of a job that runs once per gate, and its restore-keys prefix,",
+        "by '${{ matrix.gate }}', as the template does",
+    )
+    edit = Edit(does, per_run_keys, Agent(then=then))
+    yield Finding(
+        str(path.relative_to(root)), problem, edit, identity="cache key without a per-run part"
+    )
+
+
+def cache_key_lines(lines: list[str]) -> list[tuple[int, re.Match[str]]]:
+    """Each ``key:`` line that belongs to an ``actions/cache`` step: its index and its parts."""
+    found: list[tuple[int, re.Match[str]]] = []
+    cache = False
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith(("- ", "-\t")) and CACHE_USES not in line:
+            cache = False
+        if CACHE_USES in line:
+            cache = True
+        elif cache and (match := CACHE_KEY.match(line)):
+            found.append((index, match))
+    return found
+
+
+def bare_cache_keys(content: str) -> list[tuple[int, re.Match[str]]]:
+    return [
+        (index, match)
+        for index, match in cache_key_lines(content.split("\n"))
+        if not any(part in match.string for part in PER_RUN_PARTS)
+    ]
+
+
+def per_run_keys(current: str | None) -> str:
+    """The workflow with ``-${{ github.sha }}`` ending each cache key that has no per-run part.
+
+    A trailing comment stays after it.
+    """
+    lines = (current or "").split("\n")
+    for index, match in bare_cache_keys(current or ""):
+        value = match["value"]
+        quote = value[-1:] if len(value) > 1 and value[0] == value[-1] in "\"'" else ""
+        body = value[: len(value) - len(quote)]
+        ended = f"{body}-${{{{ github.sha }}}}{quote}"
+        lines[index] = f"{match['head']}{ended}{match['note'] or ''}"
+    return "\n".join(lines)
 
 
 def budget_flags(workflow: str) -> gatelib.Want:
@@ -2767,6 +2826,10 @@ def speed_mutations() -> list[Mutation]:
         ("Speed section with no shard count", rebind("- Shards: 1", "- Shards: a few")),
         ("CI workflow without concurrency control", rewrite(ci, "concurrency:", "serial:")),
         ("CI workflow without a cache", rewrite(deep, "cache", "store")),
+        (
+            "CI workflow whose cache key has no per-run part",
+            rewrite(ci, "-${{ github.sha }}", "", count=1),
+        ),
         ("CI workflow without a shard matrix", rewrite(ci, SHARD_MATRIX, "matrix.part")),
     ]
 
