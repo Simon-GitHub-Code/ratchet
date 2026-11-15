@@ -186,7 +186,7 @@ The owner's, for example: "When you paste a link you already saved, should it st
 
 ### The Spec role's copy
 
-The pipeline's Spec role reads the test from its prompt in `workflows/pipeline.js`, which a test holds to the text below. That copy is older and asks more than the rule in one place: it also sends a difference only in what the user sees, such as the expired-link page, to the owner. It never asks less.
+The pipeline's Spec role reads the test from its prompt in `workflows/pipeline.js`, which a test holds to the text below. That copy is older and asks more than the rule in one place: it also sends a difference only in what the user sees, such as the expired-link page, to the owner. It never asks less. Bringing the prompt to the rule is a change to the pipeline of its own.
 
 The test: describe the product to one of its users after each option, in the user's words and with no code in the sentence. When the two descriptions differ in what the user sees, what they can do, who may do it or what becomes of something that is theirs, the owner chooses. When the user could not tell which option was built, the agent chooses.
 
@@ -199,7 +199,7 @@ The test: describe the product to one of its users after each option, in the use
 
 ## The orchestrator
 
-The orchestrator is the `/ratchet:feature` skill's session. It runs the preflight, creates the branch and runs the workflow. It reads only the ticket, the workflow's structured result and the spec: reading the implementation would anchor it on one agent's reasoning and defeat the independence the pipeline exists for.
+The orchestrator is the `/ratchet:feature` skill's session. It runs the preflight, creates the branch and runs the workflow. It reads only the ticket, the workflow's structured result and the spec: reading the implementation would anchor it on one agent's reasoning and defeat the independence the pipeline exists for. When the result is not enough to decide, add the missing field to the schema.
 
 1. **Check the result.** Check `verdict === "approve"`, empty `unresolvedBlockingFindings`, and a green tail in `checkOutput`. Otherwise commit nothing. Stash what the agents left with `git stash push -u -m "<branch>: <verdict> run"`, since the route holds a ticket only on a `blocked` stash of that name. Switch back to the base branch, and settle each field the result holds as [`/ratchet:feature`](../feature/SKILL.md) step 4 says. Two of them build the ticket again with the ticket unchanged: `ticketFindings`, passed back as `args.ticketFindings`, and a `triggers` red, after the owner is told to type `/ratchet:safeguard`, or `/ratchet:architecture` for an owed review.
 2. **Report every dispute** to the owner in the hand-over, in plain words: what the rule stopped and what changing it would allow. It is a report, not a question. The owner answers in their own words if they want the rule changed, and any gate change is theirs.

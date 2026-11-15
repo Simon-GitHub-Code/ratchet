@@ -138,11 +138,10 @@ Run every command below from the repository's own checkout, on the default branc
       - Commit everything the work tree holds (`git add -A`) with the subject `<type>(<scope>): <the slug, hyphens as spaces>`. The type is `feat` for a ticket that adds behaviour and `fix` for one that repairs it.
       - The subject is at most 72 characters (tier 0 refuses more). When it is longer, drop whole words from the end of the slug until it fits, never cutting a word or leaving a trailing `and`, `a`, `the`, `of` or `to`, and put the ticket's full title in the body.
       - The body holds `Closes <ref>`, whether or not the subject was shortened.
-   3. **Bring it up to date.** Run `D update <ticket> --root .`.
+   3. **Bring it up to date.** Run `D update <ticket> --root .`. When it prints JSON, the JSON decides, whatever `drain:` or `merge:` line came before it.
       - **Exit 0 with `"moved": false`:** go to step 4.5.
       - **Exit 0 with `"moved": true`:** run `check` and note whether it is red. Then step 4.4.
-      - **Exit 2 with JSON whose `conflicts` is not empty:** the rebase stopped on those conflicts, and the branch is as it was. Then step 4.4.
-      - **Exit 2 with JSON whose `conflicts` is empty:** the rebase stopped for a reason git did not name as a conflict, and the branch is as it was. Close the ticket with `--outcome waits --reason "the rebase stopped with no conflicted path"`. A rejudge would judge a branch that is still behind.
+      - **Exit 2 with JSON:** the rebase stopped on the `conflicts` it prints, and the branch is as it was. Then step 4.4.
       - **Exit 1 with `update: <ref> is merged and is not rebased`:** the ticket has landed. Do not close it. Go on at step 5 (`D plan`); the report lists it under Merged.
       - **Any other exit 1** (`update: <ref> is not rebased: <why>`): close the ticket with `--outcome waits --reason "<the line it printed>"`.
    4. **Judge it again.** After a rebase or a conflict the first review no longer describes the change:
@@ -165,7 +164,7 @@ Run every command below from the repository's own checkout, on the default branc
 
    **Exit 3 from `update`, `close` or `split`:** a landing of that ticket is still running (for example a `land` the shell gave up waiting on), or only its merge is (its line says "a merge"). Leave the ticket: do not close, reconcile or split it. Wait for that landing to end, and go on at step 5 (`D plan`). The landing records the outcome itself; with only a merge running, a `report` or an `update` records it afterwards.
 
-   **Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line:** the command refused before any work on the ticket. Report the line, leave the ticket as it is, and go on at step 5 (`D plan`). The line says why, for example: no such ticket, or a number more than one local ticket starts with; a fast-forward that was cut off and cannot be put back yet; the drain lock, not free in time.
+   **Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line and no JSON:** the command refused before any work on the ticket. Report the line, leave the ticket as it is, and go on at step 5 (`D plan`). The line says why, for example: no such ticket, or a number more than one local ticket starts with; a fast-forward that was cut off and cannot be put back yet; the drain lock, not free in time.
 
    **A close refused with `<ref> merged, and a merge is not unsaid by closing it as <outcome>`:** the close has recorded that merge and removed a work tree its landing left. The ticket has landed: do not close it again, and go on at step 5 (`D plan`).
 
@@ -206,7 +205,7 @@ Both modes make these commits in this order ([pipeline.md](../method/pipeline.md
    - **One ticket:** run `ratchet` when it is bound, then commit everything the work tree holds (`git add -A`: the roles' `filesChanged` can miss the spec and a record they added) with the raised `quality/` files, the message naming the slug.
    - **The drain:** run `ratchet` when it is bound, and commit the raised `quality/` files.
 2. Write the ADR the result suggests under the next free number.
-3. **With no forge:** write the change description at `.scratch/changes/<branch>.md` and set the local ticket's `Status:` line to `resolved` in the same commit.
+3. **With no forge:** write the change description at `.scratch/changes/<branch>.md` (the branch's `/` written as `-`) and set the local ticket's `Status:` line to `resolved` in the same commit.
 4. Last and alone, the verdict record: the result's `verdictRecord` on stdin of `just merge-ready record`, its file committed.
 
 ## The pull request

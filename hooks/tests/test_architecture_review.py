@@ -345,16 +345,14 @@ def test_the_route_names_the_review_before_the_safeguards(
     assert route.decide(root, None).command == route.SAFEGUARD
 
 
-REVIEW_LINE = (
-    "triggers: architecture review owed: 'stored-format' gained 1 instance(s) (src/b.py:1) while"
-    " the base already held 1 and the review it reopens has not landed"
-)
-
-
 def test_the_drain_holds_a_ticket_for_an_owed_review_until_it_lands(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
 ) -> None:
-    result: dict[str, object] = {"checkOutput": REVIEW_LINE}
+    root = arrived(tmp_path)
+    write(root, "src/more.py", STORE)
+    capsys.readouterr()
+    assert run(root) == 1
+    result: dict[str, object] = {"checkOutput": capsys.readouterr().out}
     assert drain.owed_kinds(result) == []
     assert drain.owed_kinds(result, drain.REVIEW_RED) == ["stored-format"]
     assert any(route.ARCHITECTURE in reason for reason in drain.reasons_of(result))
