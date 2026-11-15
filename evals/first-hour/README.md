@@ -128,7 +128,7 @@ The session also sees its cost budget, which Claude Code enforces (`--usd`), and
 | `minutes.to_first_merge`, `minutes.to_first_usable_merge` | minutes from the start to the first merge on the default branch, and to the first after which the slice works |
 | `stop` | why the run ended (`usable-merged`, `wall-clock`, `cost`, `repeat`, `forge-stage`, `max-steps`, `interrupted`, `error`), with the detail and the minute |
 | `app` | the last app check: the start command and where the repository says it, whether it started and served `/`, `slice` (`works`, `fails` or `unchecked`), and the finding |
-| `minutes.to_first_feature_merge` | minutes to the first merge on the default branch whose branch name has neither `adopt` nor `init` in it |
+| `minutes.to_first_feature_merge` | minutes to the first merge on the default branch of a branch named `feature/…`, the name the feature step gives the branch it builds; the adoption's, a spec's and a `records/…` merge do not count |
 | `architecture` | the architecture measures, below |
 | `stack_leaks` | where the plugin's own text named a language or tool the owner never said, below |
 | `questions` | by class, by channel, recommended offered and taken (dialog and `also:` questions only: a prose question has no marked option), and every question with its answer and the owner model's reason |

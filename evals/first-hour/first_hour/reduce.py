@@ -367,17 +367,13 @@ def _app(apps: list[Event]) -> dict[str, object]:
     }
 
 
-FEATURE_BRANCH_SKIP = ("adopt", "init")
+FEATURE_BRANCH = "feature/"
 
 
 def _first_feature_merge(merges: list[dict[str, object]]) -> object:
-    """The minute of the first merge that is not the adoption's or init's, by branch name."""
+    """The minute of the first merge of a branch the feature step builds, by its prefix."""
     return next(
-        (
-            m["minute"]
-            for m in merges
-            if not any(word in str(m["branch"]).lower() for word in FEATURE_BRANCH_SKIP)
-        ),
+        (m["minute"] for m in merges if str(m["branch"]).startswith(FEATURE_BRANCH)),
         None,
     )
 

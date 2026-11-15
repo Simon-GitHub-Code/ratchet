@@ -374,8 +374,8 @@ SYNTHETIC: list[dict[str, object]] = [
     {"s": 310, "kind": "prompt", "tool": "Edit", "decision": "allow", "reason": ""},
     {"s": 320, "kind": "prompt", "tool": "Bash", "decision": "allow", "reason": "no rule"},
     {"s": 600, "kind": "merge", "branch": "chore/init", "how": "hand"},
-    {"s": 1806, "kind": "merge", "branch": "feat/add", "how": "agent"},
-    {"s": 2400, "kind": "merge", "branch": "feat/list", "how": "agent"},
+    {"s": 1806, "kind": "merge", "branch": "feature/1-add", "how": "agent"},
+    {"s": 2400, "kind": "merge", "branch": "feature/2-list", "how": "agent"},
     {"s": 2400, "kind": "usable"},
     {
         "s": 2500,
