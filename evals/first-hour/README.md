@@ -34,7 +34,7 @@ It writes, in that directory:
 | `stderr.log` | the product session's Claude Code error output |
 | `bin/` | the shell prefix that puts each of the session's commands in the sandbox, and links to the tools the run uses |
 
-`uv run evals/first-hour/run.py reduce <dir>` rewrites `metrics.json` and `table.md` from `events.jsonl`. `uv run evals/first-hour/run.py oneoff <logs> <out>` reduces the logs of the hand-driven dogfood run of 2026-11-13, as a cross-check of the reducer.
+`uv run evals/first-hour/run.py reduce <dir>` rewrites `metrics.json` and `table.md` from `events.jsonl`. It parses each pasted command's gate run again from its output in `logs/` and leaves `events.jsonl` as recorded, so a run whose driver read the runner's lines with an older parser reduces as a run driven today. `uv run evals/first-hour/run.py oneoff <logs> <out>` reduces the logs of the hand-driven dogfood run of 2026-11-13, as a cross-check of the reducer.
 
 The A/B comparison is two runs, one per checkout, and a diff of their `metrics.json`. Read the noise section before you trust a difference.
 

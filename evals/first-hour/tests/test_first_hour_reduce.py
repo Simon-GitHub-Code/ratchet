@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
 
+import run
 from first_hour import reduce, transcript
 from first_hour.persona import PERSONAS, load
+from ratchet_guards import hook
+from ratchet_guards.verdict import Verdict
 
 SESSION = "s-1"
 
@@ -373,6 +376,80 @@ def test_a_call_the_harness_refused_counts_and_a_prompt_takes_its_origin_from_it
     assert metrics["prompts"]["denied"] == 1
     assert (metrics["prompts"]["guard"], metrics["prompts"]["permission"]) == (1, 1)
     assert "| Calls the harness refused | 2 |" in reduce.table(metrics)
+
+
+def test_the_guards_own_asks_count_as_the_guards() -> None:
+    owner_ask = hook.reason(Verdict("agent-ready-label", "0001-x.md gets the status `agent:ready`"))
+    agent_ask = hook.reason(Verdict("merge-default", "git merge feat/x"))
+    run = [
+        {"s": 1, "kind": "prompt", "tool": tool, "decision": "allow", "reason": reason}
+        for tool, reason in (("Write", owner_ask), ("Bash", agent_ask), ("Bash", "no rule"))
+    ]
+    prompts = reduce.reduce(run)["prompts"]
+    assert (prompts["guard"], prompts["permission"]) == (2, 1)
+
+
+DEEP = """\
+parallel: imports: not run yet (later: code:layer) in 0.1s
+parallel: load: not applicable (none: not a service or a job) in 0.1s
+parallel: lint: green in 0.1s
+parallel: bite: red (exit 3) in 0.1s
+"""
+WAITING = "parallel: smoke: not run yet (later: code:entry-point) in 0.1s\n"
+AS_RECORDED = [{"name": "lint", "status": "green"}, {"name": "bite", "status": "red"}]
+
+
+def test_reduce_parses_a_recorded_runs_gates_again_from_its_saved_pastes(tmp_path: Path) -> None:
+    def paste(s: int, step: str, command: str) -> dict[str, object]:
+        return {"s": s, "step": step, "kind": "paste", "command": command, "exit": 0}
+
+    def gate_run(attempt: int, **more: object) -> dict[str, object]:
+        run = {"s": 60, "step": "04-m", "kind": "gates", "id": 1, "attempt": attempt}
+        return {**run, "command": "just check-deep", "gates": AS_RECORDED, **more}
+
+    recorded = [
+        paste(60, "04-m", "just check-deep"),
+        gate_run(1),
+        gate_run(2, of=1),
+        paste(70, "05-n", "just check"),
+        paste(80, "05-n", "just merge y"),
+        paste(90, "05-n", "just lint"),
+        paste(99, "06-o", "just check"),
+    ]
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for name, text in (
+        ("04-m-paste-1", f"$ just check-deep\n{DEEP}"),
+        ("05-n-paste-2", f"$ just check\n{WAITING}"),
+        ("05-n-paste-3", f"$ just merge z\n{WAITING}"),
+        ("06-o-paste-5", f"$ just check\n{WAITING}"),
+    ):
+        (logs / f"{name}.txt").write_text(text, encoding="utf-8")
+    log = "".join(json.dumps(e) + "\n" for e in recorded)
+    (tmp_path / "events.jsonl").write_text(log, encoding="utf-8")
+
+    assert run.main(["run.py", "reduce", str(tmp_path)]) == 0
+
+    metrics = json.loads((tmp_path / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["gates"] == {
+        "command": "just check-deep",
+        "minute": 1.0,
+        "ran": ["bite", "lint"],
+        "later": {"imports": "code:layer"},
+        "none": ["load"],
+    }
+    assert metrics["red_gates"] == [
+        {"gate": "bite", "command": "just check-deep", "minute": 1.0, "red_on_rerun": True}
+    ]
+    assert (tmp_path / "events.jsonl").read_text(encoding="utf-8") == log
+    again = reduce.reread(recorded, logs)
+    assert [(e["s"], e.get("id"), e["attempt"]) for e in again if e["kind"] == "gates"] == [
+        (60, 1, 1),
+        (60, 1, 2),
+        (70, None, 1),
+        (99, None, 1),
+    ]
+    assert list(reduce.reread([], logs)) == []
 
 
 def test_the_first_merge_of_a_feature_skips_the_adoption_and_the_init() -> None:

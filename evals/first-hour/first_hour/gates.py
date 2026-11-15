@@ -2,9 +2,10 @@
 
 ``parallel.py`` prints each gate's output whole under ``==> gate <==`` and one line per gate,
 ``parallel: gate: green in 0.1s`` or ``parallel: gate: red (exit 1) in 2.0s``. A gate that is not
-asked yet prints ``later: <trigger>``. Older runners call it green; newer ones say
+asked yet prints ``later: <trigger>``. Older runners call it green; later ones say
 ``parallel: gate: judged nothing (later: <trigger>)``, and ``judged nothing (none: <why>)`` for a
-gate that does not apply to the project at all. Both shapes read the same here.
+gate that does not apply to the project at all; today's say ``not run yet (later: <trigger>)``
+and ``not applicable (none: <why>)``. Every shape reads the same here.
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ from enum import StrEnum
 
 HEADER = re.compile(r"^==> (\S+) <==$")
 VERDICT = re.compile(r"^parallel: (\S+): (green|red)\b")
-NOTHING = re.compile(r"^parallel: (\S+): judged nothing \((later|none): (.*)\)")
+NOTHING = re.compile(
+    r"^parallel: (\S+): (?:judged nothing|not run yet|not applicable) \((later|none): (.*)\)"
+)
 LATER = re.compile(r"^later: (.+)$")
 
 

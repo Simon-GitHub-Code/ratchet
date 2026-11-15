@@ -17,7 +17,8 @@ that state a stack, one after another, each in its own directory under ``--dir``
 ``transcript.jsonl``, ``metrics.json`` and ``table.md`` in the directory, which must be under the
 system temp location and empty. ``probe``
 starts one session with the run's launch and prints what it can reach. ``reduce`` rewrites the
-measurements from a run's event log. ``oneoff`` turns the logs of the hand-driven dogfood run
+measurements from a run's event log, with its gate runs parsed again from the pasted commands'
+output in ``logs/``. ``oneoff`` turns the logs of the hand-driven dogfood run
 into an event log and reduces it, as a cross-check of the reducer.
 """
 
@@ -40,7 +41,8 @@ from first_hour import harness, matrix, oneoff, persona, reduce, sandbox, steps
 
 
 def _reduce(directory: Path) -> None:
-    metrics = reduce.reduce(reduce.read(directory / "events.jsonl"))
+    events = reduce.read(directory / "events.jsonl")
+    metrics = reduce.reduce(reduce.reread(events, directory / "logs"))
     (directory / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", "utf-8")
     (directory / "table.md").write_text(reduce.table(metrics), "utf-8")
     print(reduce.table(metrics))
