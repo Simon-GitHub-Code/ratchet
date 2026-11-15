@@ -120,6 +120,7 @@ class Change(enum.StrEnum):
     REMOVE_SOME = "remove some instances"
     REMOVE_ALL = "remove every instance"
     BIND = "bind the row"
+    BIND_AND_ADD = "bind the row and add one instance"
     UNBIND = "put the bound row back to later"
     DROP = "drop the row"
     RESTORE = "put the dropped row back as later"
@@ -436,11 +437,19 @@ def heads(state: State, change: Change) -> Iterator[Tree]:
 
 
 def edit(state: State, change: Change, new: frozenset[int] | None) -> Tree | None:
-    """The tip with ``change`` made to its binding or its records, or ``None`` when it cannot be."""
+    """The tip with ``change`` made to its binding or its records, with the instances it brings.
+
+    ``None`` when it cannot be made there.
+    """
     if change is Change.REVIEW:
         return record(state, frozenset())
     if change is Change.ADD_REVIEWED:
         return record(state, new)
+    if change is Change.BIND_AND_ADD:
+        bound = binding_edit(state.main, Change.BIND)
+        if bound is None or new is None or len(bound.instances | new) > WIDEST:
+            return None
+        return bound._replace(instances=bound.instances | new)
     return binding_edit(state.main, change)
 
 
@@ -705,6 +714,16 @@ def bound_takes_instances(result: Landing) -> bool:
     return result.landed or not merged.instances > tip.instances
 
 
+def binding_with_an_instance_waits_only_on_the_review(result: Landing) -> bool:
+    """A change that binds the row and adds an instance is green exactly when no review is owed."""
+    tip, merged = result.tip, result.merged
+    binds = result.fork.row is Row.LATER and result.head.row is Row.BOUND
+    if merged is None or not binds or not result.count_rose:
+        return True
+    owing = review_owed(tip, result.tip_start) and (bool(tip.instances) or result.tip_held)
+    return result.landed is not owing
+
+
 def only_binding_leaves_owed(result: Landing) -> bool:
     """Binding the row is the only green way out of owed for a kind that still has instances."""
     merged = result.merged
@@ -814,6 +833,9 @@ RULES: dict[str, Rule] = {
     "owed takes no new instance": Rule("step", step_check=owed_takes_no_new_instance),
     "owed count does not rise": Rule("step", step_check=owed_count_does_not_rise),
     "bound takes instances": Rule("step", step_check=bound_takes_instances),
+    "binding with an instance waits only on the review": Rule(
+        "step", step_check=binding_with_an_instance_waits_only_on_the_review
+    ),
     "only binding leaves owed": Rule("step", step_check=only_binding_leaves_owed),
     "only binding leaves owed, with the guard": Rule(
         "step", step_check=only_binding_leaves_owed_guarded
@@ -885,9 +907,9 @@ def kind(state: State) -> Kind:
 
 
 def export() -> model_tla.Export:
-    """The reachable graph as a TLA+ module, with the seventeen rules.
+    """The reachable graph as a TLA+ module, with the eighteen rules.
 
-    Fourteen rules are about a landing, so each is a ``model_tla.Step``, and the module holds a
+    Fifteen rules are about a landing, so each is a ``model_tla.Step``, and the module holds a
     state once for each set of them the step into it broke.
     """
     return model_tla.export(

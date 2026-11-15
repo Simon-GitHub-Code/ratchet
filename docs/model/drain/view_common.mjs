@@ -8,6 +8,14 @@ const MAIN = {
   TheAgentLeavesWorkUncommittedInC: "the agent leaves work uncommitted in c",
   TheAgentCommitsA: "the agent commits a",
   TheAgentCommitsTheVerdictRecordOfA: "the agent commits the verdict record of a",
+  ARoleOfThePipelineRunCommitsInA: "a role of the pipeline run commits in a",
+  DrainPyCheckA: "drain.py check a",
+  DrainPyCheckCannotReadThePresentStateOfA: "drain.py check cannot read the present state of a",
+  DrainPyCheckFindsOnlyARebaseLeftUnfinishedInA:
+    "drain.py check finds only a rebase left unfinished in a",
+  TheCheckOfDrainPyUpdateCannotReadThePresentStateOfA:
+    "the check of drain.py update cannot read the present state of a",
+  TheOwnerLandsTheFlagLineOfA: "the owner lands the Flag: line of a",
   DrainPyCloseOutcomeParkedA: "drain.py close --outcome parked a",
   DrainPyCloseOutcomeParkedC: "drain.py close --outcome parked c",
   DrainPyUpdateA: "drain.py update a",
@@ -100,6 +108,13 @@ const COMMAND = {
   DrainPyReport: "report",
   TheAgentCommits: "the agent commits",
   TheAgentCommitsTheVerdictRecordOf: "the agent commits the verdict record",
+  ARoleOfThePipelineRunCommitsIn: "a role commits",
+  DrainPyCheck: "check",
+  DrainPyCheckCannotReadThePresentStateOf: "the check cannot read",
+  DrainPyCheckFindsOnlyARebaseLeftUnfinishedIn: "the check finds a rebase unfinished",
+  TheCheckOfDrainPyUpdateCannotReadThePresentStateOf: "update's check cannot read",
+  TheOwnerLandsTheFlagLineOf: "the owner lands its Flag line",
+  AnUpgradeMakesThePreflightAskTheFlagLineBeforeDeployment: "an upgrade asks the Flag line",
   TheAgentLeavesWorkUncommittedIn: "the agent leaves work uncommitted",
   TheOwnerEditsTicket: "the owner edits the ticket",
   GitLeavesAStaleIndexLockInTheTreeOf: "git leaves a stale index lock",
@@ -130,6 +145,7 @@ export const leftByMerge = (v) => {
 export const life = (v) => {
   if (v.mergedA) return v.freshA ? "Merged, the next report prints it" : "Merged and reported";
   if (v.statusA === "held") return "Held until its text changes";
+  if (v.statusA === "refused") return "Refused for its Flag line";
   if (v.statusA === "buildable") return "Buildable";
   if (v.branchA === "bare") return "Opened, nothing committed";
   if (v.branchA !== "judged") return "Committed, no verdict record last";

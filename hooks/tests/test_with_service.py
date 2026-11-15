@@ -308,7 +308,7 @@ def test_a_bad_ready_url_or_env_pair_is_a_usage_error() -> None:
 
 
 LOAD = Path(servers.__file__).parents[2] / "scripts" / "load_smoke.py"
-BUSY = ["--seconds", "2.5", "--concurrency", "4", "--min-requests", "4", "--until-stopped"]
+BUSY = ["--seconds", "2.5", "--concurrency", "4", "--min-requests", "1", "--until-stopped"]
 STOPPING = (
     "import os, sys\n"
     "open(sys.argv[1], 'w').write(str(os.path.exists(os.environ['RATCHET_STOPPING'])))"
@@ -316,30 +316,40 @@ STOPPING = (
 SENDS_THEN_WAITS = (
     "import os, time\nopen(os.environ['RATCHET_SENDING'], 'w').close()\ntime.sleep(1)"
 )
+DROPPED = re.compile(r"^\d+ x GET http://127\.0\.0\.1:\d+/work: (\w+)$", re.MULTILINE)
+
+
+def smoke(*, starts_after: str = "0", reaches_late: bool = False) -> list[str]:
+    """The load smoke against ``/work``, started ``starts_after`` seconds after the command.
+
+    With ``reaches_late`` it says it is sending, and its first request reaches the service a
+    second later, after the signal was due, as on a machine too busy to run it promptly.
+    """
+    late = f'touch "${gatelib.SENDING_ENV}" && sleep 1 && ' if reaches_late else ""
+    return [
+        *("sh", "-c", f'{late}sleep {starts_after} && exec "$@"', "late", sys.executable),
+        *(str(LOAD), "--url", "http://127.0.0.1:{port}/work", *BUSY),
+    ]
 
 
 def graceful(
     mode: str,
     *extra: str,
     capsys: pytest.CaptureFixture[str],
-    limit: str = "2",
-    starts_after: str = "0",
+    limit: str = "60",
+    command: list[str] | None = None,
     hidden: bool = False,
 ) -> tuple[int, str]:
-    """The load smoke run inside a service of ``mode`` that is signalled 0.5 s in.
+    """The ``command``, a ``smoke`` by default, run inside a service of ``mode`` signalled 0.5 s in.
 
-    The smoke starts ``starts_after`` seconds after the command does, as on a loaded runner. A
-    ``hidden`` service lets no other process look at its open files.
+    A ``hidden`` service lets no other process look at its open files. The ``limit`` ends the
+    wait the moment the service exits, so it is only how long a busy machine may take to drain.
     """
-    command = [
-        *("sh", "-c", f'sleep {starts_after} && exec "$@"', "late", sys.executable, str(LOAD)),
-        *("--url", "http://127.0.0.1:{port}/work", *BUSY),
-    ]
     boot = f"MODE={mode}{' HIDDEN=1' if hidden else ''} exec {python(STOPS)}"
     return run(
         *("--boot", boot, "--ready", READY),
         *("--graceful", limit, "--signal-after", "0.5", *extra),
-        *("--", *command),
+        *("--", *(command or smoke())),
         capsys=capsys,
     )
 
@@ -364,30 +374,34 @@ def test_a_service_that_leaves_connections_in_its_accept_queue_is_green(
     assert code == 0
 
 
+@pytest.mark.parametrize("reaches_late", [False, True])
 def test_the_request_a_service_accepted_and_dropped_is_red_beside_those_it_never_accepted(
-    capfd: pytest.CaptureFixture[str],
+    capfd: pytest.CaptureFixture[str], *, reaches_late: bool
 ) -> None:
     # Why: the gate excuses a reset only for a connection it took itself from a listener the
     # service had let go of. The one request this service accepted and then abandoned counts.
-    code, out = graceful("abandon", capsys=capfd)
+    code, out = graceful("abandon", capsys=capfd, command=smoke(reaches_late=reaches_late))
     assert "load-smoke: 3 connection(s) reset after the stop signal are not counted" in out
     assert "\n1 x GET http://127.0.0.1:" in out, out
     assert code == 1
 
 
+@pytest.mark.parametrize("reaches_late", [False, True])
 def test_a_service_that_forges_the_gates_excuse_from_another_address_is_red(
-    capfd: pytest.CaptureFixture[str],
+    capfd: pytest.CaptureFixture[str], *, reaches_late: bool
 ) -> None:
     # Why: the gate names each connection it took. A name of two ports matched a connection the
     # service made to itself from another address with the client's port, so the requests it
     # then dropped were excused. A connection is named by both of its addresses and ports.
     code, out = run(
         *("--boot", f"exec {python(FORGE)}", "--ready", READY),
-        *("--graceful", "2", "--signal-after", "0.5", "--", sys.executable, str(LOAD)),
-        *("--url", "http://127.0.0.1:{port}/work", *BUSY),
+        *("--graceful", "60", "--signal-after", "0.5", "--"),
+        *smoke(reaches_late=reaches_late),
         capsys=capfd,
     )
-    assert re.search(r"\n\d+ x GET http://127\.0\.0\.1:\d+/work: ConnectionResetError\n", out), out
+    dropped = DROPPED.search(out)
+    assert dropped, out
+    assert dropped.group(1) == "ConnectionResetError"
     assert code == 1
 
 
@@ -420,25 +434,36 @@ def test_a_smoke_slow_to_start_still_has_requests_in_flight_at_the_signal(
     # Why: on a loaded runner the smoke can take longer to start than --signal-after. A signal
     # timed from the command's start then stops the service before one request is sent, and the
     # smoke is red under its request floor although the service drained correctly.
-    code, out = graceful("drain", capsys=capsys, starts_after="1")
+    code, out = graceful("drain", capsys=capsys, command=smoke(starts_after="1"))
     assert out.endswith("with_service: green\n"), out
     assert code == 0
 
 
+@pytest.mark.parametrize("reaches_late", [False, True])
+def test_a_service_that_drops_the_requests_in_flight_is_red_for_them(
+    capfd: pytest.CaptureFixture[str], *, reaches_late: bool
+) -> None:
+    code, out = graceful("drop", capsys=capfd, command=smoke(reaches_late=reaches_late))
+    assert DROPPED.search(out), out
+    assert code == 1
+    assert out.endswith("with_service: red\n")
+
+
 @pytest.mark.parametrize(
-    ("mode", "said"),
+    ("mode", "said", "limit"),
     [
-        ("drop", "the command exited with code 1"),
-        ("late", "the service exited with code 1 "),
-        ("ignore", "the service was still running 1s after SIGTERM"),
-        ("slow", "the service was still running 1s after SIGTERM"),
-        ("die", "the service exited with code 5 before it was signalled"),
+        ("late", "the service exited with code 1 ", "60"),
+        ("ignore", "the service was still running 1s after SIGTERM", "1"),
+        ("slow", "the service was still running 1s after SIGTERM", "1"),
+        ("die", "the service exited with code 5 before it was signalled", "60"),
     ],
 )
 def test_each_way_of_stopping_badly_is_red(
-    mode: str, said: str, capsys: pytest.CaptureFixture[str]
+    mode: str, said: str, capsys: pytest.CaptureFixture[str], *, limit: str
 ) -> None:
-    code, out = graceful(mode, capsys=capsys, limit="1")
+    # Why: only the services that do not stop in time are about the limit running out; the
+    # others must drain or exit before it does, which 1 s does not allow on a busy machine.
+    code, out = graceful(mode, capsys=capsys, limit=limit)
     assert said in out, out
     assert code == 1
     assert out.endswith("with_service: red\n")

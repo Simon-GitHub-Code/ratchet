@@ -30,7 +30,8 @@ class Setup(StrEnum):
     """How far the one-time setup has got.
 
     Nothing; an init that stopped with the purpose placeholder in ``AGENTS.md``; init done; the
-    tracker; an adoption that stopped before it wrote the plugin pin; the binding, pinned.
+    tracker; an adoption that stopped before it wrote the plugin pin; one that stopped after the
+    pin, before its proof; the binding, pinned and proved.
     """
 
     BARE = "bare"
@@ -38,6 +39,7 @@ class Setup(StrEnum):
     NAMED = "named"
     TRACKED = "tracked"
     ADOPTING = "adopting"
+    PINNED = "pinned"
     BOUND = "bound"
 
 
@@ -110,6 +112,20 @@ class Architecture(StrEnum):
     RECORDED = "recorded"
 
 
+class Flag(StrEnum):
+    """Whether a ticket's ``Flag:`` line is asked before the project is deployed (ADR 0061).
+
+    Waits: the line waits for ``deployed``, as it did before the upgrade that ships ADR 0061 to a
+    project asked and not deployed. Missing: that upgrade met a record in flight that states its
+    conjecture and no line, so the spec in flight and its tickets state none. Asked: the conjecture
+    writes the line on the spec with its answer, so every record states it.
+    """
+
+    WAITS = "waits"
+    MISSING = "missing"
+    ASKED = "asked"
+
+
 class Advice(StrEnum):
     """What the route tells the owner: one label per distinct next step."""
 
@@ -171,6 +187,7 @@ class ActionName(StrEnum):
     OWNER_LANDS_GUARD_EDITS = "OwnerLandsGuardEdits"
     OWNER_CHANGES_TICKET = "OwnerChangesTicket"
     OWNER_RESOLVES_TICKET = "OwnerResolvesTicket"
+    UPGRADE_ASKS_THE_FLAG_LINE = "UpgradeAsksTheFlagLine"
     UPGRADE_LEAVES_ROWS_TO_FILL = "UpgradeLeavesRowsToFill"
     AGENT_FILLS_ROWS = "AgentFillsRows"
     KIND_OF_CODE_ARRIVES = "KindOfCodeArrives"
@@ -207,7 +224,8 @@ class World:
     conjecture, so none needs one of its own. ``owes``: a safeguard is owed. ``reviews``: an
     architecture review is owed (ADR 0052). ``fills``: an upgrade left rows an agent writes from
     the repository alone (ADR 0050). ``architecture``: whether the architecture is recorded, owed
-    since an upgrade, or not yet asked (ADR 0049).
+    since an upgrade, or not yet asked (ADR 0049). ``flag``: whether the spec in flight and its
+    tickets state the ``Flag:`` line where it is asked before deployment (ADR 0061).
     """
 
     setup: Setup = Setup.BARE
@@ -223,11 +241,16 @@ class World:
     reviews: bool = False
     fills: bool = False
     architecture: Architecture = Architecture.UNASKED
+    flag: Flag = Flag.WAITS
 
 
 def adopted(world: World) -> bool:
-    """Whether the setup is done and the commit hooks are in place."""
-    return world.setup is Setup.BOUND and world.hooks
+    """Whether the binding is pinned and the commit hooks are in place, as the scripts see it.
+
+    An adoption that stopped after its pin, before its proof, is adopted here: nothing in the
+    repository stops a step there. ``rest`` and the route's advice tell it apart.
+    """
+    return world.setup in {Setup.PINNED, Setup.BOUND} and world.hooks
 
 
 def settled(world: World) -> bool:
@@ -248,6 +271,7 @@ def rest(world: World) -> bool:
     """Whether there is nothing left to finish: the route's answer is to write the next spec."""
     return (
         calm(world)
+        and world.setup is Setup.BOUND
         and world.spec is Spec.NONE
         and not world.owes
         and not world.reviews
@@ -292,14 +316,35 @@ def buildable(world: World) -> list[int]:
     return [slot for slot in free(world) if world.tickets[slot] not in HOLDS]
 
 
+def states(world: World, slot: int) -> bool:
+    """Whether the preflight finds the ticket in ``slot`` stated: its conjecture, and its line.
+
+    Why the line is read from the world: the conjecture writes it on the spec, so every ticket of
+    the spec in flight lacks it, or none does (ADR 0061).
+    """
+    return world.tickets[slot] in STATED and world.flag is not Flag.MISSING
+
+
 def stated(world: World) -> list[int]:
     """The agent-ready tickets that state a conjecture and that nothing holds."""
-    return [slot for slot in labelled(world) if world.tickets[slot] in STATED]
+    return [slot for slot in labelled(world) if states(world, slot)]
 
 
 def queue_builds(world: World) -> bool:
     """Whether a buildable ticket states its conjecture, so the route names a build."""
-    return any(world.tickets[slot] in STATED for slot in buildable(world))
+    return any(states(world, slot) for slot in buildable(world))
+
+
+def lacks_the_line(world: World) -> bool:
+    """Whether a record in flight states its conjecture, so the line can be missing from it.
+
+    The spec states it, or a ticket inherits it or states its own and has not been built.
+    """
+    return (
+        world.spec is Spec.STATED
+        or any(ticket in STATED | HOLDS for ticket in world.tickets)
+        or (world.inherits and Ticket.TRIAGE in world.tickets)
+    )
 
 
 def held_for(world: World, ticket: Ticket) -> bool:
@@ -327,7 +372,7 @@ def _no_ticket(world: World) -> bool:
 CHAIN: Final = (
     Rule(Advice.INIT, lambda w: w.setup in {Setup.BARE, Setup.STARTED}),
     Rule(Advice.TRACKER, lambda w: w.setup is Setup.NAMED),
-    Rule(Advice.ADOPT, lambda w: w.setup in {Setup.TRACKED, Setup.ADOPTING}),
+    Rule(Advice.ADOPT, lambda w: w.setup in {Setup.TRACKED, Setup.ADOPTING, Setup.PINNED}),
     Rule(Advice.HOOKS, lambda w: not w.hooks),
     Rule(Advice.FINISH_RECORDS, lambda w: w.head is Head.RECORDS),
     Rule(Advice.LAND_RECORDS, lambda w: (w.head, w.tree) == (Head.MAIN, Tree.RECORDS)),
@@ -393,7 +438,60 @@ class Divergence:
     example: World
 
 
-DIVERGENCES: Final[tuple[Divergence, ...]] = ()
+def as_before_the_flag_line(world: World) -> World:
+    """``world`` as the preflight reads it while the ``Flag:`` line waits for ``deployed``."""
+    return replace(world, flag=Flag.WAITS)
+
+
+def as_proved_by_its_pin(world: World) -> World:
+    """``world`` as the route reads it while a pinned binding counts as a finished adoption."""
+    return replace(world, setup=Setup.BOUND)
+
+
+DIVERGENCES: Final[tuple[Divergence, ...]] = (
+    Divergence(
+        name="adoption-proved-by-its-pin",
+        holds=lambda world: world.setup is Setup.PINNED,
+        reads=as_proved_by_its_pin,
+        contradicts=(
+            "Done when `check` is green in a fresh worktree of the commit, `conformance` and"
+            " `check-deep` exit 0, no rehearsal worktree is left, and the rehearsal passed, or its"
+            " second round ended with the edits it still needs named."
+        ),
+        source="skills/adopt/SKILL.md",
+        breaks=frozenset({"FollowingRealAdviceLowersRank", "RealUnprovedAdoptionNeverBuilds"}),
+        example=World(
+            setup=Setup.PINNED,
+            hooks=True,
+            foundation=True,
+            tickets=(Ticket.STATED, Ticket.TRIAGE),
+            inherits=True,
+            architecture=Architecture.RECORDED,
+        ),
+    ),
+    Divergence(
+        name="flag-line-waits-for-deployed",
+        holds=lambda world: world.flag is Flag.MISSING,
+        reads=as_before_the_flag_line,
+        contradicts=(
+            "The preflight asks every ticket of an asked type for its `Flag:` line, before"
+            " deployment as after, whatever its row's `later:` says."
+        ),
+        source=(
+            "docs/adr/0061-before-deployment-the-owner-is-asked-whether-new-behaviour-arrives"
+            "-switched-off.md"
+        ),
+        breaks=frozenset({"RealAdviceCanBeFollowed", "RealFlagLineBeforeTheBuild"}),
+        example=World(
+            setup=Setup.BOUND,
+            hooks=True,
+            foundation=True,
+            tickets=(Ticket.STATED, Ticket.TRIAGE),
+            architecture=Architecture.RECORDED,
+            flag=Flag.MISSING,
+        ),
+    ),
+)
 
 
 def divergence(world: World) -> Divergence | None:
@@ -430,11 +528,35 @@ ACTIONS: Final[dict[ActionName, Action]] = {}
 ADVISED: Final[dict[Advice, ActionName]] = {}
 
 
+def lined(world: World) -> World:
+    """``world`` with no line missing once no record in flight could lack it."""
+    if world.flag is Flag.MISSING and not lacks_the_line(world):
+        return replace(world, flag=Flag.ASKED)
+    return world
+
+
+def following_today(world: World) -> frozenset[ActionName]:
+    """The steps taken where an adoption stopped after its pin: its resume, and the real advice.
+
+    Why no other: the model shows where an owner who follows today's route is led from there,
+    and an arrival of its own beside that run would only grow the graph.
+    """
+    return frozenset({ActionName.OWNER_ADOPTS, ADVISED[real_advice(world)]})
+
+
 def action(name: ActionName, *follows: Advice) -> Callable[[Successors], Successors]:
     """Register ``successors`` as action ``name``; each advice in ``follows`` leads to it."""
 
+    def taken(successors: Successors) -> Successors:
+        def take(world: World) -> Iterator[World]:
+            if world.setup is Setup.PINNED and name not in following_today(world):
+                return iter(())
+            return map(lined, successors(world))
+
+        return take
+
     def register(successors: Successors) -> Successors:
-        ACTIONS[name] = Action(name, follows, successors)
+        ACTIONS[name] = Action(name, follows, taken(successors))
         for advice_label in follows:
             if advice_label in ADVISED:
                 message = f"{advice_label} is followed by {ADVISED[advice_label]} and {name}"
@@ -463,9 +585,22 @@ def _owner_sets_up_tracker(world: World) -> Iterator[World]:
         yield replace(world, setup=Setup.TRACKED)
 
 
+def on_the_adoption_branch(world: World) -> bool:
+    """Whether the adoption's own branch is checked out: a working branch before the glossary."""
+    return world.head is Head.WORK and not world.foundation
+
+
 @action(ActionName.OWNER_ADOPTS, Advice.ADOPT)
 def _owner_adopts(world: World) -> Iterator[World]:
-    if world.setup in {Setup.TRACKED, Setup.ADOPTING}:
+    """``/ratchet:adopt``, or its resume: from its branch it merges; after that it proves alone.
+
+    Why a resume from anywhere else changes only the setup: what the stopped adoption left is
+    merged, and its proof writes nothing the route reads.
+    """
+    if world.setup is Setup.PINNED and not on_the_adoption_branch(world):
+        yield replace(world, setup=Setup.BOUND)
+        return
+    if world.setup in {Setup.TRACKED, Setup.ADOPTING, Setup.PINNED}:
         yield replace(
             world,
             setup=Setup.BOUND,
@@ -484,13 +619,17 @@ def _older_plugin_adopts(world: World) -> Iterator[World]:
 
 @action(ActionName.ADOPTION_STOPS)
 def _adoption_stops(world: World) -> Iterator[World]:
-    """An adoption stops on its branch: before it writes the pin, committed; or just after."""
+    """An adoption stops on its branch: before it writes the pin, committed; or after it.
+
+    Why after the pin is a place of its own: the adoption writes the pin in its step 11, since
+    every tier runs the plugin-pin gate first, and proves the adoption in step 12.
+    """
     if world.setup is Setup.TRACKED:
         yield replace(world, setup=Setup.ADOPTING, head=Head.WORK)
     if world.setup in {Setup.TRACKED, Setup.ADOPTING}:
         yield replace(
             world,
-            setup=Setup.BOUND,
+            setup=Setup.PINNED,
             head=Head.WORK,
             tree=Tree.CODE,
             architecture=Architecture.RECORDED,
@@ -499,7 +638,7 @@ def _adoption_stops(world: World) -> Iterator[World]:
 
 @action(ActionName.AGENT_INSTALLS_HOOKS, Advice.HOOKS)
 def _agent_installs_hooks(world: World) -> Iterator[World]:
-    if world.setup is Setup.BOUND and not world.hooks:
+    if world.setup in {Setup.PINNED, Setup.BOUND} and not world.hooks:
         yield replace(world, hooks=True)
 
 
@@ -558,9 +697,10 @@ class Move:
 def runnable(world: World, slot: int) -> bool:
     """Whether a feature run or the drain may start on the ticket in ``slot``.
 
-    Why: ADR 0050. The feature preflight and the drain refuse while rows an agent fills are owed.
+    Why: ADR 0050 and ADR 0061. The feature preflight and the drain refuse while rows an agent
+    fills are owed, and a ticket whose ``Flag:`` line is missing.
     """
-    return unblocked(world, slot) and not world.fills
+    return unblocked(world, slot) and not world.fills and world.flag is not Flag.MISSING
 
 
 def runnable_slots(world: World) -> list[int]:
@@ -598,11 +738,22 @@ per_ticket(
     (Advice.BLOCKED,),
     Move(one(Ticket.TRIAGE), Ticket.RESOLVED),
 )
-per_ticket(
-    ActionName.OWNER_STATES_CONJECTURE,
-    (Advice.CONJECTURE,),
-    Move(one(Ticket.READY), Ticket.STATED),
-)
+
+
+@action(ActionName.OWNER_STATES_CONJECTURE, Advice.CONJECTURE)
+def _owner_states_conjecture(world: World) -> Iterator[World]:
+    """``/ratchet:conjecture <ticket>``: the ticket's conjecture, and the line where it is missing.
+
+    Why one step lands the line for every ticket: the conjecture writes the answer and the line on
+    the spec, which each ticket of it reads (ADR 0061).
+    """
+    flag = Flag.ASKED if world.flag is Flag.MISSING else world.flag
+    for moved in moves(world, Move(one(Ticket.READY), Ticket.STATED)):
+        yield replace(moved, flag=flag)
+    if calm(world) and world.flag is Flag.MISSING and STATED & set(world.tickets):
+        yield replace(world, flag=flag)
+
+
 per_ticket(
     ActionName.AGENT_BUILDS_TICKET,
     (Advice.BUILD,),
@@ -653,6 +804,7 @@ def _drain_parks_for_a_safeguard(world: World) -> Iterator[World]:
     if (
         calm(world)
         and not (world.owes or world.fills)
+        and world.flag is not Flag.MISSING
         and world.tickets == (Ticket.STATED, Ticket.STATED)
     ):
         yield replace(world, tickets=(Ticket.MERGED, Ticket.OWED), owes=True)
@@ -688,6 +840,26 @@ def _upgrade_leaves_rows_to_fill(world: World) -> Iterator[World]:
         yield replace(
             world, fills=True, architecture=Architecture.OWED if owed else world.architecture
         )
+
+
+@action(ActionName.UPGRADE_ASKS_THE_FLAG_LINE)
+def _upgrade_asks_the_flag_line(world: World) -> Iterator[World]:
+    """The upgrade that ships ADR 0061 to a project asked and not deployed.
+
+    It moves no ticket. A ticket that states its conjecture and no line is read as needing the
+    conjecture again, and a built one, which no preflight reads again, goes on to its merge. It
+    lands on the default branch, so it can arrive while the build's branch is checked out.
+
+    Why only where the architecture is recorded: an upgrade from a plugin before ADR 0049 is the
+    model's other upgrade, which comes at rest and owes the architecture.
+    """
+    building = on_a_clean_branch(world, Head.WORK) and Ticket.BUILT in world.tickets
+    if (
+        (calm(world) or (building and world.foundation and not world.parked))
+        and world.flag is Flag.WAITS
+        and world.architecture is Architecture.RECORDED
+    ):
+        yield replace(world, flag=Flag.MISSING if lacks_the_line(world) else Flag.ASKED)
 
 
 @action(ActionName.AGENT_FILLS_ROWS, Advice.FILL)
@@ -960,6 +1132,54 @@ def only(action_name: ActionName, before: str, after: str) -> str:
     )
 
 
+RUNS: Final = (
+    ActionName.AGENT_BUILDS_TICKET,
+    ActionName.BUILD_STOPS,
+    ActionName.FEATURE_RUN_BLOCKS,
+    ActionName.DRAIN_MERGES_TICKET,
+    ActionName.DRAIN_PARKS_TICKET,
+    ActionName.DRAIN_PARKS_FOR_A_SAFEGUARD,
+)
+BUILDS: Final = frozenset({Advice.BUILD, Advice.DRAIN})
+
+
+def line_before_the_build(label: Callable[[World], Advice]) -> Callable[[World], bool]:
+    """Whether ``label`` names no build and no drain where a ticket's ``Flag:`` line is missing."""
+
+    def check(world: World) -> bool:
+        return world.flag is not Flag.MISSING or label(world) not in BUILDS
+
+    return check
+
+
+def proved_before_the_build(label: Callable[[World], Advice]) -> Callable[[World], bool]:
+    """Whether ``label`` names no build and no drain where the adoption was never proved."""
+
+    def check(world: World) -> bool:
+        return world.setup is not Setup.PINNED or label(world) not in BUILDS
+
+    return check
+
+
+def no_run_without_the_line() -> str:
+    """TLA+ text: while the line is missing, no step is a feature run or the drain."""
+    runs = " \\/ ".join(RUNS)
+    return f'[][flag = "{Flag.MISSING}" => ~({runs})]_vars'
+
+
+def upgrade_moves_no_ticket() -> str:
+    """TLA+ text: the upgrade that asks the line leaves the tickets and their inheritance."""
+    return f"[][{ActionName.UPGRADE_ASKS_THE_FLAG_LINE} => UNCHANGED <<tickets, inherits>>]_vars"
+
+
+def only_the_upgrade_leaves_the_line_missing() -> str:
+    """TLA+ text: a step into a missing line is the upgrade."""
+    return (
+        f'[][(flag # "{Flag.MISSING}" /\\ flag\' = "{Flag.MISSING}")'
+        f" => {ActionName.UPGRADE_ASKS_THE_FLAG_LINE}]_vars"
+    )
+
+
 RULES: Final[dict[str, model_tla.Rule]] = {
     "AdviceCanBeFollowed": model_tla.Invariant(
         "The step the route names can be taken.", can_be_followed("advice")
@@ -1014,11 +1234,45 @@ RULES: Final[dict[str, model_tla.Rule]] = {
         "Recording the architecture is the only step that ends it being owed.",
         only(ActionName.OWNER_RECORDS_ARCHITECTURE, "=", "#"),
     ),
+    "FlagLineBeforeTheBuild": model_tla.Invariant(
+        "Where a labelled ticket has no `Flag:` line, on it or on its spec, the route names no"
+        " build and no drain.",
+        line_before_the_build(advice),
+    ),
+    "RealFlagLineBeforeTheBuild": model_tla.Invariant(
+        "Where a labelled ticket has no `Flag:` line, on it or on its spec, the real route names"
+        " no build and no drain.",
+        line_before_the_build(real_advice),
+    ),
+    "NoRunStartsWithoutTheFlagLine": model_tla.Property(
+        "No feature run and no drain starts while a ticket's `Flag:` line is missing.",
+        no_run_without_the_line(),
+    ),
+    "OnlyTheUpgradeLeavesTheFlagLineMissing": model_tla.Property(
+        "Only the upgrade that asks the `Flag:` line before deployment leaves it missing.",
+        only_the_upgrade_leaves_the_line_missing(),
+    ),
+    "TheUpgradeMovesNoTicket": model_tla.Property(
+        "The upgrade that asks the `Flag:` line moves no ticket and no inheritance: a built ticket"
+        " stays built.",
+        upgrade_moves_no_ticket(),
+    ),
+    "UnprovedAdoptionNeverBuilds": model_tla.Invariant(
+        "A repository whose adoption stopped before its proof is never told to build.",
+        proved_before_the_build(advice),
+    ),
+    "RealUnprovedAdoptionNeverBuilds": model_tla.Invariant(
+        "The real route never tells a repository whose adoption stopped before its proof to build.",
+        proved_before_the_build(real_advice),
+    ),
 }
 
 
 class Shown(NamedTuple):
-    """What the charts read of a world: what the route names, the checkout, and what is owed."""
+    """What the charts read of a world: what the route names, the checkout and what is owed.
+
+    And whether a ticket's ``Flag:`` line is missing.
+    """
 
     advice: str
     real_advice: str
@@ -1030,6 +1284,7 @@ class Shown(NamedTuple):
     reviews: bool
     owes: bool
     architecture: str
+    missing: bool
 
 
 def shown(world: World) -> Shown:
@@ -1045,6 +1300,7 @@ def shown(world: World) -> Shown:
         world.reviews,
         world.owes,
         world.architecture,
+        world.flag is Flag.MISSING,
     )
 
 

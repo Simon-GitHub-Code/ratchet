@@ -19,7 +19,7 @@ Usage::
 
 ``up`` boots the work tree at ``R`` as it is, committed or not, the way the project's justfile
 says (``boot``, ``ready``, ``boot_timeout``, and ``flags_on`` so every flag due for removal is
-on) through ``with_service.py``, on a port the kernel picks, puts ``acceptance_proxy.py`` in
+on) through ``with_service.py``, on a free port it picks, puts ``acceptance_proxy.py`` in
 front of it, and prints two lines: the one address the tester gets, and the directory the tester
 writes its record (``record.json``) and screenshots in. It returns while the product keeps
 running. Run again while that session lives, it prints the same two lines, waiting first when it
