@@ -18,6 +18,21 @@ def git(root: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
+@functools.cache
+def installed_copy() -> Path:
+    """The plugin's tracked files as a harness installs them: a folder with no history, once."""
+    here = Path(__file__).resolve().parents[2]
+    scratch = Path(tempfile.mkdtemp(prefix="ratchet-installed-"))
+    atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+    copy = scratch / "copy"
+    for name in git(here, "ls-files", "-z").split("\0"):
+        source = here / name
+        if name and (source.is_symlink() or source.is_file()):
+            (copy / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, copy / name, follow_symlinks=False)
+    return copy
+
+
 def write(root: Path, path: str, text: str) -> None:
     target = root / path
     target.parent.mkdir(parents=True, exist_ok=True)
