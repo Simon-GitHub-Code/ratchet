@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 # Installs come only from a tagged release, and the release names its commit
 
@@ -14,6 +14,8 @@ An installed copy of the plugin has no `.git`, so `plugin_pin.commit_of` returns
 **A project pins M.** The pin an upgrade writes is `V at M`. M's tree is C's without the one file, so CI on the project runs the code the installed copy runs.
 
 **A workflow makes the release.** `.github/workflows/release.yml` runs on a push to main that changes `.claude-plugin/plugin.json`. When tag `vV` does not exist, it makes C, pushes the tag and runs the release check. Neither an agent nor the owner makes C by hand. The version PR keeps the form of #121: it bumps the version, writes the changelog and sets the marketplace `ref`.
+
+**Each release has a release page.** After the check passes, the workflow publishes a GitHub release for `vV`. Its notes are the `## V` section of `CHANGELOG.md`, so the page and the changelog say the same thing. The workflow makes no page for a tag whose check is red, and it leaves a page that already exists alone. The owner authorised the pages on 2026-11-15.
 
 **The marketplace installs the tag.** In `.claude-plugin/marketplace.json`, the ratchet entry's `"source": "./"` becomes `{"source": "github", "repo": "Simon-GitHub-Code/ratchet", "ref": "vV"}`. The version PR sets `ref` with the version.
 
@@ -37,6 +39,7 @@ This is wrong if any of these is seen:
 - An installed copy of a tagged release fails to upgrade a project with no clone of the plugin.
 - A project pinned to M runs code in CI that differs from the installed copy at `vV`.
 - A `v*` tag moves or disappears with `release_check.py` still green.
+- A tag whose check passed has no release page, or its page says other than the changelog's section for its version.
 
 ## Considered options
 
@@ -53,7 +56,7 @@ This is wrong if any of these is seen:
 
 - `scripts/plugin_pin.py`: `commit_of` falls back to `.claude-plugin/commit`.
 - `scripts/release_check.py`: new, with its tests on a scratch repository.
-- `.github/workflows/release.yml`: new. Adding it is an `ASK` (workflow write), approved at merge.
+- `.github/workflows/release.yml`: new. It makes the tag, runs the check and publishes the release page. Adding it is an `ASK` (workflow write), approved at merge.
 - Main's CI: one check that `.claude-plugin/commit` is absent.
 - `.claude-plugin/marketplace.json`: the ratchet entry's source.
 - `/ratchet:upgrade`'s page: until the first tagged release is installed, run the upgrade from a clone at the published commit. This line ships in the same change.
@@ -66,6 +69,6 @@ This is wrong if any of these is seen:
 - A dev clone has `.git`, so nothing changes for it.
 - For about a minute between M's merge and the tag push, a harness that refreshes finds no `vV` and keeps the copy it has.
 
-## Open for the owner
+## Settled by the owner, 2026-11-15
 
-- **1. No `sha` in the entry, and a tag ruleset.** What the owner accepted named the tag and its sha. The build names the tag alone, for the reason under Considered options, and a ruleset forbids moving or deleting `v*` tags. The owner sets that ruleset once in the repository's settings, since no agent changes them. Recommendation: accept. Cost: one settings change, and until it is set only `release_check.py` notices a moved tag.
+- **1. No `sha` in the entry, and a tag ruleset.** The owner accepted it and set the ruleset on 2026-11-15. No agent has read the ruleset back, since the guard refuses a read of rulesets. The first proof that a tag is held is `release_check.py`'s run against the first real tag. What the owner had first accepted named the tag and its sha. The build names the tag alone, for the reason under Considered options, and a ruleset forbids moving or deleting `v*` tags. The owner sets that ruleset once in the repository's settings, since no agent changes them. Until the ruleset is set, only `release_check.py` notices a moved tag.
