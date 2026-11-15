@@ -43,7 +43,6 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import plugin_pin
 
-# Why: the guard's event log lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import events
 
