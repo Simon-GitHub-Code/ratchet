@@ -600,7 +600,8 @@ def test_a_guard_path_an_open_dispute_names_is_no_finding_and_forces_nothing() -
         "disputeCoverage": [{"path": "justfile", "disputeFile": "docs/disputes/0001-gate.md"}],
     }
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, review=named, **answers)
-    assert not any("guard paths changed" in r for r in ran["result"]["verdictForcedBy"])
+    assert ran["result"]["verdict"] == "approve"
+    assert ran["result"]["verdictForcedBy"] == []
     unnamed = {**REVIEW, "guardChanges": ["justfile"]}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, review=unnamed, **answers)
     assert ran["result"]["verdict"] == "request_changes"
