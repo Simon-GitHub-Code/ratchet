@@ -1,0 +1,71 @@
+---
+status: proposed
+---
+# Installs come only from a tagged release, and the release names its commit
+
+Settles issue #146. Amends ADR 0060 point 5 for what a release holds.
+
+An installed copy of the plugin has no `.git`, so `plugin_pin.commit_of` returns `None` (`scripts/plugin_pin.py:100-113`) and `scripts/upgrade.py` refuses every project (`scripts/upgrade.py:182-187`). An upgrade needs a clone of the plugin kept by hand at the published commit, and a clone left behind pins a project to an older commit. A file in the copy can name the commit, but no commit can name itself, and installs today follow main's head through `"source": "./"`, so the copy matches no single commit. The owner chose on 2026-11-15 that installs come only from published releases.
+
+## Decision
+
+**A release is one commit off main, named by a tag.** For version V merged on main as commit M, the release commit C is M plus one file, `.claude-plugin/commit`, holding M's full 40-character sha and a newline. Nothing else differs. C's only parent is M, C is never on main, and the tag `vV` names it.
+
+**A project pins M.** The pin an upgrade writes is `V at M`. M's tree is C's without the one file, so CI on the project runs the code the installed copy runs.
+
+**A workflow makes the release.** `.github/workflows/release.yml` runs on a push to main that changes `.claude-plugin/plugin.json`. When tag `vV` does not exist, it makes C, pushes the tag and runs the release check. Neither an agent nor the owner makes C by hand. The version PR keeps the form of #121: it bumps the version, writes the changelog and sets the marketplace `ref`.
+
+**The marketplace installs the tag.** In `.claude-plugin/marketplace.json`, the ratchet entry's `"source": "./"` becomes `{"source": "github", "repo": "Simon-GitHub-Code/ratchet", "ref": "vV"}`. The version PR sets `ref` with the version.
+
+**`commit_of` reads the file when there is no history.** With `.git`, it runs `git rev-parse HEAD` as now. Without `.git`, it reads `.claude-plugin/commit`: 40 lowercase hex characters give the commit, a missing file gives `None`, and anything else gives `UNREADABLE`.
+
+**A check holds the tag.** `scripts/release_check.py <tag>` runs in the release workflow after the tag is pushed, and anyone can run it later. It is red unless all of these hold:
+
+- C holds `.claude-plugin/commit` naming M.
+- M is C's only parent.
+- C's tree without that file equals M's tree.
+- M is on main.
+- The version in M's `plugin.json` is the tag's.
+
+Main's CI is red when main holds `.claude-plugin/commit`, since a copy on main would be stale from the next commit.
+
+## Refutation criterion
+
+This is wrong if any of these is seen:
+
+- The harness does not install a `github` source that names the marketplace's own repository at a tag. The build checks this first and stops if it fails.
+- An installed copy of a tagged release fails to upgrade a project with no clone of the plugin.
+- A project pinned to M runs code in CI that differs from the installed copy at `vV`.
+- A `v*` tag moves or disappears with `release_check.py` still green.
+
+## Considered options
+
+- **A file that names the commit holding it.** Impossible.
+- **A file on main naming the last release.** It is stale from the next commit, and a copy would claim a commit whose code it does not run.
+- **A `release` branch that installs follow.** A branch moves and gathers merges. A tag per version names the version and stays put.
+- **A `sha` beside the `ref` in the marketplace entry.** C exists only after M merges, so each release would need a second commit on main. The tag ruleset and the release check hold the tag instead.
+- **The harness's own install record.** It serves one harness, and the plugin names no harness's folders.
+- **Keep `./` and add a `ref`.** A relative source takes no `ref`.
+
+## For the builders
+
+### What changes where
+
+- `scripts/plugin_pin.py`: `commit_of` falls back to `.claude-plugin/commit`.
+- `scripts/release_check.py`: new, with its tests on a scratch repository.
+- `.github/workflows/release.yml`: new. Adding it is an `ASK` (workflow write), approved at merge.
+- Main's CI: one check that `.claude-plugin/commit` is absent.
+- `.claude-plugin/marketplace.json`: the ratchet entry's source.
+- `/ratchet:upgrade`'s page: until the first tagged release is installed, run the upgrade from a clone at the published commit. This line ships in the same change.
+- The install page: the plugin installs from the latest tag, never from main.
+
+### Consequences
+
+- Copies of 0.12.0 and 0.12.1 carry no file and keep refusing an upgrade until the harness moves them to the first tagged release. It does that when the version string changes.
+- The first tagged release is the first copy that upgrades a project by itself.
+- A dev clone has `.git`, so nothing changes for it.
+- For about a minute between M's merge and the tag push, a harness that refreshes finds no `vV` and keeps the copy it has.
+
+## Open for the owner
+
+- **1. No `sha` in the entry, and a tag ruleset.** What the owner accepted named the tag and its sha. The build names the tag alone, for the reason under Considered options, and a ruleset forbids moving or deleting `v*` tags. The owner sets that ruleset once in the repository's settings, since no agent changes them. Recommendation: accept. Cost: one settings change, and until it is set only `release_check.py` notices a moved tag.
