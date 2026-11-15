@@ -121,7 +121,7 @@ def test_a_record_naming_a_copy_that_is_gone_says_where_it_looked(tmp_path: Path
     root = adopted(tmp_path / "repo", str(gone))
     done = just(root, "plugin-pin")
     assert done.returncode == 1
-    assert f"the plugin at {gone} is tree unreadable, not the " in done.stdout
+    assert f"the plugin at {gone} is gone, and no copy on disk has the tree " in done.stdout
 
 
 def test_the_first_line_of_a_tier_names_the_copy_its_version_and_its_commit(

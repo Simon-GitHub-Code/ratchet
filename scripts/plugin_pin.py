@@ -150,9 +150,12 @@ def git_output(plugin: Path, *args: str) -> str | None:
 def commit_of(plugin: Path) -> str | None:
     """The commit a plugin is at.
 
-    A tree that tracks ``.claude-plugin/commit`` is a release commit (ADR 0068), and the commit is
-    the one that file names, in a checkout as in a copy. Otherwise the checkout's ``HEAD``, or
-    ``None`` for a copy with no file. ``UNREADABLE`` when the file holds anything but a commit.
+    A copy with ``.claude-plugin/commit`` is a release (ADR 0068), and the commit is the one that
+    file names. A clone is a release only while ``HEAD`` is the release commit itself, a single
+    commit on the one the file names, and nothing in the work tree differs from it. Otherwise the
+    checkout's ``HEAD``, or ``None`` for a copy with no file. ``UNREADABLE`` when the file holds
+    anything but a commit. The commit says where a plugin came from, never what it holds: only
+    ``copy_tree_id`` does.
     """
     if not (plugin / ".git").exists():
         return release_commit(gatelib.read_text(plugin / COMMIT_FILE))
@@ -160,7 +163,12 @@ def commit_of(plugin: Path) -> str | None:
     if head is None:
         return UNREADABLE
     if git_output(plugin, "ls-tree", "--name-only", "HEAD", "--", str(COMMIT_FILE)):
-        return release_commit(git_output(plugin, "show", f"HEAD:{COMMIT_FILE}"))
+        recorded = release_commit(git_output(plugin, "show", f"HEAD:{COMMIT_FILE}"))
+        parents = (git_output(plugin, "rev-list", "--parents", "-n", "1", "HEAD") or "").split()
+        clean = git_output(plugin, "status", "--porcelain") == ""
+        parent = parents[1:]
+        if clean and len(parent) == 1 and recorded in (UNREADABLE, parent[0]):
+            return recorded
     return head.strip()
 
 
@@ -206,8 +214,8 @@ def copy_tree_id(plugin: Path) -> str | None:
         return done.stdout.strip() if done.returncode == 0 else None
 
 
-def tree_of(plugin: Path) -> str | None:
-    """The tree id of the commit a plugin is at, or of a copy's files; ``None`` when unreadable."""
+def release_tree(plugin: Path) -> str | None:
+    """The tree id the pin of the commit ``plugin`` is at holds, or of a copy's files."""
     if not (plugin / ".git").exists():
         return copy_tree_id(plugin)
     commit = commit_of(plugin)
@@ -219,7 +227,7 @@ def tree_of(plugin: Path) -> str | None:
 
 def line_for(plugin: Path) -> str:
     """The binding's pin line naming ``plugin``, with a stand-in for what the copy cannot say."""
-    version, commit, tree = version_of(plugin) or "<version>", commit_of(plugin), tree_of(plugin)
+    version, commit, tree = version_of(plugin) or "<version>", commit_of(plugin), release_tree(plugin)
     if commit in (None, UNREADABLE):
         commit = f"<the full commit of {version}>"
     return f"- Ratchet plugin: {version} at {commit} tree {tree or f'<the tree of {version}>'}"
@@ -347,11 +355,19 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
             True,
         )
     if standing is Relation.PINNED:
-        held = tree_of(plugin)
+        held = copy_tree_id(plugin)
         if pin.tree is None:
             return (
                 f"{home} pins no tree id, so nothing holds the plugin at {plugin} to the release:"
                 f" run `{apply}`, which writes `{line_for(plugin)}`",
+                True,
+            )
+        committed = release_tree(plugin)
+        if committed != pin.tree:
+            return (
+                f"the plugin at {plugin} is at a commit whose tree is {committed or 'unreadable'},"
+                f" not the {pin.tree} that {home} pins: the pin names no release. Run `{apply}`"
+                " from the release it should name",
                 True,
             )
         if held != pin.tree:

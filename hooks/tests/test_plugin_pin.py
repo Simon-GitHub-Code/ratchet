@@ -213,9 +213,11 @@ def test_a_checkout_git_cannot_read_is_red_not_judged_on_its_version(
 def test_the_plugin_judged_is_the_one_the_script_runs_from(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    version = plugin_pin.version_of(plugin_pin.PLUGIN)
-    commit = plugin_pin.commit_of(plugin_pin.PLUGIN) or ELSEWHERE
-    held = plugin_pin.tree_of(plugin_pin.PLUGIN)
+    copy = repos.installed_copy()
+    monkeypatch.setattr(plugin_pin, "PLUGIN", copy)
+    version = plugin_pin.version_of(copy)
+    commit = plugin_pin.commit_of(copy) or ELSEWHERE
+    held = plugin_pin.copy_tree_id(copy)
     adopted(tmp_path, f"- Ratchet plugin: {version} at {commit} tree {held}")
     monkeypatch.chdir(tmp_path)
     assert plugin_pin.main(["plugin_pin.py"]) == 0
