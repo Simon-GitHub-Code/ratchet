@@ -93,9 +93,11 @@ serial0 := ""
 serial1 := ""
 serial2 := ""
 
-# How many gates run at once: every core unless RATCHET_JOBS says fewer, for a shared machine or
-# a stack whose every gate uses every core.
-jobs := env_var_or_default("RATCHET_JOBS", num_cpus())
+# How many gates run at once: every core unless RATCHET_JOBS, else `git config ratchet.jobs`, says
+# fewer, for a shared machine or a stack whose every gate uses every core. The git value is the
+# machine's, read by every work tree and every agent's shell.
+configured_jobs := `git config --get ratchet.jobs 2>/dev/null || true`
+jobs := env_var_or_default("RATCHET_JOBS", if configured_jobs == "" { num_cpus() } else { configured_jobs })
 
 # Gates that are measured alone: they judge elapsed time, which a gate running beside them
 # disturbs, so each runs once the others have finished, by itself. A name not in a tier is ignored.
