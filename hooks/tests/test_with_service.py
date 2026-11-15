@@ -322,14 +322,15 @@ def graceful(
     mode: str,
     *extra: str,
     capsys: pytest.CaptureFixture[str],
-    limit: str = "2",
+    limit: str = "60",
     starts_after: str = "0",
     hidden: bool = False,
 ) -> tuple[int, str]:
     """The load smoke run inside a service of ``mode`` that is signalled 0.5 s in.
 
     The smoke starts ``starts_after`` seconds after the command does, as on a loaded runner. A
-    ``hidden`` service lets no other process look at its open files.
+    ``hidden`` service lets no other process look at its open files. The ``limit`` ends the wait
+    the moment the service exits, so it is only how long a busy machine may take to drain.
     """
     command = [
         *("sh", "-c", f'sleep {starts_after} && exec "$@"', "late", sys.executable, str(LOAD)),
@@ -383,7 +384,7 @@ def test_a_service_that_forges_the_gates_excuse_from_another_address_is_red(
     # then dropped were excused. A connection is named by both of its addresses and ports.
     code, out = run(
         *("--boot", f"exec {python(FORGE)}", "--ready", READY),
-        *("--graceful", "2", "--signal-after", "0.5", "--", sys.executable, str(LOAD)),
+        *("--graceful", "60", "--signal-after", "0.5", "--", sys.executable, str(LOAD)),
         *("--url", "http://127.0.0.1:{port}/work", *BUSY),
         capsys=capfd,
     )
@@ -426,19 +427,21 @@ def test_a_smoke_slow_to_start_still_has_requests_in_flight_at_the_signal(
 
 
 @pytest.mark.parametrize(
-    ("mode", "said"),
+    ("mode", "said", "limit"),
     [
-        ("drop", "the command exited with code 1"),
-        ("late", "the service exited with code 1 "),
-        ("ignore", "the service was still running 1s after SIGTERM"),
-        ("slow", "the service was still running 1s after SIGTERM"),
-        ("die", "the service exited with code 5 before it was signalled"),
+        ("drop", "the command exited with code 1", "60"),
+        ("late", "the service exited with code 1 ", "60"),
+        ("ignore", "the service was still running 1s after SIGTERM", "1"),
+        ("slow", "the service was still running 1s after SIGTERM", "1"),
+        ("die", "the service exited with code 5 before it was signalled", "60"),
     ],
 )
 def test_each_way_of_stopping_badly_is_red(
-    mode: str, said: str, capsys: pytest.CaptureFixture[str]
+    mode: str, said: str, capsys: pytest.CaptureFixture[str], *, limit: str
 ) -> None:
-    code, out = graceful(mode, capsys=capsys, limit="1")
+    # Why: only the services that do not stop in time are about the limit running out; the
+    # others must drain or exit before it does, which 1 s does not allow on a busy machine.
+    code, out = graceful(mode, capsys=capsys, limit=limit)
     assert said in out, out
     assert code == 1
     assert out.endswith("with_service: red\n")

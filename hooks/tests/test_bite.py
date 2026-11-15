@@ -1,5 +1,6 @@
 """``bite.py``: every shipped gate goes red on its violation and green without it."""
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -33,6 +34,34 @@ def test_every_shipped_service_gate_bites(
     assert bite.bite(tmp_path) == 0
 
 
+# The smoke says it is sending, and its first request reaches the service a second later, as on a
+# machine too busy to run it promptly.
+LATE = (
+    "import os, pathlib, subprocess, sys, time; "
+    "pathlib.Path(os.environ['RATCHET_SENDING']).touch(); time.sleep(1); "
+    "sys.exit(subprocess.run([sys.executable, *sys.argv[1:]]).returncode)"
+)
+
+
+def test_the_graceful_stop_bites_when_requests_reach_the_service_late(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (label, gate, clean, faulty) = next(
+        entry for entry in bite.SERVICE_SCENARIOS if "drops requests" in entry[0]
+    )
+
+    def late(arguments: list[str]) -> list[str]:
+        return [
+            word
+            for argument in arguments
+            for word in (["-c", LATE, argument] if argument == bite.LOAD_SMOKE else [argument])
+        ]
+
+    monkeypatch.setattr(bite, "SCENARIOS", [])
+    monkeypatch.setattr(bite, "SERVICE_SCENARIOS", [(label, gate, late(clean), late(faulty))])
+    assert bite.bite(tmp_path) == 0
+
+
 def test_a_gate_that_does_not_bite_fails_the_run(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -52,13 +81,22 @@ def test_a_gate_that_does_not_bite_fails_the_run(
     monkeypatch.setattr(
         bite,
         "SERVICE_SCENARIOS",
-        [("deaf", lambda _argv: 0, ["--url", "{stub}"], ["--url", "{stub}"])],
+        [("deaf", says_from_a_command, ["--url", "{stub}"], ["--url", "{stub}"])],
     )
     assert bite.bite(tmp_path) == 1
     assert capsys.readouterr().out == (
-        "bite: asleep: DOES NOT BITE\nbite: broken: RED ON CLEAN STATE\n  why it is red\n"
-        "bite: deaf: DOES NOT BITE\n"
+        "bite: asleep: DOES NOT BITE\n  the gate is green with the fault planted\n"
+        "bite: broken: RED ON CLEAN STATE\n  the gate is red with no fault planted\n"
+        "  why it is red\n"
+        "bite: deaf: DOES NOT BITE\n  the gate is green with the fault planted\n"
+        "  said by its command\n  said by the gate\n"
     )
+
+
+def says_from_a_command(_argv: list[str]) -> int:
+    subprocess.run([sys.executable, "-c", "print('said by its command')"], check=True)
+    sys.stdout.write("said by the gate\n")
+    return 0
 
 
 def test_main_runs_in_a_scratch_directory(
