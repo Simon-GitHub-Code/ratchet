@@ -68,7 +68,9 @@ The method's plugin registers a PreToolUse hook on every edit and shell call: in
 
 It makes three kinds of decision: pass, ask and deny. It answers `ask` when it cannot run. A git it cannot start, or one that runs past its 5 s limit, reads as no manifest, so the path rules then give no verdict.
 
-### A guard path on a branch: pass
+Each name in a git command is read as git reads it, so a push or a tag that git matches to a default ref, a `git` pointed at another repository (`--git-dir`, `GIT_DIR`), a command git is handed to run (`rebase --exec`, an editor, an alias) and a sync on a default branch that git reads as anything but the remote's default branch are judged as what git reads them as.
+
+### A guard path: pass on a branch, deny on the default branch
 
 An Edit, Write, MultiEdit, NotebookEdit, patch or shell write of a path in a group that is not locked gets no verdict when the commit it would go into lands on a branch other than the default one. Such a change reaches the default branch only through a merge, and the merge judge sends a guard path change to the owner with its reasons, so a prompt at the edit would have asked the owner the same question earlier, with less to go on.
 
@@ -120,15 +122,15 @@ Each prompt is a plain sentence the owner can answer without knowing the guard.
 - a `git read-tree`
 - a `git pull` that names another repository or branch
 
-The sync with the remote's own default branch still passes (`git pull`, `git merge --ff-only origin/main`), and so does the `merge` entry point. The merge prompt says the merge job merges a pull request by itself once its checks pass and nothing in it needs the owner, that it then comments on the pull request with each reason it waits for him, and that `just merge-ready --head <branch>` prints the same reasons.
+The sync with the remote's own default branch still passes (`git pull`, `git merge --ff-only origin/main`), and so does the `merge` entry point. The prompt on merging a pull request says the merge job merges a pull request by itself once its checks pass and nothing in it needs the owner, that it then comments on the pull request with each reason it waits for him, and that `just merge-ready --head <branch>` prints the same reasons.
 
 **The agent-ready label.** The label is the owner's agreement that a ticket is ready to build, and the feature preflight reads it as such. The hook asks on:
 
 - applying the agent-ready label to an issue or pull request (`gh issue edit --add-label`, `gh issue create --label` and the `pr` forms), with the label as `docs/agents/triage-labels.md` spells the `ready-for-agent` role
-- giving a local ticket (`.scratch/<feature>/issues/<name>.md`, the file the route and the preflight read) that status through Edit, Write or MultiEdit
-- giving a local ticket that status through a command line or a patch that names the label and writes the ticket or a directory tickets live in
+- giving a local ticket (`.scratch/<feature>/issues/<name>.md`, the file the route and the preflight read) that status through Edit, Write or MultiEdit, other than a part split from a labelled ticket that keeps to its promises
+- giving a local ticket that status through a command line or a patch that names the label and writes the ticket or a directory tickets live in, where one call over several tickets is one ask that names each
 
-One call over several tickets is one ask that names each. The label prompt says the label marks a ticket ready for agents to build without him.
+The label prompt says the label marks a ticket ready for agents to build without him.
 
 ### A locked file: deny
 
@@ -137,6 +139,8 @@ An edit in a group marked `edit = "deny"` is denied: the harness and local git. 
 - the plugin's own files, every harness's installed plugins and the settings that enable them: `~/.claude/plugins/**` and `settings.json`, `~/.grok/installed-plugins/**`, `~/.grok/hooks/**` and `config.toml`, `~/.codex/plugins/**`, `hooks.json` and `config.toml`, `~/.pi/agent/extensions/**` and `settings.json`, `~/.config/opencode/plugins/**` and `opencode.json`
 - the `git-state` group in every checkout, adopted or not: `.git/refs/**`, `packed-refs`, `HEAD`, `info/grafts`, `shallow` and `objects/info/**`, because the default branch's ref is what the path rules are read through
 
+`guards/manifest.toml` is denied too, on every branch, to every change but an addition ([Changing the manifest](#changing-the-manifest)).
+
 ### A command that bypasses a gate or rewrites history: deny
 
 The hook denies:
@@ -144,8 +148,7 @@ The hook denies:
 - **Gate bypasses:** `--no-verify` and its spellings (`-n`, any prefix git accepts), `git commit-tree`, `SKIP=` and `RATCHET_HOOK_PROBE=` (the answer the template recipes give a hook probe, which skips the gates), hook uninstalls, hook-path changes and a `chmod` of a guard path.
 - **History rewrites:** force pushes in every spelling, pushes to main, resets and rebases that move main, amending a pushed commit, history filters.
 - **The default branch's ref:** any command that moves, deletes or re-points the default branch's ref or a ref or setting it is read through: `git branch -f`, `-d`, `-m` or `-c` on `main` or `master`, `update-ref`, `symbolic-ref` set or delete, `checkout`/`switch -B`, `-C` or `-b` naming a default branch, a fetch or push refspec ending in a protected ref, `remote add origin`, `set-url`, `set-head`, `rename`, `remove`, a `git config` or `git -c` on `remote.*`, `url.*`, `alias.*` or `include.*`, and `replace`, `fast-import`, `send-pack` and `receive-pack` whole.
-- Each name is read as git reads it, so a push or a tag that git matches to a default ref, a `git` pointed at another repository (`--git-dir`, `GIT_DIR`), a command git is handed to run (`rebase --exec`, an editor, an alias) and a sync on a default branch that git reads as anything but the remote's default branch are judged the same way.
-- **Forge settings:** forge CLI calls (`gh` on GitHub) that change branch protection, rulesets, labels, repository settings, secrets, variables, workflows or runs. Reads pass: `gh label list`, a `GET` on a labels endpoint, `gh run list`.
+- **Forge settings:** forge CLI calls (`gh` on GitHub) that change branch protection, rulesets, labels, repository settings, secrets or variables. Reads of labels and runs pass: `gh label list`, a `GET` on a labels endpoint, `gh run list`.
 - **Harness switches:** nested `claude` invocations given settings or plugin flags, and `claude`, `grok`, `codex` and `pi` commands that disable or remove a plugin, package or marketplace.
 - **Shell writes of a guard path:** any shell write, move, copy, link or delete of a locked guard path, or of any guard path where the commit lands on the default branch, including through wrappers, substitutions, `eval`, heredocs and `-c` strings.
 
@@ -207,14 +210,15 @@ The `guard-diff` entry point (tier 1) lists every changed path that matches the 
 
 A change reaches the default branch in one of two ways: the merge judge passes it and it merges itself, or the owner merges it. The judge is `scripts/merge_ready.py`, behind the `merge-ready` entry point. It prints `merge: agent` or `merge: owner` with every reason. It reads commits only: the manifest at the default branch's tip, every other file at the merge base and at the head.
 
-The owner merges when any of these holds, each under its own heading below: a guard path changed, a one-way door, new surface with no flag, a dispute, no clean approval, or the setting.
+The owner merges when any of these holds, each under its own heading below: a guard path changed, a one-way door once the project is `deployed` or holds `irreplaceable-data`, new surface with no flag once it is `deployed`, a dispute, no clean approval, or the setting.
 
 ### A guard path changed
 
-The listing is `guard-diff`'s. Two changes pass:
+The listing is `guard-diff`'s. Three changes pass:
 
 - an addition to a record
 - `quality/thresholds.toml` when every number moved the tight way and nothing else in it changed, which is what the `ratchet` entry point does after every feature
+- `quality/owed.toml` when entries only go and the plugin pin does not move
 
 A dependency change does not pass, whether the spec named it or not: the spec is an agent's, so the judge prints the dependency note and the owner merges.
 
@@ -240,7 +244,7 @@ The change adds to a file behind an `on = "removal"` door (a route, a command or
 
 ### Before a life event is declared
 
-When a door or new surface is let through because no event is declared yet, the judge prints a `note:` line saying what it let through and why, so the owner sees it. The judge reads the binding's `- Life events:` line at the merge base, so a change that declares an event, or drops one, is judged by the line it started from. The binding is a guard path, so declaring an event is itself a change the owner merges. Guard paths, disputes and the clean-approval rule below hold from the first commit whatever the events.
+When a door or new surface is let through because no event is declared yet, the judge prints a `note:` line saying what it let through and why, so the owner sees it. The judge reads the binding's `- Life events:` line at the merge base and at the default branch's tip, never at the head, so a change that declares an event, or drops one, is not judged by its own line. The binding is a guard path, so declaring an event is itself a change the owner merges. Guard paths, disputes and the clean-approval rule below hold from the first commit whatever the events.
 
 ### A dispute
 
@@ -269,7 +273,7 @@ By the default branch's manifest no guard group holds the first three and only `
 
 Among records alone the owner merges:
 
-- a ticket change that gives the agent-ready label, takes the number of another ticket beside it, or closes a ticket
+- a ticket change that gives the agent-ready label (other than to a part split from a labelled ticket that keeps to its promises), takes the number of another ticket beside it, or closes a ticket
 - any change to a labelled ticket, other than its `Parent:` and `Blocked by:` lines rewritten to name the same files
 - any change to the spec a labelled ticket inherits from
 - any change to whether a ticket a labelled ticket is blocked by is open
@@ -371,7 +375,7 @@ A denied or unanswered call is the signal to open a dispute. Open one when the g
 
 3. **Report it.** Report it to whoever started you: a pipeline agent returns it in `disputes`, and an agent an owner is driving interactively reports it in its reply. Then continue with the work the gate does not block.
 
-   Done when whoever started you has the dispute and you are on the work the gate does not block.
+   Done when the dispute is in your reply or in the `disputes` you return, and no work the gate leaves open is undone.
 
 Before `/ratchet:adopt` has run there is no `docs/disputes/` yet. Create the directory, write the dispute at the same path, and report it to the owner in the reply. Adopt's template skips an existing file, so the dispute survives adoption.
 
