@@ -116,13 +116,6 @@ shard-check: sync
 test-floor:
     UV_PROJECT_ENVIRONMENT=.venv-floor uv run --frozen --python 3.11 pytest -n {{workers}} --dist worksteal -p no:cacheprovider hooks/tests
 
-# The tests that read a record or a page (docs/, README.md, CHANGELOG.md): the whole of what CI runs
-# for a change of those files alone (scripts/lane.py). The one list, read by `pages` below.
-pages_tests := "hooks/tests/test_acceptance_record.py hooks/tests/test_drain_model.py hooks/tests/test_pipeline_model.py hooks/tests/test_ratchet_model.py hooks/tests/test_route_model.py"
-
-pages: sync
-    uv run --frozen pytest -n {{workers}} --dist worksteal --durations=10 {{pages_tests}}
-
 conformance-self-test:
     python3 scripts/conformance.py --self-test
 

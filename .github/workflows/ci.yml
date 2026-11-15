@@ -14,14 +14,16 @@ env:
   # Why: a ceiling in quality/thresholds.toml is the wall clock of one job. Each shard job of
   # `test` and `test-floor` is held to its gate's ceiling, not the sum of its shards.
 jobs:
-  # Why: a pull request of records and pages alone runs only the tests that read them, under the
-  # same job names, so a required check still reports. The classifier is read from the base, so a
-  # change to it cannot pick its own lane; a base without it, or any doubt, is the full lane.
+  # Why: a pull request of records and pages alone runs only the tests that read the pages it
+  # changes (`scripts/lane.py` holds the mapping), under the same job names, so a required check
+  # still reports. The classifier is read from the base, so a change to it cannot pick its own
+  # lane; a base without it, or any doubt, is the full lane.
   lane:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
       lane: ${{ steps.lane.outputs.lane }}
+      tests: ${{ steps.lane.outputs.tests }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
@@ -29,12 +31,16 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
         run: |
-          lane=full
+          said=full
           if [ -n "$BASE" ] && git show "$BASE:scripts/lane.py" > "$RUNNER_TEMP/lane.py"; then
-            lane="$(python3 "$RUNNER_TEMP/lane.py" "$BASE" || echo full)"
+            said="$(python3 "$RUNNER_TEMP/lane.py" "$BASE" || echo full)"
           fi
-          [ "$lane" = pages ] || lane=full
+          case "$said" in
+            pages | pages\ hooks/tests/test_*.py*) lane=pages tests="${said#pages}" ;;
+            *) lane=full tests= ;;
+          esac
           echo "lane=$lane" >> "$GITHUB_OUTPUT"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
   gates:
     needs: lane
     runs-on: ubuntu-latest
@@ -139,7 +145,7 @@ jobs:
   coverage:
     needs: [sharded, lane]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
@@ -151,8 +157,10 @@ jobs:
       - run: uv sync --frozen
       - run: just coverage-combine
         if: needs.lane.outputs.lane == 'full'
-      - run: just pages
-        if: needs.lane.outputs.lane == 'pages'
+      - run: uv run --frozen pytest -n auto $TESTS
+        if: needs.lane.outputs.lane == 'pages' && needs.lane.outputs.tests != ''
+        env:
+          TESTS: ${{ needs.lane.outputs.tests }}
   # Why: a test that falls in no shard, or in two, makes a green run a lie about the suite.
   shard-partition:
     needs: lane

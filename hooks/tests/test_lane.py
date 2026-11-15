@@ -1,5 +1,6 @@
 """``lane.py``: only a change of records and pages takes the light lane; any doubt runs it all."""
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -11,7 +12,8 @@ from tests.repos import branch, commit, git, repository, write
 BASE = {
     "README.md": "# A\n",
     "docs/adr/0001-x.md": "# 1\n",
-    "docs/model/page.md": "# page\n",
+    "docs/model/route.md": "# route\n",
+    "docs/model/drain.md": "# drain\n",
     "scripts/lane.py": "x = 1\n",
     "justfile": "default:\n",
     ".github/workflows/ci.yml": "name: ci\n",
@@ -40,29 +42,60 @@ def lane_of_change(
     return lane.lane_for("main")
 
 
+PROSE_PAGES = [
+    ({"README.md": "# B\n"}, ["skills"]),
+    ({"docs/harness/a.md": "# h\n"}, ["skills"]),
+    ({"docs/acceptance.md": "# a\n"}, ["acceptance_record", "skills"]),
+    ({"docs/adr/0034-x.md": "# 34\n"}, ["skills"]),
+    ({"docs/adr/0001-x.md": "# 1b\n", "CHANGELOG.md": "# c\n"}, []),
+]
+MODEL_PAGES = [
+    ({"docs/model/route.md": "# r\n"}, ["skills", "route_model"]),
+    ({"docs/model/drain.md": None}, ["skills", "drain_model"]),
+    (
+        {"docs/model/route.md": "# r\n", "docs/model/drain.md": "# d\n", "README.md": "# B\n"},
+        ["skills", "drain_model", "route_model"],
+    ),
+]
+
+
+@pytest.mark.parametrize("case", [*MODEL_PAGES, *PROSE_PAGES])
+def test_a_changed_page_owes_only_the_tests_that_read_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: tuple[dict[str, str | None], list[str]],
+) -> None:
+    edits, names = case
+    said = lane_of_change(tmp_path, edits, monkeypatch)
+    assert said == " ".join(["pages", *sorted(f"hooks/tests/test_{name}.py" for name in names)])
+
+
 @pytest.mark.parametrize(
     "edits",
     [
         {"docs/adr/0002-new.md": "# 2\n"},
         {"docs/adr/0001-x.md": "# 1 again\n"},
-        {"docs/model/page.md": "# page again\n"},
-        {"docs/deep/er/page.md": "# deeper\n"},
-        {"README.md": "# B\n"},
         {"CHANGELOG.md": "# log\n"},
         {"docs/adr/0001-x.md": None},
+        {"docs/harness/a.md": "# h\n"},
         {"docs/adr/0002-new.md": "# 2\n", "README.md": "# B\n", "CHANGELOG.md": "# log\n"},
     ],
 )
 def test_a_change_of_records_and_pages_alone_takes_the_light_lane(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, edits: dict[str, str | None]
 ) -> None:
-    assert lane_of_change(tmp_path, edits, monkeypatch) == "pages"
+    assert lane_of_change(tmp_path, edits, monkeypatch).split()[0] == "pages"
 
 
 @pytest.mark.parametrize(
     "edits",
     [
         {"src/app.py": "y = 2\n"},
+        {"docs/model/new.md": "# new\n"},
+        {"docs/deep/er/page.md": "# deeper\n"},
+        {"docs/process/binding.md": "# b\n"},
+        {"docs/model/route/view_flag.mjs": "x\n"},
+        {"docs/model/route.md": "# r\n", "docs/model/new.md": "# new\n"},
         {"skills/feature/SKILL.md": "# skill again\n"},
         {"skills/adopt/templates/docs/adr/0000-x.md": "# t\n"},
         {"docs/notes.txt": "plain\n"},
@@ -98,15 +131,15 @@ def test_a_change_to_the_classifier_the_justfile_or_the_workflows_is_never_light
 def test_no_glob_of_the_list_matches_the_classifier_the_justfile_or_the_workflows(
     path: str,
 ) -> None:
-    assert lane.lane_of([path]) == "full"
-    assert not any(rule.fullmatch(path) for rule in lane.ALLOWED)
+    assert lane.owed([path]) is None
+    assert not any(rule.fullmatch(path) for rule, _ in lane.RULES)
 
 
 def test_a_rename_counts_by_both_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     moves = {
-        "out": ("docs/model/page.md", "scripts/page.py"),
+        "out": ("docs/model/route.md", "scripts/page.py"),
         "in": ("src/app.py", "docs/model/app.md"),
-        "within": ("docs/model/page.md", "docs/adr/0002-page.md"),
+        "within": ("docs/model/route.md", "docs/adr/0002-page.md"),
     }
     found = []
     for name, (old, new) in moves.items():
@@ -116,7 +149,11 @@ def test_a_rename_counts_by_both_paths(tmp_path: Path, monkeypatch: pytest.Monke
         commit(root, "docs: move")
         monkeypatch.chdir(root)
         found.append(lane.lane_for("main"))
-    assert found == ["full", "full", "pages"]
+    assert found == [
+        "full",
+        "full",
+        "pages hooks/tests/test_route_model.py hooks/tests/test_skills.py",
+    ]
 
 
 def test_the_diff_is_against_the_merge_base_not_the_tip_of_the_base(
@@ -194,4 +231,30 @@ def test_the_lane_is_printed_for_the_workflow(
     monkeypatch.chdir(tmp_path)
     assert lane.main(["lane.py", "main"]) == 0
     assert lane.main(["lane.py"]) == 0
-    assert capsys.readouterr().out == "pages\nfull\n"
+    assert capsys.readouterr().out == "pages hooks/tests/test_skills.py\nfull\n"
+
+
+def test_every_model_page_a_test_reads_is_mapped_to_that_test() -> None:
+    tests = Path(__file__).parent
+    named = {
+        match.group(0): path.name
+        for path in tests.glob("test_*.py")
+        for match in re.finditer(r"docs/model/[a-z-]+\.md", path.read_text(encoding="utf-8"))
+        if f'PLUGIN_ROOT / "{match.group(0)}"' in path.read_text(encoding="utf-8")
+    }
+    assert named
+    for page, name in named.items():
+        assert f"hooks/tests/{name}" in lane.PAGES[page]
+
+
+def test_every_test_file_the_mapping_names_exists() -> None:
+    root = Path(__file__).resolve().parents[2]
+    owed = {name for names in lane.PAGES.values() for name in names}
+    assert owed
+    assert all((root / name).is_file() for name in owed)
+
+
+def test_no_other_test_reads_the_changelog() -> None:
+    tests = Path(__file__).parent
+    readers = [p.name for p in tests.glob("*.py") if "CHANGELOG" in p.read_text(encoding="utf-8")]
+    assert readers == ["test_lane.py"]
