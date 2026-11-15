@@ -643,6 +643,9 @@ class LeaseWorld:
         while not mark.exists():
             assert time.monotonic() < deadline, "the hand merge did not start"
             assert not (gate / "landed").exists(), (gate / "said").read_text(encoding="utf-8")
+            # Why: a merge that died before its mark never writes it; the mark is read again
+            # since it may have come just before the exit.
+            assert process.poll() is None or mark.exists(), "the hand merge ended before its mark"
             time.sleep(0.02)
         return process.pid, gate
 
