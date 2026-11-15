@@ -196,6 +196,10 @@ PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 PIN_RECIPE = "plugin-pin"
 PIN_SCRIPT = "plugin_pin.py"
+PLUGIN_VARIABLE = "ratchet_plugin"
+MARKETPLACE_FALLBACK = ".claude/plugins/marketplaces/ratchet"
+PLUGIN_LINE = re.compile(rf"^{PLUGIN_VARIABLE}[ \t]*:=.*$", re.MULTILINE)
+UNRECORDED_TEST = '-z "{{ratchet_plugin}}"'
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
@@ -1572,6 +1576,7 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
         )
         yield Finding(BINDING_PATH, problem, edit)
     yield from check_pin_recipe(root)
+    yield from check_plugin_fallback(root)
     if pin is None:
         return
     for name in (*TIER_WORKFLOWS, MERGE_WORKFLOW, WEEKLY_WORKFLOW):
@@ -1652,6 +1657,43 @@ def tier_recipes(binding: str, justfile: str) -> dict[str, str]:
         if recipe is not None and justfile_text.defines_recipe(justfile, recipe.group(1)):
             named[tier] = recipe.group(1)
     return named
+
+
+def check_plugin_fallback(root: Path) -> Iterable[Finding]:
+    """A justfile whose ``ratchet_plugin`` still falls back to the marketplace clone.
+
+    Why: that clone follows the default branch's head, not a release (ADR 0068), so every local
+    tier would run unreleased gates. The fix rewrites the line to the template's, which reads the
+    plugin the session hook recorded, and gives ``plugin-pin`` the template's first line for a
+    repository with none recorded.
+    """
+    justfile = read_justfile(root)
+    held = PLUGIN_LINE.search(justfile or "")
+    if held is None or MARKETPLACE_FALLBACK not in held.group(0):
+        return
+    line = PLUGIN_LINE.search(template_file("justfile"))
+    unrecorded = next(
+        (row.strip() for row in template_definition(PIN_RECIPE) if UNRECORDED_TEST in row), ""
+    )
+    if line is None or not unrecorded:
+        return
+
+    def want(current: str | None) -> str:
+        return PLUGIN_LINE.sub(lambda _: line.group(0), current or "", count=1)
+
+    does = f"rewrite the `{PLUGIN_VARIABLE}` line to the template's, which reads the recorded one"
+    edit = Edit(
+        does,
+        gatelib.chained(want, justfile_text.with_first_line(PIN_RECIPE, unrecorded)),
+        Agent(),
+    )
+    problem = (
+        f"`{PLUGIN_VARIABLE}` falls back to the marketplace clone, which follows the default"
+        " branch's head and not a release, so every local tier runs unreleased gates"
+    )
+    yield Finding(
+        "justfile", problem, edit, identity="ratchet_plugin falls back to the marketplace"
+    )
 
 
 def check_pin_recipe(root: Path) -> Iterable[Finding]:

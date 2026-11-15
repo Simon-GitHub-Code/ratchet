@@ -324,3 +324,46 @@ def test_a_linewise_recipe_does_not_read_its_later_lines(repo: Path) -> None:
 
 def test_a_here_string_fed_with_the_variable_is_a_filter() -> None:
     assert not conformance.unfiltered_changed(f'{CAPTURE}; keep <<< "$files"')
+
+
+OLD_PLUGIN_LINE = (
+    'ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", '
+    'home_directory() / ".claude/plugins/marketplaces/ratchet")'
+)
+
+
+def old_plugin_justfile(repo: Path) -> str:
+    text = (repo / JUSTFILE).read_text(encoding="utf-8")
+    line = conformance.PLUGIN_LINE.search(text)
+    assert line
+    old = text.replace(line.group(0), OLD_PLUGIN_LINE)
+    first = next(row for row in old.splitlines() if conformance.UNRECORDED_TEST in row)
+    return old.replace(first + "\n", "")
+
+
+def fallback_findings(repo: Path) -> list[conformance.Finding]:
+    return [f for f in conformance.findings(repo) if "falls back to the marketplace" in f.problem]
+
+
+def test_a_justfile_that_falls_back_to_the_marketplace_clone_is_rewritten_to_the_templates(
+    repo: Path,
+) -> None:
+    (repo / JUSTFILE).write_text(old_plugin_justfile(repo), encoding="utf-8")
+    [found] = fallback_findings(repo)
+    assert isinstance(found.fix, conformance.Auto)
+    made = found.fix.want((repo / JUSTFILE).read_text(encoding="utf-8"))
+    assert made == (conformance.ADOPT_TEMPLATES / "justfile").read_text(encoding="utf-8")
+
+
+def test_a_justfile_with_the_templates_plugin_line_is_not_held_to_the_marketplace(
+    repo: Path,
+) -> None:
+    assert fallback_findings(repo) == []
+
+
+def test_a_fallback_check_has_nothing_to_rewrite_to_when_the_template_has_no_line(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (repo / JUSTFILE).write_text(old_plugin_justfile(repo), encoding="utf-8")
+    monkeypatch.setattr(conformance, "UNRECORDED_TEST", "no such text")
+    assert fallback_findings(repo) == []
