@@ -195,7 +195,7 @@ After `next:`, `why:` and `then:` the route prints its `also:` lines: the upgrad
 An `also:` line needs no state of the model. The model's label is the `next:` line alone, and an `also:` line changes no step: it is read from the registry and the date, and nothing the owner or an agent does next turns on it. So the model leaves the lines out, and two tests on the real route hold the new one instead:
 
 - `test_a_switch_past_its_removal_date_outranks_no_step` walks from an empty directory through a whole feature. At each stop where the default branch is checked out clean, the route on a copy whose default branch declares a switch past its date prints the same `next:`, `why:`, `then:` and stage as without it. This holds today.
-- `test_the_route_names_each_switch_past_its_removal_date` takes the shortest run, `/ratchet:init`, the tracker, `/ratchet:adopt` and the hooks, then commits that switch on the default branch, and expects an `also:` line naming it. Today `scripts/route.py` prints none, so it is a strict expected failure.
+- `test_the_route_names_each_switch_past_its_removal_date` takes the shortest run, `/ratchet:init`, the tracker, `/ratchet:adopt` and the hooks, then commits that switch on the default branch, and expects an `also:` line naming it.
 
 ## Divergences
 
@@ -212,7 +212,6 @@ The model was written with another, a guard hold that outlived the edits it aske
 Each item below flips one pin. Delete the pin in the same change.
 
 - The adoption's proof, recommended and not yet decided. `skills/adopt/SKILL.md`: the last step writes one binding line, `- Adopted: <plugin version>`, once the proof is green. `scripts/route.py`, `adoption_step`: a binding with no such line is an adoption still running, and the route names `/ratchet:adopt` to resume it. `scripts/upgrade.py` writes the line for a binding that already has a pin, so an adoption finished before the change is not sent back. `scripts/conformance.py` requires the line once the binding exists. The world's resume in `route_world.py` then writes the line as the skill does. The strict expected failure `test_the_route_names_what_the_pages_say_where_it_diverges[adoption-proved-by-its-pin]` passes, which is red; delete the entry from `DIVERGENCES`. The model has none of this until it is decided.
-- `scripts/route.py`, `main`: add to the `also:` lines one line per switch `flags.expired` finds in `flags.toml`, whatever the forge and whatever the row `no flag past its removal date` says. The strict expected failure `test_the_route_names_each_switch_past_its_removal_date` then passes, which is red; take its mark away.
 
 ## Charts
 

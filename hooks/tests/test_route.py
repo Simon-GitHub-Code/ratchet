@@ -1214,3 +1214,24 @@ def test_a_dirty_tree_on_a_merged_branch_is_finished_before_the_switch(tmp_path:
     step = route.decide(root, None)
     assert step.stage == "change"
     assert step.why == "the working tree has uncommitted changes"
+
+
+def test_a_switch_past_its_removal_date_is_named_beside_the_step(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    assert route.expired_switches(root) == []
+    (root / "flags.toml").write_text(
+        '[[flag]]\nkey = "old-checkout"\nowner = "o"\ndefault = false\n'
+        'remove-by = 2000-01-01\nreason = "Hidden until the owner switches it on."\n'
+        '[[flag]]\nkey = "new-search"\nowner = "o"\ndefault = false\n'
+        'remove-by = 2999-01-01\nreason = "Hidden until the owner switches it on."\n',
+        encoding="utf-8",
+    )
+    [line] = route.expired_switches(root)
+    assert "flag 'old-checkout'" in line
+    assert route.main(["route", "--root", str(root), "--offline"]) == 0
+    also = [x for x in capsys.readouterr().out.splitlines() if x.startswith("also:")]
+    assert len(also) == 1
+    assert "old-checkout" in also[0]
