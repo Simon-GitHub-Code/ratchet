@@ -45,7 +45,7 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
 1. **Check the ground.**
    - Name the harness you run in and read its page, `${CLAUDE_PLUGIN_ROOT}/docs/harness/<harness>.md` (Claude Code, Grok, Codex, Antigravity, pi or OpenCode). It gives the command that lists installed plugins, the one that installs each of the four, and the names this skill uses mapped to that harness.
    - List the plugins. Note each one's version and marketplace (`<plugin>@<marketplace>` in Claude Code) for step 5.
-   - When `mattpocock-skills`, `pstack` or `impeccable` is missing, run the page's install commands, each in a Bash call of its own (`init.defaults` assumes it). Installing is allowed; removing is refused.
+   - When `mattpocock-skills`, `pstack` or `impeccable` is missing, install it without asking and say so in the hand-over: run the page's install commands, each in a Bash call of its own (`init.defaults` assumes it). Installing is allowed; removing is refused.
    - A plugin the page says has no package for this harness is reported in the hand-over as missing, not installed another way.
    - `gh auth status`, and `glab auth status` when `glab` exists, decide whether `init.online` is asked.
    - Look for code: a package manifest, a lockfile, source directories. None means greenfield, whose stack adoption asks.
@@ -55,7 +55,7 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
      - **Ambiguous:** `.git` is a file (a worktree or submodule), `git rev-parse --show-toplevel` names a parent directory (a nested checkout), or the directory is a bare repository. Stop and say what you found: the owner runs init again in the directory they mean.
    - Ask the questions of [What the owner is asked](#what-the-owner-is-asked) and settle the assumptions.
 
-   Done when the directory is the top level of a git repository, the four plugins are listed (or the hand-over will name the one missing) and each question is answered.
+   Done when the directory is the top level of a git repository, the four plugins are listed (or the hand-over will name the one missing) and each question that was asked is answered. A question that a record or a typed preference answers, or whose condition does not hold, is not asked.
 
 2. **Write `AGENTS.md`.** The template is `${CLAUDE_SKILL_DIR}/templates/AGENTS.md`. Its opening stanza is the four plugins and their questions.
    - **No `AGENTS.md`:** copy the template to the repository root. If a `CLAUDE.md` with content exists, move that content under the stanza.
@@ -70,7 +70,7 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
 
    Done when `CLAUDE.md` is a symlink to `AGENTS.md` and `.gitignore` holds every line of `${CLAUDE_SKILL_DIR}/templates/gitignore`.
 
-4. **Fill the title and "What this is".**
+4. **Fill the title and "What this is".** Edit `AGENTS.md`, the link target, not `CLAUDE.md`.
    - Replace `# <project>` with the repository name.
    - Write the purpose paragraph from the owner's answers, in their words where they gave them, with where it is used. Adoption drafts the ways to build it from that paragraph.
    - Record the tracker, so the tracker setup does not ask again for what init settled. Under the "Agent skills" heading, above its placeholder, add one line naming the tracker `init.defaults` settled and why, such as `Tracker chosen at init: local markdown, because the repository has no remote.` The tracker setup reads this file and takes it as its answer.
@@ -82,7 +82,6 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
    - **`mattpocock-skills`: not run here.** Its `setup-matt-pocock-skills` skill is user-invoked (`disable-model-invocation: true`). The Skill tool refuses it to an agent, and its author's rule is that no skill calls or imitates it. So the owner types `/mattpocock-skills:setup-matt-pocock-skills` after init, and the hand-over names it as the next command.
      - Skipped, and said so in the hand-over, when `docs/agents/issue-tracker.md` already exists.
      - Init creates the remote first (step 7), so that the labels that setup creates have somewhere to go.
-     - Put its `## Agent skills` block in the template's "Agent skills" section of `AGENTS.md`. Edit `AGENTS.md`, the link target, not `CLAUDE.md`.
    - **`pstack`: skipped when `~/.claude/rules/pstack-models.md` exists.** Say so in the hand-over, since the owner may not remember writing it. Otherwise:
      1. Read `<pstack>/docs/harness/claude-code.md` first. It maps the skill's Cursor names and says the rule is written to that path.
      2. Follow `<pstack>/skills/setup-pstack/SKILL.md` with the budget answered as `medium` and the roles taken from the tiered mix: `haiku` for read-only exploration, `sonnet` for code-writing and investigation, `opus` for judgment, prose and synthesis, panels mixing `opus` and `sonnet`. Every model written must be one the Agent tool lists.
@@ -107,18 +106,18 @@ Take an answer as given; never refine it with a follow-up. A question whose answ
    Done when `origin` exists, or the hand-over will say "local only".
 
 8. **Labels.** Only on a rerun where `docs/agents/triage-labels.md` exists (the tracker setup wrote it) and the tracker is GitHub or GitLab with `origin` present. Not applicable for a local tracker.
-   - Run `gh label list` in one Bash call.
+   - Run `gh label list` in one Bash call. A label is missing when that list does not show it.
    - For each row of the record whose "Label in our tracker" value is missing, run `gh label create <name> --description "<meaning>"` in a Bash call of its own, with exactly one name, no `--force` and no `-R`.
    - That is the one `gh label create` the guard allows: the name is in the record the owner just accepted, on this checkout's own repository. A denial here is a bug: see [Before adopt](#before-adopt).
 
    Done, and skipped, when every recorded label is listed.
 
 9. **Hand over.** Report, in this order:
-   - **The plugins.** Four lines, one per plugin, saying what it now does in this repository. The pstack line says where the rule lives and whether this run wrote it or found it.
+   - **The plugins.** Four lines, one per plugin, saying what it now does in this repository. A line says so when this run installed its plugin, or when the plugin is missing because it has no package for this harness. The `mattpocock-skills` line says so when its setup was skipped because `docs/agents/issue-tracker.md` exists. The pstack line says where the rule lives and whether this run wrote it or found it. Then name the plugin lines of `AGENTS.md` this run replaced, if any.
    - **The commit and the remote.** The commit hash, and the remote URL or "local only" with the reason (no forge login, or the owner kept it on this computer, and so local markdown is the tracker).
    - **The labels.** Created (the count), already present, not applicable (local tracker), not yet (the tracker setup creates them), or refused (the dispute's path).
    - **Assumed.** The block the method's rule on asking describes, with no question key or method term in it. One line per assumption this run took (each part of the defaults that applied, the interface) and per preference the owner typed: "you asked for", or, where the rule on preferences kept it from applying, as not applied, with what was asked for, why not and the route that exists. Each line says what was chosen and why in a clause, what changing it later costs (what changes, roughly how much work, and whether anything built is redone), and what the owner can say to change it, such as ``Screen: a web page that works on your phone and your laptop, because you said you will use it on both. Changing it before you run `/ratchet:adopt` is one line in the project notes, and nothing built is redone; adoption then offers ways to build it that fit what you say. Say "make it an app" or "no screen" to change it.``
-   - **The questions.** The count of questions the owner answered, and each one a companion plugin's setup still asked.
+   - **The questions.** The count of questions the owner answered, where the answer to each question not asked came from, and each one a companion plugin's setup still asked.
    - **The route, as the last lines.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root . --offline` in one Bash call and print its lines (`next:`, `why:`, `then:`, and any `also:`) as they are. Close with the bare command on its own line.
 
    Give the owner no command to paste besides that one.
