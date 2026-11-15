@@ -720,7 +720,9 @@ def hooks_checked_once(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("hooks_checked_once")
-@pytest.mark.parametrize("chunk", range(SWEEP_CHUNKS))
+@pytest.mark.parametrize(
+    "chunk", [pytest.param(n, marks=pytest.mark.shard_slot(n)) for n in range(SWEEP_CHUNKS)]
+)
 def test_the_route_names_what_the_model_says_after_every_step(tmp_path: Path, chunk: int) -> None:
     span = spans()[chunk]
     repo = real.Repo.start(tmp_path)
