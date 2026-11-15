@@ -571,6 +571,22 @@ def test_the_critic_is_pointed_at_the_binding_s_critique_directory() -> None:
     assert "next to the spec's tests" not in prompt
 
 
+def test_the_critic_and_the_review_grade_from_the_one_severity_list() -> None:
+    # Why: the critic graded from the general list alone, so a secret in a span or a behaviour
+    # shipped with no flag could be minor for it and a blocker or major for the review.
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    for role in ("critique", "review"):
+        prompt = " ".join(ran["prompts"][role].split())
+        assert prompt.count("Severity, the one list every grade you apply comes from.") == 1, role
+        blocker, major = prompt.split("- Blocker:", 1)[1].split("- Major:", 1)
+        assert "a span attribute or log field carrying a secret or a personal identifier" in blocker
+        assert "behaviour shipped on with no flag" in major.split("- Minor:")[0], role
+        assert "- Design axis: A layer violation is a blocker" in prompt, role
+    critic = " ".join(ran["prompts"]["critique"].split())
+    assert "The critic's findings carry no axis, so it applies every line." in critic
+
+
 def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> None:
     # Why: the spec, the critic's tests and the dispute records were 1,300 lines before any
     # implementation, and the run ended over the ceiling after nine agents.

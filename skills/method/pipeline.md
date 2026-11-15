@@ -112,7 +112,7 @@ Three roles read the ticket: the spec role, which writes the spec from it; the t
 
 ### Severity
 
-Every grade the critique and the review apply, blocker, major or minor, is in one list: `SEVERITY` in `workflows/pipeline.js`, which both prompts cite.
+Every grade the critique and the review apply, blocker, major or minor, is in one list: `SEVERITY` in `workflows/pipeline.js`, which both prompts cite. The script itself files a dropped promise as major.
 
 ## The loop
 
