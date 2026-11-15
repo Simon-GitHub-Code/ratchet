@@ -163,9 +163,12 @@ class Hold:
 
 
 def split_into(root: Path, branch: str, ticket: preflight.Ticket) -> list[str] | None:
-    """The parts the agent split ``ticket`` into, or ``None`` if it was not, as it reads now."""
+    """The parts the agent split ``ticket`` into, or ``None`` if it was not.
+
+    An open ticket edited since is not split any more; a closed one keeps its parts.
+    """
     note = read_note(root, branch)
-    if note.get("outcome") != SPLIT or note.get("digest") != digest(ticket):
+    if note.get("outcome") != SPLIT or (ticket.is_open and note.get("digest") != digest(ticket)):
         return None
     return texts(note.get("children"))
 
