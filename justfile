@@ -26,7 +26,8 @@ parallel := "python3 scripts/parallel.py --runner '" + just_executable() + "' --
 
 # The test workers: every core, or the share of the cores `parallel.py` gives each suite when the
 # two run beside each other, so they never start a worker per core each.
-workers := env_var_or_default("RATCHET_JOBS", "auto")
+configured_jobs := `git config --get ratchet.jobs 2>/dev/null || true`
+workers := env_var_or_default("RATCHET_JOBS", if configured_jobs == "" { "auto" } else { configured_jobs })
 
 # Tier 0: shape.
 tier0: sync
