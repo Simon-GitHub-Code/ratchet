@@ -556,6 +556,15 @@ def test_a_dropped_commit_whose_twin_on_the_base_differs_is_red(
     assert checked(path, root) == (1, not_held(root, old, dropped=1))
 
 
+def test_each_dropped_commit_needs_a_twin_of_its_own_on_the_base() -> None:
+    twin = publish_check.Commit(WHEN, "a" * 64)
+    other = publish_check.Commit(LATER, "b" * 64)
+    assert publish_check.unmatched([twin], (twin,)) == []
+    assert publish_check.unmatched([twin, twin], (twin,)) == [twin]
+    assert publish_check.unmatched([twin, twin], (other, twin, twin)) == []
+    assert publish_check.unmatched([other], (twin,)) == [other]
+
+
 def test_a_rebase_finished_with_a_commit_added_is_red(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
 ) -> None:

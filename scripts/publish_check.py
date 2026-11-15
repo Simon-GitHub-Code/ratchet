@@ -41,15 +41,15 @@ What counts as moved, each said in a line of its own:
   open that was not, or one that was open is not.
 
 With ``rebase``, a branch at a commit that does not hold where it started is not a move when the
-commits ahead of the base now are the recorded ones, by author date and message, in the same
-order, with none missing or with each missing one held by the base as a commit of the same author
-date and message that the start did not hold: git dropped it because its change had already
+commits ahead of the base now are the recorded ones, by author date and message, in the same order,
+with none missing or with each missing one held by the base as a commit of its own with the same
+author date and message that the start did not hold: git dropped it because its change had already
 landed, and a reconcile that finished the rebase did not publish (ADR 0060). A dropped commit the
-base does not hold, a twin with another message or author date, a changed order and an added
-commit are each a move, as is any other rewrite, and so is a base that names no commit. A rebase
-left under way in the checkout is never a pass: it is said in a line of its own, in place of
-``HEAD`` being detached, and with nothing else moved the exit is 3, since a role that stopped
-halfway did not publish.
+base does not hold, a twin with another message or author date, a changed order and an added commit
+are each a move, as is any other rewrite, and so is a base that names no commit. A rebase left
+under way in the checkout is never a pass: it is said in a line of its own, in place of ``HEAD``
+being detached, and with nothing else moved the exit is 3, since a role that stopped halfway did
+not publish.
 
 Uncommitted, staged and untracked changes are not a move: the roles write files and leave them.
 
@@ -405,8 +405,7 @@ def head_move(root: Path, start: Start, new: str) -> str | None:
             f" date and message in the same order ({len(was)} then, {len(now)} now): a role"
             " amended, reset or rebased it"
         )
-    landed = ahead_of(root, start.head, base) or ()
-    missing = [commit for commit in dropped if commit not in landed]
+    missing = unmatched(dropped, ahead_of(root, start.head, base) or ())
     if missing:
         return (
             f"{rewritten}, and {len(missing)} of the commits it had ahead of `{base}` were"
@@ -414,6 +413,18 @@ def head_move(root: Path, start: Start, new: str) -> str | None:
             " reset or rebased it"
         )
     return None
+
+
+def unmatched(dropped: list[Commit], landed: tuple[Commit, ...]) -> list[Commit]:
+    """The dropped commits left once each takes a twin of its own from ``landed``."""
+    twins = list(landed)
+    missing: list[Commit] = []
+    for commit in dropped:
+        if commit in twins:
+            twins.remove(commit)
+        else:
+            missing.append(commit)
+    return missing
 
 
 def dropped_from(was: tuple[Commit, ...], now: tuple[Commit, ...]) -> list[Commit] | None:
