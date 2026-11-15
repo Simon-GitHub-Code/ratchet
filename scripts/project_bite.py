@@ -102,16 +102,16 @@ store read-only. ``HEAD`` is detached there and the default branch's refs point 
 over the change sees what the tree holds beyond ``HEAD``: once the work is committed, the planted
 fault and nothing else.
 
-The real work tree is never written by the script's own writes. A fault, and the index and
-exclude file that restoring puts back, are read and written only through descriptors of the
-copy's own directories, opened one name at a time from the copy as it stood before setup ran,
-never through a link. A symbolic link in the snapshot that leads outside the copy, taken after
-setup or restored, is refused as unsafe (red, naming the link). So a process setup left running
-that swaps a directory of the copy for a link to the real tree makes the fault ``THE FAULT WAS NOT
-PLANTED`` and cannot steer such a write out of the copy. The rest of restoring is git's
-(``checkout-index``, ``clean``): git checks each path for a link before it writes there, and then
-writes by path. Setup code runs as the user, and nothing here stops it writing the real tree
-itself.
+The real work tree is never written by the script's own writes. A fault, and everything that
+restoring puts back or removes, is read and written only through descriptors of the copy's own
+directories, opened one name at a time from the copy as it stood before setup ran, never through
+a link. A symbolic link in the snapshot that leads outside the copy, taken after setup or
+restored, is refused as unsafe (red, naming the link). So a process setup left running that swaps
+a directory of the copy for a link to the real tree makes the fault ``THE FAULT WAS NOT PLANTED``
+and cannot steer such a write out of the copy. Git only lists in restoring: what differs from the
+snapshot and what stands beside it. Each file put back or removed goes through the descriptors, a
+link at a name is unlinked and never followed, and a link where a directory belongs is replaced.
+Setup code runs as the user, and nothing here stops it writing the real tree itself.
 
 What is ignored is not copied, on purpose: a virtualenv or a build cache holds the absolute paths
 of the tree it was built in, and a gate run through one would judge the real tree. ``setup``
@@ -190,6 +190,7 @@ BITING = "RATCHET_BITING"
 # Why: the copy as it stood after setup, as an index of its own: restoring from it rewrites only
 # the files a run changed, so no build tool sees a tree of new timestamps.
 SNAPSHOT = ".git/bite-index"
+FRESH = ".git/bite-fresh-index"
 # Why: a chain of links longer than this is a loop, or as good as one, and is refused.
 MAX_LINK_HOPS = 40
 # Why: a gate that adds a rule here hides from the restore what it, or a fault, left behind.
@@ -207,8 +208,9 @@ DIRECTORY = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NOFOLLOW
 DESCRIPTORS = (
     bool(NOFOLLOW)
     and DIRECTORY != os.O_RDONLY | NOFOLLOW
-    and {os.open, os.mkdir, os.rmdir, os.stat, os.unlink} <= os.supports_dir_fd
+    and {os.open, os.mkdir, os.rmdir, os.stat, os.symlink, os.unlink} <= os.supports_dir_fd
     and os.listdir in os.supports_fd
+    and shutil.rmtree.avoids_symlink_attacks
 )
 UNSUPPORTED = (
     "this system cannot open a directory without following a link, so the scratch copy is"
@@ -580,6 +582,38 @@ class Tree:
             if old is not None and stat.S_ISLNK(old.st_mode):
                 raise Unprovable(linked(path))
             os.unlink(name, dir_fd=here)
+
+    def clear(self, path: str) -> None:
+        """Delete what stands at ``path``, a directory with all it holds; a link is not followed."""
+        with self.at(path.rstrip("/")) as (here, name):
+            self.empty(here, name)
+
+    def put(self, path: str, mode: str, content: bytes) -> None:
+        """What the index holds at ``path``, replacing whatever stands there."""
+        with self.at(path, make=True) as (here, name):
+            self.empty(here, name)
+            if mode == "120000":
+                os.symlink(content, name, dir_fd=here)
+            else:
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW
+                with os.fdopen(os.open(name, flags, 0o666, dir_fd=here), "wb") as file:
+                    file.write(content)
+                    os.fchmod(file.fileno(), FILE_MODES.get(mode, 0o644))
+
+    @staticmethod
+    def empty(here: int, name: str) -> None:
+        """Delete ``name`` in the open directory ``here``, whatever it is; nothing is followed."""
+        found = entry(here, name)
+        if found is None:
+            return
+        try:
+            if stat.S_ISDIR(found.st_mode):
+                shutil.rmtree(name, dir_fd=here)
+            else:
+                os.unlink(name, dir_fd=here)
+        except OSError as error:
+            message = f"failed to remove {name}: {error.strerror}"
+            raise Unprovable(message) from error
 
     def prune(self, path: str) -> None:
         """Delete the directory at ``path`` when it holds nothing."""
@@ -998,6 +1032,7 @@ class Copy:
     tree: Tree
     shell: Shell
     head: str
+    snapshot_tree: str
     staged: bytes
     exclude: bytes
     lane: int = 0
@@ -1016,8 +1051,26 @@ class Copy:
         git_in(self.path, "reset", "-q", "--soft", self.head)
         self.tree.write(INDEX, self.staged)
         self.tree.write(EXCLUDE, self.exclude)
-        git_in(self.path, "checkout-index", "--all", "--force", index=snapshot)
-        git_in(self.path, "clean", "-ffdq", index=snapshot)
+        # Why: git only lists here; every delete and write goes through a descriptor of the copy.
+        # A fresh index holds no stat data, so the refresh compares every file's content and
+        # a gate that kept a file's size and times cannot hide its change.
+        fresh = self.path / FRESH
+        git_in(self.path, "read-tree", self.snapshot_tree, index=fresh)
+        run_git(self.path, "update-index", "-q", "--refresh", index=fresh)
+        listed = ("ls-files", "-z", "--others", "--directory", "--exclude-standard")
+        for path in git_in(self.path, *listed, index=snapshot).split("\0"):
+            if path:
+                self.tree.clear(path)
+        held = staged(self.path, snapshot)
+        listed = ("diff-files", "-z", "--raw", "--no-renames", "--ignore-submodules=all")
+        fields = git_in(self.path, *listed, index=fresh).split("\0")
+        for path in sorted(fields[1::2]):
+            mode, blob = held[path]
+            if mode in FILE_MODES:
+                content = git_bytes(self.path, "cat-file", "--filters", f"--path={path}", blob)
+            else:
+                content = git_bytes(self.path, "cat-file", "blob", blob)
+            self.tree.put(path, mode, content)
         # Why: defence in depth; the snapshot was checked, and what it now writes is checked again.
         contained(self.path, self.head)
 
@@ -1151,6 +1204,7 @@ def make_copy(root: Path, copy: Path, *, registry: Registry, shell: Shell, lane:
         tree,
         shell,
         git_in(copy, "rev-parse", "HEAD"),
+        git_in(copy, "write-tree", index=copy / SNAPSHOT),
         tree.read(INDEX) or b"",
         tree.read(EXCLUDE) or b"",
         lane,

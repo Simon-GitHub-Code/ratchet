@@ -1,15 +1,16 @@
 """``project_bite.py``: every gate a repository bound goes red on its planted fault."""
 
-import contextlib
 import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pytest
@@ -1356,7 +1357,7 @@ def test_a_copy_that_cannot_be_put_back_as_it_stood_makes_the_run_red(
         for locked in scratch.rglob("locked"):
             locked.chmod(0o755)
     out = shown(capsys)
-    assert "warning: failed to remove locked/f" in out
+    assert "failed to remove locked" in out
     assert "bites" not in out
 
 
@@ -1767,45 +1768,125 @@ def test_links_that_lead_round_in_a_ring_are_refused_as_leading_nowhere_safe(
     assert "leads outside the scratch copy" in shown(capsys)
 
 
-def test_a_process_setup_left_swapping_a_directory_for_a_link_never_changes_the_real_tree(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def made_copy(tmp_path: Path) -> tuple[Path, project_bite.Copy]:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    (root / "src/junk.txt").write_text("real\n", encoding="utf-8")
+    return root, copy
+
+
+def test_a_directory_swapped_for_a_link_between_listing_and_restoring_never_reaches_the_real_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: the race the seam test fixes in place, run for real. The swapper ends by itself a
-    # little after the proof would, and is killed by its pid once the proof is done.
-    pidfile, swapper = tmp_path / "swapper.pid", tmp_path / "swap.sh"
-    faults = [
-        'write = { path = "src/w{n}.txt", content = "planted\\n" }',
-        'replace = { path = "src/code.txt", old = "clean", new = "planted" }',
-        'remove = ["src/code.txt"]',
-    ]
-    registry = (
-        'setup = ["setsid -f sh '
-        + str(swapper)
-        + '"]\n'
-        + "".join(bite("lint", f"f{n}", faults[n % 3].replace("{n}", str(n))) for n in range(24))
-    )
-    root = project(tmp_path / "repo", {"lint": "exit 0"}, registry)
-    until = int(time.time()) + 20
-    swapper.write_text(
-        f"echo $$ > {pidfile}\n"
-        f'while [ "$(date +%s)" -lt {until} ]; do\n'
-        f"  [ -d src ] && [ ! -L src ] && mv src aside && ln -s {root / 'src'} src\n"
-        "  sleep 0.001\n"
-        "  [ -L src ] && rm src && mv aside src\n"
-        "done\n",
-        encoding="utf-8",
-    )
+    root, copy = made_copy(tmp_path)
+    (copy.path / "src/junk.txt").write_text("left by a gate\n", encoding="utf-8")
+    (copy.path / "src/code.txt").write_text("changed\n", encoding="utf-8")
     before = fingerprint(root)
-    try:
-        # Why: red either way, on a fault the gate never reads or on a copy the swapper left
-        # in a state restoring refuses; what counts is the real tree.
-        assert prove(root) == 1
-    finally:
-        if pidfile.exists():
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(int(pidfile.read_text(encoding="utf-8")), signal.SIGKILL)
+    at, swapped = project_bite.Tree.at, []
+
+    def swapping(
+        self: project_bite.Tree, path: str, **kwargs: bool
+    ) -> AbstractContextManager[tuple[int, str]]:
+        if not swapped and path.startswith("src/"):
+            swapped.append(path)
+            (copy.path / "src").rename(copy.path / "aside")
+            (copy.path / "src").symlink_to(root / "src", target_is_directory=True)
+        return at(self, path, **kwargs)
+
+    monkeypatch.setattr(project_bite.Tree, "at", swapping)
+    with pytest.raises(project_bite.Unprovable, match="reached through a symbolic link"):
+        copy.restore()
+    assert swapped
     assert fingerprint(root) == before
-    assert "bite: red" in shown(capsys)
+    assert (root / "src/junk.txt").read_text(encoding="utf-8") == "real\n"
+
+
+def test_a_file_a_gate_changed_to_the_same_length_with_its_times_put_back_is_restored(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    old = 1_000_000_000_000_000_000
+    os.utime(root / "src/code.txt", ns=(old, old))
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    target = copy.path / "src/code.txt"
+    assert target.stat().st_mtime_ns == old
+    target.write_text("dirty\n", encoding="utf-8")
+    os.utime(target, ns=(old, old))
+    copy.restore()
+    assert target.read_text(encoding="utf-8") == "clean\n"
+
+
+def test_a_link_standing_where_a_directory_belongs_is_replaced_and_the_real_tree_is_untouched(
+    tmp_path: Path,
+) -> None:
+    root, copy = made_copy(tmp_path)
+    (copy.path / "src/code.txt").write_text("changed\n", encoding="utf-8")
+    (copy.path / "src").rename(copy.path / "aside")
+    (copy.path / "src").symlink_to(root / "src", target_is_directory=True)
+    before = fingerprint(root)
+    copy.restore()
+    assert fingerprint(root) == before
+    assert not (copy.path / "src").is_symlink()
+    assert (copy.path / "src/code.txt").read_text(encoding="utf-8") == "clean\n"
+    assert not (copy.path / "src/junk.txt").exists()
+
+
+def test_a_tracked_link_a_gate_pointed_elsewhere_is_restored_as_the_link_it_was(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    (root / "src/link").symlink_to("code.txt")
+    commit(root, "a link")
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    link = copy.path / "src/link"
+    link.unlink()
+    link.symlink_to("elsewhere")
+    copy.restore()
+    assert link.is_symlink()
+    assert str(link.readlink()) == "code.txt"
+
+
+def test_a_repository_setup_made_is_left_as_its_own_history_moved_it(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    setup = (
+        "sh -c 'git init -q nested && git -C nested -c user.name=s -c user.email=s@example.invalid"
+        " commit -q --allow-empty -m one'"
+    )
+    copy = project_bite.make_copy(
+        root,
+        tmp_path / "copy",
+        registry=project_bite.Registry(setup=(setup,)),
+        shell=project_bite.Shell(),
+    )
+    nested = copy.path / "nested"
+    git(nested, *project_bite.IDENTITY, "commit", "-q", "--allow-empty", "-m", "two")
+    moved = git(nested, "rev-parse", "HEAD")
+    copy.restore()
+    assert git(nested, "rev-parse", "HEAD") == moved
+
+
+def test_what_stands_in_the_way_of_a_tracked_path_is_replaced_by_it(tmp_path: Path) -> None:
+    root, copy = made_copy(tmp_path)
+    shutil.rmtree(copy.path / "src")
+    (copy.path / "src").write_text("a file where a directory belongs\n", encoding="utf-8")
+    (copy.path / "tests/one.t").unlink()
+    (copy.path / "tests/one.t").mkdir()
+    (copy.path / "tests/one.t/inner").write_text("x\n", encoding="utf-8")
+    (copy.path / "gate").unlink()
+    (copy.path / "gate").symlink_to(root / "src/junk.txt")
+    before = fingerprint(root)
+    copy.restore()
+    assert fingerprint(root) == before
+    assert (copy.path / "src/code.txt").read_text(encoding="utf-8") == "clean\n"
+    assert (copy.path / "tests/one.t").read_text(encoding="utf-8") == "a test\n"
+    assert (copy.path / "gate").is_file()
+    assert not (copy.path / "gate").is_symlink()
 
 
 def test_a_system_that_cannot_open_a_directory_without_following_a_link_plants_nothing(
