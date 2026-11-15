@@ -97,11 +97,12 @@ At most one message, and only when the review finds that the architecture should
 ### Steps to review
 
 1. **Check the ground.**
-   - Start on the default branch with a clean tree. Make the branch `docs/architecture-<what>`, where `<what>` is the kinds or the events in a word or two.
+   - Start on the default branch with a clean tree.
    - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --reviews` in one Bash call. It lists each owed review: its trigger, the kind or event, how many instances, and what the arrival reopens.
    - When it lists nothing, say so, print the route as step 6 does, and stop.
+   - Make the branch `docs/architecture-<what>`, where `<what>` is the kinds or the events in a word or two.
 
-   Done when you hold the list.
+   Done when you hold the list and are on that branch.
 
 2. **Read what was decided.**
    - **The binding has an `## Architecture` section:** the decision is the ADR its `- Decision:` line names, and every ADR that superseded it or reviewed it since, which name their trigger on a `- Architecture review:` line.
