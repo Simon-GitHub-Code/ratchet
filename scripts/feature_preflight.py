@@ -82,9 +82,7 @@ OPERABILITY_LINES = (
     ("Load", "load smoke", "the route or input the load gates gain"),
     ("Security", "dynamic security scan", "the surface it adds: routes, inputs, who may call"),
 )
-# Why: the Flag line is asked of the owner once others can reach what ships, not on its row.
 FLAG_LINE = "Flag"
-FLAG_EVENT = "deployed"
 CRITIC_EVENT = "depended-on"
 LATER = re.compile(r"^\|\s*([^|]+?)\s*\|\s*`?later:", re.MULTILINE | re.IGNORECASE)
 GATES = "## Gates"
@@ -427,7 +425,8 @@ def operability_asked(root: Path) -> list[tuple[str, str]]:
     """The ``## Operability`` lines asked here, each with what it says; none before adoption.
 
     A line is asked when its question is asked of a declared type and its row is not waiting
-    (``later: ...``); the ``Flag`` line is asked once ``deployed`` is declared.
+    (``later: ...``); the ``Flag`` line is asked of every declared type the catalogue asks it of,
+    whatever the life events and whatever its row says.
     """
     text = binding_text(root)
     if text is None:
@@ -435,12 +434,10 @@ def operability_asked(root: Path) -> list[tuple[str, str]]:
     kinds = frozenset(application_types.declared(text) or ())
     asked_of = application_types.load().asked_of
     waiting = {question.casefold() for question in LATER.findall(section(text, GATES))}
-    live = FLAG_EVENT in application_types.life_events(text)
     return [
         (name, says)
         for name, question, says in OPERABILITY_LINES
-        if asked_of(question) & kinds
-        and (live if name == FLAG_LINE else question.casefold() not in waiting)
+        if asked_of(question) & kinds and (name == FLAG_LINE or question.casefold() not in waiting)
     ]
 
 

@@ -469,28 +469,6 @@ DIVERGENCES: Final[tuple[Divergence, ...]] = (
             architecture=Architecture.RECORDED,
         ),
     ),
-    Divergence(
-        name="flag-line-waits-for-deployed",
-        holds=lambda world: world.flag is Flag.MISSING,
-        reads=as_before_the_flag_line,
-        contradicts=(
-            "The preflight asks every ticket of an asked type for its `Flag:` line, before"
-            " deployment as after, whatever its row's `later:` says."
-        ),
-        source=(
-            "docs/adr/0061-before-deployment-the-owner-is-asked-whether-new-behaviour-arrives"
-            "-switched-off.md"
-        ),
-        breaks=frozenset({"RealAdviceCanBeFollowed", "RealFlagLineBeforeTheBuild"}),
-        example=World(
-            setup=Setup.BOUND,
-            hooks=True,
-            foundation=True,
-            tickets=(Ticket.STATED, Ticket.TRIAGE),
-            architecture=Architecture.RECORDED,
-            flag=Flag.MISSING,
-        ),
-    ),
 )
 
 
