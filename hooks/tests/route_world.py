@@ -26,6 +26,10 @@ finding is gone. The binding keeps the sections an upgrade added while the world
 parts. ``/ratchet:architecture`` writes the record and the parts, settles the ledger, and leaves
 its branch for the owner to merge.
 
+The upgrade that asks the ``Flag:`` line before deployment (ADR 0061) declares an application type
+the catalogue asks it of, the binding naming no life event. From then on the conjecture writes the
+owner's answer and the line on the spec, as the conjecture skill does.
+
 A spec and its tickets live under ``.scratch/f<n>/``, where ``n`` counts the specs written, and
 each ticket's title names ``n``, so the branch ``feature/<number>-<slug>`` is new for every spec
 and a branch merged for an earlier spec never matches a later ticket.
@@ -66,6 +70,7 @@ from tests.route_model import (
     ActionName,
     Advice,
     Architecture,
+    Flag,
     Head,
     Setup,
     Ticket,
@@ -89,7 +94,7 @@ MANIFEST = (
 PIN = "- Ratchet plugin: {version} at " + "0" * 40 + "\n"
 UNPINNED = "- Ratchet plugin: <X.Y.Z> at <ratchet-sha>\n"
 BINDING = (
-    "# Binding\n\n{pin}- Default branch: `main`\n- Life events: none\n\n"
+    "# Binding\n\n{pin}- Default branch: `main`\n- Life events: none\n{types}\n"
     "| Entry point | Command |\n| --- | --- |\n{entries}\n"
     "## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
     "| --- | --- | --- | --- | --- |\n{gates}\n"
@@ -125,6 +130,20 @@ REVIEW = (
     "# The architecture holds\n\n- Architecture review: {keys}\n- Outcome: holds\n"
     "- Decided: 2026-11-14\n\n## Decision\n\nThe new kind sits in the part that owns it.\n\n"
     "## Refutation criterion\n\nAn instance outside that part.\n"
+)
+# Why `cli`: the catalogue asks it the flag question and no other question an operability line
+# carries, so the line is the only one a ticket is asked once the type is declared.
+ASKED_TYPES = "- Application types: cli\n"
+# Why: once a type is declared, conformance asks a Triggers row of each kind the type needs, and
+# the fill an upgrade owes runs it. The world's project has none of them until one arrives.
+ASKED_KINDS: Final = application_types.load().kinds_required(
+    set(application_types.declared(ASKED_TYPES) or [])
+)
+FLAG_ANSWER = (
+    "## Answers\n\n- `conjecture.flag`: it settles one route: should it stay hidden until you"
+    " switch it on, or appear as soon as it is finished? Appear as soon as it is finished.\n\n"
+    "## Operability\n\n- Flag: none: the owner chose to have it appear as soon as it is finished,"
+    " while the project is not deployed\n"
 )
 GLOSSARY = "# Glossary\n\n**Customer**: who pays.\n"
 PLACEHOLDER = "# <project>\n"
@@ -167,6 +186,7 @@ class Repo:
     upgrades: int = 0
     architecture: str = ""
     merged: str | None = None
+    asked: bool = False
     entries: dict[str, str] = field(default_factory=lambda: dict(ENTRY_POINTS))
     manifest: str = MANIFEST
 
@@ -221,8 +241,14 @@ class Repo:
             f"| kind{n} | `src/kind{n}.py`, `src/kind{n}-*.py` | |\n"
             for n, _tool in enumerate(self.tools, 1)
         ) + "".join(f"| {kind} | `src/{kind}.py` | |\n" for kind in self.reopened)
+        if self.asked:
+            rows += "".join(
+                f"| {kind} | none: the project has none yet | |\n"
+                for kind in sorted(ASKED_KINDS - set(self.reopened))
+            )
         made = BINDING.format(
             pin=PIN.format(version=self.version()) if pinned else UNPINNED,
+            types=ASKED_TYPES if self.asked else "",
             entries="".join(
                 f"| {name} | `{command}` |\n" for name, command in self.entries.items()
             ),
@@ -366,12 +392,17 @@ def adoption(repo: Repo, change: Change, *, pinned: bool) -> None:
     write(repo.root, "GLOSSARY.md", PLACEHOLDER)
     for path in QUALITY:
         write(repo.root, path, (ADOPT_TEMPLATES / path).read_text(encoding="utf-8"))
-    if change.after.architecture is Architecture.RECORDED:
+    if change.after.architecture is Architecture.RECORDED and not repo.architecture:
         repo.record_architecture()
 
 
 def adopt(repo: Repo, change: Change) -> None:
-    """A whole adoption, committed on its branch and merged."""
+    """A whole adoption, committed on its branch and merged.
+
+    Resumed after the pin once its branch is merged, it is the proof alone, which writes nothing.
+    """
+    if change.before.setup is Setup.PINNED and repo.merged:
+        return
     on_adoption_branch(repo)
     adoption(repo, change, pinned=True)
     snapshot(repo.root, "chore(method): adopt")
@@ -387,7 +418,7 @@ DO[ActionName.OLDER_PLUGIN_ADOPTS] = adopt
 @does(ActionName.ADOPTION_STOPS)
 def _adoption_stops(repo: Repo, change: Change) -> None:
     on_adoption_branch(repo)
-    pinned = change.after.setup is Setup.BOUND
+    pinned = change.after.setup is Setup.PINNED
     adoption(repo, change, pinned=pinned)
     if not pinned:
         snapshot(repo.root, "chore(method): adopt, the templates")
@@ -411,8 +442,31 @@ def _owner_writes_spec(repo: Repo, _change: Change) -> None:
 
 
 @does(ActionName.OWNER_STATES_SPEC_CONJECTURE)
-def _owner_states_spec_conjecture(repo: Repo, _change: Change) -> None:
-    write(repo.root, f"{repo.feature()}/spec.md", f"# Settle\n\n{CONJECTURE}")
+def _owner_states_spec_conjecture(repo: Repo, change: Change) -> None:
+    flag = f"\n{FLAG_ANSWER}" if change.after.flag is not Flag.WAITS else ""
+    write(repo.root, f"{repo.feature()}/spec.md", f"# Settle\n\n{CONJECTURE}{flag}")
+
+
+def answers_the_flag_on_the_spec(repo: Repo) -> None:
+    """The conjecture's answer and ``Flag:`` line, on the spec its tickets read, once."""
+    path = repo.root / repo.feature() / "spec.md"
+    text = path.read_text(encoding="utf-8")
+    if FLAG_ANSWER not in text:
+        path.write_text(f"{text}\n{FLAG_ANSWER}", encoding="utf-8")
+
+
+@does(ActionName.OWNER_STATES_CONJECTURE)
+def _owner_states_conjecture(repo: Repo, change: Change) -> None:
+    """The ticket's conjecture where it has none, and the line on its spec where it is asked.
+
+    Why the spec: the conjecture writes the answer on the spec when the ticket has one, and each
+    ticket of the spec reads it there (ADR 0061).
+    """
+    if change.before.tickets != change.after.tickets:
+        repo.write_ticket(change.slot, Ticket.STATED, inherits=change.after.inherits)
+    if change.after.flag is not Flag.WAITS:
+        answers_the_flag_on_the_spec(repo)
+    snapshot(repo.root, "docs(tracker): the owner's conjecture of a ticket")
 
 
 @does(ActionName.OWNER_SPLITS_SPEC)
@@ -433,7 +487,6 @@ def rewrites_ticket(repo: Repo, change: Change) -> None:
 for _name in (
     ActionName.OWNER_AGREES_TICKET,
     ActionName.OWNER_WORKS_TICKET_THEMSELF,
-    ActionName.OWNER_STATES_CONJECTURE,
     ActionName.OWNER_RESOLVES_TICKET,
 ):
     DO[_name] = rewrites_ticket
@@ -694,6 +747,31 @@ def with_body(text: str, heading: str, body: str) -> str:
     start = lines.index(heading)
     end = next((n for n in range(start + 1, len(lines)) if lines[n].startswith("## ")), len(lines))
     return "\n".join([*lines[: start + 1], "", *body.rstrip("\n").split("\n"), "", *lines[end:]])
+
+
+@does(ActionName.UPGRADE_ASKS_THE_FLAG_LINE)
+def _upgrade_asks_the_flag_line(repo: Repo, _change: Change) -> None:
+    """The project becomes one the ``Flag:`` line is asked of, not deployed: a type that asks it.
+
+    Why a type, not an upgrade to a copy of the plugin: the scripts under test are this checkout's,
+    so the plugin that ships ADR 0061 is the one the tests run. Before this step the binding
+    declares no type, which no plugin asks the line of; after it, the line is asked as far as the
+    scripts ask it. It touches no ticket and no spec, and lands on the default branch, from a work
+    tree of its own while the build's branch is checked out. It keeps the pin as the last real
+    upgrade wrote it, so the fill that upgrade owes still runs from the plugin it names.
+    """
+    repo.asked = True
+    tree = repo.root
+    if repo.head() != "main":
+        tree = repo.root.parent / f"{repo.root.name}.upgrade"
+        git(repo.root, "worktree", "add", "-q", str(tree), "main")
+    pin = re.compile(r"^- Ratchet plugin: .*$", re.MULTILINE)
+    kept = pin.search(gatelib.read_text(tree / route.BINDING) or "")
+    made = repo.binding()
+    write(tree, str(route.BINDING), pin.sub(lambda _line: kept.group(), made) if kept else made)
+    snapshot(tree, "chore(method): the project is a command, not yet deployed")
+    if tree != repo.root:
+        git(repo.root, "worktree", "remove", str(tree))
 
 
 @does(ActionName.AGENT_FILLS_ROWS)
