@@ -15,7 +15,7 @@ The tier 1 `bite` (`project_bite.py --changed`) proves every tier 0 and tier 1 g
 
 - **The bites registry, `quality/bites.toml`.** The base and head registries are compared bite by bite. A gate is affected when one of its bites was added, removed or changed. A changed bite counts under both its old and its new `gate`. A change to `setup` or `include` changes the copy every gate runs in, so every gate is affected.
 - **A bite's patch, under `quality/bites/`.** The gates whose bite names that patch, in the base or the head registry. A patch no bite names affects no gate.
-- **The binding.** The gate rows of base and head are compared. A row added, removed, or changed in its command or tier affects its own gate. A change outside the rows affects every gate, since a gate may read the binding elsewhere (the operability lines, the application types).
+- **The binding.** The gate rows of base and head are compared. A row added, removed, or changed in its command or tier affects its own gate. A change outside the rows affects every gate, since a gate may read the binding elsewhere (the operability lines, the application types). The plugin pin line is the exception: a change to it alone affects no gate. The pin names the plugin version, and this proof covers the gates the repository bound to its own tools. The plugin's own gates are proven by the plugin's release and by `bite-all`. An upgrade that also changes rows, recipes or other gate paths is judged by those changes.
 - **The recipe file in `gate-commands`.** `just` is the method's own runner, so the script reads the recipes at base and head (`just --dump --dump-format json`). A changed recipe body affects every gate whose row command reaches that recipe, through its dependencies and through `just <recipe>` calls in recipe bodies. A change to a top-level assignment, a `set` line, an import or a module affects every gate.
 - **Any other `gate-commands` path**, such as a script or the commit-hook config. Nothing records which recipe runs which script, and a scan of recipe text for the path would be a guess, so every gate is affected.
 - **`tool-config`, `gate-tools`, `fitness` and `formal`.** These groups name no gate, and which config file a tool reads is a fact of the stack that ADR 0042 keeps out of the plugin. Every gate is affected.
@@ -23,7 +23,7 @@ The tier 1 `bite` (`project_bite.py --changed`) proves every tier 0 and tier 1 g
 
 The proof prints, for each gate in its set, why it is there: `lint: bite x changed`, or `every gate: scripts/check.sh changed, and no record says which gate runs it`. The owner then sees when a run fell back to every gate.
 
-**This record stays proposed until the measurement.** The last two kinds of path fall back to every gate, and the adopted project's two red merges touched scripts. If the measurement shows that most changes still fall back, the targeted proof buys little there. The exact route would then be an optional line on each gate row naming the paths its gate reads, with a missing line counted as every gate. That is a new binding field and the owner's question, so it is asked then, not decided here.
+**This record stays proposed until the measurement.** The last two kinds of path fall back to every gate, and the adopted project's two red merges touched scripts. If the measurement shows that most changes still fall back, the targeted proof buys little there. The exact route would then be an optional line on each gate row naming the paths its gate reads, with a missing line counted as every gate. That is a new binding field and the owner's question, so it is asked then, not decided here. What tier 1 does when it falls back is open item 3, below.
 
 **The full proof is tier 2's, with a ceiling of its own.** `bite-all` proves every gate, on the default branch and nightly, as tier 2 runs today. It is held to its own key under `[ceilings.seconds]`, never to the tier 1 ceiling. Adopt and the upgrade set that key from the first measured run with headroom (`budget --set`). A red `bite-all` is a red tier 2, with what that stops (below).
 
@@ -65,3 +65,12 @@ This is wrong if any of these is seen:
 
 - **1. Which runs own the full proof.** Both the default branch and the nightly run, as tier 2 runs today. The default branch finds a gate a merge broke on the merge that broke it, and the nightly run finds a gate a tool's own change broke with no merge at all. Cost: one full proof per merge that touches a gate-defining path.
 - **2. What a red full proof stops.** What any red tier 2 stops. It is fixed before anything else merges, and while it is red the merge judge leaves every merge to the owner. A gate that cannot fail lets every later change through unjudged on what it was for. Cost: a `TIMED OUT` on a loaded runner stops merges until someone runs the proof again, which the 75 percent warning makes rarer.
+
+## Open for the owner
+
+- **3. What tier 1 does when it cannot target.** In every fallback case above, tier 1 would run the same 15 to 25 minute proof under the tier 1 ceiling, and go red on the budget the way the two merges did. It is asked once the measurement says how often the fallback fires, and what the full proof costs with one shared build.
+  - (a) Prove every gate under the tier 1 ceiling, as today. Honest, slow, and red on runner variance.
+  - (b) Prove every gate, held to the full proof's own ceiling, not the tier 1 ceiling. Slow, and green when the gates bite.
+  - (c) Prove nothing it cannot target, and say so in one line. The full proof after the merge catches it, and a red there stops every further merge (item 2).
+
+  Default taken until the owner answers: (b). It merges nothing unproven, and it ends the red on variance. Cost: a pull request or local check that falls back still takes a quarter of an hour, which is what the owner asked to end.
