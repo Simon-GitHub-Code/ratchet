@@ -83,6 +83,93 @@ def test_the_feature_skill_shortens_a_long_subject_by_a_fixed_rule() -> None:
     assert commits.MAX_SUBJECT == 72
 
 
+FEATURE = " ".join((SKILLS / "feature/SKILL.md").read_text(encoding="utf-8").split())
+
+
+def test_the_feature_skill_says_the_critic_did_not_run_in_both_modes() -> None:
+    # Why: the page put the critic's line in the pull request of one ticket only, and the drain's
+    # pull request was silent on it, while the workflow's result asks for it in every run. The
+    # shared section now carries it for both modes.
+    shared = FEATURE.split("## The pull request", 1)[1].split(" ## ", 1)[0]
+    assert (
+        "When the critic did not run, the pull request says so and why, from the result's"
+        " `critic`, in both modes." in shared
+    )
+
+
+def test_the_drain_closes_the_ticket_from_every_commit() -> None:
+    # Why: the page put `Closes <ref>` in the same clause as a shortened subject, so a commit
+    # whose subject fit could leave it out. Every commit of the change now closes its ticket, and
+    # the full title is added only when the subject was shortened.
+    step = FEATURE.split("2. **Commit.**", 1)[1].split("3. **Bring it up to date.**", 1)[0]
+    assert "The body holds `Closes <ref>`, whether or not the subject was shortened." in step
+
+
+def test_a_labelled_tickets_answers_are_the_owners_to_merge_with_a_forge_too() -> None:
+    # Why: the page said only what the run prints with no forge when a labelled ticket's answers
+    # were landed. The merge judge refuses the agent's change with a forge as well, so the page now
+    # says what the agent relays in each case.
+    asking = FEATURE.split("## Questions for the owner", 1)[1]
+    assert (
+        "With a forge, the merge job leaves the pull request to the owner and comments why: relay"
+        " that comment as it is." in asking
+    )
+
+
+def test_a_red_preflight_on_the_branch_stops_the_build() -> None:
+    # Why: the page said the preflight on the branch "must stay green" and nothing of a red one, so
+    # an agent could spawn the pipeline over it. It now stops as a red first preflight does.
+    step_2 = FEATURE.split("2. **The branch.**", 1)[1].split("3. **The pipeline.**", 1)[0]
+    assert (
+        "**Red with `--branch`:** report `verdict: blocked` and, for each failure, its `check`,"
+        " `detail` and `produce`. Spawn nothing. Stop." in step_2
+    )
+
+
+def test_the_drain_reads_a_refusal_with_exit_2_as_no_conflict() -> None:
+    # Why: the page read every exit 2 of `update` as a rebase that conflicted. `drain.py` also
+    # exits 2 when it refuses before any work on the ticket, with a `drain:` or `merge:` line, and
+    # a rejudge over that would judge a branch nothing moved. One exit 2 can carry both a
+    # `merge:` recovery line and the rebase's JSON, so the JSON decides, and a line alone is a
+    # refusal that leaves the ticket.
+    assert "When it prints JSON, the JSON decides" in FEATURE
+    assert (
+        "**Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line and no JSON:**"
+        " the"
+        " command refused before any work on the ticket. Report the line, leave the ticket as it"
+        " is, and go on at step 5 (`D plan`)." in FEATURE
+    )
+
+
+def test_the_drain_does_not_close_a_ticket_that_update_says_has_merged() -> None:
+    # Why: the page closed the ticket as waiting on every exit 1 of `update`. When `update` says
+    # the ticket is merged, its note already records the merge, and `close` refuses any other
+    # outcome. The page now leaves that ticket to the report's Merged list.
+    step = FEATURE.split("3. **Bring it up to date.**", 1)[1].split("4. **Judge it again.**", 1)[0]
+    assert (
+        "**Exit 1 with `update: <ref> is merged and is not rebased`:** the ticket has landed. Do"
+        " not close it. Go on at step 5 (`D plan`); the report lists it under Merged." in step
+    )
+
+
+def test_a_split_plan_is_checked_before_drain_split_runs_it() -> None:
+    # Why: the page said to fix a refused plan and run `drain.py split` again, once. That command
+    # parks the ticket as too large on its first refusal, so there was no second run. The page now
+    # checks the plan with `split.py check`, which files nothing, and runs `split` only on a pass.
+    too_large = FEATURE.split("## Too large: the agent splits it", 1)[1].split(" ## ", 1)[0]
+    checked = (
+        (
+            'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file>'
+            " --root .`. It judges the plan as `split` will and files nothing."
+        ),
+        (
+            'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file>'
+            " --root .`, only with a plan the check passed."
+        ),
+    )
+    assert all(sentence in too_large for sentence in checked)
+
+
 def test_the_fork_test_has_one_wording_the_spec_role_and_the_conjecture_skill_share() -> None:
     # Why: the conjecture skill asked the owner what the pipeline's Spec role would have assumed,
     # because only the role's prompt held the examples. A prompt cannot follow a link, so the
@@ -136,6 +223,21 @@ def test_init_passes_the_owners_answers_to_the_setups() -> None:
     assert "follow it by hand" not in INIT
 
 
+def test_init_installs_a_missing_companion_plugin_without_asking() -> None:
+    # Why: two harness pages said init installs the companion plugins with the owner's consent,
+    # while the skill installs them as an assumption. A missing one is installed without asking,
+    # and the hand-over says so.
+    step_1 = " ".join(INIT.split("1. **Check the ground.**", 1)[1].split("\n2. ", 1)[0].split())
+    assert "is missing, install it without asking and say so in the hand-over" in step_1
+
+
+def test_init_leaves_the_agent_skills_block_to_the_tracker_setup() -> None:
+    # Why: step 5 told init to place the tracker setup's `## Agent skills` block, from a setup
+    # init does not run and which updates that section itself. Init writes only the tracker line.
+    bullet = INIT.split("**`mattpocock-skills`: not run here.**", 1)[1].split("**`pstack`", 1)[0]
+    assert "Agent skills" not in bullet
+
+
 def test_every_ratchet_skill_ends_with_the_route() -> None:
     # Why: the owner's next command is the method's promise at every stage (ADR 0009); a
     # hand-over that forgets it leaves the owner guessing which plugin's keystroke comes next.
@@ -178,6 +280,32 @@ def test_the_safeguard_skill_guards_a_new_config_on_its_own_branch() -> None:
     assert "just settings" not in safeguard
     guards = (SKILLS / "method/guards.md").read_text(encoding="utf-8")
     assert "the agent adds it to `guards/manifest.toml` on its branch" in guards
+
+
+def test_next_says_what_the_upgrade_does_and_bounds_its_own_retries() -> None:
+    next_page = flat("next/SKILL.md")
+    # Why: the route's upgrade line had no case on the page, so an agent relayed it bare or
+    # guessed what the upgrade leaves. The page now says what to add and that no count is given.
+    assert "give no count of what is owed: only the upgrade's run knows it" in next_page
+    # Why: the two commands an agent runs looped back to the route with no end when one failed or
+    # was named again. The page now allows one more run, then stops and relays the output.
+    assert (
+        "When it fails a second time, or the route still names it, stop there and relay what the"
+        " command printed, as it is." in next_page
+    )
+
+
+def test_fill_names_where_the_template_is_and_how_its_change_lands() -> None:
+    fill = flat("fill/SKILL.md")
+    # Why: the template's path was written as if it sat in the project, where it does not exist.
+    assert "`${CLAUDE_PLUGIN_ROOT}/skills/adopt/templates/docs/process/binding.md`" in fill
+    # Why: "hand it to the merge" named no action. The page now says how a change lands, in the
+    # safeguard skill's words.
+    assert (
+        "With no forge, write the change description at `.scratch/changes/<branch>.md` (the"
+        " branch's `/` written as `-`) and run"
+        " `just merge <branch>`." in fill
+    )
 
 
 UNLISTED = '[[group]]\nname = "tool-config"\nreason = "Rule sets."\npaths = ["lint.toml"]\n'
@@ -374,6 +502,50 @@ def test_the_conjecture_steps_say_how_each_fork_is_written() -> None:
     assert len(fork_rule_problems(planted)) == 1
     planted = step_3.replace("with the answer quoted under *You said*, marked **built**", "")
     assert fork_rule_problems(planted) == ["no sentence says how an answered fork's row is written"]
+
+
+def conjecture_step(number: int) -> str:
+    page = flat("conjecture/SKILL.md")
+    return page.split(f" {number}. **", 1)[1].split(f" {number + 1}. **", 1)[0]
+
+
+def test_the_size_estimate_is_written_on_the_ticket_and_never_on_a_spec() -> None:
+    # Why: the page wrote `## Size` on the shared spec beside the conjecture, and on a spec not
+    # yet split. The feature preflight reads `## Size` only from the ticket's own body, so a size
+    # written on a spec was never checked. The page now writes it on each ticket, and on no spec.
+    step_2 = conjecture_step(2)
+    assert (
+        "**A ticket:** the block goes on the ticket itself, even when its siblings share a parent"
+        " spec, since the preflight reads `## Size` only from the ticket's own body." in step_2
+    )
+    assert (
+        "**A spec that has not been split:** write no `## Size`. Make the estimate all the same,"
+        " for the ceiling case below." in step_2
+    )
+
+
+def test_the_conjecture_is_printed_once_at_the_hand_over() -> None:
+    # Why: step 3 and step 5 each said to print the conjecture, so it could go out with the
+    # questions and again at the hand-over. It is printed once, in the last reply.
+    step_3 = conjecture_step(3)
+    assert "It is printed once, in the final reply of step 5" in step_3
+
+
+def test_a_labelled_ticket_is_the_owners_to_merge_on_a_forge_too() -> None:
+    # Why: the labelled-ticket rule read as one for a repository with no forge, where a forge's
+    # merge job was said to merge every pull request. The merge judge leaves that change to the
+    # owner either way, and the page now says what happens on a forge.
+    step_4 = conjecture_step(4)
+    assert "the merge job leaves the pull request to the owner and comments why on it" in step_4
+
+
+def test_the_conjecture_names_one_shared_spec_and_no_dead_clause() -> None:
+    # Why: step 4 named the shared spec by another condition than step 2, and the `(left open)`
+    # rule ended with a clause no row could fail. Both steps use one condition, and the rule ends
+    # at the row.
+    shared = "the ticket's siblings share a parent spec"
+    assert all(shared in conjecture_step(step).lower() for step in (2, 4))
+    assert "while a row says `(left open)`." in conjecture_step(3)
 
 
 def test_adopt_asks_a_repository_with_code_whether_others_reach_it() -> None:
