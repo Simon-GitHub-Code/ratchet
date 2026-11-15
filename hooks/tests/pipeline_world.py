@@ -1,9 +1,11 @@
 """The pipeline model's runs played on the real workflow, many runs to one node process.
 
 Each abstract answer stands for one concrete structured answer the workflow's schema allows, built
-from the answers ``test_pipeline`` already scripts. The workflow runs in a fresh ``vm`` context
-whose only globals are the language's own, with ``agent``, ``phase`` and ``log`` passed in, so an
-effect it reached for any other way would end the run in a ``ReferenceError``.
+from the answers ``test_pipeline`` already scripts; the stand-in ``agent`` checks each against the
+schema the workflow passed for that call, and a play fails on an answer it refuses. The workflow
+runs in a fresh ``vm`` context whose only globals are the language's own, with ``agent``, ``phase``
+and ``log`` passed in, so an effect it reached for any other way would end the run in a
+``ReferenceError``.
 """
 
 from __future__ import annotations
@@ -187,6 +189,57 @@ function scan(label, prompt) {
   for (const found of [...prompt.matchAll(COMMAND)].map(m => m[1])) commands[role].add(found)
   for (const found of prompt.match(PUBLISHING) || []) commands[role].add(found)
 }
+// Why: a canned answer stands for one the agent could give, so it must be one the schema the
+// workflow passed allows. A keyword this does not check fails too, so none is skipped unread.
+const CHECKED = new Set([
+  'type', 'properties', 'required', 'items', 'enum', 'pattern', 'minItems', 'anyOf',
+  'additionalProperties', 'description',
+])
+function is(type, value) {
+  if (type === 'null') return value === null
+  if (type === 'integer') return Number.isInteger(value)
+  if (type === 'array') return Array.isArray(value)
+  if (type === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value)
+  return typeof value === type
+}
+function refused(schema, value, at) {
+  const unread = Object.keys(schema).filter(word => !CHECKED.has(word))
+  if (unread.length) return [`${at}: the harness does not check ${unread.join(', ')}`]
+  if (schema.anyOf) {
+    const each = schema.anyOf.map(option => refused(option, value, at))
+    if (each.some(found => !found.length)) return []
+    return [`${at}: fits no option: ${each.map(found => found[0]).join('; ')}`]
+  }
+  const types = schema.type === undefined ? [] : [].concat(schema.type)
+  const shown = JSON.stringify(value)
+  if (types.length && !types.some(type => is(type, value))) {
+    return [`${at}: ${shown} is not ${types.join(' or ')}`]
+  }
+  const found = []
+  if (schema.enum && !schema.enum.includes(value)) {
+    found.push(`${at}: ${shown} is not one of ${schema.enum.join(', ')}`)
+  }
+  if (schema.pattern && typeof value === 'string' && !new RegExp(schema.pattern).test(value)) {
+    found.push(`${at}: ${shown} does not match ${schema.pattern}`)
+  }
+  if (Array.isArray(value)) {
+    if (value.length < (schema.minItems ?? 0)) found.push(`${at}: fewer than ${schema.minItems}`)
+    const items = schema.items
+    if (items) value.forEach((item, n) => found.push(...refused(items, item, `${at}[${n}]`)))
+  }
+  if (is('object', value)) {
+    for (const name of schema.required || []) {
+      if (!(name in value)) found.push(`${at}: lacks ${name}`)
+    }
+    for (const [name, inner] of Object.entries(value)) {
+      const property = (schema.properties || {})[name]
+      if (property) found.push(...refused(property, inner, `${at}.${name}`))
+      else if (schema.additionalProperties === false) found.push(`${at}: may not have ${name}`)
+    }
+  }
+  return found
+}
+const broken = {}
 function kept(result) {
   const too = result.tooLarge
   return {
@@ -222,8 +275,12 @@ async function main() {
       const rounds = options.label.startsWith('fix-') && prompt.match(ROUNDS)
       if (rounds) told.push([options.label, Number(rounds[1])])
       scan(options.label, prompt)
-      const answer = catalogue[run.answers[options.label]]
-      return answer == null ? null : JSON.parse(JSON.stringify(answer))
+      const name = run.answers[options.label]
+      const answer = catalogue[name]
+      if (answer == null) return null
+      const found = options.schema ? refused(options.schema, answer, name) : []
+      if (found.length) broken[`${options.label} ${name}`] = found
+      return JSON.parse(JSON.stringify(answer))
     }
     try {
       const result = kept(await pipeline(run.args, agent, () => {}, () => {}))
@@ -234,7 +291,7 @@ async function main() {
   }
   const effects = Object.fromEntries(
     Object.entries(commands).map(([role, found]) => [role, [...found].sort()]))
-  console.log(JSON.stringify({ played, effects }))
+  console.log(JSON.stringify({ played, effects, broken }))
 }
 main()
 """
@@ -291,6 +348,8 @@ def play(runs: list[list[Action]], local: list[list[Action]] | None = None) -> B
         check=True,
     )
     out = json.loads(ran.stdout)
+    refused = [f"{call}: {line}" for call, lines in out["broken"].items() for line in lines]
+    assert not refused, "answers the workflow's schema refuses:\n" + "\n".join(refused)
     played = [
         Played(
             tuple((label, phase) for label, phase in raw["calls"]),

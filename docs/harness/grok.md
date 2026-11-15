@@ -11,7 +11,7 @@ grok plugin install mattpocock/skills --trust
 grok plugin install "pbakaus/impeccable#plugin" --trust
 ```
 
-`grok plugin list` shows what is installed. Grok has no dependency field, so `/ratchet:init` installs what is missing with the owner's consent. `--trust` activates a plugin's hooks; without it Grok shows the source and stops.
+`grok plugin list` shows what is installed. Grok has no dependency field, so `/ratchet:init` installs what is missing without asking, and says so in its hand-over. `--trust` activates a plugin's hooks; without it Grok shows the source and stops.
 
 ## The guard
 
