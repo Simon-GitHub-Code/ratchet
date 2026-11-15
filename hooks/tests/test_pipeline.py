@@ -592,6 +592,32 @@ def test_the_critic_and_the_review_grade_from_the_one_severity_list() -> None:
         assert "A finding that carries no axis takes every line." in prompt, role
 
 
+def test_a_guard_path_an_open_dispute_names_is_no_finding_and_forces_nothing() -> None:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED}
+    named = {
+        **REVIEW,
+        "guardChanges": ["justfile"],
+        "disputeCoverage": [{"path": "justfile", "disputeFile": "docs/disputes/0001-gate.md"}],
+    }
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, review=named, **answers)
+    assert not any("guard paths changed" in r for r in ran["result"]["verdictForcedBy"])
+    unnamed = {**REVIEW, "guardChanges": ["justfile"]}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, review=unnamed, **answers)
+    assert ran["result"]["verdict"] == "request_changes"
+    assert any(
+        "guard paths changed" in r and "justfile" in r for r in ran["result"]["verdictForcedBy"]
+    )
+
+
+def test_neither_the_critic_nor_the_review_grades_a_guard_path_a_dispute_names() -> None:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    for role in ("critique", "review"):
+        prompt = " ".join(ran["prompts"][role].split())
+        assert "A path a dispute names exactly is no finding" in prompt, role
+        assert "and a major one when one does" not in prompt, role
+
+
 def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> None:
     # Why: the spec, the critic's tests and the dispute records were 1,300 lines before any
     # implementation, and the run ended over the ceiling after nine agents.

@@ -110,9 +110,9 @@ the issue.
 - Major: unhandled edge case the spec covers, survived mutant on a stated invariant, missing
   contract, behaviour shipped on with no flag where spec.md does not say "none" with a reason.
 - Minor: everything else.
-- Guard paths: a changed guard path is a blocker on the standards axis when no gate dispute in
-  the change names that exact path, and a major one when one does: the owner, not the
-  pipeline, changes a gate. A dependency the spec decided, as the guard rules above define it,
+- Guard paths: a changed guard path that no gate dispute in the change names is a blocker on
+  the standards axis. A path a dispute names exactly is no finding: the owner, not the
+  pipeline, changes a gate, and the merge judge leaves that merge to the owner. A dependency the spec decided, as the guard rules above define it,
   is no finding; an added package spec.md does not name is a major issue on the spec axis (a
   decision the spec did not make). A
   record the change only adds to (an \`additions:\` note) is no finding for the path; a new term
