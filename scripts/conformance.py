@@ -98,11 +98,27 @@ MERGE_SHAPE = (
     ("workflow_run:", "runs it after `ci`, as the default branch holds it"),
     ("merge_ready.py", "asks the merge judge"),
     ("forge_runs.py", "says which `ci` and `deep` runs count (ADR 0024)"),
+    ("issues: write", "may close the issues a merged change says it closes"),
+    ("closingIssuesReferences", "closes the issues a merged change says it closes"),
+    ("contents: write", "may merge what the judge passes"),
+    ("pull-requests: write", "may say what the judge found on a pull request"),
+    ("actions: write", "may start tier 2 on the default branch after a merge"),
 )
 WEEKLY_WORKFLOW = "weekly.yml"
 WEEKLY_SHAPE = (
     ("schedule:", "runs the weekly gates on a schedule"),
     ("issues: write", "may open the issue a finding gets"),
+    ("just weekly", "runs the weekly gates"),
+    ("gh issue create", "opens the issue a finding gets"),
+)
+TIER_STEP_SHAPE = (
+    ("just --evaluate", "turns the justfile's tier lists into the jobs a tier runs"),
+)
+EXEMPT_STEPS = (
+    (
+        "contents: read",
+        "every workflow reads its own checkout, and a project without it fails at the checkout",
+    ),
 )
 DOOR_MEANINGS = {
     "change": "a path whose every change is final, such as a migration or infrastructure code",
@@ -1304,6 +1320,7 @@ def check_speed(root: Path) -> Iterable[Finding]:
             builds = path.name != MERGE_WORKFLOW or marker != "cache"
             if builds and marker not in content:
                 yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
+        yield from tier_step_findings(root, path, content)
         for name, marker, meaning in CEILING_SHAPE:
             if path.name == name and marker not in content:
                 problem = f"nothing {meaning} ('{marker}' absent)"
@@ -1541,6 +1558,66 @@ def forge_workflow(
     for marker, meaning in shape:
         if marker not in text:
             yield agent(f"{WORKFLOWS / name}: nothing {meaning} ('{marker}' absent)")
+
+
+def tier_step_findings(root: Path, path: Path, content: str) -> Iterable[Finding]:
+    """The markers of a tier workflow's own steps that its file lacks."""
+    if path.name in TIER_WORKFLOWS:
+        for marker, meaning in TIER_STEP_SHAPE:
+            if marker not in content:
+                yield agent(f"{path.relative_to(root)}: nothing {meaning} ('{marker}' absent)")
+
+
+def workflow_markers(name: str) -> tuple[str, ...]:
+    """Every marker the shape of the workflow ``name`` asks its project's file to hold."""
+    shapes = {MERGE_WORKFLOW: MERGE_SHAPE, WEEKLY_WORKFLOW: WEEKLY_SHAPE}
+    held = [*(() if name == MERGE_WORKFLOW else CI_SHAPE), *shapes.get(name, ())]
+    if name in TIER_WORKFLOWS:
+        held += [*TIER_STEP_SHAPE, *((m, w) for n, m, w in CEILING_SHAPE if n == name)]
+        held.append((SHARD_MATRIX, ""))
+    return tuple(marker for marker, _ in held)
+
+
+def unmarked_template_lines(name: str, text: str) -> list[tuple[int, str]]:
+    """The ``permissions:`` entries and ``run:`` steps of a template that no marker names.
+
+    Each is a line number and its text. A step is named when its own lines, comments aside, hold a
+    marker of ``name``'s shape or a string of ``EXEMPT_STEPS``.
+    """
+    named = (*workflow_markers(name), *(held for held, _ in EXEMPT_STEPS))
+    lines = text.splitlines()
+    unmarked = []
+    for number, line in enumerate(lines):
+        body = line.lstrip(" -")
+        indent = len(line) - len(body)
+        inside = [at for at in nested(lines, number, indent) if not is_comment(lines[at])]
+        if body == "permissions:":
+            chunks = [(at, lines[at]) for at in inside if lines[at].strip()]
+        elif body.startswith("run:"):
+            chunks = [(number, "\n".join([line, *(lines[at] for at in inside)]))]
+        else:
+            continue
+        unmarked += [(at + 1, held.strip()) for at, held in chunks if not mentions(held, named)]
+    return unmarked
+
+
+def mentions(text: str, markers: Iterable[str]) -> bool:
+    return any(marker in text for marker in markers)
+
+
+def nested(lines: list[str], start: int, indent: int) -> list[int]:
+    """The indexes after ``start`` that are blank or indented deeper than ``indent``."""
+    found = []
+    for at in range(start + 1, len(lines)):
+        rest = lines[at].lstrip(" ")
+        if rest and len(lines[at]) - len(rest) <= indent:
+            break
+        found.append(at)
+    return found
+
+
+def is_comment(line: str) -> bool:
+    return line.lstrip().startswith("#")
 
 
 def check_merge_workflow(root: Path) -> Iterable[Finding]:
