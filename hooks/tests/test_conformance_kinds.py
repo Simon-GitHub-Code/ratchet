@@ -6,8 +6,11 @@ from pathlib import Path
 
 import pytest
 
+import budget
 import conformance
 import gatelib
+import project_bite
+from tests import repos
 from tests.test_conformance import (
     BINDING,
     JUSTFILE,
@@ -324,3 +327,52 @@ def test_a_linewise_recipe_does_not_read_its_later_lines(repo: Path) -> None:
 
 def test_a_here_string_fed_with_the_variable_is_a_filter() -> None:
     assert not conformance.unfiltered_changed(f'{CAPTURE}; keep <<< "$files"')
+
+
+THRESHOLDS = "quality/thresholds.toml"
+
+
+def ceiling_findings(root: Path) -> list[conformance.Finding]:
+    return [f for f in conformance.findings(root) if "bite-all" in f.problem]
+
+
+def test_a_seconds_table_with_no_bite_all_ceiling_is_an_agent_finding_naming_the_command(
+    repo: Path,
+) -> None:
+    path = repo / THRESHOLDS
+    path.write_text(budget.with_ceiling(path.read_text(encoding="utf-8"), "tier1", 600.0))
+    [found] = ceiling_findings(repo)
+    assert (found.path, found.rule) == (THRESHOLDS, "bite_all_ceiling")
+    assert isinstance(found.fix, conformance.Agent)
+    assert "`just budget bite-all --set`" in " ".join(found.fix.then)
+    path.write_text(budget.with_ceiling(path.read_text(encoding="utf-8"), "bite-all", 3600.0))
+    assert ceiling_findings(repo) == []
+
+
+READS = "\n## What each gate reads\n\n"
+
+
+def read_problems(root: Path, bullets: str) -> list[str]:
+    binding = root / BINDING
+    binding.write_text(binding.read_text(encoding="utf-8") + READS + bullets, encoding="utf-8")
+    repos.git(root, "init", "-q")
+    ours = ("'## What", "gate ")
+    return [f.problem for f in conformance.findings(root) if f.problem.startswith(ours)]
+
+
+def test_a_bullet_of_what_each_gate_reads_is_red_for_no_gate_no_path_or_no_entry(
+    repo: Path,
+) -> None:
+    gate = project_bite.gate_rows((repo / BINDING).read_text(encoding="utf-8"))[0].gate
+    bullets = f"- {gate}: AGENTS.md, missing/**\n- nosuch: AGENTS.md\n- {gate}2:\n"
+    assert read_problems(repo, bullets) == [
+        f"gate '{gate}' reads 'missing/**', matching no file",
+        "'## What each gate reads' has a bullet for 'nosuch', no entry point",
+        f"'## What each gate reads' has a bullet for '{gate}2', no entry point",
+        f"'## What each gate reads' has an empty bullet for '{gate}2'",
+    ]
+
+
+def test_a_bullet_that_names_a_gate_and_a_file_that_exists_is_green(repo: Path) -> None:
+    gate = project_bite.gate_rows((repo / BINDING).read_text(encoding="utf-8"))[0].gate
+    assert read_problems(repo, f"- {gate}: AGENTS.md, docs\n") == []

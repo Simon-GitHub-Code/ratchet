@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 
 import application_types
 import architecture
+import budget
 import change_size
 import gatelib
 import hooks_installed
@@ -2435,6 +2436,47 @@ def check_register(data: dict[str, object]) -> Iterable[Finding]:
             )
 
 
+def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
+    # Why: ADR 0069. The full proof after a merge is held to a ceiling of its own, never the tier 1
+    # one; only a measured run sets it, so the finding names the command and no edit is offered.
+    text = read(root / "quality/thresholds.toml")
+    try:
+        data = tomllib.loads(text or "")
+    except tomllib.TOMLDecodeError:
+        return
+    ceilings = data.get("ceilings")
+    seconds = ceilings.get("seconds") if isinstance(ceilings, dict) else None
+    if isinstance(seconds, dict) and budget.ceiling_of(text or "", budget.FULL_PROOF) is None:
+        yield Finding(
+            "quality/thresholds.toml",
+            "`[ceilings.seconds]` has no `bite-all`, so the full proof after a merge is held to no"
+            " ceiling of its own and a long one could be held to the tier 1 ceiling",
+            Agent(
+                then=(
+                    "run `just check-deep` once on a quiet machine, then `just budget bite-all"
+                    " --set`, which records the ceiling from that measured run",
+                )
+            ),
+        )
+
+
+def check_gate_reads(root: Path) -> Iterable[Finding]:
+    # Why: ADR 0069. The bullets narrow which gates a change to tool config proves, so a bullet
+    # for no gate, an empty one, or an entry that covers no file skips a gate by mistake.
+    binding = read(root / BINDING_PATH) or ""
+    gates = {row.gate for row in project_bite.gate_rows(binding)}
+    heading = project_bite.READS
+    tracked = gatelib.tracked_paths(root)
+    for gate, entries in project_bite.gate_reads(binding).items():
+        if gate not in gates:
+            yield agent(f"{BINDING_PATH}: '{heading}' has a bullet for '{gate}', no entry point")
+        if not entries:
+            yield agent(f"{BINDING_PATH}: '{heading}' has an empty bullet for '{gate}'")
+        for entry in entries:
+            if not any(project_bite.reading(path, entry) for path in tracked):
+                yield agent(f"{BINDING_PATH}: gate '{gate}' reads '{entry}', matching no file")
+
+
 def check_bites(root: Path) -> Iterable[Finding]:
     # Why: ADR 0020. The method ships no tool, so the repository shows each gate it bound going
     # red on a planted fault; a gate with no bite, or a collection never shown empty, is unproven.
@@ -2537,6 +2579,8 @@ CHECKS: tuple[Check, ...] = (
     check_runner,
     check_installs,
     check_quality,
+    check_bite_all_ceiling,
+    check_gate_reads,
     check_bites,
     check_incidents,
     check_disputes,
