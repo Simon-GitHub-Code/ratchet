@@ -95,8 +95,14 @@ def run(root: Path, *argv: str) -> int:
 def build(
     root: Path, branch: str, files: dict[str, str], *, record: dict[str, object] | None = None
 ) -> Path:
-    """Commit ``files`` in the ticket's work tree as the pipeline's orchestrator would."""
+    """Commit ``files`` in the ticket's work tree as the pipeline's orchestrator would.
+
+    The check that says the run is over has passed the start by then: the orchestrator commits last.
+    """
     tree = drain.tree_of(root, branch)
+    checked = note(root, branch)
+    if "start" in checked:
+        queue_notes.write_note(queue_notes.note_path(root, branch), {**checked, "passed": True})
     for path, text in files.items():
         write(tree, path, text)
     commit(tree, "feat(core): the change")
@@ -346,7 +352,9 @@ def test_update_rebases_a_branch_the_default_branch_moved_under(
     write(tree, "src/b.py", "B = 1\n")
     assert run(root, "update", ALPHA) == 1
     assert "uncommitted changes" in capsys.readouterr().out
+    assert run(root, "check", ALPHA, "--final") == 0
     commit(tree, "feat(core): the change")
+    capsys.readouterr()
     assert run(root, "update", ALPHA) == 0
     assert json.loads(capsys.readouterr().out) == {"moved": False, "conflicts": []}
     moved(root)
@@ -507,6 +515,12 @@ def test_land_needs_the_merge_entry_point_and_no_forge(tmp_path: Path, capsys: O
     root = project(tmp_path, **{"docs/process/binding.md": binding(None)})
     assert run(root, "land", ALPHA) == 2
     assert capsys.readouterr().out.startswith("land: with a forge")
+    write(root, "docs/process/binding.md", binding(MERGE))
+    commit(root, "docs(process): the merge")
+    run(root, "open", ALPHA)
+    assert run(root, "check", ALPHA, "--final") == 0
+    write(root, "docs/process/binding.md", binding(None))
+    commit(root, "docs(process): no merge")
     write(root, "docs/process/binding.md", binding("/no/such/command"))
     commit(root, "docs(process): a merge that cannot run")
     assert run(root, "land", ALPHA) == 2
@@ -514,7 +528,9 @@ def test_land_needs_the_merge_entry_point_and_no_forge(tmp_path: Path, capsys: O
     write(root, "docs/process/binding.md", binding(f"{sys.executable} -c 'raise SystemExit(5)'"))
     commit(root, "docs(process): a merge that fails")
     assert run(root, "land", ALPHA) == 2
-    assert note(root, BRANCH_A) == {}, "nothing is closed on an answer that is no verdict"
+    assert "outcome" not in note(root, BRANCH_A), (
+        "nothing is closed on an answer that is no verdict"
+    )
     write(root, "docs/process/binding.md", binding(MERGE))
     commit(root, "docs(process): the merge")
     git(root, "remote", "add", "origin", "https://example.invalid/r.git")
