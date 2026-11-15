@@ -129,11 +129,16 @@ def test_an_unreadable_call_and_another_harness_are_logged(adopted: Path) -> Non
 def test_two_worktrees_of_one_repository_append_to_one_file(adopted: Path, tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     git(adopted, "worktree", "add", "-q", "-b", "feature/x", str(tree))
+    below = tree / "src/deep"
+    below.mkdir(parents=True)
     assert decision(answer(tree, bash(tree, "git push --force"))) == "deny"
+    assert decision(answer(below, bash(below, "git push --force"))) == "deny"
     assert decision(answer(adopted, bash(adopted, "git push --force"))) == "deny"
-    assert [line["branch"] for line in lines(log_of(adopted))] == ["feature/x", "main"]
+    branches = [line["branch"] for line in lines(log_of(adopted))]
+    assert branches == ["feature/x", "feature/x", "main"]
     assert (tree / ".git").is_file()
     assert not (tree / events.LOG_NAME).exists()
+    assert not (below / events.LOG_NAME).exists()
 
 
 def test_a_detached_head_is_logged_as_head(adopted: Path) -> None:

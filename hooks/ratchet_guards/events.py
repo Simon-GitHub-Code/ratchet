@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 LOG_NAME = "ratchet-guard-events.jsonl"
-# Why: below the size of one page, which local filesystems append in one piece.
+# Why: one write this small reaches a pipe in one piece (PIPE_BUF), and a local file as well.
 LIMIT = 4096
 # Why: an escaped character takes at most 12 bytes, so every text field cut to this fits LIMIT.
 CLIP = 100
