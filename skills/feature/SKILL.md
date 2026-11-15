@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Build features from tickets
 
-Build agent-ready tickets through the pipeline, one ticket or every one at once. Load the `ratchet:method` skill first. [pipeline.md](../method/pipeline.md) says what the roles do, and [records.md](../method/records.md) what the ticket carries.
+Load the `ratchet:method` skill first. [pipeline.md](../method/pipeline.md) says what the roles do, and [records.md](../method/records.md) what the ticket carries.
 
 Pick the mode from what the owner typed:
 
@@ -27,7 +27,7 @@ Pick the mode from what the owner typed:
    - **Red on `size` alone** (the ticket's own `## Size` passes a product ceiling): split it as [Too large](#too-large-the-agent-splits-it) says, then build the first part that is free.
    - **A `hooks` failure whose `produce` does not start `the owner:`** is yours to repair. Run the command it names in one Bash call, then the preflight again.
    - **A `hooks` failure whose `produce` starts `the owner:`** is a change of git config, which the guard refuses from an agent. Report it with the rest below; do not run it.
-   - **Any other red:** report `verdict: blocked` and, for each failure, its `check`, `detail` and `produce` (the skill or act that supplies the missing piece). Spawn nothing, create nothing, label nothing. Stop.
+   - **Still red after your own repair,** on anything but `size` alone, an owner's `hooks` failure included: report `verdict: blocked` and, for each failure, its `check`, `detail` and `produce` (the skill or act that supplies the missing piece). Spawn nothing, create nothing, label nothing. Stop.
 
    Done when the preflight is green, or you have reported every failure and stopped.
 
@@ -44,16 +44,9 @@ Pick the mode from what the owner typed:
    args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
    ```
 
-   What the run does:
-   - It runs the same preflight as its first stage, which is where it reads `critic`. The arguments carry only the script's path.
-   - Spec, then the ticket check, with one amend of the spec when the check finds a gap. A promise the plan still leaves out is built as the ticket says it. An input case still undecided is built with the safe answer. Each goes in the result's `assumptions`, and neither asks the owner anything.
-   - Implement. Then Critique and the fix loop, only when `critic` is true (the binding declares the `depended-on` life event). Then Review.
-   - When `critic` is false and the review lists a fixable blocker of the change, one fix pass and a second Review run before the result is returned.
-   - It never commits, pushes or opens a pull request.
+   The run is the one [pipeline.md](../method/pipeline.md) describes. It never commits, pushes or opens a pull request. The critic runs only when `critic` is true (the binding declares the `depended-on` life event). When it did not run the critic, the result's `critic` says so and why. Put that line in the pull request at step 6.
 
-   When it did not run the critic, the result's `critic` says so and why. Put that line in the pull request at step 6.
-
-   **The run errors instead of returning** (an agent died): resume it once. If it errors again, tell the owner which stage died and stop. The drain closes such a ticket for a retry; a single ticket has no queue to retry it.
+   **The run errors instead of returning** (an agent died): resume it once. If it errors again, tell the owner which stage died and stop.
 
    Done when the workflow has returned a result, or you have told the owner which stage died.
 
@@ -69,7 +62,7 @@ Pick the mode from what the owner typed:
    - **`ticketFindings`:** the build lost a promise of the ticket, or left a case of an input undecided, that the plan had kept. The owner has nothing to decide and the ticket nothing to change. Build the ticket again once, from step 1 in the same turn, with `"ticketFindings": <the result's ticketFindings>` added to the pipeline's args, so the spec role writes the next spec with them in hand. If that run is refused for the same reason, report the findings to the owner.
    - **A `triggers:` red line in `checkOutput`:** the ticket adds another instance of a kind whose safeguard is owed, or whose architecture review is owed (`triggers: architecture review owed:`). Tell the owner to type `/ratchet:safeguard`, or `/ratchet:architecture` for a review, then build the ticket again. Nothing in the ticket needs to change.
 
-   Done when the stash is made and named, and every field above that the result holds has had its case done.
+   Done when the stash is made, you are on `<base>`, and every field above that the result holds has had its case done.
 
 5. **Commit an approved change,** in the order [The records of an approved change](#the-records-of-an-approved-change) gives, with this result's records.
 
@@ -88,17 +81,14 @@ Pick the mode from what the owner typed:
    - When the change built a surface and the repository has `PRODUCT.md` but no `DESIGN.md`, say that an agent runs `impeccable document` on a branch once this merges, and that the owner merges that change, since `DESIGN.md` is a guard path.
    - The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines.
 
-   Done when the route's lines are the last lines you print.
+   Done when the hand-over holds each line above that applies and ends with the route's lines.
 
 ## The drain: every agent-ready ticket
 
 `/ratchet:feature` or `/ratchet:feature all`, with `--concurrency N` when the owner wants another cap than three. The owner types it once and steps away, so nothing asks the owner anything until the report is printed.
 
-- Each ticket is built by its own pipeline in a git work tree of its own. The tickets that do not wait on each other build at the same time.
-- Each approved change is brought up to date, judged and merged one at a time.
-- A ticket that cannot go on is parked, and the others continue.
 - `scripts/drain.py` decides the order, the cap, each ticket's state and the report.
-- The merge judge merges and `D update` rebases: never merge by hand and never rebase by hand. The owner answers every question: never answer a question for the owner.
+- The merge judge merges and `D update` rebases: never merge by hand and never rebase by hand. Open questions go to the owner at step 7: never answer a question for the owner.
 
 Run every command below from the repository's own checkout, on the default branch. `D` stands for `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py"`.
 
@@ -130,7 +120,7 @@ Run every command below from the repository's own checkout, on the default branc
    **A run that errors.** An agent that dies ends the run in a thrown error ("resume the run to retry") and no result.
    - Resume that run once: the same Workflow call with its resume.
    - If it errors again, the ticket is not parked and the drain does not stop. Run `D close <ticket> --outcome waits --reason "errored: the pipeline run errored twice: <the error's first line>" --root .`.
-   - The code `errored` is one the drain resolves itself, like `behind`. The next drain builds the ticket again, from the start. Only after it has errored `RETRIES` times in a row (three) is it held for the owner, with a reason that says the run kept erroring.
+   - The next drain builds the ticket again, from the start.
    - A run that returns a result, even a refused one, never takes this path.
    - The same holds for the rejudge of step 4.4: resume it once, then close the ticket the same way.
 
@@ -166,19 +156,14 @@ Run every command below from the repository's own checkout, on the default branc
    6. **Land it.**
       - **With no forge:** `D land <ticket> --root .` runs the binding's `merge` entry point, prints the judge's lines, removes the work tree and records merged or waiting with every reason. Exit 2 means it could not ask: report what it printed and leave the ticket.
       - **With a forge:** push, and open the pull request as [The pull request](#the-pull-request) says. Wait for both workflows: `gh pr checks <n> --watch` for `ci`, then the `merge` run that follows it (`gh run list --workflow merge.yml --limit 1`, then `gh run watch <id>`).
-      - When `gh pr view <n> --json state` says `MERGED`, run `git pull --ff-only` on the default branch and `D close <ticket> --outcome merged --root .`.
-      - Otherwise run `D close <ticket> --outcome waits --root .`, with one `--reason` per line of the judge's comment on the pull request.
+        - When `gh pr view <n> --json state` says `MERGED`, run `git pull --ff-only` on the default branch and `D close <ticket> --outcome merged --root .`.
+        - Otherwise run `D close <ticket> --outcome waits --root .`, with one `--reason` per line of the judge's comment on the pull request.
 
    **Exit 3 from `update`, `close` or `split`:** a landing of that ticket is still running (for example a `land` the shell gave up waiting on), or only its merge is (its line says "a merge"). Leave the ticket: do not close, reconcile or split it. Wait for that landing to end, and go on at step 5 (`D plan`). The landing records the outcome itself; with only a merge running, a `report` or an `update` records it afterwards.
 
    **A ticket the plan lists as `built`** was committed by an earlier drain and has no run.
    - When its `why` says it is behind the default branch, start it at step 4.3. `update` makes its work tree again, rebases it and drops the verdict record the move outdated. Then step 4.4 judges it again and 4.5 writes the new record.
    - Otherwise start it at step 4.6.
-   - The merge refuses a branch behind the default branch with the `behind` reason, so no verdict lands on a tree it was not given on.
-
-   **A ticket the plan lists as `held`** was parked or left to the owner for a decision. It is not landed again until its text changes or a path its run named as the cause changes on the default branch.
-
-   **A ticket that waited only for a reason the drain resolves itself** (`behind`, `moved`, `conflict`, `gates`, `refs`, `errored`) stays `built` and is retried, at most three times in a row. Then it is held with a reason that says so.
 
    Done when the ticket is closed, split, or left as step 4.6 or exit 3 says.
 
@@ -189,21 +174,29 @@ Run every command below from the repository's own checkout, on the default branc
 6. **The report.**
    - When no run is in progress and the plan starts nothing more, run `D report --drain <token> --root .`. It writes `.ratchet/queue/<date>-<time>.md` and prints it.
    - Print it to the owner whole, adding only the stash names of parked tickets.
+   - `git worktree list` then lists no queue work tree but one a `left:` or `kept:` line named. That one stays as the script left it.
 
-   Done when the report is printed and `git worktree list` lists no queue work tree.
+   Done when the report is printed whole, with the stash names of parked tickets added.
 
 7. **The questions, then the route.**
    - After the report, ask every parked ticket's open questions as `feature.open-question`, all in one message, as [Questions for the owner](#questions-for-the-owner) says. An answer written to a ticket releases it.
-   - **An answer released a ticket:** say so and run the drain again from step 1 in the same turn. It builds only what was released.
+   - **An answer released a ticket:** say so and run the drain again from step 1 in the same turn.
    - **Otherwise:** the last lines are the route. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
 
    Done when the drain runs again for what was released, or the route's lines are the last lines you print.
 
+### Tickets the drain holds or retries
+
+- **A ticket the plan lists as `held`** was parked or left to the owner for a decision. It is not landed again until its text changes or a path its run named as the cause changes on the default branch.
+- **A ticket that waited only for a reason the drain resolves itself** (`behind`, `moved`, `conflict`, `gates`, `refs`, `errored`) stays `built` and is retried, at most `RETRIES` times in a row (three). Then it is held with a reason that says so.
+
 ## The records of an approved change
 
-Both modes make these commits in this order ([pipeline.md](../method/pipeline.md), the orchestrator), from the latest result.
+Both modes make these commits in this order ([pipeline.md](../method/pipeline.md), the orchestrator).
 
-1. Run `ratchet` when it is bound, and commit the raised `quality/` files. **One ticket:** commit them with everything the work tree holds (`git add -A`: the roles' `filesChanged` can miss the spec and a record they added), the message naming the slug.
+1. The change and the raised `quality/` files:
+   - **One ticket:** run `ratchet` when it is bound, then commit everything the work tree holds (`git add -A`: the roles' `filesChanged` can miss the spec and a record they added) with the raised `quality/` files, the message naming the slug.
+   - **The drain:** run `ratchet` when it is bound, and commit the raised `quality/` files.
 2. Write the ADR the result suggests under the next free number.
 3. **With no forge:** write the change description at `.scratch/changes/<branch>.md` and set the local ticket's `Status:` line to `resolved` in the same commit.
 4. Last and alone, the verdict record: the result's `verdictRecord` on stdin of `just merge-ready record`, its file committed.
@@ -233,11 +226,11 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
    - **Exit 1:** the plan was refused, naming the line. Fix the plan and run it again, once.
    - **A ticket that is itself a part** is not split again. It is parked as too large and the report names it, which is the owner's.
 
-   Done when the parts are printed, or the ticket is parked as too large.
+   Done when the parts are printed, or the second run was refused, or the ticket is itself a part and is parked as too large.
 
 3. **Go on.** The parts are tickets the plan now lists, so the drain builds them in order. The hand-over says the ticket was split, into what, and why.
 
-   Done when the hand-over names the split.
+   Done when you hold the split's parts and its reason for the hand-over.
 
 ## Questions for the owner
 
