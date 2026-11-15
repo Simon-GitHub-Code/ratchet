@@ -34,8 +34,9 @@ Pick the mode from what the owner typed:
 2. **The branch.**
    - When `git rev-parse --verify --quiet <branch>` finds the branch, `git switch <branch>`. Otherwise `git switch -c <branch> <base>`.
    - Run the preflight again with `--branch <branch>`. It must stay green.
+   - **Red with `--branch`:** report `verdict: blocked` and, for each failure, its `check`, `detail` and `produce`. Spawn nothing. Stop.
 
-   Done when you are on the branch and the preflight with `--branch` is green.
+   Done when you are on the branch and the preflight with `--branch` is green, or you have reported every failure and stopped.
 
 3. **The pipeline.** Call the Workflow tool:
 
@@ -44,7 +45,7 @@ Pick the mode from what the owner typed:
    args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
    ```
 
-   The run is the one [pipeline.md](../method/pipeline.md) describes. It never commits, pushes or opens a pull request. The critic runs only when `critic` is true (the binding declares the `depended-on` life event). When it did not run the critic, the result's `critic` says so and why. Put that line in the pull request at step 6.
+   The run is the one [pipeline.md](../method/pipeline.md) describes. It never commits, pushes or opens a pull request. The critic runs only when `critic` is true (the binding declares the `depended-on` life event).
 
    **The run errors instead of returning** (an agent died): resume it once. If it errors again, tell the owner which stage died and stop.
 
@@ -69,7 +70,7 @@ Pick the mode from what the owner typed:
    Done when the verdict record is the branch's last commit and holds nothing else.
 
 6. **Publish.**
-   - **With a forge:** push, and open the pull request as [The pull request](#the-pull-request) says, with the `critic` line of step 3 when the critic did not run. The `merge` workflow merges it once `ci` is green and the judge passes it.
+   - **With a forge:** push, and open the pull request as [The pull request](#the-pull-request) says. The `merge` workflow merges it once `ci` is green and the judge passes it.
    - **With no forge:** `just merge <branch>` judges the branch, runs `check` on the merge result and merges it, or prints why the merge is the owner's.
 
    Done when the pull request is open with every section filled, or `just merge` has printed its lines.
@@ -135,7 +136,8 @@ Run every command below from the repository's own checkout, on the default branc
       - Keep the result's `openQuestions` for step 7.
    2. **Commit.** On `approve`:
       - Commit everything the work tree holds (`git add -A`) with the subject `<type>(<scope>): <the slug, hyphens as spaces>`. The type is `feat` for a ticket that adds behaviour and `fix` for one that repairs it.
-      - The subject is at most 72 characters (tier 0 refuses more). When it is longer, drop whole words from the end of the slug until it fits, never cutting a word or leaving a trailing `and`, `a`, `the`, `of` or `to`, and put the ticket's full title and `Closes <ref>` in the body.
+      - The subject is at most 72 characters (tier 0 refuses more). When it is longer, drop whole words from the end of the slug until it fits, never cutting a word or leaving a trailing `and`, `a`, `the`, `of` or `to`, and put the ticket's full title in the body.
+      - The body holds `Closes <ref>`, whether or not the subject was shortened.
    3. **Bring it up to date.** Run `D update <ticket> --root .`.
       - **Exit 0 with `"moved": false`:** go to step 4.5.
       - **Exit 0 with `"moved": true`:** run `check` and note whether it is red. Then step 4.4.
@@ -209,6 +211,8 @@ With a forge, open the pull request with every section of the template filled.
 - **Guard paths:** each of its `dependencies` with its reason, beside the versions in `dependencyNotes`.
 - **Decisions:** every addition in `recordNotes`. Name a new term by its name only: a glossary's _Avoid_ words quoted there fail the prose gate.
 
+When the critic did not run, the pull request says so and why, from the result's `critic`, in both modes.
+
 ## Too large: the agent splits it
 
 A ticket that passes the product ceilings (the preflight's `size` failure, the spec stage's estimate, or the measured stop) is split by size by you, never by the owner and never with a question. The parts are tickets in the project's tracker, so they are built like any other.
@@ -238,7 +242,8 @@ A question reaches the owner only when it is a product question: its answer shap
 
 1. **Ask** `feature.open-question`: "<the question the build stopped on, in the words of someone using the product>" All of them in one message, each as the spec role wrote it, so the owner can accept them all at once. The recommended option is first and its label ends with `(recommended)`; the description gives the reason.
 2. **Write each answer on the ticket** under `## Answers`, the question and the answer in one line each.
-   - **A local ticket:** write them at the end of the file and land it from the default branch. With no forge, `just merge --records` (the `merge` entry point) commits it on a branch of its own. With a forge it goes on a branch of its own and through a pull request. Never commit on the default branch itself. A labelled ticket changes only by the owner's merge (only its link paths may change alone), so the run prints `merge: owner` and the owner's command. Relay both as they are.
+   - **A local ticket:** write them at the end of the file and land it from the default branch. With no forge, `just merge --records` (the `merge` entry point) commits it on a branch of its own. With a forge it goes on a branch of its own and through a pull request. Never commit on the default branch itself.
+     - **A ticket that already carries the agent-ready label, or the spec such a ticket inherits from,** changes only by the owner's merge, with a forge or without (only a ticket's link paths may change alone). With no forge, the run prints `merge: owner` and the owner's command: relay both as they are. With a forge, the merge job leaves the pull request to the owner and comments why: relay that comment as it is.
    - **A tracker ticket:** `gh issue edit <n> --body-file <file>` with the full body, no label flag.
 3. **Record how the owner answered,** one Bash call per answer: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/questions.py" record --skill feature --key "feature.<slug>.<n>" --kind <direction|irreversible> --recommended <yes|no> --root .`, where `<n>` is the question's place in the result. The log is `.ratchet/questions.tsv`, which no commit carries.
 

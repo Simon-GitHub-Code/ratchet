@@ -83,6 +83,49 @@ def test_the_feature_skill_shortens_a_long_subject_by_a_fixed_rule() -> None:
     assert commits.MAX_SUBJECT == 72
 
 
+FEATURE = " ".join((SKILLS / "feature/SKILL.md").read_text(encoding="utf-8").split())
+
+
+def test_the_feature_skill_says_the_critic_did_not_run_in_both_modes() -> None:
+    # Why: the page put the critic's line in the pull request of one ticket only, and the drain's
+    # pull request was silent on it, while the workflow's result asks for it in every run. The
+    # shared section now carries it for both modes.
+    shared = FEATURE.split("## The pull request", 1)[1].split(" ## ", 1)[0]
+    assert (
+        "When the critic did not run, the pull request says so and why, from the result's"
+        " `critic`, in both modes." in shared
+    )
+
+
+def test_the_drain_closes_the_ticket_from_every_commit() -> None:
+    # Why: the page put `Closes <ref>` in the same clause as a shortened subject, so a commit
+    # whose subject fit could leave it out. Every commit of the change now closes its ticket, and
+    # the full title is added only when the subject was shortened.
+    step = FEATURE.split("2. **Commit.**", 1)[1].split("3. **Bring it up to date.**", 1)[0]
+    assert "The body holds `Closes <ref>`, whether or not the subject was shortened." in step
+
+
+def test_a_labelled_tickets_answers_are_the_owners_to_merge_with_a_forge_too() -> None:
+    # Why: the page said only what the run prints with no forge when a labelled ticket's answers
+    # were landed. The merge judge refuses the agent's change with a forge as well, so the page now
+    # says what the agent relays in each case.
+    asking = FEATURE.split("## Questions for the owner", 1)[1]
+    assert (
+        "With a forge, the merge job leaves the pull request to the owner and comments why: relay"
+        " that comment as it is." in asking
+    )
+
+
+def test_a_red_preflight_on_the_branch_stops_the_build() -> None:
+    # Why: the page said the preflight on the branch "must stay green" and nothing of a red one, so
+    # an agent could spawn the pipeline over it. It now stops as a red first preflight does.
+    step_2 = FEATURE.split("2. **The branch.**", 1)[1].split("3. **The pipeline.**", 1)[0]
+    assert (
+        "**Red with `--branch`:** report `verdict: blocked` and, for each failure, its `check`,"
+        " `detail` and `produce`. Spawn nothing. Stop." in step_2
+    )
+
+
 def test_the_fork_test_has_one_wording_the_spec_role_and_the_conjecture_skill_share() -> None:
     # Why: the conjecture skill asked the owner what the pipeline's Spec role would have assumed,
     # because only the role's prompt held the examples. A prompt cannot follow a link, so the
