@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import plugin_pin
+import release
 from ratchet_guards import events
 from tests import repos
 
@@ -56,12 +57,14 @@ def release_copy(destination: Path) -> Path:
     return destination
 
 
-def project(root: Path, copy: Path, tree: str, record: Path | None = None) -> Path:
+def project(
+    root: Path, copy: Path, tree: str, record: Path | None = None, extra: str = ""
+) -> Path:
     version = plugin_pin.version_of(copy)
     pin = f"- Ratchet plugin: {version} at {'1' * 40} tree {tree}"
     repos.repository(
         root,
-        {"justfile": JUSTFILE, "docs/process/binding.md": f"# B\n\n## Runner\n\n{pin}\n"},
+        {"justfile": JUSTFILE + extra, "docs/process/binding.md": f"# B\n\n## Runner\n\n{pin}\n"},
     )
     if record is not None:
         (root / ".git" / events.PLUGIN_RECORD).write_text(f"{record}\n", encoding="utf-8")
@@ -261,4 +264,105 @@ def test_ci_holds_the_pins_tree_id_to_the_pinned_commits(
         code = plugin_pin.main(["plugin_pin.py", "--root", str(root), "--plugin", str(used)])
         out = capsys.readouterr().out
         assert code == expected, out
-    assert f"is tree {held}, not the {'f' * 40} that docs/process/binding.md pins" in out
+    assert f"commit whose tree is {held}, not the {'f' * 40} that" in out
+
+
+CHILD = """
+probe: _plugin
+    printf '%s' "$RATCHET_PLUGIN_DIR" > outer.txt
+    printf '%s\\n' "$OTHER" > "$(git rev-parse --git-common-dir)/ratchet-plugin"
+    just child
+
+child: _plugin
+    printf '%s' "$RATCHET_PLUGIN_DIR" > inner.txt
+"""
+
+
+def test_a_child_just_runs_the_folder_its_parent_checked_whatever_the_record_says_later(
+    tmp_path: Path,
+) -> None:
+    good = release_copy(tmp_path / "cache/0.12.2")
+    pinned = raw_tree_id(good, tmp_path)
+    other = release_copy(tmp_path / "cache/0.12.3")
+    repos.write(other, "scripts/extra.py", "print('extra')\n")
+    root = project(tmp_path / "repo", good, pinned, record=good, extra=CHILD)
+    done = just(root, "probe", env={"OTHER": str(other)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (root / "outer.txt").read_text(encoding="utf-8") == str(good)
+    assert (root / "inner.txt").read_text(encoding="utf-8") == str(good)
+    record = root / ".git" / events.PLUGIN_RECORD
+    assert record.read_text(encoding="utf-8").strip() == str(other)
+
+
+def release_clone(tmp_path: Path) -> tuple[Path, str, str]:
+    work, merged = plugin_clone_source(tmp_path / "work")
+    clone = tmp_path / "clone"
+    repos.git(tmp_path, "clone", "-q", "--branch", "v1.2.3", str(work), str(clone))
+    return clone, merged, repos.git(clone, "rev-parse", "HEAD")
+
+
+def plugin_clone_source(work: Path) -> tuple[Path, str]:
+    repos.repository(work, {".claude-plugin/plugin.json": '{"version": "1.2.3"}'})
+    repos.write(work, "CHANGELOG.md", "# Changelog\n\n## 1.2.3\n\nThe release.\n")
+    merged = repos.commit(work, "docs(core): the changelog")
+    assert release.main(["release.py", "--repo", str(work)]) == 0
+    return work, merged
+
+
+def test_a_clone_is_the_release_only_while_it_is_the_release_commit_and_clean(
+    tmp_path: Path,
+) -> None:
+    clone, merged, tagged = release_clone(tmp_path)
+    assert plugin_pin.commit_of(clone) == merged
+    repos.write(clone, "CHANGELOG.md", "dirty\n")
+    assert plugin_pin.commit_of(clone) == tagged
+    repos.git(clone, "checkout", "-q", "--", "CHANGELOG.md")
+    assert plugin_pin.commit_of(clone) == merged
+    repos.write(clone, "untracked.txt", "x\n")
+    assert plugin_pin.commit_of(clone) == tagged
+    (clone / "untracked.txt").unlink()
+    repos.git(clone, "config", "user.email", "t@example.invalid")
+    repos.git(clone, "config", "user.name", "t")
+    repos.git(clone, "config", "commit.gpgsign", "false")
+    repos.git(clone, "switch", "-q", "-c", "side")
+    repos.write(clone, "added.txt", "x\n")
+    added = repos.commit(clone, "feat(core): another file")
+    assert plugin_pin.commit_of(clone) == added
+
+
+def test_a_clone_that_names_a_release_but_holds_other_files_is_red(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clone, merged, _ = release_clone(tmp_path)
+    released = repos.git(clone, "rev-parse", f"{merged}^{{tree}}")
+    root = tmp_path / "repo"
+    repos.write(
+        root,
+        "docs/process/binding.md",
+        f"## Runner\n\n- Ratchet plugin: 1.2.3 at {merged} tree {released}\n",
+    )
+    args = ["plugin_pin.py", "--root", str(root), "--plugin", str(clone)]
+    assert plugin_pin.main(args) == 0
+    capsys.readouterr()
+    repos.write(clone, "scripts/extra.py", "print('extra')\n")
+    assert plugin_pin.main(args) == 1
+    assert "is 1.2.3 at" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("recipe", [("conformance",), ("commit-msg", "message")])
+def test_a_record_naming_a_deleted_copy_is_red_in_one_line_not_a_traceback(
+    tmp_path: Path, recipe: tuple[str, ...]
+) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    gone = tmp_path / "cache" / "gone"
+    root = project(tmp_path / "repo", copy, pinned, record=gone)
+    done = just(root, *recipe)
+    assert done.returncode == 1
+    assert done.stdout == (
+        f"the plugin at {gone} is gone, and no copy on disk has the tree {pinned} that"
+        " docs/process/binding.md pins: install the plugin release the pin names, then start an"
+        " agent session here once, or set RATCHET_PLUGIN to its folder\n"
+    )
+    assert "Traceback" not in done.stderr
+    assert done.stderr == ""
