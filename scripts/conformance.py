@@ -515,21 +515,10 @@ def check_agent_instructions(root: Path) -> Iterable[Finding]:
 
 
 def companions() -> tuple[str, ...]:
-    """The plugins ``ratchet`` declares as dependencies in the marketplace file, but itself."""
-    if not MARKETPLACE.is_file():
-        return ()
-    declared: object = json.loads(MARKETPLACE.read_text(encoding="utf-8"))
-    plugins = declared.get("plugins") if isinstance(declared, dict) else None
-    found: list[str] = []
-    for entry in plugins if isinstance(plugins, list) else []:
-        dependencies_of = entry.get("dependencies") if isinstance(entry, dict) else None
-        if isinstance(entry, dict) and entry.get("name") == "ratchet":
-            found += [
-                dependency.partition("@")[0]
-                for dependency in dependencies_of or []
-                if isinstance(dependency, str)
-            ]
-    return tuple(name for name in found if name != "ratchet")
+    """The plugins ``ratchet`` declares as dependencies in the marketplace file."""
+    declared = json.loads(MARKETPLACE.read_text(encoding="utf-8"))
+    (ratchet,) = (entry for entry in declared["plugins"] if entry["name"] == "ratchet")
+    return tuple(dependency.partition("@")[0] for dependency in ratchet["dependencies"])
 
 
 def companion_of(line: str, names: Sequence[str]) -> str | None:
