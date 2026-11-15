@@ -20,14 +20,17 @@ from tests.safeguard_model import (
     Row,
     Start,
     State,
+    Verb,
     allowance_after,
     canonical,
     counterexample,
     export,
     graph,
     judge,
+    landings_of,
     outcomes,
     owed,
+    path_to,
     reviews_owed,
     summary,
 )
@@ -51,6 +54,7 @@ FOUND: dict[str, tuple[str, ...] | None] = {
     "owed count does not rise": None,
     # 3. Bound takes instances; leaving owed by dropping the row is green, and the guard holds it.
     "bound takes instances": None,
+    "binding with an instance waits only on the review": None,
     "only binding leaves owed": (
         "another branch lands: add one instance",
         "another branch lands: drop the row",
@@ -233,6 +237,27 @@ def test_a_kind_held_when_the_review_is_first_asked_owes_none() -> None:
     assert reviews_owed(state) is None
 
 
+BIND_AND_ADD = "another branch lands: bind the row and add one instance"
+
+
+def test_a_change_that_binds_the_row_with_an_instance_is_red_first_where_the_review_is_owed() -> (
+    None
+):
+    """ADR 0062 point 6 says a change that binds its row is green; an owed review makes it red."""
+    found = graph()
+    red = [
+        (*path_to(before), name)
+        for before, name, after in found.edges
+        if name == BIND_AND_ADD
+        and any(not result.landed for result in landings_of((before, name, after)))
+    ]
+    assert min(red, key=len) == (
+        "another branch lands: ask for the architecture review",
+        "another branch lands: add one instance",
+        BIND_AND_ADD,
+    )
+
+
 def replay(directory: Path, *names: str) -> tuple[World, State, list[Attempt]]:
     """The actions taken on a real repository, each landing checked against the model's."""
     world = World.create(directory / "repo")
@@ -240,7 +265,10 @@ def replay(directory: Path, *names: str) -> tuple[World, State, list[Attempt]]:
     for name in names:
         after, result = next(outcomes(STEPS[name], state))
         attempt = world.take(STEPS[name], state, after=after, result=result)
-        assert attempt is not None, name
+        if attempt is None:
+            assert STEPS[name].verb is Verb.FORK, name
+            state = after
+            continue
         printed = attempt.merge_run.out if attempt.merge_run else attempt.branch_run.out
         assert attempt.landing == result, f"{name}\n{printed}"
         seen.append(attempt)
@@ -371,6 +399,68 @@ def test_the_route_owes_a_review_a_record_before_the_arrival_did_not_settle(
     assert not state.main.reviewed
     assert reviews_owed(state) == 1
     assert world.reviews() == 1
+
+
+@pytest.mark.parametrize(
+    ("names", "lands"),
+    [
+        pytest.param((BIND_AND_ADD,), [True], id="the first instance"),
+        pytest.param(
+            ("another branch lands: add one instance", BIND_AND_ADD),
+            [True, True],
+            id="the row owed",
+        ),
+        pytest.param(
+            ("another branch lands: ask for the architecture review", BIND_AND_ADD),
+            [True, True],
+            id="the first instance once the review is asked",
+        ),
+        pytest.param(
+            (
+                "another branch lands: ask for the architecture review",
+                "another branch lands: add one instance",
+                BIND_AND_ADD,
+            ),
+            [True, True, False],
+            id="the review owed",
+        ),
+        pytest.param(
+            (
+                "fork: bind the row and add one instance",
+                "another branch lands: add one instance",
+                "land the branch",
+            ),
+            [True, True],
+            id="late, once the row is owed",
+        ),
+        pytest.param(
+            (
+                "another branch lands: ask for the architecture review",
+                "fork: bind the row and add one instance",
+                "another branch lands: add one instance",
+                "land the branch",
+            ),
+            [True, True, False],
+            id="late, once the review is owed",
+        ),
+    ],
+)
+def test_the_real_gate_lands_a_change_that_binds_the_row_with_an_instance_as_the_model_does(
+    names: tuple[str, ...], lands: list[bool], tmp_path: Path
+) -> None:
+    world, state, seen = replay(tmp_path, *names)
+    assert [attempt.landing.landed for attempt in seen] == lands
+    last = seen[-1]
+    on_branch = judge(
+        last.landing.fork, last.landing.head, last.landing.fork_held, start=last.landing.fork_start
+    )
+    assert notes(last.branch_run) == (on_branch.arrived, on_branch.event_owes, on_branch.reopens)
+    if last.landing.landed:
+        assert state.main.row is Row.BOUND
+        assert world.owed() == {}
+    else:
+        assert last.merge_run is not None
+        assert "architecture review owed" in last.merge_run.out
 
 
 def test_a_row_dropped_and_put_back_does_not_make_the_return_an_arrival(tmp_path: Path) -> None:

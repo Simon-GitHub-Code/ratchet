@@ -3,7 +3,6 @@
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -961,10 +960,6 @@ SIZE_BLOCK = {
     "openQuestions": [],
     "guardEdits": [],
 }
-OWED_LINE = (
-    "triggers: 'outbound-call' gained 1 instance(s) (src/b.py:2) while the base already held 1"
-    " and these rows are still `later:`: survives failing dependencies."
-)
 
 
 def parked(root: Path, result: dict[str, object], *, stash: bool = True) -> None:
@@ -1084,16 +1079,23 @@ def test_each_kind_of_hold_names_the_step_that_releases_it(
 
 
 def test_a_ticket_held_for_a_safeguard_names_it_until_it_is_bound(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, capsys: Out
 ) -> None:
-    root = held_root(tmp_path)
-    parked(root, {"verdict": "blocked", "checkOutput": OWED_LINE}, stash=False)
-    monkeypatch.setattr(triggers, "owed", lambda _root: [SimpleNamespace(name="outbound-call")])
+    binding = BINDING + OWES.format(events="none").removeprefix("- Application types: service\n")
+    files = {"docs/process/binding.md": binding, HELD: HELD_TEXT, "src/b.py": "requests.get(1)\n"}
+    root = repository(tmp_path, {**ADOPTED, **files})
+    write(root, "src/b.py", "requests.get(1)\nrequests.get(2)\n")
+    capsys.readouterr()
+    assert triggers.main(["triggers", "--root", str(root), "--base", "HEAD"]) == 1
+    printed = capsys.readouterr().out
+    git(root, "checkout", "--", "src/b.py")
+    parked(root, {"verdict": "blocked", "checkOutput": printed}, stash=False)
     checkout = route.observe(root)
     assert checkout is not None
     step = route.ticket_step(root, None, checkout)
     assert f"run {route.SAFEGUARD} for outbound-call" in step.command
-    monkeypatch.setattr(triggers, "owed", lambda _root: [])
+    write(root, "docs/process/binding.md", binding.replace("later: code:outbound-call", "a lint"))
+    commit(root, "chore(method): safeguard outbound calls")
     assert route.ticket_step(root, None, checkout).command == f"{route.FEATURE} {HELD}"
 
 

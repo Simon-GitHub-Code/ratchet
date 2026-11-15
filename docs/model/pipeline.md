@@ -1,6 +1,6 @@
 # One pipeline run
 
-`workflows/pipeline.js` is the workflow the `/ratchet:feature` skill runs for one ticket once its own preflight is green ([the feature pipeline](../../skills/method/pipeline.md)). It spawns one agent for each role: the preflight, the spec, the ticket check, the build, the critic and its fix rounds once the project is depended-on, and the review. Before the project is depended-on, a review that finds a blocker in the change gets one fix pass and a second review ([ADR 0056](../adr/0056-a-young-project-gets-one-fix-pass-on-a-review-blocker.md)). Given `args.rejudge`, it judges again a branch that was rebased behind another merge: a reconcile agent when the rebase conflicted or the check went red, then a second review. It never commits, pushes or opens a pull request. The orchestrator does that after it reads the result. The script is a function of its arguments and of its agents' structured answers, so one run is a state machine whose inputs are those answers. This page writes that machine down, and says which of the method's promises the script keeps whatever the agents answer.
+`workflows/pipeline.js` is the workflow the `/ratchet:feature` skill runs for one ticket once its own preflight is green ([the feature pipeline](../../skills/method/pipeline.md)). It spawns one agent for each role: the preflight, the spec, the ticket check, the build, the critic and its fix rounds once the project is depended-on, and the review. Before the project is depended-on, a review that finds a blocker in the change gets one fix pass and a second review ([ADR 0056](../adr/0056-a-young-project-gets-one-fix-pass-on-a-review-blocker.md)). Given `args.rejudge`, it judges again a branch that was rebased behind another merge: a reconcile agent when the rebase conflicted or the check went red, then a second review. The script never commits, pushes or opens a pull request, and its prompts tell every agent not to. The orchestrator does that after it reads the result. The script cannot see whether an agent did it anyway: a Workflow script cannot read a file or run a command. So the model gives every answer that fact, and shows that no step of the script turns on it (ADR 0060). The script is a function of its arguments and of its agents' structured answers, so one run is a state machine whose inputs are those answers. This page writes that machine down, and says which of the method's promises the script keeps whatever the agents answer.
 
 The model is `hooks/tests/pipeline_model.py`. The tests in `hooks/tests/test_pipeline_model.py` check each rule on every step it reaches. They also play every run of the model on the real script, which must call the same agents and end the same way (`hooks/tests/pipeline_world.py`).
 
@@ -10,6 +10,7 @@ The model covers one run with:
 
 - six ways the orchestrator starts it: a build; a build with no ticket; judging again a branch that rebased cleanly; one whose rebase conflicted; one whose check went red with no conflict (`checkRed`); and one without the slug or the spec path the first run returned. A conflict and a red check each start at the reconcile, and the reconcile's prompt differs only in the paths it lists;
 - each agent's answer cut down to the few values the script branches on, listed under [Steps](#steps). A dead agent is one that returns no result;
+- whether each agent committed, pushed or opened a pull request. No field of its answer says so, so the script takes the same step either way;
 - at most two fix rounds once the project is depended-on and one fix pass before, the script's own bounds. So the graph is every run the answers allow, not a sample.
 
 What it leaves out is listed [at the end](#left-out).
@@ -28,13 +29,14 @@ What it leaves out is listed [at the end](#left-out).
 | Built, and the last builder's check | built or not; green, red or none yet |
 | The last critique | whether it owes a fix, and whether it found nothing and tried nothing |
 | The last review | whether it holds a blocker or a major issue |
+| A role published | yes once any agent committed, pushed or opened a pull request |
 | How it ended | still running; approved; changes requested, with what forced it; stopped (blocked) with the reason, and for too large the ceiling, where it was measured, whether parts are proposed and whether the orchestrator splits it unasked; or the script's error, naming the agent and whether to resume. A verdict also carries the fix rounds, an unresolved finding, the lost promises for the next run, the kept promise in the assumptions, the verdict record, and whether the branch was judged again. A stop for too large says that too |
 
-A builder is the agent that changes code: the build, a fix round or the reconcile. From the start the model reaches 1,200 states and 1,740 steps. 964 of the states are a run that has ended.
+A builder is the agent that changes code: the build, a fix round or the reconcile. From the start the model reaches 2,394 states and 6,904 steps. 1,926 of the states are a run that has ended. Every state after the first answer is there twice, once with a role that published and once without.
 
 ## Steps
 
-Each step is the orchestrator's start, or the answer of the agent the run waits on. A step's name is the agent's label and its answer, as `fix-1 measures product code over its ceiling`.
+Each step is the orchestrator's start, or the answer of the agent the run waits on. A step's name is the agent's label and its answer, as `fix-1 measures product code over its ceiling`. Each answer below is also a step with `and has published` after it, as `implement is green and has published`: the agent committed, pushed or opened a pull request, and gave the same answer.
 
 | Agent | Its answers |
 | --- | --- |
@@ -51,18 +53,19 @@ The fix pass is labelled `fix-1`, as the critic's first round is. Tests over two
 
 ## Rules
 
-The method's promises are eighteen rules, each about a step. The model numbers them as below, and the module names each after its predicate.
+The method's promises are nineteen rules, each about a step. The model numbers them as below, and the module names each after its predicate.
 
 | Rule | In the module | Says | In Python and in TLC |
 | --- | --- | --- | --- |
 | 1 | `Evidenced` | A run ends approved only when the review that runs last approves with its own check green and nothing open, and the last builder's check was green. | holds |
-| 2 | `Bounded` | A run never spawns more agents than the documents allow, nine before the project is depended-on, twelve after, and two to judge a rebased branch again. | holds |
+| 2 | `Bounded` | The script's own calls never spawn more agents than the documents allow, nine before the project is depended-on, twelve after, and two to judge a rebased branch again. | holds |
 | 3 | `Ordered` | Agents run in the documented order of stages, save the fix pass a review of a project nobody depends on hands back, and the implementer runs only after a spec with no open question has been through the ticket check. | holds |
 | 4 | `Stricter` | No answer lifts an objection the run has raised but the repair the documents name for it, and a run with an objection standing never ends approved. | holds |
 | 5 | `Ceilinged` | A change measured or estimated over the product ceiling or the test ceiling stops the run as too large on that ceiling, so it is never approved. | holds |
 | 5a | `Measured` | A change the spec, the implementation, a fix round or the reconcile measures or estimates over a ceiling stops the run at that stage as too large on that ceiling. | holds |
 | 6 | `LoopEnds` | The fix loop runs at most one round before the project is depended-on and two after, and a critic finding still owed after the last one reaches the result as unresolved. | holds |
-| 7 | `Unpublished` | The run never commits, pushes or opens a pull request, and asks each agent only for the git and forge commands the documents give its role. | holds |
+| 7 | `Unpublished` | The script never commits, pushes or opens a pull request, and its prompts ask each agent only for the git and forge commands the documents give its role. | holds |
+| 7a | `PublishedNeverApproved` | A run in which a role committed, pushed or opened a pull request never ends approved. | breaks in 2 steps |
 | 8 | `Reported` | A failed or malformed agent answer ends in a result that says so, never in an approval and never in an unhandled error. | breaks in 2 steps |
 | 8a | `Resumable` | An agent that dies ends the run in the script's error, which names that agent and says to resume the run, with no verdict and no result. | holds |
 | 9 | `JudgedAgain` | Judging a rebased branch again always ends on a second review, and only that review's own approval approves the branch. | holds |
@@ -74,8 +77,11 @@ The method's promises are eighteen rules, each about a step. The model numbers t
 | 14 | `NeverCrashes` | A failed or malformed agent answer is never approved and never crashes the run, which ends in the script's own error naming that agent. | holds |
 | 15 | `Lost` | A change the review finds dropping a promise of the ticket is refused, and a first build returns what it lost for the next run. | holds |
 
-Two rules break, both by design. Each is a strong reading of a promise, and beside it stands the reading the method's pages give, which holds. Each breaks by its shortest run, the same in Python and in TLC.
+`Bounded` and `Unpublished` cover the script's own `agent()` calls and the text of its prompts, and no more. Neither covers what a role does: an agent a role spawns, or a commit, push or pull request a role makes. Only the prompt tells a role not to.
 
+Three rules break, all by design. Each is a strong reading of a promise, and beside it stands the reading that holds. Each breaks by its shortest run, the same in Python and in TLC.
+
+- `PublishedNeverApproved` (7a): the orchestrator judges a rebased branch again; review-again approves and has published. The script ends the run approved, since nothing it reads says the review published. It breaks for good: the script can never see the fact. `Unpublished` (7) is the reading that holds, on the script's calls and its prompts' text. A run that breaks 7a is caught after it returns, by the orchestrator's publish check, which ends the ticket as a role that published and never as an approval (ADR 0060). That check is a rule of [the drain model](drain.md), which gains it in its own turn.
 - `Reported` (8): the orchestrator starts a build; preflight dies. The script throws `preflight agent returned no result (skipped or died); resume the run to retry` and returns no result. A preflight green with no slug breaks it the same way, with an error that does not say to resume. `Resumable` (8a) is the reading that holds, and `NeverCrashes` (14) holds beside it: no failed answer is approved or crashes the run. 8a rests on ADR 0023: "One run per ticket also keeps its own run to resume, so a ticket that dies is run again alone." The method's pipeline page says the same: "A run in which an agent dies throws and returns no result: the drain resumes it once" (ADR 0055).
 - `Split` (10): the orchestrator judges a branch whose rebase conflicted again; reconcile measures product code over its ceiling. The run stops too large with no parts named, after the code was built. A stop the spec measures rather than estimates, and a stop after the build or a fix round, break it too. `SplitUnasked` (10a) is the reading that holds. It rests on the method's pipeline page, which gives the spec's estimate alone a stop "with a proposed split", and says of a fix round or a reconcile over the ceiling that "the drain splits it as for any other too-large stop". The script's result says: "with no `proposedSplit`, divide the ticket's promises yourself".
 
@@ -85,6 +91,7 @@ The tests also check that:
 
 - every rule reads as one sentence;
 - every answer of every agent is given on some run;
+- no step of the script turns on whether a role published. On every step of the model, the same answer with and without it leads to the same state, but for that fact. On the real script, the run that breaks `PublishedNeverApproved` plays the same as the run in which no role published;
 - on the real script, a change any measuring role finds over a ceiling stops the run as blocked, too large, on that ceiling and at that stage;
 - on the real script, every dead agent ends the run in an error that names it and says to resume;
 - on the real script, a run stopped too large ends on the answer that measured it, and its result tells the orchestrator to split the ticket and ask the owner nothing;
@@ -102,19 +109,19 @@ The model was turned first to the owner's decision that a project nobody depends
 
 ### The rules in the module
 
-`export()` gives each rule as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, so the module holds each state once for each set of step rules the step into it broke. Here no state is reached both by a step that breaks a rule and by one that keeps every rule, so the module has the graph's 1,200 states and 1,740 steps. The rules are computed in Python, so TLC checks that the module carries them and finds the shortest runs to them. It does not prove them a second way.
+`export()` gives each rule as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, so the module holds each state once for each set of step rules the step into it broke. Here no state is reached both by a step that breaks a rule and by one that keeps every rule, so the module has the graph's 2,394 states and 6,904 steps. The rules are computed in Python, so TLC checks that the module carries them and finds the shortest runs to them. It does not prove them a second way.
 
 ## The real script against the model
 
-The answers are finite and the script is deterministic given them, so nothing here samples. The test walks every complete run of the model: 7,361 sequences of answers from the start to an end. 7,305 are first builds, 22 judge a branch whose rebase conflicted, 22 one whose check went red, 10 one that rebased cleanly, one has no slug or spec path and one has no ticket. The longest has 12 answers. 2,772 of the first builds spend the fix pass. Each abstract answer stands for one concrete answer the script's schema allows.
+The answers are finite and the script is deterministic given them, so nothing here samples. The test walks every complete run of the model in which no role published: 7,361 sequences of answers from the start to an end. A run in which a role published hands the script the same answers, so it plays the same. 7,305 are first builds, 22 judge a branch whose rebase conflicted, 22 one whose check went red, 10 one that rebased cleanly, one has no slug or spec path and one has no ticket. The longest has 12 answers. 2,772 of the first builds spend the fix pass. Each abstract answer stands for one concrete answer the script's schema allows, and every play checks it against the schema the script passed for that call.
 
 All of them run on `workflows/pipeline.js` itself in one node process, in a context whose only globals are the language's own, with `agent`, `phase` and `log` passed in. The longest first build and the longest conflicted rejudge run once more, reading the ticket from a local file. That makes 7,363 plays. Each must call the same agents in the same stages as the model, and end as the model ends: the same verdict, the same reasons it was forced, the same stop or error. Every git or forge command any prompt names must be one the model allows that role. The plays take about four seconds of processor time.
 
 ## Charts
 
-The rules were checked on `Pipeline.tla`, SHA-256 `0b34c840414c98a16d47ce2242d8520d766e7c3c2953008b935b70ee4c0b484b`. TLC reached 1,200 states. Run again with only the rules that hold, it counts 1,741 states generated: the start and 1,740 steps. Sixteen rules hold, two break, each by the run above. A run that has ended has no step out, so the module tells TLC that this is no deadlock.
+The rules were checked on `Pipeline.tla`, SHA-256 `8f30506e33f637f3c77a19e18043b565e9175fa1ae7d5ed321208de9aa9c3224`. TLC reached 2,394 states. Run again with only the rules that hold, it counts 6,905 states generated: the start and 6,904 steps. Sixteen rules hold, three break, each by the run above. A run that has ended has no step out, so the module tells TLC that this is no deadlock.
 
-That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `ef010768dc955c7288b82cb75a58ada361c772cdb9f8f852ad8898e97362f43c`: the same graph seen through the stage a run is at. That is the agent it waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 79 states and 175 steps. A box groups states, and an arrow from a box leaves every state in it.
+That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `ef010768dc955c7288b82cb75a58ada361c772cdb9f8f852ad8898e97362f43c`: the same graph seen through the stage a run is at, and each step through the answer the script reads, so whether a role published does not show there. The stage is the agent the run waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 79 states and 175 steps. A box groups states, and an arrow from a box leaves every state in it.
 
 ### A first build
 
@@ -258,7 +265,7 @@ Here a red check from the reconcile stands against the change, as a red builder'
 
 ### Where a run breaks a rule
 
-Drawn from `Pipeline.tla`, where the tool draws only the shortest run to each rule that breaks: 5 states and 4 arrows. The states have the words of the charts above, and the steps the model's own names, as the tests give the runs. The marked error breaks `Reported`, and the marked too-large stop breaks `Split`.
+Drawn from `Pipeline.tla`, where the tool draws only the shortest run to each rule that breaks: 7 states and 6 arrows. The states have the words of the charts above, and the steps the model's own names, as the tests give the runs. The marked approval breaks `PublishedNeverApproved`, the marked error breaks `Reported`, and the marked too-large stop breaks `Split`.
 
 ```mermaid
 ---
@@ -266,34 +273,42 @@ title: "Where a run breaks a rule"
 ---
 stateDiagram-v2
   state "Legend" as legend {
-    lg0: Breaks Reported or Split
-    lg1: Path to the Reported or Split bug
+    lg0: Breaks PublishedNeverApproved or Reported or Split
+    lg1: Path to the PublishedNeverApproved or Reported or Split bug
   }
   class lg0 breaks
   class lg1 bugPath
   s0: Not started
   s1: The preflight checks the ticket is ready
   s2: The reconcile finishes the rebase and turns the check green
-  s3: Stopped on an error, resume the run
-  s4: Stopped too large, split the ticket
+  s3: The review, once more
+  s4: Stopped on an error, resume the run
+  s5: Approved, though a role published
+  s6: Stopped too large, split the ticket
   [*] --> s0
   s0 --> s1: the orchestrator starts a build
   s0 --> s2: the orchestrator judges a branch whose rebase conflicted again
-  s1 --> s3: preflight dies
-  s2 --> s4: reconcile measures product code over its ceiling
+  s0 --> s3: the orchestrator judges a rebased branch again
+  s1 --> s4: preflight dies
+  s2 --> s6: reconcile measures product code over its ceiling
+  s3 --> s5: review again approves and has published
   classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
   class s0 bugPath
   class s1 bugPath
   class s2 bugPath
-  class s3 breaks
   class s3 bugPath
   class s4 breaks
   class s4 bugPath
+  class s5 breaks
+  class s5 bugPath
+  class s6 breaks
+  class s6 bugPath
 ```
 
 ## Left out
 
-- What the orchestrator does with the result: committing, the verdict record, the pull request, the merge judge, and the drain's resume, split and park. The drain has a model of its own, `hooks/tests/drain_model.py`.
+- What the orchestrator does with the result: committing, the verdict record, the pull request, the merge judge, the publish check, and the drain's resume, split and park. The drain has a model of its own, `hooks/tests/drain_model.py`.
+- An agent a role spawns. `Bounded` counts the script's own calls, and no step of the script could see one. ADR 0060 keeps that limit a rule of the prompt.
 - What an agent does inside its stage, and every field of its answer the script does not branch on: the criteria, the tests, the findings' titles, the assumptions other than the kept promise.
 - `args.ticketFindings` from the last run, and the settled readings a rejudge passes back.
 - A ticket read from a local file, but for the two runs played again reading one.

@@ -223,8 +223,11 @@ PREFLIGHT = {
     "ok": True,
     "slug": "expiry",
     "branch": "feature/4-expiry",
-    "number": "4",
+    "number": 4,
     "title": "T",
+    "label": "ready-for-agent",
+    "failures": [],
+    "output": "preflight: green",
 }
 SPECIFIED = {
     "slug": "expiry",
@@ -246,6 +249,9 @@ CRITIQUED = {
     "attempted": ["an expiry in the past"],
     "fitnessSabotageConfirmed": True,
     "fitnessSabotageSummary": "",
+    "mutationSummary": "not applicable: the binding names no mutation gate",
+    "fuzzSummary": "not applicable: no value type is touched",
+    "checkOutput": "1 passed",
 }
 REJUDGE = {"slug": "expiry", "specPath": "docs/features/expiry/spec.md"}
 ASKED = {

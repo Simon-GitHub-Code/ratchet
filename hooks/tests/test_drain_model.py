@@ -27,19 +27,19 @@ from tests.drain_world import (
     BRANCH,
     DRAFT,
     LANDING_WAIT,
+    PUBLISHED,
     REF,
+    TEXTS,
     LeaseWorld,
     World,
     digest,
     lock_held,
     running,
 )
-from tests.repos import git, snapshot, write
+from tests.repos import git
 from tests.support import PLUGIN_ROOT
 from tests.test_drain import (
-    FILES,
     HALVES,
-    WHOLE,
     plan_file,
     scratch,  # noqa: F401 # -- an autouse fixture of the drain's tests
 )
@@ -47,9 +47,24 @@ from tests.test_drain import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-CAP, KEPT, JUDGED, NOT_STALE, ONCE, REPORT_WRITES, HELD, HELD_EDITED, REFUSED, RECOVERS, NO_TREE = (
-    model.RULES
-)
+(
+    CAP,
+    KEPT,
+    JUDGED,
+    NOT_STALE,
+    ONCE,
+    REPORT_WRITES,
+    HELD,
+    HELD_EDITED,
+    REFUSED,
+    REFUSED_UNOPENED,
+    RELEASED_BY_THE_LINE,
+    PARTS_FIRST,
+    PARTS_AWAITED,
+    RECOVERS,
+    NO_TREE,
+    UNPUBLISHED,
+) = model.RULES
 
 OPEN_A = ["drain.py open a", "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
@@ -78,6 +93,20 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     HELD: None,
     HELD_EDITED: None,
     REFUSED: None,
+    REFUSED_UNOPENED: None,
+    RELEASED_BY_THE_LINE: None,
+    # Why: `drain.pending` reads a blocker's open or closed state alone, never the note that says
+    # it was split into parts, so a split blocker the owner closes no longer holds its dependent
+    # back while the parts are unbuilt.
+    PARTS_FIRST: [
+        "drain.py open a",
+        "drain.py split a",
+        "the owner closes ticket a",
+        "drain.py open b",
+    ],
+    # Why: the same. A split blocker stays open and held, so `drain.settled` refuses its
+    # dependent as waiting on a ticket the drain cannot merge, while the parts are built and after.
+    PARTS_AWAITED: ["drain.py open a", "drain.py split a"],
     RECOVERS: None,
     # Why: the docstring accepts it: "A work tree whose uncommitted work git cannot stash (a stale
     # lock, a merge left unfinished, a damaged index) is not removed".
@@ -87,6 +116,13 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
         "the agent leaves work uncommitted in c",
         "git leaves a stale index lock in the tree of c",
         "drain.py clean --all",
+    ],
+    # Why: ADR 0060's publish check is not in the code yet. Nothing compares the branch with the
+    # state the run started from, so the agent records its verdict on a role's commit and lands it.
+    UNPUBLISHED: [
+        "drain.py open a",
+        "a role of the pipeline run commits in a",
+        "the agent commits the verdict record of a",
     ],
 }
 
@@ -228,6 +264,9 @@ WEIGHTED = [
     Kind.COMMIT,
     Kind.RECORD,
     Kind.RECORD,
+    Kind.PUBLISH,
+    Kind.UPGRADE,
+    Kind.LINE,
     Kind.EDIT,
     Kind.KILL_MID_REBASE,
     Kind.KILL_AFTER_REBASE,
@@ -245,6 +284,8 @@ WEIGHTED = [
     Kind.REPORT,
     Kind.LOCK,
     Kind.UNLOCK,
+    Kind.SPLIT,
+    Kind.RESOLVE,
 ]
 
 
@@ -410,6 +451,83 @@ def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_w
     assert plan_of(play)[BRANCH[Name.C]].state == "held"
 
 
+def test_a_branch_a_role_committed_on_is_recorded_and_landed_as_nothing_checks_it(
+    tmp_path: Path,
+) -> None:
+    path = COUNTEREXAMPLES[UNPUBLISHED] or []
+    assert broken_by(path) == {UNPUBLISHED}
+    landed = [*path, "drain.py land a"]
+    assert broken_by(landed) == {UNPUBLISHED}
+    play = replay(tmp_path, landed)
+    assert play.world.printed.endswith(f"closed: {REF[Name.A]}: merged\n"), "the drain lands it"
+    subjects = git(play.world.root, "log", "--format=%s", "main").splitlines()
+    assert PUBLISHED in subjects, "the role's commit is on the default branch"
+
+
+UPGRADE = "an upgrade makes the preflight ask the Flag: line before deployment"
+LINE_A = "the owner lands the Flag: line of a"
+
+
+def test_the_upgrade_refuses_a_ticket_with_no_flag_line_and_its_line_releases_the_cascade(
+    tmp_path: Path,
+) -> None:
+    path = [UPGRADE, "drain.py open a", LINE_A, "drain.py open a"]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    play = replay(tmp_path, path[:2])
+    assert play.world.code == 1
+    assert play.world.printed.startswith(f"open: {REF[Name.A]} is not started: it is refused; ")
+    assert "lacks `Flag:`" in play.world.printed, "the preflight names the line"
+    assert model.classify(play.state)[Name.B] is model.Status.REFUSED, "b waits on a refused a"
+    play.named(path[2])
+    statuses = model.classify(play.state)
+    assert (statuses[Name.A], statuses[Name.B]) == (model.Status.BUILDABLE, model.Status.WAITING)
+    assert play.named(path[3]).startswith("{"), "the plan starts a once its line has landed"
+    assert play.world.code == 0
+
+
+def built_and_landed(name: Name) -> list[str]:
+    return [
+        f"drain.py open {name.value}",
+        f"the agent commits {name.value}",
+        f"the agent commits the verdict record of {name.value}",
+        f"drain.py land {name.value}",
+    ]
+
+
+def test_a_ticket_waiting_on_a_split_ticket_the_owner_closed_starts_before_its_parts(
+    tmp_path: Path,
+) -> None:
+    path = COUNTEREXAMPLES[PARTS_FIRST] or []
+    assert broken_by(path) == {PARTS_FIRST}
+    play = replay(tmp_path, path[:-1])
+    drafted = plan_of(play)
+    beta = drafted[BRANCH[Name.B]]
+    assert (beta.state, beta.waits_on) == ("buildable", ()), "a closed blocker is met"
+    parts = [drafted[BRANCH[part]].state for part in model.PARTS[Name.A]]
+    assert parts == ["buildable", "waiting"], "no part of it is built"
+    assert play.named(path[-1]).startswith("{"), "the drain opens b"
+    assert play.world.code == 0
+    assert play.world.tree(Name.B).is_dir()
+
+
+def test_a_ticket_waiting_on_a_split_ticket_is_refused_and_stays_refused_once_its_parts_land(
+    tmp_path: Path,
+) -> None:
+    path = COUNTEREXAMPLES[PARTS_AWAITED] or []
+    assert broken_by(path) == {PARTS_AWAITED}
+    landed = [*path, PARK_C, *built_and_landed(Name.D), *built_and_landed(Name.E)]
+    assert broken_by(landed) == {PARTS_AWAITED}
+    play = replay(tmp_path, landed)
+    assert all(play.state.of(part).merged for part in model.PARTS[Name.A]), "both parts landed"
+    parts = ", ".join(REF[part] for part in model.PARTS[Name.A])
+    why = (
+        f"blocked: waits on {REF[Name.A]}, which this drain cannot merge (held):"
+        f" too large; split into {parts}"
+    )
+    beta = plan_of(play)[BRANCH[Name.B]]
+    assert (beta.state, beta.why) == ("refused", (why,)), "b waits on the split a, still held"
+
+
 def test_open_keeps_a_close_the_report_has_not_printed(tmp_path: Path) -> None:
     play = replay(tmp_path, [PARK_A, EDIT_A, "drain.py open a"])
     note = drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
@@ -547,7 +665,7 @@ def test_a_close_after_a_cut_off_fast_forward_puts_it_back_first_and_holds_the_t
         "merge: a run that stopped was moving `main`; its work tree is put back\n"
         f"closed: {REF[Name.A]}: parked\n"
     ), "the work tree is put back before the close reads the ticket"
-    assert note_of(play)["digest"] == digest(FILES[REF[Name.A]]), "the hold is on the owner's text"
+    assert note_of(play)["digest"] == digest(TEXTS[REF[Name.A]]), "the hold is on the owner's text"
     held = f"land: {REF[Name.A]} is held and is not landed: "
     for name in path[-2:]:
         assert held in play.named(name), name
@@ -1048,8 +1166,6 @@ def test_a_split_while_the_merge_runs_is_refused_and_files_no_part(
     two_drains: LeasePlay, tmp_path: Path
 ) -> None:
     world = two_drains.world.world
-    write(world.root, REF[Name.A], WHOLE[REF[Name.A]])
-    snapshot(world.root, "docs(tracker): the ticket's promises")
     plan = plan_file(tmp_path, HALVES)
     issues = (world.root / REF[Name.A]).parent
     filed = sorted(path.name for path in issues.iterdir())
@@ -1282,8 +1398,6 @@ def test_a_close_update_or_split_while_a_killed_lands_merge_runs_is_refused_and_
     two_drains: LeasePlay, tmp_path: Path
 ) -> None:
     world = two_drains.world.world
-    write(world.root, REF[Name.A], WHOLE[REF[Name.A]])
-    snapshot(world.root, "docs(tracker): the ticket's promises")
     plan = plan_file(tmp_path, HALVES)
     issues = (world.root / REF[Name.A]).parent
     filed = sorted(path.name for path in issues.iterdir())
