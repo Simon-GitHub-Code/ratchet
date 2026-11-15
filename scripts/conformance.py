@@ -265,6 +265,7 @@ ADOPT_TEMPLATES = TEMPLATES / "adopt/templates"
 INIT_TEMPLATES = TEMPLATES / "init/templates"
 AGENTS_TEMPLATE = INIT_TEMPLATES / "AGENTS.md"
 ASKING = "## Asking the owner"
+MOVED = "## Moved from the companion lines"
 MARKETPLACE = Path(__file__).resolve().parents[1] / ".claude-plugin/marketplace.json"
 BOLD_NAME = re.compile(r"^- \*\*([^*]+)\*\*")
 BACKTICKED_WORD = re.compile(r"`([^`\s]+)`")
@@ -561,14 +562,41 @@ def plain_companion(name: str) -> str:
     return f"- `{name}`"
 
 
+def with_moved_items(text: str, items: Sequence[str]) -> str:
+    """The text with each item appended to the moved section, which is made at the end if absent."""
+    lines = text.split("\n")
+    starts = [i for i, line in enumerate(lines) if line.rstrip() == MOVED]
+    if not starts:
+        body = text if text.endswith("\n") or not text else text + "\n"
+        return "".join([body, "\n", MOVED, "\n\n", *(f"{item}\n" for item in items)])
+    start = starts[-1]
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    last = next((i for i in range(end - 1, start, -1) if lines[i].strip()), start)
+    lines[last + 1 : last + 1] = items
+    return "\n".join(lines)
+
+
+def moved_items(text: str) -> list[str]:
+    """The lines the moved section holds."""
+    return [line.rstrip("\r") for line in markdown_text.section(text, MOVED).splitlines() if line]
+
+
 def with_plain_companions(names: Sequence[str]) -> gatelib.Want:
-    """The text with each companion line rewritten to the plugin's name alone."""
+    """The text with each companion line the project wrote on rewritten to the plugin's name alone.
+
+    Every line it rewrites is appended word for word to the moved section of the same file.
+    """
 
     def want(text: str | None) -> str:
         lines = (text or "").splitlines(keepends=True)
+        moved = []
         for index, name, line in companion_lines(text or "", names):
-            lines[index] = plain_companion(name) + line[len(line.rstrip("\r\n")) :]
-        return "".join(lines)
+            bare = line.rstrip("\r\n")
+            if bare != plain_companion(name):
+                moved.append(bare)
+            lines[index] = plain_companion(name) + line[len(bare) :]
+        made = "".join(lines)
+        return with_moved_items(made, moved) if moved else made
 
     return want
 
@@ -587,9 +615,12 @@ def check_companion_lines(root: Path) -> Iterable[Finding]:
     ]
     if stale:
         plugins = ", ".join(plugin for plugin, _ in stale)
-        problem = f"the lines for {plugins} are not exactly `- `<plugin>``"
+        problem = (
+            f"the lines for {plugins} are not exactly `- `<plugin>``; the project's own text on"
+            f" them moves to '{MOVED}' and is not deleted"
+        )
         edit = Edit(
-            "write each companion line as the plugin's name alone",
+            f"write each companion line as the plugin's name alone, its text moved to '{MOVED}'",
             with_plain_companions(names),
             Agent(start=tuple(plain_companion(plugin) for plugin, _ in stale)),
         )

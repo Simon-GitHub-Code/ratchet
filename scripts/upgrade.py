@@ -52,6 +52,7 @@ Kept = TypeVar("Kept", bound=Finding)
 MANIFEST = Path("guards/manifest.toml")
 HEAD, BODY = "    ", "        "
 PASSES = 6
+INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
 SHORT = 12
 EDITORS = {
     EditRule.DENY: "the owner edits it by hand: its guard group `{}` denies agents",
@@ -551,6 +552,13 @@ def items_block(root: Path, title: str, found: list[AgentFinding | OwnerFinding]
     return "\n".join(lines)
 
 
+def moved_lines(change: Change) -> list[str]:
+    """The lines an agent-instruction file gained in the moved section, word for word."""
+    text = change.after.decode("utf-8", errors="replace")
+    kept = conformance.moved_items((change.before or b"").decode("utf-8", errors="replace"))
+    return [line for line in conformance.moved_items(text) if line not in kept]
+
+
 def render(root: Path, result: Plan, *, applied: bool) -> str:
     """The report: the header, what was written (or would be), what is left, the owner's words."""
     blocks = [f"upgrade: {root} from {result.old} to {result.new}."]
@@ -561,6 +569,13 @@ def render(root: Path, result: Plan, *, applied: bool) -> str:
         for name in write_order(result.changes):
             lines.append(f"  {name}")
             lines += [f"    - {did}" for did in result.done.get(name, [])]
+            moved = moved_lines(result.changes[name]) if name in INSTRUCTION_FILES else []
+            if moved:
+                heading = conformance.MOVED
+                lines.append(
+                    f"    - moved {len(moved)} lines to '{heading}' for the owner to read:"
+                )
+                lines += [f"      {line}" for line in moved]
         blocks.append("\n".join(lines))
     if result.red:
         title = (
