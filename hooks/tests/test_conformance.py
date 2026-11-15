@@ -192,6 +192,31 @@ def test_the_gate_names_each_failure_and_the_count(
     ]
 
 
+def test_a_red_finding_is_followed_by_what_it_asks_next(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    then = ("the recipes `a` do not depend on `install`", "the lockfile is not named")
+    finding = conformance.Finding("justfile", "no install", conformance.Agent(then=then))
+    edited = conformance.Finding(
+        "ci.yml",
+        "bare key",
+        conformance.Edit("end it", lambda text: text or "", conformance.Agent(then=then[:1])),
+    )
+    owner = conformance.Finding("binding.md", "asks", conformance.Agent(start=("template",)))
+    findings = [finding, edited, owner]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(conformance, "findings", lambda _root: findings)
+        assert conformance.run(repo) == 1
+    assert capsys.readouterr().out.splitlines()[:6] == [
+        "justfile: no install",
+        f"  then: {then[0]}",
+        f"  then: {then[1]}",
+        "ci.yml: bare key",
+        f"  then: {then[0]}",
+        "binding.md: asks",
+    ]
+
+
 def test_without_a_root_the_gate_reads_the_working_directory(
     repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

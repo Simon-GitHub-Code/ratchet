@@ -2442,11 +2442,19 @@ def not_running(root: Path, found: Sequence[Finding]) -> list[str]:
     return list(dict.fromkeys([*(finding.stops for finding in found if finding.stops), *stuck]))
 
 
+def then_lines(fix: Fix) -> tuple[str, ...]:
+    """What a red finding asks next, from the fix that needs judgement."""
+    judged = fix.otherwise if isinstance(fix, Edit) else fix
+    return judged.then if isinstance(judged, Agent) else ()
+
+
 def run(root: Path) -> int:
     found = findings(root)
     red, owing = owed_split(root, found)
     for finding in red:
         print(finding)
+        for line in then_lines(finding.fix):
+            print(f"  then: {line}")
     for finding in owing:
         print(f"owed: {finding}")
     autos = sum(isinstance(finding.fix, Auto) for finding in [*red, *owing])
