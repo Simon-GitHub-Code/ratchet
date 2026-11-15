@@ -51,6 +51,8 @@ import gatelib
 
 PLUGIN = Path(__file__).resolve().parents[1]
 MANIFEST = Path(".claude-plugin/plugin.json")
+COMMIT_FILE = Path(".claude-plugin/commit")
+COMMIT = re.compile(r"[0-9a-f]{40}")
 PIN = re.compile(r"^- Ratchet plugin: (\S+) at ([0-9a-f]{40})$", re.MULTILINE)
 # Why: a line that only starts like the pin, such as a note on where the plugin comes from, is
 # the project's own; only a line of the pin's shape, real or placeholder, is the pin.
@@ -98,9 +100,21 @@ def version_of(plugin: Path) -> str | None:
 
 
 def commit_of(plugin: Path) -> str | None:
-    """The commit a plugin checkout is at; ``None`` for a copy that carries no history."""
+    """The commit a plugin is at.
+
+    With ``.git``, the checkout's ``HEAD``. Without it, the 40 lowercase hex digits of
+    ``.claude-plugin/commit``, which a release commit carries (ADR 0068); ``None`` when that file
+    is missing, ``UNREADABLE`` when it holds anything else.
+    """
     if not (plugin / ".git").exists():
-        return None
+        recorded = gatelib.read_text(plugin / COMMIT_FILE)
+        if recorded is None:
+            return None
+        return (
+            recorded.removesuffix("\n")
+            if COMMIT.fullmatch(recorded.removesuffix("\n"))
+            else UNREADABLE
+        )
     # Why: git exports GIT_DIR to a hook, and `git -C` obeys it over the directory it is given.
     env = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
     result = subprocess.run(

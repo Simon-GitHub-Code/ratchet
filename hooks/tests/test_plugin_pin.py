@@ -116,6 +116,40 @@ def test_a_copy_with_no_history_is_judged_on_its_version_and_says_so(
     assert f"the plugin at {used} is 1.2.3, older than the 1.3.0 at" in out
 
 
+def test_a_copy_with_no_history_takes_its_commit_from_the_release_file(tmp_path: Path) -> None:
+    repos.write(tmp_path, ".claude-plugin/commit", f"{ELSEWHERE}\n")
+    assert plugin_pin.commit_of(tmp_path) == ELSEWHERE
+    repos.write(tmp_path, ".claude-plugin/commit", ELSEWHERE)
+    assert plugin_pin.commit_of(tmp_path) == ELSEWHERE
+
+
+def test_a_copy_with_no_history_and_no_release_file_has_no_commit(tmp_path: Path) -> None:
+    assert plugin_pin.commit_of(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "text", ["", "\n", "abc\n", "F" * 40, "g" * 40, "f" * 41, f"{ELSEWHERE}\n\n", f" {ELSEWHERE}"]
+)
+def test_a_release_file_that_is_not_one_commit_is_unreadable(tmp_path: Path, text: str) -> None:
+    repos.write(tmp_path, ".claude-plugin/commit", text)
+    assert plugin_pin.commit_of(tmp_path) == plugin_pin.UNREADABLE
+
+
+@pytest.mark.parametrize("text", [f"{ELSEWHERE}\n", ELSEWHERE])
+def test_a_copy_with_a_release_file_is_judged_on_its_commit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str
+) -> None:
+    used = tmp_path / "cache/ratchet/1.2.3"
+    repos.write(used, MANIFEST, '{"version": "1.2.3"}')
+    repos.write(used, ".claude-plugin/commit", text)
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE}")
+    assert run(root, used, capsys)[0] == 0
+    adopted(root, f"- Ratchet plugin: 1.2.3 at {'a' * 40}")
+    code, out = run(root, used, capsys)
+    assert code == 1
+    assert f"is 1.2.3 at {ELSEWHERE}" in out
+
+
 @pytest.mark.parametrize("line", ["- Ratchet plugin: <X.Y.Z> at <ratchet-sha>", "", None])
 def test_a_binding_that_pins_nothing_is_red_and_names_the_plugin_in_use(
     line: str | None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
