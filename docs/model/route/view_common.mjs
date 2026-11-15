@@ -1,4 +1,4 @@
-// The owner's words for the route's model, shared by the four charts of docs/model/route.md.
+// The owner's words for the route's model, shared by the five charts of docs/model/route.md.
 
 export const NEXT = {
   init: "Run /ratchet:init",
@@ -64,6 +64,7 @@ const STEP = {
   OwnerLandsGuardEdits: "you land the guard edits",
   OwnerChangesTicket: "you change the ticket",
   OwnerResolvesTicket: "you mark the ticket resolved",
+  UpgradeAsksTheFlagLine: "an upgrade asks the Flag: line before deployment",
   UpgradeLeavesRowsToFill: "an upgrade leaves rows for an agent to fill",
   AgentFillsRows: "an agent fills the rows",
   KindOfCodeArrives: "a new kind of code arrives",
