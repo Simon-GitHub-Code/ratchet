@@ -238,11 +238,11 @@ Each item below flips the pins it names. Delete each pin in the same change.
 
 ## Charts
 
-The rules were checked on `Route.tla`, SHA-256 `f91ec8a30b8da18e10a1ef43dbbaa3bb6a185a6cef0fec15614e3e413bc836c9`. Run with the 20 rules that hold, TLC reached 2778 states, and its last line counts 7639 states generated: the start and 7638 steps. Nothing deadlocks. Run once for each of the five rules that break, with one worker, TLC stops at the shortest run that breaks it. For `RealAdviceCanBeFollowed` and `RealFlagLineBeforeTheBuild` that is the shortest run of the `Flag:` line's divergence, 14 steps from an empty directory. For `RealStaleConjectureBeforeTheBuild` it is the shortest run of the stale conjecture's, 14 steps too, the last of them the edit of the criteria. For `RealUnprovedAdoptionNeverBuilds` it is the shortest run of its own, 16 steps. `FollowingRealAdviceLowersRank` breaks after 5: `/ratchet:init`, the tracker, the adoption stopped after its pin, the hooks, and the commit the real route names on the adoption's branch, where the pages name `/ratchet:adopt`.
+The rules were checked on `Route.tla`, SHA-256 `1c8693f1e1f525bfb70cb7824ae4de130155bd161339aa56192cb1587746d0c4`. Run with the 21 rules that hold, TLC reached 2778 states, and its last line counts 7643 states generated: the start and 7642 steps. Nothing deadlocks. Run once for each of the four rules that break, with one worker, TLC stops at the shortest run that breaks it. For `RealAdviceCanBeFollowed` and `RealStaleConjectureBeforeTheBuild` that is the shortest run of the stale conjecture's divergence, 14 steps from an empty directory, the last of them the edit of the criteria. For `RealUnprovedAdoptionNeverBuilds` it is the shortest run of the adoption's, 16 steps. `FollowingRealAdviceLowersRank` breaks after 5: `/ratchet:init`, the tracker, the adoption stopped after its pin, the hooks, and the commit the real route names on the adoption's branch, where the pages name `/ratchet:adopt`.
 
-That module is too large for the statechart tool to draw. The charts are drawn from `RouteShown.tla`, SHA-256 `a4ce947075e65b06d5b58598a2138da64b810204d69443ba5673bad83e9878bf`: the same graph seen through what the charts show, which is what the route names, what it would name beneath, the checkout, what is owed, and whether the `Flag:` line is missing. Each chart's report says that TLC reached 482 states and 1713 steps there, and that nothing deadlocks.
+That module is too large for the statechart tool to draw. The charts are drawn from `RouteShown.tla`, SHA-256 `22d788ec9102cbaab79c967aa6ef29a5a2aa1b4022446489aa5dd719aba0defe`: the same graph seen through what the charts show, which is what the route names, what it would name beneath, the checkout, what is owed, and whether the `Flag:` line is missing. Each chart's report says that TLC reached 480 states and 1699 steps there, and that nothing deadlocks.
 
-A stale conjecture has no chart of its own. Seen with whether a conjecture is stale, the summary has 665 states, past the 500 the statechart tool draws. The work chart shows it: the edit of the criteria leads from "Build the agent-ready tickets" to the conjecture, which the real route reads as the build.
+A stale conjecture has no chart of its own. Seen with whether a conjecture is stale, the summary has 661 states, past the 500 the statechart tool draws. The work chart shows it: the edit of the criteria leads from "Build the agent-ready tickets" to the conjecture, which the real route reads as the build.
 
 Each chart gives each of those states one label, and draws an arrow where a step changes the label. A step that keeps the label is not drawn. The summary carries no rule, so the charts have no legend. A state where the real route names something else says so in its label.
 
@@ -250,7 +250,7 @@ Each chart gives each of those states one label, and draws an arrow where a step
 
 What the route names once nothing in the checkout is unfinished, no records branch waits and no rows to fill, safeguard, review or architecture is owed. Four labels share one state: the drain's three kinds of park and the park for a safeguard are "Release the ticket the drain parked". `build` and `drain` are "Build the agent-ready tickets". A state where the real route names something else says so after "yet the route names". Two do. Where an adoption stopped after its pin, the pages name `/ratchet:adopt` and the real route names what follows it, whatever the checkout and the tickets hold; that is one state here, and the resume leaves it for wherever the work stands. Where a ticket's conjecture is stale, the pages name its conjecture, and the real route names the build. Where the pages name the build of one ticket and the real route the drain, which would build a stale ticket after it, the chart shows the build alone, since both are "Build the agent-ready tickets".
 
-18 states and 49 arrows. It does not draw the 1182 steps that keep the label, which are most of the checkout's steps.
+18 states and 48 arrows. It does not draw the 1174 steps that keep the label, which are most of the checkout's steps.
 
 ```mermaid
 ---
@@ -270,10 +270,11 @@ stateDiagram-v2
   s10: State the ticket's conjecture
   s11: Finish the blocking ticket first
   s12: Build the agent-ready tickets
-  s13: The ticket is built on its branch
-  s14: Answer what the blocked run asked
-  s15: Mark the merged ticket resolved
-  s16: Release the ticket the drain parked
+  s13: State the ticket's conjecture, yet the route names: Build the agent-ready tickets
+  s14: The ticket is built on its branch
+  s15: Answer what the blocked run asked
+  s16: Mark the merged ticket resolved
+  s17: Release the ticket the drain parked
   [*] --> s0
   s0 --> s1: you run /ratchet:init
   s1 --> s2: you set up the tracker
@@ -302,29 +303,34 @@ stateDiagram-v2
   s10 --> s12: you state the ticket's conjecture
   s11 --> s10: you agree a ticket or you finish a ticket yourself
   s11 --> s12: you finish a ticket yourself or you agree a ticket
-  s12 --> s13: an agent builds the ticket or the build stops part-way
-  s12 --> s14: the build run blocks
-  s12 --> s15: the drain builds and merges a ticket or the drain merges one and parks the next for a safeguard
-  s12 --> s16: the drain parks a ticket
-  s12 --> s10: an upgrade asks the Flag: line before deployment
-  s4 --> s15: you run /ratchet:adopt
-  s13 --> s15: the branch merges or the merge leaves the branch checked out
-  s14 --> s12: you answer the blocked run
-  s15 --> s6: you mark the ticket resolved
-  s15 --> s9: you mark the ticket resolved
-  s15 --> s10: you mark the ticket resolved
-  s15 --> s12: you mark the ticket resolved
-  s16 --> s12: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
-  s14 --> s10: you answer the blocked run
-  s16 --> s10: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
-  s15 --> s16: you mark the ticket resolved
+  s11 --> s13: you agree a ticket or you finish a ticket yourself
+  s12 --> s13: you edit the criteria
+  s12 --> s14: an agent builds the ticket or the build stops part-way
+  s12 --> s15: the build run blocks
+  s12 --> s16: the drain builds and merges a ticket or the drain merges one and parks the next for a safeguard
+  s12 --> s17: the drain parks a ticket
+  s12 --> s10: an upgrade asks the Flag: line before deployment or you edit the criteria
+  s13 --> s12: you state the ticket's conjecture
+  s13 --> s10: an upgrade asks the Flag: line before deployment
+  s4 --> s16: you run /ratchet:adopt
+  s14 --> s16: the branch merges or the merge leaves the branch checked out
+  s15 --> s12: you answer the blocked run
+  s16 --> s6: you mark the ticket resolved
+  s16 --> s9: you mark the ticket resolved
+  s16 --> s10: you mark the ticket resolved
+  s16 --> s12: you mark the ticket resolved
+  s17 --> s12: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
+  s10 --> s13: you state the ticket's conjecture or an agent lands the records or you merge the records branch or an agent fills the rows or an agent lands the architecture review or an agent binds the safeguard or the branch merges or an agent switches to the default branch
+  s15 --> s10: you answer the blocked run
+  s17 --> s10: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
+  s16 --> s17: you mark the ticket resolved
 ```
 
 ### The checkout
 
 What is unfinished in the checkout, which the route names before any work. A merged branch still checked out is left by a switch, never merged again. The merge of it, which changes nothing, keeps the label and is not drawn.
 
-8 states and 19 arrows. It does not draw the 770 steps that keep the label: the setup, the tickets, and what is owed.
+8 states and 19 arrows. It does not draw the 939 steps that keep the label: the setup, the tickets, and what is owed.
 
 ```mermaid
 ---
@@ -365,7 +371,7 @@ stateDiagram-v2
 
 Rows an upgrade left for an agent to fill are named first of these, and no feature or drain starts until they are written (ADR 0050); the model takes the feature run and the drain away while they are owed. A safeguard or an architecture review that is owed is named before the next feature, and after anything unfinished in the checkout. A review comes before a safeguard (ADR 0052): with both owed, landing the review leaves the safeguard named.
 
-7 states and 13 arrows. It does not draw the 1145 steps that keep the label.
+7 states and 13 arrows. It does not draw the 1318 steps that keep the label.
 
 ```mermaid
 ---
@@ -399,7 +405,7 @@ stateDiagram-v2
 
 `/ratchet:adopt` records the architecture, and an adoption by an older plugin never asked it. An upgrade owes it where it was never asked (ADR 0049). The route names it after the rows to fill, a review and a safeguard, and offers beside it the step it would otherwise name, so it never hides a build or the drain. `/ratchet:architecture` leaves the record on a branch whose merge is the owner's: this chart draws that as recorded, and the checkout's chart draws the merge.
 
-7 states and 15 arrows. It does not draw the 1398 steps that keep the label.
+7 states and 15 arrows. It does not draw the 1586 steps that keep the label.
 
 ```mermaid
 ---
@@ -435,7 +441,7 @@ stateDiagram-v2
 
 The upgrade that ships ADR 0061 leaves the line missing where a record in flight states its conjecture. The route then names a conjecture once nothing it names first is open: the spec's, where the spec is not yet split, and the ticket's otherwise. That conjecture lands the line on the spec for both tickets. A held ticket is released first, and then needs its conjecture. A ticket the owner finishes themself closes without it. The real route names the same in every state here.
 
-5 states and 13 arrows. It does not draw the 1398 steps that keep the label.
+5 states and 13 arrows. It does not draw the 1581 steps that keep the label.
 
 ```mermaid
 ---
