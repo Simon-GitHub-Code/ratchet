@@ -11,12 +11,9 @@ the preflight asking that line before deployment: ``operability_asked`` stands i
 ``d`` and ``e``; the owner closes a ticket by its status line.
 After each action ``seen`` reads the repository back in the model's terms.
 
-The publish check of ADR 0060 is ``publish_check.py``. Until ``drain.py`` records a start in the
-note and runs the check itself, the world records the start where the model says ``open`` and an
-``update`` that moves the branch do, and stands in for ``drain.py check`` where the ticket has a
-tree: the real check reads the branch against that start, and a red verdict, or a rebase left
-unfinished, closes the ticket by the real ``close``. Once a note holds ``start``, the world runs
-the script's own ``check`` and reads ``start`` and ``passed`` back from the note.
+The publish check of ADR 0060 is ``publish_check.py``. ``drain.py open`` records the start in the
+note, and ``drain.py check`` runs the check against it; the world runs ``check --final``, the
+check that says the run is over, and reads ``start`` and ``passed`` back from the note.
 """
 
 from __future__ import annotations
@@ -283,8 +280,6 @@ class World:
         self.asked = False
         self.texts = dict(TEXTS)
         """Each ticket's text as filed, which its note's digest names until the owner edits it."""
-        self.starts: dict[Name, publish_check.Start] = {}
-        """The start the world recorded for a ticket while ``drain.py`` records none."""
 
     def preflight(self) -> contextlib.AbstractContextManager[object]:
         """The preflight as the upgrade leaves it: asking the ``Flag:`` line once it has run."""
@@ -402,7 +397,6 @@ class World:
                 self.command(*self.argv(model.KILLS[kind], REF[name]))
         elif kind in COMMANDS:
             self.command(*self.argv(kind, REF[name]))
-            self.restart(kind, name)
         elif kind is Kind.UPDATE_UNREADABLE:
             with self.unreadable():
                 self.command(*self.argv(Kind.UPDATE, REF[name]))
@@ -412,22 +406,11 @@ class World:
             self.by_hand(kind, name)
 
     def noted_start(self, name: Name) -> publish_check.Start | None:
-        """The start the note records, or the one the world recorded while the note holds none."""
+        """The start the note records, if it holds one."""
         note = drain.queue_notes.read_note(self.root, BRANCH[name])
-        if "start" in note:
-            return publish_check.parse(json.dumps({"start": note["start"]}))
-        return self.starts.get(name)
-
-    def scripted(self, name: Name) -> bool:
-        """Whether ``drain.py`` records the start in the ticket's note itself."""
-        return "start" in drain.queue_notes.read_note(self.root, BRANCH[name])
-
-    def restart(self, kind: Kind, name: Name) -> None:
-        """The start the model says ``open``, or an ``update`` that moved the branch, records."""
-        moved = kind is Kind.UPDATE and '"moved": true' in self.printed
-        opened = kind is Kind.OPEN and self.code == 0
-        if (moved or opened) and not self.scripted(name):
-            self.starts[name] = publish_check.start_of(self.root, BRANCH[name], no_forge)
+        if "start" not in note:
+            return None
+        return publish_check.parse(json.dumps({"start": note["start"]}))
 
     def unreadable(self) -> contextlib.AbstractContextManager[object]:
         """The check of ADR 0060 meets a present state it cannot read."""
@@ -435,27 +418,11 @@ class World:
         return mock.patch.object(publish_check, "branch_moves", side_effect=refused)
 
     def check(self, kind: Kind, name: Name) -> None:
-        """``drain.py check``, or the real check and ``close`` standing in for it."""
+        """``drain.py check --final``, the check that says the run is over."""
         if kind is Kind.CHECK_HALTED:
             self.halt(name)
-        if self.scripted(name):
-            with self.unreadable() if kind is Kind.CHECK_UNREADABLE else contextlib.nullcontext():
-                self.command("check", REF[name])
-            return
-        start, tree = self.starts[name], self.tree(name)
-        assert tree in drain.worktrees(self.root), "a check with no tree needs drain.py check"
-        try:
-            with self.unreadable() if kind is Kind.CHECK_UNREADABLE else contextlib.nullcontext():
-                moves, halted, _ = publish_check.check(tree, start, no_forge)
-        except publish_check.UnreadableError as error:
-            line = f"{publish_check.SAID} the present state cannot be read: {error}"
-            self.command("close", REF[name], "--outcome", "waits", "--reason", line)
-            return
-        if moves:
-            why = [arg for move in moves for arg in ("--reason", f"a role published: {move}")]
-            self.command("close", REF[name], "--outcome", "parked", *why)
-        elif halted:
-            self.command("close", REF[name], "--outcome", "waits", "--reason", HALTED_WHY)
+        with self.unreadable() if kind is Kind.CHECK_UNREADABLE else contextlib.nullcontext():
+            self.command("check", REF[name], "--final")
 
     def halt(self, name: Name) -> None:
         """A rejudge whose rebase conflicted, and whose reconcile stopped halfway through it.
@@ -465,13 +432,10 @@ class World:
         """
         branch, tree = BRANCH[name], self.tree(name)
         start = publish_check.start_of(self.root, branch, no_forge, rebase_onto="main")
-        if self.scripted(name):
-            path = drain.queue_notes.note_path(self.root, branch)
-            note = drain.queue_notes.read_note(self.root, branch)
-            started = json.loads(json.dumps(dataclasses.asdict(start)))
-            drain.queue_notes.write_note(path, {**note, "start": started})
-        else:
-            self.starts[name] = start
+        path = drain.queue_notes.note_path(self.root, branch)
+        note = drain.queue_notes.read_note(self.root, branch)
+        started = json.loads(json.dumps(dataclasses.asdict(start)))
+        drain.queue_notes.write_note(path, {**note, "start": started})
         git(tree, "-c", "sequence.editor=sed -i 1ibreak", "rebase", "-i", "main")
 
     def split(self, name: Name) -> None:
@@ -622,8 +586,7 @@ class World:
             return None
         outcome = held.get("outcome")
         rebasing = bool(held.get("rebasing"))
-        # Why: no file holds the mark until drain.py writes the start; the model's stands in.
-        passed = held.get("passed") is True if "start" in held else bool(was and was.passed)
+        passed = held.get("passed") is True
         if outcome is None:
             return Note(Outcome.OPENED, rebasing=rebasing, passed=passed)
         first = self.texts[REF[name]]
@@ -708,8 +671,9 @@ class LeaseWorld:
         return self.world.printed
 
     def land(self, which: Drain) -> None:
-        """The agent's commits and its record, made once, then ``land`` up to the merge it runs."""
+        """The check, the agent's commits and its record, then ``land`` up to the merge it runs."""
         if not drain.ahead(self.world.root, "main", BRANCH[Name.A]):
+            self.world.command("check", REF[Name.A], "--final")
             self.world.by_hand(Kind.COMMIT, Name.A)
             self.world.by_hand(Kind.RECORD, Name.A)
         self.start_landing(which)

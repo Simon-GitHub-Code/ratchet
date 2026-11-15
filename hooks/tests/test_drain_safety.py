@@ -1131,6 +1131,7 @@ def test_a_mark_of_a_discard_that_finished_does_not_uncount_the_next_runs_retry(
 ) -> None:
     root = project(tmp_path)
     run(root, "open", ALPHA)
+    assert run(root, "check", ALPHA, "--final") == 0
     tree = drain.tree_of(root, BRANCH_A)
     killed = start(root, "land", ALPHA, DRV_KILL_AT="discard")
     killed.communicate(timeout=60)
