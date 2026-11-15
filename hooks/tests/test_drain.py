@@ -95,10 +95,7 @@ def run(root: Path, *argv: str) -> int:
 def build(
     root: Path, branch: str, files: dict[str, str], *, record: dict[str, object] | None = None
 ) -> Path:
-    """Commit ``files`` in the ticket's work tree as the pipeline's orchestrator would.
-
-    The check that says the run is over has passed the start by then: the orchestrator commits last.
-    """
+    """Commit ``files`` in the ticket's work tree as the pipeline's orchestrator would."""
     tree = drain.tree_of(root, branch)
     checked = note(root, branch)
     if "start" in checked:

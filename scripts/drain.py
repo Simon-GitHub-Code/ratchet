@@ -167,7 +167,6 @@ OWNER_FILE = 0o600
 LANDING_TRIES, LANDING_POLL = 20, 0.05
 # Why: `update` uses 1 and 2 for its own answers, so a refusal for a live landing has its own code.
 LANDING_RUNNING = 3
-# Why: a check that cannot read, an `update` it refuses, and a `land` of a start not passed.
 UNREAD = 3
 LANDING_MAY_RUN = "a landing may be in flight in another drain"
 LOCK, LEASE = "ratchet-drain.lock", "ratchet-drain.lease"
@@ -187,7 +186,6 @@ OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
 # Why: ADR 0052. The red line of a kind whose architecture review is owed; the review releases it.
 REVIEW_RED = re.compile(r"triggers: architecture review owed: '([^']+)' gained \d+ instance")
 DEFAULT_WORDS = "the default branch"
-# Why: the line starts with a code the drain resolves itself, so the close retries the ticket.
 UNREADABLE_CODE = "refs"
 START_DROPPED = frozenset({"hold", "attempts", "rebasing", "discarding", "start", "passed"})
 BEHIND = (
@@ -785,10 +783,6 @@ def not_started(entry: Entry | None, drafted: Plan) -> list[str]:
 
 
 def forge_gh(drain: Drain) -> preflight.Runner:
-    """``gh`` run in the repository's root, which the publish check reads the forge through.
-
-    A drain that reads no tracker answers nothing, which the check reads as a forge it cannot reach.
-    """
     if drain.gh is not preflight.run_gh:
         return drain.tracker
 
@@ -924,7 +918,6 @@ def update(drain: Drain, ticket: preflight.Ticket) -> int:
 
 
 def merged_by_note(root: Path, branch: str) -> bool:
-    """Whether the note says ``branch`` merged, recording a merge it does not say yet."""
     if recorded_merge(root, branch):
         record_merge_aloud(root, branch)
     if queue_notes.read_note(root, branch).get("outcome") != MERGED:
@@ -942,7 +935,6 @@ def drop_mark(root: Path, branch: str) -> None:
 
 
 def noted_start(root: Path, branch: str) -> publish_check.Start | None:
-    """The start the note records; ``None`` when it holds none."""
     start = queue_notes.read_note(root, branch).get("start")
     try:
         return publish_check.parse(json.dumps({"start": start}))
@@ -951,12 +943,10 @@ def noted_start(root: Path, branch: str) -> publish_check.Start | None:
 
 
 def passed(root: Path, branch: str) -> bool:
-    """Whether a publish check passed the start the note records."""
     return queue_notes.read_note(root, branch).get("passed") is True
 
 
 def mark_passed(root: Path, branch: str) -> None:
-    """Write the mark that a publish check passed the start the note records."""
     note = queue_notes.read_note(root, branch)
     queue_notes.write_note(queue_notes.note_path(root, branch), {**note, "passed": True})
 
@@ -964,7 +954,6 @@ def mark_passed(root: Path, branch: str) -> None:
 def read_present(
     drain: Drain, tree: Path, start: publish_check.Start
 ) -> tuple[list[str], bool, str | None]:
-    """What moved since ``start``, a rebase left unfinished, and why the present was not read."""
     try:
         return publish_check.check(tree, start, forge_gh(drain))
     except publish_check.UnreadableError as error:
@@ -972,7 +961,6 @@ def read_present(
 
 
 def park_published(drain: Drain, ticket: preflight.Ticket, moves: list[str]) -> None:
-    """End the run as a role that published: parked, held until the ticket's text changes."""
     for move in moves:
         print(f"{publish_check.SAID} {move}")
     print(publish_check.RED)
@@ -985,11 +973,6 @@ def unreadable_line(why: str) -> str:
 
 
 def checkable(drain: Drain, ticket: preflight.Ticket) -> tuple[publish_check.Start, Path] | int:
-    """The start and the work tree ``check`` reads, or the exit code of a check that cannot start.
-
-    A branch with commits of its own and no work tree gets one under the cap, as ``update`` makes
-    one. A branch with none gets none: it holds no commit a role made, and ``open`` makes it again.
-    """
     root, branch = drain.root, route.own_branch(ticket)
     if merged_by_note(root, branch):
         print(f"check: {ticket.ref} is merged and is not checked")
@@ -1017,11 +1000,6 @@ def checkable(drain: Drain, ticket: preflight.Ticket) -> tuple[publish_check.Sta
 
 
 def check(drain: Drain, ticket: preflight.Ticket, *, final: bool) -> int:
-    """Run the publish check of ADR 0060 on the ticket's branch; the exit decides.
-
-    Why: the mark that lets ``land`` merge is written only by a check that says the run is over,
-    so a check before a resume, where a role can still commit, leaves the start unpassed.
-    """
     ready = checkable(drain, ticket)
     if isinstance(ready, int):
         return ready
@@ -1049,13 +1027,6 @@ def check(drain: Drain, ticket: preflight.Ticket, *, final: bool) -> int:
 
 
 def first_check(drain: Drain, ticket: preflight.Ticket, tree: Path) -> int | None:
-    """``update``'s own check of a start no check passed; the exit code when it stops ``update``.
-
-    A role's commit parks the ticket here. A present state it cannot read refuses ``update`` and
-    closes nothing, for a close would end the hold of a parked ticket. Green marks the start
-    passed before the rebase begins, so a run killed after the rebase is not checked against the
-    old start again, and its rebase read as a role's move.
-    """
     root, branch = drain.root, route.own_branch(ticket)
     start = noted_start(root, branch)
     if start is None or passed(root, branch):
@@ -1079,7 +1050,6 @@ def restarted(
     branch: str,
     rebase_onto: str | None = None,
 ) -> dict[str, object]:
-    """``note`` with the head ``tree`` is at recorded as the start, and no mark."""
     kept = {k: v for k, v in note.items() if k not in {"start", "passed"}}
     try:
         start = publish_check.start_of(tree, branch, forge_gh(drain), rebase_onto=rebase_onto)
@@ -1101,9 +1071,6 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
     A built branch an earlier drain left, with no work tree, gets one. A last commit that is the
     verdict record is dropped after the rebase: it certified a tree that is gone, and the second
     review writes the record that replaces it.
-
-    A branch with commits of its own is checked first when no check passed its start, and a
-    rebase that moves the branch records its new head as the start.
     """
     branch = route.own_branch(ticket)
     tree = tree_of(drain.root, branch)
@@ -1150,7 +1117,6 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
 
 
 def rebase_tree(drain: Drain, tree: Path, note: dict[str, object], *, branch: str) -> int:
-    """Rebase ``tree`` onto the default branch, its note already marked; record the new start."""
     base = merge_ready.default_ref(drain.root)
     path = queue_notes.note_path(drain.root, branch)
     if gatelib.git(tree, "rebase", "--quiet", base) is not None:
