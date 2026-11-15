@@ -1,6 +1,6 @@
 # Ratchet in OpenCode
 
-OpenCode reads `AGENTS.md`, discovers skills from `.opencode/skills/`, `~/.config/opencode/skills/` and the Claude-compatible `.claude/skills/` paths, and loads TypeScript plugins from `.opencode/plugins/` and `~/.config/opencode/plugins/`.
+OpenCode reads `AGENTS.md` and discovers skills from `.opencode/skills/`, `~/.config/opencode/skills/` and the Claude-compatible `.claude/skills/` paths. It loads TypeScript plugins from `.opencode/plugins/` and `~/.config/opencode/plugins/`.
 
 ## Install
 
@@ -11,11 +11,17 @@ npx skills@latest add Simon-GitHub-Code/ratchet -a opencode
 npx skills@latest add mattpocock/skills -a opencode
 ```
 
-The adapter writes `~/.config/opencode/plugins/ratchet-guard.ts` with the checkout's path filled in. pstack and impeccable ship no OpenCode package; pstack's skills can be copied as files, with its Cursor tool names unmapped.
+The adapter writes `~/.config/opencode/plugins/ratchet-guard.ts` with the checkout's path filled in.
+
+pstack and impeccable ship no OpenCode package. pstack's skills can be copied as files, with its Cursor tool names unmapped.
 
 ## The guard
 
-`adapters/opencode/ratchet-guard.ts` is an OpenCode plugin. Its `tool.execute.before` handler maps `bash`, `edit` and `write` to `Bash`, `Edit` and `Write`, runs `hooks/guard.py` with the Claude-shaped JSON and the project directory, and throws on `deny`. OpenCode has no way for a plugin to hand a call to the owner, so `ask` also throws, with the reason and "run it yourself". The guard asks on a merge, the agent-ready label and a write of a CI workflow or an agent-instruction file (`CLAUDE.md`, `AGENTS.md`, anything under `.claude/`, at any depth), each the owner's to give, so in OpenCode the owner makes those himself; a guard path change on a branch gets no verdict (ADR 0033), so an agent here makes it as in any other harness. A guard that cannot run throws too: fail closed, as in Claude Code.
+`adapters/opencode/ratchet-guard.ts` is an OpenCode plugin. Its `tool.execute.before` handler maps `bash`, `edit` and `write` to `Bash`, `Edit` and `Write`. It runs `hooks/guard.py` with the Claude-shaped JSON and the project directory, and throws on `deny`.
+
+- **`ask`:** OpenCode has no way for a plugin to hand a call to the owner, so `ask` also throws, with the reason and "run it yourself". The guard asks on a merge, the agent-ready label, a write of a CI workflow or an agent-instruction file (`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`, anything under `.claude/` but its `worktrees/`, at any depth), and a command line it cannot read. Each is the owner's to give, so in OpenCode the owner makes those himself.
+- **A guard path change on a branch** gets no verdict, so an agent here makes it as in any other harness.
+- **A guard that cannot run** throws too: fail closed, as in Claude Code.
 
 ## Names
 
@@ -24,11 +30,13 @@ The adapter writes `~/.config/opencode/plugins/ratchet-guard.ts` with the checko
 | `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | export it as `~/.config/opencode/ratchet`, the clone the install made |
 | `${CLAUDE_SKILL_DIR}` | the skill folder under the skills directory the installer chose |
 | `${CLAUDE_PLUGIN_ROOT}` | the clone, `~/.config/opencode/ratchet` in the install above. OpenCode is not known to set this variable, and the guard plugin takes its path from the adapter, not from it. Export `CLAUDE_PLUGIN_ROOT="$HOME/.config/opencode/ratchet"` before starting a session, so the commands in the skills resolve. This mapping is unverified |
-| `disable-model-invocation: true` | no such flag; the agent reads the skill as a document |
-| the question tool | none for plugins; the model asks in plain text |
-| subagents | OpenCode agents; otherwise the pipeline by hand from `pipeline.md` |
+| `disable-model-invocation: true` | no such flag. The agent reads the skill as a document |
+| the question tool | none for plugins. The model asks in plain text |
+| subagents | OpenCode agents. Otherwise the pipeline by hand from `pipeline.md` |
 | `claude plugin list` | the `plugin` array in `opencode.json` and the plugin directories |
 
 ## Verified
 
-Not yet run against a live OpenCode. From its docs: the plugin locations, `tool.execute.before(input, output)` with `input.tool` and `output.args`, throwing to block, and `filePath` and `command` as the file and shell arguments. Everything on this page is to be checked on first use.
+Not yet run against a live OpenCode. Everything on this page is to be checked on first use.
+
+From its docs: the plugin locations, `tool.execute.before(input, output)` with `input.tool` and `output.args`, throwing to block, and `filePath` and `command` as the file and shell arguments.
