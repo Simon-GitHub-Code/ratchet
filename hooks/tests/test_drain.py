@@ -1230,6 +1230,23 @@ def test_a_split_parent_is_not_built_and_a_ticket_waiting_on_it_waits_for_its_pa
     assert waiting.state == "buildable"
 
 
+def test_a_split_whose_note_names_no_parts_holds_its_waiting_ticket(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **WHOLE)
+    run(root, "open", ALPHA)
+    assert run(root, "split", ALPHA, "--plan", str(plan_file(tmp_path, HALVES))) == 0
+    capsys.readouterr()
+    path = queue_notes.note_path(root, BRANCH_A)
+    queue_notes.write_note(path, {**queue_notes.read_note(root, BRANCH_A), "children": []})
+    gh = offline(root).tracker
+    waiting = drain.preflight.fetch(BETA, root, gh)
+    assert waiting is not None
+    assert drain.preflight.open_blockers(waiting, root, gh) == [
+        f"blocker {ALPHA} was split into no parts"
+    ]
+
+
 def test_a_plan_that_does_not_parse_is_a_refused_split_and_a_split_parent_blocks_by_its_parts(
     tmp_path: Path, capsys: Out
 ) -> None:
