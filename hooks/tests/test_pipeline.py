@@ -1097,9 +1097,10 @@ def test_the_spec_role_designs_the_placement_and_the_review_judges_it_on_axis_f(
     assert "mattpocock-skills:codebase-design" in review
     axis = review.split("F. Design.")[1].split("The script files every")[0]
     assert "the `## Architecture` section of docs/process/binding.md" in axis
-    assert "A layer violation is a blocker" in axis
     assert "shallow wrapper" in axis
-    assert "are minor" in axis
+    grades = review.split("- Design axis:")[1].split("A defect the spec defers")[0]
+    assert "A layer violation is a blocker" in grades
+    assert "are minor" in grades
     issue = ran["schemas"]["review"]["properties"]["issues"]["items"]
     assert "design" in issue["properties"]["axis"]["enum"]
 

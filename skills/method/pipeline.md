@@ -112,9 +112,7 @@ Three roles read the ticket: the spec role, which writes the spec from it; the t
 
 ### Severity
 
-- *Blocker:* a wrong result, data loss, a layer violation or a broken non-negotiable from `AGENTS.md`.
-- *Major:* a missing criterion or a test that does not test, a dependency direction the architecture ADR rules out, or an architecture decision made without the owner.
-- *Minor:* everything else (a shallow wrapper, a placement the Design section does not explain).
+Every grade the critique and the review apply, blocker, major or minor, is in one list: `SEVERITY` in `workflows/pipeline.js`, which both prompts cite.
 
 ## The loop
 
