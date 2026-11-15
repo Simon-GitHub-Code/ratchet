@@ -27,6 +27,7 @@ from tests.drain_world import (
     BRANCH,
     DRAFT,
     LANDING_WAIT,
+    PUBLISHED,
     REF,
     LeaseWorld,
     World,
@@ -47,9 +48,20 @@ from tests.test_drain import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-CAP, KEPT, JUDGED, NOT_STALE, ONCE, REPORT_WRITES, HELD, HELD_EDITED, REFUSED, RECOVERS, NO_TREE = (
-    model.RULES
-)
+(
+    CAP,
+    KEPT,
+    JUDGED,
+    NOT_STALE,
+    ONCE,
+    REPORT_WRITES,
+    HELD,
+    HELD_EDITED,
+    REFUSED,
+    RECOVERS,
+    NO_TREE,
+    UNPUBLISHED,
+) = model.RULES
 
 OPEN_A = ["drain.py open a", "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
@@ -87,6 +99,13 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
         "the agent leaves work uncommitted in c",
         "git leaves a stale index lock in the tree of c",
         "drain.py clean --all",
+    ],
+    # Why: ADR 0060's publish check is not in the code yet. Nothing compares the branch with the
+    # state the run started from, so the agent records its verdict on a role's commit and lands it.
+    UNPUBLISHED: [
+        "drain.py open a",
+        "a role of the pipeline run commits in a",
+        "the agent commits the verdict record of a",
     ],
 }
 
@@ -228,6 +247,7 @@ WEIGHTED = [
     Kind.COMMIT,
     Kind.RECORD,
     Kind.RECORD,
+    Kind.PUBLISH,
     Kind.EDIT,
     Kind.KILL_MID_REBASE,
     Kind.KILL_AFTER_REBASE,
@@ -408,6 +428,19 @@ def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_w
     held = f"land: {REF[Name.C]} is held and is not landed: "
     assert play.named("drain.py land c").startswith(held)
     assert plan_of(play)[BRANCH[Name.C]].state == "held"
+
+
+def test_a_branch_a_role_committed_on_is_recorded_and_landed_as_nothing_checks_it(
+    tmp_path: Path,
+) -> None:
+    path = COUNTEREXAMPLES[UNPUBLISHED] or []
+    assert broken_by(path) == {UNPUBLISHED}
+    landed = [*path, "drain.py land a"]
+    assert broken_by(landed) == {UNPUBLISHED}
+    play = replay(tmp_path, landed)
+    assert play.world.printed.endswith(f"closed: {REF[Name.A]}: merged\n"), "the drain lands it"
+    subjects = git(play.world.root, "log", "--format=%s", "main").splitlines()
+    assert PUBLISHED in subjects, "the role's commit is on the default branch"
 
 
 def test_open_keeps_a_close_the_report_has_not_printed(tmp_path: Path) -> None:

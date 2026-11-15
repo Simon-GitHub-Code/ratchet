@@ -69,6 +69,8 @@ BRANCH = {Name.A: BRANCH_A, Name.B: BRANCH_B, Name.C: BRANCH_C}
 ANSWER = "\n## Answers\n\nWhich case? The lower.\n"
 CHANGE = "feat(core): the change"
 RECORD = "docs(core): the verdict record"
+PUBLISHED = "feat(core): a role's own commit"
+ROLE_FILE = "src/role.py"
 DRAFT = "src/draft.py"
 VERDICT = "docs/features/alpha/verdict.json"
 STATUSES = {status.value: status for status in Status}
@@ -344,11 +346,12 @@ class World:
         ref, tree = REF[name], self.tree(name)
         if kind is Kind.WORK:
             write(tree, DRAFT, "half done\n")
-        elif kind is Kind.COMMIT:
+        elif kind in {Kind.COMMIT, Kind.PUBLISH}:
             text = (tree / ref).read_text(encoding="utf-8")
             write(tree, ref, text.replace("Status: ready-for-agent", "Status: resolved"))
-            write(tree, f"src/{name.value}.py", f"{name.name} = 1\n")
-            snapshot(tree, CHANGE)
+            built = f"src/{name.value}.py" if kind is Kind.COMMIT else ROLE_FILE
+            write(tree, built, f"{name.name} = 1\n")
+            snapshot(tree, CHANGE if kind is Kind.COMMIT else PUBLISHED)
         elif kind is Kind.RECORD:
             with contextlib.redirect_stdout(io.StringIO()):
                 assert merge_ready.write_record(tree, json.dumps(approval("alpha"))) == 0
@@ -363,7 +366,7 @@ class World:
             self.lock_of(name).unlink()
 
     def seen(self, ghost: model.State) -> Seen:
-        """The repository read back; ``ghost`` gives what no file holds (the reviews)."""
+        """The repository read back; ``ghost`` gives what no file holds (the reviews, a role's commit)."""  # noqa: E501
         drafted = drain.plan(drain.Drain(self.root, None, model.CAP))
         by_ref = {entry.ref: STATUSES[entry.state] for entry in drafted.tickets}
         statuses = {name: by_ref[ref] for name, ref in REF.items() if ref in by_ref}
@@ -399,6 +402,7 @@ class World:
                 note=note,
                 text=text,
                 stashes=sum(f": {BRANCH[name]}: " in line for line in stashes),
+                published=was.published,
             )
             tickets.append(model.normal(ticket))
         listing = git(self.root, "worktree", "list", "--porcelain").splitlines()

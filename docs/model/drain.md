@@ -13,10 +13,10 @@ The model has two graphs.
 The main graph is one drain on one repository with no forge:
 
 - three tickets, `a`, `b` and `c`, where `b` is blocked by `a`, under a cap of one;
-- the drain's commands in any order, what the agent does in a work tree, what the owner does, and a stale index lock git leaves;
+- the drain's commands in any order, what the agent does in a work tree, a commit a role of a pipeline run makes on the branch, what the owner does, and a stale index lock git leaves;
 - a kill of `update`, `close`, `land` or the `merge.py` it runs between two of their effects;
-- each ticket playing one part. The agent commits only in `a`, whose branch goes the whole way to merged, and leaves work uncommitted only in `c`, the ticket the cap holds back. `b`, which waits on `a`, is only opened. A kill stops `update` and `land` only in `a`, and `close` only in `c`;
-- the owner edits a ticket at most once, the agent leaves work uncommitted once, and the retry count of a ticket left waiting stops at three, past which nothing reads it;
+- each ticket playing one part. The agent and a role commit only in `a`, whose branch goes the whole way to merged, and the agent leaves work uncommitted only in `c`, the ticket the cap holds back. `b`, which waits on `a`, is only opened. A kill stops `update` and `land` only in `a`, and `close` only in `c`;
+- the owner edits a ticket at most once, the agent leaves work uncommitted once, a role commits once, and the retry count of a ticket left waiting stops at three, past which nothing reads it;
 - a judge that passes a branch only when its verdict record is its last commit and the branch holds the default tip; a `check` that is always green; and tickets no two of which change the same file, so nothing conflicts.
 
 The lease graph is two drains on one repository and one ticket's work tree. Its first step says how the drains run: each in a session of its own, or both under one long-lived process. Then each drain takes the lease, opens the ticket, leaves a draft or starts a program in its tree, lands the ticket, reports, cleans, stops or dies, in any order. `land` is three steps: up to the `merge.py` it runs, the merge `merge.py` lands, and the close after it. `land` holds the drain's lock for its checks and again for its close, and not while `merge.py` runs, so every other command can run in between.
@@ -39,13 +39,14 @@ What it leaves out is listed [at the end](#left-out).
 | Each ticket's branch | none; no commit of its own; commits, the verdict record not last; commits, the verdict record last; commits, the verdict record last and certifying a tree the branch no longer has |
 | Whether the branch holds the default tip, and whether it is merged | yes or no |
 | Whether the verdict record was written on the tip the branch holds now | yes or no. No file holds it. The model keeps it so that a rule can read it |
+| Whether a role of a pipeline run committed on the branch | yes or no, until the branch merges. A role's brief forbids it, and nothing checks it yet: no file holds the state the run started from (ADR 0060). The model keeps it so that rule 11 can read it |
 | The drain's note on the ticket | none; or opened, merged, or waits or parked. A note can hold the ticket, on the text it was written on, count retries, owe a report, and carry `update`'s mark that a rebase began or `close`'s mark that it has not yet removed the tree |
 | The ticket's text, and its stashes | the text the owner wrote first or after an edit; how many stashes hold its uncommitted work |
 | What a killed `merge.py` left | its scratch work tree; and the ticket whose fast-forward of the default branch was cut off half-way, its files in the default branch's work tree, one part-written, and its index locked |
 
 The plan reads a ticket as `drain.plan` does: `merged` when its branch is, the ticket still to be marked resolved, `held` when its note holds it on the text it has now, `built` when its branch holds a commit the default branch does not, `building` when it has a work tree, `waiting` while its blocker can still merge, `refused` when it cannot, and `buildable` otherwise.
 
-From the start the main graph reaches 12,863 states and 190,251 steps.
+From the start the main graph reaches 22,238 states and 332,594 steps. Before a role's commit was a step it reached 12,863 states and 190,251 steps: the branch a role committed on repeats every state `a`'s branch reaches after a commit.
 
 | Part of the lease graph | Values |
 | --- | --- |
@@ -66,7 +67,8 @@ From the start the lease graph reaches 4,583 states and 60,124 steps.
 | Step | What it does |
 | --- | --- |
 | `drain.py open` | makes the ticket's work tree and a branch at the default tip, when the plan starts it |
-| the agent commits; the agent commits the verdict record; the agent leaves work uncommitted | in the ticket's tree |
+| the agent commits; the agent commits the verdict record; the agent leaves work uncommitted | in the ticket's tree. The agent is the session that runs the pipeline, and it commits after the run returns |
+| a role of the pipeline run commits | in `a`'s clean tree, on a branch with no commit of its own or one `update` rebased for a rejudge, before the run returns. The branch then holds a commit, its verdict record not last |
 | `drain.py update` | rebases the branch when the default branch has moved, first making the work tree of a built branch that has none, and after the rebase dropping a last commit that is the verdict record. On a landed branch it records the merge and does not rebase |
 | `drain.py land` | runs `merge.py`, and closes the ticket as merged, as waiting for a reason the drain resolves itself, or held for the owner |
 | `drain.py close --outcome parked` | writes the note that holds the ticket, then removes the tree with its uncommitted work kept as a stash |
@@ -84,7 +86,7 @@ While a landing is seen, either drain can also run `update a`, `close --outcome 
 
 ## Rules
 
-The promises are twenty-five rules, each about a step. The model numbers them, and the tests and this page use the numbers. The module names each `Rule` and its number, as `Rule6a`.
+The promises are twenty-six rules, each about a step. The model numbers them, and the tests and this page use the numbers. The module names each `Rule` and its number, as `Rule6a`.
 
 | Rule | Says | In Python | In TLC |
 | --- | --- | --- | --- |
@@ -99,6 +101,7 @@ The promises are twenty-five rules, each about a step. The model numbers them, a
 | 7 | A ticket whose blocker waits on the owner is refused. | holds | holds |
 | 8 | A killed command recovers by running again or by `clean --all`. | holds | holds |
 | 10 | `clean --all` leaves no queue work tree. | breaks in 5 steps | breaks in the work run, by the same 5 steps |
+| 11 | A branch a role committed on is never committed on after its run, nor landed (ADR 0060). | breaks in 3 steps | breaks in the life run, by the same 3 steps |
 | 9 | A second drain never removes a work tree a live first drain uses. | breaks in 4 steps | breaks in 4 steps, by the same run |
 | 9a | A second drain removes it only where the docstring says the two look alike. | breaks in 7 steps | breaks in 7 steps, by the same run |
 | 9b | A drain that has stopped never blocks the next. | breaks in 4 steps | breaks in 4 steps, by the same run |
@@ -114,7 +117,7 @@ The promises are twenty-five rules, each about a step. The model numbers them, a
 | 9l | No close is written while a merge that can still land is alive, but by its own landing. | holds | holds |
 | 9m | At most one merge of the ticket that can still land is alive at a time. | holds | holds |
 
-Rules 1 to 8 and 10 are on the main graph, 9 to 9m on the lease graph. In Python the main rules are proved on the whole main graph, and the lease rules on the whole lease graph. TLC checks the main rules on two runs of the main graph, as [below](#the-rules-in-the-modules) says, and the lease rules on the whole lease graph.
+Rules 1 to 8, 10 and 11 are on the main graph, 9 to 9m on the lease graph. In Python the main rules are proved on the whole main graph, and the lease rules on the whole lease graph. TLC checks the main rules on three runs of the main graph, as [below](#the-rules-in-the-modules) says, and the lease rules on the whole lease graph.
 
 In 9f, 9h and 9l a live landing is a `land` that runs, or a `merge.py` it started that can still land. A `merge.py` whose `land` died before its probe can land nothing, so it keeps no landing alive. Rule 9g holds because no step reaches what it forbids: while a landing is alive no other command records its merge, which is rule 9h, so the landing's close never meets a merge recorded by another command. It stays as a rule so that a change that lets one in breaks it.
 
@@ -129,9 +132,10 @@ Rules 9i and 9m stand for "no ticket ends held and merged" and "no ticket ends m
 
 ### Where a rule breaks
 
-Each break is pinned in the tests by the shortest run to it, and each run is replayed on a real repository, where the real scripts do what the model says. The docstring of `drain.py` accepts each one.
+Each break is pinned in the tests by the shortest run to it, and each run is replayed on a real repository, where the real scripts do what the model says. The docstring of `drain.py` accepts each one but rule 11's, which the next script change must close.
 
 - 10, in 5 steps: `drain.py close --outcome parked a`; `drain.py open c`; `the agent leaves work uncommitted in c`; `git leaves a stale index lock in the tree of c`; `drain.py clean --all`. The docstring says: "A work tree whose uncommitted work git cannot stash (a stale lock, a merge left unfinished, a damaged index) is not removed". Rule 2 holds there: the work stays in the tree.
+- 11, in 3 steps: `drain.py open a`; `a role of the pipeline run commits in a`; `the agent commits the verdict record of a`. The role's brief forbids the commit, and nothing checks it: a Workflow script cannot run a command (`workflows/pipeline.js:16-19`), and no script compares the branch with the state the run started from. So the agent records its verdict on the role's commit, and `land` merges it. `test_a_branch_a_role_committed_on_is_recorded_and_landed_as_nothing_checks_it` replays the run and the `land` after it, and finds the role's commit on the default branch.
 - 9, in 4 steps: `one long-lived process runs both drains`; `drain 1: drain.py clean --all`; `drain 1: drain.py open a`; `drain 2: drain.py clean --all`. The docstring says that "two drains run by one process on one repository, with drain 1 between commands and nothing running from its tree, cannot be told apart". Rule 9a, which allows only that, holds there.
 - 9a, in 7 steps: `each drain runs in a session of its own`; `drain 1: drain.py clean --all`; `drain 1: drain.py open a`; `drain 1: drain.py land a, up to the merge.py it runs`; `drain 2: drain.py clean --all --take-over`; `drain 1: a kill stops its land and its merge.py before the merge`; `drain 2: drain.py clean --all`. The owner takes over while drain 1 is alive, and the docstring says that "`--take-over` replaces one whose drain is gone for good". It accepts what follows: "a landing that drain runs keeps its tree while it runs, and the next `clean --all` takes the tree once that landing has ended, its work all committed". The take-over leaves the tree of drain 1's live landing. Once that landing is killed, drain 2's next `clean --all` takes the tree. The kill came before the merge, so it records no merge.
 - 9b, in 4 steps: `each drain runs in a session of its own`; `drain 1: drain.py clean --all`; `drain 1: stops, its session still open`; `drain 2: drain.py clean --all`. The docstring says: "A drain is alive while a process of its own is". A drain that stopped with its session open blocks the next until the owner says `--take-over`. Rule 9c, which asks only that a drain whose processes are all gone block nothing, holds.
@@ -172,17 +176,18 @@ The merge lock has a side effect. The owner's own run of the merge entry point o
 
 ### The rules in the modules
 
-`exports()` writes five modules. Three carry the rules, each as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, so a module holds each state once for each set of step rules the step into it broke. The rules are computed in Python, so TLC checks that a module carries them and finds the shortest runs to them. It does not prove them a second way.
+`exports()` writes six modules. Four carry the rules, each as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, so a module holds each state once for each set of step rules the step into it broke. The rules are computed in Python, so TLC checks that a module carries them and finds the shortest runs to them. It does not prove them a second way.
 
-The whole main graph is too large to export on every test run: its module is 15 MB, and writing it takes about 8 seconds. So TLC checks the main rules on two runs of it. Each run is the part of the main graph its start reaches by some of the model's own steps, so each of its states and steps is one of the graph, and a rule breaks on a step of it exactly where it breaks on that step of the graph.
+The whole main graph is too large to export on every test run: at 12,863 states its module was 15 MB, and writing it took about 8 seconds. So TLC checks the main rules on three runs of it. Each run is the part of the main graph its start reaches by some of the model's own steps, so each of its states and steps is one of the graph, and a rule breaks on a step of it exactly where it breaks on that step of the graph.
 
-- `DrainLanding`, the landing run: every step but those on `c`. Ticket `a` is built, judged, landed or parked, with every kill of `update`, `land` and `merge.py`, and `b` waits on it. It reaches 395 states and 4,157 steps. No step rule breaks, so the module has as many.
+- `DrainLanding`, the landing run: every step but those on `c` and a role's commit. Ticket `a` is built, judged, landed or parked, with every kill of `update`, `land` and `merge.py`, and `b` waits on it. It reaches 395 states and 4,157 steps. No step rule breaks, so the module has as many.
 - `DrainWork`, the work run: the steps on `c` and on the queue, and parking `a`, which lets the cap start `c`. The agent leaves work uncommitted, git locks the index, and kills stop `close`. It reaches 240 states and 2,337 steps. One step rule breaks, so the module has 270 states and 2,643 steps.
+- `DrainTicketLife`, the life run: every step but those on `c` and the kills. Ticket `a` is opened, built by the agent or a role, judged, landed or parked, and `b` waits on it. It reaches 191 states and 1,606 steps. One step rule breaks, rule 11, so the module has 208 states and 1,743 steps.
 - `DrainLease`: the whole lease graph, 4,583 states and 60,124 steps. Four step rules break, so the module has 5,207 states and 71,616 steps.
 
-Together the two runs reach 632 of the main graph's 12,863 states and 6,482 of its 190,251 steps. TLC does not check a step where both `a` and `c` have gone further than that: `c` building while `a` is built, judged or landed, `b` opened while `c` is, or `update` and `land` on `c`. So rule 1, the cap, never meets two trees there. The search in the tests proves every rule on every state and step of the whole main graph, and gives each break the same shortest run as TLC.
+Together the three runs reach 710 of the main graph's 22,238 states and 7,149 of its 332,594 steps. TLC does not check a step where both `a` and `c` have gone further than that: `c` building while `a` is built, judged or landed, `b` opened while `c` is, or `update` and `land` on `c`. So rule 1, the cap, never meets two trees there. The search in the tests proves every rule on every state and step of the whole main graph, and gives each break the same shortest run as TLC.
 
-The whole main graph was checked by TLC once, by hand, on the model as it stands here. `model_tla.export` wrote all of `drain_model.graph()` with the same step rules as one module of 15,244,560 bytes. No test writes that module, so this page names no SHA-256 for it: the five above say which model it was. With every rule but 10, TLC reached 13,560 states and counts 200,583 states generated, and found no error. The module has more states than the graph's 12,863 because it holds a state once more where a step into it broke rule 10, as `DrainWork` does. Run with rule 10 alone, TLC breaks it by the same 5 steps as above. The run took 16 minutes on four workers and 6 GB of memory, so no test repeats it. Run it again when the main graph changes.
+The whole main graph was checked by TLC once, by hand, on the model before a role's commit was a step, when it had 12,863 states. `model_tla.export` wrote all of `drain_model.graph()` with the same step rules as one module of 15,244,560 bytes. No test writes that module, so this page names no SHA-256 for it. With every rule but 10, TLC reached 13,560 states and counts 200,583 states generated, and found no error. The module has more states than the graph's 12,863 because it holds a state once more where a step into it broke rule 10, as `DrainWork` does. Run with rule 10 alone, TLC breaks it by the same 5 steps as above. The run took 16 minutes on four workers and 6 GB of memory, so no test repeats it. The main graph has changed since, with rule 11, and this run has not been repeated on it: run it again, with rule 11 alone as well.
 
 ## The real scripts against the model
 
@@ -197,15 +202,15 @@ Where a real command and the model disagree, the test prints the run and what ea
 
 ## Charts
 
-The main rules were checked on `DrainLanding.tla`, SHA-256 `8a2c2c98b20b87d922d21f30c8c713203ae3f78c9f8e06daf473aebee5833821`, and `DrainWork.tla`, SHA-256 `6ac236aa2476a5a440a5ed908c22ac26c7d59e30ea151633026f6a9256141364`. On `DrainLanding` TLC reached 395 states. Run again with every rule, it counts 4,158 states generated: the start and 4,157 steps. Every main rule holds there. On `DrainWork` TLC reached 270 states, and run again with only the rules that hold, it counts 2,644 states generated: the start and 2,643 steps. Rule 10 breaks there, by the run above, and the others hold.
+The main rules were checked on `DrainLanding.tla`, SHA-256 `52883a80a9d2570a7b3da5857438e1d81c8d9815c8485886cca35fd382e0f225`, `DrainWork.tla`, SHA-256 `4dc4f6ee969ddfa4c640b60cb389d27cb7bab667c6db11f1fefe2008ef6187b1`, and `DrainTicketLife.tla`, SHA-256 `2337cfd803bf75aef0023767ace40babaaa53a77483d2bd042a4518fda6df6ef`. On `DrainLanding` TLC reached 395 states. Run again with every rule, it counts 4,158 states generated: the start and 4,157 steps. Every main rule holds there. On `DrainWork` TLC reached 270 states, and run again with only the rules that hold, it counts 2,644 states generated: the start and 2,643 steps. Rule 10 breaks there, by the run above, and the others hold. On `DrainTicketLife` TLC reached 208 states, and run again with only the rules that hold, it counts 1,744 states generated: the start and 1,743 steps. Rule 11 breaks there, by the run above, and the others hold.
 
 The lease rules were checked on `DrainLease.tla`, SHA-256 `d8dcc245916be657678b56ad5471ff8d97346db4904020e1b9b0b9fa5fbd46a6`. TLC reached 5,207 states. Run again with only the rules that hold, it counts 71,617 states generated: the start and 71,616 steps, as many as the module has. Rules 9c, 9e, 9f, 9g, 9h, 9i, 9j, 9k, 9l and 9m hold. Rules 9, 9a, 9b and 9d break, each by the run above. Once both drains' sessions have ended no step is left, so the module tells TLC that a state with no step out is no deadlock.
 
-The charts of a kill are drawn from `DrainLanding.tla`, and the chart of uncommitted work from `DrainWork.tla`. Four charts are drawn from summaries, each the graph seen through the few values the chart shows. `DrainLife.tla`, SHA-256 `9cf44e9bd78a6f1c2f7447bcd17d18d9688e81b7c35913af6a1213e78bd90ee8`, is the landing run with no kill, seen through what the plan and the note say of ticket `a`. `DrainLeaseShown.tla`, SHA-256 `4284a6774bcfbb061fe332b5cf5d0abc316a8d67b6a85f9225fa3d75d1baa6ba`, is the whole lease graph seen through how the drains run, the lease's holder and whether it drains, has stopped or is gone, the landing, the merge, and a `merge.py` whose `land` was killed before its probe or after. It leaves out the other drain's session and whether it drains, which no chart reads, so that it stays under the 500 states the statechart tool draws. A box groups states, and an arrow from a box leaves every state in it.
+The charts of a kill are drawn from `DrainLanding.tla`, the chart of uncommitted work from `DrainWork.tla`, and the chart of a role's commit from `DrainTicketLife.tla`. Four charts are drawn from summaries, each the graph seen through the few values the chart shows. `DrainLife.tla`, SHA-256 `f5de547f264c1e9bb75013ab71b7a0814ad4010312a9e837c5d15ed31340b5f7`, is the life run, seen through what the plan and the note say of ticket `a`. `DrainLeaseShown.tla`, SHA-256 `4284a6774bcfbb061fe332b5cf5d0abc316a8d67b6a85f9225fa3d75d1baa6ba`, is the whole lease graph seen through how the drains run, the lease's holder and whether it drains, has stopped or is gone, the landing, the merge, and a `merge.py` whose `land` was killed before its probe or after. It leaves out the other drain's session and whether it drains, which no chart reads, so that it stays under the 500 states the statechart tool draws. A box groups states, and an arrow from a box leaves every state in it.
 
 ### One ticket's life
 
-Drawn from `DrainLife.tla`, where TLC reached 105 states and 875 steps: 8 states and 17 arrows. It does not draw the 700 steps that stay in one state. A ticket is held when `close` parks it or `land` refuses it, and only the owner's edit frees it. A branch judged on an older tip goes back through `update`, and only a branch judged on the tip lands.
+Drawn from `DrainLife.tla`, where TLC reached 183 states and 1,542 steps: 8 states and 17 arrows. It does not draw the 1,239 steps that stay in one state. A role's commit takes the same arrow as the agent's: to the drain both are a commit on the branch. A ticket is held when `close` parks it or `land` refuses it, and only the owner's edit frees it. A branch judged on an older tip goes back through `update`, and only a branch judged on the tip lands.
 
 ```mermaid
 ---
@@ -223,7 +228,7 @@ stateDiagram-v2
   [*] --> s0
   s0 --> s1: open
   s0 --> s2: close as parked or land refuses it
-  s1 --> s3: the agent commits
+  s1 --> s3: the agent commits or a role commits
   s1 --> s2: close as parked or land refuses it
   s1 --> s0: clean --all
   s2 --> s0: the owner edits the ticket
@@ -238,6 +243,40 @@ stateDiagram-v2
   s5 --> s3: update
   s5 --> s2: close as parked or land refuses it
   s6 --> s7: report
+```
+
+### A role's commit on the branch
+
+Drawn from `DrainTicketLife.tla`, where TLC reached 208 states and 1,743 steps: 4 states and 6 arrows. It does not draw the 1,644 steps that stay in one state. A role commits before the run returns, and the agent then records its verdict on that commit, which is where rule 11 breaks. `land` merges it. ADR 0060's publish check sits on the arrow out of "A role committed, the run returned": it runs after the run returns and before the agent's first commit, as [below](#what-the-next-script-change-must-do) says.
+
+```mermaid
+---
+title: "A role's commit on the branch, and where ADR 0060's publish check sits"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: Breaks Rule11 in some cases
+    lg1: Path to the Rule11 bug
+  }
+  class lg0 mayBreak
+  class lg1 bugPath
+  s0: No role has committed
+  s1: A role committed, the run returned
+  s2: A role's commit judged
+  s3: Merged
+  [*] --> s0
+  s0 --> s0: open
+  s0 --> s1: a role commits
+  s1 --> s2: the agent commits the verdict record
+  s0 --> s3: land
+  s2 --> s3: land
+  s2 --> s1: update
+  classDef mayBreak fill:#fff3e6,stroke:#e8730c,stroke-width:2.5px,color:#b85a06
+  class s0 bugPath
+  class s1 bugPath
+  class s2 mayBreak
+  class s2 bugPath
+  class s3 mayBreak
 ```
 
 ### A kill of `update`
@@ -523,7 +562,8 @@ stateDiagram-v2
 
 ## Left out
 
-- Forge mode. With a remote `land` is not used: the skill opens a pull request and the forge's merge job merges it.
+- Forge mode. With a remote `land` is not used: the skill opens a pull request and the forge's merge job merges it. So a role's push and a role's pull request are left out too: the role's step here is a commit on the local branch, while ADR 0060's check also compares the remote branch and the open pull request.
+- Which role commits, and more than one commit by roles in a run. The publish check runs once per run, not once per role, so one commit stands for any number.
 - More than two drains on the lease graph, and more than one ticket's work tree there.
 - More than three tickets, a cap above one, a ticket whose run errors, a ticket split as too large, a conflict on rebase or merge, and a red `check`. The judge gives two reasons here: `behind`, which the drain resolves itself, and a verdict record that is not last, which it does not. Its other reasons act as the second.
 - A kill at a point the model does not cut: in `open`, `report` or `clean`, and in `close` after its discard, which leaves what the whole `close` leaves but for the mark that only a retry reads. A kill in `merge.py` before its fast-forward, in the merge or in `check`, leaves its scratch work tree and nothing else, so the model takes one kill there.
@@ -551,6 +591,13 @@ stateDiagram-v2
 
 The real scripts agree with the model on the runs above, the kills, the random runs and the lease walks. They are not compared on every step of either graph.
 
+## What the next script change must do
+
+Rule 11 breaks because a step ADR 0060 decides is not in the code yet. The model has no step the code does not take, so the step is here and not on a graph. The change that adds it removes rule 11's pin, and the model then gains the step.
+
+- **The publish check.** The preflight's report records the state the run starts from: the branch head, and with a forge the remote branch and the open pull request for it. On a rejudge the starting head is the rebased head the drain records. After the run returns and before the agent's first commit, one script compares the branch with that state, once per run, and its exit decides. On the chart of [a role's commit](#a-roles-commit-on-the-branch) it sits on the arrow out of "A role committed, the run returned", ahead of "the agent commits the verdict record".
+- **Where the ticket ends.** ADR 0060 says a branch that moved "ends the ticket as a role that published, never as an approval". Rule 11 asks only that the drain never commits on that branch after the run and never lands it. Which of the drain's closes that is, held for the owner, parked, or waiting to be tried again, the record does not say, so the model does not choose.
+
 ## Changing the drain
 
 Change the model first, then the code, then the page.
@@ -568,4 +615,4 @@ for e in drain_model.exports():
     Path(sys.argv[1], e.name + ".cfg").write_text(e.config)' /tmp/drain-model
 ```
 
-Then, as [the models' README](README.md#drawing-the-charts-again) says, run the `statechart` command once on each of `DrainLanding.tla`, `DrainWork.tla` and `DrainLease.tla` with no view for the rules, run TLC directly with only the rules that hold for the counts, and once for each rule that breaks with one worker. Draw each chart from its module and view in `docs/model/drain/`, as the chart's heading says. Put each `chart.mmd` in its block, the counts beside it, and each SHA-256 on the line that names it.
+Then, as [the models' README](README.md#drawing-the-charts-again) says, run the `statechart` command once on each of `DrainLanding.tla`, `DrainWork.tla`, `DrainTicketLife.tla` and `DrainLease.tla` with no view for the rules, run TLC directly with only the rules that hold for the counts, and once for each rule that breaks with one worker. Draw each chart from its module and view in `docs/model/drain/`, as the chart's heading says. Put each `chart.mmd` in its block, the counts beside it, and each SHA-256 on the line that names it.
