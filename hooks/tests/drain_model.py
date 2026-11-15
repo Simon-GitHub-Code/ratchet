@@ -291,8 +291,9 @@ def classify(state: State) -> dict[Name, Status]:
 
     The plan reads the tickets from the default branch's work tree. While a fast-forward is cut
     off half-way that holds the merge's ticket file, so the ticket being landed reads as resolved.
-    A blocker is read by its open or closed state alone, as ``drain.pending`` reads it: the note of
-    a split blocker, and the parts it names, are not read.
+    A ticket waits on what ``awaited`` names, as ``preflight.blockers`` reads it: a split blocker,
+    open or closed, stands for its parts. A waiting ticket is refused unless everything it waits
+    on can still land, as ``drain.settled`` reads it.
     """
     found: dict[Name, Status] = {}
     resolved = resolved_of(state)
@@ -307,14 +308,29 @@ def classify(state: State) -> dict[Name, Status]:
             found[name] = Status.BUILDING
         elif name is Name.A and state.flag is Flag.MISSING:
             found[name] = Status.REFUSED
-        elif name in BLOCKER and BLOCKER[name] not in resolved:
+        elif any(part not in resolved for part in awaited(state, name)):
             found[name] = Status.WAITING
         else:
             found[name] = Status.BUILDABLE
-    for name, status in list(found.items()):
-        if status is Status.WAITING and found.get(BLOCKER[name]) not in LIVE:
-            found[name] = Status.REFUSED
-    return found
+    return settled(state, found, resolved)
+
+
+def settled(state: State, found: dict[Name, Status], resolved: set[Name]) -> dict[Name, Status]:
+    """``found`` with each waiting ticket refused that waits on one the drain cannot land."""
+    live = {name for name, status in found.items() if status in LIVE}
+    waiting = [name for name, status in found.items() if status is Status.WAITING]
+    reached = True
+    while reached:
+        reached = False
+        for name in waiting:
+            owed = {part for part in awaited(state, name) if part not in resolved}
+            if name not in live and live.issuperset(owed):
+                live.add(name)
+                reached = True
+    return {
+        name: Status.REFUSED if name in waiting and name not in live else status
+        for name, status in found.items()
+    }
 
 
 def building(state: State) -> int:
