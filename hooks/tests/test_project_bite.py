@@ -1600,6 +1600,7 @@ def test_a_directory_swapped_for_a_link_between_listing_and_restoring_never_reac
         copy.restore()
     assert swapped
     assert fingerprint(root) == before
+    assert (root / "src/junk.txt").read_text(encoding="utf-8") == "real\n"
 
 
 def test_a_link_standing_where_a_directory_belongs_is_replaced_and_the_real_tree_is_untouched(

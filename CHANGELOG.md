@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Fixed: 0.12.0 and 0.12.1 could delete or overwrite a file in the real work tree while proving a bite (issue #172). Restoring the scratch copy between runs let git check a path for a link and then delete or write it by path, so a process that `setup` left running could swap a directory of the copy for a link to the real tree in between, and git would remove or write the real file. Restoring now only lists with git and removes and writes every file through descriptors pinned to the copy, a link unlinked and never followed.
+Fixed: 0.12.0 and 0.12.1 could delete or overwrite a file in the real work tree while proving a bite (issue #172). Restoring the scratch copy between runs let git check a path for a link and then delete or write it by path, so a process that `setup` left running could swap a directory of the copy for a link to the real tree in between, and git would remove or write the real file. Restoring now only lists with git and removes and writes every file through descriptors pinned to the copy, a link unlinked and never followed. One window remains: a process `setup` left running that swaps the copy's `.git` for a link could still make git write the real repository (issue #175).
 
 ## 0.12.1
 
