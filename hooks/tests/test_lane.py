@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import lane
+from tests import page_reads
 from tests.repos import branch, commit, git, repository, write
 
 BASE = {
@@ -257,4 +258,87 @@ def test_every_test_file_the_mapping_names_exists() -> None:
 def test_no_other_test_reads_the_changelog() -> None:
     tests = Path(__file__).parent
     readers = [p.name for p in tests.glob("*.py") if "CHANGELOG" in p.read_text(encoding="utf-8")]
-    assert readers == ["test_lane.py"]
+    assert set(readers) == {"test_lane.py", "page_reads.py"}
+
+
+NOT_SEEN = (
+    "The scan reads source and does not see a path a function receives, a loop builds or another"
+    " module names, nor a read a script, git or a subprocess makes for the test."
+)
+
+
+def unmapped_reads() -> list[tuple[str, int, str]]:
+    found = []
+    for name, (hits, _dynamic) in page_reads.reads().items():
+        for line, path in sorted(hits):
+            owed = {
+                test
+                for glob, tests in lane.PAGES.items()
+                for test in tests
+                if lane.pattern(glob).fullmatch(path) or glob.startswith(f"{path}/") or path == "*"
+            }
+            if f"hooks/tests/{name}" not in owed:
+                found.append((name, line, path))
+    return found
+
+
+def covers_adrs(path: str) -> bool:
+    return path in {"*", "docs"} or path == "docs/adr" or path.startswith("docs/adr/")
+
+
+def test_a_test_the_mapping_does_not_name_reads_no_record_by_a_path_its_source_builds() -> None:
+    found = [read for read in unmapped_reads() if covers_adrs(read[2])]
+    assert found == [], f"reads docs/adr, which lane.PAGES maps to no such test. {NOT_SEEN}"
+
+
+def test_a_test_the_mapping_does_not_name_reads_no_page_by_a_path_its_source_builds() -> None:
+    found = [read for read in unmapped_reads() if not covers_adrs(read[2])]
+    assert found == [], f"reads a page lane.PAGES does not map to this test. {NOT_SEEN}"
+
+
+def test_the_scan_follows_a_path_through_names_joins_globs_and_parents(tmp_path: Path) -> None:
+    source = tmp_path / "test_x.py"
+    source.write_text(
+        "from pathlib import Path\n"
+        "from tests.support import PLUGIN_ROOT\n"
+        "HERE = Path(__file__).resolve().parents[2]\n"
+        "SKILLS = HERE / 'skills'\n"
+        "ADRS = SKILLS.parent / 'docs' / 'adr'\n"
+        "a = ADRS.glob('0034-*.md')\n"
+        "b = PLUGIN_ROOT.joinpath('docs', 'harness').rglob('*.md')\n"
+        "c = Path('README.md').read_text()\n"
+        "d = (HERE / 'CHANGELOG.md').read_text()\n"
+        "e = [p for p in HERE.iterdir()]\n"
+        "f = PLUGIN_ROOT / name\n"
+        "g = PLUGIN_ROOT / 'skills' / 'x.md'\n",
+        encoding="utf-8",
+    )
+    scan = page_reads.Scan(source)
+    paths = {path for _line, path in scan.hits}
+    assert paths == {
+        "docs",
+        "docs/adr",
+        "docs/adr/0034-*.md",
+        "docs/harness",
+        "docs/harness/*.md",
+        "README.md",
+        "CHANGELOG.md",
+        "*",
+    }
+    assert {path for _line, path in scan.dynamic} == {""}
+
+
+def test_a_path_joined_to_the_root_by_a_name_the_scan_cannot_resolve_is_reviewed() -> None:
+    reviewed = {
+        "test_route_model.py": "the skills pages its divergences name",
+        "test_skills.py": "skills, workflows and scripts",
+        "test_owed.py": "skills, scripts and .claude-plugin to copy",
+        "test_stack_names.py": "the shipped globs: skills, workflows, scripts, hooks",
+        "test_lane.py": "the files lane.PAGES names",
+    }
+    joined = {
+        path.name
+        for path in page_reads.TESTS.glob("*.py")
+        if any(tail == "" for _line, tail in page_reads.Scan(path).dynamic)
+    }
+    assert joined <= set(reviewed), "a new unresolved join to the root: review what it reads"
