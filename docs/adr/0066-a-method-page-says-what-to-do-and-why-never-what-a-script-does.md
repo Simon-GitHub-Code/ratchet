@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 # A method page says what to do and why, never what a script does
 

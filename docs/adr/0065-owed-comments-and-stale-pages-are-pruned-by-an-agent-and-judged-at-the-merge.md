@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 # Owed comments and stale pages are pruned by an agent and judged at the merge
 
@@ -44,6 +44,8 @@ This is wrong if any of these is seen:
 - **Clean-up tickets built by the drain.** Rejected. The agent-ready label is the owner's agreement (ADR 0008).
 - **A reason in an assertion message for every deleted test comment.** Rejected. Prose moved into strings is what ADR 0063's refutation criterion watches for.
 
-## Open for the owner
+## Defaults accepted by the owner, 2026-11-15
+
+Each item was a default taken overnight. The owner accepted every one as written on 2026-11-15.
 
 - **1. Prune after ten merges.** Default taken overnight: ten, set per project by `- Prune after:`. Recommendation: accept, and revisit after the first five passes. Cost: a page can stay stale for up to ten merges, and the second condition keeps a pass from running when nothing it cites changed.

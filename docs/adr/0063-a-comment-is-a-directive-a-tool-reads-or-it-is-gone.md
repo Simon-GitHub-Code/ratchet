@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 # A comment is a directive a tool reads, or it is gone
 
@@ -61,7 +61,9 @@ Look at the ledger's size over time, the dead-code gate's findings and the incid
 
 - **Licence notices.** A one-line licence identifier is a `kept` directive. A project whose licence needs a full header lists that header's lines as a `kept` kind in its binding, which the owner merges. Exempting full headers by default was declined: it leaves a door for prose.
 
-## Open for the owner
+## Defaults accepted by the owner, 2026-11-15
+
+Each item was a default taken overnight. The owner accepted every one as written on 2026-11-15.
 
 - **1. Documentation coverage for libraries only.** Default taken overnight: the question applies to `library` alone, and the upgrade unbinds it elsewhere. Recommendation: accept. A non-library has no published interface, so coverage there asks for the comments this record forbids. Cost: the one exception to "nothing unbinds", in an upgrade the owner merges.
 - **2. Markdown files are outside the comment rule.** Default taken overnight: a document is judged by its kind (ADR 0064), not by this gate, and the lister's table needs no row for it. Recommendation: accept. Cost: a comment marker inside a document is never a finding.

@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 # A document has a kind, and a steering document leaves with its feature
 
@@ -96,7 +96,9 @@ Tests:
 - **What the brief is.** `docs/design-brief.md` stays a standing page. The prune pass may cut its spent sections, such as slice one's definition of done, and never `## Purpose`, `## In the owner's words` or the out-list.
 - **A spent ticket leaves without the owner's merge** (was open item 4). A deletion `expire` lists, of a ticket that is closed and whose verdict record is in the tree, is outside ADR 0061's agreement rule, and the judge checks both facts at the merge base. A built ticket has nothing left to agree. Cost: a labelled ticket's file leaves the tree without the owner seeing it go. Its `## Answers` lines go to the brief, held by `ratchet-lowered`, and git keeps the file.
 
-## Open for the owner
+## Defaults accepted by the owner, 2026-11-15
+
+Each item was a default taken overnight. The owner accepted every one as written on 2026-11-15.
 
 - **1. The change description becomes a commit message.** The owner said the change description is deleted by the change that lands its feature. Default taken overnight: it becomes a marked commit's message instead. Recommendation: accept. A file must exist when the merge is judged, so only a later change could delete it. Cost: the letter of the owner's decision changes, and a no-forge description is read from history, not from a file.
 - **2. Steering kinds belong to the method.** Default taken overnight: a project adds standing kinds only. Recommendation: accept. Expiry is read from the method's own tickets and verdict records, and no project row can say when its own plan is spent. Cost: a project's own plans are standing until it deletes them.
