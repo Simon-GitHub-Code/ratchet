@@ -10,15 +10,19 @@ yours to give. Python 3.11 standard library only, Linux and macOS.
 Usage::
 
     parallel.py [--runner "just"] [--jobs N] [--serial A B]... [--alone GATE...]
-                [--fail-fast] [--root DIR] [--report PATH] -- GATE...
+                [--wide GATE...] [--fail-fast] [--root DIR] [--report PATH] -- GATE...
 
 * Each ``GATE`` becomes ``RUNNER GATE`` and runs in ``--root`` (the current directory). The
   entry is split like a shell line, so ``"test-shard 1/4"`` passes two words. With no
   ``--runner`` each entry is a whole command: ``-- "./lint ." "./types --strict"``.
 * At most ``--jobs`` gates run at a time: ``RATCHET_JOBS`` by default, else git's
-  ``ratchet.jobs``, else the CPU count. A gate that is itself parallel shares the cores with the
-  rest; the operating system schedules them. On a machine that is shared, or where each gate
-  uses every core, give a smaller number.
+  ``ratchet.jobs``, else the CPU count. On a machine that is shared, give a smaller number.
+* ``--wide GATE...`` names gates that are themselves parallel, such as a test suite across every
+  core. The jobs are split evenly between the wide gates that run beside each other, at least one
+  each, and each is told its share in ``RATCHET_JOBS``; one measured alone is told all of them.
+  The gate hands that number to its tool's own jobs setting, so two suites on one machine never
+  start a worker per core each. A gate not named keeps the environment it was given, and a name
+  that is not among this run's gates is ignored, so one list serves every tier.
 * ``--alone GATE...`` names gates that are measured alone: each runs once every other gate has
   finished, one at a time, with nothing beside it. It is for a gate that judges elapsed time (a
   benchmark, a load run), whose reading the other gates would disturb. A name that is not among
@@ -216,6 +220,15 @@ def plan(
     return sorted([*groups, *single], key=lambda unit: min(gates.index(name) for name in unit))
 
 
+def shares(
+    units: list[tuple[str, ...]], wide: list[str], *, alone: list[str], jobs: int
+) -> dict[str, int]:
+    """Each wide gate's share of ``jobs``: split between the units that hold one, all alone."""
+    beside = sum(1 for unit in units if set(wide).intersection(unit))
+    each = max(1, jobs // beside) if beside else jobs
+    return {name: jobs if name in alone else each for name in wide}
+
+
 class Scheduler:
     """Runs units of gates up to ``jobs`` at a time and collects what finished."""
 
@@ -228,6 +241,7 @@ class Scheduler:
         self.runner = runner
         self.root: Path = options.root
         self.jobs: int = options.jobs
+        self.shares = shares(units, options.wide, alone=options.alone, jobs=options.jobs)
         self.fail_fast: bool = options.fail_fast
         self.report_to: Path | None = options.report
         self.tools = tools(self.root)
@@ -287,10 +301,14 @@ class Scheduler:
         command = [*self.runner, *shlex.split(name)]
         log = tempfile.TemporaryFile()  # noqa: SIM115 # -- held until the gate is settled
         say(f"parallel: {name}: started")
+        env = None
+        if name in self.shares:
+            env = {**os.environ, "RATCHET_JOBS": str(self.shares[name])}
         try:
             process = subprocess.Popen(
                 command,
                 cwd=self.root,
+                env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -399,6 +417,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jobs", type=int, default=gatelib.default_jobs(), help="gates at a time")
     parser.add_argument("--serial", action="append", nargs="+", default=[], metavar="GATE")
     parser.add_argument("--alone", nargs="+", default=[], metavar="GATE", help="measured alone")
+    parser.add_argument("--wide", nargs="+", default=[], metavar="GATE", help="split the jobs")
     parser.add_argument("--fail-fast", action="store_true", help="stop at the first red gate")
     parser.add_argument("--root", type=Path, default=Path(), help="directory the gates run in")
     parser.add_argument("--report", type=Path, help="append one budget.py record per gate")
@@ -417,6 +436,7 @@ def main(argv: list[str]) -> int:
     if options.jobs < 1:
         parser.error("--jobs is at least 1")
     options.alone = [name for name in gates if name in options.alone]
+    options.wide = [name for name in gates if name in options.wide]
     try:
         runner = shlex.split(options.runner)
         units = plan(gates, options.serial, frozenset(options.alone))
