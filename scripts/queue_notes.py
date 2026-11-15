@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -32,14 +33,20 @@ SPLIT = "split"
 # owner's decision, and holds the ticket until its text changes. ``errored`` (ADR 0055) is a
 # pipeline run that threw twice, an agent having died each time: the run is the thing to retry.
 ERRORED = "errored"
+REASON_ROW = re.compile(r"\s*(?:[-*]\s+)?`?([a-z][a-z-]*)`?\s*:")
 MECHANICAL = frozenset({"behind", "moved", "conflict", "gates", "refs", ERRORED})
 # Why: how many times in a row those may leave a ticket waiting before it is the owner's.
 RETRIES = 3
 
 
 def code_of(line: str) -> str:
-    """The code a judge's reason line starts with: ``code: text``, as a ``Reason`` prints."""
-    return line.split(":", 1)[0]
+    """The code a judge's reason line starts with.
+
+    The judge prints ``code: text``, and its pull request comment lists the same reason as
+    ``- `code`: text``. On a forge the orchestrator passes the comment's lines, so both read.
+    """
+    found = REASON_ROW.match(line)
+    return found.group(1) if found else line.split(":", 1)[0]
 
 
 def mechanical(reasons: list[str]) -> bool:
