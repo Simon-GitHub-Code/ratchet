@@ -228,11 +228,7 @@ Outside Claude Code, a ticket is built by the roles [the pipeline page](skills/m
 
 ## Upgrading
 
-When the plugin updates, every tier says so on its first line and `/ratchet:next` offers the upgrade. In the repository, run:
-
-```bash
-python3 ~/.claude/plugins/marketplaces/ratchet/scripts/upgrade.py --apply
-```
+When the plugin updates, every tier says so on its first line, naming both versions and the upgrade command of the installed copy, and `/ratchet:next` offers the upgrade. In the repository, run that command with `--apply`.
 
 It moves the repository to the plugin version in use in one change, keeps every line it did not write, and loosens no gate. Anything that needs judgement it writes to `quality/owed.toml` instead of failing: each item is counted, none is red, and between upgrades the list only shrinks. The few findings that cannot be owed, such as a mutation recipe that fails on a change with no code in it, it lists as red until fixed. Without `--apply` it prints the same plan and writes nothing. The upgrade touches guard paths, so merging it is your one step. When the upgrade left rows an agent can write from the repository alone, `/ratchet:next` then names `/ratchet:fill`, and no feature starts before that is done. [CHANGELOG.md](CHANGELOG.md) says what each version changed.
 

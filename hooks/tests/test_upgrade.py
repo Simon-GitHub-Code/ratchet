@@ -490,7 +490,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 68 edits in 13 files. 88 items are owed")
+    assert verdict(out).startswith("upgrade: would write 69 edits in 13 files. 88 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -498,7 +498,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 68 changes in 13"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 69 changes in 13"
                 " files. The project owes 88 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
