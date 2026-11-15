@@ -163,7 +163,7 @@ Read [route.md](route.md) for the stages around these and [pipeline.md](pipeline
 
 ### A decision with lasting consequences
 
-A part of the architecture, a dependency, a representation, a tool, a rule. Write the ADR first, under the next free number, with the options considered and the criterion that would show the decision wrong. A new ADR is yours to write. A change that contradicts an ADR needs a superseding ADR first. Superseding or editing an ADR is the owner's: the guard asks. Read [records.md](records.md) for the ADR's sections.
+A part of the architecture, a dependency, a representation, a tool, a rule. Write the ADR first, under the next free number, with the options considered and the criterion that would show the decision wrong. A new ADR is yours to write. A change that contradicts an ADR needs a superseding ADR first. Superseding or editing an ADR is the owner's to merge: on a branch the guard lets the edit through, and on the default branch it denies it. Read [records.md](records.md) for the ADR's sections.
 
 ### Branches you will meet
 
@@ -180,7 +180,7 @@ A part of the architecture, a dependency, a representation, a tool, a rule. Writ
 - **A measured value is above its threshold:** run `ratchet`, and commit the result with the change that earned it.
 - **A tier runs over its ceiling:** make it faster in the same change (cache, split, raise the binding's shard count, run less), never by quarantining a test or raising the ceiling. Raising it is an ADR.
 - **The change touches a user interface:** load `impeccable:impeccable` yourself. Use its `shape` before you build the surface and its `polish` before you open the pull request. `DESIGN.md` is the standard the review judges it against.
-- **You need a word the glossary lacks:** read the glossary for the concept under another name first. Then add the entry with its *Avoid* list, through `domain-modeling`, before using it in code. The guard lets an added term and an added *Avoid* item through. If it asks, your edit changed or removed something that was there, and that is the owner's. Read [records.md](records.md) for the glossary's shape when you add the entry.
+- **You need a word the glossary lacks:** read the glossary for the concept under another name first. Then add the entry with its *Avoid* list, through `domain-modeling`, before using it in code. The guard lets an added term and an added *Avoid* item through. If it denies the edit, your edit changed or removed something that was there: make it on a branch, and its merge is the owner's. Read [records.md](records.md) for the glossary's shape when you add the entry.
 - **You need a dependency:** that is a design decision. Say why in the pull request body, or in an ADR when it shapes the architecture.
 - **A tool reports a finding you think is wrong:** it is a criticism. Answer it in writing (a dispute, an ADR, a register entry with a reason) or fix the code.
 - **A bug:** `mattpocock-skills:diagnosing-bugs` builds the loop. The method asks that the diagnosis name an alternative explanation before the fix and that the fix ship with the test that was red.
