@@ -124,6 +124,7 @@ TAMPER = (
     ".git/refs/**",
     ".git/packed-refs",
     ".git/HEAD",
+    ".git/ratchet-plugin",
     ".git/info/grafts",
     ".git/shallow",
     ".git/objects/info",
