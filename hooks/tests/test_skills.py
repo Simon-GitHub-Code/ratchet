@@ -526,6 +526,20 @@ def test_the_size_estimate_is_written_on_the_ticket_and_never_on_a_spec() -> Non
     )
 
 
+def test_a_ticket_that_lacks_only_its_size_gets_the_size_and_a_large_one_is_written() -> None:
+    # Why: the owner chose on 2026-11-15 that a ticket written before sizes were gets its size
+    # alone, and that a ticket over a ceiling is written with its size for the feature run to
+    # split (ADR 0046), where the page had stopped and handed the split back to them.
+    step_1 = conjecture_step(1)
+    assert "and the ticket states no `## Size`:** it was written before sizes were." in step_1
+    assert "Write the size alone" in step_1
+    step_2 = conjecture_step(2)
+    assert "**The estimate passes a ceiling:** write it as it is, and the ticket with it." in step_2
+    assert "not written as one" not in step_2
+    step_5 = flat("conjecture/SKILL.md").split(" 5. **", 1)[1]
+    assert "**Green, or red on `size` alone:** the last line is the next command" in step_5
+
+
 def test_the_conjecture_is_printed_once_at_the_hand_over() -> None:
     # Why: step 3 and step 5 each said to print the conjecture, so it could go out with the
     # questions and again at the hand-over. It is printed once, in the last reply.
