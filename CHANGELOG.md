@@ -61,6 +61,8 @@ A part of a split no longer carries the size its parent was too large for. Copie
 
 On a forge, a ticket waiting only on `behind` or `gates` is retried by the drain again, not held for the owner. The judge's pull request comment lists each reason as "- `code`: text", and the drain read the list marker as part of the code.
 
+The first-hour eval reads what the plugin prints today. Its gate parser read only an older wording of the runner's lines, so a run's waiting and not applicable gates were missing from its numbers. Its reducer counted the guard's asks as the harness's own permission prompts. Its scripted owner took only the first command of a merge's `next:` line and skipped the deep check after it. `reduce` now also parses each pasted command's gate run again from the output saved in `logs/`, so a run recorded before the fix reduces to the right numbers, and each reader has a test that runs the real printer into it.
+
 The change-size ceiling counts product code, not tests (ADR 0045). Tests were 85% of the lines counted on recent changes, so the ceiling mostly limited them. `[ceilings.change]` is now `product_files = 25`, `product_lines = 1000` and a loose `test_lines = 3000` that only stops a runaway, and the early stops follow: product code has no margin for what is still to come, tests keep two thirds of their ceiling while the critic runs.
 
 - Which paths are tests is the binding's `## Test paths` section, written at adoption by the project's agent: the plugin names no stack. Until it is filled every changed line counts as product, as before, and conformance names the missing section.
