@@ -10,9 +10,12 @@ const MAIN = {
   TheAgentCommitsTheVerdictRecordOfA: "the agent commits the verdict record of a",
   ARoleOfThePipelineRunCommitsInA: "a role of the pipeline run commits in a",
   DrainPyCheckA: "drain.py check a",
+  DrainPyCheckWithoutFinalA: "drain.py check without --final a",
   DrainPyCheckCannotReadThePresentStateOfA: "drain.py check cannot read the present state of a",
   DrainPyCheckFindsOnlyARebaseLeftUnfinishedInA:
     "drain.py check finds only a rebase left unfinished in a",
+  DrainPyCheckWithoutFinalFindsOnlyARebaseLeftUnfinishedInA:
+    "drain.py check without --final finds only a rebase left unfinished in a",
   TheCheckOfDrainPyUpdateCannotReadThePresentStateOfA:
     "the check of drain.py update cannot read the present state of a",
   TheOwnerLandsTheFlagLineOfA: "the owner lands the Flag: line of a",
@@ -110,6 +113,7 @@ const COMMAND = {
   TheAgentCommitsTheVerdictRecordOf: "the agent commits the verdict record",
   ARoleOfThePipelineRunCommitsIn: "a role commits",
   DrainPyCheck: "check",
+  DrainPyCheckWithoutFinal: "check without --final",
   DrainPyCheckCannotReadThePresentStateOf: "the check cannot read",
   DrainPyCheckFindsOnlyARebaseLeftUnfinishedIn: "the check finds a rebase unfinished",
   TheCheckOfDrainPyUpdateCannotReadThePresentStateOf: "update's check cannot read",
