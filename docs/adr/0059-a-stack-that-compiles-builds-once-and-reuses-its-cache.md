@@ -5,12 +5,10 @@ status: accepted
 
 Amends ADR 0019 (what the binding's Speed section asks) and says how the bite proof and the rehearsal meet it.
 
-A first-hour eval adopted the method on a fresh project of a stack that compiles, and on one that compiles quickly. The machine was idle. Adoption took 42 minutes on the first and 31 on the second, and the gap is compile time, by the kind of work each command did:
+First-hour eval runs on harness `fa9ee31` (plugin 0.11.1), one persona at a time on empty repositories, measured adoption by the kind of work each command did:
 
-- Practice runs of a sample feature: 8.7 minutes against 1.1. The first round went red on dead code and lint, so a second, cold round followed, and its one `check` took 3.2 minutes.
-- Planting a fault per gate: 7.1 minutes against 3.9. Each gate's fault meant a rebuild.
-- Toolchain and tool installs: 4.6 minutes against 2.0. Four tools were compiled from source, and one twice after the toolchain version changed.
-- The agent split the program into three separately compiled packages from the start, so every build compiled three.
+- `rust-shortener`, a stack that compiles: 42.3 minutes, against 34.7 for `go-todo-cli`, a stack that compiles quickly. Practice runs of a sample feature took 8.7 minutes against 3.6: the first round went red on dead code and lint, so a second, cold round followed, and its one `check` took 3.2 minutes. Planting a fault per gate took 7.1 minutes against 3.0, since each gate's fault meant a rebuild. Toolchain and tool installs took 4.6 minutes against none: four tools were compiled from source, and one twice after the toolchain version changed. The agent split the program into three separately compiled packages from the start, so every build compiled three. The machine was otherwise idle; its load rose only during the run's own gate runs.
+- `kotlin-recipes`, a stack whose builds are slow: adoption was still unfinished when the 90-minute run ended, after 86.7 minutes. 37.9 of them were spent in commands that called the build tool directly, before counting the gates that build through it. Outside work used more than a quarter of the machine in 26% of its samples, so the 86.7 is an upper bound; the shape is not load, since the quiet 40 minutes in its middle went the same way.
 
 The method named no cure, and the plugin names no stack (ADR 0042), so the cure is stated as concepts.
 
