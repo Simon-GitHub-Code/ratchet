@@ -454,7 +454,8 @@ DIVERGENCES: Final[tuple[Divergence, ...]] = (
         holds=lambda world: world.setup is Setup.PINNED,
         reads=as_proved_by_its_pin,
         contradicts=(
-            "Done when `conformance` and `check-deep` exit 0 and the rehearsal passed, or its"
+            "Done when `check` is green in a fresh worktree of the commit, `conformance` and"
+            " `check-deep` exit 0, no rehearsal worktree is left, and the rehearsal passed, or its"
             " second round ended with the edits it still needs named."
         ),
         source="skills/adopt/SKILL.md",
@@ -473,10 +474,13 @@ DIVERGENCES: Final[tuple[Divergence, ...]] = (
         holds=lambda world: world.flag is Flag.MISSING,
         reads=as_before_the_flag_line,
         contradicts=(
-            "A line of `## Operability` is asked when the binding declares an application type"
-            " its question is asked of"
+            "The preflight asks every ticket of an asked type for its `Flag:` line, before"
+            " deployment as after, whatever its row's `later:` says."
         ),
-        source="skills/method/records.md",
+        source=(
+            "docs/adr/0061-before-deployment-the-owner-is-asked-whether-new-behaviour-arrives"
+            "-switched-off.md"
+        ),
         breaks=frozenset({"RealAdviceCanBeFollowed", "RealFlagLineBeforeTheBuild"}),
         example=World(
             setup=Setup.BOUND,
