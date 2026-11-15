@@ -36,12 +36,12 @@ Use these words in code, tests, records and prose.
 
 - **trigger**: when a question starts to be asked of a repository. `always` is the floor, `code:<kind>` is the first instance of a kind of code, and `life:<event>` is a life event the owner declares. A row whose trigger has not fired is bound `later: <trigger>` and judges nothing. Read [tiers.md](tiers.md#triggers) for each question's trigger and which triggers reopen the architecture.
 - **the floor**: the questions asked from the first commit. They need no setup and run in seconds: format, lint, strict types, secrets, commit subjects, the guards, the method's own gates and the tests that exist.
-- **instance**: one occurrence of a kind of code: an entry point, an outbound call, a listener, a configuration read, a stored format, a user interface. The binding's `## Triggers` table says what marks one in this stack, and `scripts/triggers.py` counts them at the merge base and at head.
+- **instance**: one occurrence of a kind of code: a route, command, job handler or screen a user or caller reaches (the `entry-point` kind), an outbound call, a listener, a configuration read, a stored format, a user interface. The binding's `## Triggers` table says what marks one in this stack, and `scripts/triggers.py` counts them at the merge base and at head.
 - **life event**: something that happens to the project, not to its code: `deployed` (others can reach it), `irreplaceable-data` (it holds data the owner could not recreate), `depended-on` (people outside rely on it). The owner declares it on the binding's `- Life events:` line. The route proposes one when it sees a sign of it, and never declares it.
-- **owed**: a row whose trigger has fired and which is not yet bound.
+- **owed**: a row whose trigger has fired and which is still bound `later:`. Until its trigger fires, a `later:` row is not owed.
   - **The first one is free**: the change that brings a kind is never red for it, however many files it touches.
   - A later change that adds another instance while a row is still owed is red.
-  - A declared life event makes its rows owed too, and is never red.
+  - A declared life event makes its rows owed too. The event itself is never red.
   - An **architecture review** is owed the same way when a kind that changes the project's shape first arrives, or a life event is declared, until a decision record names that trigger (`/ratchet:architecture`).
 
 ### Guards and merging
@@ -49,12 +49,18 @@ Use these words in code, tests, records and prose.
 - **owner**: the human. Decides disputes, changes gates by hand, and merges every change the merge judge does not pass.
 - **guard path**: a file that defines, runs or records a gate, listed in `guards/manifest.toml`.
   - An agent changes one on a branch, and the merge judge sends the change to the owner.
-  - The hook denies each change it reads that would land on the default branch, and each change it reads to a locked one.
-  - Edit-time control stays for exactly the files whose effect comes before the merge: the hook also asks the owner before each write it reads of a CI workflow or an agent-instruction file, guard path or not.
+  - The hook denies each change it reads to one that would land on the default branch. That denial is about where the commit lands: the way out is a branch.
+  - Edit-time control stays for exactly the files whose effect comes before the merge. On every branch, two kinds get a verdict at edit time:
+    - a file that acts at once, a CI workflow or an agent-instruction file, guard path or not: the hook asks the owner before each write it reads;
+    - a locked file: the hook denies each change it reads.
   - The hook checks ordinary writes. It is not a boundary against an agent that sets out to get round it.
 - **merge judge**: the shipped script that decides who merges a change.
   - It passes one whose gates are green, whose review approves with no finding open, and that changes no guard path.
-  - Records alone (a spec, a ticket, a change description, a glossary term, each in the shape a skill writes it) need no review unless they give a ticket the agent-ready label, change a labelled ticket (other than the paths of its links, to the same files) or what it reads, close a ticket, or bring an ADR, which the owner agrees to.
+  - Records alone (a spec, a ticket, a change description, a glossary term, each in the shape a skill writes it) need no review unless they do one of these:
+    - give a ticket the agent-ready label;
+    - change a labelled ticket (other than the paths of its links, to the same files) or what it reads;
+    - close a ticket;
+    - bring an ADR, which the owner agrees to.
   - The adoption is judged by the gates it brings.
   - Once the project is `deployed` it also leaves to the owner a change that goes through a one-way door or adds surface without a flag. Once it holds `irreplaceable-data`, it leaves a one-way door to the owner.
   - Read [guards.md](guards.md) for how the judge decides each case.
@@ -102,7 +108,7 @@ Every repository on the method keeps all eleven. The conformance gate checks the
    The binding's Speed section says how this stack meets each, and the conformance gate checks what a machine can. Each tier has a ceiling in seconds that only falls, measured by the `budget` entry point and set at adoption from the first run. A tier over its ceiling on the default branch is the next piece of work. Read [tiers.md](tiers.md#speed) when a tier is slow.
 10. **The merge rule.** A change is merged when no criticism of it is open. A test is a refuter made executable, a gate is a refuter made deterministic, a review finding is a criticism, a dispute is a counter. A criticism is answered by revision or by a counter, in writing. Before you write a counter, read [epistemology.md](epistemology.md) for where it goes.
 11. **Operable by the time it matters.** A safeguard arrives with the first thing it guards, and the first one is free. The floor holds from the first commit.
-    - A question about a kind of code is asked once the first instance of that kind exists: a span and a load smoke with the first entry point, a timeout and a failing-dependency test with the first outbound call, a refusal of bad configuration with the first setting read, a graceful shutdown with the first listener.
+    - A question about a kind of code is asked once the first instance of that kind exists: a span and a load smoke with the first code of the `entry-point` kind, a timeout and a failing-dependency test with the first outbound call, a refusal of bad configuration with the first setting read, a graceful shutdown with the first listener.
     - A question about the project's life is asked once the owner declares the event: the scans and a check that production answers once it is `deployed`, a restore drill once it holds `irreplaceable-data`, load and performance budgets once it is `depended-on`.
 
     The change that brings a kind is never red for it, however many files it touches. A later one that adds another while a safeguard is owed is red. Each safeguard is split across the tiers so the pull request pays only for the cheap part. Three gates ship with the method for any service, whatever it is written in: it boots and answers, it holds under a load smoke, and its telemetry arrives. The binding names the seams and what marks an instance; the conformance gate keeps the rows. Read [tiers.md](tiers.md#triggers) when a trigger fires.
@@ -138,16 +144,19 @@ Done when you can name the project's parts and what each may depend on, its decl
 1. Branch from the default branch.
 2. Work the loop as `mattpocock-skills:tdd` describes: the test goes red for the right reason, then green, then refactor.
 3. Run `check`.
-4. Open one pull request with every section of the template filled and the tail of `check` pasted.
+4. Hand the change over:
+   - **With a forge:** open one pull request with every section of the template filled and the tail of `check` pasted.
+   - **With no forge:** write the change description at `.scratch/changes/<branch>.md` with every section of the template filled and the tail of `check` pasted, then run `just merge <branch>`.
 
-Leave the merge to the merge judge: the merge job merges a change the judge passes, and the owner merges the rest. Never merge by hand.
+Leave the merge to the merge judge: the merge job, or with no forge the `merge` entry point, merges a change the judge passes, and the owner merges the rest. Never merge by hand.
 
-Done when the pull request is open and green.
+Done when the pull request is open and green, or, with no forge, the change description is written and `just merge <branch>` has run.
 
 ### A feature
 
 1. The owner types the ticket into being with `mattpocock-skills`: `/mattpocock-skills:wayfinder` when the effort is too big for one session, `/mattpocock-skills:grill-with-docs` to decide, `/mattpocock-skills:to-spec` and `to-tickets` to write it, `/mattpocock-skills:triage` for an issue that arrived.
-2. The owner types `/ratchet:conjecture <ticket>`, for the `## Conjecture` that [records.md](records.md) describes. The agent-ready label those skills apply is the agreement.
+   - The agent-ready label these commands apply is the agreement.
+2. The owner types `/ratchet:conjecture <ticket>`, for the `## Conjecture` that [records.md](records.md) describes.
 3. The owner types `/ratchet:feature <ticket>` when they step away, or `/pstack:poteto-mode <ticket>` when they stay. The preflight refuses anything less before an agent exists.
 
 Read [route.md](route.md) for the stages around these and [pipeline.md](pipeline.md) for what each role does once the feature runs.
@@ -165,7 +174,7 @@ A part of the architecture, a dependency, a representation, a tool, a rule. Writ
 - **A gate is red because the change adds another instance while a row is still owed:** bind the row first, in a change of its own, or take the instance out of this change. Never bind the row `none` to get past it.
 - **You see a sign of a life event** (a deploy file, a migrations directory, a ticket about users): tell the owner. Declaring it is theirs.
 - **The change adds behaviour a user could meet, in a project that is `deployed`:** declare its flag in `flags.toml` with `default = false`, read it through the flag seam, and test the behaviour with the flag off. Before the project is deployed nobody meets it, and a flag is the owner's choice. A fix or a refactoring ships with no flag and says so.
-- **The change adds or alters an entry point** (a route, a job, a command) **once `telemetry emitted` is bound:** register it through the telemetry seam, and write the test that reads its span from the in-memory exporter.
+- **The change adds or alters code of the `entry-point` kind** (a route, a job, a command) **once `telemetry emitted` is bound:** register it through the telemetry seam, and write the test that reads its span from the in-memory exporter.
 - **The owner reports an incident:** write the incident record with them, and the fault in `quality/bites.toml` that reproduces it. Read [records.md](records.md#incident-record-docsincidentsnnnn-slugmd) for the record's sections.
 - **A mutant survives:** kill it with a test, or register it as equivalent with a reason of twenty characters or more.
 - **A measured value is above its threshold:** run `ratchet`, and commit the result with the change that earned it.
