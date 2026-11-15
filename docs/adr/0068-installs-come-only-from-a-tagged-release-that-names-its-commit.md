@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 # Installs come only from a tagged release, and the release names its commit
 
@@ -69,6 +69,6 @@ This is wrong if any of these is seen:
 - A dev clone has `.git`, so nothing changes for it.
 - For about a minute between M's merge and the tag push, a harness that refreshes finds no `vV` and keeps the copy it has.
 
-## Open for the owner
+## Settled by the owner, 2026-11-15
 
-- **1. No `sha` in the entry, and a tag ruleset.** What the owner accepted named the tag and its sha. The build names the tag alone, for the reason under Considered options, and a ruleset forbids moving or deleting `v*` tags. The owner sets that ruleset once in the repository's settings, since no agent changes them. Recommendation: accept. Cost: one settings change, and until it is set only `release_check.py` notices a moved tag.
+- **1. No `sha` in the entry, and a tag ruleset.** The owner accepted it on 2026-11-15 and sets the ruleset themselves. What the owner had first accepted named the tag and its sha. The build names the tag alone, for the reason under Considered options, and a ruleset forbids moving or deleting `v*` tags. The owner sets that ruleset once in the repository's settings, since no agent changes them. Until the ruleset is set, only `release_check.py` notices a moved tag.
