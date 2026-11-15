@@ -5,8 +5,8 @@ commits ``AGENTS.md``, ``/ratchet:adopt`` commits the binding and the manifest o
 and merges it, the spec skills leave records uncommitted on the default branch, ``merge --records``
 commits them on a ``records/<time>`` branch and merges it or leaves it parked, and the drain
 writes its note through ``drain.close``, parking for the safeguard on what the real triggers gate
-printed. An owner's edit of a ticket is committed on the default
-branch at once, as the model has it. ``classify`` reads a real ``route.Step`` back as the model's
+printed. An owner's edit of a ticket is committed on the default branch at once, as the model has
+it. ``classify`` reads a real ``route.Step`` back as the model's
 advice label.
 
 ``apply`` never runs ``scripts/merge.py``. Each merge it makes, of a working branch, of a records
@@ -19,10 +19,12 @@ branch it merged; ``merge --records`` is never run.
 
 ``/ratchet:adopt`` writes the architecture decision record and the binding's ``## Architecture``
 section, as the adoption has since ADR 0049; an adoption by a plugin from before it writes
-neither. An upgrade runs the plugin's own code for the ``architecture`` check: it makes the edit
-the check offers and writes down in ``quality/owed.toml`` what the check still finds, which is
-nothing where the architecture is recorded. ``/ratchet:architecture`` writes the record and the
-parts, settles the ledger, and leaves its branch for the owner to merge.
+neither. An upgrade runs the real ``upgrade.py --apply`` as a process, from a copy of the plugin
+committed as the next version, on a branch the world merges. ``/ratchet:fill`` writes the rows on
+a branch and settles the ledger by running that upgrade again, which drops each entry whose
+finding is gone. The binding keeps the sections an upgrade added while the world rewrites its own
+parts. ``/ratchet:architecture`` writes the record and the parts, settles the ledger, and leaves
+its branch for the owner to merge.
 
 A spec and its tickets live under ``.scratch/f<n>/``, where ``n`` counts the specs written, and
 each ticket's title names ``n``, so the branch ``feature/<number>-<slug>`` is new for every spec
@@ -31,10 +33,15 @@ and a branch merged for an earlier spec never matches a later ticket.
 
 from __future__ import annotations
 
+import atexit
+import functools
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -42,7 +49,6 @@ from typing import Final
 
 import application_types
 import architecture
-import conformance
 import drain
 import feature_preflight as preflight
 import gatelib
@@ -50,11 +56,11 @@ import markdown_text
 import merge
 import merge_ready
 import owed
+import plugin_pin
 import queue_notes
 import route
 import triggers
-import upgrade
-from tests.repos import branch, git, install_hooks, repository, snapshot, write
+from tests.repos import branch, git, install_hooks, repository, skeleton, snapshot, write
 from tests.route_model import (
     STATED,
     ActionName,
@@ -103,7 +109,7 @@ ARCHITECTURE_SECTION = (
     "| --- | --- | --- |\n| rules | `src/rules/**` | nothing |\n| web | `src/**` | rules |\n"
 )
 ARCHITECTURE_BRANCH = "chore/architecture"
-FILLED: Final = owed.Entry("docs/process/binding.md", "pins", "has no section", "")
+SECTIONS: Final = re.compile(r"\n(?=## )")
 REVIEW_ROW = (
     f"| {triggers.REVIEW_QUESTION} | `ratchet` plugin `scripts/triggers.py` | 1 | |"
     " `just triggers` |\n"
@@ -213,7 +219,7 @@ class Repo:
             f"| kind{n} | `src/kind{n}.py`, `src/kind{n}-*.py` | |\n"
             for n, _tool in enumerate(self.tools, 1)
         ) + "".join(f"| {kind} | `src/{kind}.py` | |\n" for kind in self.reopened)
-        return BINDING.format(
+        made = BINDING.format(
             pin=PIN.format(version=self.version()) if pinned else UNPINNED,
             entries="".join(
                 f"| {name} | `{command}` |\n" for name, command in self.entries.items()
@@ -221,6 +227,20 @@ class Repo:
             gates=gates + REVIEW_ROW,
             triggers=rows,
             architecture=self.architecture,
+        )
+        return made + self.kept_sections(made)
+
+    def kept_sections(self, made: str) -> str:
+        """The binding's ``## `` sections that ``made`` lacks: what an upgrade added, as it stands.
+
+        Why: the world writes its own parts of the binding afresh, and a real project keeps the
+        sections its upgrade added and its fill wrote while those parts change.
+        """
+        text = gatelib.read_text(self.root / route.BINDING) or ""
+        return "".join(
+            f"\n{block.rstrip()}\n"
+            for block in SECTIONS.split(text)[1:]
+            if not markdown_text.has_section(made, block.split("\n", 1)[0])
         )
 
     def version(self) -> str:
@@ -577,37 +597,109 @@ def _agent_lands_the_review(repo: Repo, _change: Change) -> None:
     snapshot(repo.root, "docs(adr): architecture review")
 
 
+PLUGIN_PARTS: Final = (".claude-plugin", "scripts", "skills", "hooks/ratchet_guards")
+
+
+@functools.cache
+def plugin_at(version: str) -> Path:
+    """This plugin, copied and committed as ``version``: the plugin an upgrade to it runs from.
+
+    Why a copy: the real upgrade moves the pin only to a plugin newer than the pin, and each of
+    the world's upgrades moves it on by one version.
+    """
+    root = Path(tempfile.mkdtemp(prefix="ratchet-plugin-"))
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    for part in PLUGIN_PARTS:
+        ignore = shutil.ignore_patterns("__pycache__")
+        shutil.copytree(plugin_pin.PLUGIN / part, root / part, symlinks=True, ignore=ignore)
+    manifest = root / plugin_pin.MANIFEST
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest.write_text(json.dumps({**data, "version": version}), encoding="utf-8")
+    shutil.copytree(skeleton(), root / ".git", symlinks=True)
+    snapshot(root, f"chore: release {version}")
+    return root
+
+
+def run_upgrade(repo: Repo) -> str:
+    """What ``upgrade.py --apply`` prints, run as a process from the plugin the pin names.
+
+    A refusal or a plan that does not settle fails the step; red items leave it at exit 1.
+    """
+    plugin = plugin_at(repo.version())
+    ran = subprocess.run(  # noqa: S603 # -- the plugin's own upgrade, no shell
+        [sys.executable, str(plugin / "scripts/upgrade.py"), "--root", str(repo.root), "--apply"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ran.returncode in {0, 1}, f"upgrade.py exited {ran.returncode}:\n{ran.stdout}"
+    return ran.stdout
+
+
+def landed(repo: Repo, name: str, subject: str) -> None:
+    """Commit the work on branch ``name`` and merge it, the default branch left checked out."""
+    snapshot(repo.root, subject)
+    git(repo.root, "switch", "-q", "main")
+    git(repo.root, "merge", "-q", "--no-ff", "--no-edit", name)
+
+
 @does(ActionName.UPGRADE_LEAVES_ROWS_TO_FILL)
 def _upgrade_leaves_rows_to_fill(repo: Repo, _change: Change) -> None:
-    """What ``upgrade.py --apply`` leaves: the pin moved, a row to fill, the architecture owed.
+    """The real ``upgrade.py --apply`` to the next version, made on a branch and merged.
 
-    The architecture's part is the plugin's own code: the edit the ``architecture`` check offers
-    is made as ``upgrade.pass_over`` makes it, and what the check still finds is written down
-    through ``owed.recorded``, as ``upgrade.owing`` writes it.
+    The world keeps the architecture section the upgrade wrote, as it keeps its own parts.
     """
     repo.upgrades += 1
-    write(repo.root, "docs/process/binding.md", repo.binding())
-    check = conformance.check_architecture
-    offered = [conformance.tried(repo.root, check, found) for found in check(repo.root)]
-    upgrade.pass_over(repo.root, offered, {})
+    name = f"chore/upgrade-{repo.version()}"
+    git(repo.root, "switch", "-q", "-C", name)
+    run_upgrade(repo)
     text = gatelib.read_text(repo.root / route.BINDING) or ""
     if markdown_text.has_section(text, architecture.SECTION):
         body = markdown_text.section(text, architecture.SECTION).rstrip()
         repo.architecture = f"\n{architecture.SECTION}{body}\n"
-    named = conformance.rule_of(check)
-    keys = [replace(found, rule=named).key() for found in check(repo.root)]
-    added = [replace(FILLED, since=repo.version())] + [
-        owed.Entry(path, rule, problem, repo.version()) for rule, path, problem in keys
-    ]
-    ledger = gatelib.read_text(repo.root / owed.LEDGER)
-    write(repo.root, str(owed.LEDGER), owed.recorded(added)(ledger))
-    snapshot(repo.root, f"chore(method): upgrade the plugin to {repo.version()}")
+    landed(repo, name, f"chore(method): upgrade the plugin to {repo.version()}")
+
+
+# Why: the rows ``/ratchet:fill`` writes for a project whose tree shows none of these things, in
+# the forms the template allows for that.
+FILLED: Final = {
+    application_types.SIGNS_SECTION: (
+        "| Event | Paths |\n| --- | --- |\n| deployed | none: it runs nowhere yet |\n"
+        "| irreplaceable-data | none: it keeps no records |\n"
+    ),
+    "## Install": "- Install: none: the tools arrive on demand\n",
+    "## Dependencies": (
+        "- Manifests: none: it declares no package\n- Lockfiles: none: it locks no package\n"
+        "- Entry point: none: there is nothing to read\n- Registries: none\n"
+    ),
+    "## Image pins": "| Files | Reference |\n| --- | --- |\n| none: no file names an image | |\n",
+    "## Suppressions": (
+        "| Kind | Pattern | Rule |\n| --- | --- | --- |\n\n| Question | Kinds |\n| --- | --- |\n"
+    ),
+}
+
+
+def with_body(text: str, heading: str, body: str) -> str:
+    """``text`` with the section under ``heading`` holding ``body``; as it was without one."""
+    lines = text.split("\n")
+    if heading not in lines:
+        return text
+    start = lines.index(heading)
+    end = next((n for n in range(start + 1, len(lines)) if lines[n].startswith("## ")), len(lines))
+    return "\n".join([*lines[: start + 1], "", *body.rstrip("\n").split("\n"), "", *lines[end:]])
 
 
 @does(ActionName.AGENT_FILLS_ROWS)
 def _agent_fills_rows(repo: Repo, _change: Change) -> None:
-    repo.settle(lambda entry: entry.rule in owed.FILL_FIRST)
-    snapshot(repo.root, "docs(process): fill the rows the upgrade left")
+    """``/ratchet:fill``: the rows written on its branch, the ledger settled by the real upgrade."""
+    name = "chore/fill-owed"
+    git(repo.root, "switch", "-q", "-C", name)
+    text = gatelib.read_text(repo.root / route.BINDING) or ""
+    for heading, body in FILLED.items():
+        text = with_body(text, heading, body)
+    write(repo.root, str(route.BINDING), text)
+    run_upgrade(repo)
+    landed(repo, name, "docs(process): fill the rows the upgrade left")
 
 
 @does(ActionName.OWNER_RECORDS_ARCHITECTURE)

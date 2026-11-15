@@ -161,8 +161,9 @@ The tests also check that:
 - where the real route names the owed architecture, its `then:` names the step it names once the architecture is no longer owed, and its `why:` offers carrying on with it; that step is the one the model gives beneath;
 - where the real route names a safeguard, its `then:` names the step it names once the rows are bound, which is the owed architecture exactly where the model owes one, and its `why:` still offers carrying on with the work;
 - on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
-- on a real repository, the architecture check finds nothing after `/ratchet:adopt`, and the upgrade's code then owes no architecture;
-- on a real repository an older plugin adopted, the upgrade's code owes exactly what the architecture check finds, the route names the fill, then `/ratchet:architecture`, then its branch's merge, and the check finds nothing after;
+- on a real repository, the architecture check finds nothing after `/ratchet:adopt`, and the real `upgrade.py --apply` then owes no architecture;
+- on a real repository an older plugin adopted, the real upgrade owes exactly what the architecture check finds, the route names the fill, which the real upgrade settles once the rows are written, then `/ratchet:architecture`, then its branch's merge, and the check finds nothing after;
+- the real upgrade also owes every other finding red at the merge base, which the route never names, and on the test's adoption, which writes no `quality/thresholds.toml` or mutation register, it leaves those two red;
 - on a real repository that owes the architecture, a review and a safeguard that arrive beside it are each named before it;
 - a drain note older than a blocked run's stash, or one with no base commit, does not release the run;
 - on long runs of steps, a repository that loses its commit hooks is told to install them first, whatever else is true.

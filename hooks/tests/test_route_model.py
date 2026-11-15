@@ -717,22 +717,32 @@ DONE = World(
 )
 
 
+FILLED_BY_THE_UPGRADE = frozenset({"dependencies", "installs", "pins", "signs", "suppressions"})
+
+
+def owes(repo: real.Repo, rules: frozenset[str]) -> list[owed.Entry]:
+    """The ledger's entries of ``rules``."""
+    return [entry for entry in owed.read(repo.root).entries if entry.rule in rules]
+
+
 def test_an_adoption_records_the_architecture_so_an_upgrade_owes_none(tmp_path: Path) -> None:
-    """The architecture check finds nothing after an adoption, and the upgrade's code owes none."""
+    """The architecture check finds nothing after an adoption, and the real upgrade owes none."""
     world = replace(DONE, architecture=Architecture.RECORDED)
     repo = built(tmp_path, world)
     assert architecture_found(repo) == []
     world = upgraded(repo, world)
     assert world.architecture is Architecture.RECORDED
-    assert [entry.rule for entry in owed.read(repo.root).entries] == ["pins"]
+    assert owes(repo, frozenset({route.ARCHITECTURE_RULE})) == []
+    assert {entry.rule for entry in owed.fill_first(repo.root)} == FILLED_BY_THE_UPGRADE
     _, labels = follow(repo, world, 0)
     assert labels == [Advice.FILL]
+    assert owed.fill_first(repo.root) == []
 
 
 def test_an_older_adoption_owes_the_architecture_after_an_upgrade_until_it_is_recorded(
     tmp_path: Path,
 ) -> None:
-    """The upgrade owes what the architecture check finds, named after the fill until it merges."""
+    """The real upgrade owes what the architecture check finds, named after the fill till merged."""
     world = replace(DONE, architecture=Architecture.UNASKED)
     repo = built(tmp_path, world)
     assert ActionName.OLDER_PLUGIN_ADOPTS in [step.action for step in path_to(world)]
@@ -747,7 +757,40 @@ def test_an_older_adoption_owes_the_architecture_after_an_upgrade_until_it_is_re
     assert labels == [Advice.FILL, Advice.ARCHITECTURE, Advice.MERGE]
     assert model.rest(world)
     assert architecture_found(repo) == []
-    assert owed.read(repo.root).entries == ()
+    assert owes(repo, FILLED_BY_THE_UPGRADE | {route.ARCHITECTURE_RULE}) == []
+
+
+def test_the_real_upgrade_owes_more_than_the_model_and_leaves_the_world_two_quality_files_red(
+    tmp_path: Path,
+) -> None:
+    """What the real upgrade leaves on the world's older adoption beyond the model's two debts.
+
+    Why it is pinned: the model's upgrade leaves rows to fill and the architecture. The real one
+    also owes every other finding red at the merge base, which the route never names. And the
+    world's adoption never wrote the quality files a template adoption writes; no entry may excuse
+    their absence, so conformance stays red, and the merge would refuse this upgrade.
+    """
+    world = replace(DONE, architecture=Architecture.UNASKED)
+    repo = built(tmp_path, world)
+    upgraded(repo, world)
+    beyond = {e.rule for e in owed.read(repo.root).entries} - FILLED_BY_THE_UPGRADE
+    assert beyond - {route.ARCHITECTURE_RULE} == {
+        "adrs",
+        "binding",
+        "brief",
+        "commit_hooks",
+        "doors",
+        "glossary",
+        "manifest",
+        "operability",
+        "quality",
+        "speed",
+    }
+    red, _ = conformance.owed_split(repo.root, conformance.findings(repo.root))
+    assert [str(finding) for finding in red] == [
+        "quality/thresholds.toml: missing",
+        "quality/mutation-register.toml: missing",
+    ]
 
 
 def test_a_review_and_a_safeguard_owed_beside_the_architecture_come_before_it(
