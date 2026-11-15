@@ -21,9 +21,9 @@ failure and the skill that produces the missing piece:
 - in an adopted repository the ticket, or its parent, says how the change is operated under
   ``## Operability``: a ``Flag:``, ``Signal:``, ``Load:`` and ``Security:`` line, each asked only
   when the binding declares an application type its question is asked of
-  (``skills/method/application-types.toml``) and its row is not bound ``later: ...`` (the
-  ``Flag:`` line waits for the ``deployed`` life event instead), and each a statement or ``none``
-  with the reason (ADR 0028);
+  (``skills/method/application-types.toml``) and its row is not bound ``later: ...``; the
+  ``Flag:`` line is asked by type alone, before deployment as after and whatever its row says
+  (ADR 0061); each a statement or ``none`` with the reason (ADR 0028);
 - with ``--branch``, ``HEAD`` is that branch and it is not the base branch;
 - in an adopted repository (``docs/process/binding.md``), a commit would run tier 0:
   ``hooks_installed.py`` proves it by running the commit hooks, and its failure carries the
