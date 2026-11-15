@@ -4,11 +4,12 @@
 The ``deny`` list is the same in every repository and does not read the manifest. It names what
 takes effect before any merge, as ``Edit`` rules: the harness's settings, hooks, workflows, agents,
 skills and commands (Claude Code reads them from the checkout a session runs in), the git hooks,
-config and the refs the guards read the default branch through (ADR 0016), and the user's settings
-and installed plugins. Beside them are the command rules the hook also denies: the gate bypasses,
-history rewrites and forge changes, and the commands that write the default branch's ref in their
-plain spellings. ``gh label create`` is not denied, because the hook lets a recorded label through
-and a settings deny would refuse that one too (ADR 0006).
+config and the refs the guards read the default branch through (ADR 0016), the guard's own event log
+in the git directory (ADR 0060), and the user's settings and installed plugins. Beside them are the
+command rules the hook also denies: the gate bypasses, history rewrites and forge changes, and the
+commands that write the default branch's ref in their plain spellings. ``gh label create`` is not
+denied, because the hook lets a recorded label through and a settings deny would refuse that one too
+(ADR 0006).
 
 The ``ask`` list is empty. An edit of any other guard path meets no rule here: on a branch the
 merge judge reads it, and where it lands on the default branch the hook refuses it. The hook is
@@ -41,6 +42,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import plugin_pin
+
+# Why: the guard's event log lives with the guard, under hooks/, as gatelib lives here for it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
+from ratchet_guards import events
 
 if TYPE_CHECKING:
     import gatelib
@@ -128,6 +133,7 @@ TAMPER = (
     ".git/shallow",
     ".git/objects/info",
     ".git/objects/info/**",
+    f".git/{events.LOG_NAME}",
     "~/.claude/settings.json",
     "~/.claude/settings.local.json",
     "~/.claude/plugins/**",
