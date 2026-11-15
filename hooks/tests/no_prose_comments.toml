@@ -204,7 +204,7 @@
 "hooks/tests/test_upgrade_writes.py" = { comments = 2, docstrings = 3 }
 "hooks/tests/test_with_service.py" = { comments = 23, docstrings = 2 }
 "justfile" = { comments = 45, docstrings = 0 }
-"pyproject.toml" = { comments = 39, docstrings = 0 }
+"pyproject.toml" = { comments = 36, docstrings = 0 }
 "quality/thresholds.toml" = { comments = 2, docstrings = 0 }
 "scripts/acceptance.py" = { comments = 6, docstrings = 39 }
 "scripts/acceptance_audit.py" = { comments = 0, docstrings = 15 }
