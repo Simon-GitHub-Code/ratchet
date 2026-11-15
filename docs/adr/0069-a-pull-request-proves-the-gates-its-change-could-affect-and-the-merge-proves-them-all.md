@@ -11,13 +11,19 @@ The tier 1 `bite` (`project_bite.py --changed`) proves every tier 0 and tier 1 g
 
 **Tier 1 proves the gates the change could affect.** The tier 1 `bite` proves each gate the change could make unable to fail, and no other. Where the script cannot tell what a changed path affects, it proves every tier 0 and tier 1 gate, as today. The same rule holds on a pull request, in the local `check`, and on the default branch's own tier 1 run, where the change is the merge against its first parent. A change that touches no path defining a gate proves nothing, as today.
 
-**What "could affect" means, per kind of path.** *To be fixed from the measurement of #168, before this record is accepted.* The issue's starting point:
+**What "could affect" means, per kind of path.** The rule is exact where the script can name the gates from text it already parses, and every tier 0 and tier 1 gate where it cannot.
 
-- a recipe file: the gates whose recipe text changed;
-- the binding: the gates whose rows changed;
-- a tool's config: the gates that read it;
-- `quality/bites.toml` or a patch under `quality/bites/`: the gates whose bites changed;
-- anything else in the manifest's gate-defining groups: every tier 0 and tier 1 gate.
+- **The bites registry, `quality/bites.toml`.** The base and head registries are compared bite by bite. A gate is affected when one of its bites was added, removed or changed. A changed bite counts under both its old and its new `gate`. A change to `setup` or `include` changes the copy every gate runs in, so every gate is affected.
+- **A bite's patch, under `quality/bites/`.** The gates whose bite names that patch, in the base or the head registry. A patch no bite names affects no gate.
+- **The binding.** The gate rows of base and head are compared. A row added, removed, or changed in its command or tier affects its own gate. A change outside the rows affects every gate, since a gate may read the binding elsewhere (the operability lines, the application types).
+- **The recipe file in `gate-commands`.** `just` is the method's own runner, so the script reads the recipes at base and head (`just --dump --dump-format json`). A changed recipe body affects every gate whose row command reaches that recipe, through its dependencies and through `just <recipe>` calls in recipe bodies. A change to a top-level assignment, a `set` line, an import or a module affects every gate.
+- **Any other `gate-commands` path**, such as a script or the commit-hook config. Nothing records which recipe runs which script, and a scan of recipe text for the path would be a guess, so every gate is affected.
+- **`tool-config`, `gate-tools`, `fitness` and `formal`.** These groups name no gate, and which config file a tool reads is a fact of the stack that ADR 0042 keeps out of the plugin. Every gate is affected.
+- **No merge base.** Every gate is affected, as today.
+
+The proof prints, for each gate in its set, why it is there: `lint: bite x changed`, or `every gate: scripts/check.sh changed, and no record says which gate runs it`. The owner then sees when a run fell back to every gate.
+
+**This record stays proposed until the measurement.** The last two kinds of path fall back to every gate, and the adopted project's two red merges touched scripts. If the measurement shows that most changes still fall back, the targeted proof buys little there. The exact route would then be an optional line on each gate row naming the paths its gate reads, with a missing line counted as every gate. That is a new binding field and the owner's question, so it is asked then, not decided here.
 
 **The full proof is tier 2's, with a ceiling of its own.** `bite-all` proves every gate, on the default branch and nightly, as tier 2 runs today. It is held to its own key under `[ceilings.seconds]`, never to the tier 1 ceiling. Adopt and the upgrade set that key from the first measured run with headroom (`budget --set`). A red `bite-all` is a red tier 2, with what that stops (below).
 
@@ -43,7 +49,7 @@ This is wrong if any of these is seen:
 
 ### What changes where
 
-- `scripts/project_bite.py`: `--changed` reads the change's paths and proves the gates the per-path rule names, or every tier 0 and tier 1 gate where it cannot tell. Each verdict line gains the fault's wall time and lane. A gate stopped by its time limit is `TIMED OUT`.
+- `scripts/project_bite.py`: `--changed` reads the change's paths and proves the gates the per-path rule names, or every tier 0 and tier 1 gate where it cannot tell, and prints why each gate is in its set. Each verdict line gains the fault's wall time and lane. A gate stopped by its time limit is `TIMED OUT`.
 - `scripts/budget.py`: a green run prints its share of the ceiling and warns at 75 percent or more.
 - `skills/adopt/templates/quality/thresholds.toml` and the upgrade: a `[ceilings.seconds]` key for `bite-all`.
 - `skills/method/tiers.md`, the bite section: tier 1 proves what the change could affect; `bite-all` has a ceiling of its own; the `TIMED OUT` verdict.
