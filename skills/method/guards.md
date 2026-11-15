@@ -173,7 +173,7 @@ A verdict covers the whole tool call. Claude Code runs none of a denied command 
 
 ### The guard's log
 
-The guard writes one line for each tool call it denies or asks about to `ratchet-guard-events.jsonl` in the repository's git directory, shared by every worktree. Each line holds the time, the decision, the tool, the rule, what the guard matched and the branch. The file is local, never committed and never shown by `git status`, and the hook denies every edit of it. With no forge it shows whether work reached the default branch past the guard.
+The guard writes one line for each tool call it denies or asks about to `ratchet-guard-events.jsonl` in the repository's git directory, shared by every worktree. Each line holds the time, the decision, the tool, the rule, what the guard matched and the branch. The file is local, never committed and never shown by `git status`, and the hook denies every edit of it. The settings deny list holds it too, as `Edit(/.git/ratchet-guard-events.jsonl)`, so the harness refuses an edit even where the hook does not run. That rule reaches the main checkout only: in a linked worktree `.git` is a file, and the hook alone guards the log there. With no forge it shows whether work reached the default branch past the guard.
 
 The hook writes its answer first and the line after, so the log never changes a verdict. Three cases write no line: the ask the guard falls back to when it cannot load, a hook that timed out, and a harness's own prompt. A deny on a path in another checkout is logged in the repository the session works in.
 
