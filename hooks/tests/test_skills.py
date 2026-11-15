@@ -580,7 +580,10 @@ def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
     )
     for body in same:
         assert criteria_digest(command, body, tmp_path) == written
-    changed = CRITERIA_BODY.replace("is refused", "is kept twice")
+    last = "# Save links\n\n## Acceptance criteria\n\n- A re-pasted link is refused.\n"
+    spaced = last.replace("criteria\n\n- ", "criteria\n- ") + "\n\n## Answers\n- Yes.\n"
+    assert criteria_digest(command, spaced, tmp_path) == criteria_digest(command, last, tmp_path)
+    changed =CRITERIA_BODY.replace("is refused", "is kept twice")
     assert criteria_digest(command, changed, tmp_path) != written
     step_1 = conjecture_step(1)
     assert "**The command prints another digest than the line names:**" in step_1

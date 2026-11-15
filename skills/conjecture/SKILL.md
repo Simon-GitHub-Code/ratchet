@@ -140,6 +140,6 @@ The `- Criteria:` line records which criteria a conjecture was drafted against, 
 
 - The criteria heading is `## Acceptance criteria` on a ticket and `## User Stories` on a spec, spelled as the body spells it. A body with neither gets no line.
 - The digest is what this command prints:
-  - **The body is a file** (a local ticket or spec, or the file step 4 passes to `gh issue edit`): `tr -d '\r' < <file> | awk -v h='<heading>' '/^## /{f=($0==h)} f' | git hash-object --stdin`
-  - **The body is a forge issue's:** `gh issue view <n> --json body --jq .body | tr -d '\r' | awk -v h='<heading>' '/^## /{f=($0==h)} f' | git hash-object --stdin`
-- The command reads only the criteria section, from its heading to the next `## ` heading, and drops the carriage returns a forge's web editor adds. A label, a new line under `## Answers` or a rewritten conjecture leaves the digest as it was.
+  - **The body is a file** (a local ticket or spec, or the file step 4 passes to `gh issue edit`): `tr -d '\r' < <file> | awk -v h='<heading>' '/^## /{f=($0==h)} f && NF' | git hash-object --stdin`
+  - **The body is a forge issue's:** `gh issue view <n> --json body --jq .body | tr -d '\r' | awk -v h='<heading>' '/^## /{f=($0==h)} f && NF' | git hash-object --stdin`
+- The command reads only the criteria section, from its heading to the next `## ` heading, and drops the carriage returns a forge's web editor adds. Blank lines do not count, so a blank line added or trimmed between sections leaves the digest as it was. A label, a new line under `## Answers` or a rewritten conjecture leaves the digest as it was.
