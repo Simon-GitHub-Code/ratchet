@@ -523,13 +523,13 @@ def free_port() -> int:
     The kernel gives each outgoing connection a port from its ephemeral range, so a port picked
     there can be taken by any client between the pick and the service's bind. Below the range
     only a bind takes one. The range starts where ``PORT_RANGE`` says, or at 49152, where RFC 6335
-    puts the dynamic ports, when that file is absent. The search starts at a random port so two
-    gates rarely pick the same one, and tries every port from 1024 up to the range. When none is
-    free, the kernel picks one from the range.
+    puts the dynamic ports, when that file is absent or does not read as a range. The search
+    starts at a random port so two gates rarely pick the same one, and tries every port from 1024
+    up to the range. When none is free, the kernel picks one from the range.
     """
     try:
         ephemeral = int(PORT_RANGE.read_text(encoding="utf-8").split()[0])
-    except FileNotFoundError:
+    except (OSError, ValueError, IndexError):
         ephemeral = DYNAMIC_PORTS
     below = max(0, ephemeral - UNPRIVILEGED)
     start = UNPRIVILEGED + secrets.randbelow(below) if below else UNPRIVILEGED

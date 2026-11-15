@@ -141,10 +141,14 @@ def test_a_free_port_is_never_one_the_kernel_gives_an_outgoing_connection() -> N
     assert len(set(ports)) > 1, "two gates picking at once rarely pick the same port"
 
 
+@pytest.mark.parametrize("content", [None, "", "not a range\n"])
 def test_where_the_platform_names_no_range_a_free_port_is_below_the_dynamic_ports(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str | None
 ) -> None:
-    monkeypatch.setattr(gatelib, "PORT_RANGE", tmp_path / "absent")
+    told = tmp_path / "range"
+    if content is not None:
+        told.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(gatelib, "PORT_RANGE", told)
     assert all(gatelib.UNPRIVILEGED <= gatelib.free_port() < 49152 for _ in range(100))
 
 
