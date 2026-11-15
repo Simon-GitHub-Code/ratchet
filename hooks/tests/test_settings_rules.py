@@ -562,3 +562,10 @@ def test_each_drift_says_whether_it_is_missing_misplaced_the_projects_own_or_the
     ]
     assert settings_rules.drifts(tmp_path / "none")[0].fault is fault.MANIFEST
     assert [found.line for found in settings_rules.drifts(root)] == settings_rules.drift(root)
+
+
+def test_the_written_settings_refuse_an_edit_of_the_guard_event_log(tmp_path: Path) -> None:
+    root = repository(tmp_path)
+    assert write(root) == 0
+    written = json.loads((root / settings_rules.SETTINGS).read_text())
+    assert "Edit(/.git/ratchet-guard-events.jsonl)" in written["permissions"]["deny"]
