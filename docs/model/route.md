@@ -184,6 +184,15 @@ The tests also check that:
 - a drain note older than a blocked run's stash, or one with no base commit, does not release the run;
 - on long runs of steps, a repository that loses its commit hooks is told to install them first, whatever else is true.
 
+## The `also:` lines
+
+After `next:`, `why:` and `then:` the route prints its `also:` lines: the upgrade, a standing answer, a sign of a life event. ADR 0061 adds one more: each switch past its removal date, as `flags.py --expired` lists it, with no forge and before `/ratchet:safeguard` binds the row `no flag past its removal date`. It outranks no step.
+
+An `also:` line needs no state of the model. The model's label is the `next:` line alone, and an `also:` line changes no step: it is read from the registry and the date, and nothing the owner or an agent does next turns on it. So the model leaves the lines out, and two tests on the real route hold the new one instead:
+
+- `test_a_switch_past_its_removal_date_outranks_no_step` walks from an empty directory through a whole feature. At each stop where the default branch is checked out clean, the route on a copy whose default branch declares a switch past its date prints the same `next:`, `why:`, `then:` and stage as without it. This holds today.
+- `test_the_route_names_each_switch_past_its_removal_date` takes the shortest run, `/ratchet:init`, the tracker, `/ratchet:adopt` and the hooks, then commits that switch on the default branch, and expects an `also:` line naming it. Today `scripts/route.py` prints none, so it is a strict expected failure.
+
 ## Divergences
 
 Where the pages make a promise that the rule they give for it does not keep, and the real route follows the rule, the model follows the promise and names the place as a divergence. The tests hold the route to the model with the divergences applied. Each one also has a test that expects the route to keep the promise and fails. That test turns red the day the route is fixed. Then the divergence is deleted from `route_model.py`.
@@ -199,6 +208,7 @@ The model was written with another, a guard hold that outlived the edits it aske
 Each item below flips one pin. Delete the pin in the same change.
 
 - `scripts/feature_preflight.py`, `operability_asked`: ask the `Flag:` line of every declared type the catalogue asks it of, whatever the life events, and delete `FLAG_EVENT`. The strict expected failure `test_the_route_names_what_the_pages_say_where_it_diverges[flag-line-waits-for-deployed]` then passes, which is red; delete the entry from `DIVERGENCES` in `route_model.py`. The world's tickets carry no `## Operability` block of their own, so the line-by-line reading ADR 0061 also asks of `operability_failure` changes nothing here; its own tests hold it.
+- `scripts/route.py`, `main`: add to the `also:` lines one line per switch `flags.expired` finds in `flags.toml`, whatever the forge and whatever the row `no flag past its removal date` says. The strict expected failure `test_the_route_names_each_switch_past_its_removal_date` then passes, which is red; take its mark away.
 
 ## Charts
 
@@ -441,7 +451,7 @@ stateDiagram-v2
 - Rows to fill owed together with a safeguard or a review. The model's upgrade arrives at rest and leaves rows to fill alone; `test_route.py` holds the route's order where they are owed together.
 - A review or a new kind that arrives while the architecture is owed. The model's arrivals come at rest; a test walks a review and a safeguard that arrive beside it on a real repository. A safeguard beside it is in the model, from the drain.
 - An adoption by an older plugin that stops part-way, an upgrade that owes the architecture and no rows to fill, and an architecture recorded a second time to revisit it. An upgrade owes the architecture once: after it is recorded, an upgrade owes none.
-- The `also:` lines: signs of a life event, and standing answers.
+- The `also:` lines, for the reason [above](#the-also-lines).
 - Another work tree that holds the default branch. There the merge cannot switch, and both its `next:` line and the route name `git switch <default>`, which git refuses while that work tree holds it. A strict expected failure in the tests turns red the day the step named there can be taken.
 - A branch the default branch holds, edited anywhere but at rest. What the route makes of a dirty tree there does not depend on the tickets or on what is owed.
 - A project that is deployed, a library, or one whose flag row is bound `none`. The upgrade that asks the `Flag:` line changes nothing the route names there, as for any other upgrade.

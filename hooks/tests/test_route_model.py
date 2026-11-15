@@ -1159,3 +1159,74 @@ class RouteMachine(RuleBasedStateMachine):
 
 def test_the_route_names_what_the_model_says_on_long_runs_of_a_real_repository() -> None:
     run_state_machine_as_test(RouteMachine, settings=STEPS)
+
+
+EXPIRED_SWITCH = "old-checkout"
+EXPIRED = (
+    f'[[flag]]\nkey = "{EXPIRED_SWITCH}"\nowner = "the owner"\ndefault = false\n'
+    'remove-by = 2000-01-01\nreason = "Hidden until the owner switches it on."\n'
+)
+ROUTE = Path(route.__file__)
+
+
+def routed(repo: real.Repo) -> dict[str, object]:
+    """What ``route.py --offline --json`` prints for ``repo``: the step and its ``also:`` lines."""
+    ran = subprocess.run(  # noqa: S603 # -- the plugin's own route, no shell
+        [sys.executable, str(ROUTE), "--root", str(repo.root), "--offline", "--json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(ran.stdout)
+
+
+def with_an_expired_switch(repo: real.Repo, root: Path) -> real.Repo:
+    """A copy of ``repo`` whose default branch declares a switch past its removal date."""
+    copy = repo.copy(root)
+    (copy.root / "flags.toml").write_text(EXPIRED, encoding="utf-8")
+    snapshot(copy.root, "feat: a switch past its removal date")
+    return copy
+
+
+def test_a_switch_past_its_removal_date_outranks_no_step(tmp_path: Path) -> None:
+    """With no forge and no safeguard bound, an expired switch changes no step the route names.
+
+    Why no state of the model holds it: an ``also:`` line comes after ``next:``, ``why:`` and
+    ``then:``, and the label is the ``next:`` line alone. So at every stop of a walk from an empty
+    directory through a whole feature where the default branch is checked out clean, the route
+    with the switch names what it names without it.
+    """
+    repo, world, asked = real.Repo.start(tmp_path), World(), 0
+    for _ in range(2):
+        while True:
+            if model.settled(world):
+                asked += 1
+                expired = with_an_expired_switch(repo, tmp_path / f"expired-{asked}")
+                without, beside = routed(repo), routed(expired)
+                assert {k: v for k, v in beside.items() if k != "also"} == {
+                    k: v for k, v in without.items() if k != "also"
+                }
+                shutil.rmtree(expired.root)
+            name = model.ADVISED[model.advice(world)]
+            after = next(model.ACTIONS[name].successors(world))
+            real.apply(repo, name, real.Change(world, after))
+            world = after
+            if model.rest(world):
+                break
+    assert asked > 1
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="route.py names no switch past its removal date: flip this pin with that change",
+)
+def test_the_route_names_each_switch_past_its_removal_date(tmp_path: Path) -> None:
+    """ADR 0061: the route lists what ``flags.py --expired`` lists, as an ``also:`` line.
+
+    The shortest run: from an empty directory to the first state the model calls adopted, with
+    no forge and no safeguard bound, then a commit on the default branch that declares a switch
+    past its removal date.
+    """
+    repo = built(tmp_path / "start", ADOPTED)
+    also = routed(with_an_expired_switch(repo, tmp_path / "expired"))["also"]
+    assert any(EXPIRED_SWITCH in line for line in also), also
