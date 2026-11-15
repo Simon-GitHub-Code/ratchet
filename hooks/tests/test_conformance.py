@@ -2,8 +2,10 @@
 
 import atexit
 import functools
+import os
 import re
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -419,6 +421,36 @@ def test_a_self_test_mutation_refuses_a_template_it_no_longer_fits(repo: Path) -
 
 JUSTFILE = "justfile"
 TEMPLATE_JUSTFILE = (SKILLS / "adopt/templates/justfile").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(shutil.which("just") is None, reason="just is not installed")
+@pytest.mark.parametrize(
+    "case",
+    [
+        ({"RATCHET_JOBS": "2"}, "3", "2"),
+        ({}, "3", "3"),
+        ({}, None, str(os.cpu_count())),
+    ],
+)
+def test_the_template_caps_the_gates_by_the_environment_then_git_then_every_core(
+    tmp_path: Path, case: tuple[dict[str, str], str | None, str]
+) -> None:
+    environment, configured, expected = case
+    git(tmp_path, "init", "-q")
+    if configured is not None:
+        git(tmp_path, "config", "ratchet.jobs", configured)
+    (tmp_path / JUSTFILE).write_text(TEMPLATE_JUSTFILE, encoding="utf-8")
+    shell = {k: v for k, v in os.environ.items() if k != "RATCHET_JOBS"}
+    shell |= {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull, **environment}
+    result = subprocess.run(  # -- a fixed argv, no shell
+        ["just", "--evaluate", "jobs"],  # noqa: S607 # -- just is resolved from PATH on purpose
+        cwd=tmp_path,
+        env=shell,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.stdout.strip(), result.stderr) == (expected, "")
 
 
 def test_an_entry_point_with_no_row_names_the_row_to_add(repo: Path) -> None:
