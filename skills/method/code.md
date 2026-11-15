@@ -15,7 +15,7 @@ Design and testing belong to the other plugins:
 - **Absolute paths.** The gate tools, and every path the binding declares pure, are held at 100% line and branch coverage by the coverage tool itself, with no exclusion reaching them.
 - **Limits are hard.** Size and complexity limits live in the lint config and a fitness test, tighter on absolute paths, and the binding holds the numbers. Split the unit rather than raise a limit.
 - **A red test stays red.** A test that cannot pass becomes a finding. A test that must change carries, in the pull request, the criticism of the test that justifies the change.
-- **Suppressions and policy constants are cited.** A tool directive names its rule and a reason. A constant that enforces a rule in a fitness test names the ADR that holds it, and a fitness test checks that the number exists.
+- **Suppressions and policy constants are cited.** A tool directive names its rule and a reason. A constant that enforces a rule in a fitness test names the ADR that holds it, and a fitness test checks that the cited ADR exists.
 - **Generated artefacts are committed**, and a gate regenerates them and diffs.
 - **A dependency is a decision**, stated in the pull request, or in an ADR when it shapes the architecture. Tool versions come from lockfiles. A binary outside them is pinned by version and checksum.
 - **One reviewed change at a time, and the merge judge decides who merges it.** The binding names the branch flow and the commit convention.
