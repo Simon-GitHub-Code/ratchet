@@ -5,6 +5,8 @@ The repository is the one ``test_drain`` builds: three local tickets, ``Beta`` b
 ``merge.py`` runs as it does in a drain, in a process of its own, which a kill ends with SIGKILL.
 Each command runs as a session runs it, ``drain.main`` with no tracker; the agent's commits are
 the commits the feature skill makes, and the owner's edit is an answer on the default branch.
+``b`` and ``c`` state their ``Flag:`` line and ``a`` does not. The upgrade that ships ADR 0061 is
+the preflight asking that line before deployment: ``operability_asked`` stands in for it.
 After each action ``seen`` reads the repository back in the model's terms.
 """
 
@@ -67,8 +69,17 @@ if TYPE_CHECKING:
 REF = {Name.A: ALPHA, Name.B: BETA, Name.C: GAMMA}
 BRANCH = {Name.A: BRANCH_A, Name.B: BRANCH_B, Name.C: BRANCH_C}
 ANSWER = "\n## Answers\n\nWhich case? The lower.\n"
+NO_FLAG = (
+    "\n## Operability\n\nFlag: none: the owner chose to have it appear as soon as it is"
+    " finished, while the project is not deployed\n"
+)
+FLAG_LANDED = "\n## Operability\n\nFlag: `alpha`, off until the owner switches it on\n"
+TEXTS = {**FILES, BETA: FILES[BETA] + NO_FLAG, GAMMA: FILES[GAMMA] + NO_FLAG}
+FLAG_ASKED = [(drain.preflight.FLAG_LINE, "the flag the behaviour ships behind")]
 CHANGE = "feat(core): the change"
 RECORD = "docs(core): the verdict record"
+PUBLISHED = "feat(core): a role's own commit"
+ROLE_FILE = "src/role.py"
 DRAFT = "src/draft.py"
 VERDICT = "docs/features/alpha/verdict.json"
 STATUSES = {status.value: status for status in Status}
@@ -223,17 +234,24 @@ class World:
         if before_merge:
             stand_in = f"sh -c '{before_merge}; exec \"$@\"' merge {stand_in}"
         merging = binding(stand_in, check)
-        self.root = repository(directory / "repo", {**FILES, "docs/process/binding.md": merging})
+        self.root = repository(directory / "repo", {**TEXTS, "docs/process/binding.md": merging})
         # Why: git's directory of a repository never moves, and each read-back would ask git again.
         self.landing_intent = merge.state_dir(self.root) / merge.LANDING
         self.token = ""
         self.printed = ""
         self.code = 0
+        self.asked = False
+
+    def preflight(self) -> contextlib.AbstractContextManager[object]:
+        """The preflight as the upgrade leaves it: asking the ``Flag:`` line once it has run."""
+        if not self.asked:
+            return contextlib.nullcontext()
+        return mock.patch.object(drain.preflight, "operability_asked", return_value=FLAG_ASKED)
 
     def command(self, *argv: str) -> int:
         """``drain.py argv`` as a session runs it; what it printed is kept."""
         out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.preflight():
             try:
                 self.code = drain.main(
                     ["drain", *argv, "--root", str(self.root), "--offline", "--concurrency", "1"]
@@ -329,7 +347,9 @@ class World:
     def perform(self, action: model.Action) -> None:
         """Do what ``action`` names."""
         kind, name = action.kind, action.ticket
-        if name is None:
+        if kind is Kind.UPGRADE:
+            self.asked = True
+        elif name is None:
             self.command(*self.argv(kind, ""))
         elif kind in model.KILLS:
             with self.killer(kind, name):
@@ -344,11 +364,12 @@ class World:
         ref, tree = REF[name], self.tree(name)
         if kind is Kind.WORK:
             write(tree, DRAFT, "half done\n")
-        elif kind is Kind.COMMIT:
+        elif kind in {Kind.COMMIT, Kind.PUBLISH}:
             text = (tree / ref).read_text(encoding="utf-8")
             write(tree, ref, text.replace("Status: ready-for-agent", "Status: resolved"))
-            write(tree, f"src/{name.value}.py", f"{name.name} = 1\n")
-            snapshot(tree, CHANGE)
+            built = f"src/{name.value}.py" if kind is Kind.COMMIT else ROLE_FILE
+            write(tree, built, f"{name.name} = 1\n")
+            snapshot(tree, CHANGE if kind is Kind.COMMIT else PUBLISHED)
         elif kind is Kind.RECORD:
             with contextlib.redirect_stdout(io.StringIO()):
                 assert merge_ready.write_record(tree, json.dumps(approval("alpha"))) == 0
@@ -357,14 +378,19 @@ class World:
             text = (self.root / ref).read_text(encoding="utf-8")
             write(self.root, ref, text + ANSWER)
             snapshot(self.root, f"docs(tracker): the owner answers {ref}")
+        elif kind is Kind.LINE:
+            text = (self.root / ref).read_text(encoding="utf-8")
+            write(self.root, ref, text + FLAG_LANDED)
+            snapshot(self.root, f"docs(tracker): the owner lands the Flag: line of {ref}")
         elif kind is Kind.LOCK:
             self.lock_of(name).write_text("", encoding="utf-8")
         elif kind is Kind.UNLOCK:
             self.lock_of(name).unlink()
 
     def seen(self, ghost: model.State) -> Seen:
-        """The repository read back; ``ghost`` gives what no file holds (the reviews)."""
-        drafted = drain.plan(drain.Drain(self.root, None, model.CAP))
+        """The repository read back; ``ghost`` gives what no file holds (the reviews, a role's commit)."""  # noqa: E501
+        with self.preflight():
+            drafted = drain.plan(drain.Drain(self.root, None, model.CAP))
         by_ref = {entry.ref: STATUSES[entry.state] for entry in drafted.tickets}
         statuses = {name: by_ref[ref] for name, ref in REF.items() if ref in by_ref}
         start = tuple(name for name, ref in REF.items() if ref in drafted.start)
@@ -388,7 +414,8 @@ class World:
             listed = branches.get(BRANCH[name])
             landed = merged and BRANCH[name] in on_merge
             branch, current = self.branch_state(name, listed, landed=landed, was=was)
-            text = int(ANSWER in (self.root / REF[name]).read_text(encoding="utf-8"))
+            written = (self.root / REF[name]).read_text(encoding="utf-8")
+            text = int(ANSWER in written or FLAG_LANDED in written)
             note = self.note(name, merged=merged, was=was.note)
             ticket = Ticket(
                 tree=tree,
@@ -399,6 +426,7 @@ class World:
                 note=note,
                 text=text,
                 stashes=sum(f": {BRANCH[name]}: " in line for line in stashes),
+                published=was.published,
             )
             tickets.append(model.normal(ticket))
         listing = git(self.root, "worktree", "list", "--porcelain").splitlines()
@@ -452,7 +480,8 @@ class World:
         rebasing = bool(held.get("rebasing"))
         if outcome is None:
             return Note(Outcome.OPENED, rebasing=rebasing)
-        texts = {digest(FILES[REF[name]]): 0, digest(FILES[REF[name]] + ANSWER): 1}
+        first = TEXTS[REF[name]]
+        texts = {digest(first): 0, digest(first + ANSWER): 1, digest(first + FLAG_LANDED): 1}
         written = texts.get(str(held.get("digest")), -1)
         attempts = held.get("attempts")
         return Note(
