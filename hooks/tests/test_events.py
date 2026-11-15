@@ -14,8 +14,8 @@ import pytest
 
 from ratchet_guards import events, hook
 from ratchet_guards.manifest import MANIFEST_PATH
-from tests.repos import git, repository
-from tests.support import MANIFEST_TEXT, PLUGIN_ROOT
+from tests.repos import branch, git, repository
+from tests.support import MANIFEST_TEXT, PLUGIN_ROOT, make_guard
 
 SHIM = PLUGIN_ROOT / "hooks/guard.py"
 STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
@@ -270,3 +270,44 @@ def test_concurrent_writers_leave_every_line_whole(tmp_path: Path) -> None:
         tag = str(line["branch"])
         assert str(line["detail"]).endswith(tag * 3000)
         assert "truncated" not in line
+
+
+def test_the_log_is_a_locked_guard_path_in_every_checkout() -> None:
+    hit = make_guard().locator.classify(
+        Path("/elsewhere/.git") / events.LOG_NAME, destructive=False
+    )
+    assert hit is not None
+    assert hit.group.locked
+    assert hit.group.name == "guard-log"
+
+
+def test_an_agent_cannot_write_the_log(adopted: Path, tmp_path: Path) -> None:
+    log = log_of(adopted)
+    relative = f".git/{events.LOG_NAME}"
+    for case in (
+        edit(adopted, log),
+        bash(adopted, f"echo '{{}}' >> {relative}"),
+        bash(adopted, f"rm {relative}"),
+        bash(adopted, f"ln -f README.md {relative}"),
+    ):
+        printed = answer(adopted, case)
+        assert decision(printed) == "deny"
+        assert "guard-log" in printed
+    branch(adopted)
+    assert decision(answer(adopted, edit(adopted, log))) == "deny"
+    bare = tmp_path / "unadopted"
+    bare.mkdir()
+    repository(bare)
+    assert decision(answer(bare, edit(bare, log_of(bare)))) == "deny"
+
+
+def test_an_agent_in_a_worktree_cannot_write_the_log(adopted: Path) -> None:
+    tree = adopted / ".claude/worktrees/agent-1"
+    git(adopted, "worktree", "add", "-q", "-b", "feature/x", str(tree))
+    log = log_of(adopted)
+    climb = os.path.relpath(log, tree)
+    for project in (tree, adopted, None):
+        for case in (edit(tree, log), bash(tree, f"echo '{{}}' >> {climb}")):
+            printed = answer(tree, case, project=project)
+            assert decision(printed) == "deny"
+            assert "guard-log" in printed
