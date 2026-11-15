@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import functools
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Final, NamedTuple
@@ -75,7 +75,8 @@ class Spec(StrEnum):
 class Ticket(StrEnum):
     """A ticket's life.
 
-    None yet, open for triage, agent-ready with or without a conjecture; held by a blocked
+    None yet, open for triage, agent-ready with or without a conjecture, or with a conjecture whose
+    criteria changed after it was written (stale); held by a blocked
     feature run's stash; held by the drain's note for open questions, for guard edits, for an owed
     safeguard, or by a note written before the drain recorded kinds or the base commit that
     landing guard edits is read from; built on a branch, merged but
@@ -89,6 +90,7 @@ class Ticket(StrEnum):
     TRIAGE = "triage"
     READY = "ready"
     STATED = "stated"
+    STALE = "stale"
     HELD = "held"
     ASKED = "asked"
     GUARDED = "guarded"
@@ -176,6 +178,7 @@ class ActionName(StrEnum):
     OWNER_AGREES_TICKET = "OwnerAgreesTicket"
     OWNER_WORKS_TICKET_THEMSELF = "OwnerWorksTicketThemself"
     OWNER_STATES_CONJECTURE = "OwnerStatesConjecture"
+    OWNER_EDITS_CRITERIA = "OwnerEditsCriteria"
     AGENT_BUILDS_TICKET = "AgentBuildsTicket"
     BUILD_STOPS = "BuildStops"
     FEATURE_RUN_BLOCKS = "FeatureRunBlocks"
@@ -210,7 +213,9 @@ Slots = tuple[Ticket, Ticket]
 BLOCKED_BY: Final = {1: 0}
 HOLDS: Final = frozenset({Ticket.HELD, Ticket.ASKED, Ticket.GUARDED, Ticket.OWED, Ticket.PARKED})
 STATED: Final = frozenset({Ticket.STATED})
-LABELLED: Final = HOLDS | STATED | frozenset({Ticket.READY, Ticket.BUILT, Ticket.MERGED})
+LABELLED: Final = (
+    HOLDS | STATED | frozenset({Ticket.READY, Ticket.STALE, Ticket.BUILT, Ticket.MERGED})
+)
 OPEN: Final = LABELLED | {Ticket.TRIAGE}
 CLOSED: Final = frozenset({Ticket.NONE, Ticket.RESOLVED})
 
@@ -342,7 +347,7 @@ def lacks_the_line(world: World) -> bool:
     """
     return (
         world.spec is Spec.STATED
-        or any(ticket in STATED | HOLDS for ticket in world.tickets)
+        or any(ticket in STATED | HOLDS | {Ticket.STALE} for ticket in world.tickets)
         or (world.inherits and Ticket.TRIAGE in world.tickets)
     )
 
@@ -448,6 +453,11 @@ def as_proved_by_its_pin(world: World) -> World:
     return replace(world, setup=Setup.BOUND)
 
 
+def as_its_criteria_unread(world: World) -> World:
+    first, second = (Ticket.STATED if t is Ticket.STALE else t for t in world.tickets)
+    return replace(world, tickets=(first, second))
+
+
 DIVERGENCES: Final[tuple[Divergence, ...]] = (
     Divergence(
         name="adoption-proved-by-its-pin",
@@ -491,25 +501,44 @@ DIVERGENCES: Final[tuple[Divergence, ...]] = (
             flag=Flag.MISSING,
         ),
     ),
+    Divergence(
+        name="stale-conjecture-read-as-stated",
+        holds=lambda world: Ticket.STALE in world.tickets,
+        reads=as_its_criteria_unread,
+        contradicts=(
+            "When the criteria change after it, `/ratchet:conjecture <ticket>` finds another"
+            " digest, drafts the three sections again, keeps every line under `## Answers`, asks"
+            " only the forks the change opened, and prints what changed in the conjecture."
+        ),
+        source="skills/method/records.md",
+        breaks=frozenset({"RealAdviceCanBeFollowed", "RealStaleConjectureBeforeTheBuild"}),
+        example=World(
+            setup=Setup.BOUND,
+            hooks=True,
+            foundation=True,
+            tickets=(Ticket.STALE, Ticket.TRIAGE),
+            architecture=Architecture.RECORDED,
+        ),
+    ),
 )
 
 
-def divergence(world: World) -> Divergence | None:
-    """The entry whose reading changes what the route names in ``world``, if one does."""
-    return next(
-        (
-            entry
-            for entry in DIVERGENCES
-            if entry.holds(world) and advice(entry.reads(world)) is not advice(world)
-        ),
-        None,
-    )
+def as_the_route_reads(world: World) -> World:
+    for entry in DIVERGENCES:
+        if entry.holds(world):
+            world = entry.reads(world)
+    return world
+
+
+def divergences(world: World) -> tuple[Divergence, ...]:
+    if advice(as_the_route_reads(world)) is advice(world):
+        return ()
+    return tuple(entry for entry in DIVERGENCES if entry.holds(world))
 
 
 def real_advice(world: World) -> Advice:
     """What the real route names in ``world``: the specification, with the divergences applied."""
-    entry = divergence(world)
-    return advice(world) if entry is None else advice(entry.reads(world))
+    return advice(as_the_route_reads(world))
 
 
 Successors = Callable[[World], Iterator[World]]
@@ -727,9 +756,13 @@ def one(ticket: Ticket) -> frozenset[Ticket]:
     return frozenset({ticket})
 
 
+def inherited(world: World) -> Ticket:
+    return Ticket.STALE if Ticket.STALE in world.tickets else Ticket.STATED
+
+
 @action(ActionName.OWNER_AGREES_TICKET, Advice.TRIAGE)
 def _owner_agrees_ticket(world: World) -> Iterator[World]:
-    after = Ticket.STATED if world.inherits else Ticket.READY
+    after = inherited(world) if world.inherits else Ticket.READY
     yield from moves(world, Move(one(Ticket.TRIAGE), after))
 
 
@@ -750,8 +783,34 @@ def _owner_states_conjecture(world: World) -> Iterator[World]:
     flag = Flag.ASKED if world.flag is Flag.MISSING else world.flag
     for moved in moves(world, Move(one(Ticket.READY), Ticket.STATED)):
         yield replace(moved, flag=flag)
+    slots = range(len(world.tickets))
+    for redraft in [slots] if world.inherits else [[slot] for slot in slots]:
+        yield from (replace(w, flag=flag) for w in redrafted(world, redraft))
     if calm(world) and world.flag is Flag.MISSING and STATED & set(world.tickets):
         yield replace(world, flag=flag)
+
+
+def redrafted(world: World, slots: Iterable[int]) -> Iterator[World]:
+    stale = [slot for slot in slots if world.tickets[slot] is Ticket.STALE]
+    if calm(world) and stale:
+        first, second = (
+            Ticket.STATED if slot in stale else ticket for slot, ticket in enumerate(world.tickets)
+        )
+        yield replace(world, tickets=(first, second))
+
+
+@action(ActionName.OWNER_EDITS_CRITERIA)
+def _owner_edits_criteria(world: World) -> Iterator[World]:
+    if not calm(world):
+        return
+    if world.inherits:
+        if Ticket.STATED in world.tickets and not HOLDS & set(world.tickets):
+            first, second = (Ticket.STALE if t is Ticket.STATED else t for t in world.tickets)
+            yield replace(world, tickets=(first, second))
+        return
+    for slot, ticket in enumerate(world.tickets):
+        if ticket is Ticket.STATED:
+            yield with_ticket(world, slot, Ticket.STALE)
 
 
 per_ticket(
@@ -1161,6 +1220,44 @@ def proved_before_the_build(label: Callable[[World], Advice]) -> Callable[[World
     return check
 
 
+def stale_before_the_build(label: Callable[[World], Advice]) -> Callable[[World], bool]:
+    def check(world: World) -> bool:
+        if Ticket.STALE not in world.tickets:
+            return True
+        named = label(world)
+        return named is not Advice.DRAIN and (named is not Advice.BUILD or queue_builds(world))
+
+    return check
+
+
+EACH_TICKET = "\\A slot \\in DOMAIN tickets"
+
+
+def no_run_on_a_stale_conjecture() -> str:
+    runs = " \\/ ".join(RUNS)
+    return (
+        f'[][{EACH_TICKET} : (tickets[slot] = "{Ticket.STALE}" /\\ ({runs}))'
+        f' => tickets\'[slot] = "{Ticket.STALE}"]_vars'
+    )
+
+
+def only_the_redraft_clears_it() -> str:
+    return (
+        f'[][{EACH_TICKET} : (tickets[slot] = "{Ticket.STALE}"'
+        f' /\\ tickets\'[slot] # "{Ticket.STALE}") => ({ActionName.OWNER_STATES_CONJECTURE}'
+        f' /\\ tickets\'[slot] = "{Ticket.STATED}")]_vars'
+    )
+
+
+def the_edit_moves_nothing_else() -> str:
+    others = ", ".join(name for name in World.__dataclass_fields__ if name != "tickets")
+    return (
+        f"[][{ActionName.OWNER_EDITS_CRITERIA} => (UNCHANGED <<{others}>> /\\\n"
+        f"  {EACH_TICKET} : tickets'[slot] = tickets[slot]"
+        f' \\/ (tickets[slot] = "{Ticket.STATED}" /\\ tickets\'[slot] = "{Ticket.STALE}"))]_vars'
+    )
+
+
 def no_run_without_the_line() -> str:
     """TLA+ text: while the line is missing, no step is a feature run or the drain."""
     runs = " \\/ ".join(RUNS)
@@ -1264,6 +1361,28 @@ RULES: Final[dict[str, model_tla.Rule]] = {
     "RealUnprovedAdoptionNeverBuilds": model_tla.Invariant(
         "The real route never tells a repository whose adoption stopped before its proof to build.",
         proved_before_the_build(real_advice),
+    ),
+    "StaleConjectureBeforeTheBuild": model_tla.Invariant(
+        "Where a ticket's conjecture is stale, the route names no drain, and no build but of a"
+        " ticket whose conjecture is current.",
+        stale_before_the_build(advice),
+    ),
+    "RealStaleConjectureBeforeTheBuild": model_tla.Invariant(
+        "Where a ticket's conjecture is stale, the real route names no drain, and no build but of"
+        " a ticket whose conjecture is current.",
+        stale_before_the_build(real_advice),
+    ),
+    "NoRunStartsOnAStaleConjecture": model_tla.Property(
+        "No feature run and no drain starts on a ticket whose conjecture is stale.",
+        no_run_on_a_stale_conjecture(),
+    ),
+    "OnlyTheRedraftClearsAStaleConjecture": model_tla.Property(
+        "Only `/ratchet:conjecture` ends a stale conjecture, and it leaves the ticket stated.",
+        only_the_redraft_clears_it(),
+    ),
+    "TheCriteriaEditMovesNothingElse": model_tla.Property(
+        "An edit of the criteria makes a stated conjecture stale and changes nothing else.",
+        the_edit_moves_nothing_else(),
     ),
 }
 
