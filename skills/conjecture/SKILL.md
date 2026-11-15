@@ -15,9 +15,10 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
 1. **Read the ticket.**
    - Run `gh issue view <n> --json number,title,body,comments` in one Bash call, or read the file.
    - Read its parent spec too: the one a `Parent:` line or a `## Parent` section names, or, for a local ticket under `<feature>/issues/`, the `<feature>/spec.md` beside that directory, which the preflight reads as its parent.
-   - **The ticket, or its parent, already states both a conjecture and its operability:** say so and stop.
+   - **The ticket, or its parent, already states a conjecture, its operability and a `## Size` block:** there is nothing to write. Say so and stop.
+   - **The ticket, or its parent, states a conjecture and its operability but no `## Size` block:** estimate the size by the `## Size` block of step 2 and write only `## Size` by step 4. Skip the rest of step 2, and step 3. When the estimate passes a ceiling, that block's ceiling case holds.
 
-   Done when you hold the ticket, and its parent spec when it has one.
+   Done when you hold the ticket, and its parent spec when it has one, and, when they already state all three sections, you have said so and stopped.
 
 2. **Draft from the record.** The conversation that produced the ticket (`grill-with-docs`, `to-spec`, `to-tickets`) already chose an approach and killed the alternatives, and the ADRs and the glossary hold the rest. That is how it will be built, so draft from that record, not from imagination. What it does for the user is another matter: a behaviour the spec chose is the owner's only where their own words settle it (step 3).
    - **The ticket's siblings share a parent spec:** draft both once, for the spec. Its tickets inherit them.
@@ -62,7 +63,7 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
    - Write the estimate as two lines: `- Product lines: <N>` and `- Product files: <M>`.
    - The ceilings are `product_lines` and `product_files` of `[ceilings.change]` in `quality/thresholds.toml`. The feature preflight refuses a ticket whose stated size passes either.
    - Be honest and not hopeful: the spec stage estimates the whole change again and stops it when it is larger.
-   - **The estimate passes a ceiling:** the ticket is not written as one. Say so in the reply, with the parts it divides into, each a vertical slice a person could use and each under the ceilings. `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so ask it for slices under the ceilings by naming both numbers in its argument.
+   - **The estimate passes a ceiling:** the ticket is not written as one. Say so in the reply, with the parts it divides into, each a vertical slice a person could use and each under the ceilings. `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so name in the reply the argument that asks it for slices under both ceilings, with both numbers in it. Then stop: write nothing to that ticket, and do not run steps 3 to 5 for it.
 
    **The `## Operability` block.** Write one line per concern the binding's application types are asked; the preflight of step 5 names any it still wants. Take each line from the ticket and the binding's Feature flags, Telemetry and Limits sections, or write `none` and why.
    - `- Flag:` the flag the behaviour ships behind.
@@ -70,11 +71,11 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
    - `- Load:` the route or input the load gates gain.
    - `- Security:` the surface it adds: routes, inputs, who may call.
 
-   Done when the draft holds the five parts, a table row for every thing the owner said that the ticket or spec touches and for every behaviour of the spec nothing they said asked for, the two size lines and an operability line for every concern asked, and, when the estimate passes a ceiling, the reply says so with the parts it divides into, and `/mattpocock-skills:to-tickets` is asked for slices under the ceilings with both numbers in its argument.
+   Done when the draft holds the five parts, a table row for every thing the owner said that the ticket or spec touches and for every behaviour of the spec nothing they said asked for, the two size lines and an operability line for every concern asked. When the estimate passes a ceiling, it is done instead when the reply names the parts the ticket divides into and the `/mattpocock-skills:to-tickets` argument, and nothing is written to that ticket.
 
 3. **One conjecture for the whole spec, and no dialog to confirm it.**
    - **The ticket's siblings share a parent spec:** the conjecture is the spec's, drafted once in step 2.
-   - The draft restates what the owner already decided, so do not ask them to accept it. Step 4 writes it, and step 5 prints it in the reply, where they read it and counter what is wrong.
+   - The draft restates what the owner already decided, so do not ask them to accept it. Step 4 writes it. It is printed once, in the final reply of step 5, where the owner reads it and counters what is wrong.
 
    **Ask the forks.**
    - Put to [the fork test](../method/pipeline.md#the-fork-test) each behaviour the spec chose that nothing the owner said settles, and each addition the user would see, keep or do something differently by.
@@ -87,19 +88,21 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
    **Write each fork.**
    - **The owner answered it:** write the answer under `## Answers` on the spec or ticket, the question and the answer in one line each. Change the criterion to follow it. Write its row with the answer quoted under *You said*, marked **built**.
    - **A fork the test gives to you** (order, wording, layout, timing, a limit, how it is built): it is written `(not asked)` and **assumed**. Take the one the record supports, name the other under Alternatives where it is a way to build it, and state what changing it later costs.
-   - Never write that no question was needed while a row says `(left open)` and is not **assumed** by the rule.
+   - Never write that no question was needed while a row says `(left open)`.
 
    Done when every fork the owner was asked has its line under `## Answers` and a **built** row, every other fork's row is `(not asked)` and **assumed**, and no row says `(left open)`.
 
-4. **Write it.** Append `## Conjecture`, `## Size` and `## Operability` with the agreed text to the ticket body. When the ticket's tickets share one spec, write them on the spec, and say that its tickets inherit them.
+4. **Write it.** Append `## Conjecture`, `## Size` and `## Operability` with the agreed text to the ticket body, or only `## Size` when step 1 found the other two. When the ticket's siblings share a parent spec, write them on the spec, and say that its tickets inherit them.
    - **The tracker is on the forge:** run `gh issue edit <n> --body-file <file>` with the full body in one Bash call. Pass no label flag: the agent-ready label is the owner's act, and the guard asks on it.
    - **The tracker is local:** edit the file and land it. The preflight refuses a dirty tree, and the ticket file is a record, not work in progress.
      - **The repository has no forge:** run the `merge` entry point with `--records` (`just merge --records`) in one Bash call. It commits the records alone on a branch of their own and merges it when the merge judge and `check` pass. The judge asks no verdict record of records alone.
-     - A ticket that already carries the agent-ready label, and the spec such a ticket inherits from, change only by the owner's merge: the run prints `merge: owner` and their command, which you relay as it is.
      - **The repository has a forge:** commit the file on a branch of its own and open the pull request. Its merge job merges it.
+     - A ticket that already carries the agent-ready label, and the spec such a ticket inherits from, change only by the owner's merge, with or without a forge. The merge judge leaves that change to the owner and says why.
+       - **No forge:** the run prints `merge: owner` and their command, which you relay as it is.
+       - **A forge:** the merge job leaves the pull request to the owner and comments why on it, which you relay.
      - Never commit on the default branch itself.
 
-   Done when the three sections are in the issue body of the ticket, or of the spec its tickets share, or in that ticket's or spec's file, merged, waiting on the owner's merge, or in an open pull request, and, when they are on the spec, you have said that its tickets inherit them.
+   Done when the sections you appended are in the issue body of the ticket, or of the parent spec its siblings share, or in that ticket's or spec's file, merged, waiting on the owner's merge, or in an open pull request. When they are on the spec, you have said that its tickets inherit them. When the merge is the owner's, you have relayed why.
 
 5. **Hand over.**
    - Print the conjecture with *What you asked for* whole. It is where the owner sees what each thing they said became.

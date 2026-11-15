@@ -376,6 +376,53 @@ def test_the_conjecture_steps_say_how_each_fork_is_written() -> None:
     assert fork_rule_problems(planted) == ["no sentence says how an answered fork's row is written"]
 
 
+def conjecture_step(number: int) -> str:
+    page = flat("conjecture/SKILL.md")
+    return page.split(f" {number}. **", 1)[1].split(f" {number + 1}. **", 1)[0]
+
+
+def test_the_conjecture_writes_nothing_to_a_ticket_too_large_for_one_change() -> None:
+    # Why: a ticket over a change-size ceiling "is not written as one" left open whether its
+    # conjecture was still asked and written. The reply now names the parts and the `to-tickets`
+    # argument, and the skill stops there.
+    step_2 = conjecture_step(2)
+    assert "Then stop: write nothing to that ticket, and do not run steps 3 to 5 for it." in step_2
+
+
+def test_the_conjecture_adds_a_missing_size_to_a_ticket_that_states_the_rest() -> None:
+    # Why: the skill stopped once a conjecture and its operability were there, so a ticket written
+    # before it estimated size kept no `## Size`. It now stops only when all three are there.
+    step_1 = conjecture_step(1)
+    assert (
+        "estimate the size by the `## Size` block of step 2 and write only `## Size` by step 4"
+        in step_1
+    )
+
+
+def test_the_conjecture_is_printed_once_at_the_hand_over() -> None:
+    # Why: step 3 and step 5 each said to print the conjecture, so it could go out with the
+    # questions and again at the hand-over. It is printed once, in the last reply.
+    step_3 = conjecture_step(3)
+    assert "It is printed once, in the final reply of step 5" in step_3
+
+
+def test_a_labelled_ticket_is_the_owners_to_merge_on_a_forge_too() -> None:
+    # Why: the labelled-ticket rule read as one for a repository with no forge, where a forge's
+    # merge job was said to merge every pull request. The merge judge leaves that change to the
+    # owner either way, and the page now says what happens on a forge.
+    step_4 = conjecture_step(4)
+    assert "the merge job leaves the pull request to the owner and comments why on it" in step_4
+
+
+def test_the_conjecture_names_one_shared_spec_and_no_dead_clause() -> None:
+    # Why: step 4 named the shared spec by another condition than step 2, and the `(left open)`
+    # rule ended with a clause no row could fail. Both steps use one condition, and the rule ends
+    # at the row.
+    shared = "the ticket's siblings share a parent spec"
+    assert all(shared in conjecture_step(step).lower() for step in (2, 4))
+    assert "while a row says `(left open)`." in conjecture_step(3)
+
+
 def test_adopt_asks_a_repository_with_code_whether_others_reach_it() -> None:
     # Why: ADR 0028. The route's sign patterns miss a deploy job in release.yml and a production
     # address in .env.example, so a deployed project with neither was asked nothing.
