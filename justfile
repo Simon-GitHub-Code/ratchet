@@ -22,7 +22,12 @@ tier1_gates := "test test-floor conformance-self-test lowered-smoke bite"
 test_shards := "6"
 shard := env_var_or_default("SHARD", "1")
 shards := env_var_or_default("SHARDS", "1")
-parallel := "python3 scripts/parallel.py --runner '" + just_executable() + "' --report .ratchet/timing.jsonl"
+parallel := "python3 scripts/parallel.py --runner '" + just_executable() + "' --report .ratchet/timing.jsonl --wide test test-floor"
+
+# The test workers: every core, or the share of the cores `parallel.py` gives each suite when the
+# two run beside each other, so they never start a worker per core each.
+configured_jobs := `git config --get ratchet.jobs 2>/dev/null || true`
+workers := env_var_or_default("RATCHET_JOBS", if configured_jobs == "" { "auto" } else { configured_jobs })
 
 # Tier 0: shape.
 tier0: sync
@@ -65,7 +70,7 @@ parse-workflow:
 parse-adapters:
     node --no-warnings scripts/parse-js.mjs adapter adapters/pi/ratchet-guard.ts adapters/opencode/ratchet-guard.ts
 
-# The suite once, across every core and in random order, under coverage. The gate scripts, the
+# The suite once, across its `workers` and in random order, under coverage. The gate scripts, the
 # guard hook and its two shims are absolute paths: every line and branch must run under test, and
 # `fail_under = 100` in pyproject.toml makes this run red when one does not. It runs on the Python
 # `.python-version` pins, whose `sys.monitoring` traces branches at a fraction of the older
@@ -73,7 +78,7 @@ parse-adapters:
 # are named beside the budget line on every run. CI runs it as `SHARD` of `SHARDS` jobs; a local run
 # is shard 1 of 1, the whole suite, and judges coverage itself.
 test:
-    uv run pytest -n auto --dist worksteal --durations=10 --cov {{cov_report}} hooks/tests evals/first-hour/tests
+    uv run pytest -n {{workers}} --dist worksteal --durations=10 --cov {{cov_report}} hooks/tests evals/first-hour/tests
     {{cov_keep}}
 
 # One shard gives no coverage verdict, since its slice alone cannot reach every line: it keeps its
@@ -109,7 +114,7 @@ shard-check: sync
 # The suite again on Python 3.11, the oldest the hook and the gate scripts support (ADR 0007),
 # without coverage and in an environment of its own.
 test-floor:
-    UV_PROJECT_ENVIRONMENT=.venv-floor uv run --frozen --python 3.11 pytest -n auto --dist worksteal -p no:cacheprovider hooks/tests
+    UV_PROJECT_ENVIRONMENT=.venv-floor uv run --frozen --python 3.11 pytest -n {{workers}} --dist worksteal -p no:cacheprovider hooks/tests
 
 conformance-self-test:
     python3 scripts/conformance.py --self-test
