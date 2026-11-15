@@ -9,7 +9,7 @@ agy plugin install https://github.com/Simon-GitHub-Code/ratchet
 agy plugin list
 ```
 
-`agy plugin list` should show `ratchet` as enabled. The plugin lands in `~/.gemini/config/plugins/ratchet/`, with its hooks in `hooks.json` there. Antigravity has no `SubagentStart` event, so the install skips that hook: subagents do not get the stance. Antigravity has no dependency field, so `/ratchet:init` installs `mattpocock-skills`, `pstack` and `impeccable` with the owner's consent.
+`agy plugin list` should show `ratchet` as enabled. The plugin lands in `~/.gemini/config/plugins/ratchet/`, with its hooks in `hooks.json` there. Antigravity has no `SubagentStart` event, so the install skips that hook: subagents do not get the stance. Antigravity has no dependency field, so `/ratchet:init` installs whichever of `mattpocock-skills`, `pstack` and `impeccable` is missing without asking, and says so in its hand-over.
 
 ## The guard
 
