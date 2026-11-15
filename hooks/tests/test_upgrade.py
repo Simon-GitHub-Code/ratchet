@@ -176,8 +176,18 @@ def test_what_the_project_wrote_survives_the_upgrade(name: str, tmp_path: Path) 
     assert all(row in rows for row in kept.rows), "every row the project wrote, in its order"
     assert DENY in after[".claude/settings.json"]
     assert [f for f in result.owner if DENY in str(f)]
-    for sections in ("AGENTS.md", ".github/pull_request_template.md"):
-        assert keeps_in_order(before[sections], after[sections]), sections
+    names = conformance.companions()
+    plugin_written = {
+        line.rstrip("\r\n")
+        for _, _, line in conformance.companion_lines(before["AGENTS.md"], names)
+    }
+    project_written = "\n".join(
+        line for line in before["AGENTS.md"].splitlines() if line not in plugin_written
+    )
+    assert keeps_in_order(project_written, after["AGENTS.md"]), "AGENTS.md"
+    assert all(conformance.plain_companion(name) in after["AGENTS.md"] for name in names)
+    template = ".github/pull_request_template.md"
+    assert keeps_in_order(before[template], after[template]), template
 
 
 def test_a_padded_table_is_padded_again_with_the_new_row(tmp_path: Path) -> None:

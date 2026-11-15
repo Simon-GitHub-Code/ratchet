@@ -9,6 +9,7 @@ to pass and each mutated one to fail, so the checker is shown to bite.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -252,6 +253,9 @@ ADOPT_TEMPLATES = TEMPLATES / "adopt/templates"
 INIT_TEMPLATES = TEMPLATES / "init/templates"
 AGENTS_TEMPLATE = INIT_TEMPLATES / "AGENTS.md"
 ASKING = "## Asking the owner"
+MARKETPLACE = Path(__file__).resolve().parents[1] / ".claude-plugin/marketplace.json"
+BOLD_NAME = re.compile(r"^- \*\*([^*]+)\*\*")
+BACKTICKED_WORD = re.compile(r"`([^`\s]+)`")
 RUNS_JUST = re.compile(r"^just\s+@?([A-Za-z_][\w-]*)")
 # Why: a gate over the change compares with a base; `changed.py` hands it one, and judges nothing
 # on the adoption, whose base holds no binding.
@@ -512,6 +516,72 @@ def check_agent_instructions(root: Path) -> Iterable[Finding]:
     elif not markdown_text.has_section(text, ASKING):
         problem = f"has no '{ASKING}' section; copy it from the template AGENTS.md"
         yield missing_section(name, problem, ASKING, template_text=read(AGENTS_TEMPLATE) or "")
+
+
+def companions() -> tuple[str, ...]:
+    """The plugins ``ratchet`` declares as dependencies in the marketplace file."""
+    declared = json.loads(MARKETPLACE.read_text(encoding="utf-8"))
+    (ratchet,) = (entry for entry in declared["plugins"] if entry["name"] == "ratchet")
+    return tuple(dependency.partition("@")[0] for dependency in ratchet["dependencies"])
+
+
+def companion_of(line: str, names: Sequence[str]) -> str | None:
+    """The companion a list line names by a bold name or by its first backticked word."""
+    if not line.startswith("- "):
+        return None
+    bold = BOLD_NAME.match(line)
+    if bold and bold.group(1) in names:
+        return bold.group(1)
+    ticked = BACKTICKED_WORD.search(line)
+    return ticked.group(1) if ticked and ticked.group(1) in names else None
+
+
+def companion_lines(text: str, names: Sequence[str]) -> Iterator[tuple[int, str, str]]:
+    """Each companion line before the first ``## `` heading: its index, its name, its line."""
+    for index, line in enumerate(text.splitlines(keepends=True)):
+        if line.startswith("##"):
+            return
+        if (name := companion_of(line, names)) is not None:
+            yield index, name, line
+
+
+def plain_companion(name: str) -> str:
+    return f"- `{name}`"
+
+
+def with_plain_companions(names: Sequence[str]) -> gatelib.Want:
+    """The text with each companion line rewritten to the plugin's name alone."""
+
+    def want(text: str | None) -> str:
+        lines = (text or "").splitlines(keepends=True)
+        for index, name, line in companion_lines(text or "", names):
+            lines[index] = plain_companion(name) + line[len(line.rstrip("\r\n")) :]
+        return "".join(lines)
+
+    return want
+
+
+def check_companion_lines(root: Path) -> Iterable[Finding]:
+    """ADR 0060: a companion plugin is named by its line alone, which says nothing about it."""
+    name = "AGENTS.md"
+    text = read(root / name)
+    if text is None:
+        name, text = "CLAUDE.md", read(root / "CLAUDE.md")
+    names = companions()
+    stale = [
+        (plugin, line)
+        for _, plugin, line in companion_lines(text or "", names)
+        if line.rstrip("\r\n") != plain_companion(plugin)
+    ]
+    if stale:
+        plugins = ", ".join(plugin for plugin, _ in stale)
+        problem = f"the lines for {plugins} are not exactly `- `<plugin>``"
+        edit = Edit(
+            "write each companion line as the plugin's name alone",
+            with_plain_companions(names),
+            Agent(start=tuple(plain_companion(plugin) for plugin, _ in stale)),
+        )
+        yield Finding(name, problem, edit)
 
 
 def check_glossary(root: Path) -> Iterable[Finding]:
@@ -2406,6 +2476,7 @@ def check_pr_template(root: Path) -> Iterable[Finding]:
 CHECKS: tuple[Check, ...] = (
     check_plugin_pin,
     check_agent_instructions,
+    check_companion_lines,
     check_glossary,
     check_brief,
     check_adrs,
@@ -2754,6 +2825,15 @@ def artefact_mutations() -> list[Mutation]:
     ci = str(WORKFLOWS / "ci.yml")
     return [
         ("AGENTS.md without the method stanza", rewrite("AGENTS.md", "ratchet:method", "nothing")),
+        (
+            "AGENTS.md with a companion line that says more than the plugin's name",
+            rewrite(
+                "AGENTS.md",
+                plain_companion(companions()[0]),
+                f"- **A question?** `{companions()[0]}`: a rule",
+                count=1,
+            ),
+        ),
         (
             "binding without the conformance entry point",
             rewrite(BINDING_PATH, "| conformance |", "| conform |"),

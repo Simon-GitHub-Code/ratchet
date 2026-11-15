@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 # Installs come only from a tagged release, and the release names its commit
 
@@ -15,9 +15,21 @@ An installed copy of the plugin has no `.git`, so `plugin_pin.commit_of` returns
 
 **A workflow makes the release.** `.github/workflows/release.yml` runs on a push to main that changes `.claude-plugin/plugin.json`. When tag `vV` does not exist, it makes C, pushes the tag and runs the release check. Neither an agent nor the owner makes C by hand. The version PR keeps the form of #121: it bumps the version, writes the changelog and sets the marketplace `ref`.
 
+**Each release has a release page.** After the check passes, the workflow publishes a GitHub release for `vV`. Its notes are the `## V` section of `CHANGELOG.md`, so the page and the changelog say the same thing. The workflow makes no page for a tag whose check is red, and it leaves a page that already exists alone. The owner authorised the pages on 2026-11-15.
+
 **The marketplace installs the tag.** In `.claude-plugin/marketplace.json`, the ratchet entry's `"source": "./"` becomes `{"source": "github", "repo": "Simon-GitHub-Code/ratchet", "ref": "vV"}`. The version PR sets `ref` with the version.
 
 **`commit_of` reads the file when there is no history.** With `.git`, it runs `git rev-parse HEAD` as now. Without `.git`, it reads `.claude-plugin/commit`: 40 lowercase hex characters give the commit, a missing file gives `None`, and anything else gives `UNREADABLE`.
+
+**The local gates run the installed copy, which a session records.** The marketplace's own clone has a `.git` and follows main's head, so a recipe or an upgrade run from it would pin a commit that is no release and run code no release holds. The adopted justfile's `ratchet_plugin` defaulted to that clone, and so did the README's upgrade command. Instead:
+
+- The SessionStart hook (`hooks/session.py`) writes the path of its own copy, read from its own file, to `ratchet-plugin` in the repository's git common directory, beside the guard event log. One file serves every work tree, the drain's included, and no `git status` shows it. Each session start rewrites it, so it follows the installed version.
+- Every harness whose adapter runs `hooks/session.py` writes the file. A harness whose adapter does not run it says so on its `docs/harness/` page, and there the owner exports `RATCHET_PLUGIN` as that page says.
+- The adopted justfile reads `RATCHET_PLUGIN` first, then that file. The fallback to the marketplace clone goes. With neither, as in a fresh clone where no session has started, `plugin-pin` is red in one line: the file is written when a session starts in the repository, or set `RATCHET_PLUGIN`. CI is unchanged: it sets `RATCHET_PLUGIN` to its checkout of the pin.
+- The settings deny list gains the file, as it holds the event log, since a path pointed at a doctored copy would weaken every local gate.
+- When the installed copy and the pin are different releases, the rule the binding states is unchanged: a copy older than the pin, or another commit of the same version, is red, and a newer copy runs and says on every run that the project can upgrade.
+- The tier's "plugin is newer" line names the upgrade command with the path of the copy that runs it. The README's upgrade section says to run the command that line names, and names no harness folder.
+- An adopted project's `ratchet_plugin` line is a template line, so a conformance shape check with a written fix carries the change to it at the upgrade.
 
 **A check holds the tag.** `scripts/release_check.py <tag>` runs in the release workflow after the tag is pushed, and anyone can run it later. It is red unless all of these hold:
 
@@ -37,6 +49,8 @@ This is wrong if any of these is seen:
 - An installed copy of a tagged release fails to upgrade a project with no clone of the plugin.
 - A project pinned to M runs code in CI that differs from the installed copy at `vV`.
 - A `v*` tag moves or disappears with `release_check.py` still green.
+- A local tier or an upgrade in an adopted project runs any copy but the installed one, or `RATCHET_PLUGIN`'s, or pins a commit that is no release's main commit.
+- A tag whose check passed has no release page, or its page says other than the changelog's section for its version.
 
 ## Considered options
 
@@ -53,9 +67,13 @@ This is wrong if any of these is seen:
 
 - `scripts/plugin_pin.py`: `commit_of` falls back to `.claude-plugin/commit`.
 - `scripts/release_check.py`: new, with its tests on a scratch repository.
-- `.github/workflows/release.yml`: new. Adding it is an `ASK` (workflow write), approved at merge.
+- `.github/workflows/release.yml`: new. It makes the tag, runs the check and publishes the release page. Adding it is an `ASK` (workflow write), approved at merge.
 - Main's CI: one check that `.claude-plugin/commit` is absent.
-- `.claude-plugin/marketplace.json`: the ratchet entry's source.
+- `.claude-plugin/marketplace.json`: the ratchet entry's source. It changes in the 0.12.2 version PR, since no tag exists before it.
+- `hooks/session.py`: writes `ratchet-plugin` in the git common directory.
+- `skills/adopt/templates/justfile`: `ratchet_plugin` reads `RATCHET_PLUGIN`, then that file, with no fallback; plus its conformance shape check and fix.
+- The settings step's deny list: the `ratchet-plugin` file.
+- `README.md`, Upgrading: run the command the tier's first line names.
 - `/ratchet:upgrade`'s page: until the first tagged release is installed, run the upgrade from a clone at the published commit. This line ships in the same change.
 - The install page: the plugin installs from the latest tag, never from main.
 
@@ -63,9 +81,10 @@ This is wrong if any of these is seen:
 
 - Copies of 0.12.0 and 0.12.1 carry no file and keep refusing an upgrade until the harness moves them to the first tagged release. It does that when the version string changes.
 - The first tagged release is the first copy that upgrades a project by itself.
+- When the harness removes an old installed copy before the next session starts, the recorded path points at nothing, and `plugin-pin` is red until a session starts or `RATCHET_PLUGIN` is set.
 - A dev clone has `.git`, so nothing changes for it.
 - For about a minute between M's merge and the tag push, a harness that refreshes finds no `vV` and keeps the copy it has.
 
-## Open for the owner
+## Settled by the owner, 2026-11-15
 
-- **1. No `sha` in the entry, and a tag ruleset.** What the owner accepted named the tag and its sha. The build names the tag alone, for the reason under Considered options, and a ruleset forbids moving or deleting `v*` tags. The owner sets that ruleset once in the repository's settings, since no agent changes them. Recommendation: accept. Cost: one settings change, and until it is set only `release_check.py` notices a moved tag.
+- **1. No `sha` in the entry, and a tag ruleset.** The owner accepted it and set the ruleset on 2026-11-15. No agent has read the ruleset back, since the guard refuses a read of rulesets. The first proof that a tag is held is `release_check.py`'s run against the first real tag. What the owner had first accepted named the tag and its sha. The build names the tag alone, for the reason under Considered options, and a ruleset forbids moving or deleting `v*` tags. The owner sets that ruleset once in the repository's settings, since no agent changes them. Until the ruleset is set, only `release_check.py` notices a moved tag.

@@ -65,7 +65,7 @@ Steps 9 to 11 wrap the step beneath them, the first of 12 to 18 that holds. The 
 
 ## States that decide `next:`
 
-**An unfinished init (step 1).** An init stopped before its questions were answered leaves the purpose placeholder in `AGENTS.md`. An `AGENTS.md` that still holds it sends the owner back to `/ratchet:init`. So does an `AGENTS.md` whose lines for the four plugins differ from the ones this plugin's init writes: a later plugin changed what they say, and the old text stays until init runs again.
+**An unfinished init (step 1).** An init stopped before its questions were answered leaves the purpose placeholder in `AGENTS.md`. An `AGENTS.md` that still holds it sends the owner back to `/ratchet:init`.
 
 **An unfinished adoption (step 1).** A binding with no plugin pin is the template's: an adoption stopped after copying the templates. The route names `/ratchet:adopt` to resume it, since the hooks install cannot finish an adoption.
 

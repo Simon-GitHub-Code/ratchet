@@ -269,7 +269,8 @@ def test_tickets_on_the_tracker_route_to_conjecture_then_feature(tmp_path: Path)
         root, FakeGh(issues=issues((3, "Three", "Body."), (5, "Five", "X." + CONJECTURE)))
     )
     assert built.command == f"{route.FEATURE} 5"
-    assert f"{route.POTETO} 5" in built.why
+    assert "or ask this session to build ticket 5 with you here" in built.why
+    assert "poteto" not in built.why
     inherited = FakeGh(
         issues=issues((7, "Seven", "**Parent:** #12\n\nBody.")),
         issue_12=json.dumps(
@@ -715,21 +716,6 @@ def test_a_spec_without_a_conjecture_is_stated_before_it_is_split(tmp_path: Path
     assert route.decide(root, None).command == f"{route.TICKETS} {spec}"
 
 
-def test_plugin_lines_older_than_the_template_send_the_owner_to_init(tmp_path: Path) -> None:
-    template = (route.PLUGIN_ROOT / "skills/init/templates/AGENTS.md").read_text()
-    lines = [line for line in template.splitlines() if line.startswith("- **")][:4]
-    current = STANZA + "\n" + "\n".join(lines) + "\n"
-    root = repository(tmp_path, {**ADOPTED, "AGENTS.md": current})
-    assert route.decide(root, None).command != route.INIT
-    stale = current.replace(lines[1], lines[1].split("`poteto-mode`")[0] + "refused to an agent.")
-    write(root, "AGENTS.md", stale)
-    commit(root, "docs: an older stanza")
-    step = route.decide(root, None)
-    assert step.command == route.INIT
-    assert "In what style, with which levers?" in step.why
-    assert step.then == route.NEXT
-
-
 def test_missing_hooks_come_before_everything_a_commit_would_do(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1097,6 +1083,38 @@ def test_a_ticket_held_for_a_safeguard_names_it_until_it_is_bound(
     write(root, "docs/process/binding.md", binding.replace("later: code:outbound-call", "a lint"))
     commit(root, "chore(method): safeguard outbound calls")
     assert route.ticket_step(root, None, checkout).command == f"{route.FEATURE} {HELD}"
+
+
+ASK_GUARD = "ask this session to make the guard edits with you here; their merge is yours"
+
+
+def test_a_parked_ticket_offers_the_guard_edits_to_the_session_only_for_a_guard_hold(
+    tmp_path: Path,
+) -> None:
+    guarded = held_root(tmp_path / "guard")
+    parked(guarded, GUARD_BLOCK, stash=False)
+    step = route.decide(guarded, None)
+    assert step.then == f"{route.FEATURE}, or {ASK_GUARD}"
+    sized = held_root(tmp_path / "size")
+    parked(sized, SIZE_BLOCK, stash=False)
+    assert route.decide(sized, None).then == route.FEATURE
+
+
+@pytest.mark.parametrize("holds", [[queue_notes.GUARD], [queue_notes.QUESTIONS]])
+def test_a_stashed_blocked_run_offers_the_guard_edits_only_when_its_note_records_them(
+    tmp_path: Path, holds: list[str]
+) -> None:
+    root = held_root(tmp_path)
+    ticket = route.agent_ready(root, None)[0][0]
+    note = {"digest": queue_notes.digest(ticket), "base": queue_notes.tip(root), "holds": holds}
+    queue_notes.write_note(queue_notes.note_path(root, "feature/2-b"), note)
+    blocked(root)
+    step = route.decide(root, None)
+    assert step.stage == "blocked-run"
+    assert "feature/2-b: blocked run" in step.command
+    assert step.then == f"{route.FEATURE} {HELD}" + (
+        f", or {ASK_GUARD}" if queue_notes.GUARD in holds else ""
+    )
 
 
 def test_a_note_without_a_hold_leaves_the_ticket_buildable(tmp_path: Path) -> None:

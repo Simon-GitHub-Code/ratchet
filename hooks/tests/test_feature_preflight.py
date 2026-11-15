@@ -410,7 +410,7 @@ def test_main_prints_json_and_the_verdict(
     out, err = capsys.readouterr()
     assert [f["check"] for f in json.loads(out)["failures"]] == ["ticket", "branch"]
     assert "preflight: ticket: 9: no such ticket" in err
-    assert "produce: mattpocock-skills:to-spec" in err
+    assert "produce: /mattpocock-skills:to-spec" in err
     assert err.rstrip().endswith("preflight: red")
 
 

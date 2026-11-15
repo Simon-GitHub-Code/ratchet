@@ -20,6 +20,7 @@
       "Edit(/.git/shallow)",
       "Edit(/.git/objects/info)",
       "Edit(/.git/objects/info/**)",
+      "Edit(/.git/ratchet-guard-events.jsonl)",
       "Edit(~/.claude/settings.json)",
       "Edit(~/.claude/settings.local.json)",
       "Edit(~/.claude/plugins/**)",
