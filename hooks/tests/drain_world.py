@@ -224,6 +224,8 @@ class World:
             stand_in = f"sh -c '{before_merge}; exec \"$@\"' merge {stand_in}"
         merging = binding(stand_in, check)
         self.root = repository(directory / "repo", {**FILES, "docs/process/binding.md": merging})
+        # Why: git's directory of a repository never moves, and each read-back would ask git again.
+        self.landing_intent = merge.state_dir(self.root) / merge.LANDING
         self.token = ""
         self.printed = ""
         self.code = 0
@@ -370,12 +372,14 @@ class World:
         refs = git(
             self.root,
             "for-each-ref",
-            "--format=%(refname:short) %(ahead-behind:main) %(contents:subject)",
+            "--format=%(refname:short) %(objectname) %(ahead-behind:main) %(contents:subject)",
             "refs/heads/feature/",
         )
-        branches = {line.split(" ", 1)[0]: line.split(" ", 3)[1:] for line in refs.splitlines()}
+        rows = {line.split(" ", 1)[0]: line.split(" ", 4)[1:] for line in refs.splitlines()}
+        branches = {branch: row[1:] for branch, row in rows.items()}
         stashes = git(self.root, "stash", "list", "--format=%gs").splitlines()
-        on_merge = drain.route.merged_features(self.root, "main")
+        tips = merged_tips(self.root)
+        on_merge = {branch for branch, row in rows.items() if row[0] in tips}
         half = self.half()
         tickets = []
         for name, was in ghost.each():
@@ -407,7 +411,7 @@ class World:
 
     def half(self) -> Name | None:
         """The ticket whose fast-forward the landing intent says was cut off, if one was."""
-        landing = merge.state_dir(self.root) / merge.LANDING
+        landing = self.landing_intent
         intent = merge.intent_of(landing.read_bytes() if landing.exists() else b"")
         if not intent:
             return None
@@ -496,6 +500,12 @@ class LeaseWorld:
     def __init__(self, directory: Path, check: str = "true", before_merge: str = "") -> None:
         self.directory = directory
         self.world = World(directory, check, before_merge)
+        root = self.world.root
+        # Why: the files of the lease and of the two locks never move, and each read-back would
+        # ask git for their directory again.
+        self.lease_file = drain.state_dir(root) / drain.LEASE
+        self.landing_lock = drain.landing_path(root, BRANCH[Name.A])
+        self.merge_lock = drain.merge.merge_lock_path(root, BRANCH[Name.A])
         self.sessions: dict[Drain, subprocess.Popen[bytes]] = {}
         self.program: subprocess.Popen[bytes] | None = None
         self.tokens: dict[Drain, str] = {}
@@ -801,15 +811,25 @@ class LeaseWorld:
 
     def seen(self, ghost: Lease) -> Lease:
         """The repository and the processes read back; ``ghost`` gives what no file holds."""
-        lease = drain.state_dir(self.world.root) / drain.LEASE
+        root, lease = self.world.root, self.lease_file
         held = json.loads(lease.read_text(encoding="utf-8")) if lease.exists() else {}
         holder = next((d for d, token in self.tokens.items() if token == held.get("token")), None)
         tree = self.world.tree(Name.A)
-        made = tree in drain.worktrees(self.world.root)
-        note = drain.queue_notes.read_note(self.world.root, BRANCH[Name.A])
+        made = tree in drain.worktrees(root)
+        note = drain.queue_notes.read_note(root, BRANCH[Name.A])
+        branch = f"refs/heads/{BRANCH[Name.A]}"
+        refs = git(
+            root,
+            "for-each-ref",
+            "--format=%(refname) %(objectname) %(ahead-behind:main)",
+            "refs/stash",
+            branch,
+        )
+        rows = {ref: row for ref, _, row in (line.partition(" ") for line in refs.splitlines())}
+        tip, ahead, _ = rows[branch].split() if branch in rows else ("", "0", "0")
         merge = (
             Merge.NONE
-            if BRANCH[Name.A] not in drain.route.merged_features(self.world.root, "main")
+            if not tip or tip not in merged_tips(root)
             else Merge.UNSAID
             if note.get("outcome") != "merged"
             else Merge.SAID
@@ -818,9 +838,9 @@ class LeaseWorld:
         )
         # Why: the landing the model names must hold its lock. It is read here and not by
         # `drain.landing_running`, so a fault in that reading is not a fault in this one too.
-        with drain.merge.locked(drain.landing_path(self.world.root, BRANCH[Name.A])) as free:
+        with drain.merge.locked(self.landing_lock) as free:
             live = self.landing is not None and free is None
-        merging = lock_held(merge_lock(self.world.root))
+        merging = lock_held(self.merge_lock)
         orphan = self.orphan[0] if self.orphan is not None and running(self.orphan[1]) else None
         return ghost._replace(
             holder=holder,
@@ -832,12 +852,12 @@ class LeaseWorld:
             tree=ghost.tree if made else None,
             draft=made and bool(git(tree, "status", "--porcelain")),
             running=self.program is not None and self.program.poll() is None,
-            stashed=bool(git(self.world.root, "stash", "list")),
+            stashed="refs/stash" in rows,
             landing=self.landing[0] if self.landing is not None and live else None,
             orphan=orphan if merging else None,
             doomed=self.doomed is not None and running(self.doomed[0]),
             merge=merge,
-            built=merge is not Merge.NONE or drain.ahead(self.world.root, "main", BRANCH[Name.A]),
+            built=merge is not Merge.NONE or ahead != "0",
             held=note.get("hold") is True,
         )
 
@@ -872,9 +892,13 @@ def stop(pid: int) -> None:
         time.sleep(0.02)
 
 
-def merge_lock(root: Path) -> Path:
-    """The file of the merge lock of ticket ``a``'s branch, as merge.py names it."""
-    return drain.merge.merge_lock_path(root, BRANCH[Name.A])
+def merged_tips(root: Path) -> set[str]:
+    """The tips merged into ``main``, as ``route.merged_features`` counts them.
+
+    Each is the second parent of a merge on the first-parent line of ``main``.
+    """
+    merges = git(root, "rev-list", "--merges", "--first-parent", "--parents", "main")
+    return {parent for line in merges.splitlines() for parent in line.split()[2:]}
 
 
 def lock_held(path: Path) -> bool:

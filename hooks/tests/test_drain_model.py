@@ -711,7 +711,7 @@ class LeasePlay:
         assert seen == self.lease, "\n".join([f"seen {seen}", f"not {self.lease}", *lines])
         # Why: the model's merge lock is held only by a merge past its probe whose land is gone;
         # a land's own merge here waits before the lock, or has ended.
-        merging = lock_held(drain.merge.merge_lock_path(self.world.world.root, BRANCH[Name.A]))
+        merging = lock_held(self.world.merge_lock)
         assert merging == (self.lease.orphan is not None), "\n".join(["merge lock", *lines])
         return self.world.world.printed
 
