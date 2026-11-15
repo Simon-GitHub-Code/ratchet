@@ -20,6 +20,7 @@ import hooks_installed
 import merge_ready
 import owed
 import queue_notes
+import triggers
 from tests import servers
 from tests.repos import commit, git, repository, write
 from tests.test_merge_ready import GLOSSARY, MANIFEST
@@ -951,10 +952,6 @@ OWED_BINDING = (
     "## Triggers\n\n| Kind | Paths | Pattern |\n| --- | --- | --- |\n"
     "| outbound-call | `src/**/*.py` | `requests\\.get\\(` |\n"
 )
-OWED_RED = (
-    "triggers: 'outbound-call' gained 1 instance(s) (src/b.py:1) while the base already held 1"
-    " and these rows are still `later:`: survives failing dependencies. Run /ratchet:safeguard"
-)
 
 
 def test_a_ticket_red_on_an_owed_safeguard_is_held_until_the_safeguard_is_bound(
@@ -968,8 +965,14 @@ def test_a_ticket_red_on_an_owed_safeguard_is_held_until_the_safeguard_is_bound(
     }
     root = project(tmp_path, **files)
     run(root, "open", GAMMA)
+    tree = drain.tree_of(root, BRANCH_C)
+    write(tree, "src/b.py", "requests.get(1)\nrequests.get(2)\n")
+    capsys.readouterr()
+    assert triggers.main(["triggers", "--root", str(tree)]) == 1
+    printed = capsys.readouterr().out
+    git(tree, "checkout", "--", "src/b.py")
     result = tmp_path / "result.json"
-    output = f"{OWED_RED}\n{OWED_RED}\ncheck: red"
+    output = f"{printed}{printed}check: red"
     result.write_text(json.dumps({"verdict": "request_changes", "checkOutput": output}))
     assert run(root, "close", GAMMA, "--outcome", "parked", "--result", str(result)) == 0
     assert note(root, BRANCH_C)["reasons"] == [
