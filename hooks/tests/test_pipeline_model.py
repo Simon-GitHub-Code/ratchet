@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 from collections import deque
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from tests import model_tla
@@ -30,6 +31,7 @@ PAGE = PLUGIN_ROOT / "docs/model/pipeline.md"
     MEASURED,
     LOOP_ENDS,
     UNPUBLISHED,
+    PUBLISHED_NEVER_APPROVED,
     REPORTED,
     RESUMABLE,
     JUDGED_AGAIN,
@@ -49,6 +51,10 @@ RECONCILED_OVER = [
     "the orchestrator judges a branch whose rebase conflicted again",
     "reconcile measures product code over its ceiling",
 ]
+PUBLISHED_APPROVED = [
+    "the orchestrator judges a rebased branch again",
+    "review-again approves and has published",
+]
 MEASURED_OVER = [
     "the orchestrator starts a build",
     "preflight is green for a project nobody depends on",
@@ -63,6 +69,11 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     MEASURED: None,
     LOOP_ENDS: None,
     UNPUBLISHED: None,
+    # 7a breaks on a role that published and a review that approves, for good: ADR 0060. A
+    # Workflow script cannot read a file or run a command, so it cannot see that a role committed,
+    # pushed or opened a pull request. The orchestrator's publish check, a rule of the drain model,
+    # catches the run after it returns. 7 holds on the script's own calls and its prompts' text.
+    PUBLISHED_NEVER_APPROVED: PUBLISHED_APPROVED,
     # 8 breaks on a dead agent, because the script raises and returns no result. 8a holds. It is
     # ADR 0023 decision 2: "One run per ticket also keeps its own run to resume, so a ticket that
     # dies is run again alone." The script's error says to resume the run.
@@ -179,8 +190,21 @@ def test_every_answer_of_every_agent_is_given_on_some_run() -> None:
             assert (role, answer) in given, (role, answer)
 
 
+def test_no_step_of_the_script_turns_on_whether_a_role_published() -> None:
+    for state in graph().states:
+        for action, after in model.moves(state):
+            if action.role is None:
+                continue
+            twin = model.answered(state, replace(action, published=not action.published))
+            assert after.published == (state.published or action.published), action.name
+            assert replace(twin, published=False) == replace(after, published=False), action.name
+
+
 def runs() -> list[tuple[list[model.Action], model.State]]:
-    """Every run from the start to an end, with the state it ends in."""
+    """Every run from the start to an end as the script reads it, with the state it ends in.
+
+    Why: no step turns on whether a role published, so the runs where one did are these runs.
+    """
     done: list[tuple[list[model.Action], model.State]] = []
     stack: list[tuple[list[model.Action], model.State]] = [([], model.INITIAL)]
     while stack:
@@ -188,7 +212,9 @@ def runs() -> list[tuple[list[model.Action], model.State]]:
         if state.ending is not None:
             done.append((actions, state))
         stack.extend(
-            (([*actions, model.named(name)], after) for name, after in adjacency().get(state, []))
+            ([*actions, action], after)
+            for name, after in adjacency().get(state, [])
+            if not (action := model.named(name)).published
         )
     return done
 
@@ -327,6 +353,8 @@ def replays() -> dict[str, world.Played]:
         "young approved issue": YOUNG_APPROVED_ISSUE,
         "reconciled over": RECONCILED_OVER,
         "measured over": MEASURED_OVER,
+        "published approved": PUBLISHED_APPROVED,
+        "approved": [name.removesuffix(model.PUBLISHED) for name in PUBLISHED_APPROVED],
     }
     batch = world.play([walked(names) for names in named.values()])
     return dict(zip(named, batch.played, strict=True))
@@ -385,3 +413,10 @@ def test_a_review_that_approves_with_a_blocker_of_its_own_takes_the_fix_pass() -
     assert real.calls[-3:] == (("review", "Review"), ("fix-1", "Fix"), ("review-1", "Review"))
     result = real.raw["result"]
     assert (result["verdict"], result["forcedBy"], result["iterations"]) == ("approve", [], 1)
+
+
+def test_a_run_in_which_a_role_published_ends_approved_on_the_real_workflow() -> None:
+    real = replays()["published approved"]
+    assert real.calls == (("review-again", "Review"),)
+    assert real.raw["result"]["verdict"] == "approve"
+    assert real == replays()["approved"], "the script is handed nothing that says a role published"
