@@ -31,6 +31,13 @@ An installed copy of the plugin has no `.git`, so `plugin_pin.commit_of` returns
 - The tier's "plugin is newer" line names the upgrade command with the path of the copy that runs it. The README's upgrade section says to run the command that line names, and names no harness folder.
 - An adopted project's `ratchet_plugin` line is a template line, so a conformance shape check with a written fix carries the change to it at the upgrade.
 
+**What the record is trusted for.** CI, which checks the plugin out at the pin, is the authority on whether a change passes. The local record is a convenience that picks which copy the local gates run, and any process with a shell can change it. Running any copy's session hook with the repository's path rewrites it to that copy's folder. The guard does not see that write, and the new value lasts into the owner's own runs. No shell-level guard can close this, so the plugin makes the change visible instead:
+
+- Every tier's first line prints the folder, the version and the commit of the copy it runs.
+- The real session hook, when it finds the record naming another folder than its own, writes its own back and logs a guard event.
+
+A stronger check of the copy itself is design point K of the build (#177). Whatever form is built is recorded here when it lands.
+
 **A check holds the tag.** `scripts/release_check.py <tag>` runs in the release workflow after the tag is pushed, and anyone can run it later. It is red unless all of these hold:
 
 - C holds `.claude-plugin/commit` naming M.
