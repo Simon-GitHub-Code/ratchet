@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.12.2
+
+Two defects of published versions are fixed, both in the proof that gates can fail. Upgrade from any version from 0.10.0 on. Run the upgrade as the README's Upgrading section says: until installs come from a tagged release, from a clone at the commit this version was published at.
+
+- 0.12.0 and 0.12.1 could delete or overwrite a file in the real work tree while proving that a gate can fail (issue #172). Restoring the scratch copy between runs let git check a path for a link and then delete or write it by path, so a process that `setup` left running could swap a directory of the copy for a link to the real tree in between, and git would remove or write the real file. Restoring now only lists with git, and removes and writes every file through descriptors pinned to the copy; a link is unlinked and never followed. One window remains: a process that `setup` left running and that swaps the copy's `.git` for a link could still make git write the real repository (issue #175).
+- From 0.10.0 up to 0.12.1, restoring the scratch copy trusted file timestamps. A gate or a process that `setup` left running, if it rewrote a tracked file in place with content of the same length and put its modification time back, left that content in the copy. The next runs of that gate were then judged on a tree the repository does not hold. Usually this shows as `RED BEFORE THE FAULT` or `NOT PROVEN` on a later bite, or a later bite is reported as not biting when its fault alone would. In the rare worst case, where the gate is red only with the leftover and the fault together, a later bite reads `bites` when its own fault alone would not make the gate red. Restoring now compares every file's content with the snapshot.
+
+The proof that gates can fail says how long each fault took (issue #168). Each verdict line ends with the wall time of its runs and the lane they ran in. A run that passes its time limit is ended and reads `TIMED OUT`: the limit is the gate's own ceiling, else its tier's, else 900 seconds, and the proof's first line names it. `TIMED OUT` covers only that limit; a tool that times out inside a gate still reads by its exit code. A red proof prints the machine's load and core count at its start and end, and a red verdict that took more than twice its gate's fastest green run says so. A green tier that used 75 percent or more of its time ceiling prints a warning. Nothing here makes the proof faster: proving only the gates a change could affect is planned (issue #168).
+
+The drain runs the publish check (ADR 0060). `open`, `update`, `check` and `land` each check that no pipeline role committed, pushed or opened a pull request during its run. `check --final` marks the recorded start as passed, and `land` refuses a ticket whose start is absent or unmarked. A rebase that drops a commit the base already holds is not publishing: each dropped commit must have a twin of its own on the base, with the same message and author date. A single-ticket run of `/ratchet:feature` checks the same after each pipeline run, and stops with the run stashed when a role published.
+
+The pipeline's review:
+
+- A guard path that an open dispute names is no finding (ADR 0067). A gate tightened in the same change as its code can now reach approve.
+- A criterion of the ticket that the change does not meet is a major finding on the spec axis.
+
+The `Flag:` line is asked before deployment (ADR 0061). The feature preflight asks it of every declared type, whatever the life events, and the route prints an `also:` line for each switch past its removal date.
+
+Companion plugins are named, never restated (ADR 0060). A companion line in `AGENTS.md` is the plugin's name alone, read from the plugin's own marketplace entry. The route names words for the session and never a companion's command. The guard's refusals of a force-push and of an amend of a pushed commit name Ratchet's own step as the way out. The upgrade rewrites only the plugin's companion lines.
+
+Conformance holds every workflow step and permission to a marker of its shape, so a template fix now reaches an adopted project (issue #166). An adopted project can see up to nine new findings on its first run after the upgrade, each with its fix.
+
+The settings step writes a harness-level deny rule for the guard's event log, beside the guard's own refusal. The rule reaches the main checkout; in a linked work tree the hook alone guards the log.
+
+`/ratchet:conjecture` writes the size alone on a ticket whose conjecture is current but has no `## Size`, and writes a ticket whose size passes a ceiling instead of stopping: `/ratchet:feature` splits it by size before it builds (ADR 0046).
+
+The route model took one more turn: the `Flag:` line is settled in it, a spec's line is read as the preflight reads it, and 18 of its 20 rules hold on the real route. The two that break are pinned to an adoption that stopped after its pin, which the route still tells to build.
+
+Decisions recorded, with their code still to come: installs come only from a tagged release, and a project's local gates run only a copy of the plugin whose content is the pinned release's (ADR 0068).
+
 ## 0.12.1
 
 A ticket that waits on a split ticket now waits on its parts (ADR 0046). The drain used to refuse it for good while the split ticket stayed open, and started it early when the owner closed the split ticket by hand. One reader, `preflight.blockers()`, now reads a split blocker as its parts, whether it is open or closed, for the drain and for the one-ticket preflight. The drain model found both breaks before the fix was written.

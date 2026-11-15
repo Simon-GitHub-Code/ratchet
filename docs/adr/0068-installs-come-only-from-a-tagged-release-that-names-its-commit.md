@@ -27,9 +27,18 @@ An installed copy of the plugin has no `.git`, so `plugin_pin.commit_of` returns
 - Every harness whose adapter runs `hooks/session.py` writes the file. A harness whose adapter does not run it says so on its `docs/harness/` page, and there the owner exports `RATCHET_PLUGIN` as that page says.
 - The adopted justfile reads `RATCHET_PLUGIN` first, then that file. The fallback to the marketplace clone goes. With neither, as in a fresh clone where no session has started, `plugin-pin` is red in one line: the file is written when a session starts in the repository, or set `RATCHET_PLUGIN`. CI is unchanged: it sets `RATCHET_PLUGIN` to its checkout of the pin.
 - The settings deny list gains the file, as it holds the event log, since a path pointed at a doctored copy would weaken every local gate.
-- When the installed copy and the pin are different releases, the rule the binding states is unchanged: a copy older than the pin, or another commit of the same version, is red, and a newer copy runs and says on every run that the project can upgrade.
+- When the installed copy and the pin are different releases, the copy check below decides which runs: the pinned copy, wherever it is on disk, or none.
 - The tier's "plugin is newer" line names the upgrade command with the path of the copy that runs it. The README's upgrade section says to run the command that line names, and names no harness folder.
 - An adopted project's `ratchet_plugin` line is a template line, so a conformance shape check with a written fix carries the change to it at the upgrade.
+
+**What the record is trusted for.** CI, which checks the plugin out at the pin, is the authority on whether a change passes. The local record is a convenience that picks which copy the local gates run, and any process with a shell can change it. Running any copy's session hook with the repository's path rewrites it to that copy's folder. The guard does not see that write, and the new value lasts into the owner's own runs. No shell-level guard can close this. So the record only picks among copies, and the gates run none that is not the pin's:
+
+- Every tier's first line prints the folder, the version and the commit of the copy it runs.
+- **The check.** Before any recipe runs anything from the recorded copy, the guarded justfile computes that copy's tree id with system git, without `.claude-plugin/commit`, in a throwaway object store and with neutralised config. It runs nothing until the id equals the pin's. The pin holds exactly the pinned commit's tree id, `M^{tree}`, and CI holds the binding to it.
+- **On a mismatch,** it tries the sibling folders of the recorded folder, since harnesses keep earlier versions beside the new one, and runs the first that matches.
+- **Only when no copy on disk matches** is the tier red, in one line: both ids, the folder, and the two ways out, which are to upgrade this project or install the pinned release.
+
+So a rewritten record is harmless: it can choose only a copy identical to the pin. Only the pinned release runs. While it is on disk, a newer copy beside it only says the project can upgrade. A newer copy alone is red until the upgrade. The owner chose this on 2026-11-15 (item 2 below). Its code arrives in the second round of #177.
 
 **A check holds the tag.** `scripts/release_check.py <tag>` runs in the release workflow after the tag is pushed, and anyone can run it later. It is red unless all of these hold:
 
@@ -88,3 +97,4 @@ This is wrong if any of these is seen:
 ## Settled by the owner, 2026-11-15
 
 - **1. No `sha` in the entry, and a tag ruleset.** The owner accepted it and set the ruleset on 2026-11-15. No agent has read the ruleset back, since the guard refuses a read of rulesets. The first proof that a tag is held is `release_check.py`'s run against the first real tag. What the owner had first accepted named the tag and its sha. The build names the tag alone, for the reason under Considered options, and a ruleset forbids moving or deleting `v*` tags. The owner sets that ruleset once in the repository's settings, since no agent changes them. Until the ruleset is set, only `release_check.py` notices a moved tag.
+- **2. Only the pinned release runs.** The owner chose on 2026-11-15 that the local gates run only a copy whose tree id equals the pin's, trying the sibling folders of the recorded folder on a mismatch, and are red in one line when no copy on disk matches. This replaces the earlier rule that a copy newer than the pin runs and says the project can upgrade.
