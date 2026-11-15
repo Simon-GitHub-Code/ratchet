@@ -4,7 +4,8 @@
 commits ``AGENTS.md``, ``/ratchet:adopt`` commits the binding and the manifest on its own branch
 and merges it, the spec skills leave records uncommitted on the default branch, ``merge --records``
 commits them on a ``records/<time>`` branch and merges it or leaves it parked, and the drain
-writes its note through ``drain.close``. An owner's edit of a ticket is committed on the default
+writes its note through ``drain.close``, parking for the safeguard on what the real triggers gate
+printed. An owner's edit of a ticket is committed on the default
 branch at once, as the model has it. ``classify`` reads a real ``route.Step`` back as the model's
 advice label.
 
@@ -32,9 +33,12 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Final
+from pathlib import Path
+from typing import Final
 
 import application_types
 import architecture
@@ -64,9 +68,6 @@ from tests.route_model import (
     runnable_slots,
 )
 from tests.test_drain import MERGE
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 STANZA = "# P\n\nLoad the `ratchet:method` skill first.\n"
 PURPOSE = f"\n## What this is\n\n{route.PURPOSE_PLACEHOLDER}: purpose, who it is for.>\n"
@@ -207,8 +208,10 @@ class Repo:
             f"| q{n} | {tool or f'later: code:kind{n}'} | 1 | | `just q{n}` |\n"
             for n, tool in enumerate(self.tools, 1)
         )
+        # Why two globs: a ticket the drain parks adds a second file of the kind.
         rows = "".join(
-            f"| kind{n} | `src/kind{n}.py` | |\n" for n, _tool in enumerate(self.tools, 1)
+            f"| kind{n} | `src/kind{n}.py`, `src/kind{n}-*.py` | |\n"
+            for n, _tool in enumerate(self.tools, 1)
         ) + "".join(f"| {kind} | `src/{kind}.py` | |\n" for kind in self.reopened)
         return BINDING.format(
             pin=PIN.format(version=self.version()) if pinned else UNPINNED,
@@ -501,8 +504,34 @@ def _drain_parks_for_a_safeguard(repo: Repo, _change: Change) -> None:
     git(repo.root, "switch", "-q", "main")
     git(repo.root, "merge", "-q", "--no-ff", "--no-edit", name)
     repo.merged = name
-    owed = f"triggers: '{kind}' gained 1 instance(s) (src/b.py:2) while the base already held 1"
-    park(repo, 1, {"verdict": "blocked", "checkOutput": owed})
+    park(repo, 1, {"verdict": "blocked", "checkOutput": second_instance_judged(repo, kind)})
+
+
+TRIGGERS: Final = Path(triggers.__file__)
+
+
+def second_instance_judged(repo: Repo, kind: str) -> str:
+    """What the real triggers gate prints for the second ticket, which adds another ``kind``.
+
+    Why a work tree of its own: the drain builds the ticket in a queue work tree, and its park
+    leaves nothing on the default branch's checkout. Why a process: the drain reads the lines a
+    gate printed, and the gate's own caches never see another repository at the same path.
+    """
+    tree = repo.root.parent / f"{repo.root.name}.queue"
+    git(repo.root, "worktree", "add", "-q", "--detach", str(tree), "main")
+    try:
+        write(tree, f"src/{kind}-b.py", "import requests\n")
+        snapshot(tree, "feat: a second instance of the kind")
+        ran = subprocess.run(  # noqa: S603 # -- the plugin's own gate, no shell
+            [sys.executable, str(TRIGGERS), "--root", str(tree)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        git(repo.root, "worktree", "remove", "--force", str(tree))
+    assert ran.returncode == 1, f"the triggers gate is red on a second instance:\n{ran.stdout}"
+    return ran.stdout
 
 
 @does(ActionName.OWNER_ANSWERS_ON_THE_TICKET)
