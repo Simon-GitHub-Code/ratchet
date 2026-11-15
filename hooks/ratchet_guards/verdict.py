@@ -31,6 +31,10 @@ NAME_THE_DIRECTORY = (
     "Give the file a path the guard can follow, an absolute one or one after a `cd` to a literal "
     "directory, and it is judged where it lands."
 )
+WITHOUT_REWRITING = (
+    "Bring the branch up to date without rewriting it: merge the default branch into it, or "
+    "add a new commit. The merge job lands it, or with no forge the `merge` entry point does."
+)
 SWITCH_ALONE = (
     "Run the branch switch in a tool call of its own and make the change in the next one: the "
     "guard reads the branch then."
@@ -77,7 +81,9 @@ RULES: dict[str, Rule] = {
     "no-verify": Rule(Decision.DENY, "skips the git hooks"),
     "skip-hooks": Rule(Decision.DENY, "skips or uninstalls the pre-commit hooks"),
     "hooks-path": Rule(Decision.DENY, "redirects git hooks or overrides git config"),
-    "force-push": Rule(Decision.DENY, "force-pushes, which rewrites published history"),
+    "force-push": Rule(
+        Decision.DENY, "force-pushes, which rewrites published history", WITHOUT_REWRITING
+    ),
     "push-main": Rule(
         Decision.DENY,
         "pushes to the default branch directly, where the method lands a change only through a "
@@ -89,7 +95,9 @@ RULES: dict[str, Rule] = {
         Decision.DENY,
         "moves, deletes or re-points the default branch, or a ref or setting it is read through",
     ),
-    "amend-pushed": Rule(Decision.DENY, "amends a commit that is already pushed"),
+    "amend-pushed": Rule(
+        Decision.DENY, "amends a commit that is already pushed", WITHOUT_REWRITING
+    ),
     "rewrite-history": Rule(Decision.DENY, "rewrites history"),
     "merge-pr": Rule(
         Decision.ASK,
