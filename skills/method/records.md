@@ -48,6 +48,8 @@ The one approach expected to work, stated so it can be shown wrong: what would r
 | "one list I can come back to in the evening" | built: saved links show newest first | criterion 2 |
 | "maybe a cheap host later" | left out: runs on your computer for now | design brief, out-list |
 
+- Criteria: `## Acceptance criteria` `<digest>`
+
 ## Size
 - Product lines: <N>
 - Product files: <M>
@@ -64,6 +66,7 @@ The one approach expected to work, stated so it can be shown wrong: what would r
 - **`## Size`:** a ticket's `## Size` is its own, since the preflight reads `## Size` only from the ticket's own body. When a ticket's siblings share a parent spec, the conjecture and the operability lines go on the spec and `## Size` on the ticket. A spec that has not been split gets no `## Size`.
 - **The agent-ready label** (`ready-for-agent` in mattpocock-skills, spelled as `docs/agents/triage-labels.md` maps it; a local ticket carries it on its `Status:` line) is the owner's agreement that the ticket, with its conjecture, is ready to build. The skill the owner typed applies it. When an agent tries to apply it, the guard asks, once for a call: one call that gives every ticket of a spec the label is one ask, which names each.
 - **Who writes the sections:** `/ratchet:conjecture <ticket>` drafts `## Conjecture` and `## Operability` from the conversation that produced the ticket, and estimates the ticket's `## Size` from the approach and the code it touches. It writes them and prints the conjecture it drafted. It asks only where the record leaves two different products open.
+- **A conjecture gone stale:** the `- Criteria:` line holds a digest of the criteria the conjecture was drafted against. When the criteria change after it, `/ratchet:conjecture <ticket>` finds another digest, drafts the three sections again, keeps every line under `## Answers`, asks only the forks the change opened, and prints what changed in the conjecture.
 - **The preflight:** `/ratchet:feature <ticket>` runs `scripts/feature_preflight.py` on the ticket before any agent exists, and the pipeline runs it again as its first stage.
 - **The spec:** the spec role writes `docs/features/<slug>/spec.md` from the ticket, starting from its `## Operability` lines. It adds what the ticket need not carry: the telemetry that shows each criterion working in production, the feature flag that gates the new behaviour (or why there is none), and the assumptions it made where the ticket was silent, each with its refuter.
 
@@ -167,11 +170,11 @@ The owner overturns an **Assumed** line by saying so in their own words, at any 
    Done when every action of the route that is the agent's is done, and any command it leaves to the owner is ready to name in step 4.
 
 3. **Flag what was built on the old choice.** Search the specs, tickets, conjectures and decision records for it.
-   - A ticket not yet built gets the owner's words under `## Answers`, and its conjecture is run again.
+   - A ticket not yet built gets the owner's words under `## Answers` and its criterion changed to follow them, and its conjecture is run again. The changed criterion is what makes that run draft the conjecture again.
    - A merged decision record gets a superseding one.
    - Merged code is named, file by file, in the reply.
 
-   Done when each ticket not yet built that the search found has the owner's words under `## Answers`, each merged decision record it found has a superseding one, each merged code file it found is listed for the reply, and each conjecture to run again is ready to name to the owner in step 4.
+   Done when each ticket not yet built that the search found has the owner's words under `## Answers` and a criterion that follows them, each merged decision record it found has a superseding one, each merged code file it found is listed for the reply, and each conjecture to run again is ready to name to the owner in step 4.
 
 4. **Say what changed, what is flagged and the next command**, in plain words, ending with the route.
 
