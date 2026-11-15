@@ -1067,10 +1067,10 @@ class Copy:
                 )
                 continue
             planted = self.run([*shlex.split(row.command), *bite.args], row.limit)
-            verdict = judge(bite, green, planted)
+            judged = judge(bite, green, planted)
             outcomes.append(
                 replace(
-                    verdict,
+                    judged,
                     seconds=before.seconds + planted.seconds,
                     lane=self.lane,
                     red_seconds=planted.seconds,
