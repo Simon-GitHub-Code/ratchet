@@ -301,6 +301,16 @@ def test_every_field_is_cut_whatever_its_characters() -> None:
     assert "truncated" not in json.loads(short.line())
 
 
+def test_a_line_of_the_longest_escapes_in_every_text_field_still_fits() -> None:
+    widest = "\U0001f600" * 5000
+    event = events.Event("2026-11-15T00:00:00Z", "deny", widest, widest, widest, widest)
+    raw = event.line()
+    assert len(raw) < events.LIMIT
+    line = json.loads(raw)
+    assert line["truncated"] is True
+    assert {line[name] for name in ("tool", "rule", "detail", "branch")} == {widest[: events.CLIP]}
+
+
 WRITER = """
 import sys
 from pathlib import Path

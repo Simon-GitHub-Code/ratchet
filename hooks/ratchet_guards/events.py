@@ -25,8 +25,9 @@ from pathlib import Path
 LOG_NAME = "ratchet-guard-events.jsonl"
 # Why: one write this small reaches a pipe in one piece (PIPE_BUF), and a local file as well.
 LIMIT = 4096
-# Why: an escaped character takes at most 12 bytes, so every text field cut to this fits LIMIT.
-CLIP = 100
+# Why: an escaped character takes at most 12 bytes, so the four free text fields cut to this
+# take 3,072 at most, and the line fits LIMIT with the rest.
+CLIP = 64
 _FLAGS = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
 
 
