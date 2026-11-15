@@ -590,3 +590,48 @@ def test_a_missing_architecture_section_is_written_with_its_table_padded(repo: P
         "| ------ | --------------------- | --------------------- |",
         "| <part> | <`glob` of its files> | <parts, or `nothing`> |",
     )
+
+
+CACHE_STEP = (
+    "      - uses: actions/cache@abc # v6\n"
+    "        with:\n"
+    "          path: .cache\n"
+    "          key: {key}{note}\n"
+    "          restore-keys: |\n"
+    "            tier0-\n"
+    "      - run: just tier0\n"
+)
+
+
+def cached(root: Path, key: str, note: str = "") -> None:
+    (root / CI).write_text(CACHE_STEP.format(key=key, note=note), encoding="utf-8")
+
+
+def cache_findings(root: Path) -> list[conformance.Finding]:
+    return [found for found in conformance.check_speed(root) if "cache key" in found.problem]
+
+
+def test_a_cache_key_with_no_per_run_part_is_red_and_the_edit_clears_it_keeping_its_comment(
+    repo: Path,
+) -> None:
+    cached(repo, "tier0-${{ hashFiles('**/*.lock') }}", " # bind: lockfiles")
+    (found,) = cache_findings(repo)
+    assert found.path == CI
+    assert isinstance(found.fix, conformance.Edit)
+    assert isinstance(found.fix.otherwise, conformance.Agent)
+    after = found.fix.want(text(repo, CI))
+    assert "key: tier0-${{ hashFiles('**/*.lock') }}-${{ github.sha }} # bind: lockfiles\n" in after
+    assert "restore-keys: |\n            tier0-\n" in after
+    (repo / CI).write_text(after, encoding="utf-8")
+    assert cache_findings(repo) == []
+
+
+@pytest.mark.parametrize("part", ["github.sha", "github.run_id"])
+def test_a_cache_key_ending_in_the_run_is_green(repo: Path, part: str) -> None:
+    cached(repo, "tier0-${{ runner.os }}-${{ " + part + " }}")
+    assert cache_findings(repo) == []
+
+
+def test_a_merge_workflow_without_a_cache_is_not_flagged(repo: Path) -> None:
+    (repo / ".github/workflows/merge.yml").write_text("name: merge\njobs: {}\n", encoding="utf-8")
+    assert [found for found in cache_findings(repo) if found.path.endswith("merge.yml")] == []
