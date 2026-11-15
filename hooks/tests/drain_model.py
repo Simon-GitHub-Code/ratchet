@@ -1,16 +1,18 @@
 """A pure model of the queue drain: how tickets go from agreed to merged, and the default branch.
 
-Three tickets, ``a``, ``b`` and ``c``, where ``b`` is blocked by ``a``, under a cap of one. Each
+Three tickets, ``a``, ``b`` and ``c``, where ``b`` is blocked by ``a``, under a cap of one, and
+``d`` and ``e``, the parts ``split`` files for ``a``, where ``e`` is blocked by ``d``. Each
 ticket is what ``drain.classify`` reads: its queue work tree, its branch, whether that branch holds
 the tip of the default branch, whether it is merged, the drain's note on it, its text and the
 stashes that hold its uncommitted work, whether a role of a pipeline run committed on its branch,
 and what a killed ``merge.py`` left; and what the preflight asks of ``a``, the one ticket with no
-``Flag:`` line. The actions are the drain's commands in any order, what the agent and a role do
-in a work tree, what the owner does, the upgrade that ships ADR 0061, a stale index lock that git
-leaves, and a kill of ``update``, ``close``, ``land`` or the ``merge.py`` it runs between two of
-their effects. ``graph()`` is every reachable state and step, ``RULES`` what a reader of ADR
-0023, ADR 0060, ADR 0061 and the feature skill expects to stay true over any history. Every rule
-is a predicate over a step: ``(before, action name, after)``.
+``Flag:`` line, and whether ``a`` was split. The actions are the drain's commands in any order,
+what the agent and a role do in a work tree, the agent's split of ``a``, what the owner does,
+the upgrade that ships ADR 0061, a stale index lock that git leaves, and a kill of ``update``,
+``close``, ``land`` or the ``merge.py`` it runs between two of their effects. ``graph()`` is
+every reachable state and step, ``RULES`` what a reader of ADR 0023, ADR 0046, ADR 0060, ADR 0061
+and the feature skill expects to stay true over any history. Every rule is a predicate over a
+step: ``(before, action name, after)``.
 
 The transitions are the code's: a command does here what ``drain.py`` and ``merge.py`` do on a
 repository, refusals included, so a rule the code does not keep breaks here too. The merge judge
@@ -18,9 +20,9 @@ passes a branch only when its verdict record is its last commit, certifies the t
 has, and the branch holds the default tip; the binding's ``check`` is always green; no two tickets
 touch one file, so nothing conflicts.
 
-Bounds keep the graph small: the owner edits a ticket at most once, landing its ``Flag:`` line
-or not, the agent leaves work uncommitted once, a role commits once, and the retry count of a
-ticket left waiting stops at ``RETRIES``, past which nothing reads it.
+Bounds keep the graph small: the owner edits a ticket at most once, landing its ``Flag:`` line,
+closing a split ticket or not, the agent leaves work uncommitted once, a role commits once, and
+the retry count of a ticket left waiting stops at ``RETRIES``, past which nothing reads it.
 """
 
 from __future__ import annotations
@@ -55,12 +57,17 @@ class Name(Fact):
     A = "a"
     B = "b"
     C = "c"
+    D = "d"
+    E = "e"
 
 
 NAMES = tuple(Name)
 INDEX = {name: index for index, name in enumerate(NAMES)}
 BY_VALUE = {name.value: name for name in NAMES}
-BLOCKER: dict[Name, Name] = {Name.B: Name.A}
+BLOCKER: dict[Name, Name] = {Name.B: Name.A, Name.E: Name.D}
+PARTS: dict[Name, tuple[Name, ...]] = {Name.A: (Name.D, Name.E)}
+"""The parts ``split`` files for a ticket, in order, each waiting on the one before."""
+PARTED = frozenset(part for parts in PARTS.values() for part in parts)
 
 
 class Tree(Fact):
@@ -100,6 +107,15 @@ class Outcome(Fact):
     OPENED = "opened"
     MERGED = "merged"
     CLOSED = "waits or parked"
+    SPLIT = "split"
+
+
+class Split(Fact):
+    """Whether ``a`` was split into ``d`` and ``e``, and whether the owner has closed it since."""
+
+    WHOLE = "a is not split, and d and e are not filed"
+    SPLIT = "a is split into d and e, and stays open"
+    CLOSED = "a is split, and the owner has closed it"
 
 
 class Note(NamedTuple):
@@ -189,7 +205,7 @@ def normal(ticket: Ticket) -> Ticket:
 
 @dataclass(frozen=True)
 class State:
-    tickets: tuple[Ticket, Ticket, Ticket]
+    tickets: tuple[Ticket, ...]
     worked: bool = False
     """Whether the agent has left work uncommitted yet: it does so once in a history."""
     scratch: bool = False
@@ -206,6 +222,7 @@ class State:
     The preflight reads a ticket only while it is neither built nor merged, so once ``a``'s
     branch holds a commit nothing reads it again.
     """
+    split: Split = Split.WHOLE
 
     @property
     def edited(self) -> bool:
@@ -220,23 +237,26 @@ class State:
         tickets[INDEX[name]] = normal(ticket)
         first = tickets[INDEX[Name.A]]
         flag = Flag.UNASKED if first.ahead or first.merged else self.flag
-        return State(
-            (tickets[0], tickets[1], tickets[2]), self.worked, self.scratch, self.half, flag
-        )
+        return State(tuple(tickets), self.worked, self.scratch, self.half, flag, self.split)
 
     def __hash__(self) -> int:
         # Why: the search hashes each state it reaches many times, and a state never changes.
         cached = self.__dict__.get("hashed")
         if cached is None:
-            cached = hash((self.tickets, self.worked, self.scratch, self.half, self.flag))
+            facts = (self.tickets, self.worked, self.scratch, self.half, self.flag, self.split)
+            cached = hash(facts)
             object.__setattr__(self, "hashed", cached)
         return cached
 
     def each(self) -> Iterator[tuple[Name, Ticket]]:
         return zip(NAMES, self.tickets, strict=True)
 
+    def filed(self, name: Name) -> bool:
+        """Whether the ticket is in the tracker: a part is once its ticket was split."""
+        return name not in PARTED or self.split is not Split.WHOLE
 
-INITIAL = State(tickets=(Ticket(), Ticket(), Ticket()))
+
+INITIAL = State(tickets=tuple(Ticket() for _ in NAMES))
 
 
 class Status(Fact):
@@ -259,17 +279,25 @@ def held_by_note(ticket: Ticket) -> bool:
     return note is not None and note.hold and note.text == ticket.text
 
 
+def resolved_of(state: State) -> set[Name]:
+    """The tickets that are not open: merged, being landed, or closed by the owner."""
+    resolved = {name for name, ticket in state.each() if ticket.merged or state.half is name}
+    return resolved | {Name.A} if state.split is Split.CLOSED else resolved
+
+
 @functools.cache
 def classify(state: State) -> dict[Name, Status]:
     """Each ticket in the plan, as ``drain.classify`` and then ``drain.settled`` call it.
 
     The plan reads the tickets from the default branch's work tree. While a fast-forward is cut
     off half-way that holds the merge's ticket file, so the ticket being landed reads as resolved.
+    A blocker is read by its open or closed state alone, as ``drain.pending`` reads it: the note of
+    a split blocker, and the parts it names, are not read.
     """
     found: dict[Name, Status] = {}
-    resolved = {name for name, ticket in state.each() if ticket.merged or state.half is name}
+    resolved = resolved_of(state)
     for name, ticket in state.each():
-        if name in resolved:
+        if name in resolved or not state.filed(name):
             continue
         if held_by_note(ticket):
             found[name] = Status.HELD
@@ -332,6 +360,8 @@ class Kind(Fact):
     KILL_LAND_AFTER_DISCARD = "a kill after the discard stops drain.py land"
     KILL_BEFORE_FAST_FORWARD = "a kill before the fast-forward stops merge.py in drain.py land"
     KILL_MID_FAST_FORWARD = "a kill mid fast-forward stops merge.py in drain.py land"
+    SPLIT = "drain.py split"
+    RESOLVE = "the owner closes ticket"
 
 
 KILLS = {
@@ -786,9 +816,33 @@ def _line(state: State, name: Name) -> State | None:
 def _upgrade(state: State) -> State | None:
     """The plugin ships ADR 0061: the preflight now asks every ticket for its ``Flag:`` line."""
     first = state.of(Name.A)
-    if state.flag is not Flag.UNASKED or first.ahead or first.merged:
+    unasked = state.flag is Flag.UNASKED and state.split is Split.WHOLE
+    if not unasked or first.ahead or first.merged:
         return None
     return dataclasses.replace(state, flag=Flag.MISSING)
+
+
+def _split(state: State, name: Name) -> State | None:
+    """``drain.split_ticket``: the parts filed, the ticket closed as ``split`` and held.
+
+    A bound: the run stops ``a`` as too large before any commit, in a clean tree. The parts are
+    local tickets, so they are committed on the default branch, which moves its tip: until then
+    the checkout is not fit to build on.
+    """
+    ticket = state.of(name)
+    if state.split is not Split.WHOLE or ticket.tree is not Tree.CLEAN:
+        return None
+    if ticket.branch is not Branch.BARE or ticket.merged:
+        return None
+    parted = moved(state.with_ticket(name, closed(ticket, Outcome.SPLIT)))
+    return dataclasses.replace(parted, split=Split.SPLIT)
+
+
+def _resolve(state: State, name: Name) -> State | None:
+    """The owner's one edit of the history: ``a``'s status set to done on the default branch."""
+    if state.split is not Split.SPLIT or (edited := _edit(state, name)) is None:
+        return None
+    return dataclasses.replace(edited, split=Split.CLOSED)
 
 
 def _lock(state: State, name: Name) -> State | None:
@@ -826,9 +880,11 @@ ON_TICKET: dict[Kind, Callable[[State, Name], State | None]] = {
     Kind.RECORD: _record,
     Kind.PUBLISH: _publish,
     Kind.CLOSE: recovering(_close),
+    Kind.SPLIT: recovering(_split),
     Kind.UPDATE: recovering(_update),
     Kind.EDIT: _edit,
     Kind.LINE: _line,
+    Kind.RESOLVE: _resolve,
     Kind.LAND: recovering(_land),
     Kind.LOCK: _lock,
     Kind.UNLOCK: _unlock,
@@ -855,17 +911,22 @@ WHOLE: dict[Kind, Callable[[State], State | None]] = {
 # in c, the ticket the cap holds back; b, which waits on a, is only opened. A kill stops
 # ``update`` and ``land`` only in a, whose branch carries a verdict record, and ``close`` only in
 # c, whose tree holds work. The drain's other commands and the owner reach a and c, and the
-# commands of the whole queue reach all three.
+# commands of the whole queue reach every ticket. The agent splits only a, into d and e, and
+# commits in them too, so they are opened, built, judged and landed and nothing more. Once a is
+# split no command names it, and the owner's one edit of it is to close it.
 A_AND_C = (Name.A, Name.C)
+BUILT = (Name.A, *PARTS[Name.A])
 PLAYS: dict[Kind, tuple[Name, ...]] = {
-    Kind.COMMIT: (Name.A,),
-    Kind.RECORD: (Name.A,),
+    Kind.COMMIT: BUILT,
+    Kind.RECORD: BUILT,
+    Kind.LAND: (*A_AND_C, *PARTS[Name.A]),
+    Kind.SPLIT: (Name.A,),
+    Kind.RESOLVE: (Name.A,),
     Kind.PUBLISH: (Name.A,),
     Kind.WORK: (Name.C,),
     Kind.LOCK: (Name.C,),
     Kind.UNLOCK: (Name.C,),
     Kind.UPDATE: A_AND_C,
-    Kind.LAND: A_AND_C,
     Kind.CLOSE: A_AND_C,
     Kind.EDIT: A_AND_C,
     Kind.LINE: (Name.A,),
@@ -890,10 +951,17 @@ ON_A_TICKET = [
 ON_THE_QUEUE = [(Action(kind), act) for kind, act in WHOLE.items()]
 
 
+def on_a_split(state: State, kind: Kind) -> bool:
+    """Whether a bound leaves out ``kind`` on the split ticket: all but the owner's close."""
+    return state.split is not Split.WHOLE and kind is not Kind.RESOLVE
+
+
 def moves(state: State) -> list[Move]:
     """Every action open to the drain, the agent, the owner and git in ``state``."""
     found: list[Move] = []
     for action, act, name in ON_A_TICKET:
+        if not state.filed(name) or (name in PARTS and on_a_split(state, action.kind)):
+            continue
         after = act(state, name)
         if after is not None:
             found.append((action, after))
@@ -1033,13 +1101,60 @@ def held_until_edited(before: State, _: str, after: State) -> bool:
     )
 
 
+def awaited(state: State, name: Name) -> tuple[Name, ...]:
+    """What the ticket waits on, as ADR 0046 means it: its blocker, or a split blocker's parts.
+
+    One level: ``split.py`` refuses to split a part.
+    """
+    blocker = BLOCKER.get(name)
+    if blocker is None:
+        return ()
+    split = blocker in PARTS and state.split is not Split.WHOLE
+    return PARTS[blocker] if split else (blocker,)
+
+
 def refused(_: State, __: str, after: State) -> bool:
     """A ticket whose blocker waits on the owner is refused, never left waiting for it."""
     statuses = classify(after)
     return all(
         statuses.get(name) is not Status.WAITING or not held_by_note(after.of(blocker))
-        for name, blocker in BLOCKER.items()
+        for name in BLOCKER
+        for blocker in awaited(after, name)
     )
+
+
+def on_a_split_blocker(state: State) -> list[Name]:
+    """The tickets that wait on a ticket the drain split."""
+    return [name for name in BLOCKER if awaited(state, name) != (BLOCKER[name],)]
+
+
+def parts_first(before: State, _: str, after: State) -> bool:
+    """A ticket that waits on a split ticket is never opened before every part of it has landed."""
+    return all(
+        after.of(name).tree is Tree.NONE
+        or before.of(name).tree is not Tree.NONE
+        or all(before.of(part).merged for part in awaited(before, name))
+        for name in on_a_split_blocker(after)
+    )
+
+
+def can_land(state: State, name: Name) -> bool:
+    """Whether the drain can still land the ticket, or has: the plan keeps it live or waiting."""
+    return state.of(name).merged or classify(state).get(name) in {*LIVE, Status.WAITING}
+
+
+def parts_awaited(_: State, __: str, after: State) -> bool:
+    """A ticket that waits on a split ticket is not refused while every part can still land, and is buildable once every part has landed."""  # noqa: E501
+    statuses = classify(after)
+    for name in on_a_split_blocker(after):
+        status = statuses.get(name)
+        parts = awaited(after, name)
+        if all(after.of(part).merged for part in parts):
+            if status in {Status.WAITING, Status.REFUSED}:
+                return False
+        elif status is Status.REFUSED and all(can_land(after, part) for part in parts):
+            return False
+    return True
 
 
 def behind(ticket: Ticket) -> bool:
@@ -1114,6 +1229,10 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "7b. the owner's Flag: line releases the refused ticket and those waiting on it": (
         released_by_the_line
     ),
+    "7c. a ticket that waits on a split ticket is opened only once every part has landed": (
+        parts_first
+    ),
+    "7d. a ticket that waits on a split ticket waits for its parts, then starts": parts_awaited,
     "8. a killed command recovers by running again or by clean --all": recovers,
     "10. clean --all leaves no queue work tree": no_tree_left,
     "11. a branch a role committed on is never committed on after its run or landed": unpublished,
@@ -1805,17 +1924,25 @@ def run(taken: Callable[[Action], bool]) -> Run:
 
 
 def landing_run() -> Run:
-    """Every step but those on ``c``, a role's commit and the ``Flag:`` line: ``a`` built, judged, landed or parked, ``b`` waiting on it."""  # noqa: E501
-    return run(lambda action: action.ticket is not Name.C and action.kind not in TICKET_LIFE)
+    """Every step but those on ``c``, a role's commit, the ``Flag:`` line and a split: ``a`` built, judged, landed or parked, ``b`` waiting on it."""  # noqa: E501
+    return run(
+        lambda action: action.ticket is not Name.C and action.kind not in TICKET_LIFE | SPLITTING
+    )
 
 
 TICKET_LIFE = frozenset({Kind.PUBLISH, Kind.UPGRADE, Kind.LINE})
 """The steps of a ticket's life that only the life run takes."""
+SPLITTING = frozenset({Kind.SPLIT, Kind.RESOLVE})
+"""The steps no run takes: only the search in the tests reaches a split."""
+UNSPLIT = (Name.A, Name.B, Name.C)
+"""The tickets the runs reach: the parts are filed only by a split."""
 
 
 def life_run() -> Run:
-    """Every step but those on ``c`` and the kills: a ticket's life as the drain's commands, the agent, a role, an upgrade and the owner lead it."""  # noqa: E501
-    return run(lambda action: action.ticket is not Name.C and action.kind not in KILLS)
+    """Every step but those on ``c``, the kills and a split: a ticket's life as the drain's commands, the agent, a role, an upgrade and the owner lead it."""  # noqa: E501
+    return run(
+        lambda action: action.ticket is not Name.C and action.kind not in KILLS.keys() | SPLITTING
+    )
 
 
 def work_run() -> Run:
@@ -1969,7 +2096,7 @@ def exports() -> tuple[model_tla.Export, ...]:
     those four, and from summaries of the life run and the lease graph.
     """
     landing, life, lease = landing_run(), life_run(), lease_run()
-    facts = state_facts(NAMES)
+    facts = state_facts(UNSPLIT)
     main = step_rules(RULES)
     return (
         model_tla.export(
