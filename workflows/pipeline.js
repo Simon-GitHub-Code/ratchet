@@ -118,6 +118,8 @@ the issue.
   record the change only adds to (an \`additions:\` note) is no finding for the path; a new term
   that restates a concept the glossary already names, or a new ADR that contradicts one in
   docs/adr/ without the owner's superseding record, is a major issue on the standards axis.
+- Spec axis: a criterion of the ticket the change does not meet is major, as a promise of the
+  ticket it drops is.
 - Design axis: A layer violation is a blocker, and so is a module that reaches around a seam
   that is a layer boundary; around any other seam it is major. A dependency direction the
   architecture ADR rules out, and an architecture decision made without the owner, are major.

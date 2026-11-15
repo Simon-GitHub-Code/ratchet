@@ -619,6 +619,18 @@ def test_neither_the_critic_nor_the_review_grades_a_guard_path_a_dispute_names()
         assert "and a major one when one does" not in prompt, role
 
 
+def test_a_criterion_the_change_does_not_meet_is_major_and_forces_changes() -> None:
+    answers = {"implement": IMPLEMENTED, "critique": CRITIQUED, "review": REVIEW}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    line = "a criterion of the ticket the change does not meet is major"
+    assert line in " ".join(ran["prompts"]["review"].split())
+    unmet = {**BLOCKER, "severity": "major", "title": "criterion 2 is not met"}
+    answers["review"] = {**REVIEW, "verdict": "approve", "issues": [unmet]}
+    ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
+    assert ran["result"]["verdict"] == "request_changes"
+    assert ran["result"]["verdictForcedBy"] == ["1 blocker/major review issue(s)"]
+
+
 def test_a_ticket_whose_whole_change_cannot_fit_is_split_by_the_spec_stage() -> None:
     # Why: the spec, the critic's tests and the dispute records were 1,300 lines before any
     # implementation, and the run ended over the ceiling after nine agents.
