@@ -46,7 +46,7 @@ A choice the owner's words already make is not asked. A deeper interview is the 
 
 ## What it costs
 
-Adoption installs the tools of the rows it binds and the test runner, runs those gates, plants each one's fault in a scratch copy, rehearses the first slice in another, and runs `check-deep` once, in step 12. On an empty repository the only rows it binds are those whose trigger is `always`: with the test runner and the rehearsal, about 35 to 45 minutes on an idle machine, and over an hour when adoption first installs the language's tools or the build is slow. A repository with code also binds the rows its code has already triggered. Tell the owner before step 1; it is not a question.
+Adoption installs the tools of the rows it binds and the test runner, runs those gates, plants each one's fault in a scratch copy, rehearses the first slice in another, and runs `check-deep` once, in step 12. On an empty repository the only rows it binds are those whose trigger is `always`: with the test runner and the rehearsal, about 35 to 45 minutes on an idle machine, and over an hour when adoption first installs the language's tools or they are slow to set up. A repository with code also binds the rows its code has already triggered. Tell the owner before step 1; it is not a question.
 
 ## Steps
 
