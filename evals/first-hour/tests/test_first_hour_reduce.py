@@ -245,7 +245,7 @@ def test_a_recorded_run_reduces_to_its_measurements() -> None:
     assert m["minutes"] == {
         "total": 10.2,
         "to_first_merge": 2.5,
-        "to_first_feature_merge": 2.5,
+        "to_first_feature_merge": 10.0,
         "to_first_usable_merge": 10.2,
     }
     assert m["app"]["starts"]
@@ -452,15 +452,18 @@ def test_reduce_parses_a_recorded_runs_gates_again_from_its_saved_pastes(tmp_pat
     assert list(reduce.reread([], logs)) == []
 
 
-def test_the_first_merge_of_a_feature_skips_the_adoption_and_the_init() -> None:
+def test_the_first_merge_of_a_feature_is_the_first_of_a_branch_the_feature_step_builds() -> None:
     merges = [
-        {"s": 60, "kind": "merge", "branch": "chore/adopt-ratchet", "how": "hand"},
-        {"s": 120, "kind": "merge", "branch": "chore/init", "how": "hand"},
+        {"s": 60, "kind": "merge", "branch": "chore/adopt-ratchet", "how": "entry-point"},
+        {"s": 120, "kind": "merge", "branch": "spec/save-and-list", "how": "entry-point"},
+        {"s": 150, "kind": "merge", "branch": "docs/spec-save-and-list", "how": "agent"},
+        {"s": 180, "kind": "merge", "branch": "records/20261115-010903", "how": "agent"},
         {"s": 300, "kind": "merge", "branch": "feature/1-save", "how": "agent"},
+        {"s": 420, "kind": "merge", "branch": "feature/2-list", "how": "agent"},
     ]
     minutes = reduce.reduce(merges)["minutes"]
     assert (minutes["to_first_merge"], minutes["to_first_feature_merge"]) == (1.0, 5.0)
-    assert reduce.reduce(merges[:2])["minutes"]["to_first_feature_merge"] is None
+    assert reduce.reduce(merges[:4])["minutes"]["to_first_feature_merge"] is None
     assert reduce.reduce([])["minutes"]["to_first_feature_merge"] is None
 
 
