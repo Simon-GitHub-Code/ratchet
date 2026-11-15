@@ -121,3 +121,19 @@ def test_main_checks_then_applies_a_plan_and_refuses_one_it_cannot_read(
         ".scratch/f/issues/02-save.md",
         ".scratch/f/issues/03-list.md",
     ]
+
+
+def test_a_part_does_not_carry_the_size_its_parent_was_too_large_for(tmp_path: Path) -> None:
+    (tmp_path / "quality").mkdir()
+    (tmp_path / "quality" / "thresholds.toml").write_text(
+        "[ceilings.change]\nproduct_lines = 300\nproduct_files = 10\n"
+    )
+    sections = "## Conjecture\n\nIt helps.\n\n## Size\n\n- Product lines: ~500\n"
+    parent = preflight.local_ticket(PARENT_REF, f"{PARENT}\n{sections}")
+    assert preflight.size_failure(parent, tmp_path) is not None
+    for index, part in enumerate(split.parts_of(HALVES)):
+        text = split.child_body(parent, part, waits=[], label="ready-for-agent")
+        child = preflight.local_ticket(f".scratch/f/issues/0{index + 2}-p.md", text)
+        assert preflight.size_failure(child, tmp_path) is None
+        assert "## Size" not in text
+        assert "## Conjecture\n\nIt helps." in text

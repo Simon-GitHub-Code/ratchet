@@ -1,7 +1,11 @@
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 
+import application_types
+import route
 from first_hour import owner
 from first_hour.persona import load
 
@@ -175,6 +179,19 @@ def test_a_life_event_proposal_becomes_a_question_and_other_also_lines_do_not() 
     assert event == "deployed"
     assert [o.label for o in question.options] == ["Yes, it is", "Not yet"]
     assert owner.life_event_question("the Ratchet plugin in use is 0.12.0, newer") is None
+
+
+def test_the_routes_own_life_event_proposal_becomes_a_question(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    (tmp_path / "docs/process").mkdir(parents=True)
+    (tmp_path / "docs/process/binding.md").write_text("# Binding\n", encoding="utf-8")
+    (tmp_path / "CONTRIBUTING.md").write_text("", encoding="utf-8")
+    [line] = route.event_proposals(tmp_path)
+    found = owner.life_event_question(line)
+    assert found is not None
+    meaning = application_types.load().events["depended-on"].meaning
+    assert found[0] == "depended-on"
+    assert found[1].text.startswith(f"Is the project now `depended-on` ({meaning})? ")
 
 
 def test_the_prompts_carry_the_persona_the_options_and_the_turns_tail() -> None:
