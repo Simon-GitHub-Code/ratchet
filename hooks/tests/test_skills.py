@@ -504,6 +504,21 @@ def test_the_conjecture_adds_a_missing_size_to_a_ticket_that_states_the_rest() -
     )
 
 
+def test_the_size_estimate_is_written_on_the_ticket_and_never_on_a_spec() -> None:
+    # Why: the page wrote `## Size` on the shared spec beside the conjecture, and on a spec not
+    # yet split. The feature preflight reads `## Size` only from the ticket's own body, so a size
+    # written on a spec was never checked. The page now writes it on each ticket, and on no spec.
+    step_2 = conjecture_step(2)
+    assert (
+        "**A ticket:** the block goes on the ticket itself, even when its siblings share a parent"
+        " spec, since the preflight reads `## Size` only from the ticket's own body." in step_2
+    )
+    assert (
+        "**A spec that has not been split:** write no `## Size`. Make the estimate all the same,"
+        " for the ceiling case below." in step_2
+    )
+
+
 def test_the_conjecture_is_printed_once_at_the_hand_over() -> None:
     # Why: step 3 and step 5 each said to print the conjecture, so it could go out with the
     # questions and again at the hand-over. It is printed once, in the last reply.
