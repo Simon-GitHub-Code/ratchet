@@ -124,11 +124,11 @@ daemon does, is not ended, and runs on, and a copy it is still writing in when t
 left behind.
 
 Usage: ``project_bite.py [--root DIR] [--changed] [--gate NAME]... [--jobs N] [--limit S]``.
-``--changed`` is the pull-request form: it proves nothing unless the change touches a path that defines a gate
-(the manifest's ``tool-config``, ``gate-commands``, ``fitness``, ``gate-tools`` and ``formal``
-groups, the registry and the binding), and then proves the gates of tiers 0 and 1. It proves
-nothing on the adoption either, the change whose base holds no binding: every gate is new
-there, and the whole proof runs once in tier 2.
+``--changed`` is the pull-request form: it proves nothing unless the change touches a path that
+defines a gate (the manifest's ``tool-config``, ``gate-commands``, ``fitness``, ``gate-tools``
+and ``formal`` groups, the registry and the binding), and then proves the gates of tiers 0
+and 1. It proves nothing on the adoption either, the change whose base holds no binding: every
+gate is new there, and the whole proof runs once in tier 2.
 """
 
 from __future__ import annotations
