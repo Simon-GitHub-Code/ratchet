@@ -202,7 +202,7 @@ stateDiagram-v2
 
 ### Where the gate alone breaks a rule
 
-Drawn from `Safeguard.tla`, where the tool draws only the shortest run to each rule that breaks: 5 states and 6 arrows. The states have the words of the chart of the kind, and the steps the model's own names, as the tests give the runs. No run that breaks a rule takes a step of the review. A rule on a landing breaks in the state the landing reaches. Most states with that label were reached some other way, so the chart marks the label as breaking the rule in some cases.
+Drawn from `Safeguard.tla` as it was before the change that binds the row and adds an instance, where the tool draws only the shortest run to each rule that breaks: 5 states and 6 arrows. The tool did not finish on the module above, so this chart was not drawn again. TLC, run on the module above once for each rule that breaks, gives the same four runs step for step. The states have the words of the chart of the kind, and the steps the model's own names, as the tests give the runs. No run that breaks a rule takes a step of the review. A rule on a landing breaks in the state the landing reaches. Most states with that label were reached some other way, so the chart marks the label as breaking the rule in some cases.
 
 ```mermaid
 ---
