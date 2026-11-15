@@ -21,7 +21,7 @@ from tests.test_conformance import (
 
 CI = ".github/workflows/ci.yml"
 SETTINGS = ".claude/settings.json"
-PIN_LINE = f"- Ratchet plugin: 0.0.0 at {'0' * 40}"
+PIN_LINE = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
 
 
 @pytest.fixture

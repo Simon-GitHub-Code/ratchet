@@ -11,11 +11,43 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # The plugin the recipes run: the folder an agent session in this repository last started the
 # plugin from, which the session hook records in the git directory. For another harness, or CI,
-# export RATCHET_PLUGIN as the plugin's folder; an empty one counts as unset. The folder reaches
-# every recipe as the environment variable RATCHET_PLUGIN_DIR and is only ever read as a shell
-# variable, so a folder name with a quote, a `$` or a backtick runs nothing. `_plugin` is red when
-# there is no folder.
-export RATCHET_PLUGIN_DIR := if env_var_or_default("RATCHET_PLUGIN", "") != "" { env_var("RATCHET_PLUGIN") } else { `common=$(git rev-parse --git-common-dir 2>/dev/null) && cat "$common/ratchet-plugin" 2>/dev/null || true` }
+# export RATCHET_PLUGIN as the plugin's folder; an empty one counts as unset. Only the release the
+# pin in docs/process/binding.md names runs (ADR 0068): the folder's tree, which this computes with
+# system git alone and a throwaway object store, must be the pin's `tree`. When the recorded
+# folder is another tree, its siblings are tried, where a harness keeps earlier versions, and the
+# first that matches runs. With none, `_plugin` is red in one line. The folder reaches every recipe
+# as the environment variable RATCHET_PLUGIN_DIR and is only ever read as a shell variable, so a
+# folder name with a quote, a `$` or a backtick runs nothing. `_plugin` is red when there is no
+# folder.
+plugin_choice := ```
+    rec=${RATCHET_PLUGIN:-}; file=0
+    if [ -z "$rec" ]; then common=$(git rev-parse --git-common-dir 2>/dev/null) && rec=$(cat "$common/ratchet-plugin" 2>/dev/null) || rec=; file=1; fi
+    [ -n "$rec" ] || exit 0
+    rec=${rec%/}
+    want=$(sed -n 's/^- Ratchet plugin: [^ ]* at [0-9a-f]\{40\} tree \([0-9a-f]\{40\}\)[ \t\r]*$/\1/p' docs/process/binding.md 2>/dev/null | head -n 1 || true)
+    treeof() {
+      (
+        cd -- "$1" 2>/dev/null || exit 1
+        work=$PWD; scratch=$(mktemp -d) || exit 1
+        trap 'rm -rf "$scratch"' EXIT
+        git() { env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_DIR="$scratch/g" GIT_WORK_TREE="$work" git -c core.autocrlf=false -c core.safecrlf=false -c core.filemode=true -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null "$@"; }
+        git init -q --template= && mkdir "$scratch/g/info" && printf '* -text -eol -ident -filter -working-tree-encoding\n' > "$scratch/g/info/attributes" || exit 1
+        git add -A -f -- . ':(exclude).git' ':(exclude).claude-plugin/commit' ':(exclude).in_use' ':(exclude,glob)**/__pycache__/**' >/dev/null 2>&1 && git write-tree
+      )
+    }
+    if [ -z "$want" ]; then printf 'Rdocs/process/binding.md pins no tree id, so the plugin at %s cannot be checked: upgrade this project with `python3 %s/scripts/upgrade.py --apply`' "$rec" "$rec"; exit 0; fi
+    have=$(treeof "$rec") || have=
+    if [ "$have" = "$want" ]; then printf 'D%s' "$rec"; exit 0; fi
+    if [ "$file" = 1 ]; then
+      for sibling in "${rec%/*}"/*/; do
+        sibling=${sibling%/}
+        [ "$sibling" != "$rec" ] && [ -d "$sibling" ] && [ "$(treeof "$sibling" || true)" = "$want" ] && { printf 'D%s' "$sibling"; exit 0; }
+      done
+    fi
+    printf 'Rthe plugin at %s is tree %s, not the %s that docs/process/binding.md pins, and no copy on disk matches: upgrade this project with `python3 %s/scripts/upgrade.py --apply`, or install the plugin release the pin names' "$rec" "${have:-unreadable}" "$want" "$rec"
+```
+export RATCHET_PLUGIN_DIR := replace_regex(plugin_choice, '(?s)^R.*|^D', '')
+export RATCHET_PLUGIN_REFUSAL := replace_regex(plugin_choice, '(?s)^D.*|^R', '')
 ratchet_plugin := "$RATCHET_PLUGIN_DIR"
 
 # The deliverable as a running thing, for `start` and the three service gates the plugin ships
@@ -135,7 +167,7 @@ dependencies dir:
 # The one guard every recipe that runs a file of the plugin depends on.
 [no-exit-message]
 _plugin:
-    @if [ -z "{{ratchet_plugin}}" ]; then echo "no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
+    @if [ -n "$RATCHET_PLUGIN_REFUSAL" ]; then printf '%s\n' "$RATCHET_PLUGIN_REFUSAL"; exit 1; fi; if [ -z "{{ratchet_plugin}}" ]; then echo "no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
 
 # Every tier starts here: the plugin the recipes run is the version docs/process/binding.md pins,
 # the commit CI checks out. Red before any gate runs when it is older, another commit of the same

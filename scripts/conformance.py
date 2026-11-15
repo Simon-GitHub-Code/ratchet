@@ -209,14 +209,17 @@ ADR_FRONT_MATTER = re.compile(
 )
 ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
 GLOSSARY_PLACEHOLDER = "<project>"
-PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha>"
+PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha> tree <ratchet-tree-id>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 PIN_RECIPE = "plugin-pin"
 PIN_SCRIPT = "plugin_pin.py"
 PLUGIN_VARIABLE = "ratchet_plugin"
 MARKETPLACE_FALLBACK = ".claude/plugins/marketplaces/ratchet"
 PLUGIN_LINE = re.compile(
-    rf"^(?:export[ \t]+RATCHET_PLUGIN_DIR[ \t]*:=.*\n)?{PLUGIN_VARIABLE}[ \t]*:=.*$", re.MULTILINE
+    r"^(?:plugin_choice[ \t]*:=[ \t]*```(?s:.*?)```\n)?"
+    r"(?:export[ \t]+RATCHET_PLUGIN_(?:DIR|REFUSAL)[ \t]*:=.*\n)*"
+    rf"{PLUGIN_VARIABLE}[ \t]*:=.*$",
+    re.MULTILINE,
 )
 PLUGIN_GUARD = "_plugin"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
@@ -1724,6 +1727,22 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
             "add the pin line for the plugin in use", plugin_pin.with_pin(line), Agent((line,))
         )
         yield Finding(BINDING_PATH, problem, edit)
+    elif pin.tree is None:
+        line = plugin_pin.line_for(plugin_pin.PLUGIN)
+        problem = (
+            f"the pin names no tree id, so no copy of the plugin can be held to the release; write"
+            f" `- Ratchet plugin: {pin.version} at {pin.commit} tree <the tree of that commit>`"
+            " (`git rev-parse <commit>^{tree}` in a clone of the plugin gives it), or run the"
+            " plugin's upgrade"
+        )
+        if plugin_pin.commit_of(plugin_pin.PLUGIN) == pin.commit:
+            yield Finding(
+                BINDING_PATH,
+                problem,
+                Edit("add the tree id of the plugin in use", plugin_pin.with_pin(line), Agent()),
+            )
+        else:
+            yield Finding(BINDING_PATH, problem, Agent())
     yield from check_pin_recipe(root)
     yield from check_plugin_fallback(root)
     if pin is None:
@@ -3179,7 +3198,11 @@ def pin_mutations() -> list[Mutation]:
     return [
         (
             "binding with the plugin pin unfilled",
-            rewrite(binding, f"0.0.0 at {pinned}", PLUGIN_PIN_PLACEHOLDER),
+            rewrite(binding, f"0.0.0 at {pinned} tree {pinned}", PLUGIN_PIN_PLACEHOLDER),
+        ),
+        (
+            "binding whose plugin pin names no tree id",
+            rewrite(binding, f"0.0.0 at {pinned} tree {pinned}", f"0.0.0 at {pinned}"),
         ),
         (
             "workflow at a commit the binding does not pin",
@@ -3483,7 +3506,7 @@ Wrong if a change to the rules keeps needing a change to the command.
 
 def fill_binding(text: str) -> str:
     """A command line tool's binding: one row its type leaves out, a tool in every other."""
-    text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40}")
+    text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40} tree {'0' * 40}")
     text = TYPES_PLACEHOLDER.sub("- Application types: cli", text)
     text = TEST_PATHS_PLACEHOLDER.sub("- Tests: `tests/**`", text)
     text = DECISION_PLACEHOLDER.sub(f"- Decision: `{SELF_TEST_RECORD}`", text)

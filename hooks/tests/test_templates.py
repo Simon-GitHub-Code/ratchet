@@ -17,6 +17,7 @@ import change_size
 import conformance
 import pins
 import plugin_pin
+from tests import repos
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
 PLUGIN_ROOT = TEMPLATES.parents[2]
@@ -575,7 +576,7 @@ def test_the_issue_carries_the_output_of_each_red_gate_and_not_the_green_gates_t
 
 def test_the_plugin_version_has_one_home_the_binding() -> None:
     text = (TEMPLATES / "docs/adr/0001-adopt-the-ratchet-method.md").read_text(encoding="utf-8")
-    assert "\n- Ratchet plugin: <X.Y.Z> at <ratchet-sha>\n" in BINDING
+    assert "\n- Ratchet plugin: <X.Y.Z> at <ratchet-sha> tree <ratchet-tree-id>\n" in BINDING
     assert "<X.Y.Z>" not in text
     assert "<ratchet-sha>" not in text
     assert "https://github.com/Simon-GitHub-Code/ratchet" in text
@@ -600,8 +601,7 @@ def test_a_tier_says_what_to_set_when_no_plugin_is_where_the_justfile_looks(
     needs_just()
     code, said = pin_recipe(tmp_path, tmp_path / "absent")
     assert code == 1
-    assert f"plugin-pin: no Ratchet plugin at {tmp_path / 'absent'}" in said
-    assert "set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins" in said
+    assert f"the plugin at {tmp_path / 'absent'} cannot be checked" in said
 
 
 def test_a_tier_is_red_until_the_binding_pins_the_plugin_it_runs_from(tmp_path: Path) -> None:
@@ -609,12 +609,16 @@ def test_a_tier_is_red_until_the_binding_pins_the_plugin_it_runs_from(tmp_path: 
     version = plugin_pin.version_of(PLUGIN_ROOT)
     binding = tmp_path / "docs/process/binding.md"
     binding.parent.mkdir(parents=True)
-    binding.write_text(f"- Ratchet plugin: {version}-other at {'1' * 40}\n", encoding="utf-8")
-    code, said = pin_recipe(tmp_path, PLUGIN_ROOT)
+    copy = repos.installed_copy()
+    held = plugin_pin.copy_tree_id(copy)
+    binding.write_text(
+        f"- Ratchet plugin: {version}-other at {'1' * 40} tree {held}\n", encoding="utf-8"
+    )
+    code, said = pin_recipe(tmp_path, copy)
     assert (code, said.splitlines()[-1]) == (1, "plugin-pin: red")
-    commit = plugin_pin.commit_of(PLUGIN_ROOT) or "1" * 40
-    binding.write_text(f"- Ratchet plugin: {version} at {commit}\n", encoding="utf-8")
-    code, said = pin_recipe(tmp_path, PLUGIN_ROOT)
+    commit = plugin_pin.commit_of(copy) or "1" * 40
+    binding.write_text(f"- Ratchet plugin: {version} at {commit} tree {held}\n", encoding="utf-8")
+    code, said = pin_recipe(tmp_path, copy)
     assert (code, said.splitlines()[-1]) == (0, "plugin-pin: green")
 
 
