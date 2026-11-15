@@ -119,19 +119,20 @@ def test_a_green_run_says_its_share_of_the_ceiling_and_warns_from_75_percent() -
 
 
 def test_main_warns_on_a_green_run_near_its_ceiling_and_stays_green(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "quality").mkdir()
     (tmp_path / "quality/thresholds.toml").write_text(
-        budget.with_ceiling("", "bite-all", 1.0), encoding="utf-8"
+        budget.with_ceiling("", "bite-all", 100.0), encoding="utf-8"
     )
-    slow = ["--", sys.executable, "-c", "import time; time.sleep(0.9)"]
-    assert budget.main(["budget", "bite-all", "--root", str(tmp_path), *slow]) == 0
+    command = ["--", sys.executable, "-c", "pass"]
+    monkeypatch.setattr(budget, "timed", lambda _command, _cwd: (90.0, 0))
+    assert budget.main(["budget", "bite-all", "--root", str(tmp_path), *command]) == 0
     out = capsys.readouterr().out
-    assert "% used): green" in out
-    assert "::warning title=ratchet-budget::ratchet-budget: bite-all used" in out
-    fast = ["--", sys.executable, "-c", "pass"]
-    assert budget.main(["budget", "bite-all", "--root", str(tmp_path), *fast]) == 0
+    assert "(ceiling 100s, 90% used): green" in out
+    assert "::warning title=ratchet-budget::ratchet-budget: bite-all used 90%" in out
+    monkeypatch.setattr(budget, "timed", lambda _command, _cwd: (74.0, 0))
+    assert budget.main(["budget", "bite-all", "--root", str(tmp_path), *command]) == 0
     assert "::warning" not in capsys.readouterr().out
 
 
