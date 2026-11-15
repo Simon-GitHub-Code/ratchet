@@ -28,7 +28,7 @@ An upgrade adds sections to the binding whose rows state what this project's own
    - **Suppressions:** the directives the bound tools read, including the kinds that silence the coverage question.
    - **Install:** whether an install comes first.
    - **Dependencies:** how dependencies are read.
-   - **A mutation recipe that passes a tool's own report:** rewrite the recipe so it converts that report to the neutral format that `scripts/mutation_survivors.py` documents. Write the register's entries again for the new identities.
+   - **A mutation recipe that passes a tool's own report:** rewrite the recipe so it converts that report to the neutral format that `${CLAUDE_PLUGIN_ROOT}/scripts/mutation_survivors.py` documents. Write the register's entries again for the new identities.
 
    Name no tool in a page the plugin ships. The binding is the project's.
 
