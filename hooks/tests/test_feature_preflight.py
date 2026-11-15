@@ -15,6 +15,7 @@ import pytest
 import drain
 import feature_preflight as preflight
 import owed
+import publish_check
 import route
 from tests.repos import git, install_hooks, repository, snapshot, write
 
@@ -327,6 +328,37 @@ def test_the_checkout_must_be_clean_and_on_the_branch(tmp_path: Path) -> None:
     assert run(root, "4", gh, branch="feature/4-x").ok
     assert checks(run(root, "4", gh, base="feature/4-x", branch="feature/4-x")) == ["branch"]
     assert checks(run(root, "4", gh, base="main", branch="main"))[0] == "branch"
+
+
+def test_on_its_branch_the_report_carries_the_start_the_publish_check_reads(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = repository(tmp_path, {"docs/agents/triage-labels.md": RECORD})
+    gh = gh_returning(issue())
+    assert run(root, "4", gh).start is None
+    git(root, "switch", "-q", "-c", "feature/4-x")
+    report = run(root, "4", gh, branch="feature/4-x")
+    head = git(root, "rev-parse", "HEAD").strip()
+    assert report.start == publish_check.Start("feature/4-x", head, None)
+    saved = tmp_path / "start.json"
+    saved.write_text(json.dumps(asdict(report)), encoding="utf-8")
+    assert publish_check.read_start(saved) == report.start
+    assert publish_check.main(["publish_check.py", str(saved), "--root", str(root)]) == 0
+    write(root, "src/x.py", "x = 1\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "a role commits")
+    capsys.readouterr()
+    assert publish_check.main(["publish_check.py", str(saved), "--root", str(root)]) == 1
+    assert "a role committed" in capsys.readouterr().out
+
+
+def test_a_forge_that_cannot_be_read_turns_the_start_red(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"docs/agents/triage-labels.md": RECORD})
+    git(root, "switch", "-q", "-c", "feature/4-x")
+    git(root, "remote", "add", "origin", str(tmp_path / "nowhere"))
+    report = run(root, "4", gh_returning(issue()), branch="feature/4-x")
+    assert checks(report) == ["start"]
+    assert report.start is None
 
 
 def test_outside_a_checkout_the_tree_cannot_be_clean(tmp_path: Path) -> None:
