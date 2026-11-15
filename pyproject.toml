@@ -84,6 +84,7 @@ ignore = [
     "S603", "S607", # subprocess runs git with a literal argv list, no shell
     "INP001", # standalone scripts, deliberately not a package
 ]
+"scripts/comments.py" = ["D100", "D101"]
 "evals/first-hour/run.py" = [
     "T201",   # the command prints the table by design
     "S603",   # subprocess runs the resolved `claude` with a literal argv list
