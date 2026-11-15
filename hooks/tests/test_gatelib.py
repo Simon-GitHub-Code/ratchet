@@ -1,5 +1,6 @@
 """The gate library: one merge base for every gate, the changed paths, the thresholds file."""
 
+import contextlib
 import http.server
 import signal
 import socket
@@ -125,6 +126,42 @@ def test_a_free_port_can_be_bound_and_then_listens() -> None:
     assert not gatelib.listening(url), "closed again"
     assert not gatelib.listening(f"http://127.0.0.1:{port}"), "nothing took the free port"
     assert not gatelib.listening(f"https://127.0.0.1:{port}"), "https defaults to 443 otherwise"
+
+
+def ephemeral() -> range:
+    low, high = gatelib.PORT_RANGE.read_text(encoding="utf-8").split()
+    return range(int(low), int(high) + 1)
+
+
+def test_a_free_port_is_never_one_the_kernel_gives_an_outgoing_connection() -> None:
+    # Why: a client anywhere on the host can take a port of that range between the pick and the
+    # service's bind, and the service then fails to boot.
+    ports = [gatelib.free_port() for _ in range(500)]
+    assert all(gatelib.UNPRIVILEGED <= port < ephemeral().start for port in ports)
+    assert len(set(ports)) > 1, "two gates picking at once rarely pick the same port"
+
+
+def test_where_the_platform_names_no_range_a_free_port_is_below_the_dynamic_ports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gatelib, "PORT_RANGE", tmp_path / "absent")
+    assert all(gatelib.UNPRIVILEGED <= gatelib.free_port() < 49152 for _ in range(100))
+
+
+@pytest.mark.parametrize("start", [1027, 1024, 600])
+def test_with_no_port_free_below_the_range_the_kernel_picks_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start: int
+) -> None:
+    told = tmp_path / "range"
+    told.write_text(f"{start}\t60999\n", encoding="utf-8")
+    real = ephemeral()
+    monkeypatch.setattr(gatelib, "PORT_RANGE", told)
+    with contextlib.ExitStack() as taken:
+        for port in range(gatelib.UNPRIVILEGED, start):
+            bound = taken.enter_context(socket.socket())
+            with contextlib.suppress(OSError):
+                bound.bind(("127.0.0.1", port))
+        assert gatelib.free_port() in real
 
 
 def test_http_status_reads_the_status_and_sends_a_json_body() -> None:
