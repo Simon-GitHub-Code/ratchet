@@ -722,7 +722,11 @@ def test_plugin_lines_older_than_the_template_send_the_owner_to_init(tmp_path: P
     current = STANZA + "\n" + "\n".join(lines) + "\n"
     root = repository(tmp_path, {**ADOPTED, "AGENTS.md": current})
     assert route.decide(root, None).command != route.INIT
-    stale = current.replace(lines[1], lines[1].split("`poteto-mode`")[0] + "refused to an agent.")
+    # Why: an older line is cut where its last rule begins. The cut has to remove something, or
+    # the line below it is the current one with words added and proves nothing about an older one.
+    older, cut, _ = lines[1].partition(" Once a pstack skill runs")
+    assert cut
+    stale = current.replace(lines[1], older)
     write(root, "AGENTS.md", stale)
     commit(root, "docs: an older stanza")
     step = route.decide(root, None)
