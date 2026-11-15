@@ -52,7 +52,7 @@ The owner is asked nothing. A tool the architecture record names was their choic
    - Run `conformance` and `check`, both to green.
    - Commit with the subject `chore(method): safeguard <what>`, at most 72 characters; the `commits` gate accepts it.
    - Push and open the pull request with every template section filled: under Gates the table of step 2 and each `just bite-one` verdict, under Criticism every tool you could not check.
-   - With no forge, write the change description at `.scratch/changes/<branch>.md` and run `just merge <branch>`.
+   - With no forge, write the change description at `.scratch/changes/<branch>.md` (the branch's `/` written as `-`) and run `just merge <branch>`.
 
    The change touches guard paths, so the merge judge leaves the merge to the owner, and says so.
 

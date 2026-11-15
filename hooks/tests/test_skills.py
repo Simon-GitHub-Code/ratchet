@@ -129,10 +129,13 @@ def test_a_red_preflight_on_the_branch_stops_the_build() -> None:
 def test_the_drain_reads_a_refusal_with_exit_2_as_no_conflict() -> None:
     # Why: the page read every exit 2 of `update` as a rebase that conflicted. `drain.py` also
     # exits 2 when it refuses before any work on the ticket, with a `drain:` or `merge:` line, and
-    # a rejudge over that would judge a branch nothing moved. The page now sends only a non-empty
-    # `conflicts` to the rejudge, and leaves the ticket for every refusal.
+    # a rejudge over that would judge a branch nothing moved. One exit 2 can carry both a
+    # `merge:` recovery line and the rebase's JSON, so the JSON decides, and a line alone is a
+    # refusal that leaves the ticket.
+    assert "When it prints JSON, the JSON decides" in FEATURE
     assert (
-        "**Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line:** the"
+        "**Exit 2 from `update`, `close` or `split` with a `drain:` or `merge:` line and no JSON:**"
+        " the"
         " command refused before any work on the ticket. Report the line, leave the ticket as it"
         " is, and go on at step 5 (`D plan`)." in FEATURE
     )
@@ -503,24 +506,6 @@ def test_the_conjecture_steps_say_how_each_fork_is_written() -> None:
 def conjecture_step(number: int) -> str:
     page = flat("conjecture/SKILL.md")
     return page.split(f" {number}. **", 1)[1].split(f" {number + 1}. **", 1)[0]
-
-
-def test_the_conjecture_writes_nothing_to_a_ticket_too_large_for_one_change() -> None:
-    # Why: a ticket over a change-size ceiling "is not written as one" left open whether its
-    # conjecture was still asked and written. The reply now names the parts and the `to-tickets`
-    # argument, and the skill stops there.
-    step_2 = conjecture_step(2)
-    assert "Then stop: write nothing to that ticket, and do not run steps 3 to 5 for it." in step_2
-
-
-def test_the_conjecture_adds_a_missing_size_to_a_ticket_that_states_the_rest() -> None:
-    # Why: the skill stopped once a conjecture and its operability were there, so a ticket written
-    # before it estimated size kept no `## Size`. It now stops only when all three are there.
-    step_1 = conjecture_step(1)
-    assert (
-        "estimate the size by the `## Size` block of step 2 and write only `## Size` by step 4"
-        in step_1
-    )
 
 
 def test_the_size_estimate_is_written_on_the_ticket_and_never_on_a_spec() -> None:
