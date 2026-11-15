@@ -45,7 +45,17 @@ from tests import model_tla
 from tests import route_model as model
 from tests import route_world as real
 from tests.repos import git, snapshot
-from tests.route_model import ActionName, Advice, Architecture, Head, Setup, Ticket, Tree, World
+from tests.route_model import (
+    ActionName,
+    Advice,
+    Architecture,
+    Flag,
+    Head,
+    Setup,
+    Ticket,
+    Tree,
+    World,
+)
 from tests.support import PLUGIN_ROOT
 from tests.test_drain import approval
 
@@ -165,6 +175,45 @@ def changed_by_another(name: ActionName, *, enters: bool) -> Callable[[Label], s
     return check
 
 
+def builds_without_the_line(label: Label) -> set[World]:
+    """The states where a ticket's ``Flag:`` line is missing and ``label`` names a build."""
+    return {
+        s
+        for s in model.graph().states
+        if s.flag is Flag.MISSING and label(s) in {Advice.BUILD, Advice.DRAIN}
+    }
+
+
+def runs_without_the_line(_label: Label) -> set[World]:
+    """The states with a feature run or a drain that starts while the line is missing."""
+    return {
+        source
+        for source, act, _target in model.graph().edges
+        if source.flag is Flag.MISSING and act in model.RUNS
+    }
+
+
+def missing_by_another(_label: Label) -> set[World]:
+    """The states with a step other than the upgrade that leaves the line missing."""
+    return {
+        source
+        for source, act, target in model.graph().edges
+        if source.flag is not Flag.MISSING
+        and target.flag is Flag.MISSING
+        and act is not ActionName.UPGRADE_ASKS_THE_FLAG_LINE
+    }
+
+
+def upgrade_moves_a_ticket(_label: Label) -> set[World]:
+    """The states where the upgrade that asks the line moves a ticket or the inheritance."""
+    return {
+        source
+        for source, act, target in model.graph().edges
+        if act is ActionName.UPGRADE_ASKS_THE_FLAG_LINE
+        and (source.tickets, source.inherits) != (target.tickets, target.inherits)
+    }
+
+
 CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "AdviceCanBeFollowed": (cannot_be_followed, model.advice),
     "AdviceReachesRest": (never_rests, model.advice),
@@ -185,6 +234,11 @@ CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
         changed_by_another(ActionName.OWNER_RECORDS_ARCHITECTURE, enters=False),
         model.advice,
     ),
+    "FlagLineBeforeTheBuild": (builds_without_the_line, model.advice),
+    "RealFlagLineBeforeTheBuild": (builds_without_the_line, model.real_advice),
+    "NoRunStartsWithoutTheFlagLine": (runs_without_the_line, model.advice),
+    "OnlyTheUpgradeLeavesTheFlagLineMissing": (missing_by_another, model.advice),
+    "TheUpgradeMovesNoTicket": (upgrade_moves_a_ticket, model.advice),
 }
 
 
