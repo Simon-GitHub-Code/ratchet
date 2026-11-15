@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+Fixed: 0.12.0 and 0.12.1 could delete or overwrite a file in the real work tree while proving a bite (issue #172). Restoring the scratch copy between runs let git check a path for a link and then delete or write it by path, so a process that `setup` left running could swap a directory of the copy for a link to the real tree in between, and git would remove or write the real file. Restoring now only lists with git and removes and writes every file through descriptors pinned to the copy, a link unlinked and never followed.
+
 ## 0.12.1
 
 A ticket that waits on a split ticket now waits on its parts (ADR 0046). The drain used to refuse it for good while the split ticket stayed open, and started it early when the owner closed the split ticket by hand. One reader, `preflight.blockers()`, now reads a split blocker as its parts, whether it is open or closed, for the drain and for the one-ticket preflight. The drain model found both breaks before the fix was written.
