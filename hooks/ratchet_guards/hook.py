@@ -30,6 +30,9 @@ so a write chained before the refused command is lost with it. The deny message 
 names the matched command, and the method asks agents to keep a gated command in a tool
 call of its own.
 
+Each deny and ask is also appended to the guard's event log in the repository's git common
+directory (``ratchet_guards.events``). The answer never depends on the log.
+
 An Edit, Write or MultiEdit that gives a local ticket (``.scratch/<feature>/issues/<name>.md``)
 the agent-ready status asks, as applying that label on a forge does, and so does a command line
 or a patch that names the label and writes the ticket (``ratchet_guards.tickets``).
@@ -56,17 +59,19 @@ named locked (``ratchet_guards.manifest``). The plugin's own files are locked ei
 the other harnesses (``ratchet_guards.manifest.PLUGIN_HOME_PATTERNS``).
 """
 
+import contextlib
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
-from ratchet_guards import bash, records, tickets
+from ratchet_guards import bash, events, records, tickets
 from ratchet_guards.committed import committed_manifest, default_branch
 from ratchet_guards.context import DETACHED, Context, Guard
 from ratchet_guards.manifest import (
@@ -576,15 +581,42 @@ def respond(verdict: Verdict | None, *, antigravity: bool = False) -> str:
     return json.dumps({"hookSpecificOutput": output})
 
 
-def run(text: str, make_guard: Callable[[], Guard]) -> str:
-    """Answer one hook call in its harness's form; every failure becomes an ``ask``."""
+def run(text: str, make_guard: Callable[[], Guard], root: Path | None = None) -> str:
+    """Answer one hook call in its harness's form; every failure becomes an ``ask``.
+
+    With ``root``, a deny or an ask is also logged in the repository ``root`` is in
+    (``ratchet_guards.events``). Any failure to log is dropped: the answer never depends on it.
+    """
     payload: object = None
     try:
         payload = json.loads(text)
         verdict = decide(payload, make_guard())
     except Exception as error:  # noqa: BLE001 # -- fail closed: any failure must reach a human
         verdict = _unreadable(f"{type(error).__name__}: {error}")
+    if verdict is not None and root is not None:
+        with contextlib.suppress(Exception):
+            _log(root, payload, verdict)
     return respond(verdict, antigravity=is_antigravity(payload))
+
+
+def _log(root: Path, payload: object, verdict: Verdict) -> None:
+    """Append ``verdict`` to the event log in the git common directory of ``root``, if any."""
+    common = _git(root, "rev-parse", "--git-common-dir")
+    if not common:
+        return
+    tool = None
+    if isinstance(payload, dict):
+        call = from_antigravity(payload) if is_antigravity(payload) else payload
+        tool = call.get("tool_name")
+    event = events.Event(
+        at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        decision=verdict.decision.name.lower(),
+        tool=tool if isinstance(tool, str) else None,
+        rule=verdict.rule,
+        detail=verdict.detail,
+        branch=_head(root),
+    )
+    events.append(root / common / events.LOG_NAME, event.line())
 
 
 def repository_root(path: Path) -> Path:
@@ -633,7 +665,7 @@ def main(
     project: Path | None = None,
 ) -> int:
     """Read the payload, write the decision, exit 0 (a decision is carried in the JSON)."""
-    answer = run(stdin.read(), lambda: local_guard(root, project=project))
+    answer = run(stdin.read(), lambda: local_guard(root, project=project), root)
     if answer:
         stdout.write(answer + "\n")
     return 0
