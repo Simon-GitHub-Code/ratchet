@@ -32,6 +32,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
       actions: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -92,8 +93,14 @@ jobs:
               now="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '"\(.state) \(.head.sha) \(.base.ref)"' || true)"
               if [ "$now" != "open $sha $DEFAULT_BRANCH" ]; then
                 echo "::error::#$number: its head or its base changed while it was judged"; failed=1
-              elif gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$number/merge" -f "sha=$sha" -f merge_method=merge --jq .message; then
+              elif closes="$(gh pr view "$number" --json closingIssuesReferences \
+                  --jq '.closingIssuesReferences[] | select(.url | startswith(env.GITHUB_SERVER_URL + "/" + env.GITHUB_REPOSITORY + "/issues/")) | .number')" \
+                && gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$number/merge" -f "sha=$sha" -f merge_method=merge --jq .message; then
                 merged=1
+                for issue in $closes; do
+                  gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/$issue" -f state=closed -f state_reason=completed --silent \
+                    || echo "::warning::#$number: issue #$issue it closes stays open"
+                done
                 # Why: the name goes into a URL, so one with a character a URL reads is left.
                 case "$branch" in
                   *[!A-Za-z0-9._/-]*) echo "branch $branch stays" ;;

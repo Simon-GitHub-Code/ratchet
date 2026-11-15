@@ -58,6 +58,7 @@ import change_size
 import gatelib
 import hooks_installed
 import owed
+import publish_check
 import queue_notes
 
 # Why: a local ticket is the file the guard asks about the label on; both read its shape here.
@@ -210,6 +211,7 @@ class Report:
     label: str = READY_ROLE
     critic: bool = False
     critic_reason: str = ""
+    start: publish_check.Start | None = None
 
     def fail(self, check: str, detail: str, produce: str = "") -> None:
         """Record one failed check."""
@@ -667,7 +669,16 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
     check_hooks(report, root)
     check_fill_first(report, root)
     check_critic(report, root)
+    if branch is not None and report.ok:
+        record_start(report, root, branch=branch, gh=gh)
     return report
+
+
+def record_start(report: Report, root: Path, *, branch: str, gh: Runner) -> None:
+    try:
+        report.start = publish_check.start_of(root, branch, gh)
+    except publish_check.UnreadableError as error:
+        report.fail("start", str(error), "the forge reachable again, or the branch made again")
 
 
 def main(argv: list[str]) -> int:

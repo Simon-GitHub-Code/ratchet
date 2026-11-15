@@ -102,7 +102,30 @@ const PREAMBLE = 'Load the `ratchet:method` skill (the method this repository fo
 // block as the dispute signal the first time.
 // Why: the reviewer had no definition and filed a binary that drops an expense with exit 0 as
 // minor; critic and reviewer now grade by the same words.
-const SEVERITY = 'Severity: blocker = wrong result (a wrong output, or a wrong input accepted with exit 0), data loss, a violated AGENTS.md non-negotiable, a declared-path or contract violation; major = unhandled edge case the spec covers, survived mutant on a stated invariant, missing contract; minor = everything else. A defect the spec defers to a later ticket is still graded by what it does to a user now.'
+const SEVERITY = `Severity, the one list every grade you apply comes from. A finding that carries no
+axis takes every line. Where a finding carries an axis, the axis a line names is the axis of
+the issue.
+- Blocker: wrong result (a wrong output, or a wrong input accepted with exit 0), data loss, a
+  violated AGENTS.md non-negotiable, a declared-path or contract violation, a crash the fuzz
+  harness finds, a span attribute or log field carrying a secret or a personal identifier.
+- Major: unhandled edge case the spec covers, survived mutant on a stated invariant, missing
+  contract, behaviour shipped on with no flag where spec.md does not say "none" with a reason.
+- Minor: everything else.
+- Guard paths: a changed guard path is a blocker on the standards axis when no gate dispute in
+  the change names that exact path, and a major one when one does: the owner, not the
+  pipeline, changes a gate. A dependency the spec decided, as the guard rules above define it,
+  is no finding; an added package spec.md does not name is a major issue on the spec axis (a
+  decision the spec did not make). A
+  record the change only adds to (an \`additions:\` note) is no finding for the path; a new term
+  that restates a concept the glossary already names, or a new ADR that contradicts one in
+  docs/adr/ without the owner's superseding record, is a major issue on the standards axis.
+- Design axis: A layer violation is a blocker, and so is a module that reaches around a seam
+  that is a layer boundary; around any other seam it is major. A dependency direction the
+  architecture ADR rules out, and an architecture decision made without the owner, are major.
+  A shallow wrapper, logic that fits its layer but sits in a worse module, and a placement the
+  Design section does not explain are minor, unless the spec's Design section says otherwise
+  and the code does something else: that is major.
+A defect the spec defers to a later ticket is still graded by what it does to a user now.`
 
 const GUARD_RULES = `
 Guard paths and gate disputes:
@@ -1111,7 +1134,7 @@ Do all of the following and report evidence for each:
    "not applicable" and why in \`mutationSummary\`.
 3. Fuzzing: if binding.md names a fuzz harness and filesChanged includes a value type (an
    amount, a date, an identifier, a parser), run the harness against it, time-boxed to a few
-   minutes. Report crashes as blockers. Otherwise write "not applicable" and why in
+   minutes. Report crashes as findings. Otherwise write "not applicable" and why in
    \`fuzzSummary\`.
 4. Fitness-test sabotage: if the repository has fitness tests (tests that enforce the layer
    rules and non-negotiables), copy the repository to a scratch directory (\`mktemp -d\`,
@@ -1135,17 +1158,11 @@ Do all of the following and report evidence for each:
    and \`critique\` on the surface; each finding they prove is a finding here, judged against
    DESIGN.md.
 7. Guard paths: run \`guard-diff\` and put every guard path it lists in \`guardFilesChanged\`.
-   Each one is a blocker finding (title "guard path changed: <path>") unless a gate dispute
-   under docs/disputes/ in the change names that path, and even then a major one: the
-   pipeline never changes a gate, only the owner does. The exception is a dependency the spec
-   decided: a path whose note is \`dependencies added:\` naming only packages spec.md's
-   dependencies name, and a \`lockfile:\` path beside one, is no finding. An added package
-   spec.md does not name is a major finding (a decision the spec did not make). The other
-   exception is a record the change only adds to: a path whose note is \`additions:\` is no
-   finding by itself. Read what it added: a new term that names a concept the glossary already
-   names, or a new ADR that contradicts one in docs/adr/ without the owner's superseding
-   record, is a major finding with the two passages quoted. Your scratch copy for step 4 is
-   outside the repository, so sabotage there is not a guard change.
+   Grade each by the Guard paths line of the severity list below; a finding on a changed
+   guard path is titled "guard path changed: <path>", and the gate disputes are those under
+   docs/disputes/ in the change. For a path whose note is \`additions:\`, read what it added;
+   a finding on it quotes the two passages. Your scratch copy for step 4 is outside the
+   repository, so sabotage there is not a guard change.
 
 Keep every test you added that PASSES (regression value) and every test that FAILS because of
 a genuine defect (list it as \`suggestedTest\` on the finding). Delete tests that fail because
@@ -1155,7 +1172,9 @@ List every command you ran trying to break the change in \`attempted\`, with its
 outcome. Nothing found refutes only the attempts that would have hit; the script blocks a
 run whose critic found nothing and attempted nothing.
 
-${SEVERITY} The suite is expected to be red only on the failing tests you kept; say so in the
+${SEVERITY}
+
+The suite is expected to be red only on the failing tests you kept; say so in the
 finding evidence, and set \`testFails: true\` on each such finding. A finding whose test you
 kept failing is fixed before the review whatever its severity, since a red \`check\` cannot
 be approved: keep a failing test only for a defect the code should lose, and for anything
@@ -1227,12 +1246,11 @@ B. Standards conformance:
    - Type strictness, lint, test placement and coverage as the gates in binding.md require
    - Telemetry: every entry point the change adds or alters is registered through the seam
      binding.md's Telemetry section names and emits the signal spec.md names, with a test that
-     reads it from the in-memory exporter; a span attribute or log field carrying a secret or
-     a personal identifier is a blocker
+     reads it from the in-memory exporter, and no span attribute or log field carries a secret
+     or a personal identifier
    - Feature flag: new behaviour is reachable only through the flag spec.md names, read through
      the seam binding.md's Feature flags section names, declared in \`flags.toml\` with
-     \`default = false\`, and tested with the flag off; behaviour shipped on with no flag, where
-     spec.md does not say "none" with a reason, is a major issue. Surface added to a contract
+     \`default = false\`, and tested with the flag off. Surface added to a contract
      artefact or public-surface snapshot with no flag reaches the owner whatever spec.md says:
      the merge judge reports it as \`unflagged\`, so say in the review which of the two it is,
      behaviour that should be dark or surface with nothing to turn off
@@ -1244,15 +1262,9 @@ C. Guard paths: run \`guard-diff\` and list every guard path it prints in \`guar
    \`additions:\` note in \`recordNotes\`. Then
    read every file under docs/disputes/ that the diff adds or changes. For each changed guard
    path, if some dispute record's text names that exact path, add \`{ path, disputeFile }\` to
-   \`disputeCoverage\`; a dispute that names only the gate covers no path. Every
-   changed guard path is a blocker issue on the standards axis when uncovered and a major one
-   when covered: the owner, not the pipeline, changes a gate. The exception is a dependency
-   the spec decided, as the guard rules above define it: no issue. An added package spec.md
-   does not name is a major issue on the spec axis. The other exception is a record the change
-   only adds to (an \`additions:\` note): no issue for the path. The check behind the note
-   reads shape, not meaning, so read each addition against the records: a new term that
-   restates a concept the glossary already names, or a new ADR that contradicts an existing one,
-   is a major issue on the standards axis.
+   \`disputeCoverage\`; a dispute that names only the gate covers no path. Grade each changed
+   guard path by the Guard paths line of the severity list below. The check behind an
+   \`additions:\` note reads shape, not meaning, so read each addition against the records.
 D. The ticket. Only the spec role and the ticket check read it before you, so a change that loses
    what the owner asked for can pass every other axis. ${readings}${PROMISE_READINGS}
    Read them against spec.md as it now stands and the change: a promise is \`dropped\` when what
@@ -1268,12 +1280,7 @@ F. Design. Judge the change against the project's architecture: read the archite
    direction the architecture does not allow, a shallow wrapper (a module whose interface is
    nearly as large as what it hides, that only forwards), and a change that makes an
    architecture decision (a new layer, a new kind of storage, a new process boundary) the spec
-   did not raise with the owner. A layer violation is a blocker, and so is a module that
-   reaches around a seam that is a layer boundary; around any other seam it is major. A dependency direction the
-   architecture ADR rules out, and an architecture decision made without the owner, are major.
-   A shallow wrapper, logic that fits its layer but sits in a worse module, and a placement the
-   Design section does not explain are minor, unless the spec's Design section says otherwise
-   and the code does something else: that is major. Where the project records no architecture,
+   did not raise with the owner. Where the project records no architecture,
    judge only the declared layers and the spec's own Design section.
 The script files every \`dropped\` promise and every null case as a major issue: the change lost
 something the ticket promised. It lists every \`bent\` and \`assumed\` promise with the spec's
