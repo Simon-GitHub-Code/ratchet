@@ -4,8 +4,11 @@ import io
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+import time
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
@@ -103,16 +106,18 @@ def test_an_allow_starts_no_process_for_the_log(
     started: list[tuple[str, ...]] = []
     real = hook._run  # noqa: SLF001 # -- counts the git processes the hook starts
 
-    def counting(cwd: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
+    def counting(
+        cwd: Path, *args: str, timeout: float = hook.GIT_TIMEOUT_SECONDS
+    ) -> subprocess.CompletedProcess[str] | None:
         started.append(args)
-        return real(cwd, *args)
+        return real(cwd, *args, timeout=timeout)
 
     monkeypatch.setattr(hook, "_run", counting)
-    text = json.dumps(bash(adopted, "git status"))
-    hook.run(text, lambda: hook.local_guard(adopted))
+    case = bash(adopted, "git status")
+    hook.run(json.dumps(case), lambda: hook.local_guard(adopted))
     without = len(started)
     started.clear()
-    hook.run(text, lambda: hook.local_guard(adopted), adopted)
+    assert answer(adopted, case) == ""
     assert len(started) == without
 
 
@@ -207,6 +212,56 @@ def test_a_fifo_at_the_log_path_does_not_hold_the_answer(adopted: Path) -> None:
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout == unlogged(adopted, case)
+
+
+HANGING_GIT = """#!/bin/sh
+for arg in "$@"; do
+    if [ "$arg" = --git-common-dir ]; then
+        cat "$ANSWER" > "$SEEN"
+        exec sleep 60
+    fi
+done
+exec {git} "$@"
+"""
+
+
+def test_a_hung_git_holds_neither_the_answer_nor_the_exit(adopted: Path, tmp_path: Path) -> None:
+    real = shutil.which("git")
+    assert real is not None
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "git"
+    fake.write_text(HANGING_GIT.format(git=shlex.quote(real)), encoding="utf-8")
+    fake.chmod(0o755)
+    answer_file, seen = tmp_path / "answer", tmp_path / "seen"
+    case = json.dumps(bash(adopted, "git push --force"))
+    path = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+    env = {
+        **os.environ,
+        "PATH": path,
+        "PYTHONPATH": "",
+        "ANSWER": str(answer_file),
+        "SEEN": str(seen),
+    }
+    with answer_file.open("w", encoding="utf-8") as stdout:
+        done = subprocess.run(  # noqa: S603 # -- the interpreter running these tests, on a fixed script
+            [sys.executable, str(SHIM)],
+            input=case,
+            stdout=stdout,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=60,
+            env=env,
+        )
+    exited = time.time()
+    assert done.returncode == 0, done.stderr
+    expected = unlogged(adopted, case)
+    assert decision(expected) == "deny"
+    assert seen.read_text(encoding="utf-8") == expected
+    assert answer_file.read_text(encoding="utf-8") == expected
+    assert exited - seen.stat().st_mtime < hook.LOG_TIMEOUT_SECONDS + 2
+    assert not log_of(adopted).exists()
 
 
 def test_a_failure_of_any_kind_leaves_the_answer_as_it_was() -> None:

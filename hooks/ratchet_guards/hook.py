@@ -142,6 +142,7 @@ PATCH_HEADER = re.compile(
 )
 PATCH_DESTRUCTIVE = frozenset({"Delete File", "Move to"})
 GIT_TIMEOUT_SECONDS = 5
+LOG_TIMEOUT_SECONDS = 1.0
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 STANDARD_MANIFEST = "skills/adopt/templates/guards/manifest.toml"
 
@@ -295,28 +296,30 @@ class LocalFilesystem:
         return os.path.expandvars(Path(word).expanduser())
 
 
-def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
-    """``git -C cwd args`` as it finished, or ``None`` when git is missing or hangs."""
+def _run(
+    cwd: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[str] | None:
+    """``git -C cwd args`` as it finished, or ``None`` when git is missing or times out."""
     try:
         return subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
             ["git", "-C", str(cwd), *args],  # noqa: S607 # -- git is resolved from PATH on purpose
             capture_output=True,
             text=True,
-            timeout=GIT_TIMEOUT_SECONDS,  # pragma: no mutate # -- only bounds a hung git
+            timeout=timeout,  # pragma: no mutate # -- only bounds a hung git
             check=False,  # pragma: no mutate # -- the caller reads the exit status
         )
     except (OSError, subprocess.SubprocessError):
         return None
 
 
-def _output(cwd: Path, *args: str) -> str | None:
+def _output(cwd: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS) -> str | None:
     """``git -C cwd args`` stdout as git wrote it, or ``None`` when git fails or is missing."""
-    completed = _run(cwd, *args)
+    completed = _run(cwd, *args, timeout=timeout)
     return completed.stdout if completed is not None and completed.returncode == 0 else None
 
 
-def _git(cwd: Path, *args: str) -> str | None:
-    output = _output(cwd, *args)
+def _git(cwd: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS) -> str | None:
+    output = _output(cwd, *args, timeout=timeout)
     return None if output is None else output.strip()
 
 
@@ -328,8 +331,8 @@ _TRACKING = f"refs/remotes/{REMOTE}/"
 _NOT_SYMBOLIC = 1
 
 
-def _head(root: Path) -> str | None:
-    completed = _run(root, "symbolic-ref", "-q", "HEAD")
+def _head(root: Path, timeout: float = GIT_TIMEOUT_SECONDS) -> str | None:
+    completed = _run(root, "symbolic-ref", "-q", "HEAD", timeout=timeout)
     if completed is None:
         return None
     if completed.returncode == _NOT_SYMBOLIC:
@@ -581,27 +584,30 @@ def respond(verdict: Verdict | None, *, antigravity: bool = False) -> str:
     return json.dumps({"hookSpecificOutput": output})
 
 
-def run(text: str, make_guard: Callable[[], Guard], root: Path | None = None) -> str:
-    """Answer one hook call in its harness's form; every failure becomes an ``ask``.
+def run(text: str, make_guard: Callable[[], Guard]) -> str:
+    """Answer one hook call in its harness's form; every failure becomes an ``ask``."""
+    payload, verdict = _judged(text, make_guard)
+    return respond(verdict, antigravity=is_antigravity(payload))
 
-    With ``root``, a deny or an ask is also logged in the repository ``root`` is in
-    (``ratchet_guards.events``). Any failure to log is dropped: the answer never depends on it.
-    """
+
+def _judged(text: str, make_guard: Callable[[], Guard]) -> tuple[object, Verdict | None]:
     payload: object = None
     try:
         payload = json.loads(text)
         verdict = decide(payload, make_guard())
     except Exception as error:  # noqa: BLE001 # -- fail closed: any failure must reach a human
         verdict = _unreadable(f"{type(error).__name__}: {error}")
-    if verdict is not None and root is not None:
-        with contextlib.suppress(Exception):
-            _log(root, payload, verdict)
-    return respond(verdict, antigravity=is_antigravity(payload))
+    return payload, verdict
 
 
 def _log(root: Path, payload: object, verdict: Verdict) -> None:
-    """Append ``verdict`` to the event log in the git common directory of ``root``, if any."""
-    common = _git(root, "rev-parse", "--git-common-dir")
+    """Append ``verdict`` to the event log in the git common directory of ``root``, if any.
+
+    Its git calls share ``LOG_TIMEOUT_SECONDS`` in all, so a hung git ends it well inside the
+    hook's own time limit.
+    """
+    deadline = time.monotonic() + LOG_TIMEOUT_SECONDS
+    common = _git(root, "rev-parse", "--git-common-dir", timeout=LOG_TIMEOUT_SECONDS)
     if not common:
         return
     tool = None
@@ -614,7 +620,7 @@ def _log(root: Path, payload: object, verdict: Verdict) -> None:
         tool=tool if isinstance(tool, str) else None,
         rule=verdict.rule,
         detail=verdict.detail,
-        branch=_head(root),
+        branch=_head(root, max(deadline - time.monotonic(), 0)),
     )
     events.append(root / common / events.LOG_NAME, event.line())
 
@@ -664,8 +670,17 @@ def main(
     *,
     project: Path | None = None,
 ) -> int:
-    """Read the payload, write the decision, exit 0 (a decision is carried in the JSON)."""
-    answer = run(stdin.read(), lambda: local_guard(root, project=project), root)
+    """Read the payload, write the decision, then log a deny or an ask; exit 0.
+
+    The decision is written and flushed before the log starts, so the log cannot hold it back.
+    Any failure to log is dropped.
+    """
+    payload, verdict = _judged(stdin.read(), lambda: local_guard(root, project=project))
+    answer = respond(verdict, antigravity=is_antigravity(payload))
     if answer:
         stdout.write(answer + "\n")
+        stdout.flush()
+    if verdict is not None:
+        with contextlib.suppress(Exception):
+            _log(root, payload, verdict)
     return 0
