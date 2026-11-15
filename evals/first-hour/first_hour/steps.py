@@ -102,16 +102,15 @@ def shell_commands(text: str) -> tuple[str, ...]:
 def next_commands(output: str) -> tuple[str, ...]:
     """The shell commands an entry point's ``next:`` lines tell the owner to run.
 
-    ``merge`` prints ``next: just check-deep on `main`: ...`` with the command bare, and
-    ``next: the owner types `git switch ...`, then `just check-deep` ...`` with it ticked.
+    ``merge`` prints ``next: just check-deep on `main`: ...`` with the command bare,
+    ``next: `git switch main`, then just check-deep on `main`: ...`` when it ran on the merged
+    branch, and ``next: the owner types `git switch ...`, then `just check-deep` ...`` with both
+    ticked.
     """
     found: list[str] = []
     for line in NEXT_LINE.findall(output):
-        ticked = shell_commands(line)
-        if ticked:
-            found.extend(ticked)
-            continue
-        bare = re.split(r" on `|: ", line, maxsplit=1)[0].strip()
+        found.extend(shell_commands(line))
+        bare = re.split(r" on `|: ", line, maxsplit=1)[0].rsplit(", then ", 1)[-1].strip()
         if is_command(bare):
             found.append(bare)
     return tuple(dict.fromkeys(found))

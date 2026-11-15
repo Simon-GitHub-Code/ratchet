@@ -38,7 +38,10 @@ import gatelib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import splits
 
-INHERITED = ("## Parent", "## Conjecture", "## Size", "## Operability")
+# Why: not `## Size`. The parent's estimate is the whole of what was too large; copied into each
+# part, it stops every part at its preflight, and a part is never split again. A part states no
+# size, and the spec stage estimates it.
+INHERITED = ("## Parent", "## Conjecture", "## Operability")
 SLUG = re.compile(r"[^a-z0-9]+")
 
 

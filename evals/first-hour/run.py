@@ -9,6 +9,7 @@
     uv run evals/first-hour/run.py personas
     uv run evals/first-hour/run.py matrix --plugin /path/to/ratchet --dir /tmp/first-hour-matrix
     uv run evals/first-hour/run.py reduce /tmp/first-hour-1
+    uv run evals/first-hour/run.py table /tmp/first-hour-1 /tmp/first-hour-2 --dir /tmp/table
     uv run evals/first-hour/run.py oneoff <one-off logs dir> <out dir>
 
 ``--persona`` names the owner of one run (``personas`` lists them). ``matrix`` runs the personas
@@ -17,7 +18,10 @@ that state a stack, one after another, each in its own directory under ``--dir``
 ``transcript.jsonl``, ``metrics.json`` and ``table.md`` in the directory, which must be under the
 system temp location and empty. ``probe``
 starts one session with the run's launch and prints what it can reach. ``reduce`` rewrites the
-measurements from a run's event log. ``oneoff`` turns the logs of the hand-driven dogfood run
+measurements from a run's event log, with its gate runs parsed again from the pasted commands'
+output in ``logs/``. ``table`` prints the matrix table of runs already reduced, one row a run in
+the order given, from each ``metrics.json`` as it is, and with ``--dir`` writes ``matrix.md`` and
+``matrix.json`` there as a matrix does. ``oneoff`` turns the logs of the hand-driven dogfood run
 into an event log and reduces it, as a cross-check of the reducer.
 """
 
@@ -33,14 +37,19 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from first_hour import harness, matrix, oneoff, persona, reduce, sandbox, steps
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
 
 def _reduce(directory: Path) -> None:
-    metrics = reduce.reduce(reduce.read(directory / "events.jsonl"))
+    events = reduce.read(directory / "events.jsonl")
+    metrics = reduce.reduce(reduce.reread(events, directory / "logs"))
     (directory / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", "utf-8")
     (directory / "table.md").write_text(reduce.table(metrics), "utf-8")
     print(reduce.table(metrics))
@@ -103,6 +112,47 @@ def _matrix(options: argparse.Namespace) -> int:
     return 0
 
 
+def _recorded(directory: Path) -> tuple[persona.Persona, Mapping[str, object]] | str:
+    """A recorded run's persona and measurements, or why the table cannot name it."""
+    metrics = matrix.read_metrics(directory)
+    if metrics is None:
+        return "no readable metrics.json"
+    meta = metrics.get("meta")
+    name = meta.get("persona") if isinstance(meta, dict) else None
+    if not isinstance(name, str) or not name:
+        return "its metrics.json names no persona"
+    try:
+        return persona.load(name), metrics
+    except (OSError, KeyError, ValueError):
+        return f"its persona {name} is not under personas/"
+
+
+def _table(options: argparse.Namespace) -> int:
+    """Print the matrix table of runs already reduced, and write it under ``--dir`` when given."""
+    found: dict[str, tuple[Path, persona.Persona, Mapping[str, object]]] = {}
+    for directory in options.runs:
+        run = _recorded(directory)
+        if isinstance(run, str):
+            print(f"table: {directory}: {run}", file=sys.stderr)
+            return 2
+        one, metrics = run
+        if one.name in found:
+            first = found[one.name][0]
+            print(
+                f"table: {first} and {directory} are both runs of {one.name};"
+                " matrix.json holds one run a persona",
+                file=sys.stderr,
+            )
+            return 2
+        found[one.name] = (directory, one, metrics)
+    rows = [matrix.row(one, metrics) for _, one, metrics in found.values()]
+    if options.dir is not None:
+        options.dir.mkdir(parents=True, exist_ok=True)
+        matrix.write(options.dir, rows, {name: run[2] for name, run in found.items()})
+    print(matrix.table(rows), end="")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     """The command line: one subcommand each for a run, a probe, a matrix and the readers."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -130,6 +180,13 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("personas", help="list the personas and the stack each insists on")
     again = sub.add_parser("reduce", help="rewrite a run's measurements from its event log")
     again.add_argument("dir", type=Path)
+    table = sub.add_parser(
+        "table",
+        help="the matrix table of runs already reduced, read from each run's metrics.json as it"
+        " is; it launches nothing and reduces nothing",
+    )
+    table.add_argument("runs", type=Path, nargs="+", help="a run's directory, one a persona")
+    table.add_argument("--dir", type=Path, help="write matrix.md and matrix.json here")
     old = sub.add_parser("oneoff", help="reduce the hand-driven dogfood run's logs")
     old.add_argument("logs", type=Path)
     old.add_argument("out", type=Path)
@@ -137,14 +194,14 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str]) -> int:
-    """Run, probe, reduce, or cross-check, as the subcommand says."""
+    """Run, probe, reduce, tabulate, or cross-check, as the subcommand says."""
     options = _parser().parse_args(argv[1:])
     if options.command == "personas":
         for stem in persona.names():
             print(f"{stem}\t{persona.load(stem).stack or 'unstated'}")
         return 0
-    if options.command == "matrix":
-        return _matrix(options)
+    if options.command in ("matrix", "table"):
+        return {"matrix": _matrix, "table": _table}[options.command](options)
     if options.command == "reduce":
         _reduce(options.dir)
         return 0

@@ -1,6 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
+
+Version 0.11.1 was an interim cut of this release, published so that an adopted project could pin it while the evaluation runs went on. It has no entry of its own: everything in it is listed here.
+
+The plugin's state machines are written down as models, and the real code is held to them. The route, one pipeline run, the queue drain and the merge, the safeguard a project owes, and the threshold ratchet each have a model under `hooks/tests`: every state it can reach, and the rules each state and step must keep. The tests prove every rule on every state, and play the real scripts against the model, so a change that breaks a rule is red. Each model has a page with its charts under `docs/model`: `route.md`, `pipeline.md`, `drain.md`, `safeguard.md` and `ratchet.md`. Most of the fixes below were found this way.
+
+The queue drain finishes what a killed or concurrent command left, and no longer lands a held ticket or loses track of a merge (ADR 0023).
+
+- `land` refuses a ticket the drain holds. A merge is recorded once: `close` of a merged ticket is refused.
+- A rerun after a kill finishes the step. `land` finishes the discard it was cut off in, `update` keeps its rebasing mark until the outdated verdict record is gone, and a refusal is counted once. `update`, `report` and `clean` record a merge that no note says, and `update` no longer rebases a branch that already landed.
+- `update` making a work tree again counts against the cap, `split` takes the drain lock, and `open` keeps a parked note the report has not listed yet.
+- A landing holds a lock of its own until it ends. `report`, `clean` and `clean --all`, from any drain, leave that ticket's note and work tree alone while it runs, and say so.
+- A `report` ends only its own drain's lease. `clean --all` is refused while a program runs in another drain's work tree, whether a lease is held or not.
+- A fast-forward cut off half-way is put back before any drain command reads a ticket, so a ticket parked meanwhile is held on its own text. While a git command still runs in that work tree, every drain command is refused and says to run it again.
+- `merge.py` removes an empty scratch directory a killed run left, once it has stood a minute.
+- A second `land` of a ticket is refused while its landing is still running, and says to run it again once that one ends. It went on with no lock, and could record the merge and remove the work tree under the landing that was alive.
+- `clean --all` leaves the work tree and the note of a live landing whose earlier close was cut off before it removed the tree.
+- `update`, `close` and `split` of a ticket refuse with exit 3 and change nothing while that ticket's landing runs. Before, a ticket parked during its merge could be merged without the owner.
+- A `--take-over` of a drain that is still alive is the owner's call. A landing that drain runs keeps its work tree while it runs, and the next `clean --all` takes it once the landing has ended.
+- The drain sees a landing while its `land` or the merge it started is alive. Each `land` holds a private lock the merge probes, and `merge.py` holds its own lock for its whole run, so a `land` killed alone no longer lets ticket commands, `clean` or a second `land` act under a live merge. `merge.py` never removes or creates the file `RATCHET_LANDING` names, and it refuses one outside the repository's git directory (ADR 0058).
+
+A gate's proof can no longer write into the real repository through a link. A setup left running could swap a directory of the scratch copy for a link into the real tree; the snapshot then held the link, and each restore wrote it back. `bite` now refuses any link that setup made or changed whose end lies outside the copy, and names it. It judges the link by its text in the snapshot, through every link on the way, not by the copy as it stands, and refuses a ring of links. A link the commit already holds is the repository's own and stays.
+
+A project that is not yet depended-on gets one fix pass on a review blocker: a fresh fix agent and a second review, keyed on the review's own blockers whatever its verdict (ADR 0056). A lost ticket promise still parks the ticket. Such a run spawns at most nine agents, not seven.
+
+The change size is read after each fix round and after a rejudge's reconcile, not only after the spec and the build (ADR 0055). A round that takes product code over its ceiling stops the run as too large, so the drain splits the ticket instead of parking it on a red check. A pipeline run that errors is resumed once, then closed to be tried again; after three such closes in a row the ticket is held, and the reason says the run errored each time. A guard hold written before the drain recorded its base commit is released by a change to the ticket, and the route names that step.
+
+The README is rewritten for a solo builder. It opens on the thesis, then a quick start, the day to day, what the method costs and how it works. The table of shipped gates moves to `docs/gates.md` and the map of the plugin to `docs/layout.md`. It says that contributions are not accepted yet. The time adoption takes is stated as measured, in the README and in the adopt skill, in place of the estimate of about 25 minutes: 35 and 42 minutes on empty repositories where the language's tools were quick to install and run, 81 minutes where adoption first installed them, and still unfinished after 87 minutes where they were slowest to set up.
 
 The last stack knowledge leaves the plugin's code and pages for the binding (ADR 0050).
 
@@ -12,7 +39,7 @@ The architecture and the tools are asked at adoption, recorded and declared (ADR
 
 - The choice is a decision record with `## Decision` and its `- Chosen by:` line, at least two alternatives under `## Considered options`, `## Reversal cost` and `## Refutation criterion`. The binding's new `## Architecture` section names it and declares the parts, `| Part | Path | May depend on |`, which replaces the `## Layers` section of `AGENTS.md`.
 - `conformance` is red on a missing record, fewer than two alternatives, no reversal cost or refuter, no `- Chosen by:`, no declared part, or a part that depends on one the table lacks. It reads structure only.
-- An adopted repository gets the template's section from the upgrade, and the rest is owed (ADR 0037). While it is owed the route names the new `/ratchet:architecture`, which also revisits the choice later.
+- An adopted repository gets the template's section from the upgrade, and the rest is owed (ADR 0037). While it is owed the route names the new `/ratchet:architecture`, which also revisits the choice later. When a safeguard is owed too, the route names the safeguard first and its `then:` names `/ratchet:architecture`.
 - Init no longer assumes the stack, and `/ratchet:safeguard` takes the tool the record names for a concept. Everything else of ADR 0034 stands.
 
 No shipped page, template, prompt, script or hook names a stack tool beyond a residue that says why, file by file (ADR 0042). The speed paragraphs of `tiers.md`, the docstrings, the skills' examples and the CI templates' cache keys now say the concept, and the cache key hashes `quality/snapshots/` instead of a package manifest. A test searches every shipped file for tool, language, framework and host names and is red on a new one, and on a residue entry that no longer matches.
@@ -22,15 +49,30 @@ The architecture is reviewed again when the project's shape changes (ADR 0052). 
 - `/ratchet:architecture` does the review: it re-reads the architecture decision and the declared layers against the code, records that the decision holds (an assumption the hand-over states), or asks the owner one question with two or three options and their reversal cost, records the answer as a superseding decision and updates the layers so the gates hold. The route names it before `/ratchet:safeguard`; the drain holds a ticket red for an owed review until the review lands.
 - Two kinds join the catalogue, `scheduled-work` and `access-control`, and every Triggers table needs a row for each kind that reopens the architecture, whatever the types. An existing repository owes the missing rows through the upgrade.
 - The review is asked by the new Gates row `architecture reviewed when its shape changes`, bound to `scripts/triggers.py`; `upgrade.py --apply` adds it. What a repository held when that row was first bound counts as reviewed, so no adopted repository turns red for what it already had.
+- A decision record settles the review only when it landed after the kind first arrived on the default branch. A record written ahead of the code settles nothing, so the instances that follow the arrival are still reviewed.
+
+The spec decides where the change goes, and the review judges it against the architecture (ADR 0051). The spec's Design section ties the placement to the architecture record and the parts it declares, names each seam it adds or changes and why, and says what it rejected. The review gains a design axis: crossing a declared part's boundary is a blocker, a dependency the architecture rules out is major, and a shallow wrapper or a placement the spec does not explain is minor. A change to the architecture itself, such as a new kind of storage or a new process boundary, is a question for the owner, recommendation first.
 
 A drain whose processes are all gone no longer blocks the next `clean --all`. The lease judged a drain alive by any process of its chain that was still running, including the service manager above every session; it now counts only a process below where the chains part, or a program running from a queue work tree, and the two-hour record of commands is gone.
 
 A ticket that is too large is split by the agent, not handed back to the owner (ADR 0046). A part names its ticket (`Split from:`) and inherits the agent-ready label while that ticket carries it on the default branch or the tracker, one level only. A deterministic check holds the scope: each promise (`- [ ]` line) of a part appears in the parent verbatim and the parts carry every promise exactly once; a refusal names the line. `drain.py split --plan` files the parts in order, closes the parent as `split` with its text untouched, and keeps draining.
 
+A part of a split no longer carries the size its parent was too large for. Copied into each part, the parent's `## Size` stopped every part at its preflight, and a part is never split again, so every part was parked as too large. A part now states no size, and the spec stage estimates it.
+
+On a forge, a ticket waiting only on `behind` or `gates` is retried by the drain again, not held for the owner. The judge's pull request comment lists each reason as "- `code`: text", and the drain read the list marker as part of the code.
+
+The first-hour eval reads what the plugin prints today. Its gate parser read only an older wording of the runner's lines, so a run's waiting and not applicable gates were missing from its numbers. Its reducer counted the guard's asks as the harness's own permission prompts. Its scripted owner took only the first command of a merge's `next:` line and skipped the deep check after it. `reduce` now also parses each pasted command's gate run again from the output saved in `logs/`, so a run recorded before the fix reduces to the right numbers, and each reader has a test that runs the real printer into it.
+
+The first-hour eval builds its matrix table from runs already recorded. `run.py table <run dir>...` reads each run's `metrics.json` as it is and prints one row a run, and with `--dir` writes `matrix.md` and `matrix.json`; it launches and reduces nothing, and refuses a run it cannot name and two runs of one persona. The table gains a `Harness` column, the commit of the eval code that drove each run, read from the run's own record. Its "Min to first feature merge" column, and `minutes.to_first_feature_merge` behind it, now take the first merge of a branch named `feature/`, the name the feature step gives the branch it builds. They took the first merge that was not the adoption's or init's, so a spec's merge counted as the first feature; a run recorded before this shows the old value until its event log is reduced again.
+
 The change-size ceiling counts product code, not tests (ADR 0045). Tests were 85% of the lines counted on recent changes, so the ceiling mostly limited them. `[ceilings.change]` is now `product_files = 25`, `product_lines = 1000` and a loose `test_lines = 3000` that only stops a runaway, and the early stops follow: product code has no margin for what is still to come, tests keep two thirds of their ceiling while the critic runs.
 
 - Which paths are tests is the binding's `## Test paths` section, written at adoption by the project's agent: the plugin names no stack. Until it is filled every changed line counts as product, as before, and conformance names the missing section.
 - An existing repository's `files` and `lines` become `product_files` and `product_lines` at the same values, by `upgrade.py --apply`; the lowered gate reads the move and refuses a higher value. `test_lines` is new, and the one loosening, which the upgrade says plainly.
+
+The change that brings the first of a kind of code is free however many files it touches, and only once (ADR 0030, ADR 0048). The free arrival was bounded to one file, so a first feature that brought its server, its page and its store together was red. The change-size ceiling now bounds what one change brings. A kind the default branch ever held is returning, not arriving: removing every instance and adding them back is red while its rows are owed.
+
+A `Relaxes:` record loosens a threshold only in the change that adds it (ADR 0047). It was honoured from every decision record in the tree, for good. Its values must now equal the merge base's and the head's, and a key removed and then written back looser is judged against the value it last held.
 
 The drain's recovery reads a kill inside one file's write, and tells two drains under one process apart (ADR 0023). A fast-forward killed while git wrote a file puts that part-written file back, and keeps only what the owner had changed or left untracked before it began. `clean --all` prints the drain's token, and the drain's later commands stamp its lease, so a second drain started under the same long-lived process is refused while the first is active.
 
@@ -45,16 +87,80 @@ The queue drain and the merge no longer lose work, collide or stop half-way (ADR
 - A work tree is removed only once its uncommitted work is a stash. A stale `index.lock`, a merge left unfinished or a damaged index kept the stash from being made, and the tree was removed anyway; now it stays, nothing running from it is ended, and the note and the command say so.
 - One drain runs on a repository at a time. `clean --all` is refused while a process of another drain is alive, every command that changes a work tree runs under a lock the kernel frees when its holder dies, and a built ticket still in its work tree counts against the cap.
 - A run killed part-way finishes when it is run again. `update` abandons a rebase it left and starts over, `land` records a merge that landed and puts back what a killed `merge.py` left (its scratch work tree, a fast-forward cut off half-way), and `clean` records a merge no note said.
+- A built branch that another landing left behind is rebased and judged again before it lands, so no verdict on a tree no review saw lands. A hold outranks built: a ticket parked after it had commits stays held. A ticket behind a held blocker is refused with the blocker and its reason.
 
-A ticket that fits the change-size ceiling is no longer parked as too large before the critic exists (ADR 0040). Until the binding declares `depended-on` the early size stop is the ceiling itself; with the critic it stays at two thirds.
+The guards hold whatever the default branch is called (ADR 0041). In a repository with no remote and a default branch named neither `main` nor `master`, every path guard was off. When no remote or fixed name settles it, the default branch is now the one the main work tree has checked out, and every rule that compares with the default branch reads it.
 
-The route no longer loops a non-engineer on a parked ticket or a half-finished adoption. It reads the drain's note of why a ticket is held and names the step that releases that kind of hold (a size block names the split, never a bare `/ratchet:feature`), and a binding with no plugin pin names `/ratchet:adopt` to resume, ahead of the hooks install.
+A ticket that fits the change-size ceiling is no longer parked as too large before the critic exists (ADR 0040). The margins are now those of ADR 0045 above: none for product code, and two thirds of the test ceiling while the critic runs.
 
-An adopted JavaScript project merges through `just merge` with nothing installed by hand (ADR 0039).
+The route no longer loops a non-engineer on a parked ticket or a half-finished adoption. It reads the drain's note of why a ticket is held and names the step that releases that kind of hold (a size block names the split, never a bare `/ratchet:feature`), and a binding with no plugin pin names `/ratchet:adopt` to resume, ahead of the hooks install. A held ticket or a blocked run is released only by a change to the ticket, by the cause its run recorded landing (the guard edits, a dispute), or, for a safeguard hold, by binding the safeguard. An unrelated change on the default branch no longer offers the same build again.
 
-- The template `justfile` has an `install` recipe, run by every tier right after `plugin-pin`. A stack whose tools come from npm, pnpm, yarn or bun binds it to the frozen install of the lockfile, and each recipe that runs one of those tools depends on it, so a fresh checkout works as CI does.
-- `conformance` is red on a lockfile whose tools run without it (`installs`), `upgrade.py --apply` writes the dependency, and the finding is never owed.
+- After `just merge` of the checked-out branch, the checkout is left on the default branch. For a branch the default branch already holds, the route names `git switch <default>`, not the same merge again.
+
+An adopted project whose tools need an install merges through `just merge` with nothing installed by hand (ADR 0039, ADR 0043).
+
+- The template `justfile` has an `install` recipe. Where the binding's `## Install` section says the stack needs one, the recipe installs exactly what the lockfile it names says, every recipe the section lists depends on it, and each tier runs it after `plugin-pin`, so a fresh checkout works as CI does.
+- `conformance` is red when the justfile does not do what the section says, and those findings are never owed. `upgrade.py --apply` writes the section from the justfile's own `install` recipe where it can.
 - Step 12 of `/ratchet:adopt` rehearses in a fresh worktree with no setup by hand, where the merge runs.
+
+An upgrade is one command, and what it cannot settle is owed, not red (ADR 0029, ADR 0037).
+
+- `upgrade.py --apply` moves the pin and makes every edit that needs no judgement. Each edit counts only when the check that raised it no longer does on the edited tree, and every conformance finding says who fixes it: `auto`, `agent` or `owner`. It refuses, and writes nothing, when a file it would write is ignored by git, leads out of the repository through a link, lies in a submodule or lands under `guards/`.
+- What it leaves is written to `quality/owed.toml`, one entry per finding. `conformance` counts the owed findings, stays green and names the checks that do not run until they are fixed, and `/ratchet:next` relays the list.
+- Between upgrades the list only shrinks. A new or changed entry is red unless the same change moves the pin to a newer version and the merge base was red on that finding. A change that only drops entries passes the merge judge without the owner.
+- The upgrade asks the owner nothing. Each call that is the owner's keeps a default that loosens nothing, stated in plain words, and the upgrade never writes `- Life events: none`.
+- An upgrade no longer reports nothing red for a mutation recipe from before ADR 0050 that hands the output of `mutation_survivors.py --changed` to its tool unfiltered. That list now holds every changed file, so the recipe failed on the first change with no code in it. `conformance` names such a recipe red, never owed, and reads a recipe that starts with a shebang as one script.
+- The sections an upgrade adds are written with their tables padded, so a project whose format check pads tables is not red right after the upgrade.
+
+Records land without the owner, and so does the adoption (ADR 0031). The merge judge asks no verdict of a change made only of records: a ticket, a spec, a change description, a glossary addition or an ADR. The owner still merges a ticket change that gives the agent-ready label, takes another's number or closes a ticket, any change to a labelled ticket or the spec it inherits from, and any ADR. `AGENTS.md`, `CLAUDE.md` and the other agent-instruction files stay the owner's at any depth. `just merge --records` lands the records a skill left on the default branch through a branch of their own, and the route never tells an agent to commit on the default branch. The adoption is judged by the manifest it brings, which must guard at least what the template does.
+
+- A ticket edit that changes only its links is the agent's to merge, when each changed link names the same file and the preflight reads the ticket the same; otherwise it is the owner's (ADR 0057). The preflight's `Parent:` line reads a `.md` path before a bare number.
+
+An agent changes a guard path on a branch without a prompt, and the owner decides at the merge (ADR 0033). The merge judge already sends every guard path change to the owner with its reasons. In the owner's replayed sessions this took the prompts from 173 to 39.
+
+- Two kinds of file act the moment they are written, so the hook asks before each write of one, on every branch: a CI workflow, and an agent-instruction file at any depth.
+- On the default branch a guard path change is denied, and the message says to make it on a branch. A locked group (settings, hooks, local git, the plugins) is denied on every branch. Every deny ends in its way out.
+- `guards/**` has a `manifest` group of its own, and `.claude/rules/**` moves to `decisions`. `.claude/settings.json` holds the same fixed `deny` list in every repository.
+
+Only product questions reach the owner (ADR 0034). Init and adoption ask only what decides what becomes of the user's things, who may see or do them, or what they can do at all, all in one message with a recommended answer each. Every other choice is listed under **Assumed**, with what changing it later costs. `/ratchet:safeguard` asks nothing.
+
+- The `interactive` modes of `/ratchet:init` and `/ratchet:adopt` are gone: type a preference after the command. A preference never turns a check off, lowers a bar or declares a life event.
+- `/ratchet:conjecture` shows what each thing the owner said became, asks each choice their words leave open, and corrects a spec that contradicts them.
+- `skills/method/questions.toml` lists every question a skill may ask, and a test is red on any other. ADR 0049 later made the architecture and its tools an adoption question.
+
+Before anything is built, a check reads the spec against the ticket (ADR 0036). A plan that leaves out something the ticket promised, or leaves a field's empty, too long or harmful input undecided, is repaired. What it still leaves out is built as the ticket says, and an input still open is built the safe way; the pull request lists both in plain words for the owner to overrule. The check asks the owner nothing. It adds one agent to every run, and two when it finds a gap.
+
+A new acceptance harness, `scripts/acceptance.py`, for a tester to stand behind (ADR 0035). `up` boots the work tree as it is behind a proxy that logs every request and gives the tester one address. `check` holds the tester's record to that log, so a pass cites a request the harness saw. `replay` runs the record's kept checks again, and with `--control` against a product that does nothing, where each must fail. `summary` writes what the owner reads. It is not a gate: the tester role that uses it is still to come. `docs/acceptance.md` is the reference.
+
+Adoption provisions what the first slice needs, and rehearses it (ADR 0032). `/ratchet:adopt` installs a test runner, and a property-testing library where the runner has none, and names them in the binding's new `## Tests` section. It writes every config its stack rules promise, fills `boot`, `ready` and `service` for every type that boots, and ships a live change-size ceiling. The new `just start` runs the product. `/ratchet:safeguard` no longer installs a test runner that adoption provisioned.
+
+A gate's proof is harder to fool, and the summary says what ran (ADR 0020).
+
+- Every run of a gate starts from the copy as restoring leaves it, and each bite is judged against a green run of its own. A gate red again with no fault after a bite leaves that bite `NOT PROVEN`. A fault is planted only in a file git sees in the snapshot, never through a link, in `.git` or in a submodule.
+- A new fault kind, `replace = { path, old, new }`, changes the one place an exact text stands in a file. It keeps applying when the lines around it change, where a context patch broke on an unrelated edit beside it. Text found nowhere or twice is `THE FAULT WAS NOT PLANTED`, which is red.
+- A gate whose whole output is one `later:` or `none:` line judged nothing, and says so. The last line counts what ran and what waits, as in `parallel: green (26 ran, 39 not run yet)`, where it read as every gate green.
+- An interrupt stops `project_bite.py` within a fraction of a second, and the scratch copies are removed once every lane has stopped.
+
+The guard no longer asks about a write that a `cd` did not cause, and reads more of the shell as the shell does.
+
+- A `cd` inside a subshell, in a pipeline stage before the last or in a background job no longer moves the commands after it, on a line the guard models in full. On a line with a heredoc, a `case`, a quote left open, or a command that may move the shell where the line does not show it (`eval`, `source`, an alias, a function, a trap), every `cd` stays in force. A quote or substitution left open asks.
+- The guard reads one operator at a time, a heredoc delimiter as a full word, and `${ cmd; }` as a command that runs first, so lines that once hid a write are judged. A command that runs another in a directory it names, such as `env -C` or `sudo -D`, is judged in that directory.
+- The ask after a move the guard cannot follow names the path, says it is the owner's, and says what approving and denying each do.
+- The agent-ready label is asked about only on a ticket file, so a spec or a change description that names it no longer asks.
+
+The graceful-stop check is no longer red on a service that drains correctly.
+
+- `with_service.py --graceful` holds a copy of each listener of the service from just before the stop signal. A connection still waiting in the accept queue, which the service never took, is named in `RATCHET_STOPPING` and not counted. Every other reset after the signal is a dropped request, and red, whenever its request started. This needs Linux 5.6 or later; on a port the gate cannot hold, the smoke judges as before and names the port and the reason.
+- **Breaking:** `--signal-after` counts from when the command creates `RATCHET_SENDING`, not from its start. A `--graceful` command must create that path within `--timeout`, as `load_smoke.py --until-stopped` does, or the check is red.
+
+Smaller fixes.
+
+- `telemetry_sink.py` stops its command at once on an interrupt. The signal could reach its receiver thread, and the command then ran to its end.
+- The settings check no longer fails when the owner denies a rule the plugin writes as an ask, and regeneration writes such a rule back once.
+- With `--over report`, `budget.py` raises a run over its ceiling as a warning annotation, as well as printing it.
+- `conformance` and the upgrade read each justfile once, so an upgrade plan is several times faster.
+- `/ratchet:feature` starts the pipeline workflow by its name. On a fresh install the harness refused the script path the skill gave, because the session had not read that file; the path stays as the fallback for a harness that lists no workflow by name.
+- The binding template's Install sentence writes its example in a double-backtick span, so a markdown formatter no longer rewrites the sentence and drops its spaces.
 
 ## 0.11.0
 

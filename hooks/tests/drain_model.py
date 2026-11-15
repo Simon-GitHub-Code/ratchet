@@ -1502,6 +1502,8 @@ def lease_moves(lease: Lease) -> list[tuple[str, Lease]]:
 LEASE_STEPS = {f"{drain.value}: {step.value}": (drain, step) for drain in Drain for step in Step}
 
 
+# Why: the rule search, the tour and the exports each read it; a process builds it once.
+@functools.cache
 def lease_graph() -> tuple[frozenset[Lease], list[LeaseEdge]]:
     """Every lease state reachable from ``LEASE_INITIAL`` and every step, breadth first."""
     seen = {LEASE_INITIAL}

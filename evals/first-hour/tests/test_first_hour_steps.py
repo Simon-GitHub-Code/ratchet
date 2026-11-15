@@ -88,6 +88,14 @@ def test_a_merge_the_entry_point_made_names_the_bare_deep_check_once() -> None:
     assert steps.next_commands(output) == ("just check-deep",)
 
 
+def test_a_merge_run_on_its_own_branch_names_the_switch_and_the_bare_deep_check() -> None:
+    output = (
+        "merged: `f` into `main` at abc\n"
+        "next: `git switch main`, then just check-deep on `main`: tier 2 runs after every merge\n"
+    )
+    assert steps.next_commands(output) == ("git switch main", "just check-deep")
+
+
 BUDGET = Budget(minutes=10, usd=5, repeats=3, steps=None)
 
 
