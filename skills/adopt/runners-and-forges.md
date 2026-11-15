@@ -9,8 +9,6 @@ The templates are the `just` and GitHub examples. Step 7 of the adopt skill send
 3. Keep the three service gates on a `boot` and a `ready` value, and hand each long gate its shard from `SHARD` and `SHARDS`.
 4. Keep one list of gates per tier in that runner, run each tier's gates at once through `scripts/parallel.py` (`--runner` takes the runner's command prefix), and have the CI build its matrices from those lists, never from a copy.
 
-Done when the runner holds every entry point, the binding's Entry points table names its commands, and the hook recipes, service gates, shards and tier lists keep the behaviour above.
-
 ## A forge other than GitHub
 
 1. Move the pull request template to the path the forge reads and name it on the Forge section's template line.
@@ -18,23 +16,19 @@ Done when the runner holds every entry point, the binding's Entry points table n
 3. Schedule `weekly` there once a week, and have a red run open or update one issue.
 4. Put those paths in the manifest's `ci` group.
 5. The `merge` workflow has no counterpart in another forge's templates.
-   - **The forge's CI can run a job when the `ci` pipeline of a merge request finishes:** write one that does what `merge.yml` does: check out the default branch and the plugin at the commit the binding's `- Ratchet plugin:` line pins, run `merge_ready.py` on each merge request whose pipeline is green, merge the ones it passes at the commit it judged, and comment its reasons on the rest.
+   - **The forge's CI can run a job when the `ci` pipeline of a merge request finishes:** write one that does what `merge.yml` does: check out the default branch and the plugin at the commit the binding's `- Ratchet plugin:` line pins, run `merge_ready.py` on each merge request whose pipeline is green, merge the ones it passes at the commit it judged, and comment its report on each one it judges.
    - **Until that job exists:** the owner merges every change, and the hand-over says so.
 
    The binding's Forge section names which of the two holds.
 
-Done when the template and the CI sit at the forge's paths, the CI paths are in the manifest's `ci` group, `weekly` is scheduled, and the Forge section names whether the merge job exists or the owner merges every change.
-
 ## No forge
 
-No `origin`: the owner kept the repository local at init.
+No `origin`: the owner kept the repository local at init. Delete `.github/`, move the pull request template to `docs/process/change-template.md`, and name it in the Forge section as the change template. The arrangement is then:
 
-1. Delete `.github/`, move the pull request template to `docs/process/change-template.md`, and name it in the Forge section as the change template.
-2. A change is then a branch whose description is written from that template to `.scratch/changes/<branch>.md` (the branch's `/` written as `-`), and `just merge <branch>` merges it: the merge judge reads the branch, `check` runs on the merge result, and the default branch moves only when both pass. A change the judge leaves to the owner, they merge with `git merge --no-ff`.
-3. Tier 0 runs from the commit hook, tier 1 as `check` before each merge, tier 2 as `check-deep` on the default branch after it.
-4. Nothing schedules the weekly gates, so the machine does: a cron line or a systemd timer runs `just weekly` in the repository once a week and writes its output where the owner reads it, and a red run becomes a ticket.
-5. Write that as an ADR with its refuter (a merge with `check` red or unrun; tier 2 unrun for a week; the weekly gates unrun for a month) and the rejected options.
+- A change is a branch whose description is written from that template to `.scratch/changes/<branch>.md` (the branch's `/` written as `-`), and `just merge <branch>` merges it: the merge judge reads the branch, `check` runs on the merge result, and the default branch moves only when both pass. A change the judge leaves to the owner, they merge with `git merge --no-ff`.
+- Tier 0 runs from the commit hook, tier 1 as `check` before each merge, tier 2 as `check-deep` on the default branch after it.
+- Nothing schedules the weekly gates, so the machine does: a cron line or a systemd timer runs `just weekly` in the repository once a week and writes its output where the owner reads it, and a red run becomes a ticket.
+
+Write all of the above, the change template included, as an ADR with its refuter (a merge with `check` red or unrun; tier 2 unrun for a week; the weekly gates unrun for a month) and the rejected options.
 
 Read "push" and "pull request" in the adopt skill's later steps that way: nothing is pushed, and the CI step has no workflow to pin.
-
-Done when `.github/` is gone, the change template is at `docs/process/change-template.md` and named in the Forge section, a timer runs `just weekly` once a week, and the ADR is written.
