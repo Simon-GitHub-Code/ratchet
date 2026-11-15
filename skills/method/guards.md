@@ -171,6 +171,12 @@ Every deny message ends in the way out:
 
 A verdict covers the whole tool call. Claude Code runs none of a denied command line, so a file write chained before the refused command is lost with it. The deny message says so and names the matched command. Keep a command the guard may refuse (a forge CLI call, a push, anything near a guard path) in a tool call of its own, so an unrelated write is never lost with it.
 
+### The guard's log
+
+The guard writes one line for each tool call it denies or asks about to `ratchet-guard-events.jsonl` in the repository's git directory, shared by every worktree. Each line holds the time, the decision, the tool, the rule, what the guard matched and the branch. The file is local, never committed and never shown by `git status`, and the hook denies every edit of it. With no forge it shows whether work reached the default branch past the guard.
+
+The hook writes its answer first and the line after, so the log never changes a verdict. Three cases write no line: the ask the guard falls back to when it cannot load, a hook that timed out, and a harness's own prompt. A deny on a path in another checkout is logged in the repository the session works in.
+
 ### When the path rules are on
 
 The path rules are on only once `guards/manifest.toml` is committed on the default branch: the branch `refs/remotes/origin/HEAD` names, else `refs/remotes/origin/main`, `refs/remotes/origin/master`, `refs/heads/main` or `refs/heads/master`, each read by its full name and skipped when it names no commit. The hook reads that commit from git and judges every path against it, whatever the work tree says. It is not a flag an agent could set, and not the work tree, where an adoption in progress is still writing the manifest and the files it names.
