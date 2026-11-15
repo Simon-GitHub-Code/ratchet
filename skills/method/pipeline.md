@@ -31,10 +31,10 @@ Each role does its work with the other plugins' skills. The method fixes what a 
 **What it decides and what it asks.**
 
 - An undecided point is an assumption. The spec takes the conservative, reversible answer, builds on it, and returns it in `assumptions` with its refuter. The pull request lists each one for the owner to counter. An assumption is by definition one that can be taken back, so it does not hold a merge: the owner may read it after the change has merged.
-- It decides each case of an input the ticket leaves open with the narrowest safe answer (an empty value: nothing is saved and nothing breaks; an oversized one: refused with a message, keeping what the user typed; a hostile one: kept as plain text that does nothing), and lists it as an assumption. A case where that answer takes something from the user, such as refusing an empty value that clears a note, is a `direction` question.
+- It decides each case of an input the ticket leaves open with the narrowest safe answer (an empty value: nothing is saved and nothing breaks; an oversized one: refused with a message, saving nothing and keeping what the user typed; a hostile one: kept as plain text that does nothing, shown as text and never run, followed or used as a path), and lists it as an assumption. A case where that answer takes something from the user, such as refusing an empty value that clears a note, is a `direction` question.
 - A point is an open question in two cases. It is `irreversible` when a wrong guess cannot be taken back (stored data lost, a public contract fixed, money spent, a security or privacy rule weakened). It is `direction` when the options are different products, which [the fork test](#the-fork-test) decides. A choice the user could not tell apart is the role's own.
 - A promise of the ticket it believes cannot or should not be built as written is a question under the fork test too, never one it leaves out.
-- A change that implies a change to the architecture (a new layer, a new kind of storage, a new process boundary) is a `direction` question under the fork test, with options and a recommendation, never decided silently.
+- A change that implies a change to the architecture (a new layer, a new kind of storage, a new process boundary) is a `direction` question under the fork test, never decided silently or buried in Design. Its options include the one that keeps the architecture as it is, when the feature can be built within it, and the recommended one comes first, with why.
 - Each question carries its kind, two to four options with the recommended one first, and why. The role never asks the owner to confirm.
 - Open questions stay open.
 
@@ -82,7 +82,7 @@ The critic runs only once the binding's `- Life events:` line declares `depended
   - the fitness tests sabotaged in a scratch copy and seen to bite;
   - vocabulary and contracts checked;
   - `guard-diff` run.
-- Tests that expose real defects stay, in the one flat critique directory the binding's Critique tests section names, or `tests/critique/` when it names none (`<slug>.<layer>.critique.test.<ext>`), never beside the code.
+- Every test the critic added that passes, and every one that fails because of a real defect, stays, in the one flat critique directory the binding's Critique tests section names, or `tests/critique/` when it names none (`<slug>.<layer>.critique.test.<ext>`), never beside the code.
 - The critic runs `tier0` and its own tests, not `check`.
 - A finding whose kept test passes (`heldByKeptTest`) is resolved by that test.
 
@@ -120,17 +120,26 @@ Three roles read the ticket: the spec role, which writes the spec from it; the t
 
 The script is a pure function of its arguments and the agents' structured results, so it resumes cleanly.
 
-0. **Preflight.** `scripts/feature_preflight.py` on the ticket checks that it is open, `## Conjecture` is stated, the agent-ready label is present, the tree is clean, `HEAD` is on the branch, and, in an adopted repository, that a commit would run tier 0 (`scripts/hooks_installed.py`, which prints the repair when the commit hooks are missing, since the pipeline's commits would otherwise skip tier 0).
-   - The skill runs it before the workflow and spawns nothing while it is red.
-   - The workflow runs it again as its first stage, through one low-effort agent that types the command and relays its JSON.
+0. **Preflight.** `scripts/feature_preflight.py` on the ticket checks that:
+   - the ticket exists, is open and was not split;
+   - `## Conjecture` and `## Operability` are stated;
+   - the ticket's own `## Size` passes no product ceiling;
+   - the agent-ready label is present, and no ticket it is blocked by is still open;
+   - the tree is clean and `HEAD` is on the branch;
+   - in an adopted repository, a commit would run tier 0 (`scripts/hooks_installed.py`, which prints the repair when the commit hooks are missing, since the pipeline's commits would otherwise skip tier 0);
+   - no owed item an agent writes from the repository alone is still unwritten.
+
+   The skill runs it before the workflow and spawns nothing while it is red. The workflow runs it again as its first stage, through one low-effort agent that types the command and relays its JSON.
+
    - Red stops the run with `verdict: "blocked"` and, per failure, what produces the missing piece.
+   - Red on `size` alone is the exception: the orchestrator splits the ticket instead, as [`/ratchet:feature`](../feature/SKILL.md) step 1 says, and builds the first part that is free.
 1. **Spec.**
    - A non-empty `openQuestions` stops the run with `verdict: "blocked"`. The orchestrator asks the owner each one as the registered product question `feature.open-question` ([questions.toml](questions.toml)), writes the answer on the ticket under `## Answers`, and builds the ticket again.
    - A non-empty `guardEdits` stops the run the same way: criteria that need a guard path changed (an import contract, a shared test fixture, a row of the binding's Architecture table, the definition of a term the glossary already has) cannot be met by a run with no owner at the keyboard. The owner lands those edits first, or builds the ticket with `/pstack:poteto-mode` while present and merges the change.
-   - A word the glossary lacks is not a guard edit: the spec role adds the term with its *Avoid* list, the guard lets an addition through, and the pull request lists it.
+   - A word the glossary lacks is not a guard edit where the manifest marks the glossary `edit = "append"`: the spec role adds the term with its *Avoid* list, the guard lets an addition through, and the pull request lists it.
 2. **Ticket check.** A gap the check finds, a promise `dropped` or `bent` or an input case no criterion decides, goes back to the spec role, which amends `spec.md` once while no code exists, and the check reads it again. After that the run decides, and the script asks the owner nothing.
    - **A promise still `dropped`** is kept from the ticket. The readings the script settles say, in the ticket's words, that the app does it. The implementer builds it with a test, and the review judges the build against it. It joins the `assumptions` as "the plan left this out, so it was built as your ticket says", which the owner overrules as he would any assumption. A ticket line about how the change is built, such as a tool to run, is kept the same way.
-   - **A case still undecided** takes the safe answer the same way (an empty value: nothing is saved and nothing breaks; an oversized one refused with a message; a hostile one kept as plain text that does nothing), and joins the `assumptions` under the input's plain name.
+   - **A case still undecided** takes the safe answer the same way (an empty value: nothing is saved and nothing breaks; an oversized one: refused with a message, saving nothing and keeping what the user typed; a hostile one: kept as plain text that does nothing, shown as text and never run, followed or used as a path), and joins the `assumptions` under the input's plain name.
    - **A promise still read as `bent`** is a reading the two roles do not share. It joins the `assumptions` and holds nothing.
    - **No question comes from the check.** The owner is asked only the spec role's own open questions, such as a ticket that contradicts itself or a promise the role believes cannot or should not be built as written, and those still stop the run before the build.
    - **At the review, a `dropped` promise or an undecided case** means the build lost what the spec had. The script files it as a major issue, the verdict record carries it as unresolved, the merge judge refuses, and the result's `ticketFindings` go to the spec role of the next run as `args.ticketFindings`.
@@ -143,6 +152,7 @@ The script is a pure function of its arguments and the agents' structured result
 4. **Critique,** once the project is `depended-on`; skipped before.
 5. **Fix loop,** once the project is `depended-on`. While a blocker or major finding remains that no kept passing test resolves, or a test the critic kept is failing (whatever the finding's severity), up to two rounds: a *fresh* fix agent (it has not seen the previous implementer's reasoning), then re-critique by title plus a search for new breakage.
 6. **Review.** Before the project is `depended-on`, a review that lists fixable blockers, whatever its verdict says, gets one fix pass: the same fresh fix agent, given those issues, then the review again. A fixable blocker is a blocker or major issue in the change itself; not a promise of the ticket the change lost, not a question for the owner, not a too-large stop. If the second review approves, the run goes on as approved. If it still refuses, the ticket is parked as before.
+   - A review with any `dropped` promise or undecided case gets no fix pass at all, even beside fixable blockers.
    - A `dropped` promise or an undecided case at the review, and a `bent` or `assumed` reading at either role, follow the rules under step 2.
 7. **Forced verdict.** The script forces `request_changes`, and `verdictForcedBy` says which, when:
    - blocking findings are unresolved;
@@ -191,16 +201,16 @@ The test: describe the product to one of its users after each option, in the use
 
 ## The orchestrator
 
-The orchestrator is the `/ratchet:feature` skill's session. It runs the preflight, creates the branch, runs the workflow, reads its result and the spec, and nothing else: reading the implementation would anchor it on one agent's reasoning and defeat the independence the pipeline exists for.
+The orchestrator is the `/ratchet:feature` skill's session. It runs the preflight, creates the branch and runs the workflow. It reads only the ticket, the workflow's structured result and the spec: reading the implementation would anchor it on one agent's reasoning and defeat the independence the pipeline exists for.
 
-1. **Check the result.** Check `verdict === "approve"`, empty `unresolvedBlockingFindings`, and a green tail in `checkOutput`. Otherwise stash what the agents left (`git stash push -u`), switch back to the base branch, and rerun `/ratchet:feature <ticket>` after the ticket has been adjusted, or stop and report.
+1. **Check the result.** Check `verdict === "approve"`, empty `unresolvedBlockingFindings`, and a green tail in `checkOutput`. Otherwise commit nothing. Stash what the agents left with `git stash push -u -m "<branch>: <verdict> run"`, since the route holds a ticket only on a `blocked` stash of that name. Switch back to the base branch, and settle each field the result holds as [`/ratchet:feature`](../feature/SKILL.md) step 4 says. Two of them build the ticket again with the ticket unchanged: `ticketFindings`, passed back as `args.ticketFindings`, and a `triggers` red, after the owner is told to type `/ratchet:safeguard`, or `/ratchet:architecture` for an owed review.
 2. **Report every dispute** to the owner in the hand-over, in plain words: what the rule stopped and what changing it would allow. It is a report, not a question. The owner answers in their own words if they want the rule changed, and any gate change is theirs.
-3. **Raise the floors.** Run the `ratchet` entry point when it is bound, so each threshold rises to what the approved change measured, and confirm `ratchet-lowered` stays green. Commit `filesChanged` and the raised `quality/` files on the branch with a message naming the slug. Without this step a floor recorded at adoption never moves, and coverage can fall back to it with every gate green.
+3. **Raise the floors.** Run the `ratchet` entry point when it is bound, so each threshold rises to what the approved change measured, and confirm `ratchet-lowered` stays green. Commit everything the work tree holds (`git add -A`) with the raised `quality/` files on the branch, with a message naming the slug: the roles' `filesChanged` can miss the spec and a record they added. The drain commits the two apart, as [`/ratchet:feature`](../feature/SKILL.md) says. Without this step a floor recorded at adoption never moves, and coverage can fall back to it with every gate green.
 4. **Commit what else the change holds.**
    - If an ADR is suggested, write it under the next free number: the guard lets a new ADR through. One that must supersede another or carry a `Relaxes:` line waits for the owner, in an interactive session where the guard can ask.
    - With no forge (the binding's Forge section names a change template instead of a pull request template), the filled template is `.scratch/changes/<branch>.md` (the branch's `/` written as `-`). Commit it on the branch with the local ticket's `Status:` line set to `resolved`, the local form of `Closes #N`, so the merge resolves it.
 5. **Write the verdict record.** Put the result's `verdictRecord` on stdin of the `merge-ready` entry point's `record` form (`just merge-ready record`), and commit the `docs/features/<slug>/verdict.json` it writes alone, as the last commit. The record names the tree the review saw, so any commit after it sends the merge to the owner.
-6. **Publish.** Push, and open the pull request with every section of the repository's template filled ([records.md](records.md)), every entry of `recordNotes` (each added term, *Avoid* item and ADR) listed in the Decisions section. With no forge nothing is pushed.
+6. **Publish.** Push, and open the pull request with every section of the repository's template filled ([records.md](records.md)), every entry of `recordNotes` (each added term, *Avoid* item and ADR) listed in the Decisions section. When the critic did not run, the pull request says so and why, from the result's `critic`. With no forge nothing is pushed.
 7. **Leave the merge to the judge.** The merge judge decides who merges, never the orchestrator ([guards.md](guards.md)). Run the `merge-ready` entry point and report its lines: `merge: agent`, or `merge: owner` with every reason.
    - On a forge, the pull request's merge job asks the same judge once `ci` is green, merges what it passes and comments why on the rest.
    - With no forge, run the `merge` entry point with the branch (`just merge <branch>`). It judges, runs `check` on the merge result and merges, or prints why the merge is the owner's.
@@ -219,7 +229,7 @@ The orchestrator is the `/ratchet:feature` skill's session. It runs the prefligh
 
   `ratchet` runs after the rebase.
 - **The judge merges.** With no forge, `drain.py land <ticket>` runs the `merge` entry point and closes the ticket with the judge's lines. With a forge, the skill opens the pull request and watches it, and the merge job merges.
-- **A ticket that cannot go on is parked.** An open question, a guard edit, a dispute, a verdict that is not an approval or a `merge: owner` closes the ticket with the reasons as given, and the others go on. A parked ticket is held until its text changes or a path its run named as the cause (a guard edit, a dispute file) changes on the default branch.
+- **A ticket that cannot go on is parked.** An open question, a guard edit, a dispute, a verdict that is not an approval or a `merge: owner` closes the ticket with the reasons as given, and the others go on. A too-large result is not parked, though its verdict is `blocked`: the agent splits it, as [Too large](../feature/SKILL.md#too-large-the-agent-splits-it) says, unless the ticket is itself a part. A parked ticket is held until its text changes or a path its run named as the cause (a guard edit, a dispute file) changes on the default branch.
   - A `triggers` red, another instance of a kind whose safeguard or architecture review is owed, parks it with a reason naming `/ratchet:safeguard` or `/ratchet:architecture`, and holds it only until the row is bound or the review has landed.
   - No role writes the review: it is the owner's next command, and a decision record written in the same change as the instance would not count.
 - **One report.** `drain.py report` writes `.ratchet/queue/<date>-<time>.md`: what merged, what waits for the owner and why, what is parked, every assumption with its refuter, every record added, the time each ticket took. The owner's questions come after it.
