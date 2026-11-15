@@ -309,35 +309,6 @@ WEIGHTED = [
     Kind.RESOLVE,
     Kind.CHECK_HALTED,
 ]
-LANDS_A = frozenset(
-    {Kind.LAND, *(kill for kill, command in model.KILLS.items() if command is Kind.LAND)}
-)
-UPDATES_A = frozenset({Kind.UPDATE, Kind.KILL_MID_REBASE, Kind.KILL_AFTER_REBASE})
-
-
-def taken_today(world: World, before: model.State, action: model.Action) -> bool:
-    """Whether today's drain.py takes ``action`` as the model does.
-
-    The steps the script change of ADR 0060 adds are left to the replays that wait for it: a
-    check that cannot read, a check that makes the tree, ``land`` refused on a start no check
-    passed, and ``update`` parking a ticket its own check finds published.
-    """
-    name = action.ticket
-    if name is None or world.scripted(name):
-        return True
-    if action.kind in {Kind.CHECK_UNREADABLE, Kind.UPDATE_UNREADABLE}:
-        return False
-    state = model.recovered(before)
-    ticket = state.of(name)
-    if action.kind in {Kind.CHECK, Kind.CHECK_HALTED}:
-        return ticket.tree is not model.Tree.NONE
-    if action.kind in LANDS_A:
-        done = model.held_by_note(ticket) or model.says_merged(ticket) or model.unrecorded(ticket)
-        return done or not model.unchecked(ticket)
-    if action.kind in UPDATES_A:
-        ready = model.unmarked(state, name)
-        return ready is None or model.checked_first(ready, name) is not None
-    return True
 
 
 class DrainOnARepository(RuleBasedStateMachine):
@@ -354,10 +325,7 @@ class DrainOnARepository(RuleBasedStateMachine):
         # change the state ahead of those that do not makes that example walk the lifecycle,
         # not repeat one refused command.
         state = self.play.state
-        today = [
-            move for move in model.moves(state) if taken_today(self.play.world, state, move[0])
-        ]
-        moves = sorted(today, key=lambda move: move[1] == state)
+        moves = sorted(model.moves(state), key=lambda move: move[1] == state)
         changes = [
             kind for kind in WEIGHTED if any(a.kind is kind and b != state for a, b in moves)
         ]
@@ -506,11 +474,6 @@ def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_w
 
 
 ROLE_A = "a role of the pipeline run commits in a"
-NOT_YET = (
-    "drain.py does not run the publish check yet: the script change that docs/model/drain.md"
-    " names under 'What the next script change must do' turns this on"
-)
-waits_for_the_script = pytest.mark.xfail(reason=NOT_YET, strict=True)
 
 
 def test_the_agent_that_commits_before_the_check_commits_on_a_branch_a_role_committed_on(
@@ -526,7 +489,6 @@ def test_the_agent_that_commits_before_the_check_commits_on_a_branch_a_role_comm
     replay(tmp_path, path)
 
 
-@waits_for_the_script
 def test_land_refuses_a_branch_a_role_committed_on_whose_start_no_check_passed(
     tmp_path: Path,
 ) -> None:
@@ -552,7 +514,6 @@ def test_the_check_parks_a_branch_a_role_committed_on_and_holds_it_until_its_tex
     assert play.named("drain.py land a").startswith(f"land: {REF[Name.A]} is held")
 
 
-@waits_for_the_script
 def test_check_records_the_start_and_marks_it_passed_in_the_note(tmp_path: Path) -> None:
     play = replay(tmp_path, ["drain.py open a"])
     opened = json.loads(play.world.printed)
@@ -564,7 +525,6 @@ def test_check_records_the_start_and_marks_it_passed_in_the_note(tmp_path: Path)
     assert note_of(play)["passed"] is True
 
 
-@waits_for_the_script
 def test_a_check_after_a_run_that_died_makes_the_tree_and_parks_a_branch_a_role_committed_on(
     tmp_path: Path,
 ) -> None:
@@ -577,7 +537,6 @@ def test_a_check_after_a_run_that_died_makes_the_tree_and_parks_a_branch_a_role_
     )
 
 
-@waits_for_the_script
 def test_update_checks_a_start_no_check_passed_and_parks_a_branch_a_role_committed_on(
     tmp_path: Path,
 ) -> None:
@@ -632,7 +591,6 @@ def test_a_check_that_finds_only_an_unfinished_rebase_passes_the_start_and_the_t
     play.named(path[-1])
 
 
-@waits_for_the_script
 def test_a_check_that_cannot_read_leaves_the_start_unpassed_and_the_retrys_update_checks_it(
     tmp_path: Path,
 ) -> None:
@@ -647,7 +605,6 @@ def test_a_check_that_cannot_read_leaves_the_start_unpassed_and_the_retrys_updat
     assert play.state.of(Name.A).branch is Branch.DRAFT
 
 
-@waits_for_the_script
 def test_update_is_refused_when_its_check_cannot_read_the_present_state(tmp_path: Path) -> None:
     path = ["drain.py open a", ROLE_A, EDIT_C, UPDATE_UNREAD_A]
     assert broken_by(path) == set()
@@ -1377,6 +1334,7 @@ def test_clean_all_under_a_live_landing_keeps_the_tree_and_mark_a_killed_close_l
         two_drains.named(said)
     lease_world, world = two_drains.world, two_drains.world.world
     note_of_a = functools.partial(drain.queue_notes.read_note, world.root, BRANCH[Name.A])
+    world.command("check", REF[Name.A], "--final")
     world.by_hand(Kind.COMMIT, Name.A)
     world.by_hand(Kind.RECORD, Name.A)
     world.by_hand(Kind.EDIT, Name.C)

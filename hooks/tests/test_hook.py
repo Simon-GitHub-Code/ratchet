@@ -207,6 +207,23 @@ def test_a_deny_ends_with_the_way_out_of_its_rule() -> None:
     assert COMMITTED not in locked
 
 
+def test_a_deny_for_rewriting_history_names_ratchets_step_not_a_dispute() -> None:
+    way_out = (
+        "Bring the branch up to date without rewriting it: merge the default branch into it, or "
+        "add a new commit. The merge job lands it, or with no forge the `merge` entry point "
+        "does."
+    )
+    for rule, because in (
+        ("force-push", "force-pushes, which rewrites published history"),
+        ("amend-pushed", "amends a commit that is already pushed"),
+    ):
+        assert RULES[rule].decision is Decision.DENY
+        assert RULES[rule].way_out == way_out
+        text = hook.reason(Verdict(rule, "git push -f"))
+        assert f"It {because}: git push -f. {way_out} If the call" in text
+        assert "gate dispute" not in text
+
+
 def test_a_deny_about_a_folder_the_guard_cannot_work_out_says_how_to_write_it_out() -> None:
     command = "cd $S && sed -i s/a/b/ .github/workflows/ci.yml"
     verdict = hook.decide(payload("Bash", command=command), make_guard(manifest=EMPTY))
