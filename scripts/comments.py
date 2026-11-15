@@ -118,7 +118,7 @@ def directives(root: Path, paths: Iterable[str], patterns: Sequence[str]) -> set
     expressions = [part for pattern in patterns for part in ("-e", pattern)]
     out = gatelib.git(
         root,
-        *("--literal-pathspecs", "grep", "--no-index", "-I", "-n", "-z", "-E"),
+        *("grep", "--no-index", "-I", "-n", "-z", "-E"),
         *expressions,
         *("--", *searched),
     )

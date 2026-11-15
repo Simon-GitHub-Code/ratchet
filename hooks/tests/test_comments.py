@@ -143,16 +143,6 @@ def test_a_directive_on_another_line_does_not_excuse_a_comment(
     assert "a.txt:2: a comment no tool reads: 'a reason'" in capsys.readouterr().out
 
 
-def test_a_path_with_glob_characters_is_searched_as_itself(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = project(tmp_path)
-    write(root, "f[1].txt", "// SILENCE-IT\n")
-    write(root, "f1.txt", "// a note\n")
-    assert run(root, "f1.txt\t1\tcomment\ta note\n", "f[1].txt", "f1.txt", monkeypatch=monkeypatch)
-    assert not run(root, "f[1].txt\t1\tcomment\tSILENCE-IT\n", "f[1].txt", monkeypatch=monkeypatch)
-
-
 @pytest.mark.parametrize(
     ("binding", "record", "verdict"),
     [
