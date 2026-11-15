@@ -58,6 +58,8 @@ if TYPE_CHECKING:
     HELD,
     HELD_EDITED,
     REFUSED,
+    REFUSED_UNOPENED,
+    RELEASED_BY_THE_LINE,
     RECOVERS,
     NO_TREE,
     UNPUBLISHED,
@@ -90,6 +92,8 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     HELD: None,
     HELD_EDITED: None,
     REFUSED: None,
+    REFUSED_UNOPENED: None,
+    RELEASED_BY_THE_LINE: None,
     RECOVERS: None,
     # Why: the docstring accepts it: "A work tree whose uncommitted work git cannot stash (a stale
     # lock, a merge left unfinished, a damaged index) is not removed".
@@ -248,6 +252,8 @@ WEIGHTED = [
     Kind.RECORD,
     Kind.RECORD,
     Kind.PUBLISH,
+    Kind.UPGRADE,
+    Kind.LINE,
     Kind.EDIT,
     Kind.KILL_MID_REBASE,
     Kind.KILL_AFTER_REBASE,
@@ -441,6 +447,27 @@ def test_a_branch_a_role_committed_on_is_recorded_and_landed_as_nothing_checks_i
     assert play.world.printed.endswith(f"closed: {REF[Name.A]}: merged\n"), "the drain lands it"
     subjects = git(play.world.root, "log", "--format=%s", "main").splitlines()
     assert PUBLISHED in subjects, "the role's commit is on the default branch"
+
+
+UPGRADE = "an upgrade makes the preflight ask the Flag: line before deployment"
+LINE_A = "the owner lands the Flag: line of a"
+
+
+def test_the_upgrade_refuses_a_ticket_with_no_flag_line_and_its_line_releases_the_cascade(
+    tmp_path: Path,
+) -> None:
+    path = [UPGRADE, "drain.py open a", LINE_A, "drain.py open a"]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    play = replay(tmp_path, path[:2])
+    assert play.world.code == 1
+    assert play.world.printed.startswith(f"open: {REF[Name.A]} is not started: it is refused; ")
+    assert "lacks `Flag:`" in play.world.printed, "the preflight names the line"
+    assert model.classify(play.state)[Name.B] is model.Status.REFUSED, "b waits on a refused a"
+    play.named(path[2])
+    statuses = model.classify(play.state)
+    assert (statuses[Name.A], statuses[Name.B]) == (model.Status.BUILDABLE, model.Status.WAITING)
+    assert play.named(path[3]).startswith("{"), "the plan starts a once its line has landed"
+    assert play.world.code == 0
 
 
 def test_open_keeps_a_close_the_report_has_not_printed(tmp_path: Path) -> None:
