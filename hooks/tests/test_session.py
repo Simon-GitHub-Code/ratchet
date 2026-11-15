@@ -1,6 +1,7 @@
 """The session hook: the stance on an adopted checkout, a nudge on a bare one, silence elsewhere."""
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -8,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from ratchet_guards import session
+from ratchet_guards import events, session
+from tests import repos
 from tests.support import PLUGIN_ROOT
 
 STANZA = "This repository follows the method: load the `ratchet:method` skill first.\n"
@@ -204,3 +206,55 @@ def test_the_shipped_stance_links_nothing_relative() -> None:
     text = session.stance(PLUGIN_ROOT)
     assert text.startswith(session.STANCE_HEADING)
     assert re.findall(r"\]\((?!https?://)[^)]*\)", text) == []
+
+
+def recorded(root: Path) -> Path:
+    return root / ".git" / events.PLUGIN_RECORD
+
+
+def test_a_session_in_a_repository_records_the_plugin_it_runs_from(tmp_path: Path) -> None:
+    root = repos.repository(tmp_path / "repo")
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+
+
+def test_a_session_in_a_linked_worktree_records_in_the_common_directory(tmp_path: Path) -> None:
+    root = repos.repository(tmp_path / "repo")
+    linked = tmp_path / "linked"
+    repos.git(root, "worktree", "add", "-q", str(linked), "-b", "side")
+    shim({"hook_event_name": "SessionStart", "cwd": str(linked)}, tmp_path)
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+    assert not (linked / ".git").is_dir()
+
+
+def test_a_session_outside_a_repository_records_nothing(tmp_path: Path) -> None:
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    shim({"hook_event_name": "SessionStart", "cwd": str(loose)}, tmp_path)
+    assert list(tmp_path.rglob(events.PLUGIN_RECORD)) == []
+
+
+def test_a_symbolic_link_at_the_record_is_not_followed(tmp_path: Path) -> None:
+    root = repos.repository(tmp_path / "repo")
+    target = tmp_path / "target"
+    target.write_text("keep\n", encoding="utf-8")
+    recorded(root).symlink_to(target)
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert target.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_a_fifo_at_the_record_is_not_waited_on(tmp_path: Path) -> None:
+    root = repos.repository(tmp_path / "repo")
+    os.mkfifo(recorded(root))
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+
+
+def test_recording_changes_nothing_the_hook_prints(tmp_path: Path) -> None:
+    root = repos.repository(tmp_path / "repo")
+    payload = {"hook_event_name": "SessionStart", "cwd": str(root)}
+    first = shim(payload, tmp_path)
+    assert first.startswith("Ratchet:")
+    assert shim(payload, tmp_path) == first
+    assert first == f"{session.message(root)}\n"

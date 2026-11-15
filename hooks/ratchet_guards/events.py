@@ -23,12 +23,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 LOG_NAME = "ratchet-guard-events.jsonl"
+PLUGIN_RECORD = "ratchet-plugin"
 # Why: one write this small reaches a pipe in one piece (PIPE_BUF), and a local file as well.
 LIMIT = 4096
 # Why: an escaped character takes at most 12 bytes, so the four free text fields cut to this
 # take 3,072 at most, and the line fits LIMIT with the rest.
 CLIP = 64
 _FLAGS = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+_REPLACE = os.O_WRONLY | os.O_TRUNC | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,5 +59,14 @@ def append(log: Path, line: bytes) -> None:
     descriptor = os.open(log, _FLAGS, 0o600)
     try:
         os.write(descriptor, line)
+    finally:
+        os.close(descriptor)
+
+
+def replace(record: Path, text: str) -> None:
+    """Make ``record`` hold ``text`` alone; a symbolic link or FIFO there raises ``OSError``."""
+    descriptor = os.open(record, _REPLACE, 0o600)
+    try:
+        os.write(descriptor, text.encode())
     finally:
         os.close(descriptor)

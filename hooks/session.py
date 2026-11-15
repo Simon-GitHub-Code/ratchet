@@ -3,7 +3,8 @@
 
 Delegates to ``ratchet_guards.session``. Standard library only and run on the system
 ``python3``. The repository root is the hook input's ``cwd``, else ``$CLAUDE_PROJECT_DIR``,
-else the working directory. The hook only adds context, so any failure prints nothing.
+else the working directory. It also records the plugin folder it runs from in the repository's
+git common directory. The hook only adds context, so any failure prints nothing.
 Antigravity's input names its event in ``hookEventName``, Claude Code's in
 ``hook_event_name``; the form of the answer follows.
 """
@@ -33,8 +34,12 @@ def main() -> int:
     root = root_of(text, os.environ, Path.cwd())
     sys.path.insert(0, str(HOOKS))
     try:
-        from ratchet_guards.session import main as session  # noqa: PLC0415 # -- after the path set-up above
+        from ratchet_guards.session import (  # noqa: PLC0415 # -- after the path set-up above
+            main as session,
+        )
+        from ratchet_guards.session import record_plugin  # noqa: PLC0415 # -- same
 
+        record_plugin(root, HOOKS.parent)
         return session(root, event_of(text), antigravity=ANTIGRAVITY_EVENT in payload_of(text))
     except Exception:  # noqa: BLE001 # -- context only: a broken hook says nothing
         return 0

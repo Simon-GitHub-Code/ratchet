@@ -22,7 +22,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from ratchet_guards.hook import PLUGIN_ROOT, repository_root
+from ratchet_guards import events
+from ratchet_guards.hook import PLUGIN_ROOT, common_directory, repository_root
 
 BINDING = Path("docs/process/binding.md")
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
@@ -130,6 +131,22 @@ def render(event: str, text: str, *, antigravity: bool = False) -> str:
         output = {"hookEventName": event, "additionalContext": text}
         return json.dumps({"hookSpecificOutput": output})
     return text
+
+
+def record_plugin(cwd: Path, plugin_root: Path) -> None:
+    """Record ``plugin_root`` in the git common directory of the repository holding ``cwd``.
+
+    The file is ``events.PLUGIN_RECORD`` and holds the path and a newline, so a gate recipe in the
+    repository finds the plugin this session runs from. Nothing is written outside a repository,
+    a symbolic link or FIFO at the path is not followed, and any failure is dropped.
+    """
+    common = common_directory(cwd)
+    if common is None:
+        return
+    try:
+        events.replace(common / events.PLUGIN_RECORD, f"{plugin_root}\n")
+    except OSError:
+        return
 
 
 def main(root: Path, event: str, *, antigravity: bool = False) -> int:
