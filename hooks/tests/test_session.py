@@ -290,3 +290,13 @@ def test_recording_changes_nothing_the_hook_prints(tmp_path: Path) -> None:
     assert first.startswith("Ratchet:")
     assert shim(payload, tmp_path) == first
     assert first == f"{session.message(root)}\n"
+
+
+def test_a_directory_at_the_record_is_left_alone_and_nothing_is_raised(tmp_path: Path) -> None:
+    root = adopted(tmp_path / "repo")
+    recorded(root).mkdir()
+    session.record_plugin(root, PLUGIN_ROOT)
+    assert recorded(root).is_dir()
+    assert [p.name for p in (root / ".git").iterdir() if p.name.startswith(".ratchet-plugin")] == []
+    with pytest.raises(OSError, match="directory"):
+        events.replace(recorded(root), "/x\n")

@@ -101,7 +101,7 @@ def findings(repo: Path, tag: str, release_commit: str, *, main: str, label: str
     if git(repo, "merge-base", "--is-ancestor", commit, main) is None:
         found.append(f"{tag}: {commit} is not on {label}")
     version = release.version_in(repo, commit)
-    if f"v{version}" != tag:
+    if version is None or f"v{version}" != tag:
         found.append(f"{tag}: the version in {commit}'s {release.MANIFEST} is {version}, not {tag}")
     elif release.bump_commit(repo, main, version) != commit:
         found.append(
