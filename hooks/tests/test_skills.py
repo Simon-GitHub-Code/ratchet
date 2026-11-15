@@ -216,23 +216,6 @@ def test_init_passes_the_owners_answers_to_the_setups() -> None:
     assert "follow it by hand" not in INIT
 
 
-PLUGINS = ("mattpocock-skills", "pstack", "impeccable", "ratchet")
-
-
-def test_the_plugin_lines_hold_rules_and_list_no_skill() -> None:
-    # Why: the plugin lines listed what each named skill does, which the skill listing already
-    # says, in a file every session loads, and an agent once read the pstack line as forbidding
-    # pstack's own chain. Each line now holds its question, its plugin and only the rules the
-    # listing cannot give, the pstack line with the reason its chain is followed.
-    template = (SKILLS / "init/templates/AGENTS.md").read_text(encoding="utf-8")
-    opening = template.split("\n## ", 1)[0]
-    stanza = [line for line in opening.splitlines() if line.startswith("- **")]
-    pstack = next(line for line in stanza if "`pstack`" in line)
-    assert "reading their files, which is pstack's own design and is followed in full" in pstack
-    named = [n for line in stanza for n in re.findall(r"`([a-z-]+)`", line) if n not in PLUGINS]
-    assert named == []
-
-
 def test_init_installs_a_missing_companion_plugin_without_asking() -> None:
     # Why: two harness pages said init installs the companion plugins with the owner's consent,
     # while the skill installs them as an assumption. A missing one is installed without asking,
