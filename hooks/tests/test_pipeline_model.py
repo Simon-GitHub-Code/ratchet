@@ -192,12 +192,13 @@ def test_every_answer_of_every_agent_is_given_on_some_run() -> None:
 
 def test_no_step_of_the_script_turns_on_whether_a_role_published() -> None:
     for state in graph().states:
+        unseen = replace(state, published=False)
         for action, after in model.moves(state):
             if action.role is None:
                 continue
-            twin = model.answered(state, replace(action, published=not action.published))
+            plain = model.answered(unseen, replace(action, published=False))
             assert after.published == (state.published or action.published), action.name
-            assert replace(twin, published=False) == replace(after, published=False), action.name
+            assert replace(after, published=False) == plain, action.name
 
 
 def runs() -> list[tuple[list[model.Action], model.State]]:
@@ -354,7 +355,7 @@ def replays() -> dict[str, world.Played]:
         "reconciled over": RECONCILED_OVER,
         "measured over": MEASURED_OVER,
         "published approved": PUBLISHED_APPROVED,
-        "approved": [name.removesuffix(model.PUBLISHED) for name in PUBLISHED_APPROVED],
+        "approved": [model.read(name) for name in PUBLISHED_APPROVED],
     }
     batch = world.play([walked(names) for names in named.values()])
     return dict(zip(named, batch.played, strict=True))
