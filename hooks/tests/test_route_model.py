@@ -326,6 +326,11 @@ def test_a_rule_breaks_only_where_a_divergence_says_it_does(name: str) -> None:
     assert label is model.real_advice or not broken
 
 
+def test_no_state_holds_two_divergences() -> None:
+    both = [s for s in model.graph().states if sum(e.holds(s) for e in model.DIVERGENCES) > 1]
+    assert both == []
+
+
 def test_the_architecture_rules_are_met_where_they_bite() -> None:
     """The owed architecture is named beside a build and a drain, begun and ended by its steps."""
     graph = model.graph()
