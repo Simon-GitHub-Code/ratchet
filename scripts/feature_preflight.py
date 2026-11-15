@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """The feature preflight: what must be true before the pipeline spawns its first agent.
 
-The input of ``/ratchet:feature`` is a tracker ticket (``/mattpocock-skills:to-spec``, ``/mattpocock-skills:to-tickets`` or
-``/mattpocock-skills:triage`` wrote it): a number on GitHub or GitLab, or the path of a local
-ticket file. The preflight is a pure check over that ticket and the checkout, red with the exact
-failure and the skill that produces the missing piece:
+The input of ``/ratchet:feature`` is a tracker ticket (``/mattpocock-skills:to-spec``,
+``/mattpocock-skills:to-tickets`` or ``/mattpocock-skills:triage`` wrote it): a number on GitHub
+or GitLab, or the path of a local ticket file. The preflight is a pure check over that ticket and
+the checkout, red with the exact failure and the skill that produces the missing piece:
 
 - the ticket exists and is open, and a local one is ``.scratch/<feature>/issues/<name>.md``, the
   one file the guard asks the owner about before an agent writes the agent-ready label;
