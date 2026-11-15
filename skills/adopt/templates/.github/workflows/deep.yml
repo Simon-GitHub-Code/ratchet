@@ -63,9 +63,9 @@ jobs:
         with:
           path: | # bind: the dependency directory, the mutation cache, the fuzz corpus
             .cache
-          key: tier2-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }} # bind: lockfiles and tool configs
+          key: tier2-${{ runner.os }}-${{ matrix.gate }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }}-${{ github.sha }} # bind: lockfiles and tool configs
           restore-keys: |
-            tier2-${{ runner.os }}-
+            tier2-${{ runner.os }}-${{ matrix.gate }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
       - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier2 --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -93,9 +93,9 @@ jobs:
         with:
           path: | # bind: the dependency directory, the mutation cache, the fuzz corpus
             .cache
-          key: tier2-${{ runner.os }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }} # bind: lockfiles and tool configs
+          key: tier2-${{ runner.os }}-${{ matrix.gate }}-${{ matrix.shard }}-${{ hashFiles('**/*.lock') }}-${{ hashFiles('quality/snapshots/**') }}-${{ github.sha }} # bind: lockfiles and tool configs
           restore-keys: |
-            tier2-${{ runner.os }}-
+            tier2-${{ runner.os }}-${{ matrix.gate }}-${{ matrix.shard }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
       - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier2 --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
         env:

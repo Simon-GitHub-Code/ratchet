@@ -638,15 +638,15 @@ def pending(entry: Entry, ticket: preflight.Ticket, *, drain: Drain, seen: Seen)
         if failure.check != "blocked"
     ]
     waits = []
-    for ref in ticket.blockers:
-        resolved = preflight.blocker_ref(ticket, ref, drain.root)
-        blocker = preflight.fetch(resolved, drain.root, drain.tracker)
-        if blocker is None:
-            refused.append(f"blocked: blocker {ref} was not found")
-        elif blocker.is_open and key(resolved) in seen.queued:
-            waits.append(key(resolved))
-        elif blocker.is_open:
-            refused.append(f"blocked: blocker {resolved} is still open and is not agent-ready")
+    for blocker in preflight.blockers(ticket, drain.root, drain.tracker):
+        why = preflight.unmet(blocker)
+        if why is None:
+            continue
+        if blocker.ticket is not None and key(blocker.ref) in seen.queued:
+            waits.append(key(blocker.ref))
+        else:
+            agent_ready = "" if blocker.ticket is None else " and is not agent-ready"
+            refused.append(f"blocked: {why}{agent_ready}")
     if refused:
         return replace(entry, state=REFUSED, why=tuple(refused))
     return replace(entry, state=WAITING if waits else BUILDABLE, waits_on=tuple(waits))
