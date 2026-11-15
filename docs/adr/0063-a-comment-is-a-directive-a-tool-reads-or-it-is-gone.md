@@ -3,6 +3,8 @@ status: proposed
 ---
 # A comment is a directive a tool reads, or it is gone
 
+Amends ADR 0037: the ledger also grows in the change that first fills the lister, and along a rename, not only when the pin moves. Amends ADR 0028: documentation coverage unbinds outside a library, the one exception to "nothing unbinds".
+
 The owner wants no prose comment in a project on the method. A comment drifts from the code beside it. A reason worth keeping belongs in a test, a type, a lint rule or a decision record, where a gate or a reviewer reads it. The plugin names no language (ADR 0042), so it cannot find a comment itself. The binding already lists the directives each bound tool reads, one extended regular expression per kind, and the `suppressions` gate counts the lines they match (`skills/adopt/templates/docs/process/binding.md:212-224`, ADR 0042, ADR 0050). The dependencies contract is the precedent for a reader the project writes and a script the plugin ships that judges its records (`hooks/ratchet_guards/dependencies.py:8-16`, `:35-36`, ADR 0044).
 
 ## Decision
@@ -15,7 +17,7 @@ The owner wants no prose comment in a project on the method. A comment drifts fr
 
 **The published interface.** The binding's `## Architecture` section (`binding.md:21-31`) gains `- Published interface: <globs>`, or `none: not a library`. It is chosen with the architecture, since which surfaces are promises is the question `life:depended-on` reopens (`skills/method/application-types.toml:68`). It is in the binding, a guard path, so widening it is the owner's.
 
-**The gate.** `scripts/comments.py`, entry point `comments`, tier 0, trigger `always`, question `no prose comments`. It runs the lister over the files changed since the merge base. Each finding is keyed by the rule `comments`, its path and its text, the ledger's rule, path and problem (`scripts/owed.py:92-102`). An owed entry excuses one equal finding (ADR 0037), and every other finding is red. A comment moved within its file keeps its key. One reworded, copied or added is red. An entry whose comment is gone is red until it is dropped.
+**The gate.** `scripts/comments.py`, entry point `comments`, tier 0, trigger `always`, question `no prose comments`. Its entry point runs the lister over the files changed since the merge base and pipes the records into the script. The script runs nothing itself. It reads the records on standard input and takes the changed files as arguments (`scripts/comments.py:179-193`). Empty input is green, so the lister's exit must reach the gate. The adoption template's recipe shell sets `pipefail` (`skills/adopt/templates/justfile:10`), so a lister that fails turns the entry point red. The dependencies contract treats a reader that fails the same way, as a run it cannot judge (`hooks/ratchet_guards/dependencies.py:37-38`). Each finding is keyed by the rule `comments`, its path and its text, the ledger's rule, path and problem (`scripts/owed.py:92-102`). An owed entry excuses one equal finding (ADR 0037), and every other finding is red. A comment moved within its file keeps its key. One reworded, copied or added is red. An entry whose comment is gone is red until it is dropped.
 
 **What exists is owed.** An adoption records every comment it finds, as a change from no pin may (`scripts/owed.py:214-227`, ADR 0037). In a repository already adopted, the upgrade adds the section, and filling it is a fill-first item (`owed.py:73`, ADR 0050). Two exceptions join `owed.grown`, which today lets the ledger grow only in a change that moves the pin (`owed.py:242-246`). The change that first fills the lister may add `comments` entries carrying the pin as `since`, because the first reading is free as the first instance of a kind is (ADR 0030). An entry may follow a rename git reports, with the same rule and text. Otherwise the ledger only shrinks.
 
@@ -26,6 +28,8 @@ The owner wants no prose comment in a project on the method. A comment drifts fr
 ## Consequences
 
 The clean-up of what is owed is ADR 0065's.
+
+The plugin holds itself to the rule. Its own scripts, hooks and tests lose their prose comments and docstrings as an adopted project's code does, and its pages follow ADR 0066.
 
 The lister is a row an agent writes. It can miss a form of comment inside a file kind it covers, and the per-row bite proves one form only. That is weaker than a parser the plugin owned, which no stack-neutral plugin can have. It is said on the row, as ADR 0050 says it for its own rows.
 
@@ -50,7 +54,7 @@ Look at the ledger's size over time, the dead-code gate's findings and the incid
 - **A count per file that only falls.** Rejected. Rewording an old comment into a new one keeps the count.
 - **The lines a change adds, judged against the merge base, with no ledger.** Rejected. Moving a function within its file turns its old comments red, and the backlog is invisible.
 - **One owed entry per file.** Rejected. It excuses every new comment in a file that still owes one, which ADR 0037 rejected for the same reason.
-- **Doc comments on every public symbol.** Rejected by the owner.
+- **Doc comments on every public symbol.** Rejected. It asks for prose on every symbol, and that prose drifts as any comment does.
 - **The clean-up through a companion plugin's comment reviewer.** Rejected. Its keep list allows doc comments that define any public contract and comments about behaviour forced from outside (pstack 0.9.137, `agents/comment-sicko.md:17`, `:19`). It waits for approval before it encodes a constraint (`skills/no-comments/SKILL.md:34`).
 
 ## Settled by the owner, 2026-11-15
