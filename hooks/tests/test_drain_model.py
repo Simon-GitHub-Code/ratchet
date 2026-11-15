@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import json
 import os
 import shutil
 import signal
@@ -20,12 +21,14 @@ from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_a
 
 import drain
 import gatelib
+import publish_check
 from tests import drain_model as model
 from tests import model_tla
 from tests.drain_model import Branch, Kind, Merge, Name, Step
 from tests.drain_world import (
     BRANCH,
     DRAFT,
+    HALTED_WHY,
     LANDING_WAIT,
     PUBLISHED,
     REF,
@@ -63,10 +66,12 @@ if TYPE_CHECKING:
     PARTS_AWAITED,
     RECOVERS,
     NO_TREE,
-    UNPUBLISHED,
+    UNLANDED,
+    UNTOUCHED,
 ) = model.RULES
 
-OPEN_A = ["drain.py open a", "the agent commits a"]
+CHECK_A = "drain.py check a"
+OPEN_A = ["drain.py open a", CHECK_A, "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
 PARK_A = "drain.py close --outcome parked a"
 EDIT_A = "the owner edits ticket a"
@@ -107,9 +112,10 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
         "git leaves a stale index lock in the tree of c",
         "drain.py clean --all",
     ],
-    # Why: ADR 0060's publish check is not in the code yet. Nothing compares the branch with the
-    # state the run started from, so the agent records its verdict on a role's commit and lands it.
-    UNPUBLISHED: [
+    UNLANDED: None,
+    # Why: the agent's commits are free here, and nothing in the drain stops one before the check.
+    # The feature skill's order does: the rule holds on every step that keeps it.
+    UNTOUCHED: [
         "drain.py open a",
         "a role of the pipeline run commits in a",
         "the agent commits the verdict record of a",
@@ -121,20 +127,20 @@ PARK_C = "drain.py close --outcome parked c"
 # Why: for each kind of kill, on a landed ticket and on one not landed, the shortest path to one
 # that leaves what neither the whole command nor none of it leaves, as the search finds them.
 KILL_CUTS = [
-    ["drain.py open a", LAND_CUT],
+    ["drain.py open a", CHECK_A, LAND_CUT],
     ["drain.py open a", EDIT_A, "a kill mid-rebase stops drain.py update a"],
     ["drain.py open a", EDIT_A, KILL_AFTER_REBASE],
     [PARK_A, "drain.py open c", f"a kill before the discard stops {PARK_C}"],
-    LAND_KILLED,
-    [*JUDGED_A, LAND_CUT],
-    [*JUDGED_A, "a kill before the fast-forward stops merge.py in drain.py land a"],
-    [*JUDGED_A, CUT_OFF],
     [
         PARK_A,
         "drain.py open c",
         "the agent leaves work uncommitted in c",
         f"a kill after the stash stops {PARK_C}",
     ],
+    LAND_KILLED,
+    [*JUDGED_A, LAND_CUT],
+    [*JUDGED_A, "a kill before the fast-forward stops merge.py in drain.py land a"],
+    [*JUDGED_A, CUT_OFF],
     [*JUDGED_A, EDIT_A, LAND_LEFT],
 ]
 
@@ -150,9 +156,14 @@ class Search(NamedTuple):
 
 
 @functools.cache
+def main_graph() -> tuple[frozenset[model.State], list[model.Edge]]:
+    return model.graph()
+
+
+@functools.cache
 def search() -> Search:
     """What the graph's breadth-first steps show."""
-    _, edges = model.graph()
+    _, edges = main_graph()
     came: dict[model.State, tuple[model.State, str] | None] = {model.INITIAL: None}
     breaks: dict[str, list[str]] = {}
     cuts: dict[tuple[str, bool], list[str]] = {}
@@ -189,6 +200,24 @@ def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_pa
     )
     for kind in Kind:
         assert any(name.startswith(kind.value) for name in found.taken), kind
+    unchecked = [
+        said
+        for before, said, after in main_graph()[1]
+        for name in Name
+        if after.of(name).merged and model.unchecked(before.of(name))
+    ]
+    assert not unchecked, f"a branch lands on a start no check passed: {unchecked[0]}"
+
+
+def test_a_branch_a_role_committed_on_is_never_committed_on_where_the_skill_keeps_its_order() -> (
+    None
+):
+    # Why: rule 11b holds only where the agent commits after the check, as the feature skill says.
+    _, edges = model.graph(model.in_order)
+    holds = model.RULES[UNTOUCHED]
+    broken = next((said for before, said, after in edges if not holds(before, said, after)), None)
+    assert broken is None, broken
+    assert all(model.RULES[UNLANDED](before, said, after) for before, said, after in edges)
 
 
 def test_every_rule_reads_as_one_sentence() -> None:
@@ -254,6 +283,8 @@ WEIGHTED = [
     Kind.COMMIT,
     Kind.RECORD,
     Kind.RECORD,
+    Kind.CHECK,
+    Kind.CHECK,
     Kind.PUBLISH,
     Kind.UPGRADE,
     Kind.LINE,
@@ -276,7 +307,37 @@ WEIGHTED = [
     Kind.UNLOCK,
     Kind.SPLIT,
     Kind.RESOLVE,
+    Kind.CHECK_HALTED,
 ]
+LANDS_A = frozenset(
+    {Kind.LAND, *(kill for kill, command in model.KILLS.items() if command is Kind.LAND)}
+)
+UPDATES_A = frozenset({Kind.UPDATE, Kind.KILL_MID_REBASE, Kind.KILL_AFTER_REBASE})
+
+
+def taken_today(world: World, before: model.State, action: model.Action) -> bool:
+    """Whether today's drain.py takes ``action`` as the model does.
+
+    The steps the script change of ADR 0060 adds are left to the replays that wait for it: a
+    check that cannot read, a check that makes the tree, ``land`` refused on a start no check
+    passed, and ``update`` parking a ticket its own check finds published.
+    """
+    name = action.ticket
+    if name is None or world.scripted(name):
+        return True
+    if action.kind in {Kind.CHECK_UNREADABLE, Kind.UPDATE_UNREADABLE}:
+        return False
+    state = model.recovered(before)
+    ticket = state.of(name)
+    if action.kind in {Kind.CHECK, Kind.CHECK_HALTED}:
+        return ticket.tree is not model.Tree.NONE
+    if action.kind in LANDS_A:
+        done = model.held_by_note(ticket) or model.says_merged(ticket) or model.unrecorded(ticket)
+        return done or not model.unchecked(ticket)
+    if action.kind in UPDATES_A:
+        ready = model.unmarked(state, name)
+        return ready is None or model.checked_first(ready, name) is not None
+    return True
 
 
 class DrainOnARepository(RuleBasedStateMachine):
@@ -293,7 +354,10 @@ class DrainOnARepository(RuleBasedStateMachine):
         # change the state ahead of those that do not makes that example walk the lifecycle,
         # not repeat one refused command.
         state = self.play.state
-        moves = sorted(model.moves(state), key=lambda move: move[1] == state)
+        today = [
+            move for move in model.moves(state) if taken_today(self.play.world, state, move[0])
+        ]
+        moves = sorted(today, key=lambda move: move[1] == state)
         changes = [
             kind for kind in WEIGHTED if any(a.kind is kind and b != state for a, b in moves)
         ]
@@ -389,7 +453,7 @@ def test_a_branch_judged_on_an_older_tip_does_not_land_and_is_retried(tmp_path: 
     play = replay(tmp_path, [*JUDGED_A, "the owner edits ticket c", "drain.py land a"])
     assert "merge: owner\nbehind: the branch does not hold the tip of `main`" in play.world.printed
     assert play.state.of(Name.A).note == model.Note(
-        model.Outcome.CLOSED, hold=False, text=0, fresh=True, attempts=1
+        model.Outcome.CLOSED, hold=False, text=0, fresh=True, attempts=1, passed=True
     ), "behind alone is a reason the drain resolves itself"
 
 
@@ -441,17 +505,155 @@ def test_clean_all_leaves_a_tree_git_cannot_stash_and_a_killed_close_keeps_its_w
     assert plan_of(play)[BRANCH[Name.C]].state == "held"
 
 
-def test_a_branch_a_role_committed_on_is_recorded_and_landed_as_nothing_checks_it(
+ROLE_A = "a role of the pipeline run commits in a"
+NOT_YET = (
+    "drain.py does not run the publish check yet: the script change that docs/model/drain.md"
+    " names under 'What the next script change must do' turns this on"
+)
+waits_for_the_script = pytest.mark.xfail(reason=NOT_YET, strict=True)
+
+
+def test_the_agent_that_commits_before_the_check_commits_on_a_branch_a_role_committed_on(
     tmp_path: Path,
 ) -> None:
-    path = COUNTEREXAMPLES[UNPUBLISHED] or []
-    assert broken_by(path) == {UNPUBLISHED}
-    landed = [*path, "drain.py land a"]
-    assert broken_by(landed) == {UNPUBLISHED}
+    path = COUNTEREXAMPLES[UNTOUCHED] or []
+    assert broken_by(path) == {UNTOUCHED}
+    before = model.INITIAL
+    for name in path[:-1]:
+        before = next(after for action, after in model.moves(before) if action.name == name)
+    last = next(action for action, _ in model.moves(before) if action.name == path[-1])
+    assert not model.in_order(before, last), "the skill checks before the agent's first commit"
+    replay(tmp_path, path)
+
+
+@waits_for_the_script
+def test_land_refuses_a_branch_a_role_committed_on_whose_start_no_check_passed(
+    tmp_path: Path,
+) -> None:
+    landed = [*(COUNTEREXAMPLES[UNTOUCHED] or []), "drain.py land a"]
+    assert broken_by(landed) == set()
     play = replay(tmp_path, landed)
-    assert play.world.printed.endswith(f"closed: {REF[Name.A]}: merged\n"), "the drain lands it"
+    assert play.world.code == 3
+    assert "check" in play.world.printed, "land says to run the check first"
     subjects = git(play.world.root, "log", "--format=%s", "main").splitlines()
-    assert PUBLISHED in subjects, "the role's commit is on the default branch"
+    assert PUBLISHED not in subjects, "the role's commit is not on the default branch"
+
+
+def test_the_check_parks_a_branch_a_role_committed_on_and_holds_it_until_its_text_changes(
+    tmp_path: Path,
+) -> None:
+    path = ["drain.py open a", ROLE_A, CHECK_A]
+    assert broken_by(path) == set()
+    play = replay(tmp_path, path)
+    note = model.Note(model.Outcome.CLOSED, hold=True, text=0, fresh=True)
+    assert play.state.of(Name.A).note == note, "parked, held, never retried"
+    reasons = note_of(play)["reasons"]
+    assert reasons[0].startswith("a role published: `feature/1-alpha` moved"), reasons
+    assert play.named("drain.py land a").startswith(f"land: {REF[Name.A]} is held")
+
+
+@waits_for_the_script
+def test_check_records_the_start_and_marks_it_passed_in_the_note(tmp_path: Path) -> None:
+    play = replay(tmp_path, ["drain.py open a"])
+    opened = json.loads(play.world.printed)
+    note = note_of(play)
+    assert note["start"] == opened["start"], "open records the start and prints it"
+    assert "passed" not in note
+    assert play.named(CHECK_A).startswith(publish_check.GREEN)
+    assert play.world.code == 0
+    assert note_of(play)["passed"] is True
+
+
+@waits_for_the_script
+def test_a_check_after_a_run_that_died_makes_the_tree_and_parks_a_branch_a_role_committed_on(
+    tmp_path: Path,
+) -> None:
+    path = ["drain.py open a", ROLE_A, "drain.py clean --all", CHECK_A]
+    assert broken_by(path) == set()
+    play = replay(tmp_path, path)
+    assert play.world.code == 1
+    assert play.state.of(Name.A).note == model.Note(
+        model.Outcome.CLOSED, hold=True, text=0, fresh=True
+    )
+
+
+@waits_for_the_script
+def test_update_checks_a_start_no_check_passed_and_parks_a_branch_a_role_committed_on(
+    tmp_path: Path,
+) -> None:
+    path = ["drain.py open a", ROLE_A, "the owner edits ticket c", "drain.py update a"]
+    assert broken_by(path) == set()
+    play = replay(tmp_path, path)
+    assert model.held_by_note(play.state.of(Name.A)), "held until its text changes"
+    assert play.state.of(Name.A).branch is Branch.DRAFT, "update did not rebase it"
+
+
+EDIT_C = "the owner edits ticket c"
+UPDATE_A = "drain.py update a"
+REJUDGED = [*JUDGED_A, EDIT_C, UPDATE_A]
+HALTED_A = "drain.py check finds only a rebase left unfinished in a"
+UNREAD_A = "drain.py check cannot read the present state of a"
+UPDATE_UNREAD_A = "the check of drain.py update cannot read the present state of a"
+
+
+def walked(path: list[str]) -> list[model.State]:
+    """The model's state after each step of ``path``."""
+    states = [model.INITIAL]
+    for name in path:
+        states.append(
+            next(after for action, after in model.moves(states[-1]) if action.name == name)
+        )
+    return states[1:]
+
+
+def test_a_moved_update_records_a_new_start_and_its_rejudge_lands_once_checked_again(
+    tmp_path: Path,
+) -> None:
+    path = [*REJUDGED, CHECK_A, "the agent commits the verdict record of a", "drain.py land a"]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    updated = walked(path)[len(REJUDGED) - 1]
+    assert model.unchecked(updated.of(Name.A)), "the start is the rebased head, unpassed"
+    assert model.landing(updated, Name.A) is None, "land refuses it until the check"
+    play = replay(tmp_path, path)
+    assert play.world.printed.endswith(f"closed: {REF[Name.A]}: merged\n")
+
+
+def test_a_check_that_finds_only_an_unfinished_rebase_passes_the_start_and_the_ticket_waits(
+    tmp_path: Path,
+) -> None:
+    path = [*REJUDGED, HALTED_A, UPDATE_A, "drain.py land a"]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    play = replay(tmp_path, path[:-2])
+    assert play.state.of(Name.A).note == model.Note(
+        model.Outcome.CLOSED, text=0, fresh=True, attempts=1, passed=True
+    ), "waits to be retried, its start passed"
+    assert note_of(play)["reasons"][0] == HALTED_WHY
+    assert play.named(UPDATE_A) == '{"moved": false, "conflicts": []}\n', "no check runs again"
+    play.named(path[-1])
+
+
+@waits_for_the_script
+def test_a_check_that_cannot_read_leaves_the_start_unpassed_and_the_retrys_update_checks_it(
+    tmp_path: Path,
+) -> None:
+    path = ["drain.py open a", ROLE_A, UNREAD_A, "the owner edits ticket a", UPDATE_A]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    states = walked(path)
+    assert states[2].of(Name.A).note == model.Note(
+        model.Outcome.CLOSED, text=0, fresh=True, attempts=1
+    ), "the ticket waits to be retried, its start unpassed"
+    assert model.held_by_note(states[-1].of(Name.A)), "the retry's update parks it"
+    play = replay(tmp_path, path)
+    assert play.state.of(Name.A).branch is Branch.DRAFT
+
+
+@waits_for_the_script
+def test_update_is_refused_when_its_check_cannot_read_the_present_state(tmp_path: Path) -> None:
+    path = ["drain.py open a", ROLE_A, EDIT_C, UPDATE_UNREAD_A]
+    assert broken_by(path) == set()
+    play = replay(tmp_path, path)
+    assert play.world.code == 3
+    assert play.state.of(Name.A).branch is Branch.DRAFT
 
 
 UPGRADE = "an upgrade makes the preflight ask the Flag: line before deployment"
@@ -478,6 +680,7 @@ def test_the_upgrade_refuses_a_ticket_with_no_flag_line_and_its_line_releases_th
 def built_and_landed(name: Name) -> list[str]:
     return [
         f"drain.py open {name.value}",
+        f"drain.py check {name.value}",
         f"the agent commits {name.value}",
         f"the agent commits the verdict record of {name.value}",
         f"drain.py land {name.value}",

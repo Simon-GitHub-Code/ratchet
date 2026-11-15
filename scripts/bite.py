@@ -574,10 +574,12 @@ def python(code: str) -> str:
 
 
 # Why: a request to /work is held until the stop, and the stop waits for one, so a request is in
-# flight when it comes however late the machine delivers either; the fault drops it.
+# flight when it comes however late the machine delivers either; the fault drops it. The stop runs
+# on a thread started at boot: a signal handler that started one could deadlock on the lock the
+# server takes to start each request's thread.
 STOPS = (
     "import os, signal, threading, http.server as h\n"
-    "held, stopping = threading.Event(), threading.Event()\n"
+    "signalled, held, stopping = threading.Event(), threading.Event(), threading.Event()\n"
     "class S(h.ThreadingHTTPServer):\n"
     "    daemon_threads = False\n"
     "    block_on_close = True\n"
@@ -589,10 +591,11 @@ STOPS = (
     "        self.send_response(200); self.send_header('Content-Length', '0'); self.end_headers()\n"
     "s = S(('127.0.0.1', int(os.environ['PORT'])), H)\n"
     "def stop():\n"
-    "    held.wait()\n"
+    "    signalled.wait(); held.wait()\n"
     "    if os.environ['DROPS']: os._exit(0)\n"
     "    stopping.set(); s.shutdown()\n"
-    "signal.signal(signal.SIGTERM, lambda *args: threading.Thread(target=stop).start())\n"
+    "threading.Thread(target=stop, daemon=True).start()\n"
+    "signal.signal(signal.SIGTERM, lambda *args: signalled.set())\n"
     "s.serve_forever(); s.server_close()"
 )
 LOAD_SMOKE = str(Path(__file__).with_name("load_smoke.py"))
