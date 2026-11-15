@@ -155,10 +155,14 @@ def test_a_split_plan_is_checked_before_drain_split_runs_it() -> None:
     # checks the plan with `split.py check`, which files nothing, and runs `split` only on a pass.
     too_large = FEATURE.split("## Too large: the agent splits it", 1)[1].split(" ## ", 1)[0]
     checked = (
-        'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file>'
-        " --root .`. It judges the plan as `split` will and files nothing.",
-        'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file>'
-        " --root .`, only with a plan the check passed.",
+        (
+            'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/split.py" check <ticket> --plan <file>'
+            " --root .`. It judges the plan as `split` will and files nothing."
+        ),
+        (
+            'run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/drain.py" split <ticket> --plan <file>'
+            " --root .`, only with a plan the check passed."
+        ),
     )
     assert all(sentence in too_large for sentence in checked)
 
