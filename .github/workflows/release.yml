@@ -23,16 +23,18 @@ jobs:
           made="$(python3 scripts/release.py)"
           echo "$made"
           case "$made" in
-            created*) made="${made#created }"; echo "name=${made%% *}" >> "$GITHUB_OUTPUT" ;;
+            created*) made="${made#created }"; echo "name=${made%% *}" >> "$GITHUB_OUTPUT"; echo "fresh=true" >> "$GITHUB_OUTPUT" ;;
+            exists*) echo "name=${made#exists }" >> "$GITHUB_OUTPUT" ;;
           esac
       - if: steps.tag.outputs.name != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.name }}
+          FRESH: ${{ steps.tag.outputs.fresh }}
         run: |
           set -euo pipefail
           tag="$TAG"
-          git push origin "$tag"
+          if [ "$FRESH" = "true" ]; then git push origin "$tag"; fi
           python3 scripts/release_check.py "$tag" --main origin/main
           if gh release view "$tag" > /dev/null 2>&1; then
             echo "release page for $tag exists; left alone"

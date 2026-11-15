@@ -24,7 +24,9 @@ Cutting a release:
   ``{"source": "github", "repo": "Simon-GitHub-Code/ratchet", "ref": "vV"}`` and removes the
   strict ``xfail`` mark on the marketplace-entry test.
 * Merging it to main runs ``.github/workflows/release.yml``, which makes and pushes the tag, runs
-  ``scripts/release_check.py`` and publishes the release page.
+  ``scripts/release_check.py`` and publishes the release page. When the tag already exists, the
+  run checks it again and publishes the page only if it is missing, so a rerun mends a page step
+  that failed.
 * A person's token merges the version PR, not a workflow's ``GITHUB_TOKEN``: GitHub starts no
   workflow from a push made with that token, so ``release.yml`` would not run.
 """
