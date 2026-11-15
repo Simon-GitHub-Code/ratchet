@@ -1,11 +1,13 @@
 import * as c from "./view_common.mjs";
 
-// Drawn from DrainLanding: a role's commit on ticket a's branch, and what the drain does with it.
-export const title = "A role's commit on the branch, and where ADR 0060's publish check sits";
+// Drawn from DrainTicketLife: a role's commit on ticket a's branch, and the publish check on it.
+export const title = "A role's commit on the branch, and the publish check of ADR 0060";
 export const state = (v) => {
   if (v.mergedA) return "Merged";
-  if (!v.publishedA) return "No role has committed";
-  if (v.branchA === "draft") return "A role committed, the run returned";
-  return "A role's commit judged";
+  if (!v.publishedA) return v.passedA ? "No role has committed, the check passed" : "No role has committed";
+  if (v.statusA === "held") return "Held, a role's commit on it";
+  if (v.treeA === "none") return "A role committed, its tree gone";
+  if (v.branchA === "judged") return "A role's commit judged, unchecked";
+  return "A role committed, the run returned";
 };
-export const step = (action) => (action.startsWith("AKill") ? "a kill of a command" : c.command(action));
+export const step = (action) => c.command(action);
