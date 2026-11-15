@@ -13,9 +13,11 @@ import contextlib
 import errno
 import fnmatch
 import ipaddress
+import itertools
 import json
 import os
 import re
+import secrets
 import selectors
 import shutil
 import signal
@@ -47,6 +49,9 @@ STOPPING_ENV = "RATCHET_STOPPING"
 # counts ``--signal-after`` from then, so a command slow to start still has requests in flight.
 SENDING_ENV = "RATCHET_SENDING"
 ANSWER_POLL = 0.002
+PORT_RANGE = Path("/proc/sys/net/ipv4/ip_local_port_range")
+DYNAMIC_PORTS = 49152
+UNPRIVILEGED = 1024
 THRESHOLDS = Path("quality/thresholds.toml")
 STATE = Path(".ratchet")
 DEFAULT_BRANCH_LINE = re.compile(r"^- Default branch: `([^`]+)`$", re.MULTILINE)
@@ -141,14 +146,25 @@ def show(root: Path, ref: str, path: str) -> str | None:
     return git(root, "show", f"{ref}:{path}")
 
 
-def default_jobs() -> int:
-    """``RATCHET_JOBS`` when it is a count, else every core: the cap on what runs at once.
+def default_jobs(root: Path | None = None) -> int:
+    """``RATCHET_JOBS``, else git's ``ratchet.jobs``, when it is a count, else every core.
 
     Why: the gates a tier runs at once and the scratch copies a bite proof runs at once share
-    one machine, so one number caps both, the one a shared machine sets.
+    one machine, so one number caps both, the one a shared machine sets. Git's configuration
+    reaches agents that do not inherit the owner's shell, and every work tree of a clone.
     """
-    value = os.environ.get("RATCHET_JOBS", "")
-    return int(value) if value.isdigit() and int(value) > 0 else os.cpu_count() or 1
+    for value in (os.environ.get("RATCHET_JOBS", ""), configured_jobs(root or Path.cwd())):
+        if value.isdigit() and int(value) > 0:
+            return int(value)
+    return os.cpu_count() or 1
+
+
+def configured_jobs(root: Path) -> str:
+    """Git's ``ratchet.jobs`` in ``root``, empty when git, the repository or the key is missing."""
+    try:
+        return git(root, "config", "--get", "ratchet.jobs") or ""
+    except OSError:
+        return ""
 
 
 def entry_point(root: Path, name: str) -> str | None:
@@ -502,11 +518,29 @@ def signals_held() -> Iterator[None]:
 
 
 def free_port() -> int:
-    """A TCP port nothing listens on now, picked by the kernel on the loopback interface."""
+    """A TCP port nothing is bound to now on the loopback interface, below the ephemeral range.
+
+    The kernel gives each outgoing connection a port from its ephemeral range, so a port picked
+    there can be taken by any client between the pick and the service's bind. Below the range
+    only a bind takes one. The range starts where ``PORT_RANGE`` says, or at 49152, where RFC 6335
+    puts the dynamic ports, when that file is absent or does not read as a range. The search
+    starts at a random port so two gates rarely pick the same one, and tries every port from 1024
+    up to the range. When none is free, the kernel picks one from the range.
+    """
+    try:
+        ephemeral = int(PORT_RANGE.read_text(encoding="utf-8").split()[0])
+    except (OSError, ValueError, IndexError):
+        ephemeral = DYNAMIC_PORTS
+    below = max(0, ephemeral - UNPRIVILEGED)
+    start = UNPRIVILEGED + secrets.randbelow(below) if below else UNPRIVILEGED
+    for port in itertools.chain(range(start, ephemeral), range(UNPRIVILEGED, start)):
+        with socket.socket() as probe, contextlib.suppress(OSError):
+            probe.bind(("127.0.0.1", port))
+            return port
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
-        port: int = probe.getsockname()[1]
-    return port
+        picked: int = probe.getsockname()[1]
+    return picked
 
 
 def listening(url: str) -> bool:
