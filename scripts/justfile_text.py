@@ -43,7 +43,7 @@ def definition(text: str, name: str) -> tuple[str, ...]:
         if head is None or head.group(1) != name:
             continue
         start = index
-        while start > 0 and lines[start - 1].startswith("#"):
+        while start > 0 and lines[start - 1].startswith(("#", "[")):
             start -= 1
         end = index + 1
         while end < len(lines) and lines[end].startswith((" ", "\t")):
