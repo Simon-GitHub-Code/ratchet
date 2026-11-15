@@ -12,6 +12,9 @@ only parent, and tags C as a lightweight tag ``vV``. Author and committer come f
 environment, as for any ``git commit``. It never pushes; the workflow pushes the tag and then runs
 ``scripts/release_check.py``.
 
+A version that is not above every tagged version is refused, with one line naming both: a revert
+of the manifest never makes a release, and the first commit where a version became V is its M.
+
 Usage: ``release.py [--repo DIR] [--existing]``. It prints ``created vV C`` when it made a tag and
 ``exists vV`` when it did nothing, and exits 1 with a line on stderr when it cannot go on. With
 ``--existing`` it never makes a tag: a version with no tag is exit 1.
@@ -40,6 +43,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -49,6 +53,7 @@ from typing import NoReturn
 COMMIT_FILE = ".claude-plugin/commit"
 MANIFEST = ".claude-plugin/plugin.json"
 CHANGELOG = "CHANGELOG.md"
+DOTTED = re.compile(r"\d+(?:\.\d+)*")
 
 
 class Stop(Exception):  # noqa: N818 # -- a stop is an answer, not a fault
@@ -91,13 +96,13 @@ def version_in(repo: Path, commit: str) -> str | None:
 
 
 def bump_commit(repo: Path, ref: str, version: str) -> str | None:
-    """The commit on ``ref``'s first-parent line where the version became ``version``.
+    """The first commit on ``ref``'s first-parent line where the version became ``version``.
 
     It holds ``version`` and its first parent, if it has one, holds another. ``None`` when no
     commit on the line is that.
     """
     listed = try_git(repo, "log", "--first-parent", "--format=%H", ref, "--", MANIFEST) or ""
-    for commit in listed.splitlines():
+    for commit in reversed(listed.splitlines()):
         if version_in(repo, commit) != version:
             continue
         before = try_git(repo, "rev-parse", "-q", "--verify", f"{commit}^1^{{commit}}")
@@ -123,9 +128,28 @@ def release_commit(repo: Path, base: str, version: str) -> str:
     return git(repo, "commit-tree", tree, "-p", base, "-m", f"release: v{version}")
 
 
+def dotted(version: str) -> tuple[int, ...] | None:
+    return tuple(int(part) for part in version.split(".")) if DOTTED.fullmatch(version) else None
+
+
+def refuse_unless_above_every_tag(repo: Path, version: str) -> None:
+    here = dotted(version)
+    if here is None:
+        stop(f"the version {version} is not dotted numbers")
+    tagged = [
+        (found, name)
+        for name in (try_git(repo, "tag", "--list", "v*") or "").splitlines()
+        if (found := dotted(name.removeprefix("v"))) is not None
+    ]
+    highest = max(tagged, default=None)
+    if highest is not None and highest[0] > here:
+        stop(f"the version {version} is not above the tagged {highest[1]}; versions only go up")
+
+
 def release(repo: Path, *, create: bool = True) -> str:
     version = version_at_head(repo)
     tag = f"v{version}"
+    refuse_unless_above_every_tag(repo, version)
     if try_git(repo, "rev-parse", "-q", "--verify", f"refs/tags/{tag}") is not None:
         return f"exists {tag}"
     if not create:

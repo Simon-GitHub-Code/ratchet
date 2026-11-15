@@ -8,6 +8,7 @@ import pytest
 
 import conformance
 import gatelib
+import justfile_text
 from tests.test_conformance import (
     BINDING,
     JUSTFILE,
@@ -334,6 +335,13 @@ OLD_PLUGIN_LINE = (
 )
 
 
+OLD_COMMIT_MSG = (
+    "commit-msg file:\n"
+    '    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo commit-msg > "$RATCHET_HOOK_PROBE"; '
+    'else python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"; fi'
+)
+
+
 def old_plugin_justfile(repo: Path) -> str:
     template = (repo / JUSTFILE).read_text(encoding="utf-8")
     line = conformance.PLUGIN_LINE.search(template)
@@ -341,9 +349,11 @@ def old_plugin_justfile(repo: Path) -> str:
     start = template.index("# The one guard")
     end = template.index("# Every tier starts here")
     old = (template[:start] + template[end:]).replace(line.group(0), OLD_PLUGIN_LINE)
-    return old.replace(f": {conformance.PLUGIN_GUARD}\n", ":\n").replace(
+    old = old.replace(f": {conformance.PLUGIN_GUARD}\n", ":\n").replace(
         f" {conformance.PLUGIN_GUARD}\n", "\n"
     )
+    held = "\n".join(justfile_text.definition(old, "commit-msg"))
+    return old.replace(held, OLD_COMMIT_MSG)
 
 
 def fallback_findings(repo: Path) -> list[conformance.Finding]:
@@ -372,3 +382,30 @@ def test_a_fallback_check_has_nothing_to_rewrite_to_when_the_template_has_no_lin
     (repo / JUSTFILE).write_text(old_plugin_justfile(repo), encoding="utf-8")
     monkeypatch.setattr(conformance, "PLUGIN_GUARD", "no_such_recipe")
     assert fallback_findings(repo) == []
+
+
+def value_findings(repo: Path) -> list[conformance.Finding]:
+    return [
+        f for f in conformance.findings(repo) if "read `ratchet_plugin` as a folder" in f.problem
+    ]
+
+
+@pytest.mark.parametrize(
+    "owner_text",
+    [
+        '\nmine:\n    #!/usr/bin/env python3\n    print("{{ratchet_plugin}}")\n',
+        '\nbase := ratchet_plugin + "/scripts"\n',
+        "\nthere := path_exists(ratchet_plugin)\n",
+        "\nmine:\n    echo {{ratchet_plugin}}/x\n",
+        "\nmine:\n    echo '{{ratchet_plugin}}/x'\n",
+    ],
+)
+def test_an_owner_use_of_the_plugin_variable_as_a_folder_is_one_red_line(
+    repo: Path, owner_text: str
+) -> None:
+    assert value_findings(repo) == []
+    path = repo / JUSTFILE
+    path.write_text(path.read_text(encoding="utf-8") + owner_text, encoding="utf-8")
+    [found] = value_findings(repo)
+    assert isinstance(found.fix, conformance.Agent)
+    assert '"$RATCHET_PLUGIN_DIR"' in found.problem

@@ -1,5 +1,6 @@
 """``plugin_pin``: the plugin a tier runs from is the commit and version the binding pins."""
 
+import shlex
 from pathlib import Path
 
 import pytest
@@ -470,3 +471,9 @@ def test_a_clone_at_a_release_tag_is_at_the_commit_its_release_file_names(
 def test_a_clone_that_tracks_no_release_file_is_at_its_head(tmp_path: Path) -> None:
     used, head = plugin(tmp_path / "plugin")
     assert plugin_pin.commit_of(used) == head
+
+
+def test_the_upgrade_command_quotes_a_path_with_a_space(tmp_path: Path) -> None:
+    spaced = tmp_path / "my plugin"
+    command = plugin_pin.upgrade_command(spaced)
+    assert shlex.split(command) == ["python3", str(spaced / "scripts/upgrade.py"), "--apply"]

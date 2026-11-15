@@ -292,6 +292,27 @@ def test_recording_changes_nothing_the_hook_prints(tmp_path: Path) -> None:
     assert first == f"{session.message(root)}\n"
 
 
+def test_the_record_is_never_seen_partly_written_and_a_short_write_is_finished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / events.PLUGIN_RECORD
+    record.write_text("/old\n", encoding="utf-8")
+    before = record.stat().st_ino
+    seen: list[str] = []
+    real = os.write
+
+    def short(descriptor: int, data: bytes) -> int:
+        seen.append(record.read_text(encoding="utf-8"))
+        return real(descriptor, bytes(data)[:2])
+
+    monkeypatch.setattr(events.os, "write", short)
+    events.replace(record, "/new/path\n")
+    assert len(seen) > 1
+    assert set(seen) == {"/old\n"}
+    assert record.read_text(encoding="utf-8") == "/new/path\n"
+    assert record.stat().st_ino != before
+
+
 def test_a_directory_at_the_record_is_left_alone_and_nothing_is_raised(tmp_path: Path) -> None:
     root = adopted(tmp_path / "repo")
     recorded(root).mkdir()

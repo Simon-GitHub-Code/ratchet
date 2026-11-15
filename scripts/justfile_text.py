@@ -305,6 +305,39 @@ def with_recipe(template: str, name: str) -> Want:
     return want
 
 
+def callers(template: str, name: str) -> tuple[str, ...]:
+    """The recipes of the template whose body runs ``just name``."""
+    lines = template.split("\n")
+    return tuple(
+        block.name
+        for block in blocks(lines)
+        if block.parsed is not None
+        and name in JUST_CALL.findall(code_of("\n".join(lines[block.head + 1 : block.end])))
+    )
+
+
+def with_template_recipe(template: str, name: str) -> Want:
+    """The want of a justfile whose recipe ``name`` is the template's: replaced, else copied."""
+    found = template_recipe(template, name)
+    if found is None:
+        message = f"the template has no recipe {name!r}"
+        raise ValueError(message)
+    template_lines, wanted, _ = found
+    copy = template_lines[wanted.start : wanted.end]
+    copied = with_recipe(template, name)
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        lines = text.split("\n")
+        block = next((b for b in blocks(lines) if b.name == name), None)
+        if block is None:
+            return copied(text)
+        lines[block.start : block.end] = copy
+        return "\n".join(lines)
+
+    return want
+
+
 def with_first_dependency(recipe: str, dependency_name: str) -> Want:
     """The want of a justfile whose recipe runs ``dependency_name`` first among its dependencies."""
     return with_dependency_after(recipe, dependency_name, None)

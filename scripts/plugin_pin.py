@@ -43,6 +43,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -229,7 +230,7 @@ def write_refusal(root: Path, plugin: Path) -> str | None:
 
 def upgrade_command(plugin: Path) -> str:
     """The command that moves a repository to ``plugin``: the pin, the workflow refs, the rules."""
-    return f"python3 {plugin / 'scripts/upgrade.py'} --apply"
+    return f"python3 {shlex.quote(str(plugin / 'scripts/upgrade.py'))} --apply"
 
 
 def in_use(plugin: Path) -> str:

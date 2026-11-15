@@ -1726,6 +1726,7 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
         yield Finding(BINDING_PATH, problem, edit)
     yield from check_pin_recipe(root)
     yield from check_plugin_fallback(root)
+    yield from check_plugin_uses(root)
     if pin is None:
         return
     for name in (*TIER_WORKFLOWS, MERGE_WORKFLOW, WEEKLY_WORKFLOW):
@@ -1840,6 +1841,11 @@ def check_plugin_fallback(root: Path) -> Iterable[Finding]:
             want,
             justfile_text.with_recipe(template, PLUGIN_GUARD),
             *(justfile_text.with_first_dependency(name, PLUGIN_GUARD) for name in guarded),
+            *(
+                justfile_text.with_template_recipe(template, name)
+                for name in justfile_text.callers(template, PLUGIN_GUARD)
+                if justfile_text.defines_recipe(justfile or "", name)
+            ),
         ),
         Agent(),
     )
@@ -1850,6 +1856,89 @@ def check_plugin_fallback(root: Path) -> Iterable[Finding]:
     yield Finding(
         "justfile", problem, edit, identity="ratchet_plugin falls back to the marketplace"
     )
+
+
+PLUGIN_USE = re.compile(r"\{\{\s*ratchet_plugin\s*\}\}")
+PLUGIN_TEXT_LINE = re.compile(
+    r'^ratchet_plugin[ \t]*:=[ \t]*"\$RATCHET_PLUGIN_DIR"[ \t]*$', re.MULTILINE
+)
+PLUGIN_NAME = re.compile(r"\bratchet_plugin\b")
+ASSIGNMENT = re.compile(r"^([A-Za-z_][\w-]*)[ \t]*:=(.*)$")
+
+
+def inside_quotes(prefix: str) -> bool:
+    """Whether the end of ``prefix`` is inside double quotes, at its own level of a shell line."""
+    outer: list[tuple[bool, bool]] = []
+    double = single = False
+    index = 0
+    while index < len(prefix):
+        char = prefix[index]
+        if char == '"' and not single:
+            double = not double
+        elif char == "'" and not double:
+            single = not single
+        elif prefix.startswith("$(", index) and not single:
+            outer.append((double, single))
+            double = single = False
+            index += 1
+        elif char == ")" and outer and not double and not single:
+            double, single = outer.pop()
+        index += 1
+    return double
+
+
+def body_reads_value(line: str, *, shebang: bool) -> bool:
+    return any(
+        shebang or not inside_quotes(line[: use.start()]) for use in PLUGIN_USE.finditer(line)
+    )
+
+
+def expression_reads_value(expression: str) -> bool:
+    if re.search(r"\([^)]*\bratchet_plugin\b", expression):
+        return True
+    return any(
+        not expression[: use.start()].rstrip().endswith(("\"' +", '" +'))
+        for use in PLUGIN_NAME.finditer(expression)
+    )
+
+
+def plugin_value_uses(justfile: str) -> list[str]:
+    """Where ``ratchet_plugin``, which is shell text, is read as a value by ``just`` itself."""
+    found: list[str] = []
+    shebang = False
+    for number, line in enumerate(justfile.split("\n"), 1):
+        body = line[:1] in (" ", "\t")
+        shebang = (shebang and body) or (body and line.strip().startswith("#!"))
+        assignment = None if body else ASSIGNMENT.match(line)
+        if body:
+            reads = body_reads_value(line, shebang=shebang)
+        elif assignment is not None and assignment.group(1) != PLUGIN_VARIABLE:
+            reads = expression_reads_value(assignment.group(2))
+        else:
+            reads = False
+        if reads and (shebang or not line.lstrip().startswith("#")):
+            found.append(f"line {number}")
+    return found
+
+
+def check_plugin_uses(root: Path) -> Iterable[Finding]:
+    """A justfile that reads ``ratchet_plugin`` as a value, which is now the text of a variable.
+
+    Why: ``ratchet_plugin`` is ``"$RATCHET_PLUGIN_DIR"``, so no folder name is ever pasted into a
+    shell line (ADR 0068). A shebang recipe, a variable built on it and a function call such as
+    ``path_exists(ratchet_plugin)`` read the text itself, and each worked under the old line.
+    """
+    justfile = read_justfile(root)
+    if justfile is None or PLUGIN_TEXT_LINE.search(justfile) is None:
+        return
+    uses = plugin_value_uses(justfile)
+    if uses:
+        yield agent(
+            f"justfile: {', '.join(uses)} read `{PLUGIN_VARIABLE}` as a folder, and it is the text"
+            ' "$RATCHET_PLUGIN_DIR"; write each use as "$RATCHET_PLUGIN_DIR" inside a'
+            " double-quoted word of a shell line, and in a shebang recipe read the environment"
+            " variable RATCHET_PLUGIN_DIR"
+        )
 
 
 def check_pin_recipe(root: Path) -> Iterable[Finding]:

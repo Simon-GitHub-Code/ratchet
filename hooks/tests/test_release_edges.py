@@ -78,3 +78,26 @@ def test_a_remote_with_the_tag_and_no_default_branch_is_red(tmp_path: Path, caps
     capsys.readouterr()
     assert release_check.main(["release_check.py", "v1.2.3", "--repo", str(root)]) == 1
     assert "origin names no default branch" in capsys.readouterr().out
+
+
+def test_a_version_that_goes_back_is_refused_and_the_old_tag_stays_green(
+    tmp_path: Path, capsys: Out
+) -> None:
+    notes = "# C\n\n## 1.1.0\n\nOld.\n"
+    root = repos.repository(
+        tmp_path / "work", {MANIFEST: json.dumps({"version": "1.1.0"}), "CHANGELOG.md": notes}
+    )
+    assert release.main(["release.py", "--repo", str(root)]) == 0
+    repos.write(root, MANIFEST, json.dumps({"version": "1.2.0"}))
+    repos.write(root, "CHANGELOG.md", "# C\n\n## 1.2.0\n\nNew.\n\n## 1.1.0\n\nOld.\n")
+    repos.commit(root, "feat(core): release 1.2.0")
+    assert release.main(["release.py", "--repo", str(root)]) == 0
+    repos.write(root, MANIFEST, json.dumps({"version": "1.1.0"}))
+    repos.commit(root, "revert(core): back to 1.1.0")
+    capsys.readouterr()
+    assert release.main(["release.py", "--repo", str(root)]) == 1
+    error = capsys.readouterr().err
+    assert "1.1.0" in error
+    assert "v1.2.0" in error
+    code, lines = checked(root, capsys, tag="v1.1.0")
+    assert (code, lines) == (0, ["release-check: v1.1.0 green"])

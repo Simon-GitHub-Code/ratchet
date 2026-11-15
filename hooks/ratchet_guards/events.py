@@ -73,7 +73,9 @@ def replace(record: Path, text: str) -> None:
     descriptor, name = tempfile.mkstemp(dir=record.parent, prefix=f".{record.name}.")
     try:
         try:
-            os.write(descriptor, text.encode())
+            pending = memoryview(text.encode())
+            while pending:
+                pending = pending[os.write(descriptor, pending) :]
         finally:
             os.close(descriptor)
         Path(name).replace(record)
