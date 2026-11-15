@@ -20,7 +20,7 @@ What it leaves out is listed [at the end](#left-out).
 
 | Part | Values |
 | --- | --- |
-| Setup | nothing; an init that stopped before its questions; init done; the tracker set up; an adoption that stopped before it wrote the plugin pin; adopted |
+| Setup | nothing; an init that stopped before its questions; init done; the tracker set up; an adoption that stopped before it wrote the plugin pin; one that stopped after the pin, before its proof; adopted |
 | Commit hooks | installed, or not |
 | Checked out | the default branch; a working branch; a working branch the default branch already holds; a `records/<time>` branch |
 | Work tree | clean; records only; more than records |
@@ -35,13 +35,15 @@ What it leaves out is listed [at the end](#left-out).
 | The architecture | never asked, as before adoption and after an adoption by a plugin from before ADR 0049; owed since an upgrade; recorded |
 | The `Flag:` line | waits for `deployed`, as before the upgrade that ships ADR 0061; missing from the spec in flight and its tickets, which state their conjecture; asked, the conjecture writing it on the spec |
 
-From an empty directory the model reaches 2210 states and 5798 steps. Nine of the states are at rest: adopted, nothing unfinished, nothing owed, and every ticket resolved or none written. In three the architecture is recorded, in three it was never asked, and in three it is recorded and the `Flag:` line is asked. At rest the route names the next spec.
+From an empty directory the model reaches 2235 states and 5855 steps. Nine of the states are at rest: adopted, nothing unfinished, nothing owed, and every ticket resolved or none written. In three the architecture is recorded, in three it was never asked, and in three it is recorded and the `Flag:` line is asked. At rest the route names the next spec.
 
-A working branch the default branch already holds has no commit of its own to merge. A merge leaves it checked out when it is cut off before it switches, when it cannot switch, or when it is made from another checkout. A merge keeps the branch it merged, so it can be checked out again. A build that stops on the branch it cut, before it wrote anything, leaves one too: the branch is the default branch's tip. A commit on it makes it a working branch with work to merge again. In 282 states it is checked out clean, and in 9 with code uncommitted.
+`/ratchet:adopt` writes the plugin pin in its step 11, since every tier runs the plugin-pin gate first, and proves the adoption in step 12. So it can stop in two places: before the pin, with the templates committed on its branch, and after it, before its proof, with its work uncommitted there. The pages name `/ratchet:adopt` to resume either. Resumed on its branch it merges, as before; resumed off it, it proves the adoption and changes nothing else. Where it stopped after the pin, the model takes only that resume and the step the real route names, so the run it shows is that of an owner who follows today's route. In 29 states the adoption stopped after its pin, and they are not at rest.
 
-The architecture takes three values because each opens other steps. `/ratchet:adopt` asks it and records it (ADR 0049), so it is recorded from the adoption on. An adoption by an older plugin asked nothing, and the route reads nothing of that: it says the same as where the architecture is recorded. They part at an upgrade, which owes the architecture where it was never asked and owes nothing more where it is recorded. While it is owed the route names `/ratchet:architecture`, and recording it is the only step that ends that. In 1554 states the architecture is recorded, in 466 it was never asked, and in 190 it is owed.
+A working branch the default branch already holds has no commit of its own to merge. A merge leaves it checked out when it is cut off before it switches, when it cannot switch, or when it is made from another checkout. A merge keeps the branch it merged, so it can be checked out again. A build that stops on the branch it cut, before it wrote anything, leaves one too: the branch is the default branch's tip. A commit on it makes it a working branch with work to merge again. In 281 states it is checked out clean, and in 9 with code uncommitted.
 
-The `Flag:` line takes three values (ADR 0061). Before the upgrade that ships the decision, the line waits for `deployed`, and nothing the route names turns on it. The upgrade moves no ticket. Where a record in flight states its conjecture and no line, the line is missing: the spec states its conjecture, a ticket inherits it, or a ticket states its own and is not yet built. A labelled ticket then reads as one with no conjecture. The route names `/ratchet:conjecture <ticket>`, and no feature run and no drain starts on it. The release of a hold, and the agreement of a ticket that inherits from the spec, lead there too. A built ticket goes on to its merge, since no preflight reads it again. The conjecture writes the answer and the line on the spec, which each ticket reads, so one conjecture lands the line for both tickets. Once it is on the spec, or every ticket that lacked it is closed, the line is asked: the conjecture writes it on every later spec. In 1445 states the line waits, in 267 it is missing, and in 498 it is asked.
+The architecture takes three values because each opens other steps. `/ratchet:adopt` asks it and records it (ADR 0049), so it is recorded from the adoption on. An adoption by an older plugin asked nothing, and the route reads nothing of that: it says the same as where the architecture is recorded. They part at an upgrade, which owes the architecture where it was never asked and owes nothing more where it is recorded. While it is owed the route names `/ratchet:architecture`, and recording it is the only step that ends that. In 1579 states the architecture is recorded, in 466 it was never asked, and in 190 it is owed.
+
+The `Flag:` line takes three values (ADR 0061). Before the upgrade that ships the decision, the line waits for `deployed`, and nothing the route names turns on it. The upgrade moves no ticket. Where a record in flight states its conjecture and no line, the line is missing: the spec states its conjecture, a ticket inherits it, or a ticket states its own and is not yet built. A labelled ticket then reads as one with no conjecture. The route names `/ratchet:conjecture <ticket>`, and no feature run and no drain starts on it. The release of a hold, and the agreement of a ticket that inherits from the spec, lead there too. A built ticket goes on to its merge, since no preflight reads it again. The conjecture writes the answer and the line on the spec, which each ticket reads, so one conjecture lands the line for both tickets. Once it is on the spec, or every ticket that lacked it is closed, the line is asked: the conjecture writes it on every later spec. In 1470 states the line waits, in 267 it is missing, and in 498 it is asked.
 
 ADR 0061 has the upgrade send each stated ticket back to agent-ready and stop the tickets inheriting until the spec states the line. The model keeps each ticket's state and reads the line beside it instead. A ticket sent back to agent-ready forgets whether it states its own conjecture, and that decides whether it is stated once the line lands on the spec. The route names the same step either way.
 
@@ -55,7 +57,7 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | --- | --- | --- |
 | `init` | no setup, or an init that stopped | `/ratchet:init` |
 | `tracker` | init done | `/mattpocock-skills:setup-matt-pocock-skills` |
-| `adopt` | the tracker is set up, or an adoption stopped before the pin | `/ratchet:adopt` |
+| `adopt` | the tracker is set up, or an adoption stopped, before the pin or after it, before its proof | `/ratchet:adopt` |
 | `hooks` | the commit hooks are missing | the hooks install, which an agent runs |
 | `finish-records` | a `records/<time>` branch is checked out | `just merge --records`, which finishes the stopped run |
 | `land-records` | records alone are uncommitted on the default branch | `just merge --records` |
@@ -92,9 +94,9 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | you run `/ratchet:init` | `init` |
 | init stops before its questions | |
 | you set up the tracker | `tracker` |
-| you run `/ratchet:adopt`, which records the architecture | `adopt` |
+| you run `/ratchet:adopt`, which records the architecture; resumed after its pin, off its branch, it proves the adoption alone | `adopt` |
 | an adoption by a plugin from before the architecture was asked | |
-| the adoption stops part-way: on its branch before the pin, committed; or after the pin, uncommitted | |
+| the adoption stops part-way: on its branch before the pin, committed; or after the pin, before its proof, uncommitted | |
 | an agent installs the hooks | `hooks` |
 | you write the glossary and the brief, uncommitted | `grill` |
 | you write a spec | `specify` |
@@ -134,7 +136,7 @@ The route asks in this order, and the first case that applies is its answer. Eac
 
 ## Rules
 
-A rule whose name starts `Real` is on what the real route names; the others are on what the pages say. Four are on the architecture an upgrade leaves owed, and the last five on the `Flag:` line (ADR 0061). Each rule on the pages holds in Python and in TLC, on every state. Two rules on the real route break, each in the 9 states of [the divergence](#divergences) and in no other.
+A rule whose name starts `Real` is on what the real route names; the others are on what the pages say. Four are on the architecture an upgrade leaves owed, five on the `Flag:` line (ADR 0061), and the last two on the adoption's proof. Each rule on the pages holds in Python and in TLC, on every state. Four rules on the real route break, each only in states of [a divergence](#divergences) that names it.
 
 | Rule | Says | On the model |
 | --- | --- | --- |
@@ -142,7 +144,7 @@ A rule whose name starts `Real` is on what the real route names; the others are 
 | `AdviceReachesRest` | Following the route's advice reaches a state with nothing left to finish. | holds |
 | `FollowingAdviceLowersRank` | Each step the route names gets nearer to having nothing left to finish. | holds |
 | `RealAdviceCanBeFollowed` | The step the real route names can be taken. | breaks in 9 states |
-| `FollowingRealAdviceLowersRank` | Each step the real route names gets nearer to having nothing left to finish. | holds |
+| `FollowingRealAdviceLowersRank` | Each step the real route names gets nearer to having nothing left to finish. | breaks in 4 states |
 | `AdviceChangesTheState` | Taking the step the route names changes the state: its effect has not already happened. | holds |
 | `RealAdviceChangesTheState` | Taking the step the real route names changes the state: its effect has not already happened. | holds |
 | `AdviceNeverMergesAMergedBranch` | The route never names the merge of a branch the default branch already holds. | holds |
@@ -156,10 +158,12 @@ A rule whose name starts `Real` is on what the real route names; the others are 
 | `NoRunStartsWithoutTheFlagLine` | No feature run and no drain starts while a ticket's `Flag:` line is missing. | holds |
 | `OnlyTheUpgradeLeavesTheFlagLineMissing` | Only the upgrade that asks the `Flag:` line before deployment leaves it missing. | holds |
 | `TheUpgradeMovesNoTicket` | The upgrade that asks the `Flag:` line moves no ticket and no inheritance: a built ticket stays built. | holds |
+| `UnprovedAdoptionNeverBuilds` | A repository whose adoption stopped before its proof is never told to build. | holds |
+| `RealUnprovedAdoptionNeverBuilds` | The real route never tells a repository whose adoption stopped before its proof to build. | breaks in 2 states |
 
 The rank of a state is the longest run of advised steps from it to rest. The highest rank is 23.
 
-On a branch the default branch already holds, the merge can still be run, and it changes nothing: the merge judge refuses the branch, as behind a merge commit that holds it, or as a change with nothing in it to judge. The model has that step, from each of the 282 states. So a route that named the merge there would name a step that can be taken, and `RealAdviceCanBeFollowed` would hold. That is how the defect this model once missed got past it: with no forge, after the merge left the checkout on the branch, the route named the same merge again, for ever. `RealAdviceChangesTheState` breaks there. TLA+ cannot see a step that leaves every variable as it was, so the rule is a fact of each state: no way of taking the step named leads back to the same state.
+On a branch the default branch already holds, the merge can still be run, and it changes nothing: the merge judge refuses the branch, as behind a merge commit that holds it, or as a change with nothing in it to judge. The model has that step, from each of the 281 states. So a route that named the merge there would name a step that can be taken, and `RealAdviceCanBeFollowed` would hold. That is how the defect this model once missed got past it: with no forge, after the merge left the checkout on the branch, the route named the same merge again, for ever. `RealAdviceChangesTheState` breaks there. TLA+ cannot see a step that leaves every variable as it was, so the rule is a fact of each state: no way of taking the step named leads back to the same state.
 
 `ArchitectureNamedExactlyWhenOwed` names what comes before the architecture field by field, apart from the order the model asks in: the setup, the hooks, the checkout, a records branch, rows to fill, a review and a safeguard. So a change of that order breaks it. In 72 states the route names the owed architecture, and the step it would otherwise name is a build in 7 of them and the drain in 2.
 
@@ -170,8 +174,8 @@ The tests also check that:
 - following the advice never comes back to a state it passed, except through rest;
 - every state reaches rest by some steps;
 - each kind of hold is released by the one step the route names for it, and by no other: a ticket parked for guard edits stays parked when another ticket is agreed or the binding changes, and a note older than the kinds of hold, or a guard hold with no base commit, waits for a change to the ticket;
-- on a real repository, the real route names what the model says after every one of the 5798 steps, each taken from its source state as the shortest path from an empty directory builds it; where the drain parks a ticket for the safeguard, it parks on what the real `triggers.py` printed for the ticket's change;
-- on a real repository whose binding runs `merge.py`, the merge the route names, of the adoption's branch or of a working branch, leaves the default branch checked out and keeps the branch, and the route names what the model says after it; checked out again, the branch is named for the switch, a second merge of it changes nothing, and the switch goes back;
+- on a real repository, the real route names what the model says after every one of the 5855 steps, each taken from its source state as the shortest path from an empty directory builds it; where the drain parks a ticket for the safeguard, it parks on what the real `triggers.py` printed for the ticket's change;
+- on a real repository whose binding runs `merge.py`, the merge the route names, of the adoption's branch before its proof or of a working branch, leaves the default branch checked out and keeps the branch, and the route names what the model says after it; checked out again, the branch is named for the switch, a second merge of it changes nothing, and the switch goes back;
 - on such a repository, a merge with a dirty tree, or with the default branch checked out elsewhere, leaves HEAD on the branch and its `next:` line names the switch first, and a merge run from the default branch leaves HEAD there; the route then names what the model says;
 - on a real repository, a build that stops on the branch it cut is left by the switch and built again, and following the route from there never comes back to it;
 - where the real route names the owed architecture, its `then:` names the step it names once the architecture is no longer owed, and its `why:` offers carrying on with it; that step is the one the model gives beneath;
@@ -197,9 +201,10 @@ An `also:` line needs no state of the model. The model's label is the `next:` li
 
 Where the pages make a promise that the rule they give for it does not keep, and the real route follows the rule, the model follows the promise and names the place as a divergence. The tests hold the route to the model with the divergences applied. Each one also has a test that expects the route to keep the promise and fails. That test turns red the day the route is fixed. Then the divergence is deleted from `route_model.py`.
 
-There is one.
+There are two.
 
 - `flag-line-waits-for-deployed`. [The records page](../../skills/method/records.md) says: "A line of `## Operability` is asked when the binding declares an application type its question is asked of". `scripts/feature_preflight.py` asks the `Flag:` line only once `deployed` is declared, so where the line is missing the real route reads each stated ticket as stated. ADR 0061 decides the page's way. The shortest run: `/ratchet:init`, the tracker, `/ratchet:adopt`, the hooks, the glossary and brief committed and merged, a spec written and landed, split and landed, the first ticket agreed and its own conjecture stated, then the upgrade that asks the line. The model names `/ratchet:conjecture` on the first ticket. The real route names its build. In the 9 states where the line is missing and the pages name the conjecture, the real route names a build or the drain. That step cannot be taken, since the preflight is to refuse the ticket, so `RealAdviceCanBeFollowed` and `RealFlagLineBeforeTheBuild` break there. The sweep holds the real route to the build it names today, and a strict expected failure replays the shortest run and expects the conjecture.
+- `adoption-proved-by-its-pin`. [The adopt skill](../../skills/adopt/SKILL.md) says of its proof: "Done when `conformance` and `check-deep` exit 0 and the rehearsal passed, or its second round ended with the edits it still needs named." `scripts/route.py`, `adoption_step`, reads a binding with no plugin pin as an adoption that stopped, and one with a pin as adopted. The pin is written in step 11 and the proof run in step 12, so where the adoption stopped between them the real route reads it as finished. The shortest run: `/ratchet:init`, the tracker, the adoption stopped after its pin, the hooks, its work committed and merged as the route names, the glossary and brief committed and merged, a spec written and landed, its conjecture stated and landed, split and landed, the first ticket agreed. The model names `/ratchet:adopt`. The real route names the ticket's build. In the 29 states where the adoption stopped after its pin, the real route names what it names once the adoption is done. In 2 that is a build, so `RealUnprovedAdoptionNeverBuilds` breaks. In 4 it is the commit or the merge of the adoption's own branch, or the next spec, each a step that leads further from rest, so `FollowingRealAdviceLowersRank` breaks. The sweep holds the real route to what it names today, and a strict expected failure replays the shortest run and expects `/ratchet:adopt`.
 
 The model was written with another, a guard hold that outlived the edits it asked for. It was deleted when the drain's note began to record the paths a run named as its cause, and the default branch's commit when it parked. Landing those paths releases the hold.
 
@@ -208,21 +213,22 @@ The model was written with another, a guard hold that outlived the edits it aske
 Each item below flips one pin. Delete the pin in the same change.
 
 - `scripts/feature_preflight.py`, `operability_asked`: ask the `Flag:` line of every declared type the catalogue asks it of, whatever the life events, and delete `FLAG_EVENT`. The strict expected failure `test_the_route_names_what_the_pages_say_where_it_diverges[flag-line-waits-for-deployed]` then passes, which is red; delete the entry from `DIVERGENCES` in `route_model.py`. The world's tickets carry no `## Operability` block of their own, so the line-by-line reading ADR 0061 also asks of `operability_failure` changes nothing here; its own tests hold it.
+- The adoption's proof, recommended and not yet decided. `skills/adopt/SKILL.md`: the last step writes one binding line, `- Adopted: <plugin version>`, once the proof is green. `scripts/route.py`, `adoption_step`: a binding with no such line is an adoption still running, and the route names `/ratchet:adopt` to resume it. `scripts/upgrade.py` writes the line for a binding that already has a pin, so an adoption finished before the change is not sent back. `scripts/conformance.py` requires the line once the binding exists. The world's resume in `route_world.py` then writes the line as the skill does. The strict expected failure `test_the_route_names_what_the_pages_say_where_it_diverges[adoption-proved-by-its-pin]` passes, which is red; delete the entry from `DIVERGENCES`. The model has none of this until it is decided.
 - `scripts/route.py`, `main`: add to the `also:` lines one line per switch `flags.expired` finds in `flags.toml`, whatever the forge and whatever the row `no flag past its removal date` says. The strict expected failure `test_the_route_names_each_switch_past_its_removal_date` then passes, which is red; take its mark away.
 
 ## Charts
 
-The rules were checked on `Route.tla`, SHA-256 `15402fc7e2e065d8c838323374dcc5ee57b10af419f7c2fb6306af6a4df8d306`. Run with the 16 rules that hold, TLC reached 2210 states, and its last line counts 5799 states generated: the start and 5798 steps. Nothing deadlocks. Run once for each of the two rules that break, with one worker, TLC stops at the shortest run of [the divergence](#divergences), 14 steps from an empty directory, the same for both.
+The rules were checked on `Route.tla`, SHA-256 `637207c52f5b04902911d84717eef14975f755122bd1aad384e5a95b47d94be5`. Run with the 16 rules that hold, TLC reached 2235 states, and its last line counts 5856 states generated: the start and 5855 steps. Nothing deadlocks. Run once for each of the four rules that break, with one worker, TLC stops at the shortest run that breaks it. For the two rules on the `Flag:` line that is the shortest run of their divergence, 14 steps from an empty directory. For `RealUnprovedAdoptionNeverBuilds` it is the shortest run of its own, 16 steps. `FollowingRealAdviceLowersRank` breaks after 5: `/ratchet:init`, the tracker, the adoption stopped after its pin, the hooks, and the commit the real route names on the adoption's branch, where the pages name `/ratchet:adopt`.
 
-That module is too large for the statechart tool to draw. The charts are drawn from `RouteShown.tla`, SHA-256 `370eb9d6d33e24f92b36f648c3e2c9c1a89f3aa8544903efc4b4972df2648d71`: the same graph seen through what the charts show, which is what the route names, what it would name beneath, the checkout, what is owed, and whether the `Flag:` line is missing. Each chart's report says that TLC reached 465 states and 1482 steps there, and that nothing deadlocks.
+That module is too large for the statechart tool to draw. The charts are drawn from `RouteShown.tla`, SHA-256 `2b407aba20306dc3a0656d4df29078a6b31eec241dfc4f7f426c445ce4c5a3e0`: the same graph seen through what the charts show, which is what the route names, what it would name beneath, the checkout, what is owed, and whether the `Flag:` line is missing. Each chart's report says that TLC reached 476 states and 1521 steps there, and that nothing deadlocks.
 
 Each chart gives each of those states one label, and draws an arrow where a step changes the label. A step that keeps the label is not drawn. The summary carries no rule, so the charts have no legend. A state where the real route names something else says so in its label.
 
 ### The work
 
-What the route names once nothing in the checkout is unfinished, no records branch waits and no rows to fill, safeguard, review or architecture is owed. Four labels share one state: the drain's three kinds of park and the park for a safeguard are "Release the ticket the drain parked". `build` and `drain` are "Build the agent-ready tickets". A state where the real route names something else says so after "yet the route names". One does: where a ticket's `Flag:` line is missing, the pages name its conjecture, and the real route names the build.
+What the route names once nothing in the checkout is unfinished, no records branch waits and no rows to fill, safeguard, review or architecture is owed. Four labels share one state: the drain's three kinds of park and the park for a safeguard are "Release the ticket the drain parked". `build` and `drain` are "Build the agent-ready tickets". A state where the real route names something else says so after "yet the route names". Two do. Where an adoption stopped after its pin, the pages name `/ratchet:adopt` and the real route names what follows it, whatever the checkout and the tickets hold; that is one state here, and the resume leaves it for wherever the work stands. Where a ticket's `Flag:` line is missing, the pages name its conjecture, and the real route names the build.
 
-17 states and 38 arrows. It does not draw the 1049 steps that keep the label, which are most of the checkout's steps.
+18 states and 49 arrows. It does not draw the 1067 steps that keep the label, which are most of the checkout's steps.
 
 ```mermaid
 ---
@@ -233,65 +239,77 @@ stateDiagram-v2
   s1: Set up the tracker
   s2: Run /ratchet:adopt
   s3: Install the commit hooks
-  s4: Write the glossary and design brief
-  s5: Write the next spec
-  s6: State the spec's conjecture
-  s7: Split the spec into tickets
-  s8: Agree a ticket for agents
-  s9: State the ticket's conjecture
-  s10: Finish the blocking ticket first
-  s11: Build the agent-ready tickets
-  s12: The ticket is built on its branch
-  s13: Answer what the blocked run asked
-  s14: Mark the merged ticket resolved
-  s15: Release the ticket the drain parked
-  s16: State the ticket's conjecture, yet the route names: Build the agent-ready tickets
+  s4: Run /ratchet:adopt, yet the route names what follows it
+  s5: Write the glossary and design brief
+  s6: Write the next spec
+  s7: State the spec's conjecture
+  s8: Split the spec into tickets
+  s9: Agree a ticket for agents
+  s10: State the ticket's conjecture
+  s11: Finish the blocking ticket first
+  s12: Build the agent-ready tickets
+  s13: The ticket is built on its branch
+  s14: Answer what the blocked run asked
+  s15: Mark the merged ticket resolved
+  s16: Release the ticket the drain parked
+  s17: State the ticket's conjecture, yet the route names: Build the agent-ready tickets
   [*] --> s0
   s0 --> s1: you run /ratchet:init
   s1 --> s2: you set up the tracker
-  s2 --> s3: you run /ratchet:adopt or an older plugin's adoption or the adoption stops part-way
-  s3 --> s4: an agent installs the hooks
-  s4 --> s5: you write the glossary and brief
-  s5 --> s6: you write a spec
-  s6 --> s7: you state the spec's conjecture
-  s6 --> s8: you split the spec
-  s7 --> s8: you split the spec
-  s8 --> s5: you finish a ticket yourself
-  s8 --> s9: you agree a ticket
-  s8 --> s10: you agree a ticket
-  s8 --> s11: you agree a ticket
-  s9 --> s11: you state the ticket's conjecture
-  s10 --> s9: you agree a ticket or you finish a ticket yourself
-  s10 --> s11: you finish a ticket yourself or you agree a ticket
-  s11 --> s12: an agent builds the ticket or the build stops part-way
-  s11 --> s13: the build run blocks
-  s11 --> s14: the drain builds and merges a ticket or the drain merges one and parks the next for a safeguard
-  s11 --> s15: the drain parks a ticket
-  s11 --> s16: an upgrade asks the Flag: line before deployment
-  s8 --> s16: you agree a ticket
-  s11 --> s9: an upgrade asks the Flag: line before deployment
-  s12 --> s14: the branch merges or the merge leaves the branch checked out
-  s13 --> s11: you answer the blocked run
-  s14 --> s8: you mark the ticket resolved
-  s14 --> s9: you mark the ticket resolved
-  s14 --> s5: you mark the ticket resolved
-  s14 --> s11: you mark the ticket resolved
-  s15 --> s11: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
-  s16 --> s11: you state the ticket's conjecture
-  s10 --> s16: you finish a ticket yourself or you agree a ticket
-  s9 --> s16: an agent fills the rows or an agent lands the architecture review or an agent binds the safeguard or an agent lands the records or you merge the records branch
-  s13 --> s16: you answer the blocked run
-  s15 --> s16: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
-  s14 --> s15: you mark the ticket resolved
-  s13 --> s9: you answer the blocked run
-  s15 --> s9: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
+  s2 --> s3: you run /ratchet:adopt or an older plugin's adoption
+  s2 --> s4: the adoption stops part-way
+  s3 --> s5: an agent installs the hooks
+  s4 --> s3: you run /ratchet:adopt
+  s4 --> s5: you run /ratchet:adopt
+  s5 --> s6: you write the glossary and brief
+  s4 --> s6: you run /ratchet:adopt
+  s6 --> s7: you write a spec
+  s4 --> s7: you run /ratchet:adopt
+  s4 --> s8: you run /ratchet:adopt
+  s4 --> s9: you run /ratchet:adopt
+  s4 --> s12: you run /ratchet:adopt
+  s4 --> s11: you run /ratchet:adopt
+  s7 --> s8: you state the spec's conjecture
+  s7 --> s9: you split the spec
+  s8 --> s9: you split the spec
+  s9 --> s6: you finish a ticket yourself
+  s9 --> s10: you agree a ticket
+  s9 --> s11: you agree a ticket
+  s9 --> s12: you agree a ticket
+  s4 --> s13: you run /ratchet:adopt
+  s10 --> s12: you state the ticket's conjecture
+  s11 --> s10: you agree a ticket or you finish a ticket yourself
+  s11 --> s12: you finish a ticket yourself or you agree a ticket
+  s12 --> s13: an agent builds the ticket or the build stops part-way
+  s12 --> s14: the build run blocks
+  s12 --> s15: the drain builds and merges a ticket or the drain merges one and parks the next for a safeguard
+  s12 --> s16: the drain parks a ticket
+  s12 --> s17: an upgrade asks the Flag: line before deployment
+  s9 --> s17: you agree a ticket
+  s4 --> s15: you run /ratchet:adopt
+  s13 --> s15: the branch merges or the merge leaves the branch checked out
+  s14 --> s12: you answer the blocked run
+  s15 --> s6: you mark the ticket resolved
+  s15 --> s9: you mark the ticket resolved
+  s15 --> s10: you mark the ticket resolved
+  s15 --> s12: you mark the ticket resolved
+  s16 --> s12: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
+  s17 --> s12: you state the ticket's conjecture
+  s11 --> s17: you finish a ticket yourself or you agree a ticket
+  s14 --> s17: you answer the blocked run
+  s16 --> s17: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
+  s15 --> s16: you mark the ticket resolved
+  s10 --> s17: an agent lands the records or you merge the records branch or an agent fills the rows or an agent lands the architecture review or an agent binds the safeguard
+  s12 --> s10: an upgrade asks the Flag: line before deployment
+  s14 --> s10: you answer the blocked run
+  s16 --> s10: you answer on the ticket or you land the guard edits or you change the ticket or an agent binds the safeguard
 ```
 
 ### The checkout
 
 What is unfinished in the checkout, which the route names before any work. A merged branch still checked out is left by a switch, never merged again. The merge of it, which changes nothing, keeps the label and is not drawn.
 
-8 states and 18 arrows. It does not draw the 763 steps that keep the label: the setup, the tickets, and what is owed.
+8 states and 19 arrows. It does not draw the 784 steps that keep the label: the setup, the tickets, and what is owed.
 
 ```mermaid
 ---
@@ -311,13 +329,14 @@ stateDiagram-v2
   s0 --> s2: the adoption stops part-way or the build stops part-way
   s1 --> s0: you run /ratchet:adopt or the branch merges
   s1 --> s2: the adoption stops part-way or someone edits code
+  s2 --> s0: you run /ratchet:adopt
   s2 --> s1: an agent commits on a branch
   s0 --> s3: you write the glossary and brief or someone edits code
   s3 --> s1: an agent commits on a branch
   s1 --> s4: the merge leaves the branch checked out
-  s4 --> s0: an agent switches to the default branch
-  s0 --> s4: someone checks out a merged branch or the build stops part-way
   s0 --> s5: you write a spec or you state the spec's conjecture or you split the spec or you mark the ticket resolved
+  s0 --> s4: someone checks out a merged branch or the build stops part-way
+  s4 --> s0: an agent switches to the default branch
   s4 --> s2: someone edits code
   s5 --> s0: an agent lands the records
   s5 --> s6: an agent lands the records
@@ -331,7 +350,7 @@ stateDiagram-v2
 
 Rows an upgrade left for an agent to fill are named first of these, and no feature or drain starts until they are written (ADR 0050); the model takes the feature run and the drain away while they are owed. A safeguard or an architecture review that is owed is named before the next feature, and after anything unfinished in the checkout. A review comes before a safeguard (ADR 0052): with both owed, landing the review leaves the safeguard named.
 
-7 states and 13 arrows. It does not draw the 1113 steps that keep the label.
+7 states and 13 arrows. It does not draw the 1152 steps that keep the label.
 
 ```mermaid
 ---
@@ -342,21 +361,21 @@ stateDiagram-v2
   s1: Rows to fill: the route names it
   s2: Review owed: the route names it
   s3: Owed: the route names it
-  s4: Review owed: unfinished work comes first
-  s5: Rows to fill: unfinished work comes first
+  s4: Rows to fill: unfinished work comes first
+  s5: Review owed: unfinished work comes first
   s6: Owed: unfinished work comes first
   [*] --> s0
   s0 --> s1: an upgrade leaves rows for an agent to fill
   s0 --> s2: a kind that reopens the architecture arrives
   s0 --> s3: a new kind of code arrives or the drain merges one and parks the next for a safeguard
   s1 --> s0: an agent fills the rows
-  s1 --> s5: you write a spec or you run /ratchet:architecture or you state the spec's conjecture or you split the spec
+  s1 --> s4: you write a spec or you run /ratchet:architecture or you state the spec's conjecture or you split the spec
   s2 --> s0: an agent lands the architecture review
-  s2 --> s4: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way or you mark the ticket resolved
+  s2 --> s5: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way or you mark the ticket resolved
   s3 --> s0: an agent binds the safeguard
-  s3 --> s6: you write a spec or you state the spec's conjecture or you split the spec or an agent builds the ticket or the build stops part-way or you mark the ticket resolved or you run /ratchet:architecture
-  s4 --> s2: an agent lands the records or you merge the records branch or the branch merges or an agent switches to the default branch
-  s5 --> s1: an agent lands the records or the branch merges or you merge the records branch or an agent switches to the default branch
+  s3 --> s6: you write a spec or you state the spec's conjecture or you split the spec or you mark the ticket resolved or an agent builds the ticket or the build stops part-way or you run /ratchet:architecture
+  s4 --> s1: an agent lands the records or the branch merges or you merge the records branch or an agent switches to the default branch
+  s5 --> s2: an agent lands the records or you merge the records branch or the branch merges or an agent switches to the default branch
   s6 --> s3: an agent lands the records or you merge the records branch or the branch merges or an agent switches to the default branch
   s2 --> s3: an agent lands the architecture review
 ```
@@ -365,7 +384,7 @@ stateDiagram-v2
 
 `/ratchet:adopt` records the architecture, and an adoption by an older plugin never asked it. An upgrade owes it where it was never asked (ADR 0049). The route names it after the rows to fill, a review and a safeguard, and offers beside it the step it would otherwise name, so it never hides a build or the drain. `/ratchet:architecture` leaves the record on a branch whose merge is the owner's: this chart draws that as recorded, and the checkout's chart draws the merge.
 
-7 states and 15 arrows. It does not draw the 1389 steps that keep the label.
+7 states and 15 arrows. It does not draw the 1408 steps that keep the label.
 
 ```mermaid
 ---
@@ -380,7 +399,7 @@ stateDiagram-v2
   s5: Owed: the route names it
   s6: Owed: a safeguard comes first
   [*] --> s0
-  s0 --> s1: you run /ratchet:adopt or the adoption stops part-way
+  s0 --> s1: you run /ratchet:adopt
   s0 --> s2: an older plugin's adoption
   s2 --> s3: an upgrade leaves rows for an agent to fill
   s3 --> s4: you write a spec or you state the spec's conjecture or you split the spec
@@ -401,7 +420,7 @@ stateDiagram-v2
 
 The upgrade that ships ADR 0061 leaves the line missing where a record in flight states its conjecture. The route then names the ticket's conjecture once nothing it names first is open, and that conjecture lands the line on the spec for both tickets. A held ticket is released first, and then needs its conjecture. A ticket the owner finishes themself closes without it. Where the line is missing, the real route names a build instead, as the two states that say "yet the real route names" show.
 
-6 states and 17 arrows. It does not draw the 1363 steps that keep the label.
+6 states and 17 arrows. It does not draw the 1402 steps that keep the label.
 
 ```mermaid
 ---
@@ -419,7 +438,7 @@ stateDiagram-v2
   s0 --> s3: an upgrade asks the Flag: line before deployment
   s0 --> s2: an upgrade asks the Flag: line before deployment
   s1 --> s0: you finish a ticket yourself or you state the ticket's conjecture
-  s1 --> s2: you agree a ticket or you finish a ticket yourself or an agent fills the rows or an agent lands the architecture review or an agent binds the safeguard or an agent lands the records or you merge the records branch
+  s1 --> s2: you agree a ticket or you finish a ticket yourself or an agent lands the records or you merge the records branch or an agent fills the rows or an agent lands the architecture review or an agent binds the safeguard
   s0 --> s5: an upgrade asks the Flag: line before deployment
   s2 --> s0: you state the ticket's conjecture
   s2 --> s4: you agree a ticket
@@ -455,6 +474,7 @@ stateDiagram-v2
 - Another work tree that holds the default branch. There the merge cannot switch, and both its `next:` line and the route name `git switch <default>`, which git refuses while that work tree holds it. A strict expected failure in the tests turns red the day the step named there can be taken.
 - A branch the default branch holds, edited anywhere but at rest. What the route makes of a dirty tree there does not depend on the tickets or on what is owed.
 - A project that is deployed, a library, or one whose flag row is bound `none`. The upgrade that asks the `Flag:` line changes nothing the route names there, as for any other upgrade.
+- Any step but the resume and the real route's from an adoption stopped after its pin: an edit, an upgrade, a hold. The model shows where today's route leads from there, and nothing else.
 - That upgrade before the glossary is written, while records or code are uncommitted or a records branch waits, or from a plugin before ADR 0049.
 - A ticket whose own `## Operability` block lacks the `Flag:` line its spec states, which ADR 0061 reads line by line. The model's tickets carry no block of their own.
 - Hooks lost after the setup. The model installs them once; the stateful test takes them away every seventh step and checks that the route names them first.

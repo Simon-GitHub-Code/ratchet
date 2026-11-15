@@ -382,12 +382,17 @@ def adoption(repo: Repo, change: Change, *, pinned: bool) -> None:
     write(repo.root, "GLOSSARY.md", PLACEHOLDER)
     for path in QUALITY:
         write(repo.root, path, (ADOPT_TEMPLATES / path).read_text(encoding="utf-8"))
-    if change.after.architecture is Architecture.RECORDED:
+    if change.after.architecture is Architecture.RECORDED and not repo.architecture:
         repo.record_architecture()
 
 
 def adopt(repo: Repo, change: Change) -> None:
-    """A whole adoption, committed on its branch and merged."""
+    """A whole adoption, committed on its branch and merged.
+
+    Resumed after the pin once its branch is merged, it is the proof alone, which writes nothing.
+    """
+    if change.before.setup is Setup.PINNED and repo.merged:
+        return
     on_adoption_branch(repo)
     adoption(repo, change, pinned=True)
     snapshot(repo.root, "chore(method): adopt")
@@ -403,7 +408,7 @@ DO[ActionName.OLDER_PLUGIN_ADOPTS] = adopt
 @does(ActionName.ADOPTION_STOPS)
 def _adoption_stops(repo: Repo, change: Change) -> None:
     on_adoption_branch(repo)
-    pinned = change.after.setup is Setup.BOUND
+    pinned = change.after.setup is Setup.PINNED
     adoption(repo, change, pinned=pinned)
     if not pinned:
         snapshot(repo.root, "chore(method): adopt, the templates")

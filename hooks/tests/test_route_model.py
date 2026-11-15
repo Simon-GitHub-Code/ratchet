@@ -184,6 +184,15 @@ def builds_without_the_line(label: Label) -> set[World]:
     }
 
 
+def builds_unproved(label: Label) -> set[World]:
+    """The states where the adoption stopped before its proof and ``label`` names a build."""
+    return {
+        s
+        for s in model.graph().states
+        if s.setup is Setup.PINNED and label(s) in {Advice.BUILD, Advice.DRAIN}
+    }
+
+
 def runs_without_the_line(_label: Label) -> set[World]:
     """The states with a feature run or a drain that starts while the line is missing."""
     return {
@@ -239,6 +248,8 @@ CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "NoRunStartsWithoutTheFlagLine": (runs_without_the_line, model.advice),
     "OnlyTheUpgradeLeavesTheFlagLineMissing": (missing_by_another, model.advice),
     "TheUpgradeMovesNoTicket": (upgrade_moves_a_ticket, model.advice),
+    "UnprovedAdoptionNeverBuilds": (builds_unproved, model.advice),
+    "RealUnprovedAdoptionNeverBuilds": (builds_unproved, model.real_advice),
 }
 
 
@@ -248,15 +259,23 @@ def test_every_rule_the_export_names_is_checked_here() -> None:
 
 @pytest.mark.parametrize("name", list(CHECKS))
 def test_a_rule_breaks_only_where_a_divergence_says_it_does(name: str) -> None:
-    """On ``advice`` every rule holds; on ``real_advice`` it fails exactly where an entry says."""
+    """On ``advice`` every rule holds; on ``real_advice`` it fails only where an entry says.
+
+    Each entry that names the rule breaks it in some state of its own. Why not in each: an
+    adoption stopped after its pin is read as finished everywhere, and the route names a build
+    in only some of those states.
+    """
     check, label = CHECKS[name]
-    explained = {
-        state
-        for state in model.graph().states
-        if (entry := model.divergence(state)) and name in entry.breaks
-    }
-    assert check(label) == explained
-    assert label is model.real_advice or not explained
+    broken = check(label)
+    where: dict[str, set[World]] = defaultdict(set)
+    for state in model.graph().states:
+        if (entry := model.divergence(state)) and name in entry.breaks:
+            where[entry.name].add(state)
+    assert broken <= set().union(*where.values())
+    assert all(broken & states for states in where.values()), sorted(where)
+    named = {entry.name for entry in model.DIVERGENCES if name in entry.breaks}
+    assert set(where) == named
+    assert label is model.real_advice or not broken
 
 
 def test_the_architecture_rules_are_met_where_they_bite() -> None:
@@ -870,7 +889,7 @@ def test_a_review_and_a_safeguard_owed_beside_the_architecture_come_before_it(
 
 ADOPTED = World(setup=Setup.BOUND, hooks=True, architecture=Architecture.RECORDED)
 BRANCHES = {
-    "the adoption's branch": (replace(ADOPTED, head=Head.WORK), ()),
+    "the adoption's branch": (replace(ADOPTED, setup=Setup.PINNED, head=Head.WORK), ()),
     "a working branch": (
         replace(ADOPTED, foundation=True),
         (ActionName.SOMEONE_EDITS_CODE, ActionName.AGENT_COMMITS_ON_A_BRANCH),
@@ -905,7 +924,9 @@ def test_after_the_real_merge_the_route_never_names_that_merge_again(
     leaves the checkout on the branch it merged. The adoption's branch is judged by its own gates,
     a working branch by its verdict record. The merge keeps the branch: checked out again, the
     route names the switch, the merge run there changes nothing, as the model's merge does, and
-    the switch the route names goes back.
+    the switch the route names goes back. The adoption's branch exists only before its proof,
+    where the model takes no step but the resume and the route's own, so its switch back is read
+    off the rules alone.
     """
     world, steps = BRANCHES[case]
     repo = real.Repo.merging(tmp_path)
@@ -935,7 +956,7 @@ def test_after_the_real_merge_the_route_never_names_that_merge_again(
     assert git(repo.root, "branch", "--list", branch), "the merge keeps the branch"
     git(repo.root, "switch", "-q", branch)
     again = replace(merged, head=Head.MERGED)
-    assert again in model.graph().states
+    assert again in model.graph().states or again.setup is Setup.PINNED
     path.append(f"switch to {branch}")
     ask(repo, again, path)
     was = unchanged(repo)

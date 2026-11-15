@@ -30,7 +30,8 @@ class Setup(StrEnum):
     """How far the one-time setup has got.
 
     Nothing; an init that stopped with the purpose placeholder in ``AGENTS.md``; init done; the
-    tracker; an adoption that stopped before it wrote the plugin pin; the binding, pinned.
+    tracker; an adoption that stopped before it wrote the plugin pin; one that stopped after the
+    pin, before its proof; the binding, pinned and proved.
     """
 
     BARE = "bare"
@@ -38,6 +39,7 @@ class Setup(StrEnum):
     NAMED = "named"
     TRACKED = "tracked"
     ADOPTING = "adopting"
+    PINNED = "pinned"
     BOUND = "bound"
 
 
@@ -243,8 +245,12 @@ class World:
 
 
 def adopted(world: World) -> bool:
-    """Whether the setup is done and the commit hooks are in place."""
-    return world.setup is Setup.BOUND and world.hooks
+    """Whether the binding is pinned and the commit hooks are in place, as the scripts see it.
+
+    An adoption that stopped after its pin, before its proof, is adopted here: nothing in the
+    repository stops a step there. ``rest`` and the route's advice tell it apart.
+    """
+    return world.setup in {Setup.PINNED, Setup.BOUND} and world.hooks
 
 
 def settled(world: World) -> bool:
@@ -265,6 +271,7 @@ def rest(world: World) -> bool:
     """Whether there is nothing left to finish: the route's answer is to write the next spec."""
     return (
         calm(world)
+        and world.setup is Setup.BOUND
         and world.spec is Spec.NONE
         and not world.owes
         and not world.reviews
@@ -365,7 +372,7 @@ def _no_ticket(world: World) -> bool:
 CHAIN: Final = (
     Rule(Advice.INIT, lambda w: w.setup in {Setup.BARE, Setup.STARTED}),
     Rule(Advice.TRACKER, lambda w: w.setup is Setup.NAMED),
-    Rule(Advice.ADOPT, lambda w: w.setup in {Setup.TRACKED, Setup.ADOPTING}),
+    Rule(Advice.ADOPT, lambda w: w.setup in {Setup.TRACKED, Setup.ADOPTING, Setup.PINNED}),
     Rule(Advice.HOOKS, lambda w: not w.hooks),
     Rule(Advice.FINISH_RECORDS, lambda w: w.head is Head.RECORDS),
     Rule(Advice.LAND_RECORDS, lambda w: (w.head, w.tree) == (Head.MAIN, Tree.RECORDS)),
@@ -436,7 +443,31 @@ def as_before_the_flag_line(world: World) -> World:
     return replace(world, flag=Flag.WAITS)
 
 
+def as_proved_by_its_pin(world: World) -> World:
+    """``world`` as the route reads it while a pinned binding counts as a finished adoption."""
+    return replace(world, setup=Setup.BOUND)
+
+
 DIVERGENCES: Final[tuple[Divergence, ...]] = (
+    Divergence(
+        name="adoption-proved-by-its-pin",
+        holds=lambda world: world.setup is Setup.PINNED,
+        reads=as_proved_by_its_pin,
+        contradicts=(
+            "Done when `conformance` and `check-deep` exit 0 and the rehearsal passed, or its"
+            " second round ended with the edits it still needs named."
+        ),
+        source="skills/adopt/SKILL.md",
+        breaks=frozenset({"FollowingRealAdviceLowersRank", "RealUnprovedAdoptionNeverBuilds"}),
+        example=World(
+            setup=Setup.PINNED,
+            hooks=True,
+            foundation=True,
+            tickets=(Ticket.STATED, Ticket.TRIAGE),
+            inherits=True,
+            architecture=Architecture.RECORDED,
+        ),
+    ),
     Divergence(
         name="flag-line-waits-for-deployed",
         holds=lambda world: world.flag is Flag.MISSING,
@@ -500,11 +531,28 @@ def lined(world: World) -> World:
     return world
 
 
+def following_today(world: World) -> frozenset[ActionName]:
+    """The steps taken where an adoption stopped after its pin: its resume, and the real advice.
+
+    Why no other: the model shows where an owner who follows today's route is led from there,
+    and an arrival of its own beside that run would only grow the graph.
+    """
+    return frozenset({ActionName.OWNER_ADOPTS, ADVISED[real_advice(world)]})
+
+
 def action(name: ActionName, *follows: Advice) -> Callable[[Successors], Successors]:
     """Register ``successors`` as action ``name``; each advice in ``follows`` leads to it."""
 
+    def taken(successors: Successors) -> Successors:
+        def take(world: World) -> Iterator[World]:
+            if world.setup is Setup.PINNED and name not in following_today(world):
+                return iter(())
+            return map(lined, successors(world))
+
+        return take
+
     def register(successors: Successors) -> Successors:
-        ACTIONS[name] = Action(name, follows, lambda world: map(lined, successors(world)))
+        ACTIONS[name] = Action(name, follows, taken(successors))
         for advice_label in follows:
             if advice_label in ADVISED:
                 message = f"{advice_label} is followed by {ADVISED[advice_label]} and {name}"
@@ -533,9 +581,22 @@ def _owner_sets_up_tracker(world: World) -> Iterator[World]:
         yield replace(world, setup=Setup.TRACKED)
 
 
+def on_the_adoption_branch(world: World) -> bool:
+    """Whether the adoption's own branch is checked out: a working branch before the glossary."""
+    return world.head is Head.WORK and not world.foundation
+
+
 @action(ActionName.OWNER_ADOPTS, Advice.ADOPT)
 def _owner_adopts(world: World) -> Iterator[World]:
-    if world.setup in {Setup.TRACKED, Setup.ADOPTING}:
+    """``/ratchet:adopt``, or its resume: from its branch it merges; after that it proves alone.
+
+    Why a resume from anywhere else changes only the setup: what the stopped adoption left is
+    merged, and its proof writes nothing the route reads.
+    """
+    if world.setup is Setup.PINNED and not on_the_adoption_branch(world):
+        yield replace(world, setup=Setup.BOUND)
+        return
+    if world.setup in {Setup.TRACKED, Setup.ADOPTING, Setup.PINNED}:
         yield replace(
             world,
             setup=Setup.BOUND,
@@ -554,13 +615,17 @@ def _older_plugin_adopts(world: World) -> Iterator[World]:
 
 @action(ActionName.ADOPTION_STOPS)
 def _adoption_stops(world: World) -> Iterator[World]:
-    """An adoption stops on its branch: before it writes the pin, committed; or just after."""
+    """An adoption stops on its branch: before it writes the pin, committed; or after it.
+
+    Why after the pin is a place of its own: the adoption writes the pin in its step 11, since
+    every tier runs the plugin-pin gate first, and proves the adoption in step 12.
+    """
     if world.setup is Setup.TRACKED:
         yield replace(world, setup=Setup.ADOPTING, head=Head.WORK)
     if world.setup in {Setup.TRACKED, Setup.ADOPTING}:
         yield replace(
             world,
-            setup=Setup.BOUND,
+            setup=Setup.PINNED,
             head=Head.WORK,
             tree=Tree.CODE,
             architecture=Architecture.RECORDED,
@@ -569,7 +634,7 @@ def _adoption_stops(world: World) -> Iterator[World]:
 
 @action(ActionName.AGENT_INSTALLS_HOOKS, Advice.HOOKS)
 def _agent_installs_hooks(world: World) -> Iterator[World]:
-    if world.setup is Setup.BOUND and not world.hooks:
+    if world.setup in {Setup.PINNED, Setup.BOUND} and not world.hooks:
         yield replace(world, hooks=True)
 
 
@@ -1083,6 +1148,15 @@ def line_before_the_build(label: Callable[[World], Advice]) -> Callable[[World],
     return check
 
 
+def proved_before_the_build(label: Callable[[World], Advice]) -> Callable[[World], bool]:
+    """Whether ``label`` names no build and no drain where the adoption was never proved."""
+
+    def check(world: World) -> bool:
+        return world.setup is not Setup.PINNED or label(world) not in BUILDS
+
+    return check
+
+
 def no_run_without_the_line() -> str:
     """TLA+ text: while the line is missing, no step is a feature run or the drain."""
     runs = " \\/ ".join(RUNS)
@@ -1178,6 +1252,14 @@ RULES: Final[dict[str, model_tla.Rule]] = {
         "The upgrade that asks the `Flag:` line moves no ticket and no inheritance: a built ticket"
         " stays built.",
         upgrade_moves_no_ticket(),
+    ),
+    "UnprovedAdoptionNeverBuilds": model_tla.Invariant(
+        "A repository whose adoption stopped before its proof is never told to build.",
+        proved_before_the_build(advice),
+    ),
+    "RealUnprovedAdoptionNeverBuilds": model_tla.Invariant(
+        "The real route never tells a repository whose adoption stopped before its proof to build.",
+        proved_before_the_build(real_advice),
     ),
 }
 
