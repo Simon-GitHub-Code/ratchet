@@ -283,6 +283,7 @@ WEIGHTED = [
     Kind.COMMIT,
     Kind.RECORD,
     Kind.RECORD,
+    Kind.CHECK_NOT_FINAL,
     Kind.CHECK,
     Kind.CHECK,
     Kind.PUBLISH,
@@ -308,7 +309,9 @@ WEIGHTED = [
     Kind.SPLIT,
     Kind.RESOLVE,
     Kind.CHECK_HALTED,
+    Kind.CHECK_HALTED_NOT_FINAL,
 ]
+WALKED: list[list[str]] = []
 
 
 class DrainOnARepository(RuleBasedStateMachine):
@@ -338,6 +341,7 @@ class DrainOnARepository(RuleBasedStateMachine):
         self.play.take(action, after)
 
     def teardown(self) -> None:
+        WALKED.append(self.play.path)
         shutil.rmtree(self.scratch, ignore_errors=True)
 
 
@@ -355,6 +359,8 @@ def test_the_real_drain_agrees_with_the_model_on_every_step() -> None:
             suppress_health_check=[HealthCheck.too_slow],
         ),
     )
+    walked = {name for path in WALKED for name in path}
+    assert f"{Kind.CHECK_NOT_FINAL.value} a" in walked, "the walk takes the check without --final"
 
 
 def test_the_real_drain_agrees_with_the_model_after_each_kind_of_kill(tmp_path: Path) -> None:
@@ -603,6 +609,75 @@ def test_a_check_that_cannot_read_leaves_the_start_unpassed_and_the_retrys_updat
     assert model.held_by_note(states[-1].of(Name.A)), "the retry's update parks it"
     play = replay(tmp_path, path)
     assert play.state.of(Name.A).branch is Branch.DRAFT
+
+
+NOT_FINAL_A = f"{Kind.CHECK_NOT_FINAL.value} a"
+HALTED_NOT_FINAL_A = f"{Kind.CHECK_HALTED_NOT_FINAL.value} a"
+RECORD_A = "the agent commits the verdict record of a"
+LAND_A = "drain.py land a"
+RESUMED = ["drain.py open a", NOT_FINAL_A, ROLE_A, RECORD_A, LAND_A]
+NOT_PASSED = (
+    f"land: {REF[Name.A]} is not landed: no publish check has passed its start; run"
+    f" `drain.py check {REF[Name.A]} --final` first\n"
+)
+
+
+def test_land_refuses_a_branch_a_role_committed_on_in_the_resume_after_a_check_without_final(
+    tmp_path: Path,
+) -> None:
+    broken = [broken_by(RESUMED[:at]) for at in range(1, len(RESUMED) + 1)]
+    assert broken == [set(), set(), set(), {UNTOUCHED}, set()], broken
+    states = walked(RESUMED)
+    assert states[1] == states[0], "a check without --final marks nothing"
+    recorded = next(action for action, _ in model.moves(states[2]) if action.name == RECORD_A)
+    assert not model.in_order(states[2], recorded), "the skill's last check, with --final, parks it"
+    assert states[-1] == states[-2], "land refuses it"
+    play = replay(tmp_path, RESUMED[:2])
+    assert (play.world.code, play.world.printed) == (0, f"{publish_check.GREEN}\n")
+    assert "passed" not in note_of(play)
+    for name in RESUMED[2:]:
+        play.named(name)
+    assert (play.world.code, play.world.printed) == (3, NOT_PASSED)
+    subjects = git(play.world.root, "log", "--format=%s", "main").splitlines()
+    assert PUBLISHED not in subjects, "the role's commit is not on the default branch"
+
+
+def test_a_check_without_final_parks_a_branch_that_moved_as_the_last_check_does(
+    tmp_path: Path,
+) -> None:
+    path = ["drain.py open a", ROLE_A, NOT_FINAL_A]
+    assert walked(path)[-1] == walked([*path[:-1], CHECK_A])[-1]
+    play = replay(tmp_path, path)
+    assert play.world.code == 1
+    assert note_of(play)["reasons"][0].startswith("a role published: `feature/1-alpha` moved")
+
+
+def test_a_check_without_final_that_finds_only_an_unfinished_rebase_leaves_the_start_unpassed(
+    tmp_path: Path,
+) -> None:
+    path = [*REJUDGED, HALTED_NOT_FINAL_A, LAND_A, CHECK_A]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    play = replay(tmp_path, path[:-2])
+    assert play.world.code == 3
+    assert play.state.of(Name.A).note == model.Note(
+        model.Outcome.CLOSED, text=0, fresh=True, attempts=1
+    ), "waits to be retried, its start unpassed"
+    assert note_of(play)["reasons"][0] == HALTED_WHY
+    assert (play.named(LAND_A), play.world.code) == (NOT_PASSED, 3)
+    assert play.named(CHECK_A).startswith(publish_check.GREEN), "the next check makes the tree"
+    assert note_of(play)["passed"] is True
+
+
+def test_a_check_that_cannot_read_marks_nothing_with_the_flag_or_without_it(
+    tmp_path: Path,
+) -> None:
+    play = replay(tmp_path, ["drain.py open a", ROLE_A])
+    play.state = walked([*play.path, UNREAD_A])[-1]
+    play.path.append(f"{UNREAD_A}, run without --final")
+    with play.world.unreadable():
+        play.world.command("check", REF[Name.A])
+    assert play.world.code == 3
+    play.agree()
 
 
 def test_update_is_refused_when_its_check_cannot_read_the_present_state(tmp_path: Path) -> None:

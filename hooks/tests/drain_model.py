@@ -25,8 +25,10 @@ touch one file, so nothing conflicts.
 Bounds keep the graph small: the owner edits a ticket at most once, landing its ``Flag:`` line,
 closing a split ticket or not, the agent leaves work uncommitted once, a role commits once, and
 the retry count of a ticket left waiting stops at ``RETRIES``, past which nothing reads it. A
-role commits before its run's check. The skill runs ``check`` only on a start no check passed, of
-a ticket its note does not hold. A check that cannot read, or that finds only a rebase left
+role commits only on a start no check passed: before its run's check, or after a check without
+``--final``, which the skill runs after a run that errored, in the resume that follows. The skill
+runs ``check`` only on a start no check passed, of a ticket its note does not hold. A check without
+``--final`` is taken only in ``a``. A check that cannot read, or that finds only a rebase left
 unfinished, is taken only in ``a``, on a branch with commits of its own.
 
 In ``a`` the agent's commits are free: it may commit before the check. The feature skill's order,
@@ -404,8 +406,10 @@ class Kind(Fact):
     SPLIT = "drain.py split"
     RESOLVE = "the owner closes ticket"
     CHECK = "drain.py check"
+    CHECK_NOT_FINAL = "drain.py check without --final"
     CHECK_UNREADABLE = "drain.py check cannot read the present state of"
     CHECK_HALTED = "drain.py check finds only a rebase left unfinished in"
+    CHECK_HALTED_NOT_FINAL = "drain.py check without --final finds only a rebase left unfinished in"
     UPDATE_UNREADABLE = "the check of drain.py update cannot read the present state of"
 
 
@@ -601,14 +605,14 @@ def in_its_tree(state: State, name: Name) -> Ticket | None:
     return ticket if ticket.tree in {Tree.CLEAN, Tree.DIRTY} else None
 
 
-def _check(state: State, name: Name) -> State | None:
-    """``drain.py check``: green marks the start passed; a branch that moved is parked and held."""
+def _check(state: State, name: Name, *, final: bool = True) -> State | None:
+    """``drain.py check``: green with ``--final`` marks the start passed; a branch that moved is parked and held."""  # noqa: E501
     ticket = in_its_tree(state, name)
     if ticket is None:
         return None
     if ticket.since:
         return state.with_ticket(name, closed(ticket, Outcome.CLOSED))
-    return state.with_ticket(name, checked(ticket))
+    return state.with_ticket(name, checked(ticket) if final else ticket)
 
 
 def _check_unreadable(state: State, name: Name) -> State | None:
@@ -622,13 +626,14 @@ def _check_unreadable(state: State, name: Name) -> State | None:
     return state.with_ticket(name, closed(ticket, Outcome.CLOSED, retry=True))
 
 
-def _check_halted(state: State, name: Name) -> State | None:
-    """A rejudge's reconcile left its rebase unfinished and nothing moved: the start passed, and the ticket waits to be retried."""  # noqa: E501
+def _check_halted(state: State, name: Name, *, final: bool = True) -> State | None:
+    """A rejudge's reconcile left its rebase unfinished and nothing moved: the start passed with ``--final``, and the ticket waits to be retried."""  # noqa: E501
     ticket = in_its_tree(state, name)
     rejudged = state.of(name).tree is not Tree.NONE and state.of(name).branch in AHEAD
     if ticket is None or ticket.since or not rejudged:
         return None
-    return state.with_ticket(name, closed(checked(ticket), Outcome.CLOSED, retry=True))
+    read = checked(ticket) if final else ticket
+    return state.with_ticket(name, closed(read, Outcome.CLOSED, retry=True))
 
 
 def rebased(ticket: Ticket) -> Ticket:
@@ -1039,8 +1044,10 @@ ON_TICKET: dict[Kind, Callable[[State, Name], State | None]] = {
     Kind.RECORD: _record,
     Kind.PUBLISH: _publish,
     Kind.CHECK: recovering(_check),
+    Kind.CHECK_NOT_FINAL: recovering(functools.partial(_check, final=False)),
     Kind.CHECK_UNREADABLE: recovering(_check_unreadable),
     Kind.CHECK_HALTED: recovering(_check_halted),
+    Kind.CHECK_HALTED_NOT_FINAL: recovering(functools.partial(_check_halted, final=False)),
     Kind.CLOSE: recovering(_close),
     Kind.SPLIT: recovering(_split),
     Kind.UPDATE: recovering(_update),
@@ -1088,8 +1095,10 @@ PLAYS: dict[Kind, tuple[Name, ...]] = {
     Kind.RESOLVE: (Name.A,),
     Kind.PUBLISH: (Name.A,),
     Kind.CHECK: BUILT,
+    Kind.CHECK_NOT_FINAL: (Name.A,),
     Kind.CHECK_UNREADABLE: (Name.A,),
     Kind.CHECK_HALTED: (Name.A,),
+    Kind.CHECK_HALTED_NOT_FINAL: (Name.A,),
     Kind.UPDATE_UNREADABLE: (Name.A,),
     Kind.WORK: (Name.C,),
     Kind.LOCK: (Name.C,),
@@ -2120,16 +2129,26 @@ def run(
 
 
 def landing_run() -> Run:
-    """Every step but those on ``c``, a role's commit, a check that cannot read, the ``Flag:`` line and the steps no run takes, the agent keeping the skill's order: ``a`` built, checked, judged, landed or parked, ``b`` waiting on it."""  # noqa: E501
+    """Every step but those on ``c``, a role's commit, a check without ``--final`` or that cannot read, the ``Flag:`` line and the steps no run takes, the agent keeping the skill's order: ``a`` built, checked, judged, landed or parked, ``b`` waiting on it."""  # noqa: E501
     return run(
         lambda action: action.ticket is not Name.C and action.kind not in TICKET_LIFE | UNRUN,
         in_order,
     )
 
 
-TICKET_LIFE = frozenset({Kind.PUBLISH, Kind.UPGRADE, Kind.LINE, Kind.CHECK_UNREADABLE})
+TICKET_LIFE = frozenset(
+    {Kind.PUBLISH, Kind.UPGRADE, Kind.LINE, Kind.CHECK_UNREADABLE, Kind.CHECK_NOT_FINAL}
+)
 """The steps of a ticket's life that only the life run takes."""
-UNRUN = frozenset({Kind.SPLIT, Kind.RESOLVE, Kind.CHECK_HALTED, Kind.UPDATE_UNREADABLE})
+UNRUN = frozenset(
+    {
+        Kind.SPLIT,
+        Kind.RESOLVE,
+        Kind.CHECK_HALTED,
+        Kind.CHECK_HALTED_NOT_FINAL,
+        Kind.UPDATE_UNREADABLE,
+    }
+)
 """The steps no run takes, so that the life run stays a module the statechart tool draws whole:
 only the search in the tests reaches a split, a check that finds only a rebase left unfinished,
 and an ``update`` whose check cannot read."""

@@ -14,7 +14,8 @@ After each action ``seen`` reads the repository back in the model's terms.
 
 The publish check of ADR 0060 is ``publish_check.py``. ``drain.py open`` records the start in the
 note, and ``drain.py check`` runs the check against it; the world runs ``check --final``, the
-check that says the run is over, and reads ``start`` and ``passed`` back from the note.
+check that says the run is over, or ``check`` with no flag where the model's step is the check
+without it, and reads ``start`` and ``passed`` back from the note.
 """
 
 from __future__ import annotations
@@ -112,7 +113,8 @@ DRAFT = "src/draft.py"
 SLUG = {Name.A: "alpha", Name.D: "save", Name.E: "list"}
 STATUSES = {status.value: status for status in Status}
 COMMANDS = frozenset({Kind.OPEN, Kind.UPDATE, Kind.LAND, Kind.CLOSE})
-CHECKS = frozenset({Kind.CHECK, Kind.CHECK_UNREADABLE, Kind.CHECK_HALTED})
+NOT_FINAL = frozenset({Kind.CHECK_NOT_FINAL, Kind.CHECK_HALTED_NOT_FINAL})
+CHECKS = frozenset({Kind.CHECK, Kind.CHECK_UNREADABLE, Kind.CHECK_HALTED, *NOT_FINAL})
 UNREADABLE = "the forge cannot be reached"
 """Why a check cannot read the present state here: a forge down, as ADR 0060 names it."""
 HALTED_WHY = "conflict: the rebase onto `main` was left unfinished"
@@ -419,11 +421,12 @@ class World:
         return mock.patch.object(publish_check, "branch_moves", side_effect=refused)
 
     def check(self, kind: Kind, name: Name) -> None:
-        """``drain.py check --final``, the check that says the run is over."""
-        if kind is Kind.CHECK_HALTED:
+        """``drain.py check``, with ``--final`` but where the model's step is the check without it."""  # noqa: E501
+        if kind in {Kind.CHECK_HALTED, Kind.CHECK_HALTED_NOT_FINAL}:
             self.halt(name)
+        final = [] if kind in NOT_FINAL else ["--final"]
         with self.unreadable() if kind is Kind.CHECK_UNREADABLE else contextlib.nullcontext():
-            self.command("check", REF[name], "--final")
+            self.command("check", REF[name], *final)
 
     def halt(self, name: Name) -> None:
         """A rejudge whose rebase conflicted, and whose reconcile stopped halfway through it.
