@@ -495,7 +495,7 @@ def test_an_entry_point_with_no_row_names_the_row_to_add(repo: Path) -> None:
 
 
 def test_an_entry_point_whose_recipe_is_missing_names_the_recipe_to_copy(repo: Path) -> None:
-    replace(JUSTFILE, "hooks-install:\n", "hooks-installs:\n")(repo)
+    replace(JUSTFILE, "hooks-install: _plugin\n", "hooks-installs: _plugin\n")(repo)
     assert red(repo) == [
         (
             "justfile: has no `hooks-install` recipe, which the binding's entry point"
@@ -551,7 +551,7 @@ def test_the_pin_line_says_what_a_copy_without_history_cannot(tmp_path: Path) ->
             "justfile: no gate runs through `changed.py`",
         ),
         (
-            replace(JUSTFILE, "ratchet:\n    just hooks-installed\n", "ratchet:\n"),
+            replace(JUSTFILE, "ratchet: _plugin\n    just hooks-installed\n", "ratchet: _plugin\n"),
             "justfile: the `ratchet` recipe raises the thresholds without asking",
         ),
         (

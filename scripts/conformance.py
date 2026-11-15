@@ -215,8 +215,10 @@ PIN_RECIPE = "plugin-pin"
 PIN_SCRIPT = "plugin_pin.py"
 PLUGIN_VARIABLE = "ratchet_plugin"
 MARKETPLACE_FALLBACK = ".claude/plugins/marketplaces/ratchet"
-PLUGIN_LINE = re.compile(rf"^{PLUGIN_VARIABLE}[ \t]*:=.*$", re.MULTILINE)
-UNRECORDED_TEST = '-z "{{ratchet_plugin}}"'
+PLUGIN_LINE = re.compile(
+    rf"^(?:export[ \t]+RATCHET_PLUGIN_DIR[ \t]*:=.*\n)?{PLUGIN_VARIABLE}[ \t]*:=.*$", re.MULTILINE
+)
+PLUGIN_GUARD = "_plugin"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
@@ -1811,19 +1813,22 @@ def check_plugin_fallback(root: Path) -> Iterable[Finding]:
 
     Why: that clone follows the default branch's head, not a release (ADR 0068), so every local
     tier would run unreleased gates. The fix rewrites the line to the template's, which reads the
-    plugin the session hook recorded, and gives ``plugin-pin`` the template's first line for a
-    repository with none recorded.
+    plugin the session hook recorded, adds the template's guard recipe and makes each recipe the
+    template gives that guard depend on it, so a repository with none recorded is told so.
     """
     justfile = read_justfile(root)
     held = PLUGIN_LINE.search(justfile or "")
     if held is None or MARKETPLACE_FALLBACK not in held.group(0):
         return
-    line = PLUGIN_LINE.search(template_file("justfile"))
-    unrecorded = next(
-        (row.strip() for row in template_definition(PIN_RECIPE) if UNRECORDED_TEST in row), ""
-    )
-    if line is None or not unrecorded:
+    template = template_file("justfile")
+    line = PLUGIN_LINE.search(template)
+    if line is None or justfile_text.template_recipe(template, PLUGIN_GUARD) is None:
         return
+    guarded = [
+        name
+        for name in justfile_text.first_dependents(template, PLUGIN_GUARD)
+        if justfile_text.defines_recipe(justfile or "", name)
+    ]
 
     def want(current: str | None) -> str:
         return PLUGIN_LINE.sub(lambda _: line.group(0), current or "", count=1)
@@ -1831,7 +1836,11 @@ def check_plugin_fallback(root: Path) -> Iterable[Finding]:
     does = f"rewrite the `{PLUGIN_VARIABLE}` line to the template's, which reads the recorded one"
     edit = Edit(
         does,
-        gatelib.chained(want, justfile_text.with_first_line(PIN_RECIPE, unrecorded)),
+        gatelib.chained(
+            want,
+            justfile_text.with_recipe(template, PLUGIN_GUARD),
+            *(justfile_text.with_first_dependency(name, PLUGIN_GUARD) for name in guarded),
+        ),
         Agent(),
     )
     problem = (

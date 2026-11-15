@@ -74,11 +74,11 @@ AUTO = [
         f"{BINDING}: the Entry points table has no row for 'tier0-tree'",
     ),
     (
-        replace(JUSTFILE, "hooks-install:\n", "hooks-installs:\n"),
+        replace(JUSTFILE, "hooks-install: _plugin\n", "hooks-installs: _plugin\n"),
         "justfile: has no `hooks-install`",
     ),
     (
-        replace(JUSTFILE, "ratchet:\n    just hooks-installed\n", "ratchet:\n"),
+        replace(JUSTFILE, "ratchet: _plugin\n    just hooks-installed\n", "ratchet: _plugin\n"),
         "justfile: the `ratchet` recipe raises",
     ),
     (
@@ -144,7 +144,7 @@ def test_an_entry_point_row_is_left_to_an_agent_when_the_table_cannot_take_it(
 
 
 def test_a_ratchet_recipe_that_cannot_ask_first_is_left_to_an_agent(repo: Path) -> None:
-    replace(JUSTFILE, "ratchet:\n    just hooks-installed\n", "ratchet:\n")(repo)
+    replace(JUSTFILE, "ratchet: _plugin\n    just hooks-installed\n", "ratchet: _plugin\n")(repo)
     replace(JUSTFILE, "hooks-installed:\n", "hooks-asked:\n")(repo)
     replace(JUSTFILE, "ratchet_plugin", "plugin_home")(repo)
     [found] = [f for f in conformance.findings(repo) if "`ratchet` recipe" in f.problem]
@@ -154,7 +154,9 @@ def test_a_ratchet_recipe_that_cannot_ask_first_is_left_to_an_agent(repo: Path) 
 
 def test_a_ratchet_recipe_written_as_a_script_is_left_to_an_agent(repo: Path) -> None:
     replace(
-        JUSTFILE, "ratchet:\n    just hooks-installed\n", "ratchet:\n    #!/usr/bin/env bash\n"
+        JUSTFILE,
+        "ratchet: _plugin\n    just hooks-installed\n",
+        "ratchet: _plugin\n    #!/usr/bin/env bash\n",
     )(repo)
     assert kind(repo, "justfile: the `ratchet` recipe raises") == "Agent"
 
@@ -333,12 +335,15 @@ OLD_PLUGIN_LINE = (
 
 
 def old_plugin_justfile(repo: Path) -> str:
-    text = (repo / JUSTFILE).read_text(encoding="utf-8")
-    line = conformance.PLUGIN_LINE.search(text)
+    template = (repo / JUSTFILE).read_text(encoding="utf-8")
+    line = conformance.PLUGIN_LINE.search(template)
     assert line
-    old = text.replace(line.group(0), OLD_PLUGIN_LINE)
-    first = next(row for row in old.splitlines() if conformance.UNRECORDED_TEST in row)
-    return old.replace(first + "\n", "")
+    start = template.index("# The one guard")
+    end = template.index("# Every tier starts here")
+    old = (template[:start] + template[end:]).replace(line.group(0), OLD_PLUGIN_LINE)
+    return old.replace(f": {conformance.PLUGIN_GUARD}\n", ":\n").replace(
+        f" {conformance.PLUGIN_GUARD}\n", "\n"
+    )
 
 
 def fallback_findings(repo: Path) -> list[conformance.Finding]:
@@ -365,5 +370,5 @@ def test_a_fallback_check_has_nothing_to_rewrite_to_when_the_template_has_no_lin
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (repo / JUSTFILE).write_text(old_plugin_justfile(repo), encoding="utf-8")
-    monkeypatch.setattr(conformance, "UNRECORDED_TEST", "no such text")
+    monkeypatch.setattr(conformance, "PLUGIN_GUARD", "no_such_recipe")
     assert fallback_findings(repo) == []
