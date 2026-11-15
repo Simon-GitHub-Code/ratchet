@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The feature preflight: what must be true before the pipeline spawns its first agent.
 
-The input of ``/ratchet:feature`` is a tracker ticket (``mattpocock-skills:to-spec``,
-``to-tickets`` or ``triage`` wrote it): a number on GitHub or GitLab, or the path of a local
+The input of ``/ratchet:feature`` is a tracker ticket (``/mattpocock-skills:to-spec``, ``/mattpocock-skills:to-tickets`` or
+``/mattpocock-skills:triage`` wrote it): a number on GitHub or GitLab, or the path of a local
 ticket file. The preflight is a pure check over that ticket and the checkout, red with the exact
 failure and the skill that produces the missing piece:
 
@@ -110,7 +110,10 @@ BLOCKER_REF = re.compile(r"[^`\s,()]+\.md|#?\d+")
 Runner = Callable[[Sequence[str]], str | None]
 
 PRODUCES = {
-    "ticket": "mattpocock-skills:to-spec, to-tickets or triage writes the ticket on the tracker",
+    "ticket": (
+        "/mattpocock-skills:to-spec, /mattpocock-skills:to-tickets or /mattpocock-skills:triage"
+        " writes the ticket on the tracker"
+    ),
     "open": "a closed ticket is done or rejected; pick an open one",
     "conjecture": (
         "the owner adds `## Conjecture` to the ticket, or to its parent spec:"
@@ -126,7 +129,7 @@ PRODUCES = {
         " the tracker, the original marked split (`/ratchet:feature`, step 4, `tooLarge`)"
     ),
     "split": "build the parts it was split into; nothing is left to do for the ticket itself",
-    "label": "the owner applies the agent-ready label (mattpocock-skills:triage, or by hand)",
+    "label": "the owner applies the agent-ready label (/mattpocock-skills:triage, or by hand)",
     "blocked": (
         "build the blocking tickets first; when the order no longer holds, the owner edits the"
         " ticket's Blocked by"

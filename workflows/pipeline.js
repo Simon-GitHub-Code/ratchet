@@ -7,7 +7,8 @@
 // the guard manifest at guards/manifest.toml; a docs/features/ directory for the spec;
 // a docs/disputes/ directory; AGENTS.md at the root stating the non-negotiables; and
 // GLOSSARY.md (or GLOSSARY-MAP.md) stating the vocabulary. The feature's input is a tracker
-// ticket (mattpocock-skills:to-spec, to-tickets or triage wrote it) carrying a `## Conjecture`
+// ticket (/mattpocock-skills:to-spec, /mattpocock-skills:to-tickets or
+// /mattpocock-skills:triage wrote it) carrying a `## Conjecture`
 // section and the owner's agent-ready label: the plugin's scripts/feature_preflight.py says
 // whether it does, and nothing else runs until it says so. Every agent loads the
 // ratchet:method skill first and takes every project-specific rule from those files, never

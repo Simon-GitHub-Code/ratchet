@@ -101,8 +101,8 @@ CONJECTURE = "/ratchet:conjecture"
 FEATURE = "/ratchet:feature"
 POTETO = "/pstack:poteto-mode"
 PULL_REQUEST = (
-    "open the pull request (the `pr` skill fills the body); its merge job merges it when the"
-    " merge judge passes it, and comments why when the merge is yours"
+    "open the pull request (`mattpocock-skills:pr` fills the body); its merge job merges it when"
+    " the merge judge passes it, and comments why when the merge is yours"
 )
 WAIT = "nothing: the merge job merges it once `ci` is green, or comments why the merge is yours"
 MERGE_FALLBACK = "the binding's `merge` entry point"
