@@ -1338,26 +1338,25 @@ def bare_cache_finding(root: Path, path: Path, content: str) -> Iterable[Finding
     )
 
 
-def cache_key_lines(lines: list[str]) -> list[int]:
-    """The index of each ``key:`` line that belongs to an ``actions/cache`` step."""
-    found: list[int] = []
+def cache_key_lines(lines: list[str]) -> list[tuple[int, re.Match[str]]]:
+    """Each ``key:`` line that belongs to an ``actions/cache`` step: its index and its parts."""
+    found: list[tuple[int, re.Match[str]]] = []
     cache = False
     for index, line in enumerate(lines):
         if line.lstrip().startswith(("- ", "-\t")) and CACHE_USES not in line:
             cache = False
         if CACHE_USES in line:
             cache = True
-        elif cache and CACHE_KEY.match(line):
-            found.append(index)
+        elif cache and (match := CACHE_KEY.match(line)):
+            found.append((index, match))
     return found
 
 
-def bare_cache_keys(content: str) -> list[int]:
-    lines = content.split("\n")
+def bare_cache_keys(content: str) -> list[tuple[int, re.Match[str]]]:
     return [
-        index
-        for index in cache_key_lines(lines)
-        if not any(part in lines[index] for part in PER_RUN_PARTS)
+        (index, match)
+        for index, match in cache_key_lines(content.split("\n"))
+        if not any(part in match.string for part in PER_RUN_PARTS)
     ]
 
 
@@ -1367,14 +1366,12 @@ def per_run_keys(current: str | None) -> str:
     A trailing comment stays after it.
     """
     lines = (current or "").split("\n")
-    for index in bare_cache_keys(current or ""):
-        match = CACHE_KEY.match(lines[index])
-        if match:
-            value = match["value"]
-            quote = value[-1:] if len(value) > 1 and value[0] == value[-1] in "\"'" else ""
-            body = value[: len(value) - len(quote)]
-            ended = f"{body}-${{{{ github.sha }}}}{quote}"
-            lines[index] = f"{match['head']}{ended}{match['note'] or ''}"
+    for index, match in bare_cache_keys(current or ""):
+        value = match["value"]
+        quote = value[-1:] if len(value) > 1 and value[0] == value[-1] in "\"'" else ""
+        body = value[: len(value) - len(quote)]
+        ended = f"{body}-${{{{ github.sha }}}}{quote}"
+        lines[index] = f"{match['head']}{ended}{match['note'] or ''}"
     return "\n".join(lines)
 
 
