@@ -1,6 +1,8 @@
 """The skills' text: what the owner-free run promises, pinned so an edit cannot drift it."""
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -564,6 +566,74 @@ def test_a_labelled_ticket_is_the_owners_to_merge_on_a_forge_too() -> None:
     # owner either way, and the page now says what happens on a forge.
     step_4 = conjecture_step(4)
     assert "the merge job leaves the pull request to the owner and comments why on it" in step_4
+
+
+CRITERIA_BODY = (
+    "# Save links\n\nStatus: needs-triage\n\n## What to build\nOne list.\n\n"
+    "## Acceptance criteria\n- [ ] newest first\n- [ ] a re-pasted link is refused\n\n"
+    "## Blocked by\nNone\n"
+)
+
+
+def criteria_digest(command: str, body: str, tmp_path: Path) -> str:
+    path = tmp_path / "ticket.md"
+    path.write_bytes(body.encode("utf-8"))
+    run = command.replace("<file>", str(path)).replace("<heading>", "## Acceptance criteria")
+    bash = shutil.which("bash")
+    assert bash
+    done = subprocess.run(  # noqa: S603 # -- the page's own command, run on a file the test wrote
+        [bash, "-c", run], capture_output=True, text=True, check=True
+    )
+    return done.stdout.strip()
+
+
+def test_a_conjecture_is_drafted_again_when_its_criteria_change_and_only_then(
+    tmp_path: Path,
+) -> None:
+    # Why: step 1 stopped with "nothing to write" once a conjecture existed, so criteria changed
+    # by an overturned assumption or the owner's edit kept a conjecture drafted for the old ones.
+    # The digest is the check: a label, an answer, the conjecture itself or a forge's line endings
+    # must leave it as it was, and a changed criterion must move it.
+    page = (SKILLS / "conjecture/SKILL.md").read_text(encoding="utf-8")
+    reference = page.split("\n## The criteria digest\n", 1)[1]
+    found = re.search(r"\*\*The body is a file\*\*.*`([^`]+)`$", reference, re.MULTILINE)
+    assert found, "the page gives the command for a body in a file"
+    command = found.group(1)
+    rest = command.split("< <file> | ", 1)[1]
+    forge = f"`gh issue view <n> --json body --jq .body | tr -d '\\r' | {rest}`"
+    assert forge in reference
+    written = criteria_digest(command, CRITERIA_BODY, tmp_path)
+    assert re.fullmatch(r"[0-9a-f]{40}", written)
+    same = (
+        CRITERIA_BODY.replace("needs-triage", "ready-for-agent")
+        + "\n## Answers\n- Refuse a re-pasted link? Yes.\n\n## Conjecture\nOne list.\n"
+        + f"- Criteria: `## Acceptance criteria` `{written}`\n",
+        CRITERIA_BODY.replace("\n", "\r\n"),
+    )
+    for body in same:
+        assert criteria_digest(command, body, tmp_path) == written
+    last = "# Save links\n\n## Acceptance criteria\n\n- A re-pasted link is refused.\n"
+    spaced = last.replace("criteria\n\n- ", "criteria\n- ") + "\n\n## Answers\n- Yes.\n"
+    assert criteria_digest(command, spaced, tmp_path) == criteria_digest(command, last, tmp_path)
+    changed = CRITERIA_BODY.replace("is refused", "is kept twice")
+    assert criteria_digest(command, changed, tmp_path) != written
+    step_1 = conjecture_step(1)
+    assert "**The command prints another digest than the line names:**" in step_1
+    assert "Redraft it: run steps 2 to 5" in step_1
+
+
+def test_a_redraft_keeps_the_answers_and_shows_the_owner_what_changed() -> None:
+    # Why: the owner chose a redraft that keeps their earlier answers, asks only what the change
+    # reopened and shows them what changed, and that lands as the first write did.
+    step_3 = conjecture_step(3)
+    assert "**A redraft:** ask only the forks the changed criteria opened" in step_3
+    assert "Every other line under `## Answers` stays as it is" in step_3
+    step_4 = conjecture_step(4)
+    assert "`## Answers` keeps every earlier line. It lands as below, as the first write" in step_4
+    step_5 = conjecture_step(5)
+    assert "the old words under *Was* and the new under *Now*" in step_5
+    records = flat("method/records.md")
+    assert "keeps every line under `## Answers`, asks only the forks the change opened" in records
 
 
 def test_the_conjecture_names_one_shared_spec_and_no_dead_clause() -> None:

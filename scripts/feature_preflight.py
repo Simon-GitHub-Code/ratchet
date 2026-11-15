@@ -543,25 +543,48 @@ def blocker_ref(ticket: Ticket, ref: str, root: Path) -> str:
     return siblings[0].relative_to(root).as_posix() if siblings else ref
 
 
+@dataclass(frozen=True)
+class Blocker:
+    """A ticket another waits on: as the ticket names it, as read, and the split it is part of."""
+
+    named: str
+    ref: str
+    ticket: Ticket | None
+    split_from: str = ""
+
+
+def blockers(ticket: Ticket, root: Path, gh: Runner) -> list[Blocker]:
+    """What ``ticket`` waits on, a blocker the drain split read as its parts (ADR 0046)."""
+    found: list[Blocker] = []
+    for named in ticket.blockers:
+        ref = blocker_ref(ticket, named, root)
+        blocker = fetch(ref, root, gh)
+        parts = None if blocker is None else split_parts(blocker, root)
+        if parts is None:
+            found.append(Blocker(named, ref, blocker))
+        elif not parts:
+            found.append(Blocker(named, "", None, ref))
+        else:
+            found += [Blocker(part, part, fetch(part, root, gh), ref) for part in parts]
+    return found
+
+
+def unmet(blocker: Blocker) -> str | None:
+    """Why ``blocker`` still holds its ticket back, or ``None`` once it is done."""
+    if blocker.ticket is not None and not blocker.ticket.is_open:
+        return None
+    if blocker.split_from and not blocker.ref:
+        return f"blocker {blocker.split_from} was split into no parts"
+    if blocker.split_from:
+        return f"blocker {blocker.split_from} was split, and its part {blocker.ref} is not done"
+    if blocker.ticket is None:
+        return f"blocker {blocker.named} was not found"
+    return f"blocker {blocker.ref} is still open"
+
+
 def open_blockers(ticket: Ticket, root: Path, gh: Runner) -> list[str]:
     """Each blocker that is still open or cannot be found, as a sentence."""
-    problems = []
-    for ref in ticket.blockers:
-        resolved = blocker_ref(ticket, ref, root)
-        blocker = fetch(resolved, root, gh)
-        if blocker is None:
-            problems.append(f"blocker {ref} was not found")
-        elif blocker.is_open and (parts := split_parts(blocker, root)) is not None:
-            # Why: ADR 0046. A split ticket is open, text untouched, and done when its parts are.
-            for part in parts:
-                found = fetch(part, root, gh)
-                if found is None or found.is_open:
-                    problems.append(
-                        f"blocker {resolved} was split, and its part {part} is not done"
-                    )
-        elif blocker.is_open:
-            problems.append(f"blocker {resolved} is still open")
-    return problems
+    return [why for blocker in blockers(ticket, root, gh) if (why := unmet(blocker)) is not None]
 
 
 def split_parts(ticket: Ticket, root: Path) -> list[str] | None:
