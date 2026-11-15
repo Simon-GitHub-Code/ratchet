@@ -1835,6 +1835,42 @@ def test_a_link_standing_where_a_directory_belongs_is_replaced_and_the_real_tree
     assert not (copy.path / "src/junk.txt").exists()
 
 
+def test_a_tracked_link_a_gate_pointed_elsewhere_is_restored_as_the_link_it_was(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    (root / "src/link").symlink_to("code.txt")
+    commit(root, "a link")
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    link = copy.path / "src/link"
+    link.unlink()
+    link.symlink_to("elsewhere")
+    copy.restore()
+    assert link.is_symlink()
+    assert str(link.readlink()) == "code.txt"
+
+
+def test_a_repository_setup_made_is_left_as_its_own_history_moved_it(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    setup = (
+        "sh -c 'git init -q nested && git -C nested -c user.name=s -c user.email=s@example.invalid"
+        " commit -q --allow-empty -m one'"
+    )
+    copy = project_bite.make_copy(
+        root,
+        tmp_path / "copy",
+        registry=project_bite.Registry(setup=(setup,)),
+        shell=project_bite.Shell(),
+    )
+    nested = copy.path / "nested"
+    git(nested, *project_bite.IDENTITY, "commit", "-q", "--allow-empty", "-m", "two")
+    moved = git(nested, "rev-parse", "HEAD")
+    copy.restore()
+    assert git(nested, "rev-parse", "HEAD") == moved
+
+
 def test_what_stands_in_the_way_of_a_tracked_path_is_replaced_by_it(tmp_path: Path) -> None:
     root, copy = made_copy(tmp_path)
     shutil.rmtree(copy.path / "src")

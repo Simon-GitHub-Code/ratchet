@@ -507,14 +507,8 @@ class Tree:
         return cls(path, (found.st_dev, found.st_ino))
 
     @contextmanager
-    def at(
-        self, path: str, *, make: bool = False, replace: bool = False
-    ) -> Iterator[tuple[int, str]]:
-        """The open directory ``path`` lies in, and its last name; ``make`` makes the way.
-
-        With ``replace``, whatever is not a directory where one belongs on the way is deleted
-        (a link is unlinked, never followed) and the directory made.
-        """
+    def at(self, path: str, *, make: bool = False) -> Iterator[tuple[int, str]]:
+        """The open directory ``path`` lies in, and its last name; ``make`` makes the way."""
         if not DESCRIPTORS:
             raise Unprovable(UNSUPPORTED)
         *way, name = PurePosixPath(path).parts
@@ -525,10 +519,6 @@ class Tree:
                 message = f"{self.path} is no longer the directory the scratch copy was made in"
                 raise Unprovable(message)
             for depth, part in enumerate(way, 1):
-                if replace:
-                    stale = entry(here, part)
-                    if stale is not None and not stat.S_ISDIR(stale.st_mode):
-                        os.unlink(part, dir_fd=here)
                 if make:
                     with contextlib.suppress(FileExistsError):
                         os.mkdir(part, dir_fd=here)
@@ -599,13 +589,11 @@ class Tree:
             self.empty(here, name)
 
     def put(self, path: str, mode: str, content: bytes) -> None:
-        """What the index holds at ``path``, replacing whatever stands there or leads to it."""
-        with self.at(path, make=True, replace=True) as (here, name):
+        """What the index holds at ``path``, replacing whatever stands there."""
+        with self.at(path, make=True) as (here, name):
             self.empty(here, name)
             if mode == "120000":
                 os.symlink(content, name, dir_fd=here)
-            elif mode == "160000":
-                os.mkdir(name, dir_fd=here)
             else:
                 flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW
                 with os.fdopen(os.open(name, flags, 0o666, dir_fd=here), "wb") as file:
@@ -1074,14 +1062,12 @@ class Copy:
             if path:
                 self.tree.clear(path)
         held = staged(self.path, snapshot)
-        raw = git_in(self.path, "diff-files", "-z", "--raw", "--no-renames", index=fresh)
-        fields = raw.split("\0")
+        listed = ("diff-files", "-z", "--raw", "--no-renames", "--ignore-submodules=all")
+        fields = git_in(self.path, *listed, index=fresh).split("\0")
         for path in sorted(fields[1::2]):
             mode, blob = held[path]
             if mode in FILE_MODES:
                 content = git_bytes(self.path, "cat-file", "--filters", f"--path={path}", blob)
-            elif mode == "160000":
-                content = b""
             else:
                 content = git_bytes(self.path, "cat-file", "blob", blob)
             self.tree.put(path, mode, content)
