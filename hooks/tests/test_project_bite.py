@@ -60,11 +60,12 @@ def project(
     return repository(root, files)
 
 
-TIMING = re.compile(r" \(\d+\.\ds, lane \d+\)")
+TIMING = re.compile(r" \(\d+\.\ds, lane \d+(; [^)]*)?\)")
+AID = re.compile(r"^bite: (limit|load): .*\n", re.MULTILINE)
 
 
 def shown(capsys: pytest.CaptureFixture[str]) -> str:
-    return TIMING.sub("", capsys.readouterr().out)
+    return AID.sub("", TIMING.sub("", capsys.readouterr().out))
 
 
 def prove(root: Path, *flags: str) -> int:
@@ -395,8 +396,10 @@ def test_ratchet_jobs_caps_the_lanes_as_it_caps_the_gates(
     root = project(tmp_path / "repo", gates, registry)
     seen: list[int] = []
 
-    def record(_root: Path, _registry: object, _tasks: object, *, lanes: int, limit: float) -> int:
-        assert limit == project_bite.GATE_LIMIT
+    def record(
+        _root: Path, _registry: object, _tasks: object, *, lanes: int, limit: float | None
+    ) -> int:
+        assert limit is None
         seen.append(lanes)
         return 0
 
@@ -667,7 +670,7 @@ def test_each_verdict_line_ends_with_its_wall_time_and_lane(
         tmp_path / "repo", {"lint": f"sleep 0.2; {LINT}"}, bite("lint", "a planted word")
     )
     assert prove(root) == 0
-    line = capsys.readouterr().out.splitlines()[0]
+    line = capsys.readouterr().out.splitlines()[1]
     match = re.fullmatch(r"bite: lint: a planted word: bites \((\d+\.\d)s, lane 0\)", line)
     assert match is not None
     assert float(match[1]) >= 0.4
@@ -701,6 +704,135 @@ def test_a_gate_ended_by_the_time_limit_is_timed_out_whatever_its_exit_code_woul
     assert "bite: lint: a planted word: TIMED OUT\n" in out
     assert "bite: timed out after 0.5s" in out
     assert "bite: red: 0 of 1 faults bit" in out
+
+
+def ceilings(**keys: float) -> str:
+    return "[ceilings.seconds]\n" + "".join(f"{key} = {value}\n" for key, value in keys.items())
+
+
+def limited_project(tmp_path: Path, tier: str, thresholds: str) -> Path:
+    root = project(
+        tmp_path / "repo",
+        {"lint": f"sleep 3; {LINT}"},
+        bite("lint", "a planted word"),
+        rows=row("lint", tier),
+    )
+    write(root, "quality/thresholds.toml", thresholds)
+    commit(root, "thresholds")
+    return root
+
+
+def test_a_gates_own_ceiling_limits_its_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = limited_project(tmp_path, "1", ceilings(lint=0.5, tier1=60))
+    assert prove(root) == 1
+    assert "bite: timed out after 0.5s" in shown(capsys)
+
+
+def test_with_no_ceiling_of_its_own_the_tier_ceiling_limits_the_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = limited_project(tmp_path, "2", ceilings(tier2=0.5, tier1=60))
+    assert prove(root) == 1
+    assert "bite: timed out after 0.5s" in shown(capsys)
+
+
+def test_the_limit_flag_overrides_both_ceilings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = limited_project(tmp_path, "1", ceilings(lint=60, tier1=60))
+    assert prove(root, "--limit", "0.5") == 1
+    assert "bite: timed out after 0.5s" in shown(capsys)
+
+
+def test_with_no_ceiling_at_all_a_run_is_limited_to_the_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    limits: set[float | None] = set()
+    run = project_bite.Shell.run
+
+    def watch(*args: object) -> project_bite.Run:
+        limits.add(args[3])  # type: ignore[arg-type]
+        return run(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(project_bite.Shell, "run", watch)
+    assert prove(root) == 0
+    assert limits == {900.0}
+
+
+def test_a_run_ended_by_the_limit_has_an_integer_code_and_says_it_timed_out(
+    tmp_path: Path,
+) -> None:
+    ran = project_bite.Shell().run(["sleep", "5"], tmp_path, 0.3)
+    assert isinstance(ran.code, int)
+    assert ran.timed_out
+
+
+def test_a_process_that_left_the_group_holding_the_output_cannot_hold_the_run_past_the_limit(
+    tmp_path: Path,
+) -> None:
+    started = time.monotonic()
+    ran = project_bite.Shell().run(["sh", "-c", "setsid sleep 6 & sleep 30"], tmp_path, 0.3)
+    assert ran.timed_out
+    assert time.monotonic() - started < 4
+
+
+def test_the_proof_names_the_limit_in_use_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    assert prove(root) == 0
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "bite: limit: each gate's ceiling, else its tier's, else 900s a run"
+    )
+    assert prove(root, "--limit", "30") == 0
+    assert capsys.readouterr().out.splitlines()[0] == "bite: limit: 30s a run"
+
+
+def test_a_red_proof_ends_with_the_load_at_its_start_and_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, bite("lint", "a planted word"))
+    assert prove(root) == 1
+    last = capsys.readouterr().out.splitlines()[-1]
+    assert re.fullmatch(r"bite: load: \d+\.\d on \d+ cores at the start, .* at the end", last)
+
+
+def test_a_green_proof_prints_no_load(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    assert prove(root) == 0
+    assert "bite: load:" not in capsys.readouterr().out
+
+
+def test_a_missing_load_average_is_unknown(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delattr(os, "getloadavg")
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, bite("lint", "a planted word"))
+    assert prove(root) == 1
+    assert "bite: load: unknown at the start, unknown at the end" in capsys.readouterr().out
+
+
+def test_a_red_run_over_twice_the_fastest_green_run_says_how_much_slower(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    body = 'if grep -rl planted src; then sleep 1; echo "no words"; exit 1; fi'
+    root = project(tmp_path / "repo", {"lint": body}, bite("lint", "a planted word"))
+    assert prove(root) == 1
+    line = capsys.readouterr().out.splitlines()[1]
+    assert re.search(
+        r"RED FOR ANOTHER REASON \(\d+\.\ds, lane 0; \d+\.\dx this gate's fastest green run\)", line
+    )
+
+
+def test_a_red_run_no_slower_than_its_green_runs_says_nothing_more(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, bite("lint", "a planted word"))
+    assert prove(root) == 1
+    assert "fastest green run" not in capsys.readouterr().out
 
 
 def test_a_gate_that_times_out_only_with_the_fault_planted_is_timed_out(
