@@ -212,8 +212,12 @@ def recorded(root: Path) -> Path:
     return root / ".git" / events.PLUGIN_RECORD
 
 
+def adopted(root: Path) -> Path:
+    return repos.repository(root, {"docs/process/binding.md": "# Binding\n"})
+
+
 def test_a_session_in_a_repository_records_the_plugin_it_runs_from(tmp_path: Path) -> None:
-    root = repos.repository(tmp_path / "repo")
+    root = adopted(tmp_path / "repo")
     shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
     assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
     shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
@@ -221,12 +225,18 @@ def test_a_session_in_a_repository_records_the_plugin_it_runs_from(tmp_path: Pat
 
 
 def test_a_session_in_a_linked_worktree_records_in_the_common_directory(tmp_path: Path) -> None:
-    root = repos.repository(tmp_path / "repo")
+    root = adopted(tmp_path / "repo")
     linked = tmp_path / "linked"
     repos.git(root, "worktree", "add", "-q", str(linked), "-b", "side")
     shim({"hook_event_name": "SessionStart", "cwd": str(linked)}, tmp_path)
     assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
     assert not (linked / ".git").is_dir()
+
+
+def test_a_session_in_a_repository_with_no_binding_records_nothing(tmp_path: Path) -> None:
+    root = repos.repository(tmp_path / "repo")
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert not recorded(root).exists()
 
 
 def test_a_session_outside_a_repository_records_nothing(tmp_path: Path) -> None:
@@ -237,22 +247,44 @@ def test_a_session_outside_a_repository_records_nothing(tmp_path: Path) -> None:
 
 
 def test_a_symbolic_link_at_the_record_is_not_followed(tmp_path: Path) -> None:
-    root = repos.repository(tmp_path / "repo")
+    root = adopted(tmp_path / "repo")
     target = tmp_path / "target"
     target.write_text("keep\n", encoding="utf-8")
     recorded(root).symlink_to(target)
     shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
     assert target.read_text(encoding="utf-8") == "keep\n"
+    assert not recorded(root).is_symlink()
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+
+
+def test_a_hard_link_at_the_record_is_never_written_through(tmp_path: Path) -> None:
+    root = adopted(tmp_path / "repo")
+    other = tmp_path / "other"
+    other.write_text("keep\n", encoding="utf-8")
+    os.link(other, recorded(root))
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert other.read_text(encoding="utf-8") == "keep\n"
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+
+
+def test_a_failed_record_leaves_the_old_one_whole_and_no_stray_file(tmp_path: Path) -> None:
+    record = tmp_path / events.PLUGIN_RECORD
+    record.write_text("/old\n", encoding="utf-8")
+    events.replace(record, "/new\n")
+    assert record.read_text(encoding="utf-8") == "/new\n"
+    with pytest.raises(FileNotFoundError):
+        events.replace(tmp_path / "absent" / events.PLUGIN_RECORD, "/x\n")
+    assert sorted(path.name for path in tmp_path.iterdir()) == [events.PLUGIN_RECORD]
 
 
 def test_a_fifo_at_the_record_is_not_waited_on(tmp_path: Path) -> None:
-    root = repos.repository(tmp_path / "repo")
+    root = adopted(tmp_path / "repo")
     os.mkfifo(recorded(root))
     shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
 
 
 def test_recording_changes_nothing_the_hook_prints(tmp_path: Path) -> None:
-    root = repos.repository(tmp_path / "repo")
+    root = adopted(tmp_path / "repo")
     payload = {"hook_event_name": "SessionStart", "cwd": str(root)}
     first = shim(payload, tmp_path)
     assert first.startswith("Ratchet:")

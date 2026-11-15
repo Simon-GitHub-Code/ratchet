@@ -134,14 +134,15 @@ def render(event: str, text: str, *, antigravity: bool = False) -> str:
 
 
 def record_plugin(cwd: Path, plugin_root: Path) -> None:
-    """Record ``plugin_root`` in the git common directory of the repository holding ``cwd``.
+    """Record ``plugin_root`` in the git common directory of an adopted repository holding ``cwd``.
 
     The file is ``events.PLUGIN_RECORD`` and holds the path and a newline, so a gate recipe in the
-    repository finds the plugin this session runs from. Nothing is written outside a repository,
-    a symbolic link or FIFO at the path is not followed, and any failure is dropped.
+    repository finds the plugin this session runs from. Nothing is written outside a repository or
+    in one with no binding. The file is replaced whole, so a link or FIFO at the path is replaced
+    and not written through, and any failure is dropped.
     """
     common = common_directory(cwd)
-    if common is None:
+    if common is None or not (repository_root(cwd) / BINDING).is_file():
         return
     try:
         events.replace(common / events.PLUGIN_RECORD, f"{plugin_root}\n")

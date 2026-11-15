@@ -19,6 +19,7 @@ nor hold its answer. The caller drops any failure, so the log never changes a ve
 
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -30,7 +31,6 @@ LIMIT = 4096
 # take 3,072 at most, and the line fits LIMIT with the rest.
 CLIP = 64
 _FLAGS = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
-_REPLACE = os.O_WRONLY | os.O_TRUNC | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,9 +64,19 @@ def append(log: Path, line: bytes) -> None:
 
 
 def replace(record: Path, text: str) -> None:
-    """Make ``record`` hold ``text`` alone; a symbolic link or FIFO there raises ``OSError``."""
-    descriptor = os.open(record, _REPLACE, 0o600)
+    """Make ``record`` hold ``text`` alone, all at once; a failure raises ``OSError``.
+
+    The text goes into a new file beside ``record`` that then takes the name, so a reader sees the
+    old content or the new and never an empty or cut one. A symbolic link or hard link at the name
+    is replaced and never written through.
+    """
+    descriptor, name = tempfile.mkstemp(dir=record.parent, prefix=f".{record.name}.")
     try:
-        os.write(descriptor, text.encode())
-    finally:
-        os.close(descriptor)
+        try:
+            os.write(descriptor, text.encode())
+        finally:
+            os.close(descriptor)
+        Path(name).replace(record)
+    except OSError:
+        Path(name).unlink(missing_ok=True)
+        raise

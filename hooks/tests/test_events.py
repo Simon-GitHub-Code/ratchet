@@ -381,3 +381,50 @@ def test_an_agent_in_a_worktree_cannot_write_the_log(adopted: Path) -> None:
             printed = answer(tree, case, project=project)
             assert decision(printed) == "deny"
             assert "guard-log" in printed
+
+
+def test_the_plugin_record_is_a_locked_guard_path_in_every_checkout() -> None:
+    hit = make_guard().locator.classify(
+        Path("/elsewhere/.git") / events.PLUGIN_RECORD, destructive=False
+    )
+    assert hit is not None
+    assert hit.group.locked
+    assert hit.group.name == "plugin-record"
+
+
+def record_of(root: Path) -> Path:
+    return root / ".git" / events.PLUGIN_RECORD
+
+
+def test_an_agent_cannot_write_the_plugin_record(adopted: Path, tmp_path: Path) -> None:
+    record = record_of(adopted)
+    relative = f".git/{events.PLUGIN_RECORD}"
+    for case in (
+        edit(adopted, record),
+        bash(adopted, f"echo /tmp/other > {relative}"),
+        bash(adopted, f"printf /tmp/other | tee {relative}"),
+        bash(adopted, f"cp /tmp/other {relative}"),
+        bash(adopted, f"rm {relative}"),
+        bash(adopted, f"ln -f README.md {relative}"),
+    ):
+        printed = answer(adopted, case)
+        assert decision(printed) == "deny"
+        assert "plugin-record" in printed
+    branch(adopted)
+    assert decision(answer(adopted, edit(adopted, record))) == "deny"
+    bare = tmp_path / "unadopted"
+    bare.mkdir()
+    repository(bare)
+    assert decision(answer(bare, edit(bare, record_of(bare)))) == "deny"
+
+
+def test_an_agent_in_a_worktree_cannot_write_the_plugin_record(adopted: Path) -> None:
+    tree = adopted / ".claude/worktrees/agent-2"
+    git(adopted, "worktree", "add", "-q", "-b", "feature/y", str(tree))
+    record = record_of(adopted)
+    climb = os.path.relpath(record, tree)
+    for project in (tree, adopted, None):
+        for case in (edit(tree, record), bash(tree, f"echo /tmp/other > {climb}")):
+            printed = answer(tree, case, project=project)
+            assert decision(printed) == "deny"
+            assert "plugin-record" in printed
