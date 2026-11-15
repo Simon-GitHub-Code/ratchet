@@ -634,6 +634,16 @@ def test_the_upgrade_refuses_a_ticket_with_no_flag_line_and_its_line_releases_th
     assert play.world.code == 0
 
 
+def test_the_upgrade_is_a_commit_on_the_default_branch_so_an_open_branch_is_then_behind(
+    tmp_path: Path,
+) -> None:
+    path = ["drain.py open a", UPGRADE, UPDATE_A]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    assert not walked(path[:2])[-1].of(Name.A).current
+    play = replay(tmp_path, path)
+    assert play.world.printed == '{"moved": true, "conflicts": []}\n'
+
+
 def built_and_landed(name: Name) -> list[str]:
     return [
         f"drain.py open {name.value}",

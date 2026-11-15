@@ -970,12 +970,15 @@ def _line(state: State, name: Name) -> State | None:
 
 
 def _upgrade(state: State) -> State | None:
-    """The plugin ships ADR 0061: the preflight now asks every ticket for its ``Flag:`` line."""
+    """The plugin ships ADR 0061: the preflight now asks every ticket for its ``Flag:`` line.
+
+    The upgrade is a commit of the binding on the default branch, which moves its tip.
+    """
     first = state.of(Name.A)
     unasked = state.flag is Flag.UNASKED and state.split is Split.WHOLE
-    if not unasked or first.ahead or first.merged:
+    if not unasked or first.ahead or first.merged or state.half is not None:
         return None
-    return dataclasses.replace(state, flag=Flag.MISSING)
+    return dataclasses.replace(moved(state), flag=Flag.MISSING)
 
 
 def _split(state: State, name: Name) -> State | None:
@@ -2090,12 +2093,15 @@ class Run(NamedTuple):
     edges: list[tuple[object, str, object]]
 
 
-def run(taken: Callable[[Action], bool], *, ordered: bool = False) -> Run:
+def run(
+    taken: Callable[[Action], bool],
+    keep: Callable[[State, Action], bool] = lambda _state, _action: True,
+) -> Run:
     """The part of ``graph()`` its start reaches by the actions ``taken`` keeps, breadth first.
 
-    With ``ordered``, only the steps that keep the skill's order. Each of its states and steps is
-    one of ``graph()``, so a rule breaks on a step of it exactly where it breaks on that step of
-    the graph.
+    Only the steps ``keep`` keeps where they start, as the skill's order with ``in_order``. Each
+    of its states and steps is one of ``graph()``, so a rule breaks on a step of it exactly where
+    it breaks on that step of the graph.
     """
     seen = {INITIAL: INITIAL}
     frontier = deque([INITIAL])
@@ -2103,7 +2109,7 @@ def run(taken: Callable[[Action], bool], *, ordered: bool = False) -> Run:
     while frontier:
         state = frontier.popleft()
         for action, after in moves(state):
-            if not taken(action) or (ordered and not in_order(state, action)):
+            if not taken(action) or not keep(state, action):
                 continue
             known = seen.get(after)
             if known is None:
@@ -2117,7 +2123,7 @@ def landing_run() -> Run:
     """Every step but those on ``c``, a role's commit, a check that cannot read, the ``Flag:`` line and the steps no run takes, the agent keeping the skill's order: ``a`` built, checked, judged, landed or parked, ``b`` waiting on it."""  # noqa: E501
     return run(
         lambda action: action.ticket is not Name.C and action.kind not in TICKET_LIFE | UNRUN,
-        ordered=True,
+        in_order,
     )
 
 
@@ -2132,9 +2138,17 @@ UNSPLIT = (Name.A, Name.B, Name.C)
 
 
 def life_run() -> Run:
-    """Every step but those on ``c``, the kills and a split: a ticket's life as the drain's commands, the publish check, the agent, a role, an upgrade and the owner lead it."""  # noqa: E501
+    """Every step but those on ``c``, the kills and a split: a ticket's life as the drain's commands, the publish check, the agent, a role, an upgrade and the owner lead it.
+
+    Why the upgrade only where no branch's tip matters: an upgrade under ``a``'s open tree leaves
+    its branch behind, and the run would pass the 500 states the statechart tool draws whole. Only
+    the search in the tests takes the upgrade there.
+    """  # noqa: E501
     return run(
-        lambda action: action.ticket is not Name.C and action.kind not in KILLS.keys() | UNRUN
+        lambda action: action.ticket is not Name.C and action.kind not in KILLS.keys() | UNRUN,
+        lambda state, action: (
+            action.kind is not Kind.UPGRADE or not any(map(tip_matters, state.tickets))
+        ),
     )
 
 

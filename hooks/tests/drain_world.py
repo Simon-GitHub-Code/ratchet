@@ -5,8 +5,9 @@ The repository is the one ``test_drain`` builds: three local tickets, ``Beta`` b
 ``merge.py`` runs as it does in a drain, in a process of its own, which a kill ends with SIGKILL.
 Each command runs as a session runs it, ``drain.main`` with no tracker; the agent's commits are
 the commits the feature skill makes, and the owner's edit is an answer on the default branch.
-``b`` and ``c`` state their ``Flag:`` line and ``a`` does not. The upgrade that ships ADR 0061 is
-the preflight asking that line before deployment: ``operability_asked`` stands in for it.
+``b`` and ``c`` state their ``Flag:`` line and ``a`` does not. The scripts under test ship ADR
+0061 already, so the upgrade is a commit on the default branch whose binding declares a type the
+catalogue asks the line of, as in the route's world.
 ``Alpha`` carries two promises, so the agent can split it into ``Save`` and ``List``, the model's
 ``d`` and ``e``; the owner closes a ticket by its status line.
 After each action ``seen`` reads the repository back in the model's terms.
@@ -58,6 +59,7 @@ from tests.drain_model import (
     Tree,
 )
 from tests.repos import git, repository, snapshot, write
+from tests.route_world import ASKED_TYPES
 from tests.test_drain import (
     ALPHA,
     BETA,
@@ -100,7 +102,7 @@ NO_FLAG = (
 )
 FLAG_LANDED = "\n## Operability\n\nFlag: `alpha`, off until the owner switches it on\n"
 TEXTS = {**FILES, **WHOLE, BETA: FILES[BETA] + NO_FLAG, GAMMA: FILES[GAMMA] + NO_FLAG}
-FLAG_ASKED = [(drain.preflight.FLAG_LINE, "the flag the behaviour ships behind")]
+BINDING = "docs/process/binding.md"
 CHANGE = "feat(core): the change"
 RECORD = "docs(core): the verdict record"
 PUBLISHED = "feat(core): a role's own commit"
@@ -270,27 +272,26 @@ class World:
         stand_in = f"{sys.executable} {killer}"
         if before_merge:
             stand_in = f"sh -c '{before_merge}; exec \"$@\"' merge {stand_in}"
-        merging = binding(stand_in, check)
-        self.root = repository(directory / "repo", {**TEXTS, "docs/process/binding.md": merging})
+        self.binding = binding(stand_in, check)
+        self.root = repository(directory / "repo", {**TEXTS, BINDING: self.binding})
         # Why: git's directory of a repository never moves, and each read-back would ask git again.
         self.landing_intent = merge.state_dir(self.root) / merge.LANDING
         self.token = ""
         self.printed = ""
         self.code = 0
-        self.asked = False
         self.texts = dict(TEXTS)
         """Each ticket's text as filed, which its note's digest names until the owner edits it."""
 
-    def preflight(self) -> contextlib.AbstractContextManager[object]:
-        """The preflight as the upgrade leaves it: asking the ``Flag:`` line once it has run."""
-        if not self.asked:
-            return contextlib.nullcontext()
-        return mock.patch.object(drain.preflight, "operability_asked", return_value=FLAG_ASKED)
+    def upgrade(self) -> None:
+        """The project becomes one the ``Flag:`` line is asked of, not deployed: a type that asks it."""  # noqa: E501
+        pin = "- Default branch: `main`\n"
+        write(self.root, BINDING, self.binding.replace(pin, pin + ASKED_TYPES))
+        snapshot(self.root, "chore(method): the project is a command, not yet deployed")
 
     def command(self, *argv: str) -> int:
         """``drain.py argv`` as a session runs it; what it printed is kept."""
         out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.preflight():
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
                 self.code = drain.main(
                     ["drain", *argv, "--root", str(self.root), "--offline", "--concurrency", "1"]
@@ -387,7 +388,7 @@ class World:
         """Do what ``action`` names."""
         kind, name = action.kind, action.ticket
         if kind is Kind.UPGRADE:
-            self.asked = True
+            self.upgrade()
         elif kind is Kind.SPLIT and name is not None:
             self.split(name)
         elif name is None:
@@ -488,8 +489,7 @@ class World:
 
     def seen(self, ghost: model.State) -> Seen:
         """The repository read back; ``ghost`` gives what no file holds (the reviews, a role's commit)."""  # noqa: E501
-        with self.preflight():
-            drafted = drain.plan(drain.Drain(self.root, None, model.CAP))
+        drafted = drain.plan(drain.Drain(self.root, None, model.CAP))
         by_ref = {entry.ref: STATUSES[entry.state] for entry in drafted.tickets}
         statuses = {name: by_ref[ref] for name, ref in REF.items() if ref in by_ref}
         start = tuple(name for name, ref in REF.items() if ref in drafted.start)
