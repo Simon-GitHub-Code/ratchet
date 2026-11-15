@@ -288,12 +288,13 @@ def _origin(prompt: Event) -> str:
     that (or by the one-off run's converter) carries ``origin`` and it is read as recorded. Why
     the empty reason counts for the guard: an Edit or Write inside the project is on the
     session's allow-list, so the only thing that asks for one is the project's own ``ask`` rule
-    for a guard path, which Claude Code reports with no reason at all.
+    for a guard path, which Claude Code reports with no reason at all. The hook's asks begin
+    ``Ratchet: ``; before 3c2d41b they began ``Ratchet guard``, as its denials still do.
     """
     reason = str(prompt.get("reason") or "")
     origin = prompt.get("origin")
     if origin is None:
-        origin = "guard" if reason.startswith("Ratchet guard") else "permission"
+        origin = "guard" if reason.startswith(("Ratchet: ", "Ratchet guard")) else "permission"
     write = prompt.get("tool") in ("Edit", "Write", "NotebookEdit")
     if origin == "permission" and write and not reason:
         return "guard"

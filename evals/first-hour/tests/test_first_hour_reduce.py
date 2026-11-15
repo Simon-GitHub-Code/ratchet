@@ -3,6 +3,8 @@ from pathlib import Path
 
 from first_hour import reduce, transcript
 from first_hour.persona import PERSONAS, load
+from ratchet_guards import hook
+from ratchet_guards.verdict import Verdict
 
 SESSION = "s-1"
 
@@ -373,6 +375,17 @@ def test_a_call_the_harness_refused_counts_and_a_prompt_takes_its_origin_from_it
     assert metrics["prompts"]["denied"] == 1
     assert (metrics["prompts"]["guard"], metrics["prompts"]["permission"]) == (1, 1)
     assert "| Calls the harness refused | 2 |" in reduce.table(metrics)
+
+
+def test_the_guards_own_asks_count_as_the_guards() -> None:
+    owner_ask = hook.reason(Verdict("agent-ready-label", "0001-x.md gets the status `agent:ready`"))
+    agent_ask = hook.reason(Verdict("merge-default", "git merge feat/x"))
+    run = [
+        {"s": 1, "kind": "prompt", "tool": tool, "decision": "allow", "reason": reason}
+        for tool, reason in (("Write", owner_ask), ("Bash", agent_ask), ("Bash", "no rule"))
+    ]
+    prompts = reduce.reduce(run)["prompts"]
+    assert (prompts["guard"], prompts["permission"]) == (2, 1)
 
 
 def test_the_first_merge_of_a_feature_skips_the_adoption_and_the_init() -> None:
