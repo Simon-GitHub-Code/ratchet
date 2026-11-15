@@ -3,12 +3,14 @@
 Three tickets, ``a``, ``b`` and ``c``, where ``b`` is blocked by ``a``, under a cap of one. Each
 ticket is what ``drain.classify`` reads: its queue work tree, its branch, whether that branch holds
 the tip of the default branch, whether it is merged, the drain's note on it, its text and the
-stashes that hold its uncommitted work, and what a killed ``merge.py`` left. The actions are the
-drain's commands in any order, what the agent does in a work tree, what the owner does, a stale
-index lock that git leaves, and a kill of ``update``, ``close``, ``land`` or the ``merge.py`` it
-runs between two of their effects. ``graph()`` is every reachable state and step, ``RULES`` what
-a reader of ADR 0023 and the feature skill expects to stay true over any history. Every rule is a
-predicate over a step: ``(before, action name, after)``.
+stashes that hold its uncommitted work, whether a role of a pipeline run committed on its branch,
+and what a killed ``merge.py`` left; and what the preflight asks of ``a``, the one ticket with no
+``Flag:`` line. The actions are the drain's commands in any order, what the agent and a role do
+in a work tree, what the owner does, the upgrade that ships ADR 0061, a stale index lock that git
+leaves, and a kill of ``update``, ``close``, ``land`` or the ``merge.py`` it runs between two of
+their effects. ``graph()`` is every reachable state and step, ``RULES`` what a reader of ADR
+0023, ADR 0060, ADR 0061 and the feature skill expects to stay true over any history. Every rule
+is a predicate over a step: ``(before, action name, after)``.
 
 The transitions are the code's: a command does here what ``drain.py`` and ``merge.py`` do on a
 repository, refusals included, so a rule the code does not keep breaks here too. The merge judge
@@ -16,9 +18,9 @@ passes a branch only when its verdict record is its last commit, certifies the t
 has, and the branch holds the default tip; the binding's ``check`` is always green; no two tickets
 touch one file, so nothing conflicts.
 
-Bounds keep the graph small: the owner edits a ticket at most once, the agent leaves work
-uncommitted once, and the retry count of a ticket left waiting stops at ``RETRIES``, past which
-nothing reads it.
+Bounds keep the graph small: the owner edits a ticket at most once, landing its ``Flag:`` line
+or not, the agent leaves work uncommitted once, a role commits once, and the retry count of a
+ticket left waiting stops at ``RETRIES``, past which nothing reads it.
 """
 
 from __future__ import annotations
@@ -70,6 +72,14 @@ class Tree(Fact):
 
 
 HOLDS_WORK = frozenset({Tree.DIRTY, Tree.LOCKED})
+
+
+class Flag(Fact):
+    """What the preflight asks of ticket ``a``, the one ticket with no ``Flag:`` line (ADR 0061)."""
+
+    UNASKED = "the preflight asks no Flag: line before deployment"
+    MISSING = "the preflight asks the Flag: line, and a has none"
+    LANDED = "the owner has landed a's Flag: line"
 
 
 class Branch(Fact):
@@ -135,6 +145,11 @@ class Ticket(NamedTuple):
     note: Note | None = None
     text: int = 0
     stashes: int = 0
+    published: bool = False
+    """Whether a role of a pipeline run committed on the branch, which its brief forbids.
+
+    No file holds it: the preflight records no starting state yet (ADR 0060).
+    """
 
     @property
     def ahead(self) -> bool:
@@ -162,13 +177,14 @@ def normal(ticket: Ticket) -> Ticket:
     """
     current = ticket.current or not tip_matters(ticket)
     reviewed = ticket.reviewed and ticket.branch is Branch.JUDGED and not ticket.merged
+    published = ticket.published and not ticket.merged
     note = ticket.note
     retried = ticket.branch is Branch.JUDGED and not ticket.merged
     if note is not None and note.discarding and ticket.tree is Tree.NONE and not retried:
         ticket = ticket._replace(note=note._replace(discarding=False))
-    if (current, reviewed) == (ticket.current, ticket.reviewed):
+    if (current, reviewed, published) == (ticket.current, ticket.reviewed, ticket.published):
         return ticket
-    return ticket._replace(current=current, reviewed=reviewed)
+    return ticket._replace(current=current, reviewed=reviewed, published=published)
 
 
 @dataclass(frozen=True)
@@ -184,6 +200,12 @@ class State:
     Files of its merge are in the default branch's work tree, one part-written, its index is
     locked and the landing intent is kept.
     """
+    flag: Flag = Flag.UNASKED
+    """What the preflight asks of ``a``; ``UNASKED`` wherever nothing reads it.
+
+    The preflight reads a ticket only while it is neither built nor merged, so once ``a``'s
+    branch holds a commit nothing reads it again.
+    """
 
     @property
     def edited(self) -> bool:
@@ -196,13 +218,17 @@ class State:
     def with_ticket(self, name: Name, ticket: Ticket) -> State:
         tickets = list(self.tickets)
         tickets[INDEX[name]] = normal(ticket)
-        return State((tickets[0], tickets[1], tickets[2]), self.worked, self.scratch, self.half)
+        first = tickets[INDEX[Name.A]]
+        flag = Flag.UNASKED if first.ahead or first.merged else self.flag
+        return State(
+            (tickets[0], tickets[1], tickets[2]), self.worked, self.scratch, self.half, flag
+        )
 
     def __hash__(self) -> int:
         # Why: the search hashes each state it reaches many times, and a state never changes.
         cached = self.__dict__.get("hashed")
         if cached is None:
-            cached = hash((self.tickets, self.worked, self.scratch, self.half))
+            cached = hash((self.tickets, self.worked, self.scratch, self.half, self.flag))
             object.__setattr__(self, "hashed", cached)
         return cached
 
@@ -251,6 +277,8 @@ def classify(state: State) -> dict[Name, Status]:
             found[name] = Status.BUILT
         elif ticket.tree is not Tree.NONE:
             found[name] = Status.BUILDING
+        elif name is Name.A and state.flag is Flag.MISSING:
+            found[name] = Status.REFUSED
         elif name in BLOCKER and BLOCKER[name] not in resolved:
             found[name] = Status.WAITING
         else:
@@ -283,6 +311,7 @@ class Kind(Fact):
     WORK = "the agent leaves work uncommitted in"
     COMMIT = "the agent commits"
     RECORD = "the agent commits the verdict record of"
+    PUBLISH = "a role of the pipeline run commits in"
     UPDATE = "drain.py update"
     LAND = "drain.py land"
     CLOSE = "drain.py close --outcome parked"
@@ -290,6 +319,8 @@ class Kind(Fact):
     CLEAN_ALL = "drain.py clean --all"
     REPORT = "drain.py report"
     EDIT = "the owner edits ticket"
+    LINE = "the owner lands the Flag: line of"
+    UPGRADE = "an upgrade makes the preflight ask the Flag: line before deployment"
     LOCK = "git leaves a stale index lock in the tree of"
     UNLOCK = "the owner removes the stale index lock of"
     KILL_MID_REBASE = "a kill mid-rebase stops drain.py update"
@@ -442,6 +473,16 @@ def _record(state: State, name: Name) -> State | None:
         return None
     judged = ticket._replace(branch=Branch.JUDGED, reviewed=ticket.current)
     return state.with_ticket(name, judged)
+
+
+def _publish(state: State, name: Name) -> State | None:
+    """A role commits before the run returns: on a new branch, or on one ``update`` rebased."""
+    ticket = state.of(name)
+    runs = ticket.tree is Tree.CLEAN and ticket.branch in {Branch.BARE, Branch.DRAFT}
+    if ticket.merged or ticket.published or not runs:
+        return None
+    moved_by_a_role = ticket._replace(branch=Branch.DRAFT, reviewed=False, published=True)
+    return state.with_ticket(name, moved_by_a_role)
 
 
 def rebased(ticket: Ticket) -> Ticket:
@@ -735,6 +776,21 @@ def _edit(state: State, name: Name) -> State | None:
     return shifted.with_ticket(name, shifted.of(name)._replace(text=1))
 
 
+def _line(state: State, name: Name) -> State | None:
+    """The owner's one edit of the ticket: its ``Flag:`` line, landed on the default branch."""
+    if state.flag is not Flag.MISSING or (edited := _edit(state, name)) is None:
+        return None
+    return dataclasses.replace(edited, flag=Flag.LANDED)
+
+
+def _upgrade(state: State) -> State | None:
+    """The plugin ships ADR 0061: the preflight now asks every ticket for its ``Flag:`` line."""
+    first = state.of(Name.A)
+    if state.flag is not Flag.UNASKED or first.ahead or first.merged:
+        return None
+    return dataclasses.replace(state, flag=Flag.MISSING)
+
+
 def _lock(state: State, name: Name) -> State | None:
     ticket = state.of(name)
     if ticket.tree is not Tree.DIRTY:
@@ -768,9 +824,11 @@ ON_TICKET: dict[Kind, Callable[[State, Name], State | None]] = {
     Kind.WORK: _work,
     Kind.COMMIT: _commit,
     Kind.RECORD: _record,
+    Kind.PUBLISH: _publish,
     Kind.CLOSE: recovering(_close),
     Kind.UPDATE: recovering(_update),
     Kind.EDIT: _edit,
+    Kind.LINE: _line,
     Kind.LAND: recovering(_land),
     Kind.LOCK: _lock,
     Kind.UNLOCK: _unlock,
@@ -784,23 +842,25 @@ ON_TICKET: dict[Kind, Callable[[State, Name], State | None]] = {
     Kind.KILL_BEFORE_FAST_FORWARD: recovering(_kill_before_fast_forward),
     Kind.KILL_MID_FAST_FORWARD: recovering(_kill_mid_fast_forward),
 }
-WHOLE: dict[Kind, Callable[[State], State]] = {
+WHOLE: dict[Kind, Callable[[State], State | None]] = {
     Kind.CLEAN: lambda state: cleaned(state, everything=False),
     Kind.CLEAN_ALL: lambda state: cleaned(state, everything=True),
     Kind.REPORT: lambda state: _report(recovered(state)),
+    Kind.UPGRADE: _upgrade,
 }
 
 
-# Why: a bound. Each ticket plays one part so the graph stays small: the agent commits only in
-# a, whose branch goes the whole way to merged, and leaves work uncommitted only in c, the ticket
-# the cap holds back; b, which waits on a, is only opened. A kill stops ``update`` and ``land``
-# only in a, whose branch carries a verdict record, and ``close`` only in c, whose tree holds
-# work. The drain's other commands and the owner reach a and c, and the commands of the whole
-# queue reach all three.
+# Why: a bound. Each ticket plays one part so the graph stays small: the agent and a role commit
+# only in a, whose branch goes the whole way to merged, and the agent leaves work uncommitted only
+# in c, the ticket the cap holds back; b, which waits on a, is only opened. A kill stops
+# ``update`` and ``land`` only in a, whose branch carries a verdict record, and ``close`` only in
+# c, whose tree holds work. The drain's other commands and the owner reach a and c, and the
+# commands of the whole queue reach all three.
 A_AND_C = (Name.A, Name.C)
 PLAYS: dict[Kind, tuple[Name, ...]] = {
     Kind.COMMIT: (Name.A,),
     Kind.RECORD: (Name.A,),
+    Kind.PUBLISH: (Name.A,),
     Kind.WORK: (Name.C,),
     Kind.LOCK: (Name.C,),
     Kind.UNLOCK: (Name.C,),
@@ -808,6 +868,7 @@ PLAYS: dict[Kind, tuple[Name, ...]] = {
     Kind.LAND: A_AND_C,
     Kind.CLOSE: A_AND_C,
     Kind.EDIT: A_AND_C,
+    Kind.LINE: (Name.A,),
     Kind.KILL_MID_REBASE: (Name.A,),
     Kind.KILL_AFTER_REBASE: (Name.A,),
     Kind.KILL_BEFORE_DISCARD: (Name.C,),
@@ -836,7 +897,7 @@ def moves(state: State) -> list[Move]:
         after = act(state, name)
         if after is not None:
             found.append((action, after))
-    found += [(action, act(state)) for action, act in ON_THE_QUEUE]
+    found += [(action, after) for action, act in ON_THE_QUEUE if (after := act(state)) is not None]
     return found
 
 
@@ -1005,9 +1066,38 @@ def recovers(before: State, action: str, after: State) -> bool:
     return next_drain(after, name) in {next_drain(whole, name), next_drain(before, name)}
 
 
+def refused_unopened(before: State, _: str, after: State) -> bool:
+    """A ticket the plan refuses is never given a work tree."""
+    return all(
+        after.of(name).tree is Tree.NONE or before.of(name).tree is not Tree.NONE
+        for name, status in classify(before).items()
+        if status is Status.REFUSED
+    )
+
+
+def released_by_the_line(_: State, action: str, after: State) -> bool:
+    """Once the owner lands a refused ticket's Flag: line, neither it nor a ticket waiting on it is refused."""  # noqa: E501
+    if action != f"{Kind.LINE.value} {Name.A.value}":
+        return True
+    statuses = classify(after)
+    waiting = [name for name, blocker in BLOCKER.items() if blocker is Name.A]
+    return all(statuses.get(name) is not Status.REFUSED for name in [Name.A, *waiting])
+
+
 def no_tree_left(_: State, action: str, after: State) -> bool:
     """After ``clean --all`` no queue work tree is left."""
     return action != Kind.CLEAN_ALL.value or all(t.tree is Tree.NONE for t in after.tickets)
+
+
+def unpublished(before: State, action: str, after: State) -> bool:
+    """A branch a role of its run committed on is never committed on after the run, nor landed."""
+    for name, was, now in zip(NAMES, before.tickets, after.tickets, strict=True):
+        if not was.published:
+            continue
+        committed = {f"{kind.value} {name.value}" for kind in (Kind.COMMIT, Kind.RECORD)}
+        if action in committed or now.merged:
+            return False
+    return True
 
 
 RULES: dict[str, Callable[[State, str, State], bool]] = {
@@ -1020,8 +1110,13 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "6. a held ticket stays held until its text changes": stays_held,
     "6a. a ticket its note holds merges only once the owner edits it": held_until_edited,
     "7. a ticket whose blocker waits on the owner is refused": refused,
+    "7a. a ticket the plan refuses is never opened": refused_unopened,
+    "7b. the owner's Flag: line releases the refused ticket and those waiting on it": (
+        released_by_the_line
+    ),
     "8. a killed command recovers by running again or by clean --all": recovers,
     "10. clean --all leaves no queue work tree": no_tree_left,
+    "11. a branch a role committed on is never committed on after its run or landed": unpublished,
 }
 
 
@@ -1710,12 +1805,16 @@ def run(taken: Callable[[Action], bool]) -> Run:
 
 
 def landing_run() -> Run:
-    """Every step but those on ``c``: ``a`` built, judged, landed or parked, ``b`` waiting on it."""
-    return run(lambda action: action.ticket is not Name.C)
+    """Every step but those on ``c``, a role's commit and the ``Flag:`` line: ``a`` built, judged, landed or parked, ``b`` waiting on it."""  # noqa: E501
+    return run(lambda action: action.ticket is not Name.C and action.kind not in TICKET_LIFE)
+
+
+TICKET_LIFE = frozenset({Kind.PUBLISH, Kind.UPGRADE, Kind.LINE})
+"""The steps of a ticket's life that only the life run takes."""
 
 
 def life_run() -> Run:
-    """The landing run with no kill: a ticket's life as the drain's commands lead it."""
+    """Every step but those on ``c`` and the kills: a ticket's life as the drain's commands, the agent, a role, an upgrade and the owner lead it."""  # noqa: E501
     return run(lambda action: action.ticket is not Name.C and action.kind not in KILLS)
 
 
@@ -1723,7 +1822,7 @@ def work_run() -> Run:
     """The steps on ``c`` and on the queue, and ``a`` parked, which lets the cap start ``c``."""
     return run(
         lambda action: (
-            action.ticket in {Name.C, None}
+            (action.ticket in {Name.C, None} and action.kind is not Kind.UPGRADE)
             or (action.ticket is Name.A and action.kind is Kind.CLOSE)
         )
     )
@@ -1752,6 +1851,7 @@ TICKET_FACTS: dict[str, Callable[[Ticket], object]] = {
     "discarding": note_fact(lambda note: note.discarding, none=False),
     "edited": lambda ticket: ticket.text > 0,
     "stashes": lambda ticket: ticket.stashes,
+    "published": lambda ticket: ticket.published,
 }
 """What a module reads of each ticket, named with the ticket's letter: ``treeA``."""
 
@@ -1768,6 +1868,7 @@ def state_facts(names: tuple[Name, ...]) -> dict[str, Callable[[State], object]]
         **facts,
         "scratch": lambda state: state.scratch,
         "half": lambda state: "none" if state.half is None else state.half.value,
+        "flag": lambda state: state.flag.name.lower(),
     }
 
 
@@ -1863,11 +1964,11 @@ def seen_through(
 def exports() -> tuple[model_tla.Export, ...]:
     """The modules ``docs/model/drain.md`` was checked and drawn from.
 
-    TLC checks the rules on the landing run, the work run and the whole lease graph; the search
-    in the tests proves them on the whole main graph. The charts are drawn from those three, and
-    from summaries of the life run and the lease graph.
+    TLC checks the rules on the landing run, the work run, the life run and the whole lease
+    graph; the search in the tests proves them on the whole main graph. The charts are drawn from
+    those four, and from summaries of the life run and the lease graph.
     """
-    landing, lease = landing_run(), lease_run()
+    landing, life, lease = landing_run(), life_run(), lease_run()
     facts = state_facts(NAMES)
     main = step_rules(RULES)
     return (
@@ -1878,6 +1979,9 @@ def exports() -> tuple[model_tla.Export, ...]:
             "DrainWork", work_run(), main, fields=(), derived=facts, action=model_tla.identifier
         ),
         model_tla.export(
+            "DrainTicketLife", life, main, fields=(), derived=facts, action=model_tla.identifier
+        ),
+        model_tla.export(
             "DrainLease",
             lease,
             step_rules(LEASE_RULES),
@@ -1886,6 +1990,6 @@ def exports() -> tuple[model_tla.Export, ...]:
             action=model_tla.identifier,
             deadlock=False,
         ),
-        seen_through("DrainLife", life_run(), {fact: facts[fact] for fact in SHOWN_LANDING}),
+        seen_through("DrainLife", life, {fact: facts[fact] for fact in SHOWN_LANDING}),
         seen_through("DrainLeaseShown", lease, SHOWN_LEASE, deadlock=False),
     )

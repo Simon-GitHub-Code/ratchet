@@ -5,17 +5,18 @@ machine whose inputs are those answers. Each answer is abstracted to the few val
 branches on: the spec role asks the owner or not, measures its change inside the ceilings or over
 one, or estimates that the whole change cannot fit; the ticket check finds a gap or not; a builder's
 check is green or red; the critic finds nothing, owes a fix, or tries nothing; the review approves,
-refuses, or approves against its own evidence; and any agent can die.
+refuses, or approves against its own evidence; and any agent can die. Each answer also says whether
+that role committed, pushed or opened a pull request, which the script cannot see (ADR 0060).
 
 The state is the agent the run waits on, what the answers so far established (whether the critic
 runs, the spec's last answer, a promise the run kept from the ticket, the last builder's check,
 what the last critique owes, whether the last review holds a blocking issue), the agents and fix
-rounds spent, and how the run ended. The fix loop runs on what the critic owes once the project is
-depended-on, and before that for one round on the review's blocking issues, which a second review
-then judges. ``graph()`` is every run the abstract answers allow: the fix loop's own bound keeps it
-finite, so it is every run, not a sample. ``RULES`` is what a reader of the method expects to stay
-true whatever the agents answer; every rule is a predicate over a step ``(before, action name,
-after)``.
+rounds spent, whether some role published, and how the run ended. The fix loop runs on what the
+critic owes once the project is depended-on, and before that for one round on the review's blocking
+issues, which a second review then judges. ``graph()`` is every run the abstract answers allow:
+the fix loop's own bound keeps it finite, so it is every run, not a sample. ``RULES`` is what a
+reader of the method expects to stay true whatever the agents answer; every rule is a predicate
+over a step ``(before, action name, after)``.
 ``export()`` writes the graph and the rules as a TLA+ module, and ``summary()`` the graph seen
 through the stage a run is at, for the charts of docs/model/pipeline.md.
 
@@ -324,7 +325,11 @@ class State:
     owed: bool = False
     silent: bool = False
     issue: bool = False
+    published: bool = False
     ending: Ending | None = None
+
+
+PUBLISHED = " and has published"
 
 
 @dataclass(frozen=True)
@@ -334,6 +339,8 @@ class Action:
     answer: Said
     role: Role | None = None
     rounds: int = 0
+    published: bool = False
+    """Whether the agent committed, pushed or opened a pull request, which no answer field says."""
 
     @property
     def label(self) -> str:
@@ -352,7 +359,7 @@ class Action:
     @property
     def name(self) -> str:
         who = f"{self.label} " if self.role else "the orchestrator "
-        return f"{who}{self.answer.value}"
+        return f"{who}{self.answer.value}{PUBLISHED if self.published else ''}"
 
     @property
     def fails_as(self) -> str:
@@ -541,7 +548,8 @@ STEPS: dict[Role, Callable[[State, Action], State]] = {
 def answered(state: State, action: Action) -> State:
     """``state`` once the agent it waits on gives ``action``'s answer."""
     assert action.role is not None
-    ran = replace(state, agents=state.agents + 1, phase=action.phase)
+    published = state.published or action.published
+    ran = replace(state, agents=state.agents + 1, phase=action.phase, published=published)
     if action.answer in FAILED or action.answer in MALFORMED:
         died = action.answer in FAILED
         return _ended(ran, Ending(Outcome.ERROR, error=action.fails_as, resume=died))
@@ -568,8 +576,9 @@ def numbered(state: State) -> int:
 def _answer(state: State) -> Iterator[Move]:
     if state.awaiting is not None:
         for answer in ANSWERS[state.awaiting]:
-            action = Action(answer, state.awaiting, numbered(state))
-            yield action, answered(state, action)
+            for published in (False, True):
+                action = Action(answer, state.awaiting, numbered(state), published)
+                yield action, answered(state, action)
 
 
 ACTIONS: dict[str, Callable[[State], Iterator[Move]]] = {
@@ -618,12 +627,14 @@ def named(name: str) -> Action:
     who, said = name.split(" ", 1)
     if who == "the":
         return Action(Start(said.removeprefix("orchestrator ")))
+    published = said.endswith(PUBLISHED)
     role = Role(ROUND.sub("", who))
     numbered = ROUND.search(who)
     number = int(numbered.group(1)) if numbered else 0
     rounds = number - 1 if role is Role.FIX else number
+    said = said.removesuffix(PUBLISHED)
     answer = next(answer for answer in type(ANSWERS[role][0]) if answer.value == said)
-    return Action(answer, role, rounds)
+    return Action(answer, role, rounds, published)
 
 
 def most(state: State) -> int:
@@ -643,7 +654,7 @@ def evidenced(before: State, name: str, after: State) -> bool:
 
 
 def bounded(_: State, __: str, after: State) -> bool:
-    """A run never spawns more agents than the documents allow, nine before the project is depended-on, twelve after, and two to judge a rebased branch again."""  # noqa: E501
+    """The script's own calls never spawn more agents than the documents allow, nine before the project is depended-on, twelve after, and two to judge a rebased branch again."""  # noqa: E501
     return after.agents <= most(after)
 
 
@@ -706,9 +717,15 @@ def loop_ends(before: State, name: str, after: State) -> bool:
 
 
 def unpublished(_: State, name: str, __: State) -> bool:
-    """The run never commits, pushes or opens a pull request, and asks each agent only for the git and forge commands the documents give its role."""  # noqa: E501
+    """The script never commits, pushes or opens a pull request, and its prompts ask each agent only for the git and forge commands the documents give its role."""  # noqa: E501
     role = named(name).role
     return role is None or not COMMANDS[role] & PUBLISHING
+
+
+def published_never_approved(_: State, __: str, after: State) -> bool:
+    """A run in which a role committed, pushed or opened a pull request never ends approved."""
+    ending = after.ending
+    return not after.published or ending is None or ending.outcome is not Outcome.APPROVE
 
 
 def reported(_: State, name: str, after: State) -> bool:
@@ -820,13 +837,14 @@ def lost(_: State, name: str, after: State) -> bool:
 
 RULES: dict[str, Callable[[State, str, State], bool]] = {
     "1. a run is approved only on the last review's clean approval of a green tree": evidenced,
-    "2. a run spawns no more agents than the documents allow": bounded,
+    "2. the script spawns no more agents than the documents allow": bounded,
     "3. stages run in order, and nothing is built before the spec asks nothing": ordered,
     "4. a verdict only gets stricter, but by a documented repair": stricter,
     "5. a change over a ceiling stops as too large and is never approved": ceilinged,
     "5a. a change over a ceiling after any role that measures it stops as too large": measured,
     "6. the fix loop ends, and what it leaves owed is in the result": loop_ends,
-    "7. the run never commits, pushes or opens a pull request": unpublished,
+    "7. the script never commits, pushes or opens a pull request, nor asks for one": unpublished,
+    "7a. a run in which a role published never ends approved": published_never_approved,
     "8. a failed or malformed answer ends in a result that says so": reported,
     "8a. a dead agent ends the run in an error that says to resume it": resumable,
     "9. a rebased branch is approved only by its own second review": judged_again,
@@ -889,6 +907,7 @@ AS_STATE: dict[str, Callable[[State], object]] = {
     "owed": lambda state: state.owed,
     "silent": lambda state: state.silent,
     "issue": lambda state: state.issue,
+    "published": lambda state: state.published,
     "outcome": outcome,
     **{
         name: lambda state, read=read: read(state.ending or NOT_ENDED)
@@ -898,7 +917,7 @@ AS_STATE: dict[str, Callable[[State], object]] = {
 
 
 def export() -> model_tla.Export:
-    """Every run as a TLA+ module, with the eighteen rules, each named after its predicate.
+    """Every run as a TLA+ module, with the nineteen rules, each named after its predicate.
 
     Every rule is about a step, so each is a ``model_tla.Step``. A run that has ended has no step
     out, so the module tells TLC that its end is no deadlock.
@@ -932,11 +951,20 @@ class Stage(NamedTuple):
     resume: bool
 
 
+def read(name: str) -> str:
+    """The step called ``name`` as the script reads it: without whether the agent published."""
+    return name.removesuffix(PUBLISHED)
+
+
 def stage(state: State) -> Stage:
     return Stage(*(AS_STATE[name](state) for name in Stage._fields))
 
 
 def summary() -> model_tla.Export:
-    """The graph seen through ``stage``, small enough for the statechart tool to draw whole."""
-    seen = model_tla.summary(graph(), stage, model_tla.identifier)
+    """The graph seen through ``stage``, small enough for the statechart tool to draw whole.
+
+    Why: the script cannot see whether a role published, so each step is seen as the answer the
+    script reads.
+    """
+    seen = model_tla.summary(graph(), stage, lambda name: model_tla.identifier(read(name)))
     return model_tla.export("PipelineStage", seen, {}, fields=Stage._fields, deadlock=False)
