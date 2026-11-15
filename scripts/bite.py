@@ -685,15 +685,17 @@ def quietly(gate: Gate, argv: list[str]) -> tuple[int, str]:
     sys.stdout.flush()
     sys.stderr.flush()
     kept = [os.dup(1), os.dup(2)]
-    with tempfile.TemporaryFile() as said:
-        text = open(said.fileno(), "w", encoding="utf-8", buffering=1, closefd=False)  # noqa: SIM115
+    with (
+        tempfile.TemporaryFile() as said,
+        open(said.fileno(), "w", encoding="utf-8", buffering=1, closefd=False) as text,
+    ):
         os.dup2(said.fileno(), 1)
         os.dup2(said.fileno(), 2)
         try:
             with redirect_stdout(text), redirect_stderr(text):
                 code = gate(argv)
+            text.flush()
         finally:
-            text.close()
             for fd, copy in enumerate(kept, 1):
                 os.dup2(copy, fd)
                 os.close(copy)
