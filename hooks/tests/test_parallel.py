@@ -242,7 +242,9 @@ def test_outputs_are_never_interleaved(capsys: pytest.CaptureFixture[str]) -> No
 
 
 def test_the_closing_lines_name_the_slowest_gate(capsys: pytest.CaptureFixture[str]) -> None:
-    options = argparse.Namespace(root=Path(), jobs=1, fail_fast=False, report=None, alone=[])
+    options = argparse.Namespace(
+        root=Path(), jobs=1, fail_fast=False, report=None, alone=[], wide=[]
+    )
     scheduler = parallel.Scheduler([], [], options)
     scheduler.finished = [
         parallel.Finished("fast", 0.2, 0, ""),
@@ -493,6 +495,32 @@ def test_a_gate_measured_alone_runs_after_the_others_with_nothing_beside_it(
         "+also",
         "-also",
     ]
+
+
+JOBS = "import os, sys; print(sys.argv[1], os.environ.get('RATCHET_JOBS', 'unset'))"
+
+
+def test_wide_gates_split_the_jobs_and_every_other_gate_keeps_its_environment(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RATCHET_JOBS", raising=False)
+    suite, floor, first, then = (gate(JOBS, name) for name in ("suite", "floor", "first", "then"))
+    plain, timed = gate(JOBS, "plain"), gate(JOBS, "timed")
+    wide = ["--wide", suite, floor, first, then, timed, "not-in-this-tier"]
+    serial = ["--serial", first, then]
+    arguments = ["--jobs", "7", *wide, *serial, "--alone", timed]
+    assert run(*arguments, "--", suite, floor, first, then, plain, timed) == 0
+    out = capsys.readouterr().out
+    for said in ("suite 2", "floor 2", "first 2", "then 2", "plain unset", "timed 7"):
+        assert f"\n{said}\n" in out
+
+
+def test_a_wide_gate_gets_at_least_one_job(capsys: pytest.CaptureFixture[str]) -> None:
+    a, b = gate(JOBS, "a"), gate(JOBS, "b")
+    assert run("--jobs", "1", "--wide", a, b, "--", a, b) == 0
+    out = capsys.readouterr().out
+    assert "\na 1\n" in out
+    assert "\nb 1\n" in out
 
 
 def test_fail_fast_names_a_gate_measured_alone_that_never_started(

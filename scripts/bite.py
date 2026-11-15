@@ -14,7 +14,6 @@ Usage: ``bite.py``. Exits 1 when any gate fails to bite or fails to pass.
 from __future__ import annotations
 
 import http.server
-import io
 import json
 import os
 import shlex
@@ -574,8 +573,11 @@ def python(code: str) -> str:
     return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
 
 
+# Why: a request to /work is held until the stop, and the stop waits for one, so a request is in
+# flight when it comes however late the machine delivers either; the fault drops it.
 STOPS = (
-    "import os, signal, threading, time, http.server as h\n"
+    "import os, signal, threading, http.server as h\n"
+    "held, stopping = threading.Event(), threading.Event()\n"
     "class S(h.ThreadingHTTPServer):\n"
     "    daemon_threads = False\n"
     "    block_on_close = True\n"
@@ -583,30 +585,34 @@ STOPS = (
     "class H(h.BaseHTTPRequestHandler):\n"
     "    def log_message(self, *args): pass\n"
     "    def do_GET(self):\n"
-    "        time.sleep(0.3)\n"
+    "        if self.path == '/work': held.set(); stopping.wait()\n"
     "        self.send_response(200); self.send_header('Content-Length', '0'); self.end_headers()\n"
     "s = S(('127.0.0.1', int(os.environ['PORT'])), H)\n"
-    "def stop(*args):\n"
+    "def stop():\n"
+    "    held.wait()\n"
     "    if os.environ['DROPS']: os._exit(0)\n"
-    "    threading.Thread(target=s.shutdown).start()\n"
-    "signal.signal(signal.SIGTERM, stop)\n"
+    "    stopping.set(); s.shutdown()\n"
+    "signal.signal(signal.SIGTERM, lambda *args: threading.Thread(target=stop).start())\n"
     "s.serve_forever(); s.server_close()"
 )
-# The held command: the load smoke, its own report kept out of this gate's output.
-HELD = (
-    "import subprocess, sys; sys.exit(subprocess.run(sys.argv[1:], capture_output=True).returncode)"
-)
 LOAD_SMOKE = str(Path(__file__).with_name("load_smoke.py"))
+# Why: each limit ends the wait the moment the service or the request is done, so it is only how
+# long a busy machine may take; the fault is caught by the request it drops, never by a limit.
 GRACEFUL = [
-    *("--ready", "http://127.0.0.1:{port}/", "--graceful", "3", "--signal-after", "0.5"),
-    *("--", sys.executable, "-c", HELD, sys.executable, LOAD_SMOKE),
-    *("--url", "http://127.0.0.1:{port}/work", "--until-stopped", "--seconds", "2"),
+    *("--ready", "http://127.0.0.1:{port}/", "--timeout", "120"),
+    *("--graceful", "120", "--signal-after", "0.5"),
+    *("--", sys.executable, LOAD_SMOKE, "--url", "http://127.0.0.1:{port}/work"),
+    *("--until-stopped", "--seconds", "2", "--timeout", "120"),
     *("--concurrency", "2", "--min-requests", "1"),
 ]
 REFUSES = "import os, sys; 'BITE_SETTING' in os.environ or sys.exit('BITE_SETTING is not set')\n"
 
 READY = "http://127.0.0.1:{port}/"
-LOAD = ["--ready", "{stub}/health", "--seconds", "0.5", "--concurrency", "2", "--min-requests", "1"]
+REFUSAL = ["--refuses", "BITE_SETTING"]
+LOAD = [
+    *("--ready", "{stub}/health", "--seconds", "0.5", "--timeout", "120"),
+    *("--concurrency", "2", "--min-requests", "1"),
+]
 SINK = ["--service", "bite", "--require", "traces"]
 SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
     (
@@ -626,8 +632,8 @@ SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
     (
         "smoke: a service that boots without a required setting",
         with_service.main,
-        ["--boot", python(REFUSES + SERVE), "--ready", READY, "--refuses", "BITE_SETTING"],
-        ["--boot", python(SERVE), "--ready", READY, "--refuses", "BITE_SETTING"],
+        [*("--boot", python(REFUSES + SERVE), "--ready", READY, "--timeout", "120"), *REFUSAL],
+        [*("--boot", python(SERVE), "--ready", READY, "--timeout", "120"), *REFUSAL],
     ),
     (
         "load-smoke: a 500 under load",
@@ -675,11 +681,26 @@ def stub_service() -> Iterator[str]:
 
 
 def quietly(gate: Gate, argv: list[str]) -> tuple[int, str]:
-    """The gate's exit code and what it printed."""
-    said = io.StringIO()
-    with redirect_stdout(said), redirect_stderr(said):
-        code = gate(argv)
-    return code, said.getvalue()
+    """The gate's exit code and what it printed, the commands it ran included."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    kept = [os.dup(1), os.dup(2)]
+    with (
+        tempfile.TemporaryFile() as said,
+        open(said.fileno(), "w", encoding="utf-8", buffering=1, closefd=False) as text,
+    ):
+        os.dup2(said.fileno(), 1)
+        os.dup2(said.fileno(), 2)
+        try:
+            with redirect_stdout(text), redirect_stderr(text):
+                code = gate(argv)
+            text.flush()
+        finally:
+            for fd, copy in enumerate(kept, 1):
+                os.dup2(copy, fd)
+                os.close(copy)
+        said.seek(0)
+        return code, said.read().decode("utf-8", errors="replace")
 
 
 def run_service(gate: Gate, arguments: list[str], stub: str) -> tuple[int, str]:
@@ -693,15 +714,22 @@ def run(gate: Gate, root: Path, flags: list[str]) -> tuple[int, str]:
 def verdict(label: str, clean: tuple[int, str], faulty: tuple[int, str]) -> bool:
     """Print the scenario's line; whether the gate bit and passed.
 
-    A gate red on the clean state prints what it said, so the red explains itself.
+    A run that went the wrong way is named, and what the gate said in it is printed under it, so
+    the verdict explains itself.
     """
     green, red = clean[0] == 0, faulty[0] != 0
-    text = "bites" if red and green else "DOES NOT BITE" if green else "RED ON CLEAN STATE"
+    if red and green:
+        print(f"bite: {label}: bites")
+        return True
+    text, why, said = (
+        ("DOES NOT BITE", "the gate is green with the fault planted", faulty[1])
+        if green
+        else ("RED ON CLEAN STATE", "the gate is red with no fault planted", clean[1])
+    )
     print(f"bite: {label}: {text}")
-    if not green:
-        for line in clean[1].splitlines():
-            print(f"  {line}")
-    return red and green
+    for line in [why, *said.splitlines()]:
+        print(f"  {line}")
+    return False
 
 
 def bite(scratch_dir: Path) -> int:
