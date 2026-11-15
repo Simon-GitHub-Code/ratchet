@@ -1,12 +1,12 @@
 ---
 name: conjecture
-description: Draft a ticket's conjecture, size and operability from the conversation that produced it, and write them to the ticket. Asks the owner, in one message, each product choice nothing they said settles, and makes the spec follow what they did say.
+description: Draft a ticket's conjecture, size and operability from the conversation that produced it, and write them to the ticket, or draft them again when its criteria changed since. Asks the owner, in one message, each product choice nothing they said settles, and makes the spec follow what they did say.
 disable-model-invocation: true
 ---
 
 # The conjecture of a ticket
 
-Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what the owner already decided.
+Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the owner already decided, and draft them again when the ticket's criteria change after they were written.
 
 `/ratchet:conjecture <ticket>`: the ticket is a number on the tracker (`4` or `#4`) or the path of a local ticket file. The argument may also be a spec (a tracker issue or a local `spec.md`) that `to-tickets` has not split yet. The route sends a spec that states no conjecture or operability here first, because `to-tickets` writes neither, and the tickets it then makes inherit both from the spec.
 
@@ -15,12 +15,17 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
 1. **Read the ticket.**
    - Run `gh issue view <n> --json number,title,body,comments` in one Bash call, or read the file.
    - Read its parent spec too: the one a `Parent:` line or a `## Parent` section names, or, for a local ticket under `<feature>/issues/`, the `<feature>/spec.md` beside that directory, which the preflight reads as its parent.
-   - **The ticket, or its parent, already states a conjecture and its operability:** there is nothing to write. Say so and stop.
+   - **The ticket, or its parent, states a conjecture:** check that it is current. Run the digest command of [The criteria digest](#the-criteria-digest) on the body that holds the conjecture, with the heading its `- Criteria:` line names.
+     - **The command prints another digest than the line names:** the criteria changed after the conjecture was written. Redraft it: run steps 2 to 5, each as its *redraft* case says. The case below does not apply.
+     - **It prints the same digest, or the conjecture has no `- Criteria:` line:** the conjecture is current, and the case below decides.
+   - **The ticket, or its parent, already states a current conjecture and its operability, and the ticket states no `## Size`:** it was written before sizes were. Write the size alone: estimate it by the `## Size` block of step 2, write that block as step 4 says, and hand over as step 5 says, with the two size lines in place of the conjecture. Ask nothing, and draft nothing else.
+   - **The ticket, or its parent, already states a current conjecture and its operability, and the ticket states its `## Size`, or the argument is a spec:** there is nothing to write. Say so and stop.
 
-   Done when you hold the ticket, and its parent spec when it has one, and, when there is nothing to write, you have said so and stopped.
+   Done when you hold the ticket, and its parent spec when it has one; when a conjecture is stated, you know from the digest whether it is current or is to be redrafted; when only the size is missing, it is written and handed over; and, when there is nothing to write, you have said so and stopped.
 
 2. **Draft from the record.** The conversation that produced the ticket (`grill-with-docs`, `to-spec`, `to-tickets`) already chose an approach and killed the alternatives, and the ADRs and the glossary hold the rest. That is how it will be built, so draft from that record, not from imagination.
    - **The ticket's siblings share a parent spec:** draft the conjecture and the operability once, for the spec. Its tickets inherit them.
+   - **A redraft** (step 1): draft from the record as it stands now, the changed criteria and every line under `## Answers` included. The old conjecture is an agent's draft: keep what the record still supports, and change what the changed criteria change. A changed criterion that contradicts the latest line under `## Answers` is not corrected to that line: step 3 asks its fork again, since the owner may have made the change. Estimate the size again, by the `## Size` block below.
 
    Draft five parts. Each of the first four is a sentence or two.
    - *Approach*: the one way this ticket will be built, stated so it can be shown wrong.
@@ -64,7 +69,8 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
    - **A spec that has not been split:** write no `## Size`. Make the estimate all the same, for the ceiling case below.
    - The ceilings are `product_lines` and `product_files` of `[ceilings.change]` in `quality/thresholds.toml`. The feature preflight refuses a ticket whose stated size passes either.
    - Be honest and not hopeful: the spec stage estimates the whole change again and stops it when it is larger.
-   - **The estimate passes a ceiling:** the ticket is not written as one. Say so in the reply, with the parts it divides into, each a vertical slice a person could use and each under the ceilings. `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so name in the reply the argument that asks it for slices under both ceilings, with both numbers in it.
+   - **The estimate passes a ceiling:** write it as it is, and the ticket with it. The feature run splits a ticket whose `## Size` passes a ceiling before it builds, by size and without a question, as ADR 0046 says.
+   - **A spec that has not been split, whose estimate passes a ceiling:** `/mattpocock-skills:to-tickets` slices a spec by what a person can use and not by its size, so name in the reply the argument that asks it for slices under both ceilings, with both numbers in it.
 
    **The `## Operability` block.** Write one line per concern the binding's application types are asked; the preflight of step 5 names any it still wants. Take each line from the ticket and the binding's Feature flags, Telemetry and Limits sections, or write `none` and why.
    - `- Flag:` the flag the behaviour ships behind.
@@ -72,7 +78,7 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
    - `- Load:` the route or input the load gates gain.
    - `- Security:` the surface it adds: routes, inputs, who may call.
 
-   Done when the draft holds the five parts, a table row for every thing the owner said that the ticket or spec touches and for every behaviour of the spec nothing they said asked for, the two size lines for a ticket (none for a spec that has not been split) and an operability line for every concern asked. When the estimate passes a ceiling, it is done instead when the reply names the parts the ticket divides into and the `/mattpocock-skills:to-tickets` argument, and nothing is written to that ticket.
+   Done when the draft holds the five parts, a table row for every thing the owner said that the ticket or spec touches and for every behaviour of the spec nothing they said asked for, the two size lines for a ticket (none for a spec that has not been split) and an operability line for every concern asked. When the estimate of a spec that has not been split passes a ceiling, the reply also names the `/mattpocock-skills:to-tickets` argument.
 
 3. **One conjecture for the whole spec, and no dialog to confirm it.**
    - **The ticket's siblings share a parent spec:** the conjecture is the spec's, drafted once in step 2.
@@ -83,17 +89,21 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
    - What the spec, an earlier conjecture or an **Assumed** line chose does not settle it: an agent wrote those.
    - Ask every such fork before you write anything, all in one message, each with the answer the spec leans to first, so the owner can accept them all at once.
    - A fork already answered at the spec step has its answer under `## Answers` and is not asked again. The conjecture's questions join the same message as the spec's when they are known at that point. Otherwise, as here, they form one message of their own.
+   - **A redraft:** ask only the forks the changed criteria opened: a behaviour they now hold that nothing the owner said settles, and a fork whose latest line under `## Answers` they now contradict. Every other line under `## Answers` stays as it is, and its fork is not asked again.
 
    - **Ask** `conjecture.fork`: "<one choice the fork test gives to the owner and nothing they said settles, asked as someone using it would put it>" The answer the spec leans to comes first with `(recommended)` and the reason.
 
    **Write each fork.**
    - **The owner answered it:** write the answer under `## Answers` on the spec or ticket, the question and the answer in one line each. Change the criterion to follow it. Write its row with the answer quoted under *You said*, marked **built**.
    - **A fork the test gives to you** (order, wording, layout, timing, a limit, how it is built): it is written `(not asked)` and **assumed**. Take the one the record supports, name the other under Alternatives where it is a way to build it, and state what changing it later costs.
+   - **A redraft:** write a reopened fork's answer below its earlier line, dated. The earlier line stays.
    - Never write that no question was needed while a row says `(left open)`.
 
    Done when every fork the owner was asked has its line under `## Answers` and a **built** row, every other fork's row is `(not asked)` and **assumed**, and no row says `(left open)`.
 
 4. **Write it.** Append `## Conjecture`, `## Size` and `## Operability` with the agreed text to the ticket body.
+   - End the `## Conjecture` you write with its `- Criteria:` line, by [The criteria digest](#the-criteria-digest), run on the body as you will write it.
+   - **A redraft:** replace each section this run drafted, where it stands, instead of appending it. `## Answers` keeps every earlier line. It lands as below, as the first write did.
    - **The ticket's siblings share a parent spec:** write the conjecture and the operability on the spec, and say that its tickets inherit them. `## Size` goes on the ticket.
    - **The argument is a spec that has not been split:** append `## Conjecture` and `## Operability` only.
    - **The tracker is on the forge:** run `gh issue edit <n> --body-file <file>` with the full body in one Bash call, one call per issue you write to. Pass no label flag: the agent-ready label is the owner's act, and the guard asks on it.
@@ -105,16 +115,34 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` once, from what
        - **A forge:** the merge job leaves the pull request to the owner and comments why on it. Hand over without waiting for that job, as step 5 says.
      - Never commit on the default branch itself.
 
-   Done when each section you appended is where this step puts it, in the issue body or in the file, merged, waiting on the owner's merge, or in an open pull request. When they are on the spec, you have said that its tickets inherit them. When the merge is the owner's, you have relayed why, or, with a forge, you have gone on to step 5 without waiting for the merge job.
+   Done when each section you appended or replaced is where this step puts it, `## Conjecture` ending with its `- Criteria:` line when the body has a criteria heading, in the issue body or in the file, merged, waiting on the owner's merge, or in an open pull request. When they are on the spec, you have said that its tickets inherit them. When the merge is the owner's, you have relayed why, or, with a forge, you have gone on to step 5 without waiting for the merge job.
 
 5. **Hand over.**
+   - **This run redrafted a conjecture** (step 1): before the conjecture, say that the criteria changed since it was written, and print what changed in it. Give each part, table row, size line and operability line that the redraft changed, dropped or added, the old words under *Was* and the new under *Now*.
    - Print the conjecture with *What you asked for* whole. It is where the owner sees what each thing they said became.
    - Its **assumed** rows are the reply's **Assumed** block, each with what changing it later costs.
    - Say how many questions the owner answered.
    - **The merge job will leave the pull request to the owner** (step 4, a forge): say that it will, with a comment on the pull request saying why.
    - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" <ticket> --root .` in one Bash call and report its verdict.
    - **Red on the label:** say that the ticket needs the agent-ready label and that applying it is the owner's keystroke.
-   - **Green:** the last line is the next command, `/ratchet:feature <ticket>` (or `/pstack:poteto-mode <ticket>` when the owner stays).
+   - **Red on `size`:** say that the ticket's size passes a ceiling and that `/ratchet:feature` splits it by size before it builds, asking the owner nothing.
+   - **Green, or red on `size` alone:** the last line is the next command, `/ratchet:feature <ticket>` (or `/pstack:poteto-mode <ticket>` when the owner stays).
    - **The owner counters the conjecture:** an alternative they name goes in with its criticism. An approach they change replaces the draft's. Write the changed conjecture again as step 4 says, and print it again.
 
-   Done when the reply holds the conjecture with its whole *What you asked for* table, its **Assumed** block and the count of answered questions; and the preflight's verdict, with, when the verdict is red on the label, that applying the label is the owner's keystroke, and, when it is green, the next command last. When the merge job will leave the pull request to the owner, the reply says so. When the owner counters it, the conjecture holds the alternative they named with its criticism, or the approach they changed, written again as step 4 says and printed again.
+   Done when the reply holds the conjecture with its whole *What you asked for* table, its **Assumed** block and the count of answered questions, after a redraft preceded by each change under *Was* and *Now*; and the preflight's verdict, with, when the verdict is red on the label, that applying the label is the owner's keystroke, when it is red on `size`, that the feature run splits the ticket, and, when it is green or red on `size` alone, the next command last. When the merge job will leave the pull request to the owner, the reply says so. When the owner counters it, the conjecture holds the alternative they named with its criticism, or the approach they changed, written again as step 4 says and printed again.
+
+## The criteria digest
+
+The `- Criteria:` line records which criteria a conjecture was drafted against, so that step 1 tells from one command, and not by judgement, whether they changed since. A forge issue and a local file are checked the same way, since both hold the body as text.
+
+- The line is the last of `## Conjecture`: the criteria heading, then the digest.
+
+  ```markdown
+  - Criteria: `## Acceptance criteria` `<digest>`
+  ```
+
+- The criteria heading is `## Acceptance criteria` on a ticket and `## User Stories` on a spec, spelled as the body spells it. A body with neither gets no line.
+- The digest is what this command prints:
+  - **The body is a file** (a local ticket or spec, or the file step 4 passes to `gh issue edit`): `tr -d '\r' < <file> | awk -v h='<heading>' '/^## /{f=($0==h)} f && NF' | git hash-object --stdin`
+  - **The body is a forge issue's:** `gh issue view <n> --json body --jq .body | tr -d '\r' | awk -v h='<heading>' '/^## /{f=($0==h)} f && NF' | git hash-object --stdin`
+- The command reads only the criteria section, from its heading to the next `## ` heading, and drops the carriage returns a forge's web editor adds. Blank lines do not count, so a blank line added or trimmed between sections leaves the digest as it was. A label, a new line under `## Answers` or a rewritten conjecture leaves the digest as it was.
