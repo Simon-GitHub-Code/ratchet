@@ -460,6 +460,31 @@ def not_matched(root: Path, old: str, *, then: int, now: int) -> list[str]:
     ]
 
 
+def not_held(root: Path, old: str, *, dropped: int) -> list[str]:
+    return [
+        (
+            f"publish check: `{BRANCH}` is at {git(root, 'rev-parse', 'HEAD')[:12]}, which does"
+            f" not hold {old[:12]}, where it started, and {dropped} of the commits it had ahead"
+            " of `main` were dropped, which `main` does not hold by author date and message: a"
+            " role amended, reset or rebased it"
+        ),
+        RED,
+    ]
+
+
+def landed_on_main(
+    root: Path, monkeypatch: pytest.MonkeyPatch, *, message: str | None = None, date: str = WHEN
+) -> None:
+    """Main takes the branch's notes change as its own commit, as a merge that landed it did."""
+    notes = git(root, "rev-parse", "HEAD")
+    git(root, "switch", "-q", "main")
+    monkeypatch.setenv("GIT_AUTHOR_DATE", date)
+    git(root, "cherry-pick", "-n", notes)
+    git(root, "commit", "-q", "-m", message or "docs(core): the branch adds notes")
+    monkeypatch.setenv("GIT_AUTHOR_DATE", WHEN)
+    git(root, "switch", "-q", BRANCH)
+
+
 def test_a_reconcile_that_finishes_the_rebase_is_not_publishing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
 ) -> None:
@@ -493,7 +518,42 @@ def test_a_rebase_that_skips_the_conflicted_commit_drops_it_and_is_red(
     old = git(root, "rev-parse", "HEAD")
     stopped(root)
     git(root, "rebase", "--skip")
-    assert checked(path, root) == (1, not_matched(root, old, then=3, now=2))
+    assert checked(path, root) == (1, not_held(root, old, dropped=1))
+
+
+def test_a_rebase_that_drops_a_commit_the_base_already_holds_is_not_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checked: Check
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    landed_on_main(root, monkeypatch)
+    path = started(tmp_path, root, rebase_onto="main")
+    finished(root)
+    assert git(root, "rev-list", "--count", "main..HEAD") == "2"
+    assert checked(path, root) == (0, [GREEN])
+
+
+@pytest.mark.parametrize(
+    ("message", "date"),
+    [
+        ("docs(core): the notes, reworded", WHEN),
+        (None, LATER),
+    ],
+    ids=["another-message", "another-author-date"],
+)
+def test_a_dropped_commit_whose_twin_on_the_base_differs_is_red(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    checked: Check,
+    *,
+    message: str | None,
+    date: str,
+) -> None:
+    root = rejudged(tmp_path, monkeypatch)
+    landed_on_main(root, monkeypatch, message=message, date=date)
+    path = started(tmp_path, root, rebase_onto="main")
+    old = git(root, "rev-parse", "HEAD")
+    finished(root)
+    assert checked(path, root) == (1, not_held(root, old, dropped=1))
 
 
 def test_a_rebase_finished_with_a_commit_added_is_red(
