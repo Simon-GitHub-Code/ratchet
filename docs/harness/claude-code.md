@@ -16,7 +16,7 @@ The ratchet marketplace entry declares `mattpocock-skills`, `pstack` and `impecc
 
 ## The guard
 
-Nothing to wire. `hooks/hooks.json` registers `hooks/guard.py` on PreToolUse for `Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch`, and `hooks/session.py` on SessionStart and SubagentStart.
+Nothing to wire. `hooks/hooks.json` registers `hooks/guard.py` on PreToolUse for `Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|run_terminal_command|search_replace|hashline_edit|write`, and `hooks/session.py` on SessionStart and SubagentStart.
 
 ## Names
 

@@ -19,7 +19,7 @@ pstack and impeccable ship no OpenCode package. pstack's skills can be copied as
 
 `adapters/opencode/ratchet-guard.ts` is an OpenCode plugin. Its `tool.execute.before` handler maps `bash`, `edit` and `write` to `Bash`, `Edit` and `Write`. It runs `hooks/guard.py` with the Claude-shaped JSON and the project directory, and throws on `deny`.
 
-- **`ask`:** OpenCode has no way for a plugin to hand a call to the owner, so `ask` also throws, with the reason and "run it yourself". The guard asks on a merge, the agent-ready label and a write of a CI workflow or an agent-instruction file (`CLAUDE.md`, `AGENTS.md`, anything under `.claude/`, at any depth). Each is the owner's to give, so in OpenCode the owner makes those himself.
+- **`ask`:** OpenCode has no way for a plugin to hand a call to the owner, so `ask` also throws, with the reason and "run it yourself". The guard asks on a merge, the agent-ready label, a write of a CI workflow or an agent-instruction file (`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`, anything under `.claude/`, at any depth), and a command line it cannot read. Each is the owner's to give, so in OpenCode the owner makes those himself.
 - **A guard path change on a branch** gets no verdict, so an agent here makes it as in any other harness.
 - **A guard that cannot run** throws too: fail closed, as in Claude Code.
 

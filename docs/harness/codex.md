@@ -12,7 +12,7 @@ codex plugin marketplace add michael-denyer/pstack-claude && codex plugin add ps
 codex plugin marketplace add pbakaus/impeccable && codex plugin add impeccable@impeccable
 ```
 
-`~/.codex/config.toml` lists installed plugins under `[plugins."name@marketplace"]`. Hooks need `[features] hooks = true`. Codex asks the owner to trust each hook source once.
+`~/.codex/config.toml` lists installed plugins under `[plugins."name@marketplace"]`. Hooks need `[features] hooks = true`, which the owner adds: the guard denies an agent's edit of that file. Codex asks the owner to trust each hook source once.
 
 ## The guard
 

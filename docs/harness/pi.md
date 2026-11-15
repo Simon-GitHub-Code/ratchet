@@ -13,7 +13,7 @@ pi install git:github.com/mattpocock/skills
 pi install git:github.com/pbakaus/impeccable
 ```
 
-`pi list` shows installed packages. After installing, two packages need a line in `~/.pi/agent/settings.json`:
+`pi list` shows installed packages. After installing, two packages need a line in `~/.pi/agent/settings.json`. The owner adds both: the guard denies an agent's edit of that file.
 
 - **mattpocock/skills:** narrow the package to the skills its Claude plugin ships (the `skills` list in its `.claude-plugin/plugin.json`), minus `tdd` and `teach`, with the object form: `{ "source": "git:github.com/mattpocock/skills", "skills": ["skills/engineering/ask-matt", ...] }`. The package has no `pi` manifest, so pi loads every folder under `skills/`, drafts included. Two of those names (`tdd`, `teach`) collide with pstack's. pi skill names are not namespaced per plugin, so the first one loaded wins and the other is a warning.
 - **impeccable:** add the folder to pi's own list: `"skills": ["~/.pi/agent/git/github.com/pbakaus/impeccable/.pi/skills"]`. impeccable keeps its pi build in `.pi/skills/`, which pi does not look in for a package, so the install loads nothing.
