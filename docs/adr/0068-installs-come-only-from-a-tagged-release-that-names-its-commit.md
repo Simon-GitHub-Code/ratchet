@@ -78,17 +78,17 @@ This is wrong if any of these is seen:
 - `scripts/release_check.py`: new, with its tests on a scratch repository.
 - `.github/workflows/release.yml`: new. It makes the tag, runs the check and publishes the release page. Adding it is an `ASK` (workflow write), approved at merge.
 - Main's CI: one check that `.claude-plugin/commit` is absent.
-- `.claude-plugin/marketplace.json`: the ratchet entry's source. It changes in the 0.12.2 version PR, since no tag exists before it.
+- `.claude-plugin/marketplace.json`: the ratchet entry's source. It changes in the version PR of the first tagged release, since no tag exists before it.
 - `hooks/session.py`: writes `ratchet-plugin` in the git common directory.
 - `skills/adopt/templates/justfile`: `ratchet_plugin` reads `RATCHET_PLUGIN`, then that file, with no fallback; plus its conformance shape check and fix.
 - The settings step's deny list: the `ratchet-plugin` file.
 - `README.md`, Upgrading: run the command the tier's first line names.
-- `/ratchet:upgrade`'s page: until the first tagged release is installed, run the upgrade from a clone at the published commit. This line ships in the same change.
+- The README's Upgrading section: until the first tagged release is installed, run the upgrade from a clone at the published commit. This line ships in the same change.
 - The install page: the plugin installs from the latest tag, never from main.
 
 ### Consequences
 
-- Copies of 0.12.0 and 0.12.1 carry no file and keep refusing an upgrade until the harness moves them to the first tagged release. It does that when the version string changes.
+- Copies of every version before the first tagged release carry no file and keep refusing an upgrade until the harness moves them to the first tagged release. It does that when the version string changes.
 - The first tagged release is the first copy that upgrades a project by itself.
 - When the harness removes an old installed copy before the next session starts, the recorded path points at nothing, and `plugin-pin` is red until a session starts or `RATCHET_PLUGIN` is set.
 - A dev clone has `.git`, so nothing changes for it.
