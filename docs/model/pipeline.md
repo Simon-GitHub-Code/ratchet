@@ -265,7 +265,7 @@ Here a red check from the reconcile stands against the change, as a red builder'
 
 ### Where a run breaks a rule
 
-Drawn from `Pipeline.tla`, where the tool draws only the shortest run to each rule that breaks: 5 states and 4 arrows. The states have the words of the charts above, and the steps the model's own names, as the tests give the runs. The marked error breaks `Reported`, and the marked too-large stop breaks `Split`.
+Drawn from `Pipeline.tla`, where the tool draws only the shortest run to each rule that breaks: 7 states and 6 arrows. The states have the words of the charts above, and the steps the model's own names, as the tests give the runs. The marked approval breaks `PublishedNeverApproved`, the marked error breaks `Reported`, and the marked too-large stop breaks `Split`.
 
 ```mermaid
 ---
@@ -273,29 +273,36 @@ title: "Where a run breaks a rule"
 ---
 stateDiagram-v2
   state "Legend" as legend {
-    lg0: Breaks Reported or Split
-    lg1: Path to the Reported or Split bug
+    lg0: Breaks PublishedNeverApproved or Reported or Split
+    lg1: Path to the PublishedNeverApproved or Reported or Split bug
   }
   class lg0 breaks
   class lg1 bugPath
   s0: Not started
   s1: The preflight checks the ticket is ready
   s2: The reconcile finishes the rebase and turns the check green
-  s3: Stopped on an error, resume the run
-  s4: Stopped too large, split the ticket
+  s3: The review, once more
+  s4: Stopped on an error, resume the run
+  s5: Approved, though a role published
+  s6: Stopped too large, split the ticket
   [*] --> s0
   s0 --> s1: the orchestrator starts a build
   s0 --> s2: the orchestrator judges a branch whose rebase conflicted again
-  s1 --> s3: preflight dies
-  s2 --> s4: reconcile measures product code over its ceiling
+  s0 --> s3: the orchestrator judges a rebased branch again
+  s1 --> s4: preflight dies
+  s2 --> s6: reconcile measures product code over its ceiling
+  s3 --> s5: review again approves and has published
   classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
   class s0 bugPath
   class s1 bugPath
   class s2 bugPath
-  class s3 breaks
   class s3 bugPath
   class s4 breaks
   class s4 bugPath
+  class s5 breaks
+  class s5 bugPath
+  class s6 breaks
+  class s6 bugPath
 ```
 
 ## Left out
