@@ -302,7 +302,8 @@ def test_fill_names_where_the_template_is_and_how_its_change_lands() -> None:
     # Why: "hand it to the merge" named no action. The page now says how a change lands, in the
     # safeguard skill's words.
     assert (
-        "With no forge, write the change description at `.scratch/changes/<branch>.md` and run"
+        "With no forge, write the change description at `.scratch/changes/<branch>.md` (the"
+        " branch's `/` written as `-`) and run"
         " `just merge <branch>`." in fill
     )
 
