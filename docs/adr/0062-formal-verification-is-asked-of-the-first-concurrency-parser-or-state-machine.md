@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 # Formal verification is asked of the first concurrency, parser or state machine, one row per kind
 
@@ -118,9 +118,9 @@ This is wrong if any of these is seen:
 
 **Tests.** `hooks/tests/test_application_types.py:60-64`; behind across a rename and a late merge; the proof tie; `trigger_kinds` fill-first, a missing `- Life events:` line not; a bite fixture planting a departure in mirrored code.
 
-## Open for the owner
+## Defaults accepted by the owner, 2026-11-15
 
-Each item is a default taken overnight, built to its recommendation. Item 2 was settled by the owner (below).
+Each item was a default taken overnight. The owner accepted every one as written on 2026-11-15.
 
 - **1. The slash form.** Default taken overnight: an agent load. Recommendation: keep it; the hand-over says plainly that a model was written. Cost of the slash: an exception to ADR 0060, for a keystroke that starts what the agent starts anyway.
 - **3. Drift: proposal or red.** Default taken overnight: a proposal. Recommendation: keep it. Cost: one owner's merge per round; red costs one per second change to mirrored code.
