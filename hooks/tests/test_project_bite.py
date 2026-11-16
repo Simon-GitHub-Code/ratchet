@@ -1020,26 +1020,28 @@ def limited_project(tmp_path: Path, tier: str, thresholds: str) -> Path:
     return root
 
 
-def test_a_gates_own_ceiling_limits_its_run(
+def test_a_tier_or_gate_ceiling_far_below_a_cold_run_never_limits_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = limited_project(tmp_path, "1", ceilings(lint=0.5, tier1=60))
+    root = limited_project(tmp_path, "0", ceilings(lint=0.5, tier0=0.5, tier1=0.5))
+    assert prove(root) == 0
+    out = shown(capsys)
+    assert "bite: lint: a planted word: bites" in out
+    assert "timed out" not in out
+
+
+def test_the_bite_run_ceiling_limits_every_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = limited_project(tmp_path, "1", ceilings(**{"bite-run": 0.5}))
     assert prove(root) == 1
     assert "bite: timed out after 0.5s" in shown(capsys)
 
 
-def test_with_no_ceiling_of_its_own_the_tier_ceiling_limits_the_run(
+def test_the_limit_flag_overrides_the_bite_run_ceiling(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = limited_project(tmp_path, "2", ceilings(tier2=0.5, tier1=60))
-    assert prove(root) == 1
-    assert "bite: timed out after 0.5s" in shown(capsys)
-
-
-def test_the_limit_flag_overrides_both_ceilings(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    root = limited_project(tmp_path, "1", ceilings(lint=60, tier1=60))
+    root = limited_project(tmp_path, "1", ceilings(**{"bite-run": 60}))
     assert prove(root, "--limit", "0.5") == 1
     assert "bite: timed out after 0.5s" in shown(capsys)
 
@@ -1083,7 +1085,13 @@ def test_the_proof_names_the_limit_in_use_first(
     root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
     assert prove(root) == 0
     assert capsys.readouterr().out.splitlines()[0] == (
-        "bite: limit: each gate's ceiling, else its tier's, else 900s a run"
+        "bite: limit: 900s a run; no `bite-run` in quality/thresholds.toml"
+    )
+    write(root, "quality/thresholds.toml", ceilings(tier0=60, **{"bite-run": 600}))
+    commit(root, "thresholds")
+    assert prove(root) == 0
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "bite: limit: 600s a run, `bite-run` in quality/thresholds.toml"
     )
     assert prove(root, "--limit", "30") == 0
     assert capsys.readouterr().out.splitlines()[0] == "bite: limit: 30s a run"
