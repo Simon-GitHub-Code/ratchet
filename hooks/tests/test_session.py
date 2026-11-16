@@ -1,6 +1,7 @@
 """The session hook: the stance on an adopted checkout, a nudge on a bare one, silence elsewhere."""
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -8,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from ratchet_guards import session
+import plugin_pin
+from ratchet_guards import events, session
+from tests import repos
 from tests.support import PLUGIN_ROOT
 
 STANZA = "This repository follows the method: load the `ratchet:method` skill first.\n"
@@ -74,6 +77,24 @@ def test_an_adopted_repository_gets_the_stance(tmp_path: Path) -> None:
     assert text.endswith(STANCE.strip())
     assert "## Working" not in text
     assert session.message(root / "src/deep", plugin(tmp_path)) == text
+
+
+def test_a_session_on_a_copy_that_is_not_the_pinned_release_says_so_in_one_line(
+    tmp_path: Path,
+) -> None:
+    root = checkout(tmp_path, stanza=True, binding=True)
+    copy = plugin(tmp_path)
+    tree = plugin_pin.copy_tree_id(copy)
+    binding = root / session.BINDING
+    binding.write_text(f"- Ratchet plugin: 1.0.0 at {'1' * 40} tree {tree}\n", encoding="utf-8")
+    assert "which is not the release" not in (session.message(root, copy) or "")
+    binding.write_text(f"- Ratchet plugin: 1.0.0 at {'1' * 40} tree {'2' * 40}\n", encoding="utf-8")
+    text = session.message(root, copy) or ""
+    line = session.NOT_PINNED.format(plugin=copy)
+    assert text.count(line) == 1
+    assert "\n" not in line
+    binding.write_text(f"- Ratchet plugin: 1.0.0 at {'1' * 40}\n", encoding="utf-8")
+    assert line not in (session.message(root, copy) or "")
 
 
 def test_claude_md_alone_counts_as_the_stanza(tmp_path: Path) -> None:
@@ -204,3 +225,118 @@ def test_the_shipped_stance_links_nothing_relative() -> None:
     text = session.stance(PLUGIN_ROOT)
     assert text.startswith(session.STANCE_HEADING)
     assert re.findall(r"\]\((?!https?://)[^)]*\)", text) == []
+
+
+def recorded(root: Path) -> Path:
+    return root / ".git" / events.PLUGIN_RECORD
+
+
+def adopted(root: Path) -> Path:
+    return repos.repository(root, {"docs/process/binding.md": "# Binding\n"})
+
+
+def test_a_session_in_a_repository_records_the_plugin_it_runs_from(tmp_path: Path) -> None:
+    root = adopted(tmp_path / "repo")
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+
+
+def test_a_session_in_a_linked_worktree_records_in_the_common_directory(tmp_path: Path) -> None:
+    root = adopted(tmp_path / "repo")
+    linked = tmp_path / "linked"
+    repos.git(root, "worktree", "add", "-q", str(linked), "-b", "side")
+    shim({"hook_event_name": "SessionStart", "cwd": str(linked)}, tmp_path)
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+    assert not (linked / ".git").is_dir()
+
+
+def test_a_session_in_a_repository_with_no_binding_records_nothing(tmp_path: Path) -> None:
+    root = repos.repository(tmp_path / "repo")
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert not recorded(root).exists()
+
+
+def test_a_session_outside_a_repository_records_nothing(tmp_path: Path) -> None:
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    shim({"hook_event_name": "SessionStart", "cwd": str(loose)}, tmp_path)
+    assert list(tmp_path.rglob(events.PLUGIN_RECORD)) == []
+
+
+def test_a_symbolic_link_at_the_record_is_not_followed(tmp_path: Path) -> None:
+    root = adopted(tmp_path / "repo")
+    target = tmp_path / "target"
+    target.write_text("keep\n", encoding="utf-8")
+    recorded(root).symlink_to(target)
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert target.read_text(encoding="utf-8") == "keep\n"
+    assert not recorded(root).is_symlink()
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+
+
+def test_a_hard_link_at_the_record_is_never_written_through(tmp_path: Path) -> None:
+    root = adopted(tmp_path / "repo")
+    other = tmp_path / "other"
+    other.write_text("keep\n", encoding="utf-8")
+    os.link(other, recorded(root))
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+    assert other.read_text(encoding="utf-8") == "keep\n"
+    assert recorded(root).read_text(encoding="utf-8") == f"{PLUGIN_ROOT}\n"
+
+
+def test_a_failed_record_leaves_the_old_one_whole_and_no_stray_file(tmp_path: Path) -> None:
+    record = tmp_path / events.PLUGIN_RECORD
+    record.write_text("/old\n", encoding="utf-8")
+    events.replace(record, "/new\n")
+    assert record.read_text(encoding="utf-8") == "/new\n"
+    with pytest.raises(FileNotFoundError):
+        events.replace(tmp_path / "absent" / events.PLUGIN_RECORD, "/x\n")
+    assert sorted(path.name for path in tmp_path.iterdir()) == [events.PLUGIN_RECORD]
+
+
+def test_a_fifo_at_the_record_is_not_waited_on(tmp_path: Path) -> None:
+    root = adopted(tmp_path / "repo")
+    os.mkfifo(recorded(root))
+    shim({"hook_event_name": "SessionStart", "cwd": str(root)}, tmp_path)
+
+
+def test_recording_changes_nothing_the_hook_prints(tmp_path: Path) -> None:
+    root = adopted(tmp_path / "repo")
+    payload = {"hook_event_name": "SessionStart", "cwd": str(root)}
+    first = shim(payload, tmp_path)
+    assert first.startswith("Ratchet:")
+    assert shim(payload, tmp_path) == first
+    assert first == f"{session.message(root)}\n"
+
+
+def test_the_record_is_never_seen_partly_written_and_a_short_write_is_finished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / events.PLUGIN_RECORD
+    record.write_text("/old\n", encoding="utf-8")
+    before = record.stat().st_ino
+    seen: list[str] = []
+    real = os.write
+
+    def short(descriptor: int, data: bytes) -> int:
+        seen.append(record.read_text(encoding="utf-8"))
+        return real(descriptor, bytes(data)[:2])
+
+    monkeypatch.setattr(events.os, "write", short)
+    events.replace(record, "/new/path\n")
+    assert len(seen) > 1
+    assert set(seen) == {"/old\n"}
+    assert record.read_text(encoding="utf-8") == "/new/path\n"
+    assert record.stat().st_ino != before
+
+
+def test_a_directory_at_the_record_is_left_alone_and_nothing_is_raised(tmp_path: Path) -> None:
+    root = adopted(tmp_path / "repo")
+    recorded(root).mkdir()
+    session.record_plugin(root, PLUGIN_ROOT)
+    assert recorded(root).is_dir()
+    assert [p.name for p in (root / ".git").iterdir() if p.name.startswith(".ratchet-plugin")] == []
+    with pytest.raises(OSError, match="directory"):
+        events.replace(recorded(root), "/x\n")

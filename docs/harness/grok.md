@@ -33,7 +33,7 @@ The Cursor preset uses `Shell`, `StrReplace`, `Write` and `EditNotebook`, with t
 
 | In the skills | Here |
 | --- | --- |
-| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | export it as the `ratchet` folder under `~/.grok/installed-plugins/`, which `registry.json` names |
+| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | unset: the session hook, once it has run in the repository, records the installed copy's folder in `.git/ratchet-plugin`, and the template `justfile` reads it. Until then, export it as the `ratchet` folder under `~/.grok/installed-plugins/`, which `registry.json` names |
 | `${CLAUDE_SKILL_DIR}` | the skill folder under `~/.grok/installed-plugins/<plugin>/skills/<name>/` |
 | `${CLAUDE_PLUGIN_ROOT}` | the plugin folder under `~/.grok/installed-plugins/`. Grok expands it in hook commands. The guard's command in `hooks/hooks.json` uses it, and the guard denied calls (see Verified). Whether it is set in the shell of a skill's Bash call is not verified. Export it to the plugin folder before starting a session, so the commands in the skills resolve |
 | `disable-model-invocation: true` | read the `SKILL.md` and follow it |

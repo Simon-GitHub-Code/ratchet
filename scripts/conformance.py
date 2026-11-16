@@ -211,10 +211,21 @@ ADR_FRONT_MATTER = re.compile(
 )
 ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
 GLOSSARY_PLACEHOLDER = "<project>"
-PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha>"
+PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha> tree <ratchet-tree-id>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 PIN_RECIPE = "plugin-pin"
 PIN_SCRIPT = "plugin_pin.py"
+PLUGIN_VARIABLE = "ratchet_plugin"
+MARKETPLACE_FALLBACK = ".claude/plugins/marketplaces/ratchet"
+PLUGIN_LINE = re.compile(
+    r"^(?:(?:plugin_(?:choice|pyc)[ \t]*:=[ \t]*```(?s:.*?)```"
+    r"|(?:export[ \t]+)?(?:RATCHET_PLUGIN_(?:DIR|REFUSAL|CHECKED)|PYTHONPYCACHEPREFIX"
+    r"|PYTHONDONTWRITEBYTECODE|plugin_tree|plugin_pyc_ok)[ \t]*:=.*)\n)*"
+    rf"{PLUGIN_VARIABLE}[ \t]*:=.*$",
+    re.MULTILINE,
+)
+PLUGIN_GUARD = "_plugin"
+NO_EXIT_MESSAGE = "[no-exit-message]"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
@@ -1818,7 +1829,26 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
             "add the pin line for the plugin in use", plugin_pin.with_pin(line), Agent((line,))
         )
         yield Finding(BINDING_PATH, problem, edit)
+    elif pin.tree is None:
+        line = plugin_pin.line_for(plugin_pin.PLUGIN)
+        problem = (
+            f"the pin names no tree id, so no copy of the plugin can be held to the release; write"
+            f" `- Ratchet plugin: {pin.version} at {pin.commit} tree <the tree of that commit>`"
+            " (`git rev-parse <commit>^{tree}` in a clone of the plugin gives it), or run the"
+            " plugin's upgrade"
+        )
+        if plugin_pin.commit_of(plugin_pin.PLUGIN) == pin.commit:
+            yield Finding(
+                BINDING_PATH,
+                problem,
+                Edit("add the tree id of the plugin in use", plugin_pin.with_pin(line), Agent()),
+            )
+        else:
+            yield Finding(BINDING_PATH, problem, Agent())
     yield from check_pin_recipe(root)
+    yield from check_plugin_fallback(root)
+    yield from check_pre_commit_recipe(root)
+    yield from check_plugin_uses(root)
     if pin is None:
         return
     for name in (*TIER_WORKFLOWS, MERGE_WORKFLOW, WEEKLY_WORKFLOW):
@@ -1899,6 +1929,180 @@ def tier_recipes(binding: str, justfile: str) -> dict[str, str]:
         if recipe is not None and justfile_text.defines_recipe(justfile, recipe.group(1)):
             named[tier] = recipe.group(1)
     return named
+
+
+def check_plugin_fallback(root: Path) -> Iterable[Finding]:
+    """A justfile whose plugin block is not the template's, such as a fallback to the marketplace.
+
+    Why: that clone follows the default branch's head, not a release (ADR 0068), so every local
+    tier would run unreleased gates, and any other block leaves the runs unhashed. The fix rewrites
+    the block to the template's, which reads the plugin the session hook recorded, adds the
+    template's guard recipe and makes each recipe the template gives that guard depend on it, so a
+    repository with none recorded is told so.
+    """
+    justfile = read_justfile(root)
+    held = PLUGIN_LINE.search(justfile or "")
+    template = template_file("justfile")
+    line = PLUGIN_LINE.search(template)
+    if (
+        held is None
+        or line is None
+        or held.group(0) == line.group(0)
+        or justfile_text.template_recipe(template, PLUGIN_GUARD) is None
+    ):
+        return
+    guarded = [
+        name
+        for name in justfile_text.first_dependents(template, PLUGIN_GUARD)
+        if justfile_text.defines_recipe(justfile or "", name)
+    ]
+
+    def want(current: str | None) -> str:
+        return PLUGIN_LINE.sub(lambda _: line.group(0), current or "", count=1)
+
+    does = f"rewrite the `{PLUGIN_VARIABLE}` line to the template's, which reads the recorded one"
+    edit = Edit(
+        does,
+        gatelib.chained(
+            want,
+            justfile_text.with_recipe(template, PLUGIN_GUARD),
+            *(justfile_text.with_first_dependency(name, PLUGIN_GUARD) for name in guarded),
+            *(
+                justfile_text.with_template_recipe(template, name)
+                for name in justfile_text.callers(template, PLUGIN_GUARD)
+                if justfile_text.defines_recipe(justfile or "", name)
+            ),
+        ),
+        Agent(),
+    )
+    if MARKETPLACE_FALLBACK in held.group(0):
+        problem = (
+            f"`{PLUGIN_VARIABLE}` falls back to the marketplace clone, which follows the default"
+            " branch's head and not a release, so every local tier runs unreleased gates"
+        )
+    else:
+        problem = (
+            f"the plugin block above `{PLUGIN_VARIABLE}` is not the template's, so no local run"
+            " is held to the release the binding pins"
+        )
+    yield Finding(
+        "justfile", problem, edit, identity="ratchet_plugin falls back to the marketplace"
+    )
+
+
+def check_pre_commit_recipe(root: Path) -> Iterable[Finding]:
+    """A ``pre-commit`` recipe that does not run the pin check first or hide its exit message.
+
+    Why: an upgraded project keeps its own recipe, so the hook would run gates of a plugin no
+    check held to the release, and just would add its own error line to the guard's one.
+    """
+    justfile = read_justfile(root)
+    template = template_file("justfile")
+    name = "pre-commit"
+    if (
+        justfile is None
+        or not justfile_text.defines_recipe(justfile, name)
+        or not justfile_text.defines_recipe(justfile, "tier0-tree")
+        or justfile_text.template_recipe(template, name) is None
+    ):
+        return
+    quiet = NO_EXIT_MESSAGE in justfile_text.definition(justfile, name)
+    if quiet and justfile_text.runs(justfile, name, PIN_SCRIPT):
+        return
+    yield Finding(
+        "justfile",
+        f"`{name}` neither runs {PIN_SCRIPT} first nor carries `{NO_EXIT_MESSAGE}`, so the commit"
+        " hook can run a plugin no check held to the release",
+        Edit(
+            f"make `{name}` the template's recipe",
+            justfile_text.with_template_recipe(template, name),
+            Agent(),
+        ),
+        identity="pre-commit recipe is not the template's",
+    )
+
+
+PLUGIN_USE = re.compile(r"\{\{\s*ratchet_plugin\s*\}\}")
+PLUGIN_TEXT_LINE = re.compile(
+    r'^ratchet_plugin[ \t]*:=[ \t]*"\$RATCHET_PLUGIN_DIR"[ \t]*$', re.MULTILINE
+)
+PLUGIN_NAME = re.compile(r"\bratchet_plugin\b")
+ASSIGNMENT = re.compile(r"^([A-Za-z_][\w-]*)[ \t]*:=(.*)$")
+
+
+def inside_quotes(prefix: str) -> bool:
+    """Whether the end of ``prefix`` is inside double quotes, at its own level of a shell line."""
+    outer: list[tuple[bool, bool]] = []
+    double = single = False
+    index = 0
+    while index < len(prefix):
+        char = prefix[index]
+        if char == '"' and not single:
+            double = not double
+        elif char == "'" and not double:
+            single = not single
+        elif prefix.startswith("$(", index) and not single:
+            outer.append((double, single))
+            double = single = False
+            index += 1
+        elif char == ")" and outer and not double and not single:
+            double, single = outer.pop()
+        index += 1
+    return double
+
+
+def body_reads_value(line: str, *, shebang: bool) -> bool:
+    return any(
+        shebang or not inside_quotes(line[: use.start()]) for use in PLUGIN_USE.finditer(line)
+    )
+
+
+def expression_reads_value(expression: str) -> bool:
+    if re.search(r"\([^)]*\bratchet_plugin\b", expression):
+        return True
+    return any(
+        not expression[: use.start()].rstrip().endswith(("\"' +", '" +'))
+        for use in PLUGIN_NAME.finditer(expression)
+    )
+
+
+def plugin_value_uses(justfile: str) -> list[str]:
+    """Where ``ratchet_plugin``, which is shell text, is read as a value by ``just`` itself."""
+    found: list[str] = []
+    shebang = False
+    for number, line in enumerate(justfile.split("\n"), 1):
+        body = line[:1] in (" ", "\t")
+        shebang = (shebang and body) or (body and line.strip().startswith("#!"))
+        assignment = None if body else ASSIGNMENT.match(line)
+        if body:
+            reads = body_reads_value(line, shebang=shebang)
+        elif assignment is not None and assignment.group(1) != PLUGIN_VARIABLE:
+            reads = expression_reads_value(assignment.group(2))
+        else:
+            reads = False
+        if reads and (shebang or not line.lstrip().startswith("#")):
+            found.append(f"line {number}")
+    return found
+
+
+def check_plugin_uses(root: Path) -> Iterable[Finding]:
+    """A justfile that reads ``ratchet_plugin`` as a value, which is now the text of a variable.
+
+    Why: ``ratchet_plugin`` is ``"$RATCHET_PLUGIN_DIR"``, so no folder name is ever pasted into a
+    shell line (ADR 0068). A shebang recipe, a variable built on it and a function call such as
+    ``path_exists(ratchet_plugin)`` read the text itself, and each worked under the old line.
+    """
+    justfile = read_justfile(root)
+    if justfile is None or PLUGIN_TEXT_LINE.search(justfile) is None:
+        return
+    uses = plugin_value_uses(justfile)
+    if uses:
+        yield agent(
+            f"justfile: {', '.join(uses)} read `{PLUGIN_VARIABLE}` as a folder, and it is the text"
+            ' "$RATCHET_PLUGIN_DIR"; write each use as "$RATCHET_PLUGIN_DIR" inside a'
+            " double-quoted word of a shell line, and in a shebang recipe read the environment"
+            " variable RATCHET_PLUGIN_DIR"
+        )
 
 
 def check_pin_recipe(root: Path) -> Iterable[Finding]:
@@ -2939,7 +3143,9 @@ def upgrade_mutations() -> list[Mutation]:
         ),
         (
             "justfile whose ratchet recipe does not ask whether hooks run",
-            rewrite("justfile", "ratchet:\n    just hooks-installed\n", "ratchet:\n"),
+            rewrite(
+                "justfile", "ratchet: _plugin\n    just hooks-installed\n", "ratchet: _plugin\n"
+            ),
         ),
         (
             "justfile capping the gates at once by another variable",
@@ -3234,7 +3440,11 @@ def pin_mutations() -> list[Mutation]:
     return [
         (
             "binding with the plugin pin unfilled",
-            rewrite(binding, f"0.0.0 at {pinned}", PLUGIN_PIN_PLACEHOLDER),
+            rewrite(binding, f"0.0.0 at {pinned} tree {pinned}", PLUGIN_PIN_PLACEHOLDER),
+        ),
+        (
+            "binding whose plugin pin names no tree id",
+            rewrite(binding, f"0.0.0 at {pinned} tree {pinned}", f"0.0.0 at {pinned}"),
         ),
         (
             "workflow at a commit the binding does not pin",
@@ -3538,7 +3748,7 @@ Wrong if a change to the rules keeps needing a change to the command.
 
 def fill_binding(text: str) -> str:
     """A command line tool's binding: one row its type leaves out, a tool in every other."""
-    text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40}")
+    text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40} tree {'0' * 40}")
     text = TYPES_PLACEHOLDER.sub("- Application types: cli", text)
     text = TEST_PATHS_PLACEHOLDER.sub("- Tests: `tests/**`", text)
     text = DECISION_PLACEHOLDER.sub(f"- Decision: `{SELF_TEST_RECORD}`", text)
