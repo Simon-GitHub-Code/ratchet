@@ -533,6 +533,33 @@ def question(item: object) -> str:
     )
 
 
+def findings_of(result: dict[str, object]) -> list[str]:
+    """The blocker and major findings a result leaves, each with the quote it breaks.
+
+    Why: ADR 0072. A run parked on a finding still owed after its fix round ran no review, so the
+    findings are in ``unresolvedBlockingFindings`` alone; a refused review's are in
+    ``reviewIssues``. A title of the verdict record that neither list holds stays as it was.
+    """
+    listed = [
+        finding
+        for key in ("unresolvedBlockingFindings", "reviewIssues")
+        for finding in queue_notes.tables(result.get(key))
+        if finding.get("severity") in {"blocker", "major"}
+    ]
+    titles = {finding.get("title") for finding in listed}
+    record = queue_notes.texts(gatelib.table(result, "verdictRecord").get("unresolved"))
+    lines = [finding_line(finding) for finding in listed]
+    lines += [f"unresolved: {title}" for title in record if title not in titles]
+    return list(dict.fromkeys(lines))
+
+
+def finding_line(finding: dict[str, object]) -> str:
+    """One finding as a reason: its title, and the record and the sentence it breaks."""
+    breaks = gatelib.table(finding, "breaks")
+    quote = f' (breaks {breaks.get("record")}: "{breaks.get("quote")}")' if breaks else ""
+    return f"unresolved: {finding.get('title')}{quote}"
+
+
 def reasons_of(result: dict[str, object]) -> list[str]:
     """Why a pipeline's result is not an approval, in the result's own words."""
     failures = queue_notes.tables(gatelib.table(result, "preflight").get("failures"))
@@ -542,8 +569,7 @@ def reasons_of(result: dict[str, object]) -> list[str]:
     edits = queue_notes.tables(result.get("guardEdits"))
     found += [f"guard edit: {edit.get('path')}: {edit.get('edit')}" for edit in edits]
     found += queue_notes.texts(result.get("verdictForcedBy"))
-    unresolved = queue_notes.texts(gatelib.table(result, "verdictRecord").get("unresolved"))
-    found += [f"unresolved: {title}" for title in unresolved]
+    found += findings_of(result)
     disputes = queue_notes.tables(result.get("disputes"))
     found += [f"dispute: {d.get('path')}: {d.get('recommendation')}" for d in disputes]
     found += [

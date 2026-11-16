@@ -24,6 +24,7 @@ Each role does its work with the other plugins' skills. The method fixes what a 
 - the feature flag that gates the behaviour, or why there is none;
 - a test plan mapped to criteria;
 - the assumptions made;
+- `## Neighbouring cases`: for each set of values a neighbouring test repeats its checks over, the test, the values, and which of them the new behaviour holds for, every value unless an assumption says otherwise;
 - out of scope.
 
 **The failing tests.** Each fails for the right reason, and its failure content is quoted in the result and in the spec. The spec runs `tier0` and only its own tests, never `check`.
@@ -148,7 +149,9 @@ The script is a pure function of its arguments and the agents' structured result
    - The spec stage also adds up the whole change before it returns (product: the lines measured, the implementation, the records; tests: the lines measured and the critic's). When either sum passes its ceiling, it stops as `blocked`, too large, with a proposed split.
    - A fix round or a Reconcile over the product ceiling (or the whole test ceiling, the critic's tests being in by then) stops the run the same way, as `tooLarge` with the stage `fix round N` or `the reconcile`, before the re-critique or the review. The drain splits it as for any other too-large stop.
 4. **Critique,** once the project is `depended-on`; skipped before.
-5. **Fix loop,** once the project is `depended-on`. While a blocker or major finding remains that no kept passing test resolves, or a test the critic kept is failing (whatever the finding's severity), up to two rounds: a *fresh* fix agent (it has not seen the previous implementer's reasoning), then re-critique by title plus a search for new breakage.
+5. **Fix loop,** once the project is `depended-on`. While a blocker or major finding remains that no kept passing test resolves, or a test the critic kept is failing (whatever the finding's severity), up to two rounds: a *fresh* fix agent (it has not seen the previous implementer's reasoning), then re-critique, each finding saying by `carries` which earlier finding it still is, plus a search for new breakage.
+   - A blocker or major carries `breaks`: the record it breaks and the sentence it quotes. The role runs `scripts/quotes.py` over its findings and returns the output. A finding whose quote the output does not show found is no finding: the script moves it to `unstated`, and no fix round starts for it.
+   - A finding that is carried into the next critique and is still owed after the round it was owed in starts no further round: the run ends there, refused with it unresolved, and the review does not run. A new blocker or major still gets the second round.
 6. **Review.** Before the project is `depended-on`, a review that lists fixable blockers, whatever its verdict says, gets one fix pass: the same fresh fix agent, given those issues, then the review again. A fixable blocker is a blocker or major issue in the change itself; not a promise of the ticket the change lost, not a question for the owner, not a too-large stop. If the second review approves, the run goes on as approved. If it still refuses, the ticket is parked as before.
    - A review with any `dropped` promise or undecided case gets no fix pass at all, even beside fixable blockers.
    - A `dropped` promise or an undecided case at the review, and a `bent` or `assumed` reading at either role, follow the rules under step 2.
@@ -159,6 +162,11 @@ The script is a pure function of its arguments and the agents' structured result
    - the spec's tests did not fail for the right reason, or a test file has no quoted failure;
    - the critic ran and found nothing and attempted nothing;
    - a guard path changed without a dispute naming it, unless it is a dependency the spec named or a record whose `guard-diff` note is `additions:`.
+
+8. **Cases no record states.** The critic, the builders and the review return `unstated`: each case where no record says which behaviour is right, put through [the fork test](#the-fork-test).
+   - A case the test gives a role is an assumption: it joins `assumptions`, and the next critic and the review judge against it.
+   - A case it gives the owner stops the run `blocked` after the role that returned it, with the question in `openQuestions`. The builders also return `departures`: a departure from a criterion of `spec.md` stops the run the same way, and a departure from an assumption goes through the fork test and, where the role has the choice, is the amended assumption.
+   - The work of a blocked run is stashed, and the ticket is built again from the preflight once the owner has answered.
 
 **Agents.** Each role is one agent. The ticket check adds two when it finds a gap (the amend and the second read), the fix loop two per round (the fix pass on a young project's review is one such round, which re-reviews instead of re-critiquing), and a change judged again behind another merge two more (reconcile and review). `AGENTS_AT_MOST` in the script holds the most a run spawns before and after `depended-on`.
 

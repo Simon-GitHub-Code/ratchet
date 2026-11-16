@@ -343,6 +343,17 @@ def test_on_its_branch_the_report_carries_the_start_the_publish_check_reads(
     saved = tmp_path / "start.json"
     saved.write_text(json.dumps(asdict(report)), encoding="utf-8")
     assert publish_check.read_start(saved) == report.start
+    publish_check.result_path(saved).write_text(
+        json.dumps(
+            {
+                "criticFindingsByRound": [],
+                "unresolvedBlockingFindings": [],
+                "reviewIssues": [],
+                "reviewIssuesByRound": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     assert publish_check.main(["publish_check.py", str(saved), "--root", str(root)]) == 0
     write(root, "src/x.py", "x = 1\n")
     git(root, "add", "-A")
