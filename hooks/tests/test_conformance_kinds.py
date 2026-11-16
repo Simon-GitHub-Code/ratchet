@@ -562,6 +562,35 @@ def test_a_bare_plugin_script_call_is_named_by_its_line_and_recipe(repo: Path) -
     assert isinstance(found.fix, conformance.Auto)
 
 
+READY_PROBE = "{{plugin_py}} -P -c 'import sys, urllib.request;"
+
+
+def test_a_templates_inline_python_line_left_on_the_bare_interpreter_is_named_by_its_line(
+    repo: Path,
+) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    assert READY_PROBE in text
+    path.write_text(
+        text.replace(READY_PROBE, "python3 -c 'import sys, urllib.request;"), encoding="utf-8"
+    )
+    number = next(
+        i
+        for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1)
+        if "python3 -c 'import sys, urllib.request;" in line
+    )
+    [found] = [f for f in conformance.findings(repo) if "bare `python3`" in f.problem]
+    assert f"justfile:{number}: recipe `telemetry-e2e` runs" in found.problem
+    assert isinstance(found.fix, conformance.Auto)
+
+
+def test_a_projects_own_inline_python_recipe_is_left_alone(repo: Path) -> None:
+    path = repo / JUSTFILE
+    mine = "\nmine:\n    python3 -c 'import json; print(json.dumps({}))'\n"
+    path.write_text(path.read_text(encoding="utf-8") + mine, encoding="utf-8")
+    assert not [f for f in conformance.findings(repo) if "bare `python3`" in f.problem]
+
+
 def test_the_templates_plugin_block_is_not_a_finding(repo: Path) -> None:
     assert block_findings(repo) == []
 
