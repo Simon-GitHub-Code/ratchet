@@ -19,7 +19,7 @@ An installed copy of the plugin has no `.git`, so `plugin_pin.commit_of` returns
 
 **The marketplace installs the tag.** In `.claude-plugin/marketplace.json`, the ratchet entry's `"source": "./"` becomes `{"source": "github", "repo": "Simon-GitHub-Code/ratchet", "ref": "vV"}`. The version PR sets `ref` with the version.
 
-**`commit_of` reads the file when there is no history.** With `.git`, it runs `git rev-parse HEAD` as now. Without `.git`, it reads `.claude-plugin/commit`: 40 lowercase hex characters give the commit, a missing file gives `None`, and anything else gives `UNREADABLE`.
+**`commit_of` reads the file.** Without `.git`, it reads `.claude-plugin/commit`: 40 lowercase hex characters give the commit, a missing file gives `None`, and anything else gives `UNREADABLE`. With `.git`, a clone is a release only while `HEAD` is the release commit itself: it tracks the file, its single parent is the commit the file names, and the work tree is clean. Then the commit is the one the file names. Otherwise it is `HEAD`, as before, so a dev clone is unchanged. A commit says where a copy came from, never what it holds; only the tree id below does.
 
 **The local gates run the installed copy, which a session records.** The marketplace's own clone has a `.git` and follows main's head, so a recipe or an upgrade run from it would pin a commit that is no release and run code no release holds. The adopted justfile's `ratchet_plugin` defaulted to that clone, and so did the README's upgrade command. Instead:
 
@@ -35,10 +35,16 @@ An installed copy of the plugin has no `.git`, so `plugin_pin.commit_of` returns
 
 - Every tier's first line prints the folder, the version and the commit of the copy it runs.
 - **The check.** Before any recipe runs anything from the recorded copy, the guarded justfile computes that copy's tree id with system git, without `.claude-plugin/commit`, in a throwaway object store and with neutralised config. It runs nothing until the id equals the pin's. The pin holds exactly the pinned commit's tree id, `M^{tree}`, and CI holds the binding to it.
-- **On a mismatch,** it tries the sibling folders of the recorded folder, since harnesses keep earlier versions beside the new one, and runs the first that matches.
-- **Only when no copy on disk matches** is the tier red, in one line: both ids, the folder, and the two ways out, which are to upgrade this project or install the pinned release.
+- **On a mismatch,** it tries the sibling folders of the recorded folder, since harnesses keep earlier versions beside the new one, and runs the first that matches. Only a folder read from the record has its siblings tried. A folder `RATCHET_PLUGIN` names is the owner's choice and runs only if it matches.
+- **Only when no copy on disk matches** is the tier red, in one line: both ids, the folder, and the two ways out, which are to upgrade this project or install the pinned release:
 
-So a rewritten record is harmless: it can choose only a copy identical to the pin. Only the pinned release runs. While it is on disk, a newer copy beside it only says the project can upgrade. A newer copy alone is red until the upgrade. The owner chose this on 2026-11-15 (item 2 below). Its code arrives in the second round of #177.
+  ```text
+  the plugin at <dir> is tree <have>, not the <want> that docs/process/binding.md pins, and no copy on disk matches: upgrade this project with `python3 <dir>/scripts/upgrade.py --apply`, or install the plugin release the pin names
+  ```
+
+  A pin with no tree id, as every pin written before this record, cannot be checked and is red in one line that names the upgrade, which writes it.
+
+So a rewritten record is harmless: it can choose only a copy identical to the pin. Only the pinned release runs. While it is on disk, a newer copy beside it only says the project can upgrade. A newer copy alone is red until the upgrade. The owner chose this on 2026-11-15 (item 2 below).
 
 **A check holds the tag.** `scripts/release_check.py <tag>` runs in the release workflow after the tag is pushed, and anyone can run it later. It is red unless all of these hold:
 
@@ -46,7 +52,9 @@ So a rewritten record is harmless: it can choose only a copy identical to the pi
 - M is C's only parent.
 - C's tree without that file equals M's tree.
 - M is on main.
-- The version in M's `plugin.json` is the tag's.
+- The version in M's `plugin.json` is the tag's, and M is the first commit on main's first-parent line where the version became it.
+
+The workflow refuses to tag a version that is not above every tagged version, in one line: `the version X is not above the tagged vY; versions only go up`. So a version never returns to an earlier value, and that first commit is unique.
 
 Main's CI is red when main holds `.claude-plugin/commit`, since a copy on main would be stale from the next commit.
 
@@ -58,7 +66,8 @@ This is wrong if any of these is seen:
 - An installed copy of a tagged release fails to upgrade a project with no clone of the plugin.
 - A project pinned to M runs code in CI that differs from the installed copy at `vV`.
 - A `v*` tag moves or disappears with `release_check.py` still green.
-- A local tier or an upgrade in an adopted project runs any copy but the installed one, or `RATCHET_PLUGIN`'s, or pins a commit that is no release's main commit.
+- A local tier in an adopted project runs a copy whose tree id is not the pin's, or a `just` a tier started reads the record again and runs another copy.
+- An upgrade pins a commit that is no release's main commit.
 - A tag whose check passed has no release page, or its page says other than the changelog's section for its version.
 
 ## Considered options
@@ -80,17 +89,22 @@ This is wrong if any of these is seen:
 - Main's CI: one check that `.claude-plugin/commit` is absent.
 - `.claude-plugin/marketplace.json`: the ratchet entry's source. It changes in the first tagged release's version PR, since no tag exists before it.
 - `hooks/session.py`: writes `ratchet-plugin` in the git common directory.
-- `skills/adopt/templates/justfile`: `ratchet_plugin` reads `RATCHET_PLUGIN`, then that file, with no fallback; plus its conformance shape check and fix.
+- `skills/adopt/templates/justfile`: `ratchet_plugin` reads `RATCHET_PLUGIN`, then that file, with no fallback; plus its conformance shape check and fix. The owner's own recipes that use the plugin's folder where a checked folder cannot reach them (a shebang recipe, a `:=` expression, a function argument, or an unquoted or single-quoted use) are a red conformance finding that lists each by line, for an agent to fix.
 - The settings step's deny list: the `ratchet-plugin` file.
 - `README.md`, Upgrading: run the command the tier's first line names.
-- The README's Upgrading section: until the first tagged release is installed, run the upgrade from a clone at the published commit. This line ships in the same change.
-- The install page: the plugin installs from the latest tag, never from main.
+- The README's Upgrading section: each version before the first tagged release says to run the upgrade from a clone at the commit it was published at, with the command that finds that commit (#181). The first tagged release drops that line, since its installed copy names its own commit.
+- The README's install step and `docs/harness/claude-code.md`: the plugin installs from the latest release's tag, never from the default branch.
 
 ### Consequences
 
 - Copies of every version before the first tagged release carry no file and keep refusing an upgrade until the harness moves them to the first tagged release. It does that when the version string changes.
 - The first tagged release is the first copy that upgrades a project by itself.
-- When the harness removes an old installed copy before the next session starts, the recorded path points at nothing, and `plugin-pin` is red until a session starts or `RATCHET_PLUGIN` is set.
+- When the harness removes the recorded copy and no copy on disk has the pinned tree, every local tier is red in one line until the pinned release is installed and a session starts, or `RATCHET_PLUGIN` names it:
+
+  ```text
+  the plugin at <dir> is gone, and no copy on disk has the tree <want> that docs/process/binding.md pins: install the plugin release the pin names, then start an agent session here once, or set RATCHET_PLUGIN to its folder
+  ```
+
 - A dev clone has `.git`, so nothing changes for it.
 - For about a minute between M's merge and the tag push, a harness that refreshes finds no `vV` and keeps the copy it has.
 
@@ -98,6 +112,6 @@ This is wrong if any of these is seen:
 
 - **1. No `sha` in the entry, and a tag ruleset.** The owner accepted it and set the ruleset on 2026-11-15. No agent has read the ruleset back, since the guard refuses a read of rulesets. The first proof that a tag is held is `release_check.py`'s run against the first real tag. What the owner had first accepted named the tag and its sha. The build names the tag alone, for the reason under Considered options, and a ruleset forbids moving or deleting `v*` tags. The owner sets that ruleset once in the repository's settings, since no agent changes them. Until the ruleset is set, only `release_check.py` notices a moved tag.
 - **2. Only the pinned release runs.** The owner chose on 2026-11-15 that the local gates run only a copy whose tree id equals the pin's, trying the sibling folders of the recorded folder on a mismatch, and are red in one line when no copy on disk matches. This replaces the earlier rule that a copy newer than the pin runs and says the project can upgrade.
-  The pin holds the tree id of M beside its version and commit: `- Ratchet plugin: V at M tree T`, with `T` the output of `git rev-parse M^{tree}`. CI, where the plugin is at M from the forge, holds the pin's `T` to the checkout's `M^{tree}` and to the hash of its files. The template justfile computes a copy's tree id with system git alone: a throwaway git directory, no git configuration, no filters, the copy's own `.gitignore` and `.gitattributes` overruled, and `.claude-plugin/commit`, `.git`, `__pycache__` and the harness's `.in_use` left out.
+  The pin holds the tree id of M beside its version and commit: `- Ratchet plugin: V at M tree T`, with `T` the output of `git rev-parse M^{tree}`. CI, where the plugin is at M from the forge, holds the pin's `T` to the checkout's `M^{tree}` and to the hash of its files. The template justfile computes a copy's tree id with system git alone: a throwaway git directory, no git configuration, no filters, the copy's own `.gitignore` and `.gitattributes` overruled, and `.claude-plugin/commit`, `.git`, the harness's `.in_use` and `__pycache__` at any depth left out.
 
   The top-level `just` reads the record once. It hands the folder it checked to every `just` a recipe starts, as `RATCHET_PLUGIN_CHECKED` beside the pin's tree id, and a child that finds the marker with the same tree id takes that folder and reads no record. A record that changes mid-tier, as a session start rewrites it, changes nothing the tier runs. A clone is a release only while `HEAD` is the release commit itself and the work tree is clean, and a commit proves where a copy came from, never what it holds: only the hash of its files does.

@@ -12,7 +12,7 @@ claude plugin marketplace add Simon-GitHub-Code/ratchet
 claude plugin install ratchet@ratchet
 ```
 
-The ratchet marketplace entry declares `mattpocock-skills`, `pstack` and `impeccable` as dependencies. So once the three marketplaces are known, the last line installs all four. `claude plugin list` shows each with its marketplace and version.
+The ratchet marketplace entry declares `mattpocock-skills`, `pstack` and `impeccable` as dependencies. So once the three marketplaces are known, the last line installs all four. The entry names the latest release's tag, so the plugin installs from that release, never from the default branch (ADR 0068). `claude plugin list` shows each with its marketplace and version.
 
 ## The guard
 
