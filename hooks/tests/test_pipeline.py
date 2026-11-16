@@ -209,12 +209,14 @@ REVIEW = {
     "dependencyNotes": [],
     "recordNotes": [],
     "checkPasses": True,
+    "namedGatesRun": [],
     "checkOutput": "check: green",
 }
 IMPLEMENTED = {
     "filesChanged": ["src/links.py"],
     "allNewTestsPass": True,
     "checkPasses": True,
+    "namedGatesRun": [],
     "checkOutput": "check: green",
     "disputes": [],
     "notes": "",
@@ -232,6 +234,7 @@ PREFLIGHT = {
 SPECIFIED = {
     "slug": "expiry",
     "specPath": "docs/features/expiry/spec.md",
+    "namedGates": [],
     "testFiles": ["tests/test_expiry.py"],
     "layersTouched": [],
     "openQuestions": [],
@@ -550,10 +553,16 @@ def test_roles_with_a_red_tree_run_tier_zero_and_their_own_tests_only() -> None:
     prompts = ran["prompts"]
     for role in ("spec", "critique"):
         assert "do not run `check`" in prompts[role], role
-        assert "run the `tier0`" in prompts[role], role
+        assert "run the `tier0` entry point" in prompts[role], role
+        assert "with `tests-changed all`" in prompts[role], role
     for role in ("implement", "review"):
-        assert "run `check` from the repository root" in prompts[role], role
+        assert "Run `check` from the repository root last, before you return" in prompts[role]
         assert "do not run `check`" not in prompts[role], role
+    for role in ("spec", "critique", "implement", "review"):
+        assert (
+            "While you work, run the `tier0` entry point and `tests-changed all`" in prompts[role]
+        )
+        assert "Never run a suite whole to see whether your own tests pass" in _said(prompts[role])
     assert "Run `tier0` and your new tests" in prompts["spec"]
 
 
@@ -1438,7 +1447,9 @@ def test_a_rejudge_holds_the_review_to_the_readings_the_first_run_settled() -> N
     assert result["assumptions"] == first["assumptions"]
     feature = (PIPELINE.parents[1] / "skills/feature/SKILL.md").read_text(encoding="utf-8")
     assert '"settled": <the first result\'s settled>' in feature, "the skill passes them back"
-    assert "dependencies?, assumptions?, settled? }" in PIPELINE.read_text(encoding="utf-8")
+    assert "dependencies?, namedGates?, assumptions?, settled? }" in PIPELINE.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_the_owner_reads_each_input_by_its_plain_name() -> None:
@@ -1479,3 +1490,82 @@ def test_the_drain_counts_every_agent_a_run_can_spawn() -> None:
         {"conflicts": ["flags.toml"]}, reconcile=IMPLEMENTED, **{"review-again": REVIEW}
     )
     assert len(rebased["labels"]) == drain.UPDATE_AGENTS
+
+
+E2E_GATE = {"gate": "e2e-browser", "tier": "2", "criterion": "`e2e-browser` is green"}
+SPEC_GATE = "`e2e-api`"
+NAMING = {**PREFLIGHT, "named_gates": [E2E_GATE]}
+FIXED = {"fix-1": IMPLEMENTED, "critique-1": CRITIQUED}
+KEPT_FAILING = {
+    **CRITIQUED,
+    "findings": [{"severity": "minor", "title": "a held case", "testFails": True}],
+}
+
+
+def _named(spec: dict[str, object], **answers: object) -> dict[str, Any]:
+    answers = (
+        {"implement": IMPLEMENTED, "critique": KEPT_FAILING, "review": REVIEW} | FIXED | answers
+    )
+    return _run({"ref": "4"}, preflight=NAMING, spec=spec, **answers)
+
+
+def test_the_gates_the_criteria_name_reach_every_role_and_the_specs_add_to_them() -> None:
+    ran = _named({**SPECIFIED, "namedGates": [SPEC_GATE]})
+    prompts = ran["prompts"]
+    assert "`e2e-browser` (tier 2)" in prompts["spec"]
+    assert SPEC_GATE not in prompts["spec"], "the spec role has not named it yet"
+    for role in ("implement", "critique", "fix-1", "review"):
+        assert "`e2e-browser` (tier 2), `e2e-api`" in prompts[role], role
+    assert ran["result"]["namedGates"] == [
+        {"gate": "e2e-browser", "tier": "2"},
+        {"gate": "e2e-api"},
+    ]
+
+
+def test_a_gate_both_lists_hold_is_named_once() -> None:
+    ran = _named({**SPECIFIED, "namedGates": ["`e2e-browser`"]})
+    assert ran["prompts"]["review"].count("`e2e-browser`") == 1
+    assert ran["result"]["namedGates"] == [{"gate": "e2e-browser", "tier": "2"}]
+
+
+def test_a_run_whose_criteria_name_no_gate_says_so() -> None:
+    ran = _built(REVIEW)
+    assert "No criterion of the ticket or of spec.md names a gate" in ran["prompts"]["implement"]
+
+
+def test_a_later_gate_is_run_whole_once_by_the_implementer_and_once_by_each_review() -> None:
+    prompts = _named(SPECIFIED)["prompts"]
+    assert "run whole, once, by you, after your `check` is green" in _said(prompts["implement"])
+    assert "run whole, once, by you, on the tree you judge" in _said(prompts["review"])
+    for role in ("spec", "critique", "fix-1"):
+        assert "run whole" not in _said(prompts[role]), role
+        assert "You run no gate a criterion names that `check` does not" in prompts[role], role
+
+
+def test_the_schemas_say_which_named_gates_the_spec_added_and_each_role_ran() -> None:
+    ran = _named(SPECIFIED)
+    spec, implement, review = (ran["schemas"][label] for label in ("spec", "implement", "review"))
+    assert _valid({**SPECIFIED, "namedGates": [SPEC_GATE]}, spec)
+    assert not _valid({k: v for k, v in SPECIFIED.items() if k != "namedGates"}, spec)
+    assert not _valid({**SPECIFIED, "namedGates": [3]}, spec)
+    assert _valid({**IMPLEMENTED, "namedGatesRun": ["`e2e-browser`"]}, implement)
+    unsaid = {k: v for k, v in IMPLEMENTED.items() if k != "namedGatesRun"}
+    assert not _valid(unsaid, implement), "the implementer says what it ran, even if nothing"
+    assert _valid({**REVIEW, "namedGatesRun": ["`e2e-browser`"]}, review)
+    assert not _valid({k: v for k, v in REVIEW.items() if k != "namedGatesRun"}, review)
+    assert "namedGatesRun" not in ran["schemas"]["fix-1"]["properties"]
+
+
+def test_the_result_says_which_named_gates_each_role_ran() -> None:
+    implemented = {**IMPLEMENTED, "namedGatesRun": ["`e2e-browser`"]}
+    reviewed = {**REVIEW, "namedGatesRun": ["`e2e-browser`", "`e2e-api`"]}
+    ran = _named(SPECIFIED, implement=implemented, review=reviewed)
+    assert ran["result"]["namedGatesRun"] == {
+        "implement": ["`e2e-browser`"],
+        "review": ["`e2e-browser`", "`e2e-api`"],
+    }
+
+
+def test_a_rejudge_reviews_against_the_gates_the_first_run_named() -> None:
+    ran = _again({"namedGates": [{"gate": "e2e-browser", "tier": "2"}]}, **{"review-again": REVIEW})
+    assert "`e2e-browser` (tier 2)" in ran["prompts"]["review-again"]

@@ -155,7 +155,7 @@ Run every command below from the repository's own checkout, on the default branc
 
       ```
       name: "ratchet:pipeline"
-      args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "rejudge": { "slug": "<slug>", "specPath": "<specPath>", "conflicts": [<the conflicts>], "checkRed": <true when check was red>, "dependencies": <the first result's dependencies>, "assumptions": <the first result's assumptions>, "settled": <the first result's settled> } }
+      args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "rejudge": { "slug": "<slug>", "specPath": "<specPath>", "conflicts": [<the conflicts>], "checkRed": <true when check was red>, "dependencies": <the first result's dependencies>, "namedGates": <the first result's namedGates>, "assumptions": <the first result's assumptions>, "settled": <the first result's settled> } }
       ```
 
       - One agent finishes the rebase and gets `check` green, only when there was a conflict or a red `check`.

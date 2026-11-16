@@ -58,6 +58,7 @@ import change_size
 import gatelib
 import hooks_installed
 import owed
+import project_bite
 import publish_check
 import queue_notes
 
@@ -84,6 +85,11 @@ OPERABILITY_LINES = (
 )
 FLAG_LINE = "Flag"
 CRITIC_EVENT = "depended-on"
+CRITERIA = "## Acceptance criteria"
+CRITERION_ITEM = re.compile(
+    r"^(?P<indent>[ \t]*)(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]*)?(?P<text>.*)$"
+)
+CODE_SPAN = re.compile(r"`([^`\n]+)`")
 LATER = re.compile(r"^\|\s*([^|]+?)\s*\|\s*`?later:", re.MULTILINE | re.IGNORECASE)
 GATES = "## Gates"
 READY_ROLE = "ready-for-agent"
@@ -181,6 +187,15 @@ class Ticket:
         return section(self.body, CONJECTURE) if CONJECTURE in self.body else None
 
 
+@dataclass(frozen=True)
+class NamedGate:
+    """A gate of the binding that one criterion of the ticket holds as a code span."""
+
+    gate: str
+    tier: str
+    criterion: str
+
+
 @dataclass
 class Failure:
     """One precondition that does not hold."""
@@ -210,6 +225,7 @@ class Report:
     critic: bool = False
     critic_reason: str = ""
     start: publish_check.Start | None = None
+    named_gates: list[NamedGate] = field(default_factory=list)
 
     def fail(self, check: str, detail: str, produce: str = "") -> None:
         """Record one failed check."""
@@ -427,6 +443,42 @@ def binding_text(root: Path) -> str | None:
     """The binding in the checkout, or ``None`` before adoption."""
     binding = root / gatelib.BINDING
     return binding.read_text(encoding="utf-8") if binding.is_file() else None
+
+
+def criteria(body: str) -> list[str]:
+    """The ticket's acceptance criteria, one text per list item, its continuation lines joined."""
+    block = re.search(
+        rf"^{re.escape(CRITERIA)}[ \t]*$\n(.*?)(?=^#{{1,2}}\s|\Z)",
+        body,
+        re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    )
+    items: list[str] = []
+    for line in (block.group(1) if block else "").splitlines():
+        item = CRITERION_ITEM.match(line)
+        if item:
+            items.append(item.group("text").strip())
+        elif items and line.strip() and line[:1] in " \t":
+            items[-1] += " " + line.strip()
+    return items
+
+
+def named_gates(body: str, binding: str | None) -> list[NamedGate]:
+    """The gates the ticket's criteria hold as a code span: a gate's name or its entry point."""
+    if binding is None:
+        return []
+    held = {
+        span: row
+        for row in reversed(project_bite.gate_rows(binding))
+        if row.command
+        for span in (row.gate, row.command)
+    }
+    found: dict[tuple[str, str], NamedGate] = {}
+    for criterion in criteria(body):
+        for span in CODE_SPAN.findall(criterion):
+            row = held.get(span.strip())
+            if row is not None:
+                found.setdefault((row.gate, criterion), NamedGate(row.gate, row.tier, criterion))
+    return list(found.values())
 
 
 def operability_asked(root: Path) -> list[tuple[str, str]]:
@@ -690,6 +742,7 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
         )
     else:
         check_ticket(report, ticket, report.label, root=root, gh=gh)
+        report.named_gates = named_gates(ticket.body, binding_text(root))
     check_checkout(report, root, base=base, branch=branch)
     check_hooks(report, root)
     check_fill_first(report, root)
