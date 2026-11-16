@@ -316,9 +316,9 @@ def test_a_clone_is_the_release_only_while_it_is_the_release_commit_and_clean(
 ) -> None:
     clone, merged, tagged = release_clone(tmp_path)
     assert plugin_pin.commit_of(clone) == merged
-    repos.write(clone, "CHANGELOG.md", "dirty\n")
+    repos.write(clone, ".claude-plugin/plugin.json", "dirty\n")
     assert plugin_pin.commit_of(clone) == tagged
-    repos.git(clone, "checkout", "-q", "--", "CHANGELOG.md")
+    repos.git(clone, "checkout", "-q", "--", ".claude-plugin/plugin.json")
     assert plugin_pin.commit_of(clone) == merged
     repos.write(clone, "untracked.txt", "x\n")
     assert plugin_pin.commit_of(clone) == tagged

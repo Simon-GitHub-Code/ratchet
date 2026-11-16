@@ -361,7 +361,7 @@ def test_smoke_boots_a_deliverable_on_the_port_the_gate_picked(
     env = {k: v for k, v in os.environ.items() if k != "PORT"} | {"RATCHET_PLUGIN": str(copy)}
     sets = ["--set", "boot", boot, "--set", "ready", "http://127.0.0.1:{port}/"]
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
-        [just, "--justfile", str(TEMPLATES / "justfile"), *sets, "smoke"],
+        [just, "--justfile", str(TEMPLATES / "justfile"), "-d", str(tmp_path), *sets, "smoke"],
         cwd=tmp_path,
         env=env | ({"PORT": port} if port else {}),
         capture_output=True,

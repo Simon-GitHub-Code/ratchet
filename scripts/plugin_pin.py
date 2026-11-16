@@ -390,12 +390,10 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
         )
     if standing is Relation.PINNED:
         problem = tree_problem(pin, plugin)
-        if problem is not None:
-            return problem, True
-        if commit is None:
-            compared = "this copy carries no commit, and its tree is the pinned one"
-            return f"plugin-pin: {version}, as {home} pins; {compared}", False
-        return f"plugin-pin: {version} at {commit[:12]}, as {home} pins", False
+        compared = "this copy carries no commit, and its tree is the pinned one"
+        at = f" at {commit[:12]}" if commit else ""
+        green = f"plugin-pin: {version}{at}, as {home} pins" + ("" if commit else f"; {compared}")
+        return (problem or green), problem is not None
     if standing is Relation.NEWER:
         return (
             (
