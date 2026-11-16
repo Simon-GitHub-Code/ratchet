@@ -610,14 +610,15 @@ def test_a_binding_change_outside_the_rows_goes_to_every_gate(
     assert proved(out) == ["lint", "tests"]
 
 
-def test_a_change_to_the_plugin_pin_line_alone_proves_nothing(
-    tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
+def test_a_change_to_the_plugin_pin_line_alone_proves_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = targeted(tmp_path, inserts=f"{PIN}\n")
     replaced(root, BINDING, PIN, PIN.replace("0.1.0", "0.2.0"))
     assert prove(root, "--changed") == 0
-    assert shown(capsys).endswith(NOTHING)
-    assert list(scratch.iterdir()) == []
+    out = shown(capsys).splitlines()
+    assert out[1] == every("the plugin pin changed, and the plugin supplies gates")
+    assert proved(out) == ["lint", "tests"]
 
 
 @pytest.mark.parametrize(

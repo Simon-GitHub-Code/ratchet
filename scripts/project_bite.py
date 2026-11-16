@@ -136,7 +136,7 @@ change touches a path that defines a gate (the manifest's ``tool-config``, ``gat
 the gates of tiers 0 and 1 that the change could affect (ADR 0069), one line each saying why.
 The registry names a gate by each bite added, removed or changed; a patch names the gates whose
 bites apply it; the binding names the gates of the rows that changed, and every gate when
-anything else in it changed but the plugin pin line; a recipe in the justfile names the gates
+anything else in it changed, the plugin pin line included; a recipe in the justfile names the gates
 whose command reaches it. Any other path, and a path whose reading fails, affects every gate of
 tiers 0 and 1. ``--pull-request-gates`` proves every gate of tiers 0 and 1 with no change to
 read, to measure what the pull-request form costs; it cannot be combined with ``--changed``. The
@@ -1566,6 +1566,8 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
         != plugin_pin.PIN_LINE.sub("", new_rest).strip()
     ):
         return [Cause(None, f"{binding} changed outside its gate rows, which a gate may read")]
+    if old_rest.strip() != new_rest.strip():
+        return [Cause(None, "the plugin pin changed, and the plugin supplies gates")]
     if any(len({row.question for row in rows}) != len(rows) for rows in (old_rows, new_rows)):
         why = f"{binding} has two gate rows for one question, so one could hide behind the other"
         return [Cause(None, why)]
