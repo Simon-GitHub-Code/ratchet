@@ -920,7 +920,7 @@ def test_a_found_quote_is_green(tmp_path: Path, checked: Check) -> None:
         {
             "criticFindingsByRound": [{"round": 1, "findings": [held]}],
             "unresolvedBlockingFindings": [held],
-            "reviewIssues": [breaking("AGENTS.md", "quotes what it breaks.")],
+            "reviewIssues": [breaking("AGENTS.md", QUOTE)],
         },
     )
     assert checked(path, root) == (0, [GREEN])

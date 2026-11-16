@@ -445,7 +445,7 @@ def given_records(result: Result, root: Path, gh: preflight.Runner) -> quotes.Re
     }
     if any(quoted_record(finding) == "ticket" for finding in result.owed):
         ticket = None if result.ref is None else preflight.fetch(result.ref, root, gh)
-        given["ticket"] = None if ticket is None else [ticket.body]
+        given["ticket"] = None if ticket is None else [quotes.Document(ticket.body, markdown=True)]
     return given
 
 
