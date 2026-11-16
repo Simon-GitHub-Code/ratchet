@@ -156,11 +156,6 @@ def test_an_upgrade_of_a_project_as_the_last_release_left_it_carries_the_interpr
     assert "{{plugin_py}} -P -c 'import sys, urllib.request;" in done
     assert "python3 -c 'import sys, urllib.request;" not in done
     assert "'FLAG_OVERRIDES=$(' + plugin_py + ' \"' + ratchet_plugin" in done
-    template = conformance.template_file("justfile")
-    template_jobs = "\n".join(justfile_text.definition(template, "configured_jobs")) + "\n"
-    template_jobs += "\n".join(justfile_text.definition(template, "jobs"))
-    assert template_jobs in done
-    assert 'jobs := env_var_or_default("RATCHET_JOBS", num_cpus())' not in done
     just = shutil.which("just")
     if just is None:
         pytest.skip("just is not installed")
@@ -173,6 +168,27 @@ def test_an_upgrade_of_a_project_as_the_last_release_left_it_carries_the_interpr
     assert not [f for f in left if "bare `python3`" in f.problem]
     [ceiling] = [f for f in left if f.rule == "bite_all_ceiling"]
     assert "is held to tier 2's ceiling of 3600s" in ceiling.problem
+
+
+def test_an_upgrade_of_a_project_adopted_before_the_jobs_setting_carries_the_templates_jobs_lines(
+    tmp_path: Path,
+) -> None:
+    root = adopted.copy(adopted.adopted("0.12.0"), tmp_path / "repo")
+    path = root / "justfile"
+    old = 'jobs := env_var_or_default("RATCHET_JOBS", num_cpus())'
+    assert old in path.read_text(encoding="utf-8")
+    upgrade.main(["upgrade.py", "--root", str(root), "--apply"])
+    done = path.read_text(encoding="utf-8")
+    template = conformance.template_file("justfile")
+    carried = "\n".join(
+        (
+            *justfile_text.definition(template, "configured_jobs"),
+            *justfile_text.definition(template, "jobs"),
+        )
+    )
+    assert carried in done
+    assert old not in done
+    assert not [f for f in conformance.findings(root) if "ratchet.jobs" in f.problem]
 
 
 @pytest.mark.parametrize("name", FIXTURES)

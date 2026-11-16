@@ -18,6 +18,7 @@ RELEASES = {
     "0.9.2": "05634d2b123c85edb023cbc94b276fb2d1225eab",
 }
 LATER = {
+    "0.12.0": "7ebb02d14e4c6932c4bbd71c58c97ac30e519508",
     "0.12.3": "429b3bfd45d8df7aa70b04599984fcbc66c6e41c",
 }
 TEMPLATES = ("skills/init/templates/", "skills/adopt/templates/")
