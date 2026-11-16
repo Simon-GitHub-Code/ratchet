@@ -15,6 +15,7 @@
       "Edit(/.git/refs/**)",
       "Edit(/.git/packed-refs)",
       "Edit(/.git/HEAD)",
+      "Edit(/.git/ratchet-plugin)",
       "Edit(/.git/info/grafts)",
       "Edit(/.git/shallow)",
       "Edit(/.git/objects/info)",

@@ -1794,7 +1794,7 @@ landing = os.environ.get(merge.LANDING_VAR)
 said = io.StringIO()
 with contextlib.redirect_stdout(said):
     code = merge.main(["merge", sys.argv[-1], "--root", os.getcwd()])
-(gate / f"result-{me}").write_text(
+(gate / f"writing-{me}").write_text(
     json.dumps(
         {
             "code": code,
@@ -1805,6 +1805,7 @@ with contextlib.redirect_stdout(said):
         }
     )
 )
+os.replace(gate / f"writing-{me}", gate / f"result-{me}")
 sys.exit(code)
 """
 )

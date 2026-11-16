@@ -501,3 +501,15 @@ def test_a_recipe_runs_a_line_through_what_it_depends_on_and_calls_and_never_loo
     assert justfile_text.runs(text, "a", "the pin")
     assert not justfile_text.runs(text, "d", "the pin")
     assert not justfile_text.runs(text, "nowhere", "the pin")
+
+
+def test_a_template_recipe_that_is_not_there_cannot_be_wanted() -> None:
+    with pytest.raises(ValueError, match="no recipe 'nothing'"):
+        justfile_text.with_template_recipe("a:\n    echo a\n", "nothing")
+
+
+def test_a_template_recipe_replaces_the_projects_and_is_copied_when_absent() -> None:
+    template = "a:\n    echo new\n\nb:\n    echo b\n"
+    want = justfile_text.with_template_recipe(template, "a")
+    assert want("a:\n    echo old\n\nb:\n    echo b\n") == template
+    assert want("b:\n    echo b\n") == template

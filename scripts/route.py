@@ -1039,7 +1039,7 @@ def decline(root: Path, event: str) -> int:
 def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
     """The upgrade, offered when the plugin in use is newer than the one the binding pins.
 
-    Why: a newer plugin is green at every tier and says so in each tier's output, which an owner
+    Why: a newer plugin is red at every tier and says why in each tier's output, which an owner
     rarely reads; the route is what the owner reads (ADR 0027).
     """
     pin = plugin_pin.pinned(gatelib.read_text(root / BINDING))
