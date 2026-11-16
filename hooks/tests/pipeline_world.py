@@ -14,7 +14,7 @@ import json
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from tests.pipeline_model import (
@@ -90,6 +90,8 @@ OPEN = {
     "heldByKeptTest": False,
 }
 PREVIOUS = "@previous"
+WAS = "@title"
+NOW = "@now"
 MOVED = "@moved"
 BLOCKER = {
     "axis": "spec",
@@ -192,12 +194,23 @@ CONCRETE: dict[Said, object] = {
     Critique.CLEAR: CRITIQUED,
     Critique.SILENT: {**CRITIQUED, "attempted": []},
     Critique.OWED: _quoted(
-        {**CRITIQUED, "findings": [OPEN], "testsAdded": [OPEN["suggestedTest"]]}
+        {
+            **CRITIQUED,
+            "findings": [{**OPEN, "title": f"{OPEN['title']} {NOW}"}],
+            "testsAdded": [OPEN["suggestedTest"]],
+        }
+    ),
+    Critique.OWED_RELABELED: _quoted(
+        {
+            **CRITIQUED,
+            "findings": [{**OPEN, "title": WAS}],
+            "testsAdded": [OPEN["suggestedTest"]],
+        }
     ),
     Critique.OWED_CARRIED: _quoted(
         {
             **CRITIQUED,
-            "findings": [{**OPEN, "carries": PREVIOUS}],
+            "findings": [{**OPEN, "carries": PREVIOUS, "title": WAS}],
             "testsAdded": [OPEN["suggestedTest"]],
         }
     ),
@@ -304,6 +317,8 @@ function kept(result) {
     stoppedAfter: result.stoppedAfter ?? null,
     carried: (result.carriedStillOwed || []).length,
     unclassified: result.unclassified ?? 0,
+    unquotedReview: result.unquotedReviewIssues ?? 0,
+    reviewRounds: (result.reviewIssuesByRound || []).length,
     unstated: (result.unstated || []).filter(e => e.of).length,
     questions: (result.openQuestions || []).length,
     guardEdits: (result.guardEdits || []).length,
@@ -321,6 +336,7 @@ async function main() {
   for (const run of runs) {
     const calls = []
     const told = []
+    let lastTitle = 'loses the order'
     const agent = async (prompt, options) => {
       calls.push([options.label, options.phase])
       const rounds = options.label.startsWith('fix-') && prompt.match(ROUNDS)
@@ -333,10 +349,15 @@ async function main() {
       const moved = (prompt.match(/"id": "(C\\d+-\\d+)"/) || [])[1]
       const text = JSON.stringify(answer)
         .replace(/"@previous"/g, JSON.stringify(`C${round - 1}-1`))
+        .replace(/@title/g, lastTitle)
+        .replace(/@now/g, `round ${round}`)
         .replace(/"@moved"/g, JSON.stringify(moved || 'no id in the prompt'))
       const found = options.schema ? refused(options.schema, JSON.parse(text), name) : []
       if (found.length) broken[`${options.label} ${name}`] = found
-      return JSON.parse(text)
+      const parsed = JSON.parse(text)
+      const first = (parsed.findings || [])[0]
+      if (options.label.startsWith('critique') && first) lastTitle = first.title
+      return parsed
     }
     try {
       const full = await pipeline(run.args, agent, () => {}, () => {})
@@ -490,6 +511,7 @@ def stopped(result: dict[str, Any]) -> Ending:
             asks=result["questions"] > 0,
             rejudged=result["rejudged"],
             unclassified=result["unclassified"] > 0,
+            unquoted_review=result["unquotedReview"] > 0,
         )
     stops = [
         (Stop.QUESTION, result["questions"] > 0),
@@ -508,7 +530,7 @@ def ending(raw: dict[str, Any]) -> Ending:
     result = raw["result"]
     outcome = Outcome(result["verdict"])
     if outcome is Outcome.BLOCKED:
-        return stopped(result)
+        return replace(stopped(result), review_rounds=result["reviewRounds"] > 0)
     parked = result["stop"] == "carried"
     return Ending(
         outcome,
@@ -516,6 +538,8 @@ def ending(raw: dict[str, Any]) -> Ending:
         after=Role(ROUND.sub("", result["stoppedAfter"])) if parked else None,
         asks=parked and result["questions"] > 0,
         unclassified=result["unclassified"] > 0,
+        unquoted_review=result["unquotedReview"] > 0,
+        review_rounds=result["reviewRounds"] > 0,
         objections=frozenset(map(objection, result["forcedBy"])),
         rounds=result["iterations"],
         unresolved=result["unresolved"] > 0,

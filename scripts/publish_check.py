@@ -58,7 +58,8 @@ JSON, before it publishes anything, to the start file's path with ``.result.json
 start file ``/x/report.json`` has the result ``/x/report.json.result.json``). A run that returned
 has one, so a missing file, text that is not a JSON object, or a result missing its lists of
 findings is refused, never tolerated. The check runs ``quotes.py`` over every blocker and major
-finding of ``criticFindingsByRound``, ``unresolvedBlockingFindings`` and ``reviewIssues``: the
+finding of ``criticFindingsByRound``, ``reviewIssuesByRound``, ``unresolvedBlockingFindings`` and
+``reviewIssues``: the
 findings the run treated as owed. It is red when one carries no ``breaks`` or quotes a record that
 does not hold the quote word for word. A minor is not checked. The records are read from the
 checkout, ``spec.md`` from the result's ``specPath`` and ``ticket`` from the result's ``ref``. A
@@ -129,8 +130,8 @@ RED = (
     f"{SAID} red, a role published: the ticket ends as a role that published, never as an approval"
 )
 RESULT_SUFFIX = ".result.json"
-ROUNDS = "criticFindingsByRound"
-FINDING_LISTS = (ROUNDS, "unresolvedBlockingFindings", "reviewIssues")
+ROUNDS = ("criticFindingsByRound", "reviewIssuesByRound")
+FINDING_LISTS = (*ROUNDS, "unresolvedBlockingFindings", "reviewIssues")
 QUOTES_RED = (
     f"{SAID} red, a finding the run treated as owed quotes what its record does not hold: the"
     " ticket is not approved"
@@ -419,7 +420,7 @@ def read_result(path: Path) -> Result:
             message = f"`{name}` is missing or is not a list"
             raise ResultError(message)
         for entry in entries:
-            inner = entry.get("findings") if name == ROUNDS and isinstance(entry, dict) else None
+            inner = entry.get("findings") if name in ROUNDS and isinstance(entry, dict) else None
             listed.extend(inner if isinstance(inner, list) else [entry])
     unique = {json.dumps(finding, sort_keys=True): finding for finding in listed}
     owed = [

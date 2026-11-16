@@ -47,6 +47,7 @@ def resulted(start: Path, fields: dict[str, object]) -> None:
     """The run's result beside the start, with no findings unless ``fields`` say otherwise."""
     result = {
         "criticFindingsByRound": [],
+        "reviewIssuesByRound": [],
         "unresolvedBlockingFindings": [],
         "reviewIssues": [],
     }
@@ -843,9 +844,19 @@ def test_a_result_file_that_is_absent_is_refused(tmp_path: Path, checked: Check)
     [
         ("not json", "it is not JSON"),
         ("[]", "it is not a JSON object"),
-        ('{"criticFindingsByRound": [], "reviewIssues": []}', "`unresolvedBlockingFindings` is"),
         (
-            '{"criticFindingsByRound": {}, "unresolvedBlockingFindings": [], "reviewIssues": []}',
+            '{"criticFindingsByRound": [], "reviewIssuesByRound": [], "reviewIssues": []}',
+            "`unresolvedBlockingFindings` is",
+        ),
+        (
+            '{"criticFindingsByRound": [], "unresolvedBlockingFindings": [], "reviewIssues": []}',
+            "`reviewIssuesByRound` is missing or is not a list",
+        ),
+        (
+            (
+                '{"criticFindingsByRound": {}, "reviewIssuesByRound": [],'
+                ' "unresolvedBlockingFindings": [], "reviewIssues": []}'
+            ),
             "`criticFindingsByRound` is missing or is not a list",
         ),
     ],
@@ -959,6 +970,19 @@ def test_a_finding_in_two_lists_is_said_once(tmp_path: Path, checked: Check) -> 
             "unresolvedBlockingFindings": [invented],
         },
     )
+    assert checked(path, root) == (
+        1,
+        [unquoted("AGENTS.md", "invented", why="the record `AGENTS.md` is absent"), QUOTES_RED],
+    )
+
+
+def test_a_blocker_of_a_review_round_that_sent_a_fix_pass_is_checked(
+    tmp_path: Path, checked: Check
+) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    invented = breaking("AGENTS.md", "invented")
+    resulted(path, {"reviewIssuesByRound": [{"round": 0, "findings": [invented]}]})
     assert checked(path, root) == (
         1,
         [unquoted("AGENTS.md", "invented", why="the record `AGENTS.md` is absent"), QUOTES_RED],

@@ -9,15 +9,19 @@ from typing import Any
 
 import pytest
 
+import adapter
 import drain
 import merge_ready
+import publish_check
 import quotes
 from tests.repos import branch, commit, repository, write
+from tests.support import PLUGIN_ROOT
 
 PIPELINE = Path(__file__).resolve().parents[2] / "workflows/pipeline.js"
 MANIFEST_TOML = '[[group]]\nname = "g"\nreason = "Because it is."\npaths = ["lint.toml"]\n'
 
 
+PLUGIN_PY = "python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode"
 RULE = "A change never loses a user's data."
 RECORDS = {"AGENTS.md": [quotes.Document(f"# Rules\n\n{RULE}\n", markdown=True)]}
 BREAKS = {"record": "AGENTS.md", "quote": RULE}
@@ -768,6 +772,34 @@ def test_a_review_that_approves_with_a_blocker_of_its_own_still_gets_the_pass() 
     ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
     assert ran["labels"] == [*YOUNG_LABELS, "review", "fix-1", "review-1"]
     assert ran["result"]["verdict"] == "approve"
+
+
+def test_a_review_round_that_sent_a_fix_pass_stays_in_the_result_and_is_checked(
+    tmp_path: Path,
+) -> None:
+    claimed = {"found": [{"index": 0, **INVENTED}], "not_found": []}
+    forged = {
+        **BLOCKED,
+        "issues": [{**BLOCKER, "breaks": INVENTED}],
+        "quoteOutput": json.dumps(claimed),
+    }
+    answers = {"implement": IMPLEMENTED, "review": forged, "fix-1": IMPLEMENTED}
+    answers |= {"review-1": REVIEW}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+    assert "fix-1" in ran["labels"], "the forged output sent a fix agent on the reviewer's word"
+    result = ran["result"]
+    assert (result["verdict"], result["reviewIssues"]) == ("approve", [])
+    (round_zero,) = result["reviewIssuesByRound"]
+    assert round_zero["round"] == 0
+    assert [f["breaks"] for f in round_zero["findings"]] == [INVENTED]
+    (tmp_path / "AGENTS.md").write_text(f"# Rules\n\n{RULE}\n", encoding="utf-8")
+    written = tmp_path / "start.json.result.json"
+    written.write_text(json.dumps(result), encoding="utf-8")
+    owed_findings = publish_check.read_result(written)
+    lines = publish_check.quote_lines(owed_findings, tmp_path, lambda _: None)
+    assert len(lines) == 1
+    assert f'"{INVENTED["quote"]}"' in lines[0]
+    assert "the finding `drops a link with exit 0`" in lines[0]
 
 
 def test_a_young_project_whose_second_review_still_blocks_is_parked_after_one_pass() -> None:
@@ -1524,9 +1556,13 @@ def test_the_drain_counts_every_agent_a_run_can_spawn() -> None:
     blocked = {"review": BLOCKED, "fix-1": IMPLEMENTED, "review-1": BLOCKED}
     young = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **{**worst, **blocked})["labels"]
     assert len(young) == drain.YOUNG_PIPELINE_AGENTS
-    owed = _quoted({**CRITIQUED, "findings": [{"severity": "major", "title": "open"}]})
-    rounds = {"critique": owed, "fix-1": IMPLEMENTED, "critique-1": owed}
-    rounds |= {"fix-2": IMPLEMENTED, "critique-2": owed}
+
+    def owed(number: int) -> dict[str, Any]:
+        finding = {"severity": "major", "title": f"open {number}"}
+        return _quoted({**CRITIQUED, "findings": [finding]})
+
+    rounds = {"critique": owed(0), "fix-1": IMPLEMENTED, "critique-1": owed(1)}
+    rounds |= {"fix-2": IMPLEMENTED, "critique-2": owed(2)}
     depended_on = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **worst, **rounds)
     assert len(depended_on["labels"]) == drain.PIPELINE_AGENTS
     rebased = _again(
@@ -1740,7 +1776,7 @@ def test_a_blocker_the_review_cannot_quote_is_moved_and_stops_the_run() -> None:
         "question",
     )
     assert [e["of"] for e in result["unstated"]] == ["R1"]
-    assert result["unclassified"] == 1
+    assert (result["unclassified"], result["unquotedReviewIssues"]) == (0, 1)
     assert result["openQuestions"][0]["options"][0].startswith("The reviewer's view:")
 
 
@@ -1785,6 +1821,48 @@ def test_a_parked_run_hands_the_findings_no_role_classified_to_the_owner_as_ques
     assert result["verdictRecord"]["openQuestions"] == [question["question"]]
     assert question["options"][0].startswith("The critic's view: reverses a saved list")
     assert question["options"][1].startswith("What the code does now")
+
+
+def test_a_finding_relabelled_as_new_carries_when_its_quote_and_title_are_the_same() -> None:
+    first = _critique(MAJOR)
+    relabelled = _critique({**MAJOR, "carries": None})
+    ran = _built_run(critique=first, **{"critique-1": relabelled})
+    assert ran["labels"][-3:] == ["critique", "fix-1", "critique-1"]
+    result = ran["result"]
+    assert (result["verdict"], result["stop"]) == ("request_changes", "carried")
+    assert result["carriedStillOwed"] == ["C1-1"]
+
+
+def test_two_defects_that_break_the_same_sentence_each_get_their_round() -> None:
+    first = _critique(MAJOR)
+    other = {**MAJOR, "title": "reverses a saved list", "carries": None}
+    assert other["title"] != MAJOR["title"]
+    ran = _built_run(critique=first, **{"critique-1": _critique(other), "critique-2": CRITIQUED})
+    assert ran["labels"][-6:] == [
+        "critique",
+        "fix-1",
+        "critique-1",
+        "fix-2",
+        "critique-2",
+        "review",
+    ]
+    assert ran["result"]["carriedStillOwed"] == []
+
+
+def test_no_role_prompt_runs_a_plugin_script_with_a_bare_python3() -> None:
+    args = {"ref": "4", "preflight": "/plugin/scripts/feature_preflight.py"}
+    ran = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)
+    assert ran["prompts"]
+    for label, prompt in ran["prompts"].items():
+        assert not re.search(r"python3 (?!-E -s )\S*scripts/", prompt), label
+        assert not re.search(r"python3 (?!-E -s )", prompt), label
+    assert f"{PLUGIN_PY} `/plugin/scripts/feature_preflight.py`" in ran["prompts"]["preflight"]
+
+
+def test_the_plugin_interpreter_the_prompts_use_is_the_one_the_templates_fall_back_to() -> None:
+    justfile = (PLUGIN_ROOT / "skills/adopt/templates/justfile").read_text(encoding="utf-8")
+    assert f'plugin_py := if plugin_pyc_ok == "" {{ "{PLUGIN_PY}" }}' in justfile
+    assert PLUGIN_PY.startswith(adapter.INTERPRETER)
 
 
 def test_a_new_blocker_after_a_fix_round_keeps_the_second_round() -> None:
@@ -1920,7 +1998,8 @@ def test_the_prompts_state_the_fork_test_and_the_quote_rule_for_each_role_that_n
 def test_the_quote_check_runs_beside_the_preflight_script_when_the_skill_names_it() -> None:
     args = {"ref": "4", "preflight": "/plugin/scripts/feature_preflight.py"}
     ran = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)
-    assert "python3 `/plugin/scripts/quotes.py` <that file> --root ." in ran["prompts"]["critique"]
+    quotes_line = f"{PLUGIN_PY} `/plugin/scripts/quotes.py` <that file> --root ."
+    assert quotes_line in ran["prompts"]["critique"]
     assert "--record ticket=" in ran["prompts"]["review"]
     assert "--record ticket=" not in ran["prompts"]["critique"]
 

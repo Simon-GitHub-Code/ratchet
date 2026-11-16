@@ -54,13 +54,15 @@ const AGENTS_AT_MOST = {"young": 9, "dependedOn": 12, "rejudge": 2}
 // ---------------------------------------------------------------------------
 // The slash form of a workflow passes no args, so a missing ref is answered, not thrown: the
 // result says what to run instead, and no agent has been spawned.
-const NOTHING_FOUND = { criticFindingsByRound: [], unresolvedBlockingFindings: [], reviewIssues: [] }
+const REVIEW_ROUNDS = []
+const FINDINGS_SO_FAR = { criticFindingsByRound: [], unresolvedBlockingFindings: [], reviewIssues: [], reviewIssuesByRound: REVIEW_ROUNDS }
+const PLUGIN_PY = 'python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode'
 const ARGS = typeof args === 'string' ? { ref: args } : (args && typeof args === 'object' ? args : {})
 const REF = typeof ARGS.ref === 'string' ? ARGS.ref.trim() : ''
 if (!REF) {
   return {
     verdict: 'blocked',
-    ...NOTHING_FOUND,
+    ...FINDINGS_SO_FAR,
     preflight: { ok: false, failures: [{ check: 'ticket', detail: 'no ticket ref was passed', produce: 'run the /ratchet:feature skill with the ticket number or path; it runs the preflight and passes args = { ref, branch, base }' }] },
     requiredByOrchestrator: ['Run `/ratchet:feature <ticket>`; the slash form of this workflow passes no args and spawns nothing'],
   }
@@ -274,7 +276,7 @@ function quoteRule(spec, list, ticketFile) {
   list item, heading, table cell or line. A blocker or major with no quote is not a finding: return it
   as an \`unstated\` entry.
 - Before you return, write \`${list}\` as the JSON list you return, in that order, to a file in a
-  \`mktemp -d\` directory outside the repository, and run \`python3 ${quotesScript()} <that file> --root .\`${ticket}.
+  \`mktemp -d\` directory outside the repository, and run \`${PLUGIN_PY} ${quotesScript()} <that file> --root .\`${ticket}.
   Return what it printed, verbatim, as \`quoteOutput\`. Correct every quote it reports not found, and
   run it again, before you return.`
 }
@@ -981,7 +983,7 @@ function preflightPrompt() {
 
 In ${ROOT_HINT}, run, in a single Bash call:
 
-    python3 ${script} "${REF}" --root .${baseFlag}${branchFlag}
+    ${PLUGIN_PY} ${script} "${REF}" --root .${baseFlag}${branchFlag}
 
 It prints a JSON object on stdout ({ ok, ref, failures: [{ check, detail, produce }], number,
 title, slug, branch, base, label, critic, critic_reason }) and a verdict line on stderr. Return that JSON's fields in the
@@ -1662,7 +1664,7 @@ function tooLarge(stop, spec, extra) {
     slug: SLUG,
     ref: REF,
     verdict: 'blocked',
-    ...NOTHING_FOUND,
+    ...FINDINGS_SO_FAR,
     verdictForcedBy: [stop.reason],
     tooLarge: stop,
     openQuestions: [],
@@ -1692,7 +1694,7 @@ function specStop(spec) {
     slug: SLUG,
     ref: REF,
     verdict: 'blocked',
-    ...NOTHING_FOUND,
+    ...FINDINGS_SO_FAR,
     openQuestions: spec.openQuestions,
     guardEdits,
     specPath: spec.specPath,
@@ -1734,6 +1736,14 @@ function blocking(findings) {
 // \`check\` is never approved, so a minor finding with a failing test would otherwise skip the loop
 // and fail the review. A finding whose kept test already passes shows the code holds: a fix round
 // would have nothing to change, and the review still reads the finding.
+function carries(finding, earlier) {
+  if (finding.carries === earlier.id) return true
+  const was = earlier.breaks
+  const now = finding.breaks
+  return Boolean(was && now) && was.record === now.record && was.quote === now.quote &&
+    String(finding.title || '').trim() === String(earlier.title || '').trim()
+}
+
 function owed(findings) {
   return (findings || []).filter(f => f && (isBlocking(f)
     ? f.quoted === true && (f.testFails === true || f.heldByKeptTest !== true)
@@ -1800,7 +1810,7 @@ function ownerEntry(moved) {
   const quote = moved.breaks ? `${moved.breaks.record}: "${moved.breaks.quote}"` : 'none given'
   return {
     of: moved.id,
-    unclassified: true,
+    ...(moved.from === 'critic' ? { unclassified: true } : { unquotedReview: true }),
     now: moved.evidence,
     evidence: moved.evidence,
     question: `A ${moved.from} found a case no record states, and nothing classified it: ${moved.title}. Where: ${moved.detail || 'not given'}. Evidence: ${moved.evidence}. The quote that was not found: ${quote}.`,
@@ -1814,6 +1824,10 @@ function ownerEntry(moved) {
 
 function unclassifiedCount() {
   return ALL_UNSTATED.filter(entry => entry.unclassified === true).length
+}
+
+function unquotedReviewCount() {
+  return ALL_UNSTATED.filter(entry => entry.unquotedReview === true).length
 }
 
 function assumedFrom(entry) {
@@ -1865,11 +1879,12 @@ function settleCases(after, entries, departures, context) {
     departures: ALL_DEPARTURES,
     unstated: ALL_UNSTATED,
     unclassified: unclassifiedCount(),
+    unquotedReviewIssues: unquotedReviewCount(),
     assumptions: ROLE_ASSUMPTIONS,
     specPath: context.specPath,
     testFiles: context.testFiles,
     branch: BRANCH,
-    ...NOTHING_FOUND,
+    ...FINDINGS_SO_FAR,
     ...context.extra,
     requiredByOrchestrator: [
       'Put every open question to the owner in one message, each with your recommended answer first and why, so the owner can accept them all at once: through the question tool, all in one call where it takes them; each answer goes on the ticket under `## Answers`, where the next spec agent reads it',
@@ -2115,7 +2130,7 @@ if (REJUDGE) {
     slug: SLUG,
     ref: REF,
     rejudged: true,
-    ...NOTHING_FOUND,
+    ...FINDINGS_SO_FAR,
     verdict: judged.verdict,
     verdictForcedBy: judged.forced,
     filesChanged: reconcile ? reconcile.filesChanged : [],
@@ -2127,6 +2142,7 @@ if (REJUDGE) {
     acceptedInputs: review.acceptedInputs,
     unstated: ALL_UNSTATED,
     unclassified: unclassifiedCount(),
+    unquotedReviewIssues: unquotedReviewCount(),
     departures: ALL_DEPARTURES,
     adrSuggested: review.adrSuggested,
     guardChanges: review.guardChanges,
@@ -2168,7 +2184,7 @@ if (!preflight.ok) {
   return {
     verdict: 'blocked',
     ref: REF,
-    ...NOTHING_FOUND,
+    ...FINDINGS_SO_FAR,
     preflight,
     branch: BRANCH || preflight.branch || '',
     requiredByOrchestrator: [
@@ -2272,7 +2288,7 @@ if (CRITIC) {
   phase('Fix')
   while (owed(critique.findings).length > 0 && iterations < MAX_FIX_ITERATIONS && carriedStillOwed.length === 0) {
     iterations += 1
-    const wasOwed = new Set(owed(critique.findings).map(f => f.id))
+    const wasOwed = owed(critique.findings)
     const stop = await fixRound(critique.findings, critique.testsAdded, iterations, MAX_FIX_ITERATIONS)
     if (stop) return stop
     critique = readCritique(must(
@@ -2286,7 +2302,7 @@ if (CRITIC) {
     log(`Re-critique ${iterations}: ${critique.findings.length} finding(s), ${owed(critique.findings).length} still owed a fix`)
     const reCritiqueHalt = haltAfter(`critique-${iterations}`, critique)
     if (reCritiqueHalt) return reCritiqueHalt
-    carriedStillOwed = owed(critique.findings).filter(f => wasOwed.has(f.carries)).map(f => f.id)
+    carriedStillOwed = owed(critique.findings).filter(f => wasOwed.some(earlier => carries(f, earlier))).map(f => f.id)
     if (carriedStillOwed.length) log(`Fix loop stops: ${carriedStillOwed.join(', ')} carried through the round it was owed and is still owed`)
   }
 } else {
@@ -2331,9 +2347,11 @@ function parkCarried() {
     unresolvedBlockingFindings: stillOwed,
     carriedStillOwed,
     reviewIssues: [],
+    reviewIssuesByRound: REVIEW_ROUNDS,
     ticketFindings: [],
     unstated: ALL_UNSTATED,
     unclassified: unclassifiedCount(),
+    unquotedReviewIssues: unquotedReviewCount(),
     departures: ALL_DEPARTURES,
     openQuestions: questions,
     assumptions,
@@ -2375,6 +2393,7 @@ function reviewStop(after, result) {
 // once on the review's blockers, then the review again; what it still refuses is parked as before.
 if (!CRITIC && fixableByReview(review)) {
   iterations += 1
+  REVIEW_ROUNDS.push({ round: iterations - 1, findings: blocking(review.issues) })
   const stop = await fixRound(review.issues, [], iterations, YOUNG_FIX_ROUNDS)
   if (stop) return stop
   phase('Review')
@@ -2434,8 +2453,10 @@ return {
   carriedStillOwed,
   unstated: ALL_UNSTATED,
   unclassified: unclassifiedCount(),
+  unquotedReviewIssues: unquotedReviewCount(),
   departures: ALL_DEPARTURES,
   reviewIssues: issues,
+  reviewIssuesByRound: REVIEW_ROUNDS,
   ticketFindings: ticketIssues(review),
   settled,
   reviewVerdict: review.verdict,

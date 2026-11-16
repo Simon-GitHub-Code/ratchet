@@ -53,6 +53,7 @@ PAGE = PLUGIN_ROOT / "docs/model/pipeline.md"
     SECOND_ROUND_KEPT,
     UNREVIEWED,
     COUNTED,
+    ROUNDS_KEPT,
 ) = model.RULES
 
 # Why: a rule the workflow does not keep is pinned here by the shortest run from the start to a
@@ -111,6 +112,7 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     SECOND_ROUND_KEPT: None,
     UNREVIEWED: None,
     COUNTED: None,
+    ROUNDS_KEPT: None,
 }
 # Why: a fix round over a ceiling, which the real workflow stops as too large, as it does the
 # reconcile of RECONCILED_OVER.
