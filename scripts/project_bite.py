@@ -81,20 +81,21 @@ fails the proof of five bites about twice as often as when one green run served 
 one proof in two, and those reds are named ``RED BEFORE THE FAULT`` or ``NOT PROVEN``.
 
 One line per bite: ``bites``, ``DOES NOT BITE`` (green with the fault), ``RED BEFORE THE FAULT``
-(red with no fault planted, on the copy as setup made it or as an earlier bite left it), ``RED
-FOR ANOTHER REASON`` (red, and ``expect`` no more often than when green), ``THE FAULT WAS NOT
-PLANTED``, ``NOT PROVEN`` (red with ``expect``, then red again with no fault planted) or ``TIMED
-OUT`` (a run of the gate hit its time limit and was ended: red, and it takes the place of the
-verdict its exit code alone would give; a time limit inside the gate's own tool is not seen, and
-reads as ``NOT PROVEN``, ``DOES NOT BITE`` or ``RED BEFORE THE FAULT``). A run is limited to the
-gate's own ``[ceilings.seconds]`` key in ``quality/thresholds.toml``, else its tier's
-(``tier0``, ``tier1``, ``tier2``), else 900 seconds; ``--limit`` sets one limit for every gate
-run. Each line ends with the wall time of the bite's runs and the lane they ran in, as
-``(12.3s, lane 1)``, and a red one that took a second or more, and more than twice the gate's
-fastest green run, says so there. A red proof ends with the machine's load at its start and at
-its end. A gate's lines come once its last run ends. The run is red on anything but ``bites``, on a
-registry that does not parse, on a tool-bound gate with no bite, and on one whose question
-requires a proof no bite of it claims.
+(red with no fault planted, on the copy as setup made it or as an earlier bite left it), ``RED FOR
+ANOTHER REASON`` (red, and ``expect`` no more often than when green), ``THE FAULT WAS NOT PLANTED``,
+``NOT PROVEN`` (red with ``expect``, then red again with no fault planted) or ``TIMED OUT`` (a run
+of the gate hit its time limit and was ended: red, and it takes the place of the verdict its exit
+code alone would give; a time limit inside the gate's own tool is not seen, and reads as ``NOT
+PROVEN``, ``DOES NOT BITE`` or ``RED BEFORE THE FAULT``). Every run is limited to ``--limit``, else
+the ``bite-run`` key of ``[ceilings.seconds]`` in ``quality/thresholds.toml``, else 900 seconds. No
+gate's or tier's ceiling limits a run: those are measured in the warm tree, and one run of a gate in
+a cold copy, with no cache, takes several times as long. The limit only ends a hung run; the proof's
+total is held by the tier's budget and by ``bite-all``. Each line ends with the wall time of the
+bite's runs and the lane they ran in, as ``(12.3s, lane 1)``, and a red one that took a second or
+more, and more than twice the gate's fastest green run, says so there. A red proof ends with the
+machine's load at its start and at its end. A gate's lines come once its last run ends. The run is
+red on anything but ``bites``, on a registry that does not parse, on a tool-bound gate with no bite,
+and on one whose question requires a proof no bite of it claims.
 
 A scratch copy is the work tree as git sees it (tracked and untracked files, nothing ignored), as
 a repository of its own under ``$TMPDIR`` with the same index and commit, borrowing the object
@@ -219,6 +220,7 @@ UNSUPPORTED = (
 TAIL = 15
 MAX_LANES = 4
 GATE_LIMIT = 900.0
+RUN_CEILING = "bite-run"
 SLOW = 2.0
 SLOW_FLOOR = 1.0
 # Seconds the main thread waits on the lanes at a time: the most a signal waits for its handler.
@@ -1324,26 +1326,26 @@ def contained(copy: Path, head: str) -> None:
 Task = tuple[Row, list[Bite]]
 
 
-def gate_limit(thresholds: str, row: Row, override: float | None) -> float:
-    """Seconds one run of the gate may take: ``--limit``, else its own ceiling, else its tier's."""
+def run_limit(root: Path, override: float | None) -> tuple[float, str]:
+    """Seconds any one run may take, and the proof's first line, which says where that came from."""
     if override is not None:
-        return override
-    for key in (row.gate, f"tier{row.tier}"):
-        ceiling = budget.ceiling_of(thresholds, key)
-        if ceiling is not None:
-            return ceiling
-    return GATE_LIMIT
+        return override, f"bite: limit: {override:g}s a run"
+    file = root / gatelib.THRESHOLDS
+    text = file.read_text(encoding="utf-8") if file.is_file() else ""
+    ceiling = budget.ceiling_of(text, RUN_CEILING)
+    key = f"`{RUN_CEILING}` in {gatelib.THRESHOLDS}"
+    if ceiling is not None:
+        return ceiling, f"bite: limit: {ceiling:g}s a run, {key}"
+    return GATE_LIMIT, f"bite: limit: {GATE_LIMIT:g}s a run; no {key}"
 
 
 def run_lanes(
-    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float | None
+    root: Path, registry: Registry, tasks: Sequence[Task], *, lanes: int, limit: float
 ) -> list[Outcome]:
     """Every task, ``lanes`` at once, each lane in a scratch copy of its own; then no copy."""
     pending: queue.SimpleQueue[Task] = queue.SimpleQueue()
-    file = root / gatelib.THRESHOLDS
-    thresholds = file.read_text(encoding="utf-8") if file.is_file() else ""
     for row, bites in tasks:
-        pending.put((replace(row, limit=gate_limit(thresholds, row, limit)), bites))
+        pending.put((replace(row, limit=limit), bites))
     shell = Shell()
     printing = threading.Lock()
 
@@ -1401,14 +1403,11 @@ def proof(
     """Run the tasks and say what bit; the exit code."""
     started = time.monotonic()
     load_before = load()
-    print(
-        f"bite: limit: {limit:g}s a run"
-        if limit is not None
-        else f"bite: limit: each gate's ceiling, else its tier's, else {GATE_LIMIT:g}s a run"
-    )
+    seconds, first = run_limit(root, limit)
+    print(first)
     try:
         with gatelib.interrupts_raise():
-            outcomes = run_lanes(root, registry, tasks, lanes=lanes, limit=limit)
+            outcomes = run_lanes(root, registry, tasks, lanes=lanes, limit=seconds)
     # Why: a copy no walk can reach, or a system that refuses one, is a run that proves nothing.
     except (Unprovable, OSError) as error:
         return gatelib.report("bite", [str(error)])

@@ -241,6 +241,8 @@ python3 "$plugin/scripts/upgrade.py" --apply
 
 It moves the repository to the plugin version in use in one change, keeps every line it did not write, and loosens no gate. Anything that needs judgement it writes to `quality/owed.toml` instead of failing: each item is counted, none is red, and between upgrades the list only shrinks. The few findings that cannot be owed, such as a mutation recipe that fails on a change with no code in it, it lists as red until fixed. Without `--apply` it prints the same plan and writes nothing. The upgrade touches guard paths, so merging it is your one step. When the upgrade left rows an agent can write from the repository alone, `/ratchet:next` then names `/ratchet:fill`, and no feature starts before that is done. [CHANGELOG.md](CHANGELOG.md) says what each version changed.
 
+If the upgrade rewrites a line naming a plugin in `AGENTS.md` or `CLAUDE.md`, it keeps your original text. It moves those lines, word for word, under `## Moved by the Ratchet upgrade` at the end of the same file, and its report lists them. Read that section, move what still applies to where it belongs, then delete the section.
+
 ## Limits
 
 Ratchet asks agents to say where their work is weakest. The same applies here.

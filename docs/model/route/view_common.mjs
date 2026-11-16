@@ -53,6 +53,7 @@ const STEP = {
   OwnerAgreesTicket: "you agree a ticket",
   OwnerWorksTicketThemself: "you finish a ticket yourself",
   OwnerStatesConjecture: "you state the ticket's conjecture",
+  OwnerEditsCriteria: "you edit the criteria",
   AgentBuildsTicket: "an agent builds the ticket",
   BuildStops: "the build stops part-way",
   FeatureRunBlocks: "the build run blocks",
