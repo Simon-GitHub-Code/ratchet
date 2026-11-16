@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
+import pytest
+
 import drain
+import feature_preflight as preflight
+import publish_check
+import queue_notes
 from ratchet_guards import bash
 from ratchet_guards.context import Context
 from ratchet_guards.hook import GitRepoState
@@ -113,3 +118,18 @@ def test_a_note_that_is_not_json_is_skipped_and_another_still_refuses(tmp_path: 
 
 def tree_of(root: Path) -> Path:
     return drain.tree_of(root, BRANCH_A)
+
+
+def test_a_check_before_a_resume_does_not_open_the_gate(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    capsys.readouterr()
+    note = queue_notes.note_path(root, BRANCH_A)
+    monkeypatch.setattr(preflight, "run_gh", lambda _args: "[]")
+    argv = ["publish_check.py", str(note), "--root", str(tree_of(root)), "--before-resume"]
+    assert publish_check.main(argv) == 0
+    assert "authorises a resume and nothing else" in capsys.readouterr().out
+    assert queue_notes.read_note(root, BRANCH_A).get("passed") is not True
+    assert [v.rule for v in judged(COMMIT, tree_of(root))] == GATED

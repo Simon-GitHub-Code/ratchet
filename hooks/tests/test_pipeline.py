@@ -9,12 +9,38 @@ from typing import Any
 
 import pytest
 
+import adapter
 import drain
 import merge_ready
+import publish_check
+import quotes
 from tests.repos import branch, commit, repository, write
+from tests.support import PLUGIN_ROOT
 
 PIPELINE = Path(__file__).resolve().parents[2] / "workflows/pipeline.js"
 MANIFEST_TOML = '[[group]]\nname = "g"\nreason = "Because it is."\npaths = ["lint.toml"]\n'
+
+
+PLUGIN_PY = "python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode"
+RULE = "A change never loses a user's data."
+RECORDS = {"AGENTS.md": [quotes.Document(f"# Rules\n\n{RULE}\n", markdown=True)]}
+BREAKS = {"record": "AGENTS.md", "quote": RULE}
+NOTHING_CHECKED = json.dumps({"found": [], "not_found": []})
+
+
+def _quoted(answer: dict[str, Any], key: str = "findings") -> dict[str, Any]:
+    """``answer`` with each blocker or major of ``key`` quoting what it breaks.
+
+    ``quoteOutput`` is what the quote check prints over them.
+    """
+    listed = [
+        {**finding, "breaks": finding.get("breaks", BREAKS)}
+        if finding.get("severity") in {"blocker", "major"}
+        else finding
+        for finding in answer[key]
+    ]
+    printed = quotes.check(listed, Path(), RECORDS)
+    return {**answer, key: listed, "quoteOutput": json.dumps(printed)}
 
 
 def _paths(call: str, *arguments: object) -> list[str]:
@@ -197,11 +223,13 @@ LINK_FIELD = {
     "oversized": "17: a link over 2048 characters answers 400 and saves nothing",
     "hostile": "9: markup characters show as text in the title and the href",
 }
+NAMED = {"record": "ticket", "quote": "Saving a link answers `303` to the list"}
+REVIEWED_LINK = {**LINK_FIELD, "named": NAMED}
 CHECKED = {"ticketPromises": PROMISES, "acceptedInputs": [LINK_FIELD]}
 REVIEW = {
     "verdict": "approve",
     "ticketPromises": PROMISES,
-    "acceptedInputs": [LINK_FIELD],
+    "acceptedInputs": [REVIEWED_LINK],
     "issues": [],
     "adrSuggested": "",
     "guardChanges": [],
@@ -209,14 +237,20 @@ REVIEW = {
     "dependencyNotes": [],
     "recordNotes": [],
     "checkPasses": True,
+    "namedGatesRun": [],
+    "unstated": [],
+    "quoteOutput": NOTHING_CHECKED,
     "checkOutput": "check: green",
 }
 IMPLEMENTED = {
     "filesChanged": ["src/links.py"],
     "allNewTestsPass": True,
     "checkPasses": True,
+    "namedGatesRun": [],
     "checkOutput": "check: green",
     "disputes": [],
+    "unstated": [],
+    "departures": [],
     "notes": "",
 }
 PREFLIGHT = {
@@ -232,6 +266,7 @@ PREFLIGHT = {
 SPECIFIED = {
     "slug": "expiry",
     "specPath": "docs/features/expiry/spec.md",
+    "namedGates": [],
     "testFiles": ["tests/test_expiry.py"],
     "layersTouched": [],
     "openQuestions": [],
@@ -251,6 +286,8 @@ CRITIQUED = {
     "fitnessSabotageSummary": "",
     "mutationSummary": "not applicable: the binding names no mutation gate",
     "fuzzSummary": "not applicable: no value type is touched",
+    "unstated": [],
+    "quoteOutput": NOTHING_CHECKED,
     "checkOutput": "1 passed",
 }
 REJUDGE = {"slug": "expiry", "specPath": "docs/features/expiry/spec.md"}
@@ -323,12 +360,10 @@ def test_a_conflict_or_a_red_check_brings_the_reconcile_agent_first() -> None:
 
 def test_the_second_review_is_held_to_the_first_ones_evidence_rules() -> None:
     finding = {"severity": "major", "title": "repeats a term the other change defined"}
-    review = {
-        **REVIEW,
-        "issues": [finding],
-        "guardChanges": ["pyproject.toml"],
-        "checkPasses": False,
-    }
+    review = _quoted(
+        {**REVIEW, "issues": [finding], "guardChanges": ["pyproject.toml"], "checkPasses": False},
+        "issues",
+    )
     result = _again({}, **{"review-again": review})["result"]
     assert result["verdict"] == "request_changes"
     assert result["verdictForcedBy"] == [
@@ -469,7 +504,7 @@ def test_a_fix_round_that_takes_the_product_code_over_its_ceiling_stops_the_run(
     # Why: ADR 0055. The size was read after the spec and the implementation only, so a fix
     # round ran on to a red check and a refused review instead of the drain's split.
     finding = {"severity": "major", "title": "no expiry", "testFails": True}
-    kept = {**CRITIQUED, "findings": [finding], "testsAdded": ["tests/test_method.py"]}
+    kept = _quoted({**CRITIQUED, "findings": [finding], "testsAdded": ["tests/test_method.py"]})
     answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
     answers |= {"critique-1": CRITIQUED}
     fits = {"lines": 1000, "ceiling": 1000, "testLines": 3000, "testCeiling": 3000}
@@ -511,22 +546,22 @@ def test_a_finding_whose_kept_test_passes_starts_no_fix_round() -> None:
         "heldByKeptTest": True,
     }
     tests = ["tests/critique/expiry.core.critique.test.py"]
-    kept = {**CRITIQUED, "findings": [held], "testsAdded": tests}
+    kept = _quoted({**CRITIQUED, "findings": [held], "testsAdded": tests})
     answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
     assert ran["labels"] == ["preflight", "spec", "ticket-check", "implement", "critique", "review"]
     result = ran["result"]
     assert (result["verdict"], result["unresolvedBlockingFindings"]) == ("approve", [])
-    assert result["criticFindings"] == [held], "the review still reads it"
+    assert [f["title"] for f in result["criticFindings"]] == [held["title"]], "the review reads it"
 
     open_major = {**held, "heldByKeptTest": False}
-    answers |= {"critique": {**kept, "findings": [open_major]}, "fix-1": IMPLEMENTED}
+    answers |= {"critique": _quoted({**kept, "findings": [open_major]}), "fix-1": IMPLEMENTED}
     answers |= {"critique-1": CRITIQUED}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
     assert "fix-1" in ran["labels"], "no kept test, still owed"
 
     failing = {**held, "testFails": True}
-    answers |= {"critique": {**kept, "findings": [failing]}}
+    answers |= {"critique": _quoted({**kept, "findings": [failing]})}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
     assert "fix-1" in ran["labels"], "a failing kept test is owed whatever the flag says"
 
@@ -534,7 +569,7 @@ def test_a_finding_whose_kept_test_passes_starts_no_fix_round() -> None:
 def test_a_held_finding_is_not_offered_to_the_fix_agent_as_a_minor() -> None:
     held = {"severity": "major", "title": "held", "testFails": False, "heldByKeptTest": True}
     open_major = {"severity": "major", "title": "open", "testFails": False, "heldByKeptTest": False}
-    kept = {**CRITIQUED, "findings": [held, open_major]}
+    kept = _quoted({**CRITIQUED, "findings": [held, open_major]})
     answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
     answers |= {"fix-1": IMPLEMENTED, "critique-1": CRITIQUED}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
@@ -550,10 +585,16 @@ def test_roles_with_a_red_tree_run_tier_zero_and_their_own_tests_only() -> None:
     prompts = ran["prompts"]
     for role in ("spec", "critique"):
         assert "do not run `check`" in prompts[role], role
-        assert "run the `tier0`" in prompts[role], role
+        assert "run the `tier0` entry point" in prompts[role], role
+        assert "with `tests-changed all`" in prompts[role], role
     for role in ("implement", "review"):
-        assert "run `check` from the repository root" in prompts[role], role
+        assert "Run `check` from the repository root last, before you return" in prompts[role]
         assert "do not run `check`" not in prompts[role], role
+    for role in ("spec", "critique", "implement", "review"):
+        assert (
+            "While you work, run the `tier0` entry point and `tests-changed all`" in prompts[role]
+        )
+        assert "Never run a suite whole to see whether your own tests pass" in _said(prompts[role])
     assert "Run `tier0` and your new tests" in prompts["spec"]
 
 
@@ -625,7 +666,7 @@ def test_a_criterion_the_change_does_not_meet_is_major_and_forces_changes() -> N
     line = "a criterion of the ticket the change does not meet is major"
     assert line in " ".join(ran["prompts"]["review"].split())
     unmet = {**BLOCKER, "severity": "major", "title": "criterion 2 is not met"}
-    answers["review"] = {**REVIEW, "verdict": "approve", "issues": [unmet]}
+    answers["review"] = _quoted({**REVIEW, "verdict": "approve", "issues": [unmet]}, "issues")
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
     assert ran["result"]["verdict"] == "request_changes"
     assert ran["result"]["verdictForcedBy"] == ["1 blocker/major review issue(s)"]
@@ -704,7 +745,7 @@ BLOCKER = {
     "location": "src/links.py:3",
     "evidence": "saving an empty link answers 200",
 }
-BLOCKED = {**REVIEW, "verdict": "request_changes", "issues": [BLOCKER]}
+BLOCKED = _quoted({**REVIEW, "verdict": "request_changes", "issues": [BLOCKER]}, "issues")
 YOUNG_LABELS = ["preflight", "spec", "ticket-check", "implement"]
 
 
@@ -733,13 +774,41 @@ def test_a_review_that_approves_with_a_blocker_of_its_own_still_gets_the_pass() 
     assert ran["result"]["verdict"] == "approve"
 
 
+def test_a_review_round_that_sent_a_fix_pass_stays_in_the_result_and_is_checked(
+    tmp_path: Path,
+) -> None:
+    claimed = {"found": [{"index": 0, **INVENTED}], "not_found": []}
+    forged = {
+        **BLOCKED,
+        "issues": [{**BLOCKER, "breaks": INVENTED}],
+        "quoteOutput": json.dumps(claimed),
+    }
+    answers = {"implement": IMPLEMENTED, "review": forged, "fix-1": IMPLEMENTED}
+    answers |= {"review-1": REVIEW}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
+    assert "fix-1" in ran["labels"], "the forged output sent a fix agent on the reviewer's word"
+    result = ran["result"]
+    assert (result["verdict"], result["reviewIssues"]) == ("approve", [])
+    (round_zero,) = result["reviewIssuesByRound"]
+    assert round_zero["round"] == 0
+    assert [f["breaks"] for f in round_zero["findings"]] == [INVENTED]
+    (tmp_path / "AGENTS.md").write_text(f"# Rules\n\n{RULE}\n", encoding="utf-8")
+    written = tmp_path / "start.json.result.json"
+    written.write_text(json.dumps(result), encoding="utf-8")
+    owed_findings = publish_check.read_result(written)
+    lines = publish_check.quote_lines(owed_findings, tmp_path, lambda _: None)
+    assert len(lines) == 1
+    assert f'"{INVENTED["quote"]}"' in lines[0]
+    assert "the finding `drops a link with exit 0`" in lines[0]
+
+
 def test_a_young_project_whose_second_review_still_blocks_is_parked_after_one_pass() -> None:
     answers = {"implement": IMPLEMENTED, "review": BLOCKED, "fix-1": IMPLEMENTED}
     answers |= {"review-1": BLOCKED, "fix-2": IMPLEMENTED, "review-2": REVIEW}
     ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **answers)
     assert ran["labels"] == [*YOUNG_LABELS, "review", "fix-1", "review-1"]
     assert ran["result"]["verdict"] == "request_changes"
-    assert ran["result"]["reviewIssues"] == [BLOCKER]
+    assert [i["title"] for i in ran["result"]["reviewIssues"]] == [BLOCKER["title"]]
 
 
 def test_a_young_projects_fix_pass_is_spent_only_on_blockers_in_the_change() -> None:
@@ -811,7 +880,7 @@ def test_the_review_does_not_name_findings_that_do_not_exist() -> None:
 
 def test_what_the_review_opens_is_open_without_a_critic() -> None:
     finding = {"severity": "major", "title": "loses the order"}
-    review = {**REVIEW, "issues": [finding], "verdict": "approve"}
+    review = _quoted({**REVIEW, "issues": [finding], "verdict": "approve"}, "issues")
     again = {"fix-1": IMPLEMENTED, "review-1": review}
     ran = _run(
         {"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, implement=IMPLEMENTED, review=review, **again
@@ -894,7 +963,7 @@ def test_a_red_triggers_gate_is_left_to_the_safeguard_and_the_drain_reads_it() -
 
 
 def test_the_fix_agent_is_told_the_same_about_a_red_triggers_gate() -> None:
-    kept = {**CRITIQUED, "findings": [{"severity": "major", "title": "open"}]}
+    kept = _quoted({**CRITIQUED, "findings": [{"severity": "major", "title": "open"}]})
     answers = {"implement": IMPLEMENTED, "critique": kept, "review": REVIEW}
     answers |= {"fix-1": IMPLEMENTED, "critique-1": CRITIQUED}
     ran = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **answers)
@@ -1002,8 +1071,16 @@ def test_the_check_and_the_review_answer_the_same_two_axes() -> None:
     check, review = _schema("ticket-check"), _schema("review")
     assert check["required"] == ["ticketPromises", "acceptedInputs"]
     for axis in check["required"]:
-        assert check["properties"][axis] == review["properties"][axis], axis
         assert axis in review["required"], axis
+    assert check["properties"]["ticketPromises"] == review["properties"]["ticketPromises"]
+    inputs = review["properties"]["acceptedInputs"]["items"]
+    assert inputs["required"] == [
+        *check["properties"]["acceptedInputs"]["items"]["required"],
+        "named",
+    ]
+    assert {k: v for k, v in inputs["properties"].items() if k != "named"} == (
+        check["properties"]["acceptedInputs"]["items"]["properties"]
+    )
     prompts = _built(REVIEW)["prompts"]
     for role in ("ticket-check", "review"):
         assert "- `dropped`: no criterion carries it;" in prompts[role], role
@@ -1046,10 +1123,12 @@ def test_each_reading_of_a_promise_carries_what_shows_it() -> None:
     assert holds({**promise, "reading": "bent", "specLine": "7: opens it", "change": "no tab"})
     seen = {"specLine": "Assumptions: any link", "ownerSees": "a blank item"}
     assert holds({**promise, "reading": "assumed", **seen})
-    undecided = {k: v for k, v in LINK_FIELD.items() if k != "hostile"}
+    undecided = {k: v for k, v in REVIEWED_LINK.items() if k != "hostile"}
     assert not _valid({**REVIEW, "acceptedInputs": [undecided]}, schema), "a case left out"
-    assert _valid({**REVIEW, "acceptedInputs": [{**LINK_FIELD, "hostile": None}]}, schema)
-    blank = {**LINK_FIELD, "empty": ""}
+    assert _valid({**REVIEW, "acceptedInputs": [{**REVIEWED_LINK, "hostile": None}]}, schema)
+    unnamed = {k: v for k, v in REVIEWED_LINK.items() if k != "named"}
+    assert not _valid({**REVIEW, "acceptedInputs": [unnamed]}, schema), "an input no record names"
+    blank = {**REVIEWED_LINK, "empty": ""}
     assert not _valid({**REVIEW, "acceptedInputs": [blank]}, schema), "a blank decides nothing"
 
 
@@ -1376,6 +1455,11 @@ def test_an_input_case_the_change_leaves_undecided_blocks(case: str) -> None:
     title = f"the change does not say what the app does when the link you paste is {words}"
     assert result["verdictRecord"]["unresolved"] == [title]
     assert [i["title"] for i in result["ticketFindings"]] == [title]
+    evidence = result["ticketFindings"][0]["evidence"]
+    assert "the method's own, that every case of an input a record names is decided" in evidence
+    assert "and not a promise of the project" in evidence
+    assert "the quote shows the input is the record's" in evidence
+    assert "the quote check refuses an invented input" in evidence
 
 
 def test_a_run_after_a_lost_promise_hands_the_spec_role_what_was_lost() -> None:
@@ -1438,7 +1522,9 @@ def test_a_rejudge_holds_the_review_to_the_readings_the_first_run_settled() -> N
     assert result["assumptions"] == first["assumptions"]
     feature = (PIPELINE.parents[1] / "skills/feature/SKILL.md").read_text(encoding="utf-8")
     assert '"settled": <the first result\'s settled>' in feature, "the skill passes them back"
-    assert "dependencies?, assumptions?, settled? }" in PIPELINE.read_text(encoding="utf-8")
+    assert "dependencies?, namedGates?, assumptions?, settled? }" in PIPELINE.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_the_owner_reads_each_input_by_its_plain_name() -> None:
@@ -1470,12 +1556,480 @@ def test_the_drain_counts_every_agent_a_run_can_spawn() -> None:
     blocked = {"review": BLOCKED, "fix-1": IMPLEMENTED, "review-1": BLOCKED}
     young = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, **{**worst, **blocked})["labels"]
     assert len(young) == drain.YOUNG_PIPELINE_AGENTS
-    owed = {**CRITIQUED, "findings": [{"severity": "major", "title": "open"}]}
-    rounds = {"critique": owed, "fix-1": IMPLEMENTED, "critique-1": owed}
-    rounds |= {"fix-2": IMPLEMENTED, "critique-2": owed}
+
+    def owed(number: int) -> dict[str, Any]:
+        finding = {"severity": "major", "title": f"open {number}"}
+        return _quoted({**CRITIQUED, "findings": [finding]})
+
+    rounds = {"critique": owed(0), "fix-1": IMPLEMENTED, "critique-1": owed(1)}
+    rounds |= {"fix-2": IMPLEMENTED, "critique-2": owed(2)}
     depended_on = _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **worst, **rounds)
     assert len(depended_on["labels"]) == drain.PIPELINE_AGENTS
     rebased = _again(
         {"conflicts": ["flags.toml"]}, reconcile=IMPLEMENTED, **{"review-again": REVIEW}
     )
     assert len(rebased["labels"]) == drain.UPDATE_AGENTS
+
+
+E2E_GATE = {"gate": "e2e-browser", "tier": "2", "criterion": "`e2e-browser` is green"}
+SPEC_GATE = "`e2e-api`"
+FIXED = {"fix-1": IMPLEMENTED, "critique-1": CRITIQUED}
+KEPT_FAILING = {
+    **CRITIQUED,
+    "findings": [{"severity": "minor", "title": "a held case", "testFails": True}],
+}
+
+
+def _named(spec: dict[str, object], **answers: object) -> dict[str, Any]:
+    answers = (
+        {"implement": IMPLEMENTED, "critique": KEPT_FAILING, "review": REVIEW} | FIXED | answers
+    )
+    return _run({"ref": "4", "namedGates": [E2E_GATE]}, preflight=PREFLIGHT, spec=spec, **answers)
+
+
+def test_the_gates_the_criteria_name_reach_every_role_and_the_specs_add_to_them() -> None:
+    ran = _named({**SPECIFIED, "namedGates": [SPEC_GATE]})
+    prompts = ran["prompts"]
+    assert "`e2e-browser` (tier 2)" in prompts["spec"]
+    assert SPEC_GATE not in prompts["spec"], "the spec role has not named it yet"
+    for role in ("implement", "critique", "fix-1", "review"):
+        assert "`e2e-browser` (tier 2), `e2e-api`" in prompts[role], role
+    assert ran["result"]["namedGates"] == [
+        {"gate": "e2e-browser", "tier": "2"},
+        {"gate": "e2e-api"},
+    ]
+
+
+def test_a_gate_both_lists_hold_is_named_once() -> None:
+    ran = _named({**SPECIFIED, "namedGates": ["`e2e-browser`"]})
+    assert ran["prompts"]["review"].count("`e2e-browser`") == 1
+    assert ran["result"]["namedGates"] == [{"gate": "e2e-browser", "tier": "2"}]
+
+
+def test_a_run_whose_criteria_name_no_gate_says_so() -> None:
+    ran = _built(REVIEW)
+    assert "No criterion of the ticket or of spec.md names a gate" in ran["prompts"]["implement"]
+
+
+def test_a_later_gate_is_run_whole_once_by_the_implementer_and_once_by_each_review() -> None:
+    prompts = _named(SPECIFIED)["prompts"]
+    assert "run whole, once, by you, after your `check` is green" in _said(prompts["implement"])
+    assert "run whole, once, by you, on the tree you judge" in _said(prompts["review"])
+    for role in ("spec", "critique", "fix-1"):
+        assert "run whole" not in _said(prompts[role]), role
+        assert "You run no gate a criterion names that `check` does not" in prompts[role], role
+
+
+def test_the_schemas_say_which_named_gates_the_spec_added_and_each_role_ran() -> None:
+    ran = _named(SPECIFIED)
+    spec, implement, review = (ran["schemas"][label] for label in ("spec", "implement", "review"))
+    assert _valid({**SPECIFIED, "namedGates": [SPEC_GATE]}, spec)
+    assert not _valid({k: v for k, v in SPECIFIED.items() if k != "namedGates"}, spec)
+    assert not _valid({**SPECIFIED, "namedGates": [3]}, spec)
+    assert _valid({**IMPLEMENTED, "namedGatesRun": ["`e2e-browser`"]}, implement)
+    unsaid = {k: v for k, v in IMPLEMENTED.items() if k != "namedGatesRun"}
+    assert not _valid(unsaid, implement), "the implementer says what it ran, even if nothing"
+    assert _valid({**REVIEW, "namedGatesRun": ["`e2e-browser`"]}, review)
+    assert not _valid({k: v for k, v in REVIEW.items() if k != "namedGatesRun"}, review)
+    assert "namedGatesRun" not in ran["schemas"]["fix-1"]["properties"]
+
+
+def test_the_result_says_which_named_gates_each_role_ran() -> None:
+    implemented = {**IMPLEMENTED, "namedGatesRun": ["`e2e-browser`"]}
+    reviewed = {**REVIEW, "namedGatesRun": ["`e2e-browser`", "`e2e-api`"]}
+    ran = _named(SPECIFIED, implement=implemented, review=reviewed)
+    assert ran["result"]["namedGatesRun"] == {
+        "implement": ["`e2e-browser`"],
+        "review": ["`e2e-browser`", "`e2e-api`"],
+    }
+
+
+def test_a_rejudge_reviews_against_the_gates_the_first_run_named() -> None:
+    ran = _again({"namedGates": [{"gate": "e2e-browser", "tier": "2"}]}, **{"review-again": REVIEW})
+    assert "`e2e-browser` (tier 2)" in ran["prompts"]["review-again"]
+
+
+def test_the_preflight_role_relays_no_named_gates_and_its_report_changes_nothing() -> None:
+    ran = _run(
+        {"ref": "4"},
+        preflight={**PREFLIGHT, "named_gates": [E2E_GATE]},
+        spec=SPECIFIED,
+        implement=IMPLEMENTED,
+        critique=CRITIQUED,
+        review=REVIEW,
+    )
+    assert "named_gates" not in ran["schemas"]["preflight"]["properties"]
+    assert "named_gates" not in ran["prompts"]["preflight"]
+    assert "No criterion of the ticket or of spec.md names a gate" in ran["prompts"]["review"]
+    assert ran["result"]["namedGates"] == []
+
+
+def test_the_skill_passes_the_named_gates_of_the_preflight_and_of_the_drain_open() -> None:
+    feature = (PIPELINE.parents[1] / "skills/feature/SKILL.md").read_text(encoding="utf-8")
+    assert "`critic_reason`, `named_gates`) and exits 1" in feature
+    assert '"namedGates": <the preflight\'s named_gates> }' in feature
+    assert '"namedGates": <the open\'s named_gates> }' in feature
+    assert "`branch`, `worktree`, `base` and `named_gates`" in feature
+    assert '"namedGates": <the first result\'s namedGates>' in feature
+
+
+# --- ADR 0072: a finding quotes what it breaks, a case no record states goes to the fork test ----
+
+MAJOR = {
+    "severity": "major",
+    "title": "loses the order",
+    "carries": None,
+    "evidence": "two saves in one second came back reversed",
+    "suggestedTest": "",
+    "testFails": False,
+    "heldByKeptTest": False,
+}
+INVENTED = {"record": "AGENTS.md", "quote": "A change always keeps the saved order."}
+DEPTH = {"implement": IMPLEMENTED, "review": REVIEW, "fix-1": IMPLEMENTED, "fix-2": IMPLEMENTED}
+CASE_QUESTION = "Does the list show every item or the first fifty?"
+
+
+def _case(whose: str, **fields: object) -> dict[str, object]:
+    return {
+        "now": "the list is empty",
+        "evidence": "ran the page with a hundred items",
+        "question": CASE_QUESTION,
+        "kind": "direction",
+        "options": ["Every item", "The first fifty"],
+        "recommendation": "Nobody said items may be hidden.",
+        "refuter": "Wrong if a long list is slow",
+        "whose": whose,
+        **fields,
+    }
+
+
+def _departure(source: str, whose: str = "role") -> dict[str, object]:
+    return {
+        **_case(whose),
+        "from": source,
+        "quote": "1. Given a link, When it is saved, Then the list shows it first.",
+        "why": "the store sorts by title",
+    }
+
+
+def _critique(*findings: dict[str, Any], **fields: object) -> dict[str, Any]:
+    return _quoted({**CRITIQUED, "findings": list(findings), **fields})
+
+
+def _built_run(**answers: object) -> dict[str, Any]:
+    return _run({"ref": "4"}, preflight=PREFLIGHT, spec=SPECIFIED, **{**DEPTH, **answers})
+
+
+def test_a_finding_that_quotes_a_sentence_no_record_holds_is_never_fixed_and_never_dropped() -> (
+    None
+):
+    invented = _critique({**MAJOR, "breaks": INVENTED})
+    ran = _built_run(critique=invented)
+    assert "fix-1" not in ran["labels"], "the critic's authority alone sends no fix agent"
+    result = ran["result"]
+    assert (result["verdict"], result["stoppedAfter"]) == ("blocked", "review")
+    assert result["criticFindingsByRound"][0]["findings"] == []
+    (entry,) = result["unstated"]
+    assert (entry["of"], entry["whose"], entry["by"]) == ("C0-1", "owner", "review")
+    assert "does not hold the quote" in entry["recommendation"]
+    assert result["unclassified"] == 1
+    (question,) = result["openQuestions"]
+    for words in (
+        MAJOR["title"],
+        MAJOR["evidence"],
+        f'AGENTS.md: "{INVENTED["quote"]}"',
+    ):
+        assert words in question["question"], words
+    assert question["options"] == [
+        f"The critic's view: {MAJOR['title']}. Change the code as the finding asks",
+        "What the code does now. Leave it as it is",
+    ]
+    prompt = ran["prompts"]["review"]
+    assert '"id": "C0-1"' in prompt
+    assert "A change always keeps the saved order." in prompt
+
+
+def test_the_review_gives_a_moved_finding_to_a_role_and_it_lands_in_the_assumptions() -> None:
+    answered = {**REVIEW, "unstated": [_case("role", of="C0-1")]}
+    ran = _built_run(critique=_critique({**MAJOR, "breaks": INVENTED}), review=answered)
+    result = ran["result"]
+    assert result["verdict"] == "approve"
+    assumed = [a for a in result["assumptions"] if a["question"] == CASE_QUESTION]
+    assert assumed == [
+        {
+            "question": CASE_QUESTION,
+            "assumed": "Every item",
+            "refuter": "Wrong if a long list is slow",
+        }
+    ]
+    assert [e["whose"] for e in result["unstated"]] == ["role"]
+
+
+def test_a_blocker_the_review_cannot_quote_is_moved_and_stops_the_run() -> None:
+    quoted = _quoted({**REVIEW, "issues": [{**BLOCKER, "breaks": INVENTED}]}, "issues")
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, implement=IMPLEMENTED, review=quoted)
+    assert ran["labels"] == [*YOUNG_LABELS, "review"], "no fix pass on an unquoted blocker"
+    result = ran["result"]
+    assert (result["verdict"], result["stoppedAfter"], result["stop"]) == (
+        "blocked",
+        "review",
+        "question",
+    )
+    assert [e["of"] for e in result["unstated"]] == ["R1"]
+    assert (result["unclassified"], result["unquotedReviewIssues"]) == (0, 1)
+    assert result["openQuestions"][0]["options"][0].startswith("The reviewer's view:")
+
+
+def test_a_minor_with_a_failing_test_and_no_quote_is_still_owed_a_fix() -> None:
+    minor = {**MAJOR, "severity": "minor", "testFails": True}
+    ran = _built_run(critique=_critique(minor), **{"critique-1": CRITIQUED})
+    assert "fix-1" in ran["labels"]
+    assert ran["result"]["unstated"] == [], "nothing was moved"
+
+
+def test_a_finding_carried_through_the_round_it_was_owed_ends_the_loop_and_parks() -> None:
+    first = _critique(MAJOR)
+    again = _critique({**MAJOR, "carries": "C0-1"})
+    ran = _built_run(critique=first, **{"critique-1": again})
+    assert ran["labels"][-3:] == ["critique", "fix-1", "critique-1"]
+    assert "review" not in ran["labels"], "the review does not run"
+    assert '"id": "C0-1"' in ran["prompts"]["critique-1"]
+    result = ran["result"]
+    assert (result["verdict"], result["iterations"]) == ("request_changes", 1)
+    assert (result["stop"], result["stoppedAfter"]) == ("carried", "critique-1")
+    assert result["carriedStillOwed"] == ["C1-1"]
+    assert [f["id"] for f in result["unresolvedBlockingFindings"]] == ["C1-1"]
+    assert result["unresolvedBlockingFindings"][0]["breaks"] == BREAKS
+    assert (result["reviewIssues"], result["ticketFindings"]) == ([], [])
+    assert result["verdictRecord"]["unresolved"] == [MAJOR["title"]]
+    assert result["verdictRecord"]["verdict"] == "request_changes"
+    assert (result["unclassified"], result["openQuestions"]) == (0, [])
+
+
+def test_a_parked_run_hands_the_findings_no_role_classified_to_the_owner_as_questions() -> None:
+    moved = {**MAJOR, "title": "reverses a saved list", "breaks": INVENTED}
+    first = _critique(MAJOR, moved)
+    again = _critique({**MAJOR, "carries": "C0-1"})
+    ran = _built_run(critique=first, **{"critique-1": again})
+    assert "review" not in ran["labels"]
+    result = ran["result"]
+    assert (result["verdict"], result["stop"]) == ("request_changes", "carried")
+    assert result["unclassified"] == 1
+    (entry,) = [e for e in result["unstated"] if e["of"] == "C0-2"]
+    assert entry["unclassified"] is True
+    (question,) = result["openQuestions"]
+    assert result["verdictRecord"]["openQuestions"] == [question["question"]]
+    assert question["options"][0].startswith("The critic's view: reverses a saved list")
+    assert question["options"][1].startswith("What the code does now")
+
+
+def test_a_finding_relabelled_as_new_carries_when_its_quote_and_title_are_the_same() -> None:
+    first = _critique(MAJOR)
+    relabelled = _critique({**MAJOR, "carries": None})
+    ran = _built_run(critique=first, **{"critique-1": relabelled})
+    assert ran["labels"][-3:] == ["critique", "fix-1", "critique-1"]
+    result = ran["result"]
+    assert (result["verdict"], result["stop"]) == ("request_changes", "carried")
+    assert result["carriedStillOwed"] == ["C1-1"]
+
+
+def test_two_defects_that_break_the_same_sentence_each_get_their_round() -> None:
+    first = _critique(MAJOR)
+    other = {**MAJOR, "title": "reverses a saved list", "carries": None}
+    assert other["title"] != MAJOR["title"]
+    ran = _built_run(critique=first, **{"critique-1": _critique(other), "critique-2": CRITIQUED})
+    assert ran["labels"][-6:] == [
+        "critique",
+        "fix-1",
+        "critique-1",
+        "fix-2",
+        "critique-2",
+        "review",
+    ]
+    assert ran["result"]["carriedStillOwed"] == []
+
+
+def test_no_role_prompt_runs_a_plugin_script_with_a_bare_python3() -> None:
+    args = {"ref": "4", "preflight": "/plugin/scripts/feature_preflight.py"}
+    ran = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)
+    assert ran["prompts"]
+    for label, prompt in ran["prompts"].items():
+        assert not re.search(r"python3 (?!-E -s )\S*scripts/", prompt), label
+        assert not re.search(r"python3 (?!-E -s )", prompt), label
+    assert f"{PLUGIN_PY} `/plugin/scripts/feature_preflight.py`" in ran["prompts"]["preflight"]
+
+
+def test_the_plugin_interpreter_the_prompts_use_is_the_one_the_templates_fall_back_to() -> None:
+    justfile = (PLUGIN_ROOT / "skills/adopt/templates/justfile").read_text(encoding="utf-8")
+    assert f'plugin_py := if plugin_pyc_ok == "" {{ "{PLUGIN_PY}" }}' in justfile
+    assert PLUGIN_PY.startswith(adapter.INTERPRETER)
+
+
+def test_a_new_blocker_after_a_fix_round_keeps_the_second_round() -> None:
+    first = _critique(MAJOR)
+    fresh = _critique({**MAJOR, "title": "a second defect", "carries": None})
+    ran = _built_run(critique=first, **{"critique-1": fresh, "critique-2": CRITIQUED})
+    rounds = ["critique", "fix-1", "critique-1", "fix-2", "critique-2", "review"]
+    assert ran["labels"][-6:] == rounds
+    assert ran["result"]["verdict"] == "approve"
+    assert ran["result"]["carriedStillOwed"] == []
+
+
+def test_a_minor_and_a_held_finding_are_owed_no_fix_round() -> None:
+    held = {**MAJOR, "title": "held", "heldByKeptTest": True}
+    first = _critique({**MAJOR, "severity": "minor"}, held)
+    ran = _built_run(critique=first)
+    assert "fix-1" not in ran["labels"]
+
+
+def test_a_departure_from_a_criterion_stops_before_the_next_role_starts() -> None:
+    departed = {**IMPLEMENTED, "departures": [_departure("criterion")]}
+    ran = _built_run(implement=departed, critique=CRITIQUED)
+    assert ran["labels"][-1] == "implement"
+    result = ran["result"]
+    assert (result["verdict"], result["stop"], result["stoppedAfter"]) == (
+        "blocked",
+        "departure",
+        "implement",
+    )
+    assert result["filesChanged"] == ["src/links.py", "tests/test_expiry.py"]
+    assert result["criticFindings"] == []
+    assert result["testsAdded"] == []
+    assert result["openQuestions"][0]["question"] == CASE_QUESTION
+    assert result["departures"][0]["quote"].startswith("1. Given a link")
+
+
+def test_a_departure_from_an_assumption_is_the_amended_assumption_when_the_role_has_it() -> None:
+    amended = {**IMPLEMENTED, "departures": [_departure("assumption", "role")]}
+    ran = _built_run(implement=amended, critique=CRITIQUED)
+    assert ran["labels"][-2:] == ["critique", "review"]
+    result = ran["result"]
+    assert result["verdict"] == "approve"
+    assert any(a["assumed"] == "Every item" for a in result["assumptions"])
+    assert "Every item" in ran["prompts"]["critique"]
+    assert "Every item" in ran["prompts"]["review"]
+    owners = {**IMPLEMENTED, "departures": [_departure("assumption", "owner")]}
+    stopped = _built_run(implement=owners, critique=CRITIQUED)["result"]
+    assert (stopped["verdict"], stopped["stop"]) == ("blocked", "departure")
+
+
+def test_a_fixer_or_a_reconcile_that_departs_from_a_criterion_stops_after_it() -> None:
+    departed = {**IMPLEMENTED, "departures": [_departure("criterion")]}
+    ran = _built_run(critique=_critique(MAJOR), **{"fix-1": departed})
+    assert ran["labels"][-1] == "fix-1"
+    assert (ran["result"]["verdict"], ran["result"]["stoppedAfter"]) == ("blocked", "fix-1")
+    again = _again({"conflicts": ["flags.toml"]}, reconcile=departed, **{"review-again": REVIEW})
+    assert again["labels"] == ["reconcile"]
+    assert (again["result"]["verdict"], again["result"]["rejudged"]) == ("blocked", True)
+
+
+def test_an_entry_the_fork_test_gives_the_owner_blocks_after_the_critic_that_returned_it() -> None:
+    ran = _built_run(critique=_critique(unstated=[_case("owner")]))
+    assert ran["labels"][-1] == "critique", "no fix round and no review"
+    result = ran["result"]
+    assert (result["verdict"], result["stop"], result["stoppedAfter"]) == (
+        "blocked",
+        "question",
+        "critique",
+    )
+    assert [q["question"] for q in result["openQuestions"]] == [CASE_QUESTION]
+    assert result["departures"] == []
+
+
+def test_an_entry_the_fork_test_gives_the_owner_blocks_after_the_reviewer_that_returned_it() -> (
+    None
+):
+    asked = {**REVIEW, "unstated": [_case("owner", of=None)]}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, implement=IMPLEMENTED, review=asked)
+    assert ran["labels"] == [*YOUNG_LABELS, "review"]
+    result = ran["result"]
+    assert (result["verdict"], result["stoppedAfter"]) == ("blocked", "review")
+    assert result["reviewIssues"] == []
+
+
+def test_an_entry_the_fork_test_gives_a_role_reaches_the_next_critic_and_the_review() -> None:
+    noted = _critique(MAJOR, unstated=[_case("role")])
+    ran = _built_run(critique=noted, **{"critique-1": CRITIQUED})
+    for label in ("critique-1", "review", "fix-1"):
+        assert CASE_QUESTION in ran["prompts"][label], label
+    assert [a["question"] for a in ran["result"]["assumptions"]].count(CASE_QUESTION) == 1
+
+
+def test_an_implementer_entry_for_the_owner_stops_the_run_after_it() -> None:
+    asked = {**IMPLEMENTED, "unstated": [_case("owner")]}
+    ran = _built_run(implement=asked)
+    assert (ran["labels"][-1], ran["result"]["stop"]) == ("implement", "question")
+
+
+def test_the_scripts_own_ticket_issues_quote_the_promise_and_the_input_they_name() -> None:
+    lost = {**PROMISES[0], "reading": "dropped", "specLine": "no criterion"}
+    undecided = {**REVIEWED_LINK, "empty": None}
+    review = {**REVIEW, "ticketPromises": [lost, *PROMISES[1:]], "acceptedInputs": [undecided]}
+    ran = _run({"ref": "4"}, preflight=YOUNG, spec=SPECIFIED, implement=IMPLEMENTED, review=review)
+    by_axis = {i["axis"]: i for i in ran["result"]["ticketFindings"]}
+    assert by_axis["ticket"]["breaks"] == {"record": "ticket", "quote": lost["promise"]}
+    assert by_axis["input"]["breaks"] == NAMED
+
+
+def test_the_prompts_state_the_fork_test_and_the_quote_rule_for_each_role_that_needs_them() -> None:
+    ran = _built_run(critique=CRITIQUED)
+    fork = "An undecided point is the owner's in two cases, and yours in every other."
+    for role in ("spec", "implement", "critique", "review"):
+        assert fork in ran["prompts"][role], role
+    copy = "Copy the unit exactly as the record writes it, markup included and its list marker"
+    for role in ("critique", "review"):
+        prompt = " ".join(ran["prompts"][role].split())
+        assert f"{copy} left off" in prompt, role
+        assert "Correct every quote it reports not found" in prompt, role
+        assert "quotes.py" in prompt, role
+        assert "as `quoteOutput`" in prompt, role
+    for role in ("implement", "review", "critique"):
+        assert "`unstated` entry" in ran["prompts"][role], role
+    for role in ("spec", "ticket-check", "critique"):
+        assert "`## Neighbouring cases`" in ran["prompts"][role], role
+    assert "Roles of this run decided" not in ran["prompts"]["review"]
+    assert "anything the spec left open" not in ran["prompts"]["implement"]
+    fixed = _built_run(critique=_critique(MAJOR), **{"critique-1": CRITIQUED})
+    assert fork in fixed["prompts"]["fix-1"]
+    redone = _again({"conflicts": ["a"]}, reconcile=IMPLEMENTED, **{"review-again": REVIEW})
+    assert fork in redone["prompts"]["reconcile"]
+
+
+def test_the_quote_check_runs_beside_the_preflight_script_when_the_skill_names_it() -> None:
+    args = {"ref": "4", "preflight": "/plugin/scripts/feature_preflight.py"}
+    ran = _run(args, preflight=PREFLIGHT, spec=SPECIFIED, **DEPTH, critique=CRITIQUED)
+    quotes_line = f"{PLUGIN_PY} `/plugin/scripts/quotes.py` <that file> --root ."
+    assert quotes_line in ran["prompts"]["critique"]
+    assert "--record ticket=" in ran["prompts"]["review"]
+    assert "--record ticket=" not in ran["prompts"]["critique"]
+
+
+def test_the_schemas_carry_breaks_unstated_departures_and_the_quote_output() -> None:
+    ran = _built_run(critique=_critique(MAJOR), **{"critique-1": CRITIQUED})
+    schemas = ran["schemas"]
+    finding = schemas["critique"]["properties"]["findings"]["items"]
+    assert finding["properties"]["breaks"]["required"] == ["record", "quote"]
+    assert "breaks" not in finding["required"], "a minor may omit it"
+    assert "carries" in finding["required"]
+    assert "breaks" in schemas["review"]["properties"]["issues"]["items"]["properties"]
+    for label in ("critique", "review"):
+        assert "quoteOutput" in schemas[label]["required"], label
+    for label in ("implement", "fix-1"):
+        assert {"unstated", "departures"} <= set(schemas[label]["required"]), label
+    unstated = schemas["review"]["properties"]["unstated"]["items"]
+    asked = schemas["review"]["properties"]["unstated"]["description"]
+    assert "one entry for each moved critic finding the prompt lists" in asked
+    assert "none is left unclassified" in asked
+    named = schemas["review"]["properties"]["acceptedInputs"]["items"]["properties"]["named"]
+    assert "the method's own" in named["description"]
+    assert "every case of an input a record names is decided" in named["description"]
+    assert "not a promise of the project" in named["description"]
+    assert "proof that the input is the record's" in named["description"]
+    assert "refuses an input that was invented" in named["description"]
+    assert unstated["properties"]["whose"]["enum"] == ["owner", "role"]
+    assert "of" in unstated["required"]
+    assert "of" not in schemas["critique"]["properties"]["unstated"]["items"]["properties"]
+    departure = schemas["implement"]["properties"]["departures"]["items"]
+    assert departure["properties"]["from"]["enum"] == ["criterion", "assumption"]
+    assert not _valid({**_case("owner"), "whose": "team", "of": None}, unstated)
+    assert not _valid({**_case("owner"), "options": ["only one"], "of": None}, unstated)

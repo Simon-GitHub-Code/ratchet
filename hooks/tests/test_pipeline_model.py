@@ -8,10 +8,12 @@ sequence of abstract answers up to the fix loop's bound runs on the model and on
 from __future__ import annotations
 
 import functools
+import json
 from collections import deque
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+import publish_check
 from tests import model_tla
 from tests import pipeline_model as model
 from tests import pipeline_world as world
@@ -19,6 +21,7 @@ from tests.support import PLUGIN_ROOT
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
 PAGE = PLUGIN_ROOT / "docs/model/pipeline.md"
 
@@ -42,6 +45,15 @@ PAGE = PLUGIN_ROOT / "docs/model/pipeline.md"
     CHECK_ASKS_NOTHING,
     NEVER_CRASHES,
     LOST,
+    DEPARTED,
+    ASKED,
+    ROLE_DECIDED,
+    UNQUOTED,
+    PARKS_CARRIED,
+    SECOND_ROUND_KEPT,
+    UNREVIEWED,
+    COUNTED,
+    ROUNDS_KEPT,
 ) = model.RULES
 
 # Why: a rule the workflow does not keep is pinned here by the shortest run from the start to a
@@ -92,6 +104,15 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     CHECK_ASKS_NOTHING: None,
     NEVER_CRASHES: None,
     LOST: None,
+    DEPARTED: None,
+    ASKED: None,
+    ROLE_DECIDED: None,
+    UNQUOTED: None,
+    PARKS_CARRIED: None,
+    SECOND_ROUND_KEPT: None,
+    UNREVIEWED: None,
+    COUNTED: None,
+    ROUNDS_KEPT: None,
 }
 # Why: a fix round over a ceiling, which the real workflow stops as too large, as it does the
 # reconcile of RECONCILED_OVER.
@@ -313,6 +334,50 @@ def test_on_the_real_workflow_a_change_any_measuring_role_finds_over_a_ceiling_s
             model.OVER[last.answer].value,
             True,
         ), last.name
+
+
+def test_every_result_the_real_workflow_returns_passes_the_publish_checks_reading(
+    tmp_path: Path,
+) -> None:
+    results = played()[1].results
+    assert len(results) >= len(model.Stop) + 2
+    for number, result in enumerate(results):
+        path = tmp_path / f"result{number}.json"
+        path.write_text(json.dumps(result), encoding="utf-8")
+        publish_check.read_result(path)
+
+
+def test_every_stop_of_the_model_is_reached_on_a_run_of_the_real_workflow() -> None:
+    reached = {real.ending.stop for _, _, real in played()[0] if real.ending.stop is not None}
+    assert reached == set(model.Stop)
+
+
+def test_on_the_real_workflow_no_review_starts_after_a_finding_is_parked_as_still_owed() -> None:
+    parked = [
+        (actions, real)
+        for actions, _, real in played()[0]
+        if real.ending.stop is model.Stop.CARRIED
+    ]
+    assert parked
+    for actions, real in parked:
+        labels = [label for label, _ in real.calls]
+        assert not [label for label in labels if label.startswith("review")], actions[-1].name
+        assert real.calls[-1][0].startswith("critique-"), actions[-1].name
+        result = real.raw["result"]
+        assert result["stoppedAfter"] == real.calls[-1][0]
+        assert result["unresolved"] > 0
+
+
+def test_on_the_real_workflow_a_stop_after_a_role_keeps_what_was_built_and_asks_the_owner() -> None:
+    stops = {model.Stop.DEPARTURE, model.Stop.QUESTION_AFTER_BUILD}
+    stopped = [(actions, real) for actions, _, real in played()[0] if real.ending.stop in stops]
+    assert {real.ending.stop for _, real in stopped} == stops
+    for actions, real in stopped:
+        result = real.raw["result"]
+        assert result["stoppedAfter"] == real.calls[-1][0], actions[-1].name
+        assert result["questions"] > 0, actions[-1].name
+        if actions[0].answer is model.Start.BUILD:
+            assert result["built"] > 0, actions[-1].name
 
 
 def test_on_the_real_workflow_every_dead_agent_ends_in_an_error_that_says_to_resume() -> None:

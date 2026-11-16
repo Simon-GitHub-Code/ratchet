@@ -89,6 +89,14 @@ def test_the_feature_skill_shortens_a_long_subject_by_a_fixed_rule() -> None:
 FEATURE = " ".join((SKILLS / "feature/SKILL.md").read_text(encoding="utf-8").split())
 
 
+def test_the_feature_skill_parks_the_findings_of_a_run_that_ran_no_review() -> None:
+    # Why: ADR 0072. A finding still owed after its fix round ends the run before the review.
+    assert "`unresolvedBlockingFindings`, and `reviewIssues` when a review ran" in FEATURE
+    assert "with the record it breaks and the sentence it quotes" in FEATURE
+    assert "A result with `stop` `carried` ran no review" in FEATURE
+    assert "with the critic's view as the first option" in FEATURE
+
+
 def test_the_feature_skill_says_the_critic_did_not_run_in_both_modes() -> None:
     # Why: the page put the critic's line in the pull request of one ticket only, and the drain's
     # pull request was silent on it, while the workflow's result asks for it in every run. The

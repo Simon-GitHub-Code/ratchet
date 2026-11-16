@@ -27,7 +27,7 @@
 export const meta = {
   name: 'pipeline',
   description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> ticket check (one amend of the spec when it finds a gap) -> implement -> adversarial critique -> fix loop (up to two rounds when the project is depended-on, one pass on a review blocker before that) -> independent review',
-  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, assumptions?, settled? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
+  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, namedGates?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, namedGates?, assumptions?, settled? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
   phases: [
     { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
     { title: 'Spec', detail: 'ticket -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the ticket leaves open questions' },
@@ -54,11 +54,15 @@ const AGENTS_AT_MOST = {"young": 9, "dependedOn": 12, "rejudge": 2}
 // ---------------------------------------------------------------------------
 // The slash form of a workflow passes no args, so a missing ref is answered, not thrown: the
 // result says what to run instead, and no agent has been spawned.
+const REVIEW_ROUNDS = []
+const FINDINGS_SO_FAR = { criticFindingsByRound: [], unresolvedBlockingFindings: [], reviewIssues: [], reviewIssuesByRound: REVIEW_ROUNDS }
+const PLUGIN_PY = 'python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode'
 const ARGS = typeof args === 'string' ? { ref: args } : (args && typeof args === 'object' ? args : {})
 const REF = typeof ARGS.ref === 'string' ? ARGS.ref.trim() : ''
 if (!REF) {
   return {
     verdict: 'blocked',
+    ...FINDINGS_SO_FAR,
     preflight: { ok: false, failures: [{ check: 'ticket', detail: 'no ticket ref was passed', produce: 'run the /ratchet:feature skill with the ticket number or path; it runs the preflight and passes args = { ref, branch, base }' }] },
     requiredByOrchestrator: ['Run `/ratchet:feature <ticket>`; the slash form of this workflow passes no args and spawns nothing'],
   }
@@ -86,6 +90,24 @@ let SLUG = ''
 // not say runs them, since the older script predates the field and more scrutiny is the safe side.
 let CRITIC = true
 let CRITIC_REASON = ''
+let NAMED_GATES = namedGatesOf(REJUDGE ? REJUDGE.namedGates : ARGS.namedGates)
+
+function namedGatesOf(list) {
+  const seen = new Map()
+  for (const entry of Array.isArray(list) ? list : []) {
+    const gate = String(typeof entry === 'string' ? entry : (entry && entry.gate) || '').replace(/`/g, '').trim()
+    if (!gate) continue
+    const tier = entry && typeof entry === 'object' && entry.tier !== undefined && entry.tier !== '' ? String(entry.tier) : ''
+    if (!seen.has(gate) || (tier && !seen.get(gate).tier)) seen.set(gate, tier ? { gate, tier } : { gate })
+  }
+  return [...seen.values()]
+}
+
+function namedGatesList() {
+  if (!NAMED_GATES.length) return '- No criterion of the ticket or of spec.md names a gate.'
+  const names = NAMED_GATES.map(g => `\`${g.gate}\`${g.tier ? ` (tier ${g.tier})` : ''}`).join(', ')
+  return `- The gates the criteria name, as code spans: ${names}. A gate of tier 2 or later, or any other gate \`check\` does not run, is the one the rule below sends to a role.`
+}
 
 const ROOT_HINT = ROOT
   ? `the repository root (${ROOT}, the directory holding AGENTS.md)`
@@ -169,15 +191,120 @@ Guard paths and gate disputes:
 // implementation exists; the critic keeps tests that fail) cannot get a green `check` anyway, so
 // it runs tier 0 and only the tests it wrote. Implement, fix and review run the full `check`,
 // and the review's run on the final tree is the one that counts.
-const CHECK_RULE = `- Before returning, run \`check\` from the repository root and include the LAST ~40 lines of
+const WORKING_RULE = `- While you work, run the \`tier0\` entry point and \`tests-changed all\`. Never run a suite whole
+  to see whether your own tests pass.`
+const CHECK_RULE = `${WORKING_RULE}
+- Run \`check\` from the repository root last, before you return, and again only after an edit: do
+  not run it again on a tree you have not changed since a green run. Include the LAST ~40 lines of
   its output verbatim in the \`checkOutput\` field of your structured result.`
-const OWN_TESTS_RULE = `- Your tree is red on purpose, so do not run \`check\`. Before returning, run the \`tier0\`
-  entry point from the repository root, then only the tests you wrote, with the test runner
-  binding.md names. Include the LAST ~40 lines of that output verbatim in the \`checkOutput\`
-  field of your structured result. The implementer, the fixer and the reviewer run the full
-  \`check\`; the reviewer's run on the final tree is the one that counts.`
+const OWN_TESTS_RULE = `${WORKING_RULE}
+- Your tree is red on purpose, so do not run \`check\`. Before returning, run the \`tier0\` entry
+  point from the repository root, then only the tests you wrote, with \`tests-changed all\`.
+  Include the LAST ~40 lines of that output verbatim in the \`checkOutput\` field of your
+  structured result. The implementer, the fixer and the reviewer run \`check\` last; the reviewer's
+  run on the final tree is the one that counts.`
+const NAMED_GATE_RULES = {
+  implement: `- A gate outside \`check\` that a criterion names is run whole, once, by you, after your
+  \`check\` is green. Return the ones you ran in \`namedGatesRun\`, as code spans.`,
+  review: `- A gate outside \`check\` that a criterion names is run whole, once, by you, on the tree you
+  judge. Return the ones you ran in \`namedGatesRun\`, as code spans.`,
+}
+const NO_NAMED_GATE_RULE = `- You run no gate a criterion names that \`check\` does not: the implementer runs each once and
+  each review once.`
 
-function commonRules(rebasing, ownTestsOnly) {
+function namedGatesRules(role) {
+  return `${namedGatesList()}
+${NAMED_GATE_RULES[role] || NO_NAMED_GATE_RULE}`
+}
+
+const FORK_TEST = `An undecided point is the owner's in two cases, and yours in every other.
+
+It is an open question of kind \`irreversible\` when a wrong guess cannot be taken back: it
+would lose or corrupt stored data, fix a public contract others will depend on, spend money, or
+weaken a security or privacy rule.
+
+It is an open question of kind \`direction\` when the options are different products. The
+test: describe the product to one of its users after each option, in the user's words and
+with no code in the sentence. When the two descriptions differ in what the user sees, what
+they can do, who may do it or what becomes of something that is theirs, the owner chooses.
+When the user could not tell which option was built, you choose. Three that are direction:
+- "Should an expired link show a page that says it expired, or send the visitor to the home
+  page?" The visitor sees a different thing.
+- "May anyone with the link close a poll, or only the person who made it?" Who may do it.
+- "When a voter answers twice, does the second answer replace the first or is it refused?"
+  What becomes of their answer.
+Three that are not, and are yours to assume:
+- Which HTTP status answers a reserved code. No user's product changes with it.
+- Whether the expiry is checked in the store or in the route. The user cannot tell.
+- A limit the ticket leaves unstated where one value is plainly the safe one: take it, and
+  the owner relaxes it in a later change.`
+
+const UNSTATED_RULE = `- A case you saw or measured where no record says which behaviour is right (the ticket, spec.md,
+  AGENTS.md, the binding, a decision record, the glossary, the design brief, the guard manifest) is
+  an \`unstated\` entry. Never leave it out because you judged it unlikely, and never settle it
+  silently in the code or in \`notes\`. Apply the fork test to it: \`whose\` is \`owner\` when the test
+  gives the owner the choice and \`role\` when it gives it to you. Each entry carries the case as the
+  owner would read it (\`question\`), what the code does now (\`now\`), the \`evidence\`, its \`kind\`, two
+  to four \`options\` with the answer you would give first, one sentence on why (\`recommendation\`),
+  and what would show that answer wrong (\`refuter\`).`
+const DEPARTURE_RULE = `- A criterion or an assumption of spec.md that your change no longer holds is a \`departures\`
+  entry, never a line in \`notes\`: \`from\` says which, \`quote\` is its words in spec.md, \`now\` is what
+  the code does instead and \`why\` says why. A departure from a criterion stops the run and goes to
+  the owner. A departure from an assumption goes through the fork test: \`whose\` is \`role\` when the
+  test gives you the choice, and the entry is then the amended assumption, your answer first in
+  \`options\`, which the later roles judge against. Give each the \`question\`, \`kind\`, \`options\`,
+  \`recommendation\` and \`refuter\` an \`unstated\` entry has.`
+const NEIGHBOURING_RULE = `A neighbouring test is one that drives a screen, command, endpoint or function the change edits, by
+name or by its address. For each set of values such a test repeats the same checks over (a list of
+sizes, locales, roles, screen shapes, classes of input), write one line under
+\`## Neighbouring cases\`: the test, the values, and which of them the new behaviour holds for. The
+default is every value the neighbouring test uses. A narrower set is an assumption, with its reason.
+It is a question only when the fork test gives it to the owner.`
+
+function quotesScript() {
+  if (PREFLIGHT_SCRIPT) return `\`${PREFLIGHT_SCRIPT.replace(/[^/]*$/, 'quotes.py')}\``
+  return 'the ratchet plugin\'s `scripts/quotes.py` (beside `feature_preflight.py`; `find` it, do not write one)'
+}
+
+function quoteRule(spec, list, ticketFile) {
+  const ticket = ticketFile ? ' and `--record ticket=<a file holding the ticket text>`' : ''
+  return `- Every blocker or major in \`${list}\` carries \`breaks\`: \`record\` names the record it breaks and
+  \`quote\` is the promise, criterion, non-negotiable or rule it breaks. The records are the ticket,
+  spec.md (name it by its path, \`${spec.specPath}\`), AGENTS.md, \`docs/process/binding.md\`, a decision
+  record (its path under \`docs/adr/\`), GLOSSARY.md, DESIGN.md and guards/manifest.toml. Copy the unit
+  exactly as the record writes it, markup included and its list marker left off: a whole sentence,
+  list item, heading, table cell or line. A blocker or major with no quote is not a finding: return it
+  as an \`unstated\` entry.
+- Before you return, write \`${list}\` as the JSON list you return, in that order, to a file in a
+  \`mktemp -d\` directory outside the repository, and run \`${PLUGIN_PY} ${quotesScript()} <that file> --root .\`${ticket}.
+  Return what it printed, verbatim, as \`quoteOutput\`. Correct every quote it reports not found, and
+  run it again, before you return.`
+}
+
+let ROLE_ASSUMPTIONS = []
+let PENDING_MOVED = []
+const ALL_UNSTATED = []
+const ALL_DEPARTURES = []
+
+function roleAssumptionsNote() {
+  if (!ROLE_ASSUMPTIONS.length) return ''
+  return `
+Roles of this run decided these cases under the fork test, the amended assumptions among them. Judge
+the change against them as against spec.md's own assumptions, and not against what they replaced:
+${JSON.stringify(ROLE_ASSUMPTIONS, null, 2)}
+`
+}
+
+function movedNote() {
+  if (!PENDING_MOVED.length) return ''
+  return `
+The quote check did not find the quote of these critic findings, so the script moved each to
+\`unstated\`. Apply the fork test to each, and return one \`unstated\` entry for it with \`of\` set to its \`id\`:
+${JSON.stringify(PENDING_MOVED, null, 2)}
+`
+}
+
+function commonRules(role, rebasing) {
   const uncommitted = rebasing
     ? `- The branch holds the change as commits. Every edit you make stays uncommitted on the
   working tree; the orchestrator commits it. The git commands you run are read-only, plus the
@@ -197,7 +324,8 @@ ${uncommitted}
 - The project's non-negotiables are whatever AGENTS.md lists; its declared paths and their
   dependency direction are whatever AGENTS.md and docs/process/binding.md define. Each is a
   hard rule.
-${ownTestsOnly ? OWN_TESTS_RULE : CHECK_RULE}
+${role === 'spec' || role === 'critic' ? OWN_TESTS_RULE : CHECK_RULE}
+${namedGatesRules(role)}
 - Your final output is consumed by a script, not a human: return only the structured object.
 ${GUARD_RULES}`
 }
@@ -287,6 +415,11 @@ const ESTIMATE_FIELD = {
 const SPEC_SCHEMA = {
   type: 'object',
   properties: {
+    namedGates: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'The gates of the binding\'s Gates table that spec.md\'s criteria name as a code span and the list you were given does not hold, each as the code span of its name; empty when the criteria add none',
+    },
     ...CHANGE_SIZE_FIELD,
     ...ESTIMATE_FIELD,
     slug: {
@@ -382,7 +515,7 @@ const SPEC_SCHEMA = {
     },
     ...checkOutputField(true),
   },
-  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'assumptions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
+  required: ['slug', 'specPath', 'namedGates', 'testFiles', 'layersTouched', 'openQuestions', 'assumptions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
 }
 
 const DISPUTES_FIELD = {
@@ -439,6 +572,75 @@ const RECORD_NOTES_FIELD = {
   },
 }
 
+const SAID = { type: 'string', pattern: '\\S' }
+const BREAKS_FIELD = {
+  breaks: {
+    type: 'object',
+    description: 'The record the finding breaks and the promise, criterion, non-negotiable or rule it breaks, quoted: one whole sentence, list item, heading, table cell or line, copied as the record writes it. Required of a blocker or major; a minor may omit it',
+    properties: {
+      record: { type: 'string', description: 'The record\'s name: `ticket`, the spec\'s path, `AGENTS.md`, `binding`, `GLOSSARY.md`, `DESIGN.md`, `guards/manifest.toml`, or a path under `docs/adr/`' },
+      quote: { type: 'string', description: 'The unit, as the record writes it' },
+    },
+    required: ['record', 'quote'],
+  },
+}
+
+const QUOTE_OUTPUT_FIELD = {
+  quoteOutput: {
+    type: 'string',
+    description: 'What the plugin\'s quote check printed over your findings, verbatim, run before returning',
+  },
+}
+
+const CASE_ENTRY = {
+  question: { ...SAID, description: 'The case as the owner would read it, in the words of a user of the product, with no code in it' },
+  kind: { type: 'string', enum: ['direction', 'irreversible'], description: 'As the fork test defines the two' },
+  options: { type: 'array', minItems: 2, items: SAID, description: 'Two to four answers, the one you would give first' },
+  recommendation: { ...SAID, description: 'One sentence: why the first option, from the records' },
+  refuter: { ...SAID, description: 'What would show the first option wrong, and what changing it later would cost' },
+  whose: { type: 'string', enum: ['owner', 'role'], description: 'The fork test\'s answer: owner when it gives the owner the choice, role when it gives it to you' },
+}
+const CASE_NAMES = Object.keys(CASE_ENTRY)
+
+function unstatedField(classifies) {
+  return {
+    unstated: {
+      type: 'array',
+      description: classifies
+        ? 'Every case you saw or measured where no record says which behaviour is right, each put through the fork test; and one entry for each moved critic finding the prompt lists, its `of` set to that finding\'s id, so that none is left unclassified; empty when none'
+        : 'Every case you saw or measured where no record says which behaviour is right, each put through the fork test; empty when none',
+      items: {
+        type: 'object',
+        properties: {
+          ...(classifies ? { of: { type: ['string', 'null'], description: 'The id of the moved critic finding this entry answers; null for an entry of your own' } } : {}),
+          now: { ...SAID, description: 'What the code does now' },
+          evidence: { ...SAID, description: 'The command run and the output that shows it' },
+          ...CASE_ENTRY,
+        },
+        required: [...(classifies ? ['of'] : []), 'now', 'evidence', ...CASE_NAMES],
+      },
+    },
+  }
+}
+
+const DEPARTURES_FIELD = {
+  departures: {
+    type: 'array',
+    description: 'Each criterion or assumption of spec.md the change no longer holds; empty when none',
+    items: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', enum: ['criterion', 'assumption'] },
+        quote: { ...SAID, description: 'The criterion or assumption in the words of spec.md' },
+        now: { ...SAID, description: 'What the code does instead' },
+        why: { ...SAID, description: 'Why it does' },
+        ...CASE_ENTRY,
+      },
+      required: ['from', 'quote', 'now', 'why', ...CASE_NAMES],
+    },
+  },
+}
+
 const IMPLEMENT_SCHEMA = {
   type: 'object',
   properties: {
@@ -446,11 +648,27 @@ const IMPLEMENT_SCHEMA = {
     allNewTestsPass: { type: 'boolean' },
     checkPasses: { type: 'boolean', description: 'true only if `check` exited 0' },
     ...CHANGE_SIZE_FIELD,
-    notes: { type: 'string', description: 'Design decisions, trade-offs, anything the spec left open and how you resolved it' },
+    notes: { type: 'string', description: 'Design decisions and trade-offs' },
     ...DISPUTES_FIELD,
+    ...unstatedField(false),
+    ...DEPARTURES_FIELD,
     ...checkOutputField(),
   },
-  required: ['filesChanged', 'allNewTestsPass', 'checkPasses', 'notes', 'disputes', 'checkOutput'],
+  required: ['filesChanged', 'allNewTestsPass', 'checkPasses', 'notes', 'disputes', 'unstated', 'departures', 'checkOutput'],
+}
+
+const NAMED_GATES_RUN_FIELD = {
+  namedGatesRun: {
+    type: 'array',
+    items: { type: 'string' },
+    description: 'The gates a criterion names that you ran whole, each as the code span of its name; empty when none was named or none lies outside `check`',
+  },
+}
+
+const BUILD_SCHEMA = {
+  ...IMPLEMENT_SCHEMA,
+  properties: { ...IMPLEMENT_SCHEMA.properties, ...NAMED_GATES_RUN_FIELD },
+  required: [...IMPLEMENT_SCHEMA.required, 'namedGatesRun'],
 }
 
 const CRITIQUE_SCHEMA = {
@@ -463,12 +681,14 @@ const CRITIQUE_SCHEMA = {
         properties: {
           severity: { type: 'string', enum: ['blocker', 'major', 'minor'] },
           title: { type: 'string' },
+          ...BREAKS_FIELD,
+          carries: { type: ['string', 'null'], description: 'On a re-critique, the `id` of the earlier finding this one is still open from; null for a finding that is new, and always null on the first critique' },
           evidence: { type: 'string', description: 'Command run and the output that demonstrates the problem' },
           suggestedTest: { type: 'string', description: 'Path of a test you added that exposes it, or a sketch of one' },
           testFails: { type: 'boolean', description: 'true when you kept a test for this finding that fails now, so `check` is red on it' },
           heldByKeptTest: { type: 'boolean', description: 'true when you kept a test for this finding that PASSES because the code already holds; false when no test was kept. Never true with testFails' },
         },
-        required: ['severity', 'title', 'evidence', 'suggestedTest', 'testFails', 'heldByKeptTest'],
+        required: ['severity', 'title', 'carries', 'evidence', 'suggestedTest', 'testFails', 'heldByKeptTest'],
       },
     },
     testsAdded: { type: 'array', items: { type: 'string' }, description: 'Repo-relative test files you created or extended' },
@@ -488,11 +708,13 @@ const CRITIQUE_SCHEMA = {
       description: 'The violation introduced and the failing output, or "not applicable" with the reason',
     },
     guardFilesChanged: GUARD_PATHS_FIELD,
+    ...unstatedField(false),
+    ...QUOTE_OUTPUT_FIELD,
     ...checkOutputField(true),
   },
   required: [
     'findings', 'testsAdded', 'attempted', 'mutationSummary', 'fuzzSummary', 'fitnessSabotageConfirmed',
-    'fitnessSabotageSummary', 'guardFilesChanged', 'checkOutput',
+    'fitnessSabotageSummary', 'guardFilesChanged', 'unstated', 'quoteOutput', 'checkOutput',
   ],
 }
 
@@ -502,7 +724,6 @@ const CRITIQUE_SCHEMA = {
 // return these two axes. The schema makes each answer both and gives each reading the evidence that
 // shows it; it cannot make an answer complete, since a list that leaves a promise out fits it as
 // well as an empty `acceptedInputs` does.
-const SAID = { type: 'string', pattern: '\\S' }
 function promiseReading(reading, description, evidence) {
   return {
     type: 'object',
@@ -590,12 +811,21 @@ const TICKET_CHECK_SCHEMA = {
   required: ['ticketPromises', 'acceptedInputs'],
 }
 
+const REVIEW_INPUTS_FIELD = {
+  ...ACCEPTED_INPUTS_FIELD,
+  items: {
+    ...ACCEPTED_INPUTS_FIELD.items,
+    properties: { ...ACCEPTED_INPUTS_FIELD.items.properties, named: { ...BREAKS_FIELD.breaks, description: 'The record that names this input, the ticket or spec.md, and the sentence that names it, quoted as for `breaks`. The rule an undecided case breaks is the method\'s own, that every case of an input a record names is decided, and not a promise of the project. `named` is the proof that the input is the record\'s, so the quote check refuses an input that was invented' } },
+    required: [...ACCEPTED_INPUTS_FIELD.items.required, 'named'],
+  },
+}
+
 const REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     verdict: { type: 'string', enum: ['approve', 'request_changes'] },
     ticketPromises: TICKET_PROMISES_FIELD,
-    acceptedInputs: ACCEPTED_INPUTS_FIELD,
+    acceptedInputs: REVIEW_INPUTS_FIELD,
     issues: {
       type: 'array',
       items: {
@@ -604,6 +834,7 @@ const REVIEW_SCHEMA = {
           axis: { type: 'string', enum: ['spec', 'standards', 'design'] },
           severity: { type: 'string', enum: ['blocker', 'major', 'minor'] },
           title: { type: 'string' },
+          ...BREAKS_FIELD,
           location: { type: 'string', description: 'file:line or acceptance-criterion id' },
           evidence: { type: 'string' },
         },
@@ -630,9 +861,12 @@ const REVIEW_SCHEMA = {
       },
     },
     checkPasses: { type: 'boolean', description: 'true only if `check` exited 0 when you ran it' },
+    ...NAMED_GATES_RUN_FIELD,
+    ...unstatedField(true),
+    ...QUOTE_OUTPUT_FIELD,
     ...checkOutputField(),
   },
-  required: ['verdict', 'ticketPromises', 'acceptedInputs', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'recordNotes', 'disputeCoverage', 'checkPasses', 'checkOutput'],
+  required: ['verdict', 'ticketPromises', 'acceptedInputs', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'recordNotes', 'disputeCoverage', 'checkPasses', 'namedGatesRun', 'unstated', 'quoteOutput', 'checkOutput'],
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +965,9 @@ Read these two and nothing else (no code, no tests, no other record), and edit n
 
 1. ${PROMISE_READINGS}
 2. ${INPUT_READINGS}
+3. Read each line under \`## Neighbouring cases\` of spec.md as you read an input case. A line that
+   holds the behaviour for fewer values than its test uses, with no assumption in spec.md giving
+   the reason, leaves a promise bent: read that promise as \`bent\`, with the line as \`specLine\`.
 
 Read what the ticket says, not what you would have built. Your final output is consumed by a
 script, not a human: return only the structured object.`
@@ -746,7 +983,7 @@ function preflightPrompt() {
 
 In ${ROOT_HINT}, run, in a single Bash call:
 
-    python3 ${script} "${REF}" --root .${baseFlag}${branchFlag}
+    ${PLUGIN_PY} ${script} "${REF}" --root .${baseFlag}${branchFlag}
 
 It prints a JSON object on stdout ({ ok, ref, failures: [{ check, detail, produce }], number,
 title, slug, branch, base, label, critic, critic_reason }) and a verdict line on stderr. Return that JSON's fields in the
@@ -775,7 +1012,7 @@ const PROMISE_RAISED = 'A promise of the ticket you believe cannot or should not
 function specPrompt(gaps = []) {
   return `${PREAMBLE}
 You are the SPEC agent for one feature of this repository.
-${commonRules(false, true)}
+${commonRules('spec')}
 Load the \`mattpocock-skills:tdd\` skill: it says what a good test is and how the seams under
 test are chosen. The spec names those seams; the owner has agreed the approach through the
 ticket's \`## Conjecture\` section and the agent-ready label.
@@ -838,6 +1075,7 @@ Your tasks, in order:
      default, with the answer and what would show it wrong
    - Open questions: only the points the owner decides (see below), each with its options,
      the recommended one first, and why
+   - Neighbouring cases: ${NEIGHBOURING_RULE}
    - Out of scope (copied from the ticket)
 2. Write the failing tests at those seams, with the test frameworks and directories binding.md
    names. Write a property test for every invariant you can state. Follow every AGENTS.md
@@ -865,27 +1103,7 @@ Your tasks, in order:
    \`promises\`, the ticket's own \`- [ ]\` lines it carries, copied verbatim, every such line in
    exactly one part. The run then stops, and the orchestrator files the parts as tickets itself.
 
-An undecided point is the owner's in two cases, and yours in every other.
-
-It is an open question of kind \`irreversible\` when a wrong guess cannot be taken back: it
-would lose or corrupt stored data, fix a public contract others will depend on, spend money, or
-weaken a security or privacy rule.
-
-It is an open question of kind \`direction\` when the options are different products. The
-test: describe the product to one of its users after each option, in the user's words and
-with no code in the sentence. When the two descriptions differ in what the user sees, what
-they can do, who may do it or what becomes of something that is theirs, the owner chooses.
-When the user could not tell which option was built, you choose. Three that are direction:
-- "Should an expired link show a page that says it expired, or send the visitor to the home
-  page?" The visitor sees a different thing.
-- "May anyone with the link close a poll, or only the person who made it?" Who may do it.
-- "When a voter answers twice, does the second answer replace the first or is it refused?"
-  What becomes of their answer.
-Three that are not, and are yours to assume:
-- Which HTTP status answers a reserved code. No user's product changes with it.
-- Whether the expiry is checked in the store or in the route. The user cannot tell.
-- A limit the ticket leaves unstated where one value is plainly the safe one: take it, and
-  the owner relaxes it in a later change.
+${FORK_TEST}
 
 A change that implies a change to the architecture is the owner's too, and never one you take
 silently or bury in Design: a new layer, a new kind of storage, a new process boundary. It is
@@ -993,7 +1211,7 @@ ${JSON.stringify(assumed, null, 2)}
     : ''
   return `${PREAMBLE}
 You are the IMPLEMENT agent for feature \`${spec.slug}\` of this repository.
-${commonRules()}
+${commonRules('implement')}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The failing tests: ${JSON.stringify(spec.testFiles)}
@@ -1001,8 +1219,10 @@ Inputs you may read:
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/, and the existing code those
   tests exercise
 ${promises}${cases}You are deliberately given neither the ticket nor the spec author's reasoning. If
-spec.md is ambiguous, pick the reading that is most consistent with the glossary and the ADRs
-and record the choice in \`notes\`.
+spec.md is ambiguous, pick the reading that is most consistent with the glossary and the ADRs.
+${FORK_TEST}
+${UNSTATED_RULE}
+${DEPARTURE_RULE}
 
 Load the \`mattpocock-skills:tdd\` skill and work its loop one slice at a time: run the listed
 tests, implement the smallest change that makes one pass, re-run, repeat. If the change touches
@@ -1027,7 +1247,7 @@ function fixPrompt(spec, findings, testsAdded, iteration, rounds) {
   const minors = findings.filter(f => f.severity === 'minor' && !blockingFindings.includes(f))
   return `${PREAMBLE}
 You are the FIX agent (round ${iteration} of ${rounds}) for feature \`${spec.slug}\` of this repository.
-${commonRules()}
+${commonRules('fix')}
 A previous implementer built this feature and a critic or reviewer found problems. You start
 fresh, from the spec and the code as they are; the previous implementer's reasoning is not
 among your inputs.
@@ -1050,6 +1270,10 @@ Resolve each blocking finding by changing the implementation; the tests are fixe
 critic test that asserts something the spec contradicts stays red and is explained in
 \`notes\`. A finding that can only be resolved by changing a guard path, or a gate you believe
 is wrong, becomes a gate dispute listed in \`disputes\`.
+${roleAssumptionsNote()}
+${FORK_TEST}
+${UNSTATED_RULE}
+${DEPARTURE_RULE}
 
 ${CHANGE_SIZE_RULE}
 
@@ -1065,7 +1289,7 @@ function reconcilePrompt(spec, conflicts) {
 You are the RECONCILE agent for feature \`${spec.slug}\` of this repository. The feature was
 built and approved. Then another change merged into \`${BASE}\`, and this branch must hold
 that change before it can merge. You bring the two together and change nothing else.
-${commonRules(true)}
+${commonRules('reconcile', true)}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The branch's own change: \`git diff ${BASE}...${BRANCH}\`
@@ -1088,6 +1312,10 @@ Do this, in order:
    \`git rebase --abort\` if a rebase is still in progress, and return with
    \`checkPasses: false\`.
 
+${FORK_TEST}
+${UNSTATED_RULE}
+${DEPARTURE_RULE}
+
 \`filesChanged\` lists the files you edited after the rebase finished; \`allNewTestsPass\` is
 whether the spec's tests pass; \`notes\` names each conflict and how you resolved it, since
 the reviewer reads the result and not your reasoning.
@@ -1101,8 +1329,9 @@ function critiquePrompt(spec, filesChanged, previousRound) {
 This is a RE-CRITIQUE after a fix round. Previous findings:
 ${JSON.stringify(previousRound.findings, null, 2)}
 Tests you added last round: ${JSON.stringify(previousRound.testsAdded)}
-Re-check every previous finding first; any still open goes back into \`findings\` with the same
-title. Then look for NEW ways the fix may have broken things.`
+Re-check every previous finding first. Each of your findings sets \`carries\` to the \`id\` of the
+previous finding it is still open from, and to null when it is new. Then look for NEW ways the fix
+may have broken things.`
     : ''
   return `${PREAMBLE}
 You are the CRITIC for feature \`${spec.slug}\` of this repository. Your job is to BREAK it.
@@ -1111,7 +1340,7 @@ in-process; the owner may run \`/pstack:interrogate\` on the branch afterwards, 
 to type, not yours to imitate). The rule of evidence: a finding survives only when a run proves
 it, so each carries the exact command, the output it printed and the output the spec requires;
 leave out anything you did not run; "no findings" is a valid result when you name what you ran.
-${commonRules(false, true)}
+${commonRules('critic')}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The spec's tests: ${JSON.stringify(spec.testFiles)}
@@ -1119,7 +1348,7 @@ Inputs you may read:
 - AGENTS.md, GLOSSARY.md, docs/process/binding.md, docs/adr/, and the fitness tests, mutation
   config and fuzz harness binding.md names
 The implementer's notes and the ticket are outside your inputs.
-${previous}
+${previous}${roleAssumptionsNote()}
 Do all of the following and report evidence for each:
 1. Property tests: with the property-testing library binding.md names, add a property for
    every invariant the spec states or implies (round-trips, monotonicity, conservation,
@@ -1165,6 +1394,16 @@ Do all of the following and report evidence for each:
    docs/disputes/ in the change. For a path whose note is \`additions:\`, read what it added;
    a finding on it quotes the two passages. Your scratch copy for step 4 is outside the
    repository, so sabotage there is not a guard change.
+
+8. Neighbouring cases: a value set that a neighbouring test repeats its checks over, and that
+   spec.md does not list under \`## Neighbouring cases\`, is a finding against the spec. ${NEIGHBOURING_RULE}
+
+A case you measured or saw that the spec does not state is a finding when a record you can quote
+says which behaviour is right, and an \`unstated\` entry when none does. It is one of the two
+whatever you judge its likelihood, and you keep no failing test for an \`unstated\` entry.
+${FORK_TEST}
+${UNSTATED_RULE}
+${quoteRule(spec, 'findings', false)}
 
 Keep every test you added that PASSES (regression value) and every test that FAILS because of
 a genuine defect (list it as \`suggestedTest\` on the finding). Delete tests that fail because
@@ -1215,7 +1454,7 @@ top; \`git diff ${BASE}\` shows both, and nothing of the other change.
     : ''
   return `${PREAMBLE}
 You are the independent REVIEWER for feature \`${spec.slug}\` of this repository.
-${commonRules()}${second}
+${commonRules('review')}${second}
 Inputs you may read, and nothing else:
 - The ticket: ${ticketHint()}, with its comments and its \`## Answers\` section: what the owner
   asked for and agreed. Read it; never edit it or comment on it.
@@ -1228,7 +1467,7 @@ Inputs you may read, and nothing else:
 - Any generated contract artefacts that binding.md names
 ${outsideInputs(CRITIC)} are outside your inputs:
 judge the spec against the ticket, and the code against the spec and the standards.
-
+${roleAssumptionsNote()}${movedNote()}
 Load the \`mattpocock-skills:code-review\` skill and apply its two axes in-process, as both of
 its sub-agents (the pipeline fixes the agent count): the spec source is spec.md; the standards
 sources are AGENTS.md, the glossary, docs/adr/ and the binding, plus the skill's smell
@@ -1284,6 +1523,13 @@ F. Design. Judge the change against the project's architecture: read the archite
    architecture decision (a new layer, a new kind of storage, a new process boundary) the spec
    did not raise with the owner. Where the project records no architecture,
    judge only the declared layers and the spec's own Design section.
+G. Cases no record states. A case you saw or measured where no record says which behaviour is right
+   is no issue: return it as an \`unstated\` entry.
+${FORK_TEST}
+${UNSTATED_RULE}
+${quoteRule(spec, 'issues', true)}
+   Each \`acceptedInputs\` entry carries \`named\`: the record that names the input, the ticket or
+   spec.md, and the whole sentence that names it, quoted the same way.
 The script files every \`dropped\` promise and every null case as a major issue: the change lost
 something the ticket promised. It lists every \`bent\` and \`assumed\` promise with the spec's
 assumptions for the owner to overrule, and neither holds the merge. Do not repeat them in
@@ -1320,7 +1566,24 @@ async function fixRound(findings, testsAdded, round, rounds) {
   const stop = noRoom(`fix round ${round}`, fix.changeSize, false)
   lastCheckOutput = fix.checkOutput
   lastCheckPasses = fix.checkPasses === true
-  return stop ? tooLarge(stop, spec, { filesChanged, disputes, checkOutput: fix.checkOutput }) : null
+  if (stop) return tooLarge(stop, spec, { filesChanged, disputes, checkOutput: fix.checkOutput })
+  return haltAfter(`fix-${round}`, fix)
+}
+
+function haltAfter(after, result, entries = result.unstated || []) {
+  return settleCases(after, entries, result.departures || [], {
+    specPath: spec.specPath,
+    testFiles: spec.testFiles,
+    extra: {
+      filesChanged,
+      disputes,
+      checkOutput: lastCheckOutput,
+      criticFindings: critique.findings,
+      criticFindingsByRound: allCriticFindings,
+      unresolvedBlockingFindings: owed(critique.findings),
+      testsAdded: critique.testsAdded,
+    },
+  })
 }
 
 // Whether a review's findings are ones a fix pass can answer: it lists blockers or majors in the
@@ -1401,6 +1664,7 @@ function tooLarge(stop, spec, extra) {
     slug: SLUG,
     ref: REF,
     verdict: 'blocked',
+    ...FINDINGS_SO_FAR,
     verdictForcedBy: [stop.reason],
     tooLarge: stop,
     openQuestions: [],
@@ -1430,6 +1694,7 @@ function specStop(spec) {
     slug: SLUG,
     ref: REF,
     verdict: 'blocked',
+    ...FINDINGS_SO_FAR,
     openQuestions: spec.openQuestions,
     guardEdits,
     specPath: spec.specPath,
@@ -1471,8 +1736,161 @@ function blocking(findings) {
 // \`check\` is never approved, so a minor finding with a failing test would otherwise skip the loop
 // and fail the review. A finding whose kept test already passes shows the code holds: a fix round
 // would have nothing to change, and the review still reads the finding.
+function carries(finding, earlier) {
+  if (finding.carries === earlier.id) return true
+  const was = earlier.breaks
+  const now = finding.breaks
+  return Boolean(was && now) && was.record === now.record && was.quote === now.quote &&
+    String(finding.title || '').trim() === String(earlier.title || '').trim()
+}
+
 function owed(findings) {
-  return (findings || []).filter(f => f && (f.testFails === true || (f.severity !== 'minor' && f.heldByKeptTest !== true)))
+  return (findings || []).filter(f => f && (isBlocking(f)
+    ? f.quoted === true && (f.testFails === true || f.heldByKeptTest !== true)
+    : f.testFails === true))
+}
+
+function isBlocking(finding) {
+  return Boolean(finding) && (finding.severity === 'blocker' || finding.severity === 'major')
+}
+
+function quoteVerdict(output) {
+  const text = String(output || '')
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  try {
+    const verdict = JSON.parse(text.slice(start))
+    return verdict && Array.isArray(verdict.found) && Array.isArray(verdict.not_found) ? verdict : null
+  } catch (error) {
+    return null
+  }
+}
+
+function quoteHeld(finding, index, verdict) {
+  const breaks = finding && finding.breaks
+  if (!verdict || !breaks) return false
+  return verdict.found.some(e => e && e.index === index && e.record === breaks.record && e.quote === breaks.quote)
+}
+
+function whyMissed(index, verdict) {
+  const missed = verdict && verdict.not_found.find(e => e && e.index === index)
+  return missed && missed.reason ? missed.reason : 'the quote check output does not show its quote found'
+}
+
+function sift(findings, quoteOutput, idOf, from) {
+  const verdict = quoteVerdict(quoteOutput)
+  const kept = []
+  const moved = []
+  ;(findings || []).forEach((finding, index) => {
+    const id = idOf(index)
+    if (!isBlocking(finding)) {
+      kept.push({ ...finding, id })
+    } else if (quoteHeld(finding, index, verdict)) {
+      kept.push({ ...finding, id, quoted: true })
+    } else {
+      moved.push({ id, from, severity: finding.severity, title: finding.title, detail: finding.location ?? finding.suggestedTest ?? '', evidence: finding.evidence, breaks: finding.breaks ?? null, reason: whyMissed(index, verdict) })
+    }
+  })
+  return { kept, moved }
+}
+
+function readCritique(raw, round) {
+  const { kept, moved } = sift(raw.findings, raw.quoteOutput, index => `C${round}-${index + 1}`, 'critic')
+  PENDING_MOVED.push(...moved)
+  return { ...raw, findings: kept }
+}
+
+function readReview(raw) {
+  const { kept, moved } = sift(raw.issues, raw.quoteOutput, index => `R${index + 1}`, 'review')
+  return { ...raw, issues: kept, movedIssues: moved }
+}
+
+function ownerEntry(moved) {
+  const view = moved.from === 'critic' ? 'The critic\'s view' : 'The reviewer\'s view'
+  const quote = moved.breaks ? `${moved.breaks.record}: "${moved.breaks.quote}"` : 'none given'
+  return {
+    of: moved.id,
+    ...(moved.from === 'critic' ? { unclassified: true } : { unquotedReview: true }),
+    now: moved.evidence,
+    evidence: moved.evidence,
+    question: `A ${moved.from} found a case no record states, and nothing classified it: ${moved.title}. Where: ${moved.detail || 'not given'}. Evidence: ${moved.evidence}. The quote that was not found: ${quote}.`,
+    whose: 'owner',
+    kind: 'direction',
+    options: [`${view}: ${moved.title}. Change the code as the finding asks`, 'What the code does now. Leave it as it is'],
+    recommendation: `Nothing quoted decides it: ${moved.reason}`,
+    refuter: 'Wrong if a record already states which behaviour is right',
+  }
+}
+
+function unclassifiedCount() {
+  return ALL_UNSTATED.filter(entry => entry.unclassified === true).length
+}
+
+function unquotedReviewCount() {
+  return ALL_UNSTATED.filter(entry => entry.unquotedReview === true).length
+}
+
+function assumedFrom(entry) {
+  return { question: entry.question, assumed: entry.options[0], refuter: entry.refuter }
+}
+
+function questionOf(entry) {
+  return {
+    question: entry.question,
+    kind: entry.kind,
+    options: entry.options,
+    recommendation: entry.recommendation,
+    now: entry.now,
+    evidence: entry.evidence ?? entry.why,
+    by: entry.by,
+  }
+}
+
+function reviewEntries(review) {
+  const own = (review.unstated || []).filter(Boolean)
+  const answered = new Set(own.map(entry => entry.of).filter(Boolean))
+  const unanswered = PENDING_MOVED.filter(moved => !answered.has(moved.id)).map(ownerEntry)
+  PENDING_MOVED = []
+  return [...own, ...unanswered, ...(review.movedIssues || []).map(ownerEntry)]
+}
+
+function settleCases(after, entries, departures, context) {
+  const tagged = entries.map(entry => ({ ...entry, by: after }))
+  const departed = departures.map(departure => ({ ...departure, by: after }))
+  ALL_UNSTATED.push(...tagged)
+  ALL_DEPARTURES.push(...departed)
+  ROLE_ASSUMPTIONS.push(
+    ...tagged.filter(entry => entry.whose === 'role').map(assumedFrom),
+    ...departed.filter(d => d.from === 'assumption' && d.whose === 'role').map(assumedFrom),
+  )
+  const asks = [
+    ...tagged.filter(entry => entry.whose === 'owner'),
+    ...departed.filter(d => d.from === 'criterion' || d.whose === 'owner'),
+  ]
+  if (!asks.length) return null
+  log(`Blocked after ${after}: ${asks.length} question(s) for the owner`)
+  return {
+    slug: SLUG,
+    ref: REF,
+    verdict: 'blocked',
+    stop: departed.some(d => asks.includes(d)) ? 'departure' : 'question',
+    stoppedAfter: after,
+    openQuestions: asks.map(questionOf),
+    departures: ALL_DEPARTURES,
+    unstated: ALL_UNSTATED,
+    unclassified: unclassifiedCount(),
+    unquotedReviewIssues: unquotedReviewCount(),
+    assumptions: ROLE_ASSUMPTIONS,
+    specPath: context.specPath,
+    testFiles: context.testFiles,
+    branch: BRANCH,
+    ...FINDINGS_SO_FAR,
+    ...context.extra,
+    requiredByOrchestrator: [
+      'Put every open question to the owner in one message, each with your recommended answer first and why, so the owner can accept them all at once: through the question tool, all in one call where it takes them; each answer goes on the ticket under `## Answers`, where the next spec agent reads it',
+      'Commit nothing and open no PR. The run is not approved, so its work is kept as the stash a run that is not approved leaves; once every question is answered, build the ticket again from the preflight, so spec.md holds each answer from its first line',
+    ],
+  }
 }
 
 function union(...lists) {
@@ -1557,7 +1975,7 @@ function dropped(readings) {
 function undecided(readings) {
   return (readings.acceptedInputs || []).flatMap(input =>
     Object.keys(INPUT_CASES).filter(c => input[c] === null)
-      .map(c => ({ input: input.input, plainName: input.plainName, case: c })))
+      .map(c => ({ input: input.input, plainName: input.plainName, case: c, named: input.named })))
 }
 
 // An input as the owner reads it: its plain name, lower case where it starts a clause mid-sentence.
@@ -1614,13 +2032,17 @@ function ticketIssues(review) {
     title: `the change drops the ticket's promise "${p.promise}"`,
     location: p.specLine,
     evidence: 'nothing in spec.md, the tests or the code carries it',
+    breaks: { record: 'ticket', quote: p.promise },
+    quoted: true,
   }))
   const cases = undecided(review).map(entry => ({
     axis: 'input',
     severity: 'major',
     title: `the change does not say what the app does when ${ownerName(entry)} is ${INPUT_CASES[entry.case].owner}`,
     location: entry.input,
-    evidence: `the change decides no ${entry.case} value`,
+    evidence: `the change decides no ${entry.case} value. The rule it breaks is the method's own, that every case of an input a record names is decided, and not a promise of the project; the quote shows the input is the record's, and the quote check refuses an invented input`,
+    breaks: entry.named,
+    quoted: true,
   }))
   return [...promises, ...cases]
 }
@@ -1694,15 +2116,21 @@ if (REJUDGE) {
     const reconcileStop = noRoom('the reconcile', reconcile.changeSize, false)
     if (reconcileStop) return tooLarge(reconcileStop, spec, { rejudged: true, filesChanged: reconcile.filesChanged, disputes: reconcile.disputes || [], checkOutput: reconcile.checkOutput })
   }
+  const rejudgeContext = { specPath: spec.specPath, testFiles: [], extra: { rejudged: true, filesChanged: reconcile ? reconcile.filesChanged : [], disputes: reconcile ? reconcile.disputes || [] : [], checkOutput: reconcile ? reconcile.checkOutput : '' } }
+  const reconcileHalt = reconcile ? settleCases('reconcile', reconcile.unstated || [], reconcile.departures || [], rejudgeContext) : null
+  if (reconcileHalt) return reconcileHalt
   phase('Review')
-  const review = must(await agent(reviewPrompt(spec, true, SETTLED), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
+  const review = readReview(must(await agent(reviewPrompt(spec, true, SETTLED), { label: 'review-again', phase: 'Review', schema: REVIEW_SCHEMA }), 'review'))
+  const reviewHalt = settleCases('review-again', reviewEntries(review), [], { ...rejudgeContext, extra: { ...rejudgeContext.extra, reviewIssues: reviewIssues(review), checkOutput: review.checkOutput } })
+  if (reviewHalt) return reviewHalt
   const judged = rejudged({ review, reconcile, dependencies: REJUDGE.dependencies })
-  const assumptions = withSurfaced(REJUDGE.assumptions, review)
+  const assumptions = withSurfaced([...(REJUDGE.assumptions || []), ...ROLE_ASSUMPTIONS], review)
   log(`Review again: ${review.verdict}` + (judged.forced.length ? `; forced to request_changes: ${judged.forced.join('; ')}` : ''))
   return {
     slug: SLUG,
     ref: REF,
     rejudged: true,
+    ...FINDINGS_SO_FAR,
     verdict: judged.verdict,
     verdictForcedBy: judged.forced,
     filesChanged: reconcile ? reconcile.filesChanged : [],
@@ -1712,6 +2140,10 @@ if (REJUDGE) {
     reviewVerdict: review.verdict,
     ticketPromises: review.ticketPromises,
     acceptedInputs: review.acceptedInputs,
+    unstated: ALL_UNSTATED,
+    unclassified: unclassifiedCount(),
+    unquotedReviewIssues: unquotedReviewCount(),
+    departures: ALL_DEPARTURES,
     adrSuggested: review.adrSuggested,
     guardChanges: review.guardChanges,
     undisputedGuardChanges: judged.undisputed,
@@ -1752,6 +2184,7 @@ if (!preflight.ok) {
   return {
     verdict: 'blocked',
     ref: REF,
+    ...FINDINGS_SO_FAR,
     preflight,
     branch: BRANCH || preflight.branch || '',
     requiredByOrchestrator: [
@@ -1796,6 +2229,7 @@ const spec = found.length
   : written
 const amendStop = found.length ? specStop(spec) : null
 if (amendStop) return amendStop
+NAMED_GATES = namedGatesOf([...NAMED_GATES, ...(Array.isArray(spec.namedGates) ? spec.namedGates : [])])
 const check = found.length
   ? must(
     await agent(ticketCheckPrompt(spec), { label: 'ticket-recheck', phase: 'Ticket check', schema: TICKET_CHECK_SCHEMA }),
@@ -1813,7 +2247,7 @@ if (assumedByRun.length) log(`Ticket check: ${assumedByRun.length} input case(s)
 // ---------------------------------------------------------------------------
 phase('Implement')
 const impl = must(
-  await agent(implementPrompt(spec, kept.map(k => k.question), assumedByRun), { label: 'implement', phase: 'Implement', schema: IMPLEMENT_SCHEMA }),
+  await agent(implementPrompt(spec, kept.map(k => k.question), assumedByRun), { label: 'implement', phase: 'Implement', schema: BUILD_SCHEMA }),
   'implement',
 )
 let filesChanged = union(spec.testFiles, impl.filesChanged)
@@ -1835,31 +2269,41 @@ let critique = {
 }
 const allCriticFindings = []
 let iterations = 0
+let carriedStillOwed = []
+const implementHalt = haltAfter('implement', impl)
+if (implementHalt) return implementHalt
 if (CRITIC) {
   phase('Critique')
-  critique = must(
+  critique = readCritique(must(
     await agent(critiquePrompt(spec, filesChanged, null), { label: 'critique', phase: 'Critique', schema: CRITIQUE_SCHEMA }),
     'critique',
-  )
+  ), 0)
   filesChanged = union(filesChanged, critique.testsAdded)
   allCriticFindings.push({ round: 0, findings: critique.findings })
   log(`Critique: ${critique.findings.length} finding(s), ${owed(critique.findings).length} owed a fix; ` +
     `fitness sabotage confirmed=${critique.fitnessSabotageConfirmed}`)
+  const critiqueHalt = haltAfter('critique', critique)
+  if (critiqueHalt) return critiqueHalt
 
   phase('Fix')
-  while (owed(critique.findings).length > 0 && iterations < MAX_FIX_ITERATIONS) {
+  while (owed(critique.findings).length > 0 && iterations < MAX_FIX_ITERATIONS && carriedStillOwed.length === 0) {
     iterations += 1
+    const wasOwed = owed(critique.findings)
     const stop = await fixRound(critique.findings, critique.testsAdded, iterations, MAX_FIX_ITERATIONS)
     if (stop) return stop
-    critique = must(
+    critique = readCritique(must(
       await agent(critiquePrompt(spec, filesChanged, critique), {
         label: `critique-${iterations}`, phase: 'Fix', schema: CRITIQUE_SCHEMA,
       }),
       `critique-${iterations}`,
-    )
+    ), iterations)
     filesChanged = union(filesChanged, critique.testsAdded)
     allCriticFindings.push({ round: iterations, findings: critique.findings })
     log(`Re-critique ${iterations}: ${critique.findings.length} finding(s), ${owed(critique.findings).length} still owed a fix`)
+    const reCritiqueHalt = haltAfter(`critique-${iterations}`, critique)
+    if (reCritiqueHalt) return reCritiqueHalt
+    carriedStillOwed = owed(critique.findings).filter(f => wasOwed.some(earlier => carries(f, earlier))).map(f => f.id)
+    if (carriedStillOwed.length) log(`Fix loop stops: ${carriedStillOwed.join(', ')} carried through the round it was owed and is still owed`)
   }
 } else {
   log(`Critique and Fix skipped: ${CRITIC_REASON || 'the preflight says the critic does not run'}`)
@@ -1869,19 +2313,93 @@ if (unresolved.length) log(`Fix loop exhausted with ${unresolved.length} unresol
 else if (CRITIC && iterations === 0) log('No blocking findings; fix loop skipped')
 
 // ---------------------------------------------------------------------------
+// A finding still owed after the round it was owed in ends the run before the review (ADR 0072,
+// point 5). The result keeps the findings and their quotes in `unresolvedBlockingFindings`; no
+// review ran, so `reviewIssues` is empty.
+// ---------------------------------------------------------------------------
+function parkCarried() {
+  const left = PENDING_MOVED.map(ownerEntry)
+  PENDING_MOVED = []
+  ALL_UNSTATED.push(...left.map(entry => ({ ...entry, by: `critique-${iterations}` })))
+  const stillOwed = owed(critique.findings)
+  const guardChanges = union(critique.guardFilesChanged)
+  const covered = coveredGuardPaths(disputes, [])
+  const undisputedGuardChanges = guardChanges.filter(path => !covered.has(path))
+  const forced = [`${stillOwed.length} unresolved blocker/major critic finding(s)`]
+  if (undisputedGuardChanges.length) forced.push(`guard paths changed without a dispute record, a spec-named dependency or an additions note covering them: ${undisputedGuardChanges.join(', ')}`)
+  if (!lastCheckPasses) forced.push('the last implement/fix result reported checkPasses: false')
+  if (!spec.failingForRightReason) forced.push('the spec reported failingForRightReason: false')
+  const questions = left.map(questionOf)
+  const assumptions = withSurfaced([...(spec.assumptions || []), ...kept, ...assumedByRun, ...ROLE_ASSUMPTIONS], check)
+  log(`Parked after critique-${iterations}: ${carriedStillOwed.join(', ')} carried through the round it was owed and is still owed; the review does not run`)
+  return {
+    slug: SLUG,
+    ref: REF,
+    verdict: 'request_changes',
+    stop: 'carried',
+    stoppedAfter: `critique-${iterations}`,
+    verdictForcedBy: forced,
+    iterations,
+    filesChanged,
+    critic: { ran: CRITIC, reason: CRITIC_REASON },
+    criticFindings: critique.findings,
+    criticFindingsByRound: allCriticFindings,
+    unresolvedBlockingFindings: stillOwed,
+    carriedStillOwed,
+    reviewIssues: [],
+    reviewIssuesByRound: REVIEW_ROUNDS,
+    ticketFindings: [],
+    unstated: ALL_UNSTATED,
+    unclassified: unclassifiedCount(),
+    unquotedReviewIssues: unquotedReviewCount(),
+    departures: ALL_DEPARTURES,
+    openQuestions: questions,
+    assumptions,
+    settled,
+    disputes,
+    guardChanges,
+    undisputedGuardChanges,
+    specPath: spec.specPath,
+    testFiles: spec.testFiles,
+    testsAdded: critique.testsAdded,
+    checkPasses: false,
+    checkOutput: lastCheckOutput,
+    namedGates: NAMED_GATES,
+    branch: BRANCH,
+    verdictRecord: verdictRecord({ slug: SLUG, ticket: REF, verdict: 'request_changes', forcedBy: forced, findings: stillOwed, openQuestions: questions, assumptions }),
+    requiredByOrchestrator: [
+      'verdict is "request_changes" and no review ran: a critic finding was still owed after the fix round it was given',
+      'Commit nothing and open no PR. Park the ticket with each entry of `unresolvedBlockingFindings`, its `breaks` quote with it, as a refused review\'s issues are parked; `openQuestions` holds the critic findings no role classified, for the owner',
+    ],
+  }
+}
+
+if (carriedStillOwed.length) return parkCarried()
+
+// ---------------------------------------------------------------------------
 // Phase 5: Review (independent)
 // ---------------------------------------------------------------------------
 phase('Review')
-let review = must(await agent(reviewPrompt(spec, false, settled), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review')
+let review = readReview(must(await agent(reviewPrompt(spec, false, settled), { label: 'review', phase: 'Review', schema: REVIEW_SCHEMA }), 'review'))
+const reviewHalt = reviewStop('review', review)
+if (reviewHalt) return reviewHalt
+function reviewStop(after, result) {
+  const halted = haltAfter(after, result, reviewEntries(result))
+  return halted && { ...halted, reviewIssues: reviewIssues(result), checkOutput: result.checkOutput }
+}
+
 // Why: ADR 0056. A project nobody depends on has no fix loop, and a blocker the review found in a
 // young project's first feature parked a ticket one pass would have closed. The same fix round runs
 // once on the review's blockers, then the review again; what it still refuses is parked as before.
 if (!CRITIC && fixableByReview(review)) {
   iterations += 1
+  REVIEW_ROUNDS.push({ round: iterations - 1, findings: blocking(review.issues) })
   const stop = await fixRound(review.issues, [], iterations, YOUNG_FIX_ROUNDS)
   if (stop) return stop
   phase('Review')
-  review = must(await agent(reviewPrompt(spec, false, settled), { label: `review-${iterations}`, phase: 'Review', schema: REVIEW_SCHEMA }), `review-${iterations}`)
+  review = readReview(must(await agent(reviewPrompt(spec, false, settled), { label: `review-${iterations}`, phase: 'Review', schema: REVIEW_SCHEMA }), `review-${iterations}`))
+  const reReviewHalt = reviewStop(`review-${iterations}`, review)
+  if (reReviewHalt) return reReviewHalt
   log(`Re-review after the one fix pass: ${review.verdict}`)
 }
 // Why: the drain reads the owed kind from this output (scripts/drain.py OWED_RED). The reviewer
@@ -1902,7 +2420,7 @@ const addedRecords = additiveRecords(review.recordNotes)
 for (const p of addedRecords) covered.add(p)
 const undisputedGuardChanges = guardChanges.filter(p => !covered.has(p))
 const blockingReviewIssues = blocking(issues)
-const assumptions = withSurfaced(withSurfaced([...(spec.assumptions || []), ...kept, ...assumedByRun], check), review)
+const assumptions = withSurfaced(withSurfaced([...(spec.assumptions || []), ...kept, ...assumedByRun, ...ROLE_ASSUMPTIONS], check), review)
 
 const forcedReasons = []
 if (undisputedGuardChanges.length) forcedReasons.push(`guard paths changed without a dispute record, a spec-named dependency or an additions note covering them: ${undisputedGuardChanges.join(', ')}`)
@@ -1932,7 +2450,13 @@ return {
   criticFindings: critique.findings,
   criticFindingsByRound: allCriticFindings,
   unresolvedBlockingFindings: unresolved,
+  carriedStillOwed,
+  unstated: ALL_UNSTATED,
+  unclassified: unclassifiedCount(),
+  unquotedReviewIssues: unquotedReviewCount(),
+  departures: ALL_DEPARTURES,
   reviewIssues: issues,
+  reviewIssuesByRound: REVIEW_ROUNDS,
   ticketFindings: ticketIssues(review),
   settled,
   reviewVerdict: review.verdict,
@@ -1958,6 +2482,8 @@ return {
   criticAttempted: critique.attempted,
   checkPasses: lastCheckPasses && review.checkPasses === true,
   checkOutput: lastCheckOutput,
+  namedGates: NAMED_GATES,
+  namedGatesRun: { implement: impl.namedGatesRun ?? [], review: review.namedGatesRun ?? [] },
   branch: BRANCH,
   verdictRecord: verdictRecord({
     slug: SLUG,

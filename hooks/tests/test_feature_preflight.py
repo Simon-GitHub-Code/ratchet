@@ -343,6 +343,17 @@ def test_on_its_branch_the_report_carries_the_start_the_publish_check_reads(
     saved = tmp_path / "start.json"
     saved.write_text(json.dumps(asdict(report)), encoding="utf-8")
     assert publish_check.read_start(saved) == report.start
+    publish_check.result_path(saved).write_text(
+        json.dumps(
+            {
+                "criticFindingsByRound": [],
+                "unresolvedBlockingFindings": [],
+                "reviewIssues": [],
+                "reviewIssuesByRound": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     assert publish_check.main(["publish_check.py", str(saved), "--root", str(root)]) == 0
     write(root, "src/x.py", "x = 1\n")
     git(root, "add", "-A")
@@ -814,3 +825,78 @@ def test_an_owed_item_an_agent_writes_stops_a_feature_and_names_the_step(tmp_pat
     write(root, "quality/owed.toml", owed.render([owed.Entry("a", "architecture", "x", "0.12.0")]))
     snapshot(root, "chore: only the architecture is owed")
     assert checks(run(root, "4", gh_returning(issue(labels=("ready-for-agent",))))) == []
+
+
+GATE_ROWS = (
+    "| Question | Tool | Tier | Threshold source | Entry point |\n"
+    "| --- | --- | --- | --- | --- |\n"
+    "| format | fmt | 0 | | `just fmt-check` |\n"
+    "| the whole suite | runner | 1 | | `just tests` |\n"
+    "| the browser suite | driver | 2 | | `just e2e-browser` |\n"
+)
+NAMING_BINDING = f"# Binding\n\n## Gates\n\n{GATE_ROWS}"
+
+
+def criteria_body(*items: str) -> str:
+    lines = "".join(f"- [ ] {item}\n" for item in items)
+    return f"## What to build\n\nA thing.\n\n## Acceptance criteria\n\n{lines}" + CONJECTURE
+
+
+def gates_named(*items: str) -> list[tuple[str, str, str]]:
+    found = preflight.named_gates(criteria_body(*items), NAMING_BINDING)
+    return [(named.gate, named.tier, named.criterion) for named in found]
+
+
+def test_a_criterion_names_a_gate_by_its_name_as_a_code_span() -> None:
+    assert gates_named("`e2e-browser` is green") == [("e2e-browser", "2", "`e2e-browser` is green")]
+
+
+def test_a_criterion_names_a_gate_by_its_entry_point_as_a_code_span() -> None:
+    assert gates_named("`just e2e-browser` passes") == [
+        ("e2e-browser", "2", "`just e2e-browser` passes")
+    ]
+
+
+def test_a_gate_named_in_prose_without_a_code_span_is_not_named() -> None:
+    assert gates_named("the e2e-browser gate is green", "just e2e-browser passes") == []
+
+
+def test_a_code_span_that_is_not_a_gate_of_the_binding_is_not_named() -> None:
+    assert gates_named("`render` returns `None`", "`e2e-mobile` is green") == []
+
+
+def test_each_criterion_that_names_a_gate_is_returned_with_the_tier_of_its_gate() -> None:
+    assert gates_named(
+        "`tests` and `e2e-browser` are green",
+        "the list renders",
+        "`fmt-check` is green again",
+    ) == [
+        ("tests", "1", "`tests` and `e2e-browser` are green"),
+        ("e2e-browser", "2", "`tests` and `e2e-browser` are green"),
+        ("fmt-check", "0", "`fmt-check` is green again"),
+    ]
+
+
+def test_a_continuation_line_belongs_to_its_criterion() -> None:
+    body = criteria_body("The page is saved\n  and `e2e-browser` is green")
+    named = preflight.named_gates(body, NAMING_BINDING)
+    assert [n.gate for n in named] == ["e2e-browser"]
+
+
+def test_only_the_acceptance_criteria_name_gates() -> None:
+    body = "## What to build\n\n`e2e-browser` is green.\n\n## Acceptance criteria\n\n- [ ] one\n"
+    assert preflight.named_gates(body, NAMING_BINDING) == []
+
+
+def test_before_adoption_no_gate_can_be_named() -> None:
+    assert preflight.named_gates(criteria_body("`e2e-browser` is green"), None) == []
+
+
+def test_the_report_carries_the_named_gates_as_json(tmp_path: Path) -> None:
+    root = repository(tmp_path, {"docs/process/binding.md": NAMING_BINDING})
+    install_hooks(root)
+    body = criteria_body("`e2e-browser` is green")
+    report = run(root, "4", gh_returning(issue(body=body, labels=("ready-for-agent",))))
+    assert asdict(report)["named_gates"] == [
+        {"gate": "e2e-browser", "tier": "2", "criterion": "`e2e-browser` is green"}
+    ]

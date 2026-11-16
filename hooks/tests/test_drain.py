@@ -594,6 +594,41 @@ def test_close_parks_a_ticket_with_the_results_reasons_and_stashes_its_draft(
     assert states(root)[BRANCH_C] == "buildable", "the ticket changed, so the hold is over"
 
 
+PARKED = {
+    "verdict": "request_changes",
+    "stop": "carried",
+    "unresolvedBlockingFindings": [
+        {
+            "severity": "major",
+            "title": "loses the order",
+            "breaks": {"record": "ticket", "quote": "The list keeps the saved order."},
+        },
+        {"severity": "minor", "title": "a nit"},
+    ],
+    "reviewIssues": [],
+    "verdictRecord": {"unresolved": ["loses the order", "a title no list holds"]},
+}
+
+
+def test_a_run_parked_with_no_review_reads_its_findings_with_their_quotes() -> None:
+    assert drain.reasons_of(PARKED) == [
+        'unresolved: loses the order (breaks ticket: "The list keeps the saved order.")',
+        "unresolved: a title no list holds",
+    ]
+
+
+def test_a_refused_reviews_issues_are_read_with_their_quotes_too() -> None:
+    issue = {
+        "severity": "blocker",
+        "title": "drops a promise",
+        "breaks": {"record": "spec.md", "quote": "It keeps the order."},
+    }
+    refused = {"reviewIssues": [issue, "an older run's text"], "verdictRecord": {}}
+    assert drain.reasons_of(refused) == [
+        'unresolved: drops a promise (breaks spec.md: "It keeps the order.")'
+    ]
+
+
 def test_a_number_names_the_one_local_ticket_it_starts(tmp_path: Path, capsys: Out) -> None:
     # Why: issue 26. With no tracker `03`, `#3` and `3` all mean the file `03-...`.
     root = project(tmp_path, **{".scratch/f/issues/30-other.md": ticket(3, "Other")})
@@ -1284,3 +1319,31 @@ def test_a_plan_that_does_not_parse_is_a_refused_split_and_a_split_parent_blocks
         text = (root / child).read_text(encoding="utf-8")
         (root / child).write_text(text.replace("Status:", "Status: done\nWas:"), encoding="utf-8")
     assert drain.preflight.open_blockers(waiting, root, gh) == []
+
+
+GATED_BINDING = binding(MERGE) + (
+    "\n## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
+    "| --- | --- | --- | --- | --- |\n| the browser suite | driver | 2 | | `just e2e-browser` |\n"
+)
+
+
+def test_open_hands_the_pipeline_the_gates_the_tickets_criteria_name(
+    tmp_path: Path, capsys: Out
+) -> None:
+    criteria = "## Acceptance criteria\n\n- [ ] `e2e-browser` is green\n- [ ] the list shows\n\n"
+    root = project(
+        tmp_path,
+        **{"docs/process/binding.md": GATED_BINDING, ALPHA: ticket(1, "Alpha", criteria)},
+    )
+    assert run(root, "open", ALPHA) == 0
+    assert json.loads(capsys.readouterr().out)["named_gates"] == [
+        {"gate": "e2e-browser", "tier": "2", "criterion": "`e2e-browser` is green"}
+    ]
+
+
+def test_open_hands_the_pipeline_no_gate_when_no_criterion_names_one(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **{"docs/process/binding.md": GATED_BINDING})
+    assert run(root, "open", ALPHA) == 0
+    assert json.loads(capsys.readouterr().out)["named_gates"] == []

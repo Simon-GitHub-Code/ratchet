@@ -23,7 +23,7 @@ Pick the mode from what the owner typed:
 
 1. **Preflight, before any agent exists.**
    - Run, in one Bash call: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" "<ticket>" --root .`.
-   - It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`) and exits 1 when red. `base` is the default branch, read from the checkout and the binding.
+   - It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`, `named_gates`) and exits 1 when red. `base` is the default branch, read from the checkout and the binding.
    - **Red on `size` alone** (the ticket's own `## Size` passes a product ceiling): split it as [Too large](#too-large-the-agent-splits-it) says, then build the first part that is free.
    - **A `hooks` failure whose `produce` does not start `the owner:`** is yours to repair. Run the command it names in one Bash call, then the preflight again.
    - **A `hooks` failure whose `produce` starts `the owner:`** is a change of git config, which the guard refuses from an agent. Report it with the rest below; do not run it.
@@ -42,15 +42,15 @@ Pick the mode from what the owner typed:
 
    ```
    name: "ratchet:pipeline"
-   args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
+   args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py", "namedGates": <the preflight's named_gates> }
    ```
 
    The run is the one [pipeline.md](../method/pipeline.md) describes. It never commits, pushes or opens a pull request. The critic runs only when `critic` is true (the binding declares the `depended-on` life event).
 
-   **The publish check, each time the run returns or errors,** before anything is committed and before a resume: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/publish_check.py" <the report file of step 2> --root .` in one Bash call.
+   **The publish check, each time the run returns or errors,** before anything is committed and before a resume: write the run's result, as JSON, to `<the report file of step 2>.result.json`, then run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/publish_check.py" <the report file of step 2> --root .` in one Bash call. A run that errored has no result: write none and add `--before-resume`.
    - **Exit 0:** nothing moved. Go on.
-   - **Exit 1:** a role committed, pushed or opened a pull request, or you committed before this check. Run `git stash push -u -m "<branch>: blocked run"`, then `git switch <base>`. Tell the owner what the check printed, and stop. Never commit on that branch.
-   - **Exit 2 or 3:** the start or the present state cannot be read, and neither is a pass. Report what it printed and stop.
+   - **Exit 1:** a role committed, pushed or opened a pull request, or you committed before this check, or a finding the run treated as owed quotes what its record does not hold. Run `git stash push -u -m "<branch>: blocked run"`, then `git switch <base>`. Tell the owner what the check printed, and stop. Never commit on that branch.
+   - **Exit 2 or 3:** the start, the result or the present state cannot be read, and none of them is a pass. Report what it printed and stop.
 
    **The run errors instead of returning** (an agent died): resume it once. If it errors again, tell the owner which stage died and stop.
 
@@ -65,6 +65,7 @@ Pick the mode from what the owner typed:
    - **`guardEdits`:** list them. The owner lands them on the default branch, or builds the ticket with `/pstack:poteto-mode` while present.
    - **`tooLarge`:** split it yourself and go on, as [Too large](#too-large-the-agent-splits-it) says. Splitting by size is no product decision, so the owner is asked nothing and is told afterwards, in the hand-over.
    - **A dispute:** relay it to the owner.
+   - **`unresolvedBlockingFindings`, and `reviewIssues` when a review ran:** list each blocker or major in the hand-over with the record it breaks and the sentence it quotes. A result with `stop` `carried` ran no review, so its findings are in `unresolvedBlockingFindings` alone; its `openQuestions` hold each critic finding no role classified, with the critic's view as the first option.
    - **`ticketFindings`:** the build lost a promise of the ticket, or left a case of an input undecided, that the plan had kept. The owner has nothing to decide and the ticket nothing to change. Build the ticket again once, from step 1 in the same turn, with `"ticketFindings": <the result's ticketFindings>` added to the pipeline's args, so the spec role writes the next spec with them in hand. If that run is refused for the same reason, report the findings to the owner.
    - **A `triggers:` red line in `checkOutput`:** the ticket adds another instance of a kind whose safeguard is owed, or whose architecture review is owed (`triggers: architecture review owed:`). Tell the owner to type `/ratchet:safeguard`, or `/ratchet:architecture` for a review, then build the ticket again. Nothing in the ticket needs to change.
 
@@ -114,13 +115,13 @@ Run every command below from the repository's own checkout, on the default branc
    Done when `blocked` is empty and you have said what the drain will do, or you have reported each line and stopped.
 
 3. **Start the pipelines.**
-   - For each ticket in `start`, run `D open <ticket> --root .`. Exit 0 prints its `branch`, `worktree` and `base`. Exit 1 means the plan does not start it.
+   - For each ticket in `start`, run `D open <ticket> --root .`. Exit 0 prints its `branch`, `worktree`, `base` and `named_gates`. Exit 1 means the plan does not start it.
    - `open` is the gate on the order and the cap, so make every branch and work tree through it, none by hand.
    - Call the Workflow tool once per ticket opened, every call in one message so the runs are concurrent:
 
    ```
    name: "ratchet:pipeline"
-   args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
+   args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py", "namedGates": <the open's named_gates> }
    ```
 
    **A run that errors.** An agent that dies ends the run in a thrown error ("resume the run to retry") and no result.
@@ -155,7 +156,7 @@ Run every command below from the repository's own checkout, on the default branc
 
       ```
       name: "ratchet:pipeline"
-      args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "rejudge": { "slug": "<slug>", "specPath": "<specPath>", "conflicts": [<the conflicts>], "checkRed": <true when check was red>, "dependencies": <the first result's dependencies>, "assumptions": <the first result's assumptions>, "settled": <the first result's settled> } }
+      args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "rejudge": { "slug": "<slug>", "specPath": "<specPath>", "conflicts": [<the conflicts>], "checkRed": <true when check was red>, "dependencies": <the first result's dependencies>, "namedGates": <the first result's namedGates>, "assumptions": <the first result's assumptions>, "settled": <the first result's settled> } }
       ```
 
       - One agent finishes the rebase and gets `check` green, only when there was a conflict or a red `check`.
@@ -266,7 +267,7 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
 
 ## Questions for the owner
 
-A question reaches the owner only when it is a product question: its answer shapes the product (`direction`) or cannot be taken back (`irreversible`). The spec role's result marks each one, with two to four options, the recommended one first, and a sentence on why. Never ask the owner to confirm what you would do anyway, and never ask whether to go on.
+A question reaches the owner only when it is a product question: its answer shapes the product (`direction`) or cannot be taken back (`irreversible`). The result marks each one, from the spec role or from the role its `stoppedAfter` names, with two to four options, the recommended one first, and a sentence on why. Never ask the owner to confirm what you would do anyway, and never ask whether to go on.
 
 1. **Ask** `feature.open-question`: "<the question the build stopped on, in the words of someone using the product>" All of them in one message, each as the spec role wrote it, so the owner can accept them all at once. The recommended option is first and its label ends with `(recommended)`; the description gives the reason.
 2. **Write each answer on the ticket** under `## Answers`, the question and the answer in one line each.
