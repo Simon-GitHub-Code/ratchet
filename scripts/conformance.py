@@ -2512,8 +2512,10 @@ def check_register(data: dict[str, object]) -> Iterable[Finding]:
 
 
 def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
-    # Why: ADR 0069. The full proof after a merge is held to a ceiling of its own, never the tier 1
-    # one; only a measured run sets it, so the finding names the command and no edit is offered.
+    """ADR 0069: the full proof after a merge has a ceiling of its own, never the tier 1 one.
+
+    Only a measured run sets it, so the finding names the command and offers no edit.
+    """
     text = read(root / "quality/thresholds.toml")
     try:
         data = tomllib.loads(text or "")
@@ -2538,8 +2540,10 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
 
 
 def check_gate_reads(root: Path) -> Iterable[Finding]:
-    # Why: ADR 0069. The bullets narrow which gates a change to tool config proves, so a bullet
-    # for no gate, an empty one, or an entry that covers no file skips a gate by mistake.
+    """ADR 0069: a bullet for no gate, an empty one, or an entry covering no file skips a gate.
+
+    The bullets of ``## What each gate reads`` narrow which gates a change to tool config proves.
+    """
     binding = read(root / BINDING_PATH) or ""
     gates = {row.gate for row in project_bite.gate_rows(binding)}
     heading = project_bite.READS

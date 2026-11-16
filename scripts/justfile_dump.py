@@ -36,7 +36,7 @@ def dump(text: str, file: Path) -> dict[str, object] | None:
     file.write_text(text, encoding="utf-8")
     command = ["just", "--justfile", str(file), "--dump", "--dump-format", "json"]
     try:
-        done = subprocess.run(  # -- a fixed argv, no shell
+        done = subprocess.run(
             command,
             cwd=file.parent,
             capture_output=True,

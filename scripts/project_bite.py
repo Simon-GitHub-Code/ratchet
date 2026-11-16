@@ -228,7 +228,7 @@ UNSUPPORTED = (
 )
 TAIL = 15
 MAX_LANES = 4
-MIN_CELLS = 4  # Why: Question, Tool, Tier, Threshold source, Entry point.
+GATE_ROW_CELLS = 5
 GATE_LIMIT = 900.0
 RUN_CEILING = "bite-run"
 SLOW = 2.0
@@ -276,7 +276,10 @@ def gate_rows(binding: str) -> list[Row]:
 
 @functools.lru_cache(maxsize=256)
 def split_gates(binding: str) -> tuple[tuple[Row, ...], str]:
-    """The Gates table's rows, and the binding with those rows taken out."""
+    """The Gates table's rows, and the binding with those rows taken out.
+
+    A row has ``GATE_ROW_CELLS`` cells: Question, Tool, Tier, Threshold source, Entry point.
+    """
     before, marker, body = binding.partition("\n## Gates\n")
     section, divider, after = body.partition("\n## ")
     kept: list[str] = []
@@ -289,7 +292,7 @@ def split_gates(binding: str) -> tuple[tuple[Row, ...], str]:
         elif not header:
             header = True
             kept.append(line)
-        elif len(cells) > MIN_CELLS:
+        elif len(cells) >= GATE_ROW_CELLS:
             command = cells[4].partition("`")[2].partition("`")[0]
             rows.append(Row(cells[0], cells[1], cells[2], command, line="|".join(cells)))
         else:
@@ -1511,12 +1514,16 @@ def patch_causes(root: Path, base: str, path: str) -> list[Cause]:
 
 
 def binding_causes(root: Path, base: str) -> list[Cause]:
+    """The gates a change to the binding could affect.
+
+    ``gatelib.show`` strips the text it returns while the work tree's file keeps its newline, so
+    the text outside the rows is compared stripped. A changed row that names no gate falls back.
+    """
     binding = str(gatelib.BINDING)
     old, new = gatelib.show(root, base, binding), gatelib.read_text(root / binding)
     if old is None or new is None:
         return [Cause(None, f"{binding} was added or removed")]
     (old_rows, old_rest), (new_rows, new_rest) = split_gates(old), split_gates(new)
-    # Why: `gatelib.show` strips the text it returns, and the work tree's file keeps its newline.
     if (
         plugin_pin.PIN_LINE.sub("", old_rest).strip()
         != plugin_pin.PIN_LINE.sub("", new_rest).strip()
@@ -1533,11 +1540,11 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
         if was is not None and now is not None and was.line == now.line:
             continue
         verb = "added" if was is None else "removed" if now is None else "changed"
-        causes += [
-            Cause(row.gate, f"the binding's row `{question}` {verb}")
-            for row in (was, now)
-            if row is not None and row.gate
-        ]
+        rows = [row for row in (was, now) if row is not None]
+        if not all(row.gate for row in rows):
+            why = f"the binding's row `{question}` {verb} and names no gate"
+            return [Cause(None, why)]
+        causes += [Cause(row.gate, f"the binding's row `{question}` {verb}") for row in rows]
     return causes
 
 

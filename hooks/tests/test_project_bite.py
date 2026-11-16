@@ -501,7 +501,8 @@ def with_reads(bullets: str) -> str:
     return f"## What each gate reads\n\n{bullets}"
 
 
-def replaced(root: Path, path: str, old: str, new: str) -> None:  # noqa: PLR0917 # -- a test helper
+def replaced(root: Path, path: str, *edit: str) -> None:
+    old, new = edit
     text = (root / path).read_text(encoding="utf-8")
     assert old in text
     write(root, path, text.replace(old, new, 1))
@@ -721,6 +722,17 @@ def test_a_question_in_two_rows_sends_a_binding_change_to_every_gate(
     out = shown(capsys).splitlines()
     why = f"{BINDING} has two gate rows for one question, so one could hide behind the other"
     assert out[1] == every(why)
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_a_changed_row_that_names_no_gate_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = targeted(tmp_path, rows=GATE_ROWS + row("extra", tool="none"))
+    replaced(root, BINDING, "`sh gate extra`", "")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == every("the binding's row `extra` changed and names no gate")
     assert proved(out) == ["lint", "tests"]
 
 
