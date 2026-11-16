@@ -260,3 +260,76 @@ def test_a_folder_a_tier_hashed_is_read_without_git(
     assert plugin_pin.checked_folder(copy)
     assert plugin_pin.commit_of(copy) == "2" * 40
     assert plugin_pin.release_tree(copy) == plugin_pin.copy_tree_id(copy)
+
+
+def marker_module(tmp_path: Path, name: str) -> tuple[Path, Path]:
+    flag = tmp_path / "ran-evil"
+    folder = tmp_path / "hijack"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_text(f"open({str(flag)!r}, 'w').close()\n", encoding="utf-8")
+    return folder, flag
+
+
+def gate_with(tmp_path: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    root = project(tmp_path / "repo", copy, pinned)
+    return just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(tmp_path), **env})
+
+
+def test_a_folder_on_pythonpath_holding_json_never_replaces_the_real_module(
+    tmp_path: Path,
+) -> None:
+    folder, flag = marker_module(tmp_path, "json.py")
+    done = gate_with(tmp_path, {"PYTHONPATH": str(folder)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+
+
+@pytest.mark.parametrize(
+    "variable", [("PYTHONSAFEPATH", "1"), ("PYTHONHOME", "/nonexistent/ratchet-home")]
+)
+def test_an_interpreter_variable_that_would_break_a_script_run_leaves_the_gate_green(
+    tmp_path: Path, variable: tuple[str, str]
+) -> None:
+    done = gate_with(tmp_path, dict([variable]))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_a_startup_file_named_by_pythonstartup_never_runs(tmp_path: Path) -> None:
+    flag = tmp_path / "ran-evil"
+    startup = tmp_path / "startup.py"
+    startup.write_text(f"open({str(flag)!r}, 'w').close()\n", encoding="utf-8")
+    done = gate_with(tmp_path, {"PYTHONSTARTUP": str(startup), "PYTHONINSPECT": "1"})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+
+
+def test_on_the_fallback_no_compiled_file_is_written_anywhere(tmp_path: Path) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    folder = temporary / f"ratchet-pyc-{os.getuid()}"
+    folder.mkdir()
+    folder.chmod(0o777)
+    root = project(tmp_path / "repo", copy, pinned)
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not list(copy.rglob("*.pyc"))
+    assert not list(temporary.rglob("*.pyc"))
+
+
+def test_on_the_fallback_a_planted_compiled_file_in_a_copy_never_runs(tmp_path: Path) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    flag = plant(tmp_path, copy / "scripts/__pycache__" / f"gatelib.{cache_tag()}.pyc")
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    folder = temporary / f"ratchet-pyc-{os.getuid()}"
+    folder.mkdir()
+    folder.chmod(0o777)
+    root = project(tmp_path / "repo", copy, pinned)
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()

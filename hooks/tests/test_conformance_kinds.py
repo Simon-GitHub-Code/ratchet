@@ -403,6 +403,29 @@ def test_a_plugin_block_that_is_not_the_templates_is_rewritten_to_it(repo: Path)
     assert found.fix.want(path.read_text(encoding="utf-8")) == text
 
 
+OLD_PYC_EXPORTS = (
+    'export PYTHONPYCACHEPREFIX := if plugin_pyc_ok == "" { "/nonexistent/x" }'
+    ' else { plugin_pyc_ok + "/" + plugin_tree }\n'
+    'export PYTHONDONTWRITEBYTECODE := if plugin_pyc_ok == "" { "1" } else { "" }\n'
+)
+
+
+def test_a_block_that_exports_the_compiled_file_variables_is_rewritten_with_nothing_left(
+    repo: Path,
+) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    [variable] = [
+        line for line in text.splitlines(keepends=True) if line.startswith("plugin_py :=")
+    ]
+    path.write_text(text.replace(variable, OLD_PYC_EXPORTS), encoding="utf-8")
+    [found] = block_findings(repo)
+    assert isinstance(found.fix, conformance.Auto)
+    made = found.fix.want(path.read_text(encoding="utf-8"))
+    assert made == text
+    assert "PYTHONPYCACHEPREFIX" not in made
+
+
 def test_the_templates_plugin_block_is_not_a_finding(repo: Path) -> None:
     assert block_findings(repo) == []
 

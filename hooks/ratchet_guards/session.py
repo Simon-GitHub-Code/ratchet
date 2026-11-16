@@ -73,12 +73,22 @@ def run_route(argv: list[str]) -> str | None:
     return completed.stdout if completed.returncode == 0 else None
 
 
+def child_interpreter() -> list[str]:
+    """This interpreter with the options that keep its environment variables and user site out."""
+    argv = [sys.executable]
+    if sys.flags.ignore_environment:
+        argv.append("-E")
+    if sys.flags.no_user_site:
+        argv.append("-s")
+    return argv
+
+
 def next_step(root: Path, plugin_root: Path = PLUGIN_ROOT, run: Runner = run_route) -> str:
     """The route's next command for ``root`` as one sentence, or empty when it cannot be had."""
     script = plugin_root / ROUTE_SCRIPT
     if not script.is_file():
         return ""
-    output = run([sys.executable, str(script), "--root", str(root), "--offline", "--json"])
+    output = run([*child_interpreter(), str(script), "--root", str(root), "--offline", "--json"])
     if output is None:
         return ""
     try:

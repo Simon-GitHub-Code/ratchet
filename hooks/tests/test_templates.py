@@ -151,7 +151,8 @@ def dry_run(recipe_name: str, justfile: Path = TEMPLATES / "justfile") -> str:
     return " ".join(done.stderr.split())
 
 
-RUNNER = 'python3 "$RATCHET_PLUGIN_DIR/scripts/parallel.py" --runner'
+PIN_CALL = re.compile(r'python3 -E -s .*"\$RATCHET_PLUGIN_DIR/scripts/plugin_pin.py"')
+RUNNER = '"$RATCHET_PLUGIN_DIR/scripts/parallel.py" --runner'
 
 
 @pytest.mark.parametrize(
@@ -173,9 +174,7 @@ def test_every_tier_runs_its_gates_at_once_through_the_runner(
     needs_just()
     pin, runner, gates = dry_run(name).partition(RUNNER)
     said = runner + gates
-    assert 'python3 "$RATCHET_PLUGIN_DIR/scripts/plugin_pin.py"' in pin, (
-        "the pin is judged before any gate"
-    )
+    assert PIN_CALL.search(pin), "the pin is judged before any gate"
     assert runner
     assert ("--fail-fast" in said) is bool(flag)
     assert "--report .ratchet/timing.jsonl" in said
@@ -235,7 +234,7 @@ def test_the_three_service_gates_arrive_bound_to_the_shipped_scripts() -> None:
         "/scripts/with_service.py\" --boot ' + quote(boot) + ' --ready ' + quote(ready)" in JUSTFILE
     )
     assert recipe("smoke").strip() == "{{booted}}"
-    assert recipe("load-smoke").startswith("    {{probed}} -- python3 ")
+    assert recipe("load-smoke").startswith("    {{probed}} -- {{plugin_py}} ")
     assert 'scripts/load_smoke.py" --url "bind: METHOD URL' in recipe("load-smoke")
     assert "{{ready}}" not in recipe("load-smoke"), "readiness alone overlaps nothing a user asks"
     assert 'scripts/telemetry_sink.py" --service "{{service}}" -- {{booted}} --' in recipe(
@@ -495,7 +494,7 @@ def test_the_weekly_entry_point_runs_its_gates_one_after_another() -> None:
         *("restore-drill", "prod-probe"),
     ]
     said = dry_run("weekly")
-    assert 'python3 "$RATCHET_PLUGIN_DIR/scripts/plugin_pin.py"' in said
+    assert PIN_CALL.search(said)
     assert said.endswith(f"--serial {' '.join(gates)} -- {' '.join(gates)}")
 
 
@@ -891,3 +890,15 @@ def test_no_markdown_template_escapes_a_backtick_inside_inline_code() -> None:
     assert files
     bad = [str(f.relative_to(PLUGIN_ROOT)) for f in files if "\\`" in f.read_text("utf-8")]
     assert not bad, f"use a double-backtick span instead of a backslash-escaped backtick: {bad}"
+
+
+def test_every_plugin_script_runs_through_the_one_interpreter_variable() -> None:
+    allowed = ("plugin_py :=", "printf ")
+    bare = [
+        line
+        for line in JUSTFILE.splitlines()
+        if not line.lstrip().startswith("#")
+        and re.search(r"\bpython3 (?!-I )", line)
+        and not any(part in line for part in allowed)
+    ]
+    assert bare == []
