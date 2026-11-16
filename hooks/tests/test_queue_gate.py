@@ -19,6 +19,7 @@ from tests.test_drain import (
 )
 
 COMMIT = "git commit -m 'feat(core): the change'"
+GATED = ["queue-final-check"]
 FINAL = "Run `drain.py check <ticket> --final` first, and commit when it is green."
 
 
@@ -45,6 +46,7 @@ def test_a_commit_in_a_queue_work_tree_before_the_final_check_is_refused(
 def test_the_same_commit_after_the_final_check_goes_through(tmp_path: Path) -> None:
     root = project(tmp_path)
     assert run(root, "open", ALPHA) == 0
+    assert [v.rule for v in judged(COMMIT, tree_of(root))] == GATED
     assert run(root, "check", ALPHA, "--final") == 0
     assert judged(COMMIT, tree_of(root)) == []
 
@@ -52,6 +54,7 @@ def test_the_same_commit_after_the_final_check_goes_through(tmp_path: Path) -> N
 def test_a_commit_outside_any_queue_work_tree_is_unaffected(tmp_path: Path) -> None:
     root = project(tmp_path)
     assert run(root, "open", ALPHA) == 0
+    assert [v.rule for v in judged(COMMIT, tree_of(root))] == GATED
     assert judged(COMMIT, root) == []
     git(root, "switch", "-q", "-c", "feat/other")
     assert judged(COMMIT, root) == []
@@ -62,6 +65,7 @@ def test_a_drain_stopped_between_the_final_check_and_the_commit_may_commit(
 ) -> None:
     root = project(tmp_path)
     assert run(root, "open", ALPHA) == 0
+    assert [v.rule for v in judged(COMMIT, tree_of(root))] == GATED
     assert run(root, "check", ALPHA, "--final") == 0
     assert run(root, "check", ALPHA) == 0
     assert judged(COMMIT, tree_of(root)) == []
@@ -70,8 +74,9 @@ def test_a_drain_stopped_between_the_final_check_and_the_commit_may_commit(
 def test_an_unfinished_rebase_whose_start_passed_with_final_may_commit(tmp_path: Path) -> None:
     root = project(tmp_path)
     assert run(root, "open", ALPHA) == 0
-    assert run(root, "check", ALPHA, "--final") == 0
     tree = tree_of(root)
+    assert [v.rule for v in judged(COMMIT, tree)] == GATED
+    assert run(root, "check", ALPHA, "--final") == 0
     (tree / git(tree, "rev-parse", "--git-path", "rebase-merge")).mkdir()
     assert judged(COMMIT, tree) == []
 
