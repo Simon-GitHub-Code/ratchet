@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+0.12.2 limited each run of the proof that gates can fail to the gate's own time ceiling, else its tier's (issue #168). Those ceilings are measured in the warm work tree, and one run of a gate in a cold scratch copy, with no cache, takes several times as long, so a slow gate's runs were ended and read `TIMED OUT`, and the proof was red: for example `bite: lint: an explicit any: TIMED OUT (60.4s, lane 2)` and `bite: red: 30 of 32 faults bit`. Any change that touches a gate path ran into it, the upgrade to 0.12.2 included. A run is now limited to `--limit`, else the `bite-run` key of `[ceilings.seconds]` in `quality/thresholds.toml`, else 900 seconds, and the proof's first line says which. No gate's or tier's ceiling limits a run.
+
 ## 0.12.2
 
 Two defects of published versions are fixed, both in the proof that gates can fail. Upgrade from any version from 0.10.0 on. Run the upgrade as the README's Upgrading section says: until installs come from a tagged release, from a clone at the commit this version was published at.
