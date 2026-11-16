@@ -62,7 +62,9 @@ finding of ``criticFindingsByRound``, ``unresolvedBlockingFindings`` and ``revie
 findings the run treated as owed. It is red when one carries no ``breaks`` or quotes a record that
 does not hold the quote word for word. A minor is not checked. The records are read from the
 checkout, ``spec.md`` from the result's ``specPath`` and ``ticket`` from the result's ``ref``. A
-run that errored returned no result; ``--errored`` says so and skips this check alone.
+run that errored returned no result; ``--before-resume`` says so and skips this check alone. A
+pass under it prints that nothing may be published on it and marks nothing, so it authorises a
+resume and nothing else; a run that returned has its result in the file, and the flag is refused.
 
 What it does not see: a tag, a stash or another branch a role made, locally or on the forge; a
 remote other than ``origin``, and any remote at all when the start had no forge; a pull request
@@ -89,7 +91,7 @@ Exit status:
 
 Neither 2 nor 3 is ever a pass.
 
-Usage: ``publish_check.py START [--root DIR] [--errored]``.
+Usage: ``publish_check.py START [--root DIR] [--before-resume]``.
 """
 
 from __future__ import annotations
@@ -114,6 +116,9 @@ REMOTE = "origin"
 SHORT = 12
 SAID = "publish check:"
 NEVER = "that is never a pass"
+NOTHING_PUBLISHED = (
+    "publish check: nothing may be published on this check; it authorises a resume and nothing else"
+)
 FINAL_CHECK = "`drain.py check <ticket> --final`"
 HALTED = (
     "a rebase is under way in the checkout and was not finished: a role stopped halfway, which"
@@ -601,8 +606,14 @@ def read_inputs(options: argparse.Namespace) -> tuple[Start, Result | None] | in
         print(f"{SAID} the start state in {options.start} cannot be read: {error}; {NEVER}")
         return 2
     where = result_path(options.start)
+    if options.before_resume and where.exists():
+        print(
+            f"{SAID} `--before-resume` was given, but the run's result is in {where}; a run that"
+            " returned is checked without it"
+        )
+        return 2
     try:
-        return start, None if options.errored else read_result(where)
+        return start, None if options.before_resume else read_result(where)
     except ResultError as error:
         print(f"{SAID} the run's result in {where} cannot be read: {error}; {NEVER}")
         return 2
@@ -638,7 +649,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("start", type=Path, help="the start state: a JSON object with `start`")
     parser.add_argument("--root", default=".")
     parser.add_argument(
-        "--errored", action="store_true", help="the run errored and returned no result"
+        "--before-resume", action="store_true", help="the run errored and returned no result"
     )
     options = parser.parse_args(argv[1:])
     inputs = read_inputs(options)
@@ -652,7 +663,10 @@ def main(argv: list[str]) -> int:
         print(f"{SAID} the present state cannot be read: {error}; {NEVER}")
         return 3
     quoted = [] if result is None else quote_lines(result, root, preflight.run_gh)
-    return settle(moves, quoted, halted=halted, unread=unread)
+    code = settle(moves, quoted, halted=halted, unread=unread)
+    if options.before_resume:
+        print(NOTHING_PUBLISHED)
+    return code
 
 
 if __name__ == "__main__":

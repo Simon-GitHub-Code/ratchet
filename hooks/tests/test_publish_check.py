@@ -807,6 +807,9 @@ QUOTES_RED = (
     "publish check: red, a finding the run treated as owed quotes what its record does not hold:"
     " the ticket is not approved"
 )
+NOTHING = (
+    "publish check: nothing may be published on this check; it authorises a resume and nothing else"
+)
 NO_BREAKS = "it carries no `breaks` with a `record` and a `quote`, both text"
 
 
@@ -866,12 +869,29 @@ def test_a_run_that_errored_has_no_result_and_is_checked_for_moves_alone(
     path = started(tmp_path, root)
     publish_check.result_path(path).unlink()
     monkeypatch.setattr(preflight, "run_gh", gh_returning(NONE_OPEN))
-    argv = ["publish_check.py", str(path), "--root", str(root), "--errored"]
+    argv = ["publish_check.py", str(path), "--root", str(root), "--before-resume"]
     assert publish_check.main(argv) == 0
-    assert capsys.readouterr().out.splitlines() == [GREEN]
+    assert capsys.readouterr().out.splitlines() == [GREEN, NOTHING]
     commit(root, "feat(core): a role committed")
     assert publish_check.main(argv) == 1
-    assert capsys.readouterr().out.splitlines()[-1] == RED
+    assert capsys.readouterr().out.splitlines()[-2:] == [RED, NOTHING]
+
+
+def test_before_resume_with_a_result_file_present_is_refused(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    resulted(path, {"reviewIssues": [breaking("AGENTS.md", "invented")]})
+    monkeypatch.setattr(preflight, "run_gh", gh_returning(NONE_OPEN))
+    argv = ["publish_check.py", str(path), "--root", str(root), "--before-resume"]
+    assert publish_check.main(argv) == 2
+    assert capsys.readouterr().out.splitlines() == [
+        (
+            f"publish check: `--before-resume` was given, but the run's result is in"
+            f" {path}.result.json; a run that returned is checked without it"
+        )
+    ]
 
 
 def test_the_result_is_beside_the_start_file() -> None:
