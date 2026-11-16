@@ -482,3 +482,44 @@ def test_a_clone_at_a_release_tag_is_at_the_commit_its_release_file_names(
 def test_a_clone_that_tracks_no_release_file_is_at_its_head(tmp_path: Path) -> None:
     used, head = plugin(tmp_path / "plugin")
     assert plugin_pin.commit_of(used) == head
+
+
+def test_a_pin_with_no_tree_id_is_red_and_names_the_line_to_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    used, commit = plugin(tmp_path / "plugin")
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {commit}")
+    code, out = run(root, used, capsys)
+    assert code == 1
+    assert "docs/process/binding.md pins no tree id" in out
+    assert f"`- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}`" in out
+
+
+def test_a_checkout_holding_a_file_the_commit_does_not_is_red_whatever_its_commit_says(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    used, commit = plugin(tmp_path / "plugin")
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}")
+    assert run(root, used, capsys)[0] == 0
+    repos.write(used, "scripts/extra.py", "print('extra')\n")
+    code, out = run(root, used, capsys)
+    assert code == 1
+    assert f"is tree {plugin_pin.copy_tree_id(used)}, not the {tree(used)} that" in out
+
+
+def test_the_pin_line_a_plugin_writes_holds_the_tree_id_of_its_commit(tmp_path: Path) -> None:
+    used, commit = plugin(tmp_path / "plugin")
+    assert plugin_pin.line_for(used) == f"- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}"
+    held = plugin_pin.pinned(plugin_pin.line_for(used))
+    assert held == plugin_pin.Pin("1.2.3", commit, tree(used))
+
+
+def test_a_folder_that_is_not_there_or_cannot_be_read_has_no_tree_id(tmp_path: Path) -> None:
+    assert plugin_pin.copy_tree_id(tmp_path / "absent") is None
+    repos.write(tmp_path / "copy", "scripts/x.py", "print(1)\n")
+    assert plugin_pin.copy_tree_id(tmp_path / "copy")
+    (tmp_path / "copy/scripts/x.py").chmod(0)
+    try:
+        assert plugin_pin.copy_tree_id(tmp_path / "copy") is None
+    finally:
+        (tmp_path / "copy/scripts/x.py").chmod(0o644)

@@ -66,9 +66,7 @@ PIN = re.compile(
 )
 # Why: a line that only starts like the pin, such as a note on where the plugin comes from, is
 # the project's own; only a line of the pin's shape, real or placeholder, is the pin.
-PIN_LINE = re.compile(
-    r"^- Ratchet plugin: \S+ at \S+(?: tree \S+)?[ \t]*(?=\r?$)", re.MULTILINE
-)
+PIN_LINE = re.compile(r"^- Ratchet plugin: \S+ at \S+(?: tree \S+)?[ \t]*(?=\r?$)", re.MULTILINE)
 PLUGIN_REF = re.compile(r'repository:\s*\S*ratchet\S*?[,\s]+ref:\s*"?([^",\s}]+)')
 RUNNER = "## Runner"
 WORKFLOWS = Path(".github/workflows")
@@ -212,12 +210,11 @@ def copy_tree_id(plugin: Path) -> str | None:
                 check=False,
             )
 
-        if run("init", "-q", "--template=").returncode:
-            return None
-        (git_dir / "info").mkdir()
+        (git_dir / "info").mkdir(parents=True)
         (git_dir / "info" / "attributes").write_text(UNFILTERED, encoding="utf-8")
-        if run("add", "-A", "-f", "--", ".", *EXCLUDED).returncode:
-            return None
+        for step in (("init", "-q", "--template="), ("add", "-A", "-f", "--", ".", *EXCLUDED)):
+            if run(*step).returncode:
+                return None
         done = run("write-tree")
         return done.stdout.strip() if done.returncode == 0 else None
 

@@ -204,9 +204,7 @@ def test_the_id_is_the_same_under_a_hostile_global_git_configuration(tmp_path: P
         "XDG_CONFIG_HOME": str(tmp_path),
         "HOME": str(tmp_path),
     }
-    done = just(
-        project(tmp_path / "repo", copy, pinned), "plugin-pin", plugin=copy, env=hostile
-    )
+    done = just(project(tmp_path / "repo", copy, pinned), "plugin-pin", plugin=copy, env=hostile)
     assert done.returncode == 0, done.stdout + done.stderr
 
 
