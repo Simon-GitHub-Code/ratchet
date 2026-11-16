@@ -172,6 +172,7 @@ import application_types
 import budget
 import gatelib
 import plugin_pin
+import report
 
 # Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -328,7 +329,7 @@ def git_in(root: Path, *args: str, index: Path | None = None, stdin: str | None 
 
 
 def environment() -> dict[str, str]:
-    kept = {key: value for key, value in os.environ.items() if key not in REAL_TREE}
+    kept = {key: value for key, value in os.environ.items() if key not in (*REAL_TREE, report.RUN)}
     return {**kept, BITING: "1"}
 
 

@@ -239,9 +239,19 @@ def test_the_gates_seen_to_starve_each_other_never_run_side_by_side_in_any_run_o
 def test_a_recipe_learns_its_shard_from_the_environment_and_is_whole_without_one() -> None:
     assert 'shard := env_var_or_default("SHARD", "1")' in JUSTFILE
     assert 'shards := env_var_or_default("SHARDS", "1")' in JUSTFILE
-    for name in ("test", "mutation-changed", "mutation", "e2e"):
+    for name in ("suite-report", "mutation-changed", "mutation", "e2e"):
         assert "shard {{shard}} of {{shards}}" in recipe(name), name
-    assert "test_runner" in recipe("test"), "the test gate runs the runner adoption provisioned"
+    for gate in ("test", "coverage", "diff-coverage", "test-counts"):
+        assert f"report.py --reader {gate}" in recipe(gate), f"{gate} reads the shared suite report"
+    body = recipe("coverage")
+    assert 'report="$(' in body, "coverage keeps report.py's exit status"
+    assert "--reader coverage --path " in body, "coverage asks for its path"
+    assert (
+        '&& {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report "$report"'
+        in body
+    )
+    assert "--report coverage.xml" not in recipe("coverage")
+    assert "test_runner" in recipe("suite-report"), "the producer runs the runner adoption set up"
 
 
 def test_a_gate_that_requests_routes_boots_with_the_flags_due_for_removal_on() -> None:

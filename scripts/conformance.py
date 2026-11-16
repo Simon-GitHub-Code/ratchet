@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -36,6 +37,7 @@ import owed
 import pins
 import plugin_pin
 import project_bite
+import report
 import settings_rules
 import suppressions
 import triggers
@@ -825,15 +827,18 @@ def entry_row(name: str, rows: dict[str, tuple[str, str]], *, on_just: bool) -> 
 
 
 @functools.cache
-def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
+def missing_recipe(
+    justfile: str, recipe: str, name: str, *, needed: str = "", placeholder: bool = False
+) -> Finding:
     """A recipe an entry point runs and the justfile lacks, copied when it stands on its own."""
     text = template_file("justfile")
     start = justfile_text.definition(text, recipe)
-    problem = (
-        f"has no `{recipe}` recipe, which the binding's entry point '{name}' runs; copy it from"
-        " the template justfile"
-    )
+    needed = needed or f"the binding's entry point '{name}' runs"
+    problem = f"has no `{recipe}` recipe, which {needed}; copy it from the template justfile"
     reasons = justfile_text.unmet(text, justfile, recipe)
+    if placeholder:
+        reasons = tuple(reason for reason in reasons if justfile_text.BINDS not in reason)
+        problem += "; it is a placeholder for the project to bind"
     if reasons:
         return Finding(
             "justfile",
@@ -1376,6 +1381,96 @@ def check_pins(root: Path) -> Iterable[Finding]:
         return
     for problem in problems:
         yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=PINS_STOPS)
+
+
+def check_shared_reports(root: Path) -> Iterable[Finding]:
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    reports, problems = report.parse(text)
+    if reports is None and problems[0] == f"has no '{report.SECTION}' section":
+        problem = (
+            f"{problems[0]}; add the template's, bind `suite-report` first to run the suite once,"
+            " then bind the `test`, `coverage`, `diff-coverage` and `test-counts` gates as"
+            " readers of the shared suite report (ADR 0071)"
+        )
+        yield missing_section(
+            BINDING_PATH, problem, report.SECTION, template_text=template_binding()
+        )
+        return
+    for problem in problems:
+        yield agent(f"{BINDING_PATH}: {problem}")
+    for shared in reports or []:
+        yield from unignored_paths(root, shared)
+    justfile = read_justfile(root)
+    if justfile is None:
+        return
+    for name, recipe in report.producers(text):
+        yield from producer_recipe(justfile, name, recipe)
+    for shared in reports or []:
+        yield from shared_report_recipes(justfile, shared)
+
+
+def producer_recipe(justfile: str, name: str, recipe: str) -> Iterable[Finding]:
+    if justfile_text.defines_recipe(justfile, recipe):
+        return
+    template = template_file("justfile")
+    if justfile_text.defines_recipe(template, recipe):
+        needed = f"the shared report '{name}' names"
+        yield missing_recipe(justfile, recipe, name, needed=needed, placeholder=True)
+        return
+    yield agent(
+        f"justfile: the shared report '{name}' names the recipe '{recipe}',"
+        " which the justfile does not define"
+    )
+
+
+def unignored_paths(root: Path, shared: report.Report) -> Iterable[Finding]:
+    for path in shared.paths:
+        ignored = subprocess.run(
+            ["git", "-C", str(root), "check-ignore", "-q", "--", path],
+            capture_output=True,
+            check=False,
+            env={k: v for k, v in os.environ.items() if k not in gatelib.REPOSITORY_VARIABLES},
+        )
+        if ignored.returncode == 1:
+            yield agent(
+                f".gitignore: the shared report '{shared.name}' writes '{path}', which git does"
+                " not ignore; a report that is tracked or untracked changes the tree's content,"
+                " so it is never reused"
+            )
+
+
+def outside_path_argument(line: str, path: str) -> str:
+    if report.SCRIPT not in line:
+        return line
+    argument = re.compile(rf"--path[ =]+(['\"]?){re.escape(path)}\1(?![\w./-])")
+    return argument.sub("", line)
+
+
+def recipe_lines(justfile: str, recipe: str) -> list[str]:
+    body = justfile_text.code_of("\n".join(justfile_text.definition(justfile, recipe)))
+    return [line for line in body.replace("\\\n", " ").splitlines() if line[:1] in " \t"]
+
+
+def shared_report_recipes(justfile: str, shared: report.Report) -> Iterable[Finding]:
+    for command in shared.readers:
+        name = report.recipe_of(command)
+        if not justfile_text.defines_recipe(justfile, name):
+            yield agent(
+                f"justfile: the shared report '{shared.name}' names the recipe '{name}',"
+                " which the justfile does not define"
+            )
+    for command in shared.readers:
+        name = report.recipe_of(command)
+        for line in recipe_lines(justfile, name):
+            named = [path for path in shared.paths if path in outside_path_argument(line, path)]
+            if named:
+                yield agent(
+                    f"justfile: the recipe '{name}' reads the shared report '{shared.name}'"
+                    f" ({', '.join(named)}) other than as the --path argument of {report.SCRIPT}:"
+                    f" {line.strip()}"
+                )
 
 
 def check_mutation(root: Path) -> Iterable[Finding]:
@@ -3060,6 +3155,7 @@ CHECKS: tuple[Check, ...] = (
     check_mutation_filter,
     check_operability,
     check_speed,
+    check_shared_reports,
     check_manifest,
     check_default_branch,
     check_doors,
@@ -3235,6 +3331,7 @@ def mutations() -> list[Mutation]:
         *suppression_mutations(),
         *signs_mutations(),
         *pins_mutations(),
+        *report_mutations(),
         *mutation_gate_mutations(),
         *dependency_mutations(),
         *weekly_mutations(),
@@ -3867,6 +3964,43 @@ def pins_mutations() -> list[Mutation]:
     ]
 
 
+def report_mutations() -> list[Mutation]:
+    row = SELF_TEST_REPORTS
+    shared = (
+        "| suite | `just build` | `suite.xml` | `just coverage`, `just diff-coverage` |"
+        " `just coverage` |"
+    )
+    reading = rewrite("justfile", "coverage: _plugin\n", "coverage: _plugin\n    cat suite.xml\n")
+
+    sharing = rebind(row, shared)
+
+    def reading_directly(root: Path) -> None:
+        sharing(root)
+        reading(root)
+
+    return [
+        ("binding without a Shared reports section", rebind(report.SECTION, "## Reports")),
+        (
+            "Shared reports row that says none with no reason",
+            rebind(row, "| none: x | none | none | none | none |"),
+        ),
+        (
+            "Shared reports row left as the template wrote it",
+            rebind(
+                row,
+                "| `suite` | `just suite-report` | <`path` of the coverage report, Cobertura or"
+                " LCOV>, <`path` of the test results, JUnit XML> | `just test`, `just coverage`,"
+                " `just diff-coverage`, `just test-counts` | `just test` |",
+            ),
+        ),
+        (
+            "Shared reports row whose producer is no recipe of the justfile",
+            rebind(row, shared.replace("just build", "just no-such-recipe")),
+        ),
+        ("reader recipe that opens its shared report's path itself", reading_directly),
+    ]
+
+
 def mutation_gate_mutations() -> list[Mutation]:
     """A recipe that hands the mutation gate a tool's own report (ADR 0050)."""
 
@@ -3952,6 +4086,8 @@ SELF_TEST_KIND = "self-test-silence"
 SIGNS_PLACEHOLDER = re.compile(r"^\| (deployed|irreplaceable-data) \| <[^\n]*$", re.MULTILINE)
 PINS_PLACEHOLDER = re.compile(r"^\| <`globs` of the files that name an image[^\n]*$", re.MULTILINE)
 SELF_TEST_PINS = "| none: the self-test names no image | none |"
+REPORTS_PLACEHOLDER = re.compile(r"^\| `suite` \|[^\n]*$", re.MULTILINE)
+SELF_TEST_REPORTS = "| none: the self-test shares no report | none | none | none | none |"
 DECISION_PLACEHOLDER = re.compile(r"^- Decision: <[^\n]*>$", re.MULTILINE)
 PARTS_PLACEHOLDER = re.compile(r"^\| <part> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_RECORD = "docs/adr/0002-the-tool-is-one-command-over-its-rules.md"
@@ -4003,6 +4139,7 @@ def fill_binding(text: str) -> str:
     text = SUPPRESSION_QUESTION_PLACEHOLDER.sub(suppression_rows, text)
     text = SIGNS_PLACEHOLDER.sub(r"| \1 | none: the self-test has no such file |", text)
     text = PINS_PLACEHOLDER.sub(SELF_TEST_PINS, text)
+    text = REPORTS_PLACEHOLDER.sub(SELF_TEST_REPORTS, text)
     text = EMPTY_TOOL_CELL.sub(r"\1 a tool |", text)
     return SPEED_PLACEHOLDER.sub(r"\1stated for this stack", text)
 
