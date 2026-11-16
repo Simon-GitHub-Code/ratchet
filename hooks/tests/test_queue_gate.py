@@ -71,13 +71,29 @@ def test_a_drain_stopped_between_the_final_check_and_the_commit_may_commit(
     assert judged(COMMIT, tree_of(root)) == []
 
 
+def mid_rebase(tree: Path) -> None:
+    git(tree, "checkout", "-q", "--detach")
+    rebase = tree / git(tree, "rev-parse", "--git-path", "rebase-merge")
+    rebase.mkdir()
+    (rebase / "head-name").write_text(f"refs/heads/{BRANCH_A}\n", encoding="utf-8")
+
+
+def test_a_tree_left_detached_mid_rebase_with_an_unpassed_start_is_refused(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    tree = tree_of(root)
+    mid_rebase(tree)
+    assert [v.rule for v in judged(COMMIT, tree)] == GATED
+
+
 def test_an_unfinished_rebase_whose_start_passed_with_final_may_commit(tmp_path: Path) -> None:
     root = project(tmp_path)
     assert run(root, "open", ALPHA) == 0
     tree = tree_of(root)
-    assert [v.rule for v in judged(COMMIT, tree)] == GATED
     assert run(root, "check", ALPHA, "--final") == 0
-    (tree / git(tree, "rev-parse", "--git-path", "rebase-merge")).mkdir()
+    mid_rebase(tree)
     assert judged(COMMIT, tree) == []
 
 

@@ -72,11 +72,6 @@ if TYPE_CHECKING:
 ) = model.RULES
 
 GATE = "queue-final-check"
-LET_THROUGH = Tree.REBASING
-"""Where the guard lets through a commit the model refuses: a tree ``update`` left mid-rebase.
-
-The tree is detached, and the guard finds the note by the branch the tree has checked out.
-"""
 CHECK_A = "drain.py check a"
 OPEN_A = ["drain.py open a", CHECK_A, "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
@@ -283,7 +278,7 @@ class Play:
                 continue
             gated = GATE in {v.rule for v in judged(COMMIT, self.world.tree(name))}
             said = f"the guard {'refuses' if gated else 'lets through'} a commit in {name.value}"
-            refused = model.commit_refused(kept) and kept.tree is not LET_THROUGH
+            refused = model.commit_refused(kept)
             assert gated == refused, self.says(said)
 
 
@@ -800,15 +795,6 @@ def test_a_commit_goes_through_after_the_final_check_and_in_a_rebase_left_on_a_p
     halted = replay(tmp_path / "halted", [*OPEN_A, EDIT_A, MARK_LEFT[-1]]).state.of(Name.A)
     assert halted.tree is Tree.REBASING
     assert not model.commit_refused(halted)
-
-
-def test_the_guard_lets_through_a_commit_in_a_tree_an_update_killed_mid_rebase_left(
-    tmp_path: Path,
-) -> None:
-    play = replay(tmp_path, MARK_LEFT)
-    assert model.commit_refused(play.state.of(Name.A))
-    assert play.state.of(Name.A).tree is LET_THROUGH
-    assert GATE not in {v.rule for v in judged(COMMIT, play.world.tree(Name.A))}
 
 
 RECORDED = (
