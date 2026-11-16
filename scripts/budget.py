@@ -11,9 +11,10 @@ its ceiling; 0 otherwise. A missing ceiling reports and passes: that is the firs
 ``--set`` never records the pull-request proof's key, ``bite``: what a targeted proof takes
 depends on what the change touched, so the owner records it by hand.
 
-The pull-request proof, key ``bite``, is held to its own ``bite`` ceiling when one is recorded,
-else to ``bite-all``'s, and never to its tier's: whatever gates it proves are a part of the full
-proof, so ``bite-all`` bounds it. Nothing is read from its output (ADR 0069).
+The pull-request proof, key ``bite``, is held to its own ``bite`` ceiling when one is recorded
+and no higher than ``bite-all``'s, else to ``bite-all``'s, else to its tier's: whatever gates it
+proves are a part of the full proof, so ``bite-all`` bounds it. It is never unbounded where the
+default branch is bounded. Nothing is read from its output (ADR 0069).
 
 A green run prints its wall clock as a share of its ceiling, and at 75 percent or more of it a
 warning line follows, raised as an annotation: a warning is not red, and shows a tier drifting
@@ -114,9 +115,14 @@ class Outcome:
 def held(text: str, key: str, tier: str | None) -> tuple[float | None, str | None]:
     """The ceiling ``key`` is judged against, and the tier it belongs to when it is the tier's."""
     own = ceiling_of(text, key)
-    if key == PROOF:
-        return (own, None) if own is not None else (ceiling_of(text, FULL_PROOF), FULL_PROOF)
     shared = ceiling_of(text, tier) if tier else None
+    if key == PROOF:
+        full = ceiling_of(text, FULL_PROOF)
+        if own is not None and (full is None or own <= full):
+            return own, None
+        if full is not None:
+            return full, FULL_PROOF
+        return (shared, tier) if shared is not None else (None, None)
     if shared is not None and (own is None or shared < own):
         return shared, tier
     return own, None

@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 import gatelib
-import justfile_dump
 import project_bite
 from tests import repos
 from tests.repos import branch, commit, git, repository, write
@@ -622,35 +621,6 @@ def test_a_change_to_the_plugin_pin_line_alone_proves_every_gate(
 
 
 @pytest.mark.parametrize(
-    "recipe",
-    ["prepare", "finish"],
-    ids=["through a dependency", "through a just call in a body"],
-)
-def test_a_recipe_goes_to_the_gates_whose_command_reaches_it(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], recipe: str
-) -> None:
-    root = targeted(tmp_path, rows=JUST_ROWS, files={"justfile": JUSTFILE})
-    replaced(root, "justfile", f"echo {recipe}", f"echo {recipe}d")
-    assert prove(root, "--changed") == 0
-    out = shown(capsys).splitlines()
-    assert out[0] == "bite: a gate may have changed (justfile)"
-    assert out[1] == f"bite: tests: recipe `{recipe}` changed, and the gate's command reaches it"
-    assert proved(out) == ["tests"]
-
-
-def test_a_top_level_assignment_in_the_justfile_goes_to_every_gate(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    root = targeted(tmp_path, rows=JUST_ROWS, files={"justfile": JUSTFILE})
-    write(root, "justfile", 'flavour := "plain"\n' + JUSTFILE)
-    assert prove(root, "--changed") == 0
-    out = shown(capsys).splitlines()
-    why = "justfile changed an assignment or a setting, which every recipe reads"
-    assert out[1] == every(why)
-    assert proved(out) == ["lint", "tests"]
-
-
-@pytest.mark.parametrize(
     "path", ["scripts/check.sh", "lint.cfg"], ids=["gate-commands", "tool-config"]
 )
 def test_a_path_that_names_no_gate_goes_to_every_gate(
@@ -702,17 +672,6 @@ def test_a_path_that_is_not_tool_config_ignores_the_bullets_and_goes_to_every_ga
     out = shown(capsys).splitlines()
     why = "scripts/check.sh changed, and no record says which gate runs it"
     assert out[1] == every(why)
-    assert proved(out) == ["lint", "tests"]
-
-
-def test_a_justfile_below_the_root_goes_to_every_gate(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    root = targeted(tmp_path, rows=JUST_ROWS, files={"justfile": JUSTFILE, "sub/justfile": "x:\n"})
-    write(root, "sub/justfile", "x:\n    echo changed\n")
-    assert prove(root, "--changed") == 0
-    out = shown(capsys).splitlines()
-    assert out[1] == every("sub/justfile changed, and no record says which gate runs it")
     assert proved(out) == ["lint", "tests"]
 
 
@@ -832,54 +791,54 @@ def test_a_gate_chosen_outside_the_affected_set_is_green_under_changed(
     )
 
 
-JUST_BASE = "lint:\n    echo a\nci:\n    echo ci\n"
-REACHES = [
-    ("alias l := lint\n" + JUST_BASE, "just l"),
-    (
-        JUST_BASE.replace("ci:", "ci target:").replace("echo ci", "x=$(just {{target}})"),
-        "just ci x",
-    ),
-    (
-        JUST_BASE.replace("ci:", "ci target:").replace("echo ci", "echo `just {{target}}`"),
-        "just ci x",
-    ),
-    (
-        JUST_BASE.replace("ci:", "ci target:").replace("echo ci", "true;just {{target}}"),
-        "just ci x",
-    ),
-    (JUST_BASE.replace("echo ci", "{{just_executable()}} lint"), "just ci"),
-    ('runner := "just"\n' + JUST_BASE.replace("echo ci", "{{runner}} lint"), "just ci"),
-    (JUST_BASE.replace("ci:", "ci target:").replace("echo ci", "just {{target}}"), "just ci x"),
-]
-
-
-@pytest.mark.parametrize(
-    ("justfile", "command"),
-    REACHES,
-    ids=[
-        "an alias",
-        "a command substitution",
-        "a backtick",
-        "after a semicolon",
-        "the runner's function",
-        "a variable holding the runner",
-        "an unreadable name",
-    ],
-)
-def test_a_gate_reaches_a_recipe_through_an_alias_a_runner_or_a_name_it_cannot_read(
-    justfile: str, command: str
+def test_a_change_to_the_justfile_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    head = justfile.replace("echo a", "exit 0")
-    found = justfile_dump.causes("justfile", justfile, head, commands={"gate": command})
-    why = "recipe `lint` changed, and the gate's command reaches it"
-    assert found == [justfile_dump.Cause("gate", why)]
+    root = targeted(tmp_path, rows=JUST_ROWS, files={"justfile": JUSTFILE})
+    replaced(root, "justfile", "echo prepare", "echo prepared")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[0] == "bite: a gate may have changed (justfile)"
+    assert out[1] == every("the justfile changed, and its recipes are code the proof cannot read")
+    assert proved(out) == ["lint", "tests"]
 
 
-def test_a_justfile_with_an_optional_import_goes_to_every_gate() -> None:
-    justfile = "import? 'more.just'\n" + JUST_BASE
-    head = justfile.replace("echo a", "exit 0")
-    found = justfile_dump.causes("justfile", justfile, head, commands={"gate": "just lint"})
-    assert [cause.gate for cause in found] == [None]
+def test_a_justfile_in_two_gate_groups_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fitness = '[[group]]\nname = "fitness"\nreason = "A fitness test."\npaths = ["justfile"]\n'
+    files = {"justfile": JUSTFILE, "guards/manifest.toml": COMMANDS_MANIFEST + fitness}
+    root = targeted(tmp_path, rows=JUST_ROWS, files=files)
+    replaced(root, "justfile", "echo finish", "echo finished")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == every("the justfile changed, and its recipes are code the proof cannot read")
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_a_file_a_patch_fault_edits_proves_that_bites_gate(tmp_path: Path) -> None:
+    root = patched(tmp_path)
+    targets = project_bite.fault_targets(root, "main")
+    assert project_bite.targeted_by(targets, "src/code.txt") == {("tests", "by patch")}
+
+
+def test_a_removed_file_a_remove_fault_covers_proves_that_bites_gate(tmp_path: Path) -> None:
+    emptied = bite("tests", "empty", 'remove = ["tests/*.t"]', expect="no test")
+    root = targeted(tmp_path, registry=bite("lint", WORD) + emptied + bite("slow", WORD))
+    (root / "tests/one.t").unlink()
+    targets = project_bite.fault_targets(root, "main")
+    assert project_bite.targeted_by(targets, "tests/one.t") == {("tests", "empty")}
+    touched = project_bite.gate_paths_changed(root, "main")
+    assert [t.path for t in touched or []] == ["tests/one.t"]
+
+
+def test_a_gate_dropped_by_gate_does_not_hide_a_registry_gap_under_changed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = targeted(tmp_path, registry=bite("lint", WORD) + bite("slow", WORD))
+    replaced(root, BINDING, "| tests | a tool | 1 |", "| tests | a tool | 0 |")
+    assert prove(root, "--changed", "--gate", "lint") == 1
+    assert "gate 'tests' (tests) is bound to a tool and no [[bite]]" in shown(capsys)
 
 
 def test_a_pull_request_with_nothing_to_compare_with_proves_the_gates(

@@ -171,7 +171,6 @@ from typing import TYPE_CHECKING, NamedTuple
 import application_types
 import budget
 import gatelib
-import justfile_dump
 import plugin_pin
 
 # Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
@@ -1456,10 +1455,17 @@ class Touched(NamedTuple):
     group: str
 
 
-Cause = justfile_dump.Cause
+class Cause(NamedTuple):
+    """Why a gate is in the proof's set; no gate means every gate of tiers 0 and 1."""
+
+    gate: str | None
+    why: str
+
+
 JUSTFILE_NAMES = ("justfile", ".justfile", "Justfile")
 READER = {"gate-commands": "runs it"}
 READS = "## What each gate reads"
+PATCH_PATH = re.compile(r"^(?:---|\+\+\+) (?:[ab]/)?(\S+)", re.MULTILINE)
 READS_BULLET = re.compile(r"^- ([^:\s]+):[ \t]*(.*)$")
 
 
@@ -1489,7 +1495,7 @@ def gate_paths_changed(root: Path, base: str | None) -> list[Touched] | None:
             touched.append(Touched(path, ""))
         elif defining_group(names):
             touched.append(Touched(path, defining_group(names)))
-        elif path in targets:
+        elif targeted_by(targets, path):
             touched.append(Touched(path, "fault"))
     return touched
 
@@ -1532,22 +1538,40 @@ def patch_causes(root: Path, base: str, path: str) -> list[Cause]:
     return [Cause(gate, f"patch {path} is named by bite `{name}`") for gate, name in sorted(named)]
 
 
+def patch_paths(text: str | None) -> set[str]:
+    """The files a patch's headers name, old and new."""
+    return {path for path in PATCH_PATH.findall(text or "") if path != "/dev/null"}
+
+
 def fault_targets(root: Path, base: str) -> dict[str, set[tuple[str, str]]]:
-    """Each file a bite's ``write`` or ``replace`` fault changes, with the bites that change it."""
+    """Each file or glob a bite's fault changes, with the bites that change it.
+
+    A ``write`` or ``replace`` names its files, a ``remove`` its globs, and a ``patch`` the files
+    its diff names at the merge base and at head.
+    """
     targets: dict[str, set[tuple[str, str]]] = {}
     for registry in registries(root, base):
         for bite in registry.bites if registry else ():
             fault = bite.fault
-            paths = (
-                [fault.path]
-                if isinstance(fault, Write)
-                else [swap.path for swap in fault.swaps]
-                if isinstance(fault, Replace)
-                else []
-            )
-            for path in paths:
-                targets.setdefault(path, set()).add((bite.gate, bite.name))
+            if isinstance(fault, Write):
+                names = {fault.path}
+            elif isinstance(fault, Replace):
+                names = {swap.path for swap in fault.swaps}
+            elif isinstance(fault, Remove):
+                names = set(fault.patterns)
+            else:
+                names = patch_paths(gatelib.show(root, base, fault.path))
+                names |= patch_paths(gatelib.read_text(root / fault.path))
+            for name in names:
+                targets.setdefault(name, set()).add((bite.gate, bite.name))
     return targets
+
+
+def targeted_by(targets: dict[str, set[tuple[str, str]]], path: str) -> set[tuple[str, str]]:
+    """The bites whose fault changes ``path``."""
+    return {
+        who for name, bites in targets.items() if gatelib.matches(path, [name]) for who in bites
+    }
 
 
 def binding_causes(root: Path, base: str) -> list[Cause]:
@@ -1585,16 +1609,6 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
             return [Cause(None, why)]
         causes += [Cause(row.gate, f"the binding's row `{question}` {verb}") for row in rows]
     return causes
-
-
-def justfile_causes(root: Path, base: str, path: str) -> list[Cause]:
-    binding = str(gatelib.BINDING)
-    commands: dict[str, str] = {}
-    for text in (gatelib.show(root, base, binding), gatelib.read_text(root / binding)):
-        commands |= {row.gate: row.command for row in gate_rows(text or "") if row.gate}
-    return justfile_dump.causes(
-        path, gatelib.show(root, base, path), gatelib.read_text(root / path), commands=commands
-    )
 
 
 def read_reads(binding: str) -> tuple[dict[str, list[str]], list[str]]:
@@ -1672,13 +1686,15 @@ def could_affect(root: Path, base: str | None, touched: Sequence[Touched] | None
             causes += patch_causes(root, base, path)
         elif path == str(gatelib.BINDING):
             causes += binding_causes(root, base)
-        elif group == "gate-commands" and path in JUSTFILE_NAMES:
-            causes += justfile_causes(root, base, path)
+        elif PurePosixPath(path).name in JUSTFILE_NAMES:
+            name = PurePosixPath(path).name
+            why = f"the {name} changed, and its recipes are code the proof cannot read"
+            causes.append(Cause(None, why))
         elif group != "fault":
             causes += unnamed_causes(root, path, group)
         causes += [
             Cause(gate, f"{path} is changed by bite `{name}`")
-            for gate, name in sorted(targets.get(path, ()))
+            for gate, name in sorted(targeted_by(targets, path))
         ]
     return causes
 
@@ -1759,7 +1775,7 @@ def main(argv: list[str]) -> int:
     root = options.root.resolve()
     rows, registry, problems, gaps = inspect(root)
     # Why: one gate at a time is how a registry is written, so `--gate` runs before it is whole.
-    problems += [] if options.gate else gaps
+    problems += [] if options.gate and not options.changed else gaps
     if problems:
         return gatelib.report("bite", [f"{REGISTRY}: {problem}" for problem in problems])
     chosen = pull_request_gates(rows) if options.pull_request_gates else rows

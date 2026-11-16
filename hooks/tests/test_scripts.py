@@ -175,7 +175,7 @@ def proof_argv(root: Path, key: str = "bite") -> list[str]:
 PRINT = ["--", sys.executable, "-c", "print('bite: fallback: x; proving every gate')"]
 
 
-def test_the_pull_request_proof_is_held_to_its_own_ceiling_else_bite_all_and_never_to_tier_1(
+def test_the_pull_request_proof_is_held_to_its_own_ceiling_never_above_bite_all_and_never_unbounded(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     (tmp_path / "quality").mkdir()
@@ -183,15 +183,18 @@ def test_the_pull_request_proof_is_held_to_its_own_ceiling_else_bite_all_and_nev
     tier1_only = budget.with_ceiling("", "tier1", 0.0)
     thresholds.write_text(tier1_only, encoding="utf-8")
     argv = proof_argv(tmp_path)
-    assert budget.main([*argv, *PRINT]) == 0, "no bite or bite-all ceiling yet: unbounded"
-    assert "no ceiling recorded of bite-all" in capsys.readouterr().out
-    thresholds.write_text(budget.with_ceiling(tier1_only, "bite-all", 1000.0), encoding="utf-8")
+    assert budget.main([*argv, *PRINT]) == 1, "with neither key recorded it is held to its tier's"
+    assert "(ceiling 0s of tier1): red" in capsys.readouterr().out
+    full = budget.with_ceiling(tier1_only, "bite-all", 1000.0)
+    thresholds.write_text(full, encoding="utf-8")
     assert budget.main([*argv, *PRINT]) == 0
     assert "(ceiling 1000s of bite-all" in capsys.readouterr().out
-    both = budget.with_ceiling(budget.with_ceiling(tier1_only, "bite-all", 1000.0), "bite", 0.0)
-    thresholds.write_text(both, encoding="utf-8")
+    thresholds.write_text(budget.with_ceiling(full, "bite", 0.0), encoding="utf-8")
     assert budget.main([*argv, *PRINT]) == 1, "its own ceiling holds it when it is recorded"
     assert "(ceiling 0s)" in capsys.readouterr().out
+    thresholds.write_text(budget.with_ceiling(full, "bite", 5000.0), encoding="utf-8")
+    assert budget.main([*argv, *PRINT]) == 0
+    assert "(ceiling 1000s of bite-all" in capsys.readouterr().out, "never above bite-all's"
 
 
 def test_set_never_records_the_pull_request_proof_s_ceiling(
