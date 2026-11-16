@@ -2822,6 +2822,8 @@ def check_register(data: dict[str, object]) -> Iterable[Finding]:
 def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
     """ADR 0069: the full proof after a merge has a ceiling of its own, never the tier 1 one.
 
+    Without one the deep workflow times it against tier 2's ceiling (``budget.held``).
+
     Only a measured run sets it, so the finding names the command and offers no edit.
     """
     text = read(root / "quality/thresholds.toml")
@@ -2847,12 +2849,12 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
 
 
 def full_proof_problem(root: Path, text: str) -> str:
-    """What the missing ``bite-all`` ceiling costs: the tier 1 ceiling it falls to, the last run."""
-    tier = budget.ceiling_of(text, "tier1")
+    """What the missing ``bite-all`` ceiling costs: the tier 2 ceiling it falls to, the last run."""
+    tier = budget.ceiling_of(text, "tier2")
     start = "`[ceilings.seconds]` has no `bite-all`, so the full proof after a merge "
     if tier is None:
-        return start + "has no ceiling at all, since no `tier1` ceiling is recorded either"
-    problem = f"{start}is held to tier 1's ceiling of {tier:g}s and goes red when it runs longer"
+        return start + "has no ceiling at all, since no `tier2` ceiling is recorded either"
+    problem = f"{start}is held to tier 2's ceiling of {tier:g}s and goes red when it runs longer"
     last = last_full_proof(root)
     return problem + (f"; the last full proof took {last:g}s" if last is not None else "")
 

@@ -136,12 +136,12 @@ change touches a path that defines a gate (the manifest's ``tool-config``, ``gat
 the gates of tiers 0 and 1 that the change could affect (ADR 0069), one line each saying why.
 The registry names a gate by each bite added, removed or changed; a patch names the gates whose
 bites apply it; the binding names the gates of the rows that changed, and every gate when
-anything else in it changed, the plugin pin line included; a recipe in the justfile names the gates
-whose command reaches it. Any other path, and a path whose reading fails, affects every gate of
-tiers 0 and 1. ``--pull-request-gates`` proves every gate of tiers 0 and 1 with no change to
-read, to measure what the pull-request form costs; it cannot be combined with ``--changed``. The
-proof proves nothing on the adoption either, the change whose base holds no binding: every
-gate is new there, and the whole proof runs once in tier 2.
+anything else in it changed, the plugin pin line included; a change to the justfile affects every
+gate, since its recipes are code the proof cannot read. Any other path, and a path whose reading
+fails, affects every gate of tiers 0 and 1. ``--pull-request-gates`` proves every gate of tiers 0
+and 1 with no change to read, to measure what the pull-request form costs; it cannot be combined
+with ``--changed``. The proof proves nothing on the adoption either, the change whose base holds
+no binding: every gate is new there, and the whole proof runs once in tier 2.
 """
 
 from __future__ import annotations

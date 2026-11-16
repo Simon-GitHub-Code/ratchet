@@ -343,7 +343,7 @@ def test_a_seconds_table_with_no_bite_all_ceiling_is_an_agent_finding_naming_the
     repo: Path,
 ) -> None:
     path = repo / THRESHOLDS
-    path.write_text(budget.with_ceiling(path.read_text(encoding="utf-8"), "tier1", 600.0))
+    path.write_text(budget.with_ceiling(path.read_text(encoding="utf-8"), "tier2", 600.0))
     [found] = ceiling_findings(repo)
     assert (found.path, found.rule) == (THRESHOLDS, "bite_all_ceiling")
     assert isinstance(found.fix, conformance.Agent)
@@ -352,12 +352,12 @@ def test_a_seconds_table_with_no_bite_all_ceiling_is_an_agent_finding_naming_the
     assert ceiling_findings(repo) == []
 
 
-def seconds_problem(repo: Path, tier1: float | None, took: float | None) -> str:
+def seconds_problem(repo: Path, tier2: float | None, took: float | None) -> str:
     path = repo / THRESHOLDS
     text = path.read_text(encoding="utf-8")
     path.write_text(
-        budget.with_ceiling(text, "tier1", tier1)
-        if tier1 is not None
+        budget.with_ceiling(text, "tier2", tier2)
+        if tier2 is not None
         else text + "\n[ceilings.seconds]\nlint = 5\n"
     )
     if took is not None:
@@ -368,11 +368,11 @@ def seconds_problem(repo: Path, tier1: float | None, took: float | None) -> str:
     return found.problem
 
 
-def test_the_missing_bite_all_ceiling_says_the_full_proof_goes_red_over_tier_1s(
+def test_the_missing_bite_all_ceiling_says_the_full_proof_goes_red_over_tier_2s(
     repo: Path,
 ) -> None:
     problem = seconds_problem(repo, 900.0, None)
-    assert "is held to tier 1's ceiling of 900s and goes red when it runs longer" in problem
+    assert "is held to tier 2's ceiling of 900s and goes red when it runs longer" in problem
     assert "last full proof" not in problem
 
 
