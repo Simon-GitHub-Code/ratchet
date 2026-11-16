@@ -683,14 +683,17 @@ def cost(edge: model.Edge) -> int:
     offers by checking the whole repository again. Once the binding declares a type the ``Flag:``
     line is asked of, it has some two hundred such edits to try, and the fill costs about 19
     steps; before, about 7. An upgrade costs about 17. Where the route names a safeguard, ``ask``
-    reads it three times. Measured from CI's times of the chunks cut by steps alone, and from a
-    profile of the slowest of them, where the fills took four fifths of the time.
+    reads it three times. Where it names a waiting branch's merge, the read lists every unmerged
+    branch and reads the branch's change twice, once to find it and once for the judge: some fifty
+    git calls where another read makes about twelve, so the step costs about 3. Measured from CI's
+    times of the chunks cut by steps alone, from a profile of the slowest of them, where the fills
+    took four fifths of the time, and from a count of the git calls each read makes.
     """
     if edge.action is ActionName.AGENT_FILLS_ROWS:
         return 7 if edge.source.flag is Flag.WAITS else 19
     if edge.action is ActionName.UPGRADE_LEAVES_ROWS_TO_FILL:
         return 17
-    return 2 if model.real_advice(edge.target) is Advice.SAFEGUARD else 1
+    return {Advice.SAFEGUARD: 2, Advice.MERGE_RECORDS: 3}.get(model.real_advice(edge.target), 1)
 
 
 @cache
