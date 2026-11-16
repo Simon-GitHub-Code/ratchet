@@ -263,8 +263,8 @@ check: plugin-pin
 check-fast: plugin-pin
     {{parallel}} --fail-fast {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
-# `perf` and `load` judge elapsed time, so they run after the other gates, one at a time (`alone`
-# above); CI gives each a job of its own.
+# The gates `alone` names run after the others, one at a time (see `alone` above); CI gives each a
+# job of its own.
 check-deep: plugin-pin
     {{parallel}} {{serial0}} {{serial1}} {{serial2}} -- {{tier0_gates}} {{tier1_gates}} {{tier2_gates}}
 
