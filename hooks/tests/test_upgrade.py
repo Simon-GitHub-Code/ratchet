@@ -640,7 +640,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
     assert "Would write 13 files (run with --apply):" in out
-    assert "  quality/owed.toml\n    - write down 94 things owed since " in out
+    assert "  quality/owed.toml\n    - write down 95 things owed since " in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
@@ -652,7 +652,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 71 edits in 13 files. 94 items are owed")
+    assert verdict(out).startswith("upgrade: would write 71 edits in 13 files. 95 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -661,7 +661,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             (
                 "This project would move from Ratchet 0.8.2 to"
                 f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 71 changes in 13"
-                " files. The project owes 94 things since the upgrade. None of them turns a check"
+                " files. The project owes 95 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
                 " make all the fixes in one change on a branch, and you decide at that one merge."
@@ -917,3 +917,18 @@ def test_an_upgrade_leaves_bound_suites_green_and_owes_the_gate_and_the_files_ta
     assert len(owing) == 1
     assert owing[0].startswith("'## Tests' has no suites table (Suite | Gate | Files | Run files).")
     assert "changed tests run" in "\n".join(e.problem for e in owed.read(root).entries)
+
+
+@pytest.mark.parametrize("name", ["0.8.2", "0.9.2"])
+def test_an_upgrade_stays_green_and_owes_the_incremental_line_without_blocking_a_feature(
+    name: str, tmp_path: Path
+) -> None:
+    root = fixture(name, tmp_path)
+    repos.branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    red, _ = conformance.owed_split(root, conformance.findings(root))
+    assert red == []
+    owing = [e for e in owed.read(root).entries if "'- Incremental:'" in e.problem]
+    assert [e.rule for e in owing] == ["speed"]
+    assert owing[0].path == "docs/process/binding.md"
+    assert owing[0].rule not in owed.FILL_FIRST
