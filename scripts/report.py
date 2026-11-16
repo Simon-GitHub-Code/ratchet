@@ -31,11 +31,16 @@ SCRIPT = "scripts/report.py"
 COLUMNS = ("Report", "Producer", "Paths", "Readers", "Judged by")
 NONE_PREFIX = "none:"
 MIN_REASON = 10
+MIN_READERS = 2
+PLACEHOLDER = (
+    "the shared reports table still has the template's placeholder row; bind `suite-report` first"
+    " to run the suite once, then bind the `test`, `coverage`, `diff-coverage` and `test-counts`"
+    " gates as readers of the shared suite report"
+)
 RUN = "RATCHET_RUN"
 FOLDER = gatelib.STATE / "reports"
 NAME = re.compile(r"[A-Za-z][\w-]*")
 COMMAND = re.compile(r"just ([A-Za-z_][\w-]*)(?: .*)?")
-STDERR = 2
 
 
 @dataclass(frozen=True)
@@ -56,8 +61,9 @@ def recipe_of(command: str) -> str:
 
 def _row(row: tuple[str, ...], problems: list[str]) -> Report | None:
     name, producer, paths, readers, judged = (cell.strip() for cell in row)
+    name = name.strip("`")
     if any(cell.startswith("<") for cell in row):
-        problems.append("the shared reports table still has the template's placeholder row")
+        problems.append(PLACEHOLDER)
         return None
     if name.lower().startswith(NONE_PREFIX):
         if len(name[len(NONE_PREFIX) :].strip()) < MIN_REASON:
@@ -86,6 +92,12 @@ def _row(row: tuple[str, ...], problems: list[str]) -> Report | None:
             " and it is one of the row's readers"
         )
         return None
+    if len(listed) < MIN_READERS:
+        problems.append(
+            f"the shared reports row '{name}' has fewer than two readers, so it is not shared:"
+            " say `none: <reason>` in its Report cell"
+        )
+        return None
     return Report(name, commands[0], files, listed, judges[0])
 
 
@@ -101,6 +113,16 @@ def parse(binding: str | None) -> tuple[list[Report] | None, list[str]]:
     if len(set(names)) != len(names):
         problems.append("two shared reports rows have one name")
     return (None if problems else reports), problems
+
+
+def producers(binding: str) -> list[tuple[str, str]]:
+    found = [t for t in markdown_text.tables(binding, SECTION) if t.header == COLUMNS]
+    return [
+        (row[0].strip("` "), recipe_of(command))
+        for row in (found[0].rows if found else ())
+        for command in markdown_text.ticked(row[1])[:1]
+        if not row[0].lower().startswith(NONE_PREFIX) and recipe_of(command)
+    ]
 
 
 def content_id(root: Path) -> str:
@@ -136,7 +158,7 @@ def held(record: Path) -> tuple[str, str, int] | None:
         return None
 
 
-def obtain(root: Path, report: Report) -> int:
+def obtain(root: Path, report: Report) -> tuple[int, Path]:
     shard = os.environ.get("SHARD", "1")
     shards = os.environ.get("SHARDS", "1")
     folder = root / FOLDER
@@ -147,21 +169,28 @@ def obtain(root: Path, report: Report) -> int:
         run = os.environ.get(RUN, "")
         content = content_id(root)
         record = folder / f"{key}.json"
+        log = folder / f"{key}.log"
         stored = held(record)
         if run and stored and stored[:2] == (run, content):
-            return stored[2]
-        status = subprocess.run(
-            shlex.split(report.producer), cwd=root, stdout=STDERR, check=False
-        ).returncode
+            return stored[2], log
+        with log.open("wb") as output:
+            status = subprocess.run(
+                shlex.split(report.producer),
+                cwd=root,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                check=False,
+            ).returncode
         record.write_text(
             json.dumps({"run": run, "content": content, "status": status}), encoding="utf-8"
         )
-        return status
+        return status, log
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="report.py")
     parser.add_argument("report")
+    parser.add_argument("--reader", required=True)
     parser.add_argument("--root", type=Path, default=Path())
     args = parser.parse_args(argv)
     root = args.root.resolve()
@@ -173,9 +202,17 @@ def main(argv: list[str]) -> int:
     if report is None:
         print(f"report: '{SECTION}' names no report '{args.report}'", file=sys.stderr)
         return 1
-    status = obtain(root, report)
+    if args.reader not in map(recipe_of, report.readers):
+        print(
+            f"report {report.name}: '{args.reader}' is not one of its readers in '{SECTION}'",
+            file=sys.stderr,
+        )
+        return 2
+    status, log = obtain(root, report)
     if status:
         judge = recipe_of(report.judge)
+        if args.reader == judge:
+            print(log.read_text(encoding="utf-8", errors="replace"), end="", file=sys.stderr)
         print(
             f"report {report.name}: `{report.producer}` exited {status}; `{judge}` judges the"
             " failure",

@@ -168,17 +168,19 @@ tier2_sharded := "mutation e2e test-stability"
 # Gates that cannot share a working tree at the same time, one variable per tier. Declare a group as
 # `--serial A B`, repeated for more groups, each name a gate of that tier. The runner cannot see what
 # a command touches, and a template cannot know this stack's tools, so the template declares one
-# group only: the tier 1 gates that run the whole suite, since each such run takes every core and
-# two side by side starve the tests inside them until they time out. Declare one for:
+# group only: the coverage gate and the changed-code mutation gate, which each run the whole suite
+# on every core and were seen to time out side by side. Declare one for:
 #   - two gates that write one file or directory (a coverage data file, a cache, a lock);
 #   - a gate that mutates the tree (a formatter, a generator, a migration) and every gate that
 #     reads what it writes;
 #   - two gates that bind one fixed port (better: `{port}` through `with_service.py`);
-#   - two more gates that each take every core.
+#   - two more gates whose tools each start a worker for every core, when a run shows one starving
+#     the other or a timed run is faster with them grouped. A group runs its gates one after
+#     another, so keep its chain shorter than the slowest gate outside it; the runner says when not.
 # Giving each gate an output of its own is better than a group. A gate that is red in parallel
 # and green alone shares state with another.
 serial0 := ""
-serial1 := "--serial coverage test mutation-changed"
+serial1 := "--serial coverage mutation-changed"
 serial2 := ""
 
 # How many gates run at once: every core unless RATCHET_JOBS, else `git config ratchet.jobs`, says
@@ -397,18 +399,21 @@ prose: _plugin
 
 # --- tier 1 bodies ---------------------------------------------------------------
 
+suite-report:
+    @echo "bind: the whole suite once, on every core, under the coverage tool: test_runner with the runner's shard flags, shard {{shard}} of {{shards}}, writing the paths the binding's Shared reports row names; red when none is collected"; exit 1
+
 test:
-    @echo "bind: read the shared suite report through the plugin's scripts/report.py instead of running the suite (shard {{shard}} of {{shards}}); red when it says the suite failed or collected no test"; exit 1
+    @echo "bind: through report.py --reader test; red when the suite run failed or collected none"; exit 1
 
 coverage: _plugin
-    @echo "bind: read the shared suite report through the plugin's scripts/report.py instead of running the suite, then judge the Cobertura or LCOV report it names in --report below"; exit 1
-    {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
+    @echo "bind: judge the coverage report that report.py --reader coverage prints, passed as --report below"; exit 1
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report "$({{plugin_py}} "{{ratchet_plugin}}/scripts/report.py" suite --reader coverage | sed -n 1p)"
 
 diff-coverage:
-    @echo "bind: read the shared suite report through the plugin's scripts/report.py instead of running the suite, then through changed, every line and branch changed since {base} ran"; exit 1
+    @echo "bind: through changed, every line and branch changed since {base} ran, read from the coverage report that report.py --reader diff-coverage prints"; exit 1
 
 test-counts:
-    @echo "bind: read the shared suite report through the plugin's scripts/report.py instead of running the suite, then through changed, collected test count at head >= at {base}"; exit 1
+    @echo "bind: through changed, collected test count at head, read from the test results that report.py --reader test-counts prints, >= at {base}"; exit 1
 
 # The recipe runs the mutation tool, converts its outcomes to the plugin's neutral format (one JSON
 # line per mutant; the docstring of `scripts/mutation_survivors.py` has it) and hands the lines to

@@ -270,11 +270,11 @@ How this repository stays fast, from the first commit (the Speed section of `ski
 
 ## Shared reports
 
-A report that more than one gate reads is produced once for each run (ADR 0071). One row per report: the recipe that produces it, the paths it writes, the recipes that read it, and the reader that judges a failed run. When the run that produced the report failed, every reader is red, and each reader but the judge says in one line that the judge's gate names the failure. A reader never opens a path itself: it runs `scripts/report.py <report>` of the `ratchet` plugin, which prints the paths. With no report shared, the Report cell says `none: <reason>`.
+A report that more than one gate reads is produced once for each run (ADR 0071). One row per report: the recipe that produces it, the paths it writes, the recipes that read it, and the reader that judges a failed run. When the run that produced the report failed, every reader is red, and each reader but the judge says in one line that the judge's gate names the failure. A reader never opens a path itself: it runs `scripts/report.py <report>` of the `ratchet` plugin, which prints the paths. Take out of Readers any gate this stack's tools cannot answer from the files the producer writes, and bind that gate to run its own command: conformance holds every reader to `report.py`, so a reader is only a gate that can be one. The judge stays a reader. A report left with fewer than two readers is not shared, and its Report cell says `none: <reason>`. With no report shared, the Report cell says `none: <reason>`.
 
 | Report | Producer | Paths | Readers | Judged by |
 | --- | --- | --- | --- | --- |
-| <name> | <`just recipe`> | <`path`, ...> | <`just recipe`, ...> | <`just recipe`, one of the readers> |
+| `suite` | `just suite-report` | <`path` of the coverage report, Cobertura or LCOV>, <`path` of the test results, JUnit XML> | `just test`, `just coverage`, `just diff-coverage`, `just test-counts` | `just test` |
 
 ## Weekly and advisory
 

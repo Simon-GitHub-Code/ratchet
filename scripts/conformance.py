@@ -827,15 +827,18 @@ def entry_row(name: str, rows: dict[str, tuple[str, str]], *, on_just: bool) -> 
 
 
 @functools.cache
-def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
+def missing_recipe(
+    justfile: str, recipe: str, name: str, *, needed: str = "", placeholder: bool = False
+) -> Finding:
     """A recipe an entry point runs and the justfile lacks, copied when it stands on its own."""
     text = template_file("justfile")
     start = justfile_text.definition(text, recipe)
-    problem = (
-        f"has no `{recipe}` recipe, which the binding's entry point '{name}' runs; copy it from"
-        " the template justfile"
-    )
+    needed = needed or f"the binding's entry point '{name}' runs"
+    problem = f"has no `{recipe}` recipe, which {needed}; copy it from the template justfile"
     reasons = justfile_text.unmet(text, justfile, recipe)
+    if placeholder:
+        reasons = tuple(reason for reason in reasons if justfile_text.BINDS not in reason)
+        problem += "; it is a placeholder for the project to bind"
     if reasons:
         return Finding(
             "justfile",
@@ -1387,8 +1390,9 @@ def check_shared_reports(root: Path) -> Iterable[Finding]:
     reports, problems = report.parse(text)
     if reports is None and problems[0] == f"has no '{report.SECTION}' section":
         problem = (
-            f"{problems[0]}; add the template's, and bind the `test`, `coverage`, `diff-coverage`"
-            " and `test-counts` gates as readers of the shared suite report (ADR 0071)"
+            f"{problems[0]}; add the template's, bind `suite-report` first to run the suite once,"
+            " then bind the `test`, `coverage`, `diff-coverage` and `test-counts` gates as"
+            " readers of the shared suite report (ADR 0071)"
         )
         yield missing_section(
             BINDING_PATH, problem, report.SECTION, template_text=template_binding()
@@ -1399,10 +1403,26 @@ def check_shared_reports(root: Path) -> Iterable[Finding]:
     for shared in reports or []:
         yield from unignored_paths(root, shared)
     justfile = read_justfile(root)
-    if reports is None or justfile is None:
+    if justfile is None:
         return
-    for shared in reports:
+    for name, recipe in report.producers(text):
+        yield from producer_recipe(justfile, name, recipe)
+    for shared in reports or []:
         yield from shared_report_recipes(justfile, shared)
+
+
+def producer_recipe(justfile: str, name: str, recipe: str) -> Iterable[Finding]:
+    if justfile_text.defines_recipe(justfile, recipe):
+        return
+    template = template_file("justfile")
+    if justfile_text.defines_recipe(template, recipe):
+        needed = f"the shared report '{name}' names"
+        yield missing_recipe(justfile, recipe, name, needed=needed, placeholder=True)
+        return
+    yield agent(
+        f"justfile: the shared report '{name}' names the recipe '{recipe}',"
+        " which the justfile does not define"
+    )
 
 
 def unignored_paths(root: Path, shared: report.Report) -> Iterable[Finding]:
@@ -1427,7 +1447,7 @@ def recipe_lines(justfile: str, recipe: str) -> list[str]:
 
 
 def shared_report_recipes(justfile: str, shared: report.Report) -> Iterable[Finding]:
-    for command in (shared.producer, *shared.readers):
+    for command in shared.readers:
         name = report.recipe_of(command)
         if not justfile_text.defines_recipe(justfile, name):
             yield agent(
@@ -3960,8 +3980,9 @@ def report_mutations() -> list[Mutation]:
             "Shared reports row left as the template wrote it",
             rebind(
                 row,
-                "| <name> | <`just recipe`> | <`path`, ...> | <`just recipe`, ...> |"
-                " <`just recipe`> |",
+                "| `suite` | `just suite-report` | <`path` of the coverage report, Cobertura or"
+                " LCOV>, <`path` of the test results, JUnit XML> | `just test`, `just coverage`,"
+                " `just diff-coverage`, `just test-counts` | `just test` |",
             ),
         ),
         (
@@ -4057,7 +4078,7 @@ SELF_TEST_KIND = "self-test-silence"
 SIGNS_PLACEHOLDER = re.compile(r"^\| (deployed|irreplaceable-data) \| <[^\n]*$", re.MULTILINE)
 PINS_PLACEHOLDER = re.compile(r"^\| <`globs` of the files that name an image[^\n]*$", re.MULTILINE)
 SELF_TEST_PINS = "| none: the self-test names no image | none |"
-REPORTS_PLACEHOLDER = re.compile(r"^\| <name> \|[^\n]*$", re.MULTILINE)
+REPORTS_PLACEHOLDER = re.compile(r"^\| `suite` \|[^\n]*$", re.MULTILINE)
 SELF_TEST_REPORTS = "| none: the self-test shares no report | none | none | none | none |"
 DECISION_PLACEHOLDER = re.compile(r"^- Decision: <[^\n]*>$", re.MULTILINE)
 PARTS_PLACEHOLDER = re.compile(r"^\| <part> \|[^\n]*$", re.MULTILINE)

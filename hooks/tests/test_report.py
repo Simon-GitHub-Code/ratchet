@@ -17,6 +17,7 @@ SUITE = "| suite | `just suite-report` | `out.txt` | `just coverage`, `just test
 FAKE_JUST = (
     "#!/bin/sh\n"
     'echo "$@" >> "$COUNT"\n'
+    '[ -n "$PRINT" ] && echo "$PRINT"\n'
     "sleep 0.3\n"
     '[ -n "$WRITES" ] && echo built > out.txt\n'
     'exit "${STATUS:-0}"\n'
@@ -60,6 +61,7 @@ def work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("PATH", f"{tools}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("COUNT", str(tmp_path / "count"))
     monkeypatch.setenv("WRITES", "1")
+    monkeypatch.setenv("PRINT", "")
     for name in (report.RUN, "SHARD", "SHARDS", "STATUS"):
         monkeypatch.delenv(name, raising=False)
     return root
@@ -70,8 +72,8 @@ def runs(root: Path) -> int:
     return len(count.read_text(encoding="utf-8").splitlines()) if count.exists() else 0
 
 
-def ask(root: Path, name: str = "suite") -> int:
-    return report.main([name, "--root", str(root)])
+def ask(root: Path, name: str = "suite", reader: str = "test") -> int:
+    return report.main([name, "--reader", reader, "--root", str(root)])
 
 
 def test_concurrent_readers_run_the_producer_once_and_all_read_what_it_wrote(
@@ -136,12 +138,33 @@ def test_a_failed_producers_exit_status_reaches_every_reader(
 ) -> None:
     monkeypatch.setenv(report.RUN, "run-1")
     monkeypatch.setenv("STATUS", "3")
-    with ThreadPoolExecutor(3) as pool:
-        statuses = list(pool.map(lambda _: ask(work), range(3)))
-    assert statuses == [1, 1, 1]
+    monkeypatch.setenv("PRINT", "FAILED test_the_distinctive_one")
+    assert ask(work, reader="coverage") == 1
+    first = capfd.readouterr().err
+    assert first == "report suite: `just suite-report` exited 3; `test` judges the failure\n"
+    assert ask(work, reader="test") == 1
+    judged = capfd.readouterr().err
+    assert judged == (
+        "FAILED test_the_distinctive_one\n"
+        "report suite: `just suite-report` exited 3; `test` judges the failure\n"
+    )
     assert runs(work) == 1
-    lines = capfd.readouterr().err.splitlines()
-    assert lines == ["report suite: `just suite-report` exited 3; `test` judges the failure"] * 3
+
+
+def test_a_reader_the_row_does_not_list_is_refused(
+    work: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    assert ask(work, reader="mutation") == 2
+    assert capfd.readouterr().err == (
+        "report suite: 'mutation' is not one of its readers in '## Shared reports'\n"
+    )
+    assert runs(work) == 0
+
+
+def test_a_reader_is_required() -> None:
+    with pytest.raises(SystemExit) as stop:
+        report.main(["suite"])
+    assert stop.value.code == 2
 
 
 def test_a_report_is_kept_for_each_shard(work: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -237,7 +260,7 @@ def test_the_table_names_each_report() -> None:
             binding(
                 "| <name> | <`just recipe`> | <`path`> | <`just recipe`> | <`just recipe`> |\n"
             ),
-            "the shared reports table still has the template's placeholder row",
+            report.PLACEHOLDER,
         ),
         (
             binding("| none: x | none | none | none | none |\n"),
@@ -278,6 +301,27 @@ def test_a_failed_producer_names_the_judge_of_its_row(
     assert capfd.readouterr().err == (
         "report suite: `just suite-report` exited 2; `coverage` judges the failure\n"
     )
+
+
+def test_a_report_with_fewer_than_two_readers_is_not_shared() -> None:
+    row = "| suite | `just a` | `p` | `just b` | `just b` |\n"
+    reports, problems = report.parse(binding(row))
+    assert reports is None
+    problem = (
+        "the shared reports row 'suite' has fewer than two readers, so it is not shared:"
+        " say `none: <reason>` in its Report cell"
+    )
+    assert problems == [problem]
+
+
+def test_the_name_may_be_backticked_and_each_producer_is_listed() -> None:
+    row = "| `suite` | `just a` | `p` | `just b`, `just c` | `just b` |\n"
+    text = binding(row + "| none: x is one gate's | none | none | none | none |\n")
+    reports, _ = report.parse(text)
+    assert reports is not None
+    assert [found.name for found in reports] == ["suite"]
+    assert report.producers(text) == [("suite", "a")]
+    assert report.producers("# Binding\n") == []
 
 
 def test_a_binding_that_shares_none_names_no_report() -> None:

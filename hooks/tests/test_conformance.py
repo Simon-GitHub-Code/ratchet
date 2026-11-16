@@ -1030,6 +1030,11 @@ def test_a_step_or_permission_no_marker_names_is_listed_with_its_line() -> None:
     ]
 
 
+TEMPLATE_ROW = (
+    "| `suite` | `just suite-report` | <`path` of the coverage report, Cobertura or LCOV>,"
+    " <`path` of the test results, JUnit XML> | `just test`, `just coverage`,"
+    " `just diff-coverage`, `just test-counts` | `just test` |"
+)
 SELF_TEST_NONE = "| none: the self-test shares no report | none | none | none | none |"
 SHARED = (
     "| suite | `just build` | `suite.xml` | `just coverage`, `just diff-coverage` |"
@@ -1102,8 +1107,9 @@ def test_a_binding_without_the_shared_reports_section_gets_the_templates(repo: P
     replace(BINDING, conformance.report.SECTION, "## Elsewhere")(repo)
     found = conformance.findings(repo)
     problem = (
-        "has no '## Shared reports' section; add the template's, and bind the `test`, `coverage`,"
-        " `diff-coverage` and `test-counts` gates as readers of the shared suite report (ADR 0071)"
+        "has no '## Shared reports' section; add the template's, bind `suite-report` first to run"
+        " the suite once, then bind the `test`, `coverage`, `diff-coverage` and `test-counts`"
+        " gates as readers of the shared suite report (ADR 0071)"
     )
     assert [finding.problem for finding in found] == [problem]
     assert isinstance(found[0].fix, conformance.Auto)
@@ -1113,11 +1119,9 @@ def test_a_shared_reports_table_the_template_left_is_red(repo: Path) -> None:
     replace(
         BINDING,
         SELF_TEST_NONE,
-        "| <name> | <`just recipe`> | <`path`, ...> | <`just recipe`, ...> | <`just recipe`> |",
+        TEMPLATE_ROW,
     )(repo)
-    assert red(repo) == [
-        f"{BINDING}: the shared reports table still has the template's placeholder row"
-    ]
+    assert red(repo) == [f"{BINDING}: {conformance.report.PLACEHOLDER}"]
 
 
 def test_a_repository_with_no_binding_has_no_shared_reports_to_hold(repo: Path) -> None:
@@ -1160,11 +1164,41 @@ def test_a_judge_that_is_not_exactly_one_of_the_readers_is_red(repo: Path, judge
     assert red(repo) == [problem]
 
 
-def test_the_templates_suite_gates_say_to_read_the_shared_report() -> None:
-    text = (SKILLS / "adopt/templates/justfile").read_text(encoding="utf-8")
-    for gate in ("test", "coverage", "diff-coverage", "test-counts"):
-        body = justfile_text.definition(text, gate)
-        assert any(
-            "bind: read the shared suite report through the plugin's scripts/report.py" in line
-            for line in body
-        ), gate
+def test_a_producer_the_template_defines_and_the_justfile_lacks_is_copied(repo: Path) -> None:
+    replace(BINDING, SELF_TEST_NONE, SHARED.replace("just build", "just suite-report"))(repo)
+    text = (repo / "justfile").read_text(encoding="utf-8")
+    block = "\n".join(justfile_text.definition(text, "suite-report"))
+    assert block
+    replace("justfile", block, "")(repo)
+    found = [f for f in conformance.findings(repo) if "`suite-report`" in f.problem]
+    problem = (
+        "has no `suite-report` recipe, which the shared report 'suite' names; copy it from the"
+        " template justfile; it is a placeholder for the project to bind"
+    )
+    assert [f.problem for f in found] == [problem]
+    assert isinstance(found[0].fix, conformance.Auto)
+
+
+def test_a_report_with_one_reader_is_red(repo: Path) -> None:
+    sharing(repo)
+    replace(BINDING, "`just coverage`, `just diff-coverage` |", "`just coverage` |")(repo)
+    problem = (
+        f"{BINDING}: the shared reports row 'suite' has fewer than two readers, so it is not"
+        " shared: say `none: <reason>` in its Report cell"
+    )
+    assert red(repo) == [problem]
+
+
+def test_the_template_row_is_red_until_its_paths_are_bound_and_still_brings_the_producer(
+    repo: Path,
+) -> None:
+    replace(BINDING, SELF_TEST_NONE, TEMPLATE_ROW)(repo)
+    text = (repo / "justfile").read_text(encoding="utf-8")
+    block = "\n".join(justfile_text.definition(text, "suite-report"))
+    replace("justfile", block, "")(repo)
+    placeholder = f"{BINDING}: {conformance.report.PLACEHOLDER}"
+    producer = (
+        "justfile: has no `suite-report` recipe, which the shared report 'suite' names; copy it"
+        " from the template justfile; it is a placeholder for the project to bind"
+    )
+    assert sorted(red(repo)) == sorted([placeholder, producer])
