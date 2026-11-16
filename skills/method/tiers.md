@@ -267,7 +267,7 @@ A tool is chosen per repository, so no recipe is shipped for it. These hold for 
 - **A tool that walks the tree is pointed at the source.** `quality/snapshots/` holds copies of the tool configs, a dependency manifest among them, which reads as a second package to a tool that searches for manifests.
 - **A snapshot of the product's own contract lives beside the tests.** A command's `--help`, a public API report or a schema changes with the feature that changes the contract. Under `quality/`, a guard path for what only rises, it could land neither ahead of its feature nor with it.
 - **A prose gate that flags the owner's own text is answered in the text.** When the `prose` gate flags a word on a glossary *Avoid* list, the text is reworded; an *Avoid* list is never shortened to turn a gate green.
-- **A gate red in parallel and green alone shares state with another.** Separate their outputs (a report path, a cache directory, a work tree of its own per gate); only when that is not possible, declare the group in that tier's `serial` variable (`--serial A B`).
+- **A gate red in parallel and green alone shares state with another.** Separate their outputs (a report path, a cache directory, a work tree of its own per gate); only when that is not possible, declare the group in that tier's `serial` variable (`--serial A B`). Two gates that each use every core go in one group too, so they never run side by side: the template puts the changed-code mutation gate with the coverage gate, and the full mutation gate in the deep group.
 
 ## Every bound gate is shown to bite
 

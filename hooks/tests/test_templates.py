@@ -199,16 +199,27 @@ def test_a_serial_group_is_declared_per_tier_and_empty_until_the_stack_needs_one
     tmp_path: Path,
 ) -> None:
     needs_just()
-    for variable in ("serial0", "serial1", "serial2"):
-        assert f'{variable} := ""' in JUSTFILE
+    assert 'serial0 := ""' in JUSTFILE
     bound = tmp_path / "justfile"
     bound.write_text(
-        JUSTFILE.replace('serial1 := ""', 'serial1 := "--serial coverage diff-coverage"'),
+        JUSTFILE.replace(
+            'serial1 := "--serial coverage test mutation-changed"',
+            'serial1 := "--serial coverage diff-coverage"',
+        ),
         encoding="utf-8",
     )
     assert " --serial coverage diff-coverage -- " in dry_run("check", bound)
     assert " --serial coverage diff-coverage -- " in dry_run("tier1", bound)
     assert "--serial" not in dry_run("tier0", bound)
+
+
+def test_the_two_mutation_gates_share_a_group_with_the_gates_that_use_every_core() -> None:
+    needs_just()
+    assert "mutation-changed" in gate_list("serial1")[1:]
+    assert "coverage" in gate_list("serial1")[1:]
+    assert "mutation" in gate_list("serial2")[1:]
+    assert "mutation-changed" in gate_list("tier1_gates")
+    assert "mutation" in gate_list("tier2_gates")
 
 
 def test_a_recipe_learns_its_shard_from_the_environment_and_is_whole_without_one() -> None:
