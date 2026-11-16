@@ -599,15 +599,33 @@ def _publish(state: State, name: Name) -> State | None:
     return state.with_ticket(name, moved_by_a_role)
 
 
+def asked(ticket: Ticket) -> bool:
+    """Whether the skill runs ``check`` on the ticket.
+
+    The skill runs the check after a run returns, so on a start no check has passed, of a branch
+    the note does not hold.
+    """
+    return unchecked(ticket) and not held_by_note(ticket)
+
+
+def cut_off(ticket: Ticket) -> bool:
+    """Whether ``update`` was cut off after it moved the branch: ``drain.cut_off``.
+
+    The note holds ``update``'s mark, and the branch is not at the tip the mark names. While the
+    mark stands, the branch is at that tip only while the rebase is under way in its tree.
+    """
+    note = ticket.note
+    return note is not None and note.rebasing and ticket.tree is not Tree.REBASING
+
+
 def in_its_tree(state: State, name: Name) -> Ticket | None:
     """The ticket as ``check`` has it once it has a tree to read; ``None`` where it reads none.
 
-    The skill runs the check after a run returns, so on a start no check has passed, of a branch
-    the note does not hold. A branch with commits of its own and no work tree gets one under the
-    cap, as ``update`` makes one, which drops ``settle``'s mark.
+    A branch with commits of its own and no work tree gets one under the cap, as ``update`` makes
+    one, which drops ``settle``'s mark. The check of an ``update`` cut off reads no tree.
     """
     ticket = state.of(name)
-    if not unchecked(ticket) or held_by_note(ticket):
+    if not asked(ticket) or cut_off(ticket):
         return None
     if ticket.tree is Tree.NONE:
         if not ticket.ahead or trees(state) >= CAP or ticket.note is None:
@@ -617,7 +635,13 @@ def in_its_tree(state: State, name: Name) -> Ticket | None:
 
 
 def _check(state: State, name: Name, *, final: bool = True) -> State | None:
-    """``drain.py check``: green with ``--final`` marks the start passed; a branch that moved is parked and held."""  # noqa: E501
+    """``drain.py check``: green with ``--final`` marks the start passed; a branch that moved is parked and held.
+
+    After an ``update`` cut off once it moved the branch, the check says to run ``update`` again
+    and changes nothing: it cannot tell that move from a role's commit.
+    """  # noqa: E501
+    if asked(state.of(name)) and cut_off(state.of(name)):
+        return state
     ticket = in_its_tree(state, name)
     if ticket is None:
         return None

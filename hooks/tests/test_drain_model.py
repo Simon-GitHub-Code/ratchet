@@ -247,13 +247,22 @@ def test_with_the_guards_gate_each_rule_but_10_holds_and_no_role_commits(part: i
         assert taken is (kind is not Kind.PUBLISH), kind
     unchecked = landed_unchecked(gate=True)
     assert not unchecked, f"a branch lands on a start no check passed: {unchecked[0]}"
+    states, edges = main_graph(gate=True)
     moved = {
         (ticket.branch, ticket.note is not None and ticket.note.rebasing)
-        for state in main_graph(gate=True)[0]
+        for state in states
         for ticket in state.tickets
         if ticket.since
     }
     assert moved == {(Branch.BARE, True)}, "only a killed update moves a branch from its start"
+    told = {
+        after == before
+        for before, said, after in edges
+        if said.startswith(Kind.CHECK.value)
+        and (name := model.ticket_of(said)) is not None
+        and before.of(name).since
+    }
+    assert told == {True}, "a check of a branch a killed update moved changes nothing"
 
 
 def test_every_rule_reads_as_one_sentence() -> None:
@@ -309,6 +318,8 @@ class Play:
         assert merging == (self.state.scratch, self.state.half), self.says(f"merge.py: {merging}")
         for name, real, kept in zip(Name, seen.tickets, self.state.tickets, strict=True):
             assert real == kept, self.says(f"ticket {name.value} is {real}\nnot {kept}")
+            cut = drain.cut_off(self.world.root, BRANCH[name])
+            assert cut is model.cut_off(kept), self.says(f"drain.cut_off of {name.value}: {cut}")
         for name, kept in self.state.each():
             if kept.tree is Tree.NONE:
                 continue
@@ -593,15 +604,22 @@ def test_check_records_the_start_and_marks_it_passed_in_the_note(tmp_path: Path)
     assert note_of(play)["passed"] is True
 
 
-def test_a_check_after_an_update_killed_past_the_rebase_of_a_bare_branch_parks_it_as_published(
+def test_a_check_after_an_update_killed_past_the_rebase_of_a_bare_branch_says_to_run_update_again(
     tmp_path: Path,
 ) -> None:
-    path = [*MARK_LEFT[:-1], KILL_AFTER_REBASE, CHECK_A]
-    assert broken_by(path) == set()
-    assert model.held_by_note(walked(path)[-1].of(Name.A)), "parked and held"
-    play = replay(tmp_path, path)
-    assert play.world.code == 1
-    assert note_of(play)["reasons"][0].startswith("a role published: `feature/1-alpha` moved")
+    path = [*MARK_LEFT[:-1], KILL_AFTER_REBASE, CHECK_A, UPDATE_A, CHECK_A]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    states = walked(path)
+    assert model.cut_off(states[2].of(Name.A)), "the mark stands and the branch moved"
+    assert states[3] == states[2], "the check changes nothing"
+    play = replay(tmp_path, path[:3])
+    kept = note_of(play)
+    told = f"check: {REF[Name.A]} {drain.CUT_OFF}\n"
+    assert (play.named(CHECK_A), play.world.code) == (told, drain.UNREAD)
+    assert note_of(play) == kept, "the check parks nothing and writes no note"
+    assert play.named(UPDATE_A) == '{"moved": true, "conflicts": []}\n'
+    assert (play.named(CHECK_A), play.world.code) == (f"{publish_check.GREEN}\n", 0)
+    assert note_of(play)["passed"] is True
 
 
 def test_a_check_after_a_run_that_died_makes_the_tree_and_parks_a_branch_a_role_committed_on(
