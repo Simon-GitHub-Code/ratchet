@@ -66,7 +66,7 @@ claude plugin marketplace add Simon-GitHub-Code/ratchet
 claude plugin install ratchet@ratchet
 ```
 
-The last line installs all four plugins: Ratchet declares the other three as dependencies. For another harness, see [Harness support](#harness-support).
+The last line installs all four plugins: Ratchet declares the other three as dependencies. Ratchet installs from its latest release's tag, never from the default branch. For another harness, see [Harness support](#harness-support).
 
 ### 3. Type four commands
 
@@ -228,20 +228,15 @@ Outside Claude Code, a ticket is built by the roles [the pipeline page](skills/m
 
 ## Upgrading
 
-When the plugin updates, every tier says so on its first line and `/ratchet:next` offers the upgrade. In the repository, run:
+Every tier's first line names the plugin copy it runs: `plugin-pin: using <version> at <commit>, in <dir>`. The local gates run only the release your project pins (ADR 0068). After the plugin updates, they keep running the pinned release while the harness still has it on disk, and `/ratchet:next` offers the upgrade. Once no copy on disk is the pinned release, every local tier is red in one line that names the upgrade command:
 
-```bash
-python3 ~/.claude/plugins/marketplaces/ratchet/scripts/upgrade.py --apply
+```text
+the plugin at <dir> is tree <have>, not the <want> that docs/process/binding.md pins, and no copy on disk matches: upgrade this project with `python3 <dir>/scripts/upgrade.py --apply`, or install the plugin release the pin names
 ```
 
-Until a tagged release is installed (ADR 0068), that clone follows the default branch and can be ahead of the version you installed, which would pin a commit no release holds. Run the upgrade instead from a clone at the commit your version was published at. Replace `<version>` with the version you installed:
+A pin written before the first tagged release holds no tree id, so the first upgrade to a tagged release starts from a red line of its own that names the same command. In the repository, run that command. CI is not affected: it checks the plugin out at the pin.
 
-```bash
-plugin=$(mktemp -d)
-git clone --quiet https://github.com/Simon-GitHub-Code/ratchet "$plugin"
-git -C "$plugin" checkout --quiet "$(git -C "$plugin" log --first-parent --reverse --format=%H -S'"version": "<version>"' -- .claude-plugin/plugin.json | head -n 1)"
-python3 "$plugin/scripts/upgrade.py" --apply
-```
+If your own recipes use the plugin's folder where the checked folder cannot reach them, such as in a shebang recipe or unquoted, the upgrade's conformance findings list each one by line. An agent fixes them as the finding says.
 
 It moves the repository to the plugin version in use in one change, keeps every line it did not write, and loosens no gate. Anything that needs judgement it writes to `quality/owed.toml` instead of failing: each item is counted, none is red, and between upgrades the list only shrinks. The few findings that cannot be owed, such as a mutation recipe that fails on a change with no code in it, it lists as red until fixed. Without `--apply` it prints the same plan and writes nothing. The upgrade touches guard paths, so merging it is your one step. When the upgrade left rows an agent can write from the repository alone, `/ratchet:next` then names `/ratchet:fill`, and no feature starts before that is done. [CHANGELOG.md](CHANGELOG.md) says what each version changed.
 

@@ -1,5 +1,6 @@
 """``plugin_pin``: the plugin a tier runs from is the commit and version the binding pins."""
 
+import shlex
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 import plugin_pin
+import release
 from tests import repos
 
 MANIFEST = ".claude-plugin/plugin.json"
@@ -19,6 +21,10 @@ def plugin(root: Path, version: str = "1.2.3") -> tuple[Path, str]:
     return root, repos.git(root, "rev-parse", "HEAD")
 
 
+def tree(used: Path) -> str:
+    return repos.git(used, "rev-parse", "HEAD^{tree}")
+
+
 def adopted(root: Path, line: str) -> Path:
     repos.write(root, "docs/process/binding.md", f"# Binding\n\n## Runner\n\njust\n\n{line}\n")
     return root
@@ -26,14 +32,16 @@ def adopted(root: Path, line: str) -> Path:
 
 def run(root: Path, used: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
     code = plugin_pin.main(["plugin_pin.py", "--root", str(root), "--plugin", str(used)])
-    return code, capsys.readouterr().out
+    first, _, rest = capsys.readouterr().out.partition("\n")
+    assert first == f"plugin-pin: using {plugin_pin.in_use(used)}, in {used}"
+    return code, rest
 
 
 def test_a_checkout_at_the_pinned_commit_and_version_is_green(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     used, commit = plugin(tmp_path / "plugin")
-    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {commit}")
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}")
     assert run(root, used, capsys) == (
         0,
         f"plugin-pin: 1.2.3 at {commit[:12]}, as docs/process/binding.md pins\nplugin-pin: green\n",
@@ -51,26 +59,28 @@ def test_a_checkout_that_moved_on_within_a_version_is_red_and_says_both_ways_out
     assert f"the plugin at {used} is 1.2.3 at {moved}" in out
     assert f"docs/process/binding.md pins 1.2.3 at {pinned}, and which is newer" in out
     assert "set RATCHET_PLUGIN to a checkout of the pinned commit" in out
-    assert f"set the pin line to `- Ratchet plugin: 1.2.3 at {moved}` and run" in out
+    line = f"- Ratchet plugin: 1.2.3 at {moved} tree {tree(used)}"
+    assert f"set the pin line to `{line}` and run" in out
     assert f"`python3 {used / 'scripts/upgrade.py'} --apply`" in out
     assert "which moves every workflow `ref` and the permission rules" in out
     assert out.endswith("plugin-pin: red\n")
 
 
-def test_a_plugin_newer_than_the_pin_is_green_and_says_so_on_every_run(
+def test_a_plugin_newer_than_the_pin_is_red_and_says_so_on_every_run(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     used, commit = plugin(tmp_path / "plugin", "1.3.0")
     root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE}")
     code, out = run(root, used, capsys)
-    assert code == 0
+    assert code == 1
     assert out == (
-        f"plugin-pin: the plugin at {used} is 1.3.0 at {commit}, newer than the 1.2.3 that"
-        " docs/process/binding.md pins: this run judges by 1.3.0's gates and CI by 1.2.3's."
+        f"the plugin at {used} is 1.3.0 at {commit}, newer than the 1.2.3 that"
+        " docs/process/binding.md pins, so this run would judge by 1.3.0's gates and CI by 1.2.3's."
         f" Run `python3 {used / 'scripts/upgrade.py'} --apply`: it moves the pin in"
-        f" docs/process/binding.md to `- Ratchet plugin: 1.3.0 at {commit}`, every workflow `ref`"
+        f" docs/process/binding.md to `- Ratchet plugin: 1.3.0 at {commit} tree {tree(used)}`,"
+        " every workflow `ref`"
         " and the permission rules together, and lists what it leaves to an agent or to you"
-        "\nplugin-pin: green\n"
+        "\nplugin-pin: red\n"
     )
     pin = plugin_pin.Pin("1.2.3", ELSEWHERE)
     assert plugin_pin.relation(pin, used) is plugin_pin.Relation.NEWER
@@ -107,13 +117,49 @@ def test_a_copy_with_no_history_is_judged_on_its_version_and_says_so(
     used = tmp_path / "cache/ratchet/1.2.3"
     repos.write(used, MANIFEST, '{"version": "1.2.3"}')
     root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE}")
-    said = "this copy carries no commit, so only the version was compared"
+    said = "this copy carries no commit, and its tree is the pinned one"
     green = f"plugin-pin: 1.2.3, as docs/process/binding.md pins; {said}\nplugin-pin: green\n"
+    adopted(root, f"- Ratchet plugin: 1.2.3 at {ELSEWHERE} tree {plugin_pin.copy_tree_id(used)}")
     assert run(root, used, capsys) == (0, green)
     adopted(root, f"- Ratchet plugin: 1.3.0 at {ELSEWHERE}")
     code, out = run(root, used, capsys)
     assert code == 1
     assert f"the plugin at {used} is 1.2.3, older than the 1.3.0 at" in out
+
+
+def test_a_copy_with_no_history_takes_its_commit_from_the_release_file(tmp_path: Path) -> None:
+    repos.write(tmp_path, ".claude-plugin/commit", f"{ELSEWHERE}\n")
+    assert plugin_pin.commit_of(tmp_path) == ELSEWHERE
+    repos.write(tmp_path, ".claude-plugin/commit", ELSEWHERE)
+    assert plugin_pin.commit_of(tmp_path) == ELSEWHERE
+
+
+def test_a_copy_with_no_history_and_no_release_file_has_no_commit(tmp_path: Path) -> None:
+    assert plugin_pin.commit_of(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "text", ["", "\n", "abc\n", "F" * 40, "g" * 40, "f" * 41, f"{ELSEWHERE}\n\n", f" {ELSEWHERE}"]
+)
+def test_a_release_file_that_is_not_one_commit_is_unreadable(tmp_path: Path, text: str) -> None:
+    repos.write(tmp_path, ".claude-plugin/commit", text)
+    assert plugin_pin.commit_of(tmp_path) == plugin_pin.UNREADABLE
+
+
+@pytest.mark.parametrize("text", [f"{ELSEWHERE}\n", ELSEWHERE])
+def test_a_copy_with_a_release_file_is_judged_on_its_commit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str
+) -> None:
+    used = tmp_path / "cache/ratchet/1.2.3"
+    repos.write(used, MANIFEST, '{"version": "1.2.3"}')
+    repos.write(used, ".claude-plugin/commit", text)
+    held = plugin_pin.copy_tree_id(used)
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE} tree {held}")
+    assert run(root, used, capsys)[0] == 0
+    adopted(root, f"- Ratchet plugin: 1.2.3 at {'a' * 40} tree {held}")
+    code, out = run(root, used, capsys)
+    assert code == 1
+    assert f"is 1.2.3 at {ELSEWHERE}" in out
 
 
 @pytest.mark.parametrize("line", ["- Ratchet plugin: <X.Y.Z> at <ratchet-sha>", "", None])
@@ -134,7 +180,7 @@ def test_the_commit_is_the_plugins_own_inside_a_git_hook(
     # Why: git exports GIT_DIR to a hook, and `git -C` obeys it over the directory it is given.
     used, commit = plugin(tmp_path / "plugin")
     root = repos.repository(tmp_path / "repo")
-    adopted(root, f"- Ratchet plugin: 1.2.3 at {commit}")
+    adopted(root, f"- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}")
     monkeypatch.setenv("GIT_DIR", str(root / ".git"))
     assert run(root, used, capsys)[0] == 0
 
@@ -168,9 +214,12 @@ def test_a_checkout_git_cannot_read_is_red_not_judged_on_its_version(
 def test_the_plugin_judged_is_the_one_the_script_runs_from(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    version = plugin_pin.version_of(plugin_pin.PLUGIN)
-    commit = plugin_pin.commit_of(plugin_pin.PLUGIN) or ELSEWHERE
-    adopted(tmp_path, f"- Ratchet plugin: {version} at {commit}")
+    copy = repos.installed_copy()
+    monkeypatch.setattr(plugin_pin, "PLUGIN", copy)
+    version = plugin_pin.version_of(copy)
+    commit = plugin_pin.commit_of(copy) or ELSEWHERE
+    held = plugin_pin.copy_tree_id(copy)
+    adopted(tmp_path, f"- Ratchet plugin: {version} at {commit} tree {held}")
     monkeypatch.chdir(tmp_path)
     assert plugin_pin.main(["plugin_pin.py"]) == 0
     assert capsys.readouterr().out.endswith("plugin-pin: green\n")
@@ -379,3 +428,105 @@ def test_a_copy_with_no_history_of_the_pinned_version_may_write(tmp_path: Path) 
     assert plugin_pin.write_refusal(refs_only, used) is not None
     two = pinned_repository(tmp_path / "z", pin=FIRST, refs=(SECOND,))
     assert plugin_pin.write_refusal(two, used) is not None
+
+
+NONE_RECORDED = (
+    "plugin-pin: no plugin recorded for this repository: start an agent session here once, or set"
+    " RATCHET_PLUGIN to the plugin's folder\nplugin-pin: red\n"
+)
+
+
+@pytest.mark.parametrize("used", ["", "absent"])
+def test_no_plugin_recorded_and_none_set_is_red_in_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], used: str
+) -> None:
+    root = repos.repository(tmp_path / "repo")
+    code = plugin_pin.main(
+        ["plugin_pin.py", "--root", str(root), "--plugin", str(tmp_path / used) if used else ""]
+    )
+    assert code == 1
+    assert capsys.readouterr().out == NONE_RECORDED
+
+
+def test_a_newer_copy_names_both_versions_and_its_own_upgrade_script(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    used, _ = plugin(tmp_path / "plugin", "1.3.0")
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE}")
+    code, out = run(root, used, capsys)
+    first = out.splitlines()[0]
+    assert code == 1
+    assert "1.3.0" in first
+    assert "newer than the 1.2.3" in first
+    assert str(used / "scripts/upgrade.py") in first
+
+
+def test_a_clone_at_a_release_tag_is_at_the_commit_its_release_file_names(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    work, merged = plugin(tmp_path / "work")
+    repos.write(work, "CHANGELOG.md", "# Changelog\n\n## 1.2.3\n\nThe release.\n")
+    repos.commit(work, "docs(core): the changelog")
+    assert release.main(["release.py", "--repo", str(work)]) == 0
+    capsys.readouterr()
+    clone = tmp_path / "clone"
+    repos.git(tmp_path, "clone", "-q", "--branch", "v1.2.3", str(work), str(clone))
+    assert repos.git(clone, "rev-parse", "HEAD") != merged
+    assert plugin_pin.commit_of(clone) == merged
+    released = repos.git(work, "rev-parse", f"{merged}^{{tree}}")
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {merged} tree {released}")
+    assert run(root, clone, capsys)[0] == 0
+    other = adopted(tmp_path / "other", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE}")
+    assert run(other, clone, capsys)[0] == 1
+
+
+def test_a_clone_that_tracks_no_release_file_is_at_its_head(tmp_path: Path) -> None:
+    used, head = plugin(tmp_path / "plugin")
+    assert plugin_pin.commit_of(used) == head
+
+
+def test_the_upgrade_command_quotes_a_path_with_a_space(tmp_path: Path) -> None:
+    spaced = tmp_path / "my plugin"
+    command = plugin_pin.upgrade_command(spaced)
+    assert shlex.split(command) == ["python3", str(spaced / "scripts/upgrade.py"), "--apply"]
+
+
+def test_a_pin_with_no_tree_id_is_red_and_names_the_line_to_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    used, commit = plugin(tmp_path / "plugin")
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {commit}")
+    code, out = run(root, used, capsys)
+    assert code == 1
+    assert "docs/process/binding.md pins no tree id" in out
+    assert f"`- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}`" in out
+
+
+def test_a_checkout_holding_a_file_the_commit_does_not_is_red_whatever_its_commit_says(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    used, commit = plugin(tmp_path / "plugin")
+    root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}")
+    assert run(root, used, capsys)[0] == 0
+    repos.write(used, "scripts/extra.py", "print('extra')\n")
+    code, out = run(root, used, capsys)
+    assert code == 1
+    assert f"is tree {plugin_pin.copy_tree_id(used)}, not the {tree(used)} that" in out
+
+
+def test_the_pin_line_a_plugin_writes_holds_the_tree_id_of_its_commit(tmp_path: Path) -> None:
+    used, commit = plugin(tmp_path / "plugin")
+    assert plugin_pin.line_for(used) == f"- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}"
+    held = plugin_pin.pinned(plugin_pin.line_for(used))
+    assert held == plugin_pin.Pin("1.2.3", commit, tree(used))
+
+
+def test_a_folder_that_is_not_there_or_cannot_be_read_has_no_tree_id(tmp_path: Path) -> None:
+    assert plugin_pin.copy_tree_id(tmp_path / "absent") is None
+    repos.write(tmp_path / "copy", "scripts/x.py", "print(1)\n")
+    assert plugin_pin.copy_tree_id(tmp_path / "copy")
+    (tmp_path / "copy/scripts/x.py").chmod(0)
+    try:
+        assert plugin_pin.copy_tree_id(tmp_path / "copy") is None
+    finally:
+        (tmp_path / "copy/scripts/x.py").chmod(0o644)

@@ -173,7 +173,8 @@ def test_a_records_branch_the_judge_left_to_the_owner_is_named(tmp_path: Path) -
         "`git switch main && git merge --no-ff records/20261113-031415`, typed by the owner"
     )
     assert step.why == (
-        "the merge judge leaves branch `records/20261113-031415` to the owner: no verdict record"
+        "the merge judge leaves branch `records/20261113-031415` to the owner, and its change holds"
+        " only records, so the owner merges or deletes it: no verdict record"
         " (docs/features/<slug>/verdict.json) is part of the change, so it is not the product of"
         " the pipeline; its paths are records, but .scratch/f/issues/01-x.md gives a ticket the"
         " agent-ready label `ready-for-agent`, which is the owner's act;"
@@ -193,12 +194,98 @@ def test_a_records_branch_a_stopped_run_committed_is_an_agents_to_merge(tmp_path
     step = route.decide(root, None)
     assert step == route.Step(
         "`just merge records/20261113-064145`",
-        "branch `records/20261113-064145` holds records a run of `just merge --records` committed"
-        " and did not merge; the merge judge passes them, so an agent runs this, and it merges"
-        " them when `check` is green on the merge result",
+        "branch `records/20261113-064145` holds records and was not merged; its change holds only"
+        " records, and the merge judge passes them, so an agent runs this, and it merges them when"
+        " `check` is green on the merge result",
         route.NEXT,
         "records",
     )
+
+
+def tickets_on(root: Path, name: str, when: str = "2026-01-01T00:00:00") -> None:
+    branch(root, name)
+    write(root, ".scratch/f/issues/01-x.md", "Status: ready-for-agent\n")
+    git(root, "add", "--all")
+    git(root, "commit", "-q", "-m", "docs: tickets", "--date", when)
+    git(root, "checkout", "-q", "main")
+
+
+def test_a_tickets_branch_under_any_name_the_judge_left_to_the_owner_is_named(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    tickets_on(root, "tickets/add-see-tick-off")
+    step = route.decide(root, None)
+    assert step.command == (
+        "`git switch main && git merge --no-ff tickets/add-see-tick-off`, typed by the owner"
+    )
+    assert step.stage == "records"
+    assert "branch `tickets/add-see-tick-off`" in step.why
+    assert "its change holds only records, so the owner merges or deletes it" in step.why
+    assert "such branches wait" not in step.why
+
+
+@pytest.mark.parametrize(
+    ("name", "path", "noted"),
+    [
+        ("feature/4-x", ".scratch/f/spec.md", False),
+        ("queue/x", ".scratch/f/spec.md", True),
+        ("feature/4-x", "docs/features/x/verdict.json", False),
+    ],
+    ids=["feature branch with a spec", "branch with a drain note", "feature branch with a verdict"],
+)
+def test_a_branch_a_run_owns_is_not_waiting_records(
+    tmp_path: Path, name: str, path: str, *, noted: bool
+) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    branch(root, name)
+    write(root, path, "{}\n" if path.endswith(".json") else "# F\n")
+    commit(root, "docs: spec")
+    git(root, "checkout", "-q", "main")
+    if noted:
+        queue_notes.write_note(queue_notes.note_path(root, name), {"outcome": "waits"})
+    assert route.records_waiting(route.observe(root)) is None
+
+
+def test_a_branch_that_changes_nothing_is_not_waiting_records(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    branch(root, "empty/work")
+    commit(root, "chore: nothing yet")
+    git(root, "checkout", "-q", "main")
+    assert route.records_waiting(route.observe(root)) is None
+
+
+def test_a_branch_checked_out_in_a_linked_work_tree_waits_until_it_is_removed(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path / "main", {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    tickets_on(root, "tickets/a")
+    other = tmp_path / "other"
+    git(root, "worktree", "add", "-q", str(other), "tickets/a")
+    assert route.records_waiting(route.observe(root)) is None
+    git(root, "worktree", "remove", str(other))
+    step = route.records_waiting(route.observe(root))
+    assert step is not None
+    assert "tickets/a" in step.why
+
+
+def test_the_checked_out_branch_is_not_waiting_records(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    tickets_on(root, "tickets/a")
+    git(root, "checkout", "-q", "tickets/a")
+    checkout = route.observe(root)
+    assert checkout is not None
+    assert route.records_waiting(checkout) is None
+    assert route.decide(root, None).stage != "records"
+
+
+def test_the_oldest_of_two_waiting_branches_is_named_with_the_count(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    tickets_on(root, "tickets/newer", "2026-03-01T00:00:00")
+    tickets_on(root, "tickets/older", "2026-02-01T00:00:00")
+    step = route.decide(root, None)
+    assert step.command.startswith("`git switch main && git merge --no-ff tickets/older`")
+    assert step.why.endswith("; 2 such branches wait, and this is the oldest")
 
 
 @pytest.mark.parametrize(

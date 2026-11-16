@@ -9,6 +9,7 @@ import pytest
 import budget
 import conformance
 import gatelib
+import justfile_text
 import project_bite
 from tests import repos
 from tests.test_conformance import (
@@ -24,7 +25,7 @@ from tests.test_conformance import (
 
 CI = ".github/workflows/ci.yml"
 SETTINGS = ".claude/settings.json"
-PIN_LINE = f"- Ratchet plugin: 0.0.0 at {'0' * 40}"
+PIN_LINE = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
 
 
 @pytest.fixture
@@ -77,11 +78,11 @@ AUTO = [
         f"{BINDING}: the Entry points table has no row for 'tier0-tree'",
     ),
     (
-        replace(JUSTFILE, "hooks-install:\n", "hooks-installs:\n"),
+        replace(JUSTFILE, "hooks-install: _plugin\n", "hooks-installs: _plugin\n"),
         "justfile: has no `hooks-install`",
     ),
     (
-        replace(JUSTFILE, "ratchet:\n    just hooks-installed\n", "ratchet:\n"),
+        replace(JUSTFILE, "ratchet: _plugin\n    just hooks-installed\n", "ratchet: _plugin\n"),
         "justfile: the `ratchet` recipe raises",
     ),
     (
@@ -147,8 +148,8 @@ def test_an_entry_point_row_is_left_to_an_agent_when_the_table_cannot_take_it(
 
 
 def test_a_ratchet_recipe_that_cannot_ask_first_is_left_to_an_agent(repo: Path) -> None:
-    replace(JUSTFILE, "ratchet:\n    just hooks-installed\n", "ratchet:\n")(repo)
-    replace(JUSTFILE, "hooks-installed:\n", "hooks-asked:\n")(repo)
+    replace(JUSTFILE, "ratchet: _plugin\n    just hooks-installed\n", "ratchet: _plugin\n")(repo)
+    replace(JUSTFILE, "hooks-installed: _plugin\n", "hooks-asked: _plugin\n")(repo)
     replace(JUSTFILE, "ratchet_plugin", "plugin_home")(repo)
     [found] = [f for f in conformance.findings(repo) if "`ratchet` recipe" in f.problem]
     assert isinstance(found.fix, conformance.Agent)
@@ -157,7 +158,9 @@ def test_a_ratchet_recipe_that_cannot_ask_first_is_left_to_an_agent(repo: Path) 
 
 def test_a_ratchet_recipe_written_as_a_script_is_left_to_an_agent(repo: Path) -> None:
     replace(
-        JUSTFILE, "ratchet:\n    just hooks-installed\n", "ratchet:\n    #!/usr/bin/env bash\n"
+        JUSTFILE,
+        "ratchet: _plugin\n    just hooks-installed\n",
+        "ratchet: _plugin\n    #!/usr/bin/env bash\n",
     )(repo)
     assert kind(repo, "justfile: the `ratchet` recipe raises") == "Agent"
 
@@ -428,3 +431,164 @@ def test_a_bullet_that_wraps_is_read_on_its_second_line_too(repo: Path) -> None:
     assert read_problems(repo, f"- {gate}: AGENTS.md,\n  missing/**\n") == [
         f"gate '{gate}' reads 'missing/**', matching no file"
     ]
+
+
+OLD_PLUGIN_LINE = (
+    'ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", '
+    'home_directory() / ".claude/plugins/marketplaces/ratchet")'
+)
+
+
+OLD_COMMIT_MSG = (
+    "commit-msg file:\n"
+    '    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo commit-msg > "$RATCHET_HOOK_PROBE"; '
+    'else python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"; fi'
+)
+
+
+def old_plugin_justfile(repo: Path) -> str:
+    template = (repo / JUSTFILE).read_text(encoding="utf-8")
+    line = conformance.PLUGIN_LINE.search(template)
+    assert line
+    start = template.index("# The one guard")
+    end = template.index("# Every tier starts here")
+    old = (template[:start] + template[end:]).replace(line.group(0), OLD_PLUGIN_LINE)
+    old = old.replace(f": {conformance.PLUGIN_GUARD}\n", ":\n").replace(
+        f" {conformance.PLUGIN_GUARD}\n", "\n"
+    )
+    held = "\n".join(justfile_text.definition(old, "commit-msg"))
+    return old.replace(held, OLD_COMMIT_MSG)
+
+
+def fallback_findings(repo: Path) -> list[conformance.Finding]:
+    return [f for f in conformance.findings(repo) if "falls back to the marketplace" in f.problem]
+
+
+def test_a_justfile_that_falls_back_to_the_marketplace_clone_is_rewritten_to_the_templates(
+    repo: Path,
+) -> None:
+    (repo / JUSTFILE).write_text(old_plugin_justfile(repo), encoding="utf-8")
+    [found] = fallback_findings(repo)
+    assert isinstance(found.fix, conformance.Auto)
+    made = found.fix.want((repo / JUSTFILE).read_text(encoding="utf-8"))
+    assert made == (conformance.ADOPT_TEMPLATES / "justfile").read_text(encoding="utf-8")
+
+
+def test_a_justfile_with_the_templates_plugin_line_is_not_held_to_the_marketplace(
+    repo: Path,
+) -> None:
+    assert fallback_findings(repo) == []
+
+
+def test_a_fallback_check_has_nothing_to_rewrite_to_when_the_template_has_no_line(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (repo / JUSTFILE).write_text(old_plugin_justfile(repo), encoding="utf-8")
+    monkeypatch.setattr(conformance, "PLUGIN_GUARD", "no_such_recipe")
+    assert fallback_findings(repo) == []
+
+
+def block_findings(repo: Path) -> list[conformance.Finding]:
+    return [f for f in conformance.findings(repo) if "is not the template's" in f.problem]
+
+
+def test_a_plugin_block_that_is_not_the_templates_is_rewritten_to_it(repo: Path) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    line = 'ratchet_plugin := "$RATCHET_PLUGIN_DIR"'
+    assert line in text
+    path.write_text(
+        text.replace(line, 'ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", "")'),
+        encoding="utf-8",
+    )
+    [found] = block_findings(repo)
+    assert "plugin block above `ratchet_plugin`" in found.problem
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.fix.want(path.read_text(encoding="utf-8")) == text
+
+
+def test_the_templates_plugin_block_is_not_a_finding(repo: Path) -> None:
+    assert block_findings(repo) == []
+
+
+PRE_COMMIT = "pre-commit"
+
+
+def pre_commit_findings(repo: Path) -> list[conformance.Finding]:
+    return [f for f in conformance.findings(repo) if "`pre-commit` neither" in f.problem]
+
+
+@pytest.mark.parametrize(
+    "own",
+    [
+        "pre-commit:\n    @just tier0-tree\n",
+        "[no-exit-message]\npre-commit:\n    @echo fast\n",
+    ],
+)
+def test_a_pre_commit_recipe_that_skips_the_pin_or_shows_just_errors_is_the_templates(
+    repo: Path, own: str
+) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    held = "\n".join(justfile_text.definition(text, PRE_COMMIT))
+    assert pre_commit_findings(repo) == []
+    path.write_text(text.replace(held, own.rstrip("\n")), encoding="utf-8")
+    [found] = pre_commit_findings(repo)
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.fix.want(path.read_text(encoding="utf-8")) == text
+
+
+def test_a_justfile_with_no_pre_commit_recipe_has_nothing_to_offer(repo: Path) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    held = "\n".join(justfile_text.definition(text, PRE_COMMIT))
+    path.write_text(text.replace(held, ""), encoding="utf-8")
+    assert pre_commit_findings(repo) == []
+
+
+def value_findings(repo: Path) -> list[conformance.Finding]:
+    return [
+        f for f in conformance.findings(repo) if "read `ratchet_plugin` as a folder" in f.problem
+    ]
+
+
+@pytest.mark.parametrize(
+    "owner_text",
+    [
+        '\nmine:\n    #!/usr/bin/env python3\n    print("{{ratchet_plugin}}")\n',
+        '\nbase := ratchet_plugin + "/scripts"\n',
+        "\nthere := path_exists(ratchet_plugin)\n",
+        "\nmine:\n    echo {{ratchet_plugin}}/x\n",
+        "\nmine:\n    echo '{{ratchet_plugin}}/x'\n",
+    ],
+)
+def test_an_owner_use_of_the_plugin_variable_as_a_folder_is_one_red_line(
+    repo: Path, owner_text: str
+) -> None:
+    assert value_findings(repo) == []
+    path = repo / JUSTFILE
+    path.write_text(path.read_text(encoding="utf-8") + owner_text, encoding="utf-8")
+    [found] = value_findings(repo)
+    assert isinstance(found.fix, conformance.Agent)
+    assert '"$RATCHET_PLUGIN_DIR"' in found.problem
+
+
+def test_a_pin_with_no_tree_id_is_a_finding_for_an_agent_when_the_plugin_is_another_commit(
+    repo: Path,
+) -> None:
+    pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
+    replace(BINDING, pin, f"- Ratchet plugin: 0.0.0 at {'0' * 40}")(repo)
+    assert kind(repo, f"{BINDING}: the pin names no tree id") == "Agent"
+
+
+def test_a_pin_with_no_tree_id_at_the_plugin_in_use_is_fixed_by_the_upgrade(repo: Path) -> None:
+    commit = conformance.plugin_pin.commit_of(conformance.plugin_pin.PLUGIN)
+    pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
+    replace(BINDING, pin, f"- Ratchet plugin: 0.0.0 at {commit}")(repo)
+    assert kind(repo, f"{BINDING}: the pin names no tree id") == "Auto"
+
+
+def test_a_quote_inside_a_command_substitution_is_its_own_level() -> None:
+    assert conformance.inside_quotes('x="$(echo "a") ')
+    assert not conformance.inside_quotes('x="$(echo "a")" ')
+    assert not conformance.inside_quotes('x=$(echo "a"; ')

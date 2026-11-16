@@ -19,10 +19,12 @@ nor hold its answer. The caller drops any failure, so the log never changes a ve
 
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 LOG_NAME = "ratchet-guard-events.jsonl"
+PLUGIN_RECORD = "ratchet-plugin"
 # Why: one write this small reaches a pipe in one piece (PIPE_BUF), and a local file as well.
 LIMIT = 4096
 # Why: an escaped character takes at most 12 bytes, so the four free text fields cut to this
@@ -59,3 +61,24 @@ def append(log: Path, line: bytes) -> None:
         os.write(descriptor, line)
     finally:
         os.close(descriptor)
+
+
+def replace(record: Path, text: str) -> None:
+    """Make ``record`` hold ``text`` alone, all at once; a failure raises ``OSError``.
+
+    The text goes into a new file beside ``record`` that then takes the name, so a reader sees the
+    old content or the new and never an empty or cut one. A symbolic link or hard link at the name
+    is replaced and never written through.
+    """
+    descriptor, name = tempfile.mkstemp(dir=record.parent, prefix=f".{record.name}.")
+    try:
+        try:
+            pending = memoryview(text.encode())
+            while pending:
+                pending = pending[os.write(descriptor, pending) :]
+        finally:
+            os.close(descriptor)
+        Path(name).replace(record)
+    except OSError:
+        Path(name).unlink(missing_ok=True)
+        raise

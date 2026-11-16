@@ -539,6 +539,31 @@ def test_a_records_branch_a_run_stopped_in_check_left_is_deleted_once_merged(
     assert record_branches(root) == []
 
 
+def test_a_branch_of_any_name_holding_records_alone_is_deleted_once_merged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = on_main(tmp_path, {})
+    branch(root, "docs/tickets-1")
+    write(root, SPEC, "# Thing\n")
+    commit(root, "docs(thing): the spec")
+    git(root, "switch", "-q", "main")
+    capsys.readouterr()
+    assert run(root, "docs/tickets-1") == 0
+    assert "merge: agent\nmerged: `docs/tickets-1` into `main`" in capsys.readouterr().out
+    assert git(root, "show", f"main:{SPEC}") == "# Thing"
+    assert git(root, "branch", "--list", "docs/tickets-1") == ""
+
+
+def test_a_branch_holding_code_is_kept_once_merged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path)
+    git(root, "switch", "-q", "main")
+    capsys.readouterr()
+    assert run(root) == 0
+    assert git(root, "branch", "--list", FEATURE).strip() == FEATURE
+
+
 def test_a_stopped_run_whose_branch_was_edited_since_is_left_as_it_is(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

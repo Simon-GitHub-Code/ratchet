@@ -632,6 +632,14 @@ def come_back(root: Path, default: str, branch: str) -> int | None:
     return None
 
 
+def holds_only_records(root: Path, default: str, name: str) -> bool:
+    base = f"{HEADS}{default}"
+    change = merge_ready.read(root, base, f"{HEADS}{name}")
+    return not isinstance(change, merge_ready.Reason) and not merge_ready.not_records(
+        root, base, change.paths
+    )
+
+
 def merge_records(root: Path, branch: str) -> int:
     """Merge a records branch as any branch is merged; delete it once it is merged."""
     code = merge(root, branch)
@@ -688,9 +696,9 @@ def main(argv: list[str]) -> int:
         return 2
     if options.records:
         return land_records(Path(top))
-    # Why: the route names `merge <branch>` for a records branch a stopped run left unmerged.
-    land = merge_records if options.branch.startswith(RECORDS) else merge
-    return locked_run(Path(top), options.branch, land)
+    default = local_default(Path(top))
+    only_records = default is not None and holds_only_records(Path(top), default, options.branch)
+    return locked_run(Path(top), options.branch, merge_records if only_records else merge)
 
 
 def locked_run(root: Path, branch: str, run: Callable[[Path, str], int]) -> int:

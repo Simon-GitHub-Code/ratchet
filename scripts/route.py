@@ -750,40 +750,90 @@ def records_stopped(checkout: Checkout) -> Step | None:
     )
 
 
+def owned_by_a_run(root: Path, name: str) -> bool:
+    """Whether the drain or a feature run owns ``name``: its note, or the feature branch prefix."""
+    return name.startswith(preflight.FEATURE_BRANCHES) or bool(queue_notes.read_note(root, name))
+
+
+def could_be_records(root: Path, default: str, name: str) -> bool:
+    """Whether the branch's change is not empty and every path of it has a record's shape.
+
+    Why: reading the judge's manifest costs far more than a diff, so a branch with a path no
+    record can have is dropped before the judge's read.
+    """
+    listed = gatelib.git(root, "diff", "--name-only", "--no-renames", f"{default}...{name}")
+    paths = (listed or "").split("\n")
+    paths = [path for path in paths if path]
+    shapes = [kind.shape for kind in merge_ready.RECORDS]
+    return bool(paths) and all(any(shape.fullmatch(path) for shape in shapes) for path in paths)
+
+
+def first_commit_time(root: Path, default: str, name: str) -> int:
+    said = gatelib.git(root, "log", "--reverse", "--format=%at", f"{default}..{name}")
+    log = (said or "").split()
+    return int(log[0]) if log else 0
+
+
+def checked_out(root: Path) -> set[str]:
+    """The branches any work tree of the repository has checked out."""
+    listed = gatelib.git(root, "worktree", "list", "--porcelain") or ""
+    return {
+        line.removeprefix("branch refs/heads/")
+        for line in listed.splitlines()
+        if line.startswith("branch refs/heads/")
+    }
+
+
+def waiting_records(checkout: Checkout) -> list[str]:
+    """Local branches not merged into the default branch whose change holds records alone.
+
+    Why: the name plays no part. An agent that commits tickets on a branch of its own leaves the
+    route as blind to it as to a records branch; a branch a run owns, and one any work tree has
+    checked out, are other steps' to name. The oldest by its first commit comes first.
+    """
+    root, default = checkout.root, checkout.default_branch
+    listed = gatelib.git(root, "branch", "--no-merged", default, "--format=%(refname:short)")
+    held = checked_out(root)
+    names = [
+        name
+        for name in (listed or "").split()
+        if name not in (default, checkout.branch)
+        and name not in held
+        and could_be_records(root, default, name)
+        and not owned_by_a_run(root, name)
+        and merge.holds_only_records(root, default, name)
+    ]
+    return sorted(names, key=lambda name: first_commit_time(root, default, name))
+
+
 def records_waiting(checkout: Checkout) -> Step | None:
-    """A records branch ``merge --records`` left unmerged; the judge says whose merge it is.
+    """A branch holding records alone that was left unmerged; the judge says whose merge it is.
 
     Why the judge is asked here: a run stopped while ``check`` ran never heard its answer, and the
     branch it leaves looks like one the judge left to the owner.
     """
     root, default = checkout.root, checkout.default_branch
-    listed = gatelib.git(
-        root,
-        "branch",
-        "--list",
-        f"{merge.RECORDS}*",
-        "--no-merged",
-        default,
-        "--format=%(refname:short)",
-    )
-    waiting = (listed or "").split()
+    waiting = waiting_records(checkout)
     if not waiting:
         return None
     name = waiting[0]
+    count = len(waiting)
+    more = f"; {count} such branches wait, and this is the oldest" if count > 1 else ""
     reasons = merge_ready.judge(root, f"{merge.HEADS}{default}", f"{merge.HEADS}{name}")
     if not reasons:
         return Step(
             merge_command(root, name),
-            f"branch `{name}` holds records a run of {merge_command(root, '--records')} committed"
-            " and did not merge; the merge judge passes them, so an agent runs this, and it merges"
-            " them when `check` is green on the merge result",
+            f"branch `{name}` holds records and was not merged; its change holds only records,"
+            " and the merge judge passes them, so an agent runs this, and it merges them when"
+            f" `check` is green on the merge result{more}",
             NEXT,
             "records",
         )
     return Step(
         f"`git switch {default} && git merge --no-ff {name}`, typed by the owner",
-        f"the merge judge leaves branch `{name}` to the owner: {reasons[0].text};"
-        f" {merge_command(root, name)} prints every reason",
+        f"the merge judge leaves branch `{name}` to the owner, and its change holds only"
+        f" records, so the owner merges or deletes it: {reasons[0].text};"
+        f" {merge_command(root, name)} prints every reason{more}",
         NEXT,
         "records",
     )
@@ -989,7 +1039,7 @@ def decline(root: Path, event: str) -> int:
 def pin_proposals(root: Path, plugin: Path = PLUGIN_ROOT) -> list[str]:
     """The upgrade, offered when the plugin in use is newer than the one the binding pins.
 
-    Why: a newer plugin is green at every tier and says so in each tier's output, which an owner
+    Why: a newer plugin is red at every tier and says why in each tier's output, which an owner
     rarely reads; the route is what the owner reads (ADR 0027).
     """
     pin = plugin_pin.pinned(gatelib.read_text(root / BINDING))

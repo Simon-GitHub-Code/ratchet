@@ -17,6 +17,7 @@ import change_size
 import conformance
 import pins
 import plugin_pin
+from tests import repos
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
 PLUGIN_ROOT = TEMPLATES.parents[2]
@@ -47,7 +48,7 @@ def gate_list(name: str) -> list[str]:
 
 
 def recipe(name: str) -> str:
-    match = re.search(rf"^{name}:\n((?:    .*\n)+)", JUSTFILE, re.MULTILINE)
+    match = re.search(rf"^{name}:(?: _plugin)?\n((?:    .*\n)+)", JUSTFILE, re.MULTILINE)
     assert match, name
     return match.group(1)
 
@@ -150,7 +151,7 @@ def dry_run(recipe_name: str, justfile: Path = TEMPLATES / "justfile") -> str:
     return " ".join(done.stderr.split())
 
 
-RUNNER = 'python3 "/plugin/scripts/parallel.py" --runner'
+RUNNER = 'python3 "$RATCHET_PLUGIN_DIR/scripts/parallel.py" --runner'
 
 
 @pytest.mark.parametrize(
@@ -172,7 +173,9 @@ def test_every_tier_runs_its_gates_at_once_through_the_runner(
     needs_just()
     pin, runner, gates = dry_run(name).partition(RUNNER)
     said = runner + gates
-    assert 'python3 "/plugin/scripts/plugin_pin.py"' in pin, "the pin is judged before any gate"
+    assert 'python3 "$RATCHET_PLUGIN_DIR/scripts/plugin_pin.py"' in pin, (
+        "the pin is judged before any gate"
+    )
     assert runner
     assert ("--fail-fast" in said) is bool(flag)
     assert "--report .ratchet/timing.jsonl" in said
@@ -350,12 +353,15 @@ def test_smoke_boots_a_deliverable_on_the_port_the_gate_picked(
     just = shutil.which("just")
     if just is None:
         pytest.skip("just is not installed")
-    env = {k: v for k, v in os.environ.items() if k != "PORT"} | {
-        "RATCHET_PLUGIN": str(PLUGIN_ROOT)
-    }
+    copy = repos.installed_copy()
+    pin = f"- Ratchet plugin: {plugin_pin.version_of(copy)} at {'1' * 40}"
+    binding = tmp_path / "docs/process/binding.md"
+    binding.parent.mkdir(parents=True)
+    binding.write_text(f"{pin} tree {plugin_pin.copy_tree_id(copy)}\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "PORT"} | {"RATCHET_PLUGIN": str(copy)}
     sets = ["--set", "boot", boot, "--set", "ready", "http://127.0.0.1:{port}/"]
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
-        [just, "--justfile", str(TEMPLATES / "justfile"), *sets, "smoke"],
+        [just, "--justfile", str(TEMPLATES / "justfile"), "-d", str(tmp_path), *sets, "smoke"],
         cwd=tmp_path,
         env=env | ({"PORT": port} if port else {}),
         capture_output=True,
@@ -489,7 +495,7 @@ def test_the_weekly_entry_point_runs_its_gates_one_after_another() -> None:
         *("restore-drill", "prod-probe"),
     ]
     said = dry_run("weekly")
-    assert 'python3 "/plugin/scripts/plugin_pin.py"' in said
+    assert 'python3 "$RATCHET_PLUGIN_DIR/scripts/plugin_pin.py"' in said
     assert said.endswith(f"--serial {' '.join(gates)} -- {' '.join(gates)}")
 
 
@@ -573,7 +579,7 @@ def test_the_issue_carries_the_output_of_each_red_gate_and_not_the_green_gates_t
 
 def test_the_plugin_version_has_one_home_the_binding() -> None:
     text = (TEMPLATES / "docs/adr/0001-adopt-the-ratchet-method.md").read_text(encoding="utf-8")
-    assert "\n- Ratchet plugin: <X.Y.Z> at <ratchet-sha>\n" in BINDING
+    assert "\n- Ratchet plugin: <X.Y.Z> at <ratchet-sha> tree <ratchet-tree-id>\n" in BINDING
     assert "<X.Y.Z>" not in text
     assert "<ratchet-sha>" not in text
     assert "https://github.com/Simon-GitHub-Code/ratchet" in text
@@ -598,8 +604,7 @@ def test_a_tier_says_what_to_set_when_no_plugin_is_where_the_justfile_looks(
     needs_just()
     code, said = pin_recipe(tmp_path, tmp_path / "absent")
     assert code == 1
-    assert f"plugin-pin: no Ratchet plugin at {tmp_path / 'absent'}" in said
-    assert "set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins" in said
+    assert f"the plugin at {tmp_path / 'absent'} cannot be checked" in said
 
 
 def test_a_tier_is_red_until_the_binding_pins_the_plugin_it_runs_from(tmp_path: Path) -> None:
@@ -607,12 +612,16 @@ def test_a_tier_is_red_until_the_binding_pins_the_plugin_it_runs_from(tmp_path: 
     version = plugin_pin.version_of(PLUGIN_ROOT)
     binding = tmp_path / "docs/process/binding.md"
     binding.parent.mkdir(parents=True)
-    binding.write_text(f"- Ratchet plugin: {version}-other at {'1' * 40}\n", encoding="utf-8")
-    code, said = pin_recipe(tmp_path, PLUGIN_ROOT)
+    copy = repos.installed_copy()
+    held = plugin_pin.copy_tree_id(copy)
+    binding.write_text(
+        f"- Ratchet plugin: {version}-other at {'1' * 40} tree {held}\n", encoding="utf-8"
+    )
+    code, said = pin_recipe(tmp_path, copy)
     assert (code, said.splitlines()[-1]) == (1, "plugin-pin: red")
-    commit = plugin_pin.commit_of(PLUGIN_ROOT) or "1" * 40
-    binding.write_text(f"- Ratchet plugin: {version} at {commit}\n", encoding="utf-8")
-    code, said = pin_recipe(tmp_path, PLUGIN_ROOT)
+    commit = plugin_pin.commit_of(copy) or "1" * 40
+    binding.write_text(f"- Ratchet plugin: {version} at {commit} tree {held}\n", encoding="utf-8")
+    code, said = pin_recipe(tmp_path, copy)
     assert (code, said.splitlines()[-1]) == (0, "plugin-pin: green")
 
 

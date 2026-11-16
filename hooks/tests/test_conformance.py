@@ -495,7 +495,7 @@ def test_an_entry_point_with_no_row_names_the_row_to_add(repo: Path) -> None:
 
 
 def test_an_entry_point_whose_recipe_is_missing_names_the_recipe_to_copy(repo: Path) -> None:
-    replace(JUSTFILE, "hooks-install:\n", "hooks-installs:\n")(repo)
+    replace(JUSTFILE, "hooks-install: _plugin\n", "hooks-installs: _plugin\n")(repo)
     assert red(repo) == [
         (
             "justfile: has no `hooks-install` recipe, which the binding's entry point"
@@ -512,7 +512,7 @@ def test_an_entry_point_whose_recipe_is_missing_names_the_recipe_to_copy(repo: P
 
 
 def test_a_missing_pin_prints_the_line_for_the_plugin_in_use(repo: Path) -> None:
-    pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40}"
+    pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
     replace(BINDING, pin, "")(repo)
     replace(JUSTFILE, "plugin_pin.py", "pin.py")(repo)
     line = conformance.plugin_pin.line_for(conformance.plugin_pin.PLUGIN)
@@ -529,6 +529,11 @@ def test_a_missing_pin_prints_the_line_for_the_plugin_in_use(repo: Path) -> None
             " the binding pins; copy `plugin-pin` from the template justfile, as the first"
             " dependency of each tier"
         ),
+        (
+            "justfile: `pre-commit` neither runs plugin_pin.py first nor carries"
+            " `[no-exit-message]`, so the commit hook can run a plugin no check held to the"
+            " release"
+        ),
     ]
 
 
@@ -536,7 +541,8 @@ def test_the_pin_line_says_what_a_copy_without_history_cannot(tmp_path: Path) ->
     (tmp_path / ".claude-plugin").mkdir()
     (tmp_path / ".claude-plugin/plugin.json").write_text('{"version": "1.2.3"}')
     line = conformance.plugin_pin.line_for(tmp_path)
-    assert line == "- Ratchet plugin: 1.2.3 at <the full commit of 1.2.3>"
+    tree = conformance.plugin_pin.copy_tree_id(tmp_path)
+    assert line == f"- Ratchet plugin: 1.2.3 at <the full commit of 1.2.3> tree {tree}"
 
 
 @pytest.mark.parametrize(
@@ -551,7 +557,7 @@ def test_the_pin_line_says_what_a_copy_without_history_cannot(tmp_path: Path) ->
             "justfile: no gate runs through `changed.py`",
         ),
         (
-            replace(JUSTFILE, "ratchet:\n    just hooks-installed\n", "ratchet:\n"),
+            replace(JUSTFILE, "ratchet: _plugin\n    just hooks-installed\n", "ratchet: _plugin\n"),
             "justfile: the `ratchet` recipe raises the thresholds without asking",
         ),
         (
