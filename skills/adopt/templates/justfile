@@ -69,8 +69,24 @@ plugin_tree := replace_regex(plugin_choice, '(?s)^R.*|^D([0-9a-f]{40}) .*', '$1'
 plugin_pyc := ```
     d=${TMPDIR:-/tmp}/ratchet-pyc-$(id -u)
     mkdir -m 700 -- "$d" 2>/dev/null || true
-    if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && [ -z "$(find "$d" -maxdepth 0 -perm /022)" ]; then printf 'O%s' "$d"; exit 0; fi
-    if [ -L "$d" ]; then why="a link"; elif [ ! -e "$d" ]; then why="not there and cannot be made"; elif [ ! -O "$d" ]; then why="owned by $(stat -c %U "$d")"; else why="mode $(stat -c %a "$d")"; fi
+    privately() {
+      python3 -I - "$1" 2>/dev/null <<-'PY'
+	import os, pwd, stat, sys
+	try: found = os.lstat(sys.argv[1])
+	except OSError: print("Rnot there and cannot be made"); sys.exit()
+	if stat.S_ISLNK(found.st_mode): print("Ra link")
+	elif not stat.S_ISDIR(found.st_mode): print("Rnot a folder")
+	elif found.st_uid != os.getuid():
+	    try: owner = pwd.getpwuid(found.st_uid).pw_name
+	    except KeyError: owner = str(found.st_uid)
+	    print("Rowned by " + owner)
+	elif found.st_mode & 0o022: print("Rmode %o" % stat.S_IMODE(found.st_mode))
+	else: print("O")
+	PY
+    }
+    verdict=$(privately "$d") || verdict=
+    if [ "$verdict" = O ]; then printf 'O%s' "$d"; exit 0; fi
+    case "$verdict" in R?*) why=${verdict#R} ;; *) why="not checked, since the check did not answer" ;; esac
     printf 'Rplugin: compiled files are not cached, since %s is %s, so every plugin script compiles from source on each start; remove %s and the next run makes a private one' "$d" "$why" "$d"
 ```
 plugin_pyc_ok := if plugin_tree == "" { "" } else { replace_regex(plugin_pyc, '(?s)^R.*|^O', '') }

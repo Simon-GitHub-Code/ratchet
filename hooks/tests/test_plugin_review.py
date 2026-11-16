@@ -3,12 +3,15 @@
 import os
 import stat
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 import plugin_pin
 from tests import repos
+from tests.support import PLUGIN_ROOT
 from tests.test_plugin_tree import just, project, raw_tree_id, red_line, release_copy
 
 
@@ -356,6 +359,72 @@ def test_a_group_writable_cache_folder_is_refused_with_one_line_saying_why_and_t
     assert f"remove {folder}" in said[0]
     assert "compiles from source on each start" in said[0]
     assert sorted(path.name for path in folder.rglob("*.pyc")) == [keyed.name]
+
+
+def test_a_check_that_fails_never_trusts_the_folder(tmp_path: Path) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    folder = temporary / f"ratchet-pyc-{os.getuid()}"
+    keyed = folder / pinned / str(copy / "scripts").lstrip("/") / f"gatelib.{cache_tag()}.pyc"
+    flag = plant(tmp_path, keyed)
+    folder.chmod(0o777)
+    fakes = tmp_path / "fakes"
+    fakes.mkdir()
+    real = subprocess.run(
+        ["python3", "-c", "import sys; print(sys.executable)"],  # noqa: S607 # -- PATH
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    python = fakes / "python3"
+    python.write_text(
+        f'#!/bin/bash\nin=$(cat)\ncase "$in" in *getpwuid*) exit 1;; esac\n'
+        f'printf "%s" "$in" | exec {real} "$@"\n',
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    finder = fakes / "find"
+    finder.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    finder.chmod(0o755)
+    root = project(tmp_path / "repo", copy, pinned)
+    path = f"{fakes}{os.pathsep}{os.environ['PATH']}"
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary), "PATH": path})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+    assert "compiled files are not cached" in done.stderr
+    assert "the check did not answer" in done.stderr
+
+
+def test_a_folder_of_another_owner_is_named_by_the_check() -> None:
+    template = (PLUGIN_ROOT / "skills/adopt/templates/justfile").read_text(encoding="utf-8")
+    start = template.index("<<-'PY'\n", template.index("privately()")) + len("<<-'PY'\n")
+    code = "\n".join(
+        line.removeprefix("\t")
+        for line in template[start : template.index("\tPY\n", start)].split("\n")
+    )
+    folder = Path(tempfile.mkdtemp())
+    try:
+        folder.chmod(0o700)
+        done = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os, sys; os.getuid = lambda: os.stat(sys.argv[1]).st_uid + 1;"
+                    " exec(sys.stdin.read())"
+                ),
+                str(folder),
+            ],
+            input=code,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    finally:
+        folder.rmdir()
+    assert done.stdout.startswith("Rowned by ")
 
 
 def test_a_cache_folder_that_is_a_link_is_refused_with_the_line(tmp_path: Path) -> None:

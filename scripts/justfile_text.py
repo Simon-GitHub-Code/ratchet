@@ -223,6 +223,45 @@ def private_helper(template: str, name: str) -> bool:
     return name.startswith("_") and template_recipe(template, name) is not None
 
 
+CARRIED_VARIABLE = "plugin_py"
+BLOCK_FIRST = "plugin_choice"
+BLOCK_LAST = "ratchet_plugin"
+
+
+def plugin_block(template: str) -> list[str]:
+    """The template's plugin block above ``ratchet_plugin``, which ``plugin_py`` is built on."""
+    lines = template.split("\n")
+    first = next((i for i, line in enumerate(lines) if line.startswith(f"{BLOCK_FIRST} :=")), None)
+    last = next((i for i, line in enumerate(lines) if line.startswith(f"{BLOCK_LAST} :=")), None)
+    if first is None or last is None or last < first:
+        return []
+    while first > 0 and lines[first - 1].startswith("#"):
+        first -= 1
+    return lines[first:last]
+
+
+def with_plugin_block(template: str) -> Want:
+    """The want of a justfile that has the variables ``plugin_py`` is built from."""
+    block = plugin_block(template)
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        if (
+            not block
+            or defines_variable(text, CARRIED_VARIABLE)
+            or defines_variable(text, BLOCK_FIRST)
+        ):
+            return text
+        lines = text.split("\n")
+        at = next((i for i, line in enumerate(lines) if line.startswith(f"{BLOCK_LAST} :=")), None)
+        if at is None:
+            at = next((b.start for b in blocks(lines) if b.parsed), len(lines))
+        lines[at:at] = [*block, ""] if at < len(lines) else block
+        return "\n".join(lines)
+
+    return want
+
+
 def unmet(template: str, project: str, name: str) -> tuple[str, ...]:
     """Why the template's recipe ``name`` cannot be copied as it stands; empty when it can."""
     found = template_recipe(template, name)
@@ -242,6 +281,7 @@ def unmet(template: str, project: str, name: str) -> tuple[str, ...]:
             defines_recipe(project, word)
             or defines_variable(project, word)
             or private_helper(template, word)
+            or word == CARRIED_VARIABLE
         )
     ]
     if lacking:
@@ -281,10 +321,14 @@ def with_recipe(template: str, name: str) -> Want:
         if private_helper(template, word)
     ]
 
+    carries = CARRIED_VARIABLE in INTERPOLATION.findall("\n".join(copy))
+
     def want(current: str | None) -> str:
         text = current or ""
         for helper in helpers:
             text = helper(text)
+        if carries:
+            text = with_plugin_block(template)(text)
         lines = text.split("\n")
         present = blocks(lines)
         if any(block.name == name for block in present):

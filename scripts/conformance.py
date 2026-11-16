@@ -2014,6 +2014,24 @@ def interpreter_calls(justfile: str, guard_diff: str) -> str:
     return "\n".join(fixed(line) for line in justfile.split("\n"))
 
 
+RECIPE_HEAD = re.compile(r"^([A-Za-z_][\w-]*)(?:(?P<variable>[ \t]*:=)|[^\n:=]*:(?!=))")
+
+
+def bare_calls(justfile: str, guard_diff: str) -> list[str]:
+    """Each line that runs a plugin script bare, as ``justfile:N: recipe `name` runs …``."""
+    kind, name = "recipe", ""
+    found = []
+    for number, line in enumerate(justfile.split("\n"), start=1):
+        head = RECIPE_HEAD.match(line)
+        if head is not None:
+            kind, name = ("variable" if head.group("variable") else "recipe"), head.group(1)
+        if interpreter_calls(line, guard_diff) != line:
+            found.append(
+                f"justfile:{number}: {kind} `{name}` runs a plugin script under the bare `python3`"
+            )
+    return found
+
+
 def check_plugin_interpreter(root: Path) -> Iterable[Finding]:
     """A recipe that runs a plugin script under the bare ``python3``, not ``plugin_py``.
 
@@ -2036,11 +2054,12 @@ def check_plugin_interpreter(root: Path) -> Iterable[Finding]:
         held = PLUGIN_LINE.sub(lambda _: block.group(0), current or "", count=1)
         return interpreter_calls(held, guard_diff)
 
+    calls = "; ".join(bare_calls(justfile, guard_diff))
     yield Finding(
         "justfile",
-        "a recipe runs a plugin script under the bare `python3`, which reads PYTHONPATH,"
-        " PYTHONSTARTUP and the user's site folder, so a folder on PYTHONPATH can replace a module"
-        f" the gate imports; run it as `{{{{{INTERPRETER_VARIABLE}}}}}`",
+        f"{calls}; the bare `python3` reads PYTHONPATH, PYTHONSTARTUP and the user's site folder,"
+        " so a folder on PYTHONPATH can replace a module the gate imports; run each as"
+        f" `{{{{{INTERPRETER_VARIABLE}}}}}`",
         Edit(
             f"run each plugin script as `{{{{{INTERPRETER_VARIABLE}}}}}` as the template does",
             want,

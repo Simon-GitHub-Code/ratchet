@@ -17,6 +17,9 @@ RELEASES = {
     "0.8.2": "4cdf6b9ee51c07c2d31e8311d02ac20c38cc9c8a",
     "0.9.2": "05634d2b123c85edb023cbc94b276fb2d1225eab",
 }
+LATER = {
+    "0.12.3": "429b3bfd45d8df7aa70b04599984fcbc66c6e41c",
+}
 TEMPLATES = ("skills/init/templates/", "skills/adopt/templates/")
 UNBOUND_GROUP = re.compile(r"paths = \[\n(?:\s*# bind:[^\n]*\n)+\]")
 EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
@@ -84,10 +87,11 @@ def release_settings(root: Path, commit: str) -> None:
 
 def build(root: Path, version: str) -> Path:
     """A committed repository as the adopt templates of ``version`` left it."""
-    commit = RELEASES[version]
+    commit = {**RELEASES, **LATER}[version]
     repository(root, fill(template_files(commit), commit))
-    release_settings(root, commit)
-    git(root, "commit", "-q", "-am", "chore(method): adopt the Ratchet method")
+    if version in RELEASES:
+        release_settings(root, commit)
+        git(root, "commit", "-q", "-am", "chore(method): adopt the Ratchet method")
     return root
 
 

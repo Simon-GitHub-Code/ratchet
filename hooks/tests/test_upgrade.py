@@ -135,6 +135,34 @@ def test_an_upgrade_runs_every_plugin_script_of_an_older_justfile_under_the_temp
     assert not [f for f in conformance.findings(root) if "bare `python3`" in f.problem]
 
 
+def test_an_upgrade_of_a_project_as_the_last_release_left_it_carries_the_interpreter(
+    tmp_path: Path,
+) -> None:
+    root = adopted.copy(adopted.adopted("0.12.3"), tmp_path / "repo")
+    mine = " --strict-by-hand\n"
+    path = root / "justfile"
+    held = path.read_text(encoding="utf-8")
+    call = 'python3 "{{ratchet_plugin}}/scripts/markers.py"'
+    assert call in held
+    path.write_text(held.replace(call + "\n", call + mine, 1), encoding="utf-8")
+    repos.git(root, "commit", "-q", "-am", "chore: a recipe of my own")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    done = path.read_text(encoding="utf-8")
+    code = "\n".join(line for line in done.splitlines() if not line.lstrip().startswith("#"))
+    assert not BARE_PLUGIN_CALL.search(code)
+    assert f'{{{{plugin_py}}}} "{{{{ratchet_plugin}}}}/scripts/markers.py"{mine}' in done
+    just = shutil.which("just")
+    if just is None:
+        pytest.skip("just is not installed")
+    listed = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the upgraded one
+        [just, "--justfile", str(path), "--list"], capture_output=True, text=True, check=False
+    )
+    assert listed.returncode == 0, listed.stderr
+    left = conformance.findings(root)
+    assert not [f for f in left if isinstance(f.fix, conformance.Auto)]
+    assert not [f for f in left if "bare `python3`" in f.problem]
+
+
 @pytest.mark.parametrize("name", FIXTURES)
 def test_a_second_upgrade_changes_nothing(name: str, tmp_path: Path) -> None:
     root = fixture(name, tmp_path)

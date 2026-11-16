@@ -426,6 +426,24 @@ def test_a_block_that_exports_the_compiled_file_variables_is_rewritten_with_noth
     assert "PYTHONPYCACHEPREFIX" not in made
 
 
+def test_a_bare_plugin_script_call_is_named_by_its_line_and_recipe(repo: Path) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    good = '{{plugin_py}} "{{ratchet_plugin}}/scripts/markers.py"'
+    assert good in text
+    path.write_text(
+        text.replace(good, 'python3 "{{ratchet_plugin}}/scripts/markers.py"'), encoding="utf-8"
+    )
+    number = next(
+        i
+        for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1)
+        if 'python3 "{{ratchet_plugin}}/scripts/markers.py"' in line
+    )
+    [found] = [f for f in conformance.findings(repo) if "bare `python3`" in f.problem]
+    assert f"justfile:{number}: recipe `markers` runs a plugin script" in found.problem
+    assert isinstance(found.fix, conformance.Auto)
+
+
 def test_the_templates_plugin_block_is_not_a_finding(repo: Path) -> None:
     assert block_findings(repo) == []
 
