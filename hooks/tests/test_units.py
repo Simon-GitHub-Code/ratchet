@@ -104,8 +104,9 @@ def test_the_rule_catalogue_is_pinned() -> None:
         "queue-final-check": (
             "DENY",
             (
-                "commits in a queue work tree before its start has passed its final check, which "
-                "leaves nothing to tell the orchestrator's commit from a role's"
+                "commits in a queue work tree, or on a one-ticket run's branch, before its start "
+                "has passed its final check, which leaves nothing to tell the orchestrator's "
+                "commit from a role's"
             ),
         ),
         "merge-pr": ("ASK", "merges a pull request"),

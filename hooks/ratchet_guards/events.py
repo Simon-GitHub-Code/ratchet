@@ -25,6 +25,7 @@ from pathlib import Path
 
 LOG_NAME = "ratchet-guard-events.jsonl"
 PLUGIN_RECORD = "ratchet-plugin"
+FEATURE_STARTS = "ratchet-feature-starts"
 # Why: one write this small reaches a pipe in one piece (PIPE_BUF), and a local file as well.
 LIMIT = 4096
 # Why: an escaped character takes at most 12 bytes, so the four free text fields cut to this

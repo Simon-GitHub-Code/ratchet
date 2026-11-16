@@ -25,7 +25,10 @@ from tests.test_drain import (
 
 COMMIT = "git commit -m 'feat(core): the change'"
 GATED = ["queue-final-check"]
-FINAL = "Run `drain.py check <ticket> --final` first, and commit when it is green."
+FINAL = (
+    "Run `drain.py check <ticket> --final` in a drain, or `publish_check.py` in a one-ticket "
+    "run, first, and commit when it is green."
+)
 
 
 def judged(command: str, cwd: Path) -> list[Verdict]:

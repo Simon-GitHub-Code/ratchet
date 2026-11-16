@@ -107,6 +107,7 @@ from pathlib import Path
 
 import feature_preflight as preflight
 import gatelib
+import queue_notes
 import quotes
 
 COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -667,6 +668,8 @@ def main(argv: list[str]) -> int:
     code = settle(moves, quoted, halted=halted, unread=unread)
     if options.before_resume:
         print(NOTHING_PUBLISHED)
+    elif code == 0:
+        queue_notes.pass_feature_start(root, start.branch)
     return code
 
 

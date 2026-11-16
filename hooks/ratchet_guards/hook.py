@@ -341,6 +341,23 @@ def _head(root: Path, timeout: float = GIT_TIMEOUT_SECONDS) -> str | None:
     return head.removeprefix(_HEADS) or None
 
 
+def _awaiting(path: Path, tree: Path) -> str | None:
+    try:
+        note: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(note, dict) or not note.get("start") or note.get("passed") is True:
+        return None
+    where, branch = note.get("worktree"), note.get("branch")
+    if (
+        isinstance(where, str)
+        and isinstance(branch, str)
+        and Path(where).resolve() == tree.resolve()
+    ):
+        return branch
+    return None
+
+
 class GitRepoState:
     """Git state read with the ``git`` command.
 
@@ -385,29 +402,25 @@ class GitRepoState:
         return None if ref is None else _output(root, "show", f"{ref}:{relative}")
 
     def awaiting_final(self, cwd: Path) -> str | None:
-        """The branch of the queue work tree at ``cwd`` whose start no final check has passed.
+        """The branch of the work tree at ``cwd`` whose start no final check has passed.
 
         The drain's notes are in the state directory of the main checkout, and each records its
-        work tree's path, which is how a tree is found when it is detached mid-rebase.
+        work tree's path, which is how a tree is found when it is detached mid-rebase. A one-ticket
+        run's note is in the git common directory, in the same shape; it holds only while that
+        tree is on the note's branch, since the run's checkout is the owner's own.
         """
         tree = _git(cwd, "rev-parse", "--show-toplevel")
         common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
         if not tree or not common:
             return None
-        for path in sorted((Path(common).parent / ".ratchet" / "queue" / "tickets").glob("*.json")):
-            try:
-                note: object = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if not isinstance(note, dict) or not note.get("start") or note.get("passed") is True:
-                continue
-            where, branch = note.get("worktree"), note.get("branch")
-            if (
-                isinstance(where, str)
-                and isinstance(branch, str)
-                and Path(where).resolve() == Path(tree).resolve()
-            ):
-                return branch
+        here = self.current_branch(cwd)
+        drained = Path(common).parent / ".ratchet" / "queue" / "tickets"
+        alone = Path(common) / events.FEATURE_STARTS
+        for directory, one_ticket in ((drained, False), (alone, True)):
+            for path in sorted(directory.glob("*.json")):
+                branch = _awaiting(path, Path(tree))
+                if branch is not None and not (one_ticket and branch != here):
+                    return branch
         return None
 
     def head_is_pushed(self, cwd: Path) -> bool | None:
