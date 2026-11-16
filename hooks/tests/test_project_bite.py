@@ -808,6 +808,18 @@ def test_a_change_that_names_only_gates_with_no_bite_is_green_and_says_so(
     assert list(scratch.iterdir()) == []
 
 
+def test_a_change_to_only_a_shipped_row_is_green_and_says_so(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tool = "`ratchet` plugin `scripts/markers.py`"
+    root = targeted(tmp_path, rows=GATE_ROWS + row("markers", tool=tool))
+    replaced(root, BINDING, f"| markers | {tool} | 0 |", f"| markers | {tool} | 1 |")
+    assert prove(root, "--changed") == 0
+    assert shown(capsys).endswith(
+        "bite: green: the gates the change affects have no bite; nothing to prove\n"
+    )
+
+
 def test_a_gate_chosen_outside_the_affected_set_is_green_under_changed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -822,6 +834,18 @@ def test_a_gate_chosen_outside_the_affected_set_is_green_under_changed(
 JUST_BASE = "lint:\n    echo a\nci:\n    echo ci\n"
 REACHES = [
     ("alias l := lint\n" + JUST_BASE, "just l"),
+    (
+        JUST_BASE.replace("ci:", "ci target:").replace("echo ci", "x=$(just {{target}})"),
+        "just ci x",
+    ),
+    (
+        JUST_BASE.replace("ci:", "ci target:").replace("echo ci", "echo `just {{target}}`"),
+        "just ci x",
+    ),
+    (
+        JUST_BASE.replace("ci:", "ci target:").replace("echo ci", "true;just {{target}}"),
+        "just ci x",
+    ),
     (JUST_BASE.replace("echo ci", "{{just_executable()}} lint"), "just ci"),
     ('runner := "just"\n' + JUST_BASE.replace("echo ci", "{{runner}} lint"), "just ci"),
     (JUST_BASE.replace("ci:", "ci target:").replace("echo ci", "just {{target}}"), "just ci x"),
@@ -833,6 +857,9 @@ REACHES = [
     REACHES,
     ids=[
         "an alias",
+        "a command substitution",
+        "a backtick",
+        "after a semicolon",
         "the runner's function",
         "a variable holding the runner",
         "an unreadable name",

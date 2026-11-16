@@ -194,6 +194,18 @@ def test_the_pull_request_proof_is_held_to_its_own_ceiling_else_bite_all_and_nev
     assert "(ceiling 0s)" in capsys.readouterr().out
 
 
+def test_set_never_records_the_pull_request_proof_s_ceiling(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "quality").mkdir()
+    thresholds = tmp_path / "quality/thresholds.toml"
+    thresholds.write_text(budget.with_ceiling("", "tier1", 600.0), encoding="utf-8")
+    command = ["--", sys.executable, "-c", "pass"]
+    assert budget.main(["budget", "bite", "--root", str(tmp_path), "--set", *command]) == 0
+    assert "the owner records ceilings.seconds.bite by hand" in capsys.readouterr().out
+    assert budget.ceiling_of(thresholds.read_text(encoding="utf-8"), "bite") is None
+
+
 def test_a_command_cannot_claim_a_longer_ceiling_by_what_it_prints(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

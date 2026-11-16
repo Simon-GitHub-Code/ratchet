@@ -8,6 +8,9 @@ thresholds file. Exit status: the command's own when it fails; 1 when it passed 
 its ceiling; 0 otherwise. A missing ceiling reports and passes: that is the first adoption.
 ``--report`` appends one JSON line per run so CI can publish the timings.
 
+``--set`` never records the pull-request proof's key, ``bite``: what a targeted proof takes
+depends on what the change touched, so the owner records it by hand.
+
 The pull-request proof, key ``bite``, is held to its own ``bite`` ceiling when one is recorded,
 else to ``bite-all``'s, and never to its tier's: whatever gates it proves are a part of the full
 proof, so ``bite-all`` bounds it. Nothing is read from its output (ADR 0069).
@@ -214,7 +217,9 @@ def main(argv: list[str]) -> int:
         )
     if options.report:
         report(root / options.report, outcome)
-    if options.headroom is not None and exit_code == 0:
+    if options.headroom is not None and options.key == PROOF:
+        print(f"ratchet-budget: the owner records {CEILINGS_TABLE}.{PROOF} by hand; --set skips it")
+    elif options.headroom is not None and exit_code == 0:
         floor = TIER_BUDGETS.get(options.key, 0.0)
         own = ceiling_of(text, options.key)
         new = lowered_ceiling(own, seconds, options.headroom, floor=floor)

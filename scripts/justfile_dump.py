@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 DUMP_TIMEOUT = 30
 OUTSIDE_RECIPES = frozenset({"recipes", "source", "first", "warnings"})
 NAME = re.compile(r"[A-Za-z_][\w-]*")
-RUNNER = re.compile(r"@?just")
+RUNNER = re.compile(r"(?<![\w-])just(?![\w-])")
 JUST_WORD = re.compile(r"\bjust\b")
 
 
@@ -96,7 +96,7 @@ def items_of(line: object) -> list[str | list[object]]:
 
 def runs_just(item: str | list[object], graph: Graph) -> bool:
     if isinstance(item, str):
-        return RUNNER.fullmatch(item) is not None
+        return RUNNER.search(item) is not None
     shown = json.dumps(item)
     return "just_executable" in shown or any(f'["variable", "{v}"]' in shown for v in graph.runners)
 
