@@ -618,6 +618,22 @@ def test_an_entry_the_upgrade_could_not_have_written_is_red_before_the_merge(
     assert f"adds '{dropped}; a row is bound or none, never dropped' for {BINDING}" in line
 
 
+def test_an_entry_paid_by_hand_after_the_upgrade_is_not_also_red_in_the_lowered_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = adopted.copy(adopted.adopted("0.9.2"), tmp_path / "repo")
+    branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    assert gate(root, capsys)[0] == 0
+    edit(root / WEEKLY, MARKER, "      - run: ./scripts/install-toolchain\n")
+    code, out = gate(root, capsys)
+    assert code == 0, out
+    assert checked(root, capsys)[0] == 1, "conformance names the stale entry and the command"
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    assert checked(root, capsys)[0] == 0
+    assert gate(root, capsys)[0] == 0
+
+
 def test_another_plugin_than_the_pin_skips_the_question_and_says_so(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

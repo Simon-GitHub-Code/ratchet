@@ -156,6 +156,11 @@ def test_an_upgrade_of_a_project_as_the_last_release_left_it_carries_the_interpr
     assert "{{plugin_py}} -P -c 'import sys, urllib.request;" in done
     assert "python3 -c 'import sys, urllib.request;" not in done
     assert "'FLAG_OVERRIDES=$(' + plugin_py + ' \"' + ratchet_plugin" in done
+    template = conformance.template_file("justfile")
+    template_jobs = "\n".join(justfile_text.definition(template, "configured_jobs")) + "\n"
+    template_jobs += "\n".join(justfile_text.definition(template, "jobs"))
+    assert template_jobs in done
+    assert 'jobs := env_var_or_default("RATCHET_JOBS", num_cpus())' not in done
     just = shutil.which("just")
     if just is None:
         pytest.skip("just is not installed")

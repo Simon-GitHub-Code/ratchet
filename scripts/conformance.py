@@ -1859,6 +1859,7 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
     yield from check_pin_recipe(root)
     yield from check_plugin_fallback(root)
     yield from check_plugin_interpreter(root)
+    yield from check_jobs_line(root)
     yield from check_pre_commit_recipe(root)
     yield from check_plugin_uses(root)
     if pin is None:
@@ -2083,6 +2084,64 @@ def check_plugin_interpreter(root: Path) -> Iterable[Finding]:
         ),
         identity="a recipe runs a plugin script under the bare python3",
     )
+
+
+JOBS_LINE = re.compile(r"^jobs[ \t]*:=.*$", re.MULTILINE)
+RELEASED_JOBS_LINES = frozenset({'jobs := env_var_or_default("RATCHET_JOBS", num_cpus())'})
+
+
+def with_template_jobs(template: str) -> gatelib.Want:
+    """The justfile with a released ``jobs`` line, and the comment above it, made the template's."""
+    block = "\n".join(
+        (
+            *justfile_text.definition(template, "configured_jobs"),
+            *justfile_text.definition(template, "jobs"),
+        )
+    )
+
+    def want(current: str | None) -> str:
+        lines = (current or "").split("\n")
+        for index, line in enumerate(lines):
+            if line in RELEASED_JOBS_LINES:
+                start = index
+                while start > 0 and lines[start - 1].startswith("#"):
+                    start -= 1
+                return "\n".join([*lines[:start], block, *lines[index + 1 :]])
+        return current or ""
+
+    return want
+
+
+def check_jobs_line(root: Path) -> Iterable[Finding]:
+    """A ``jobs`` variable that does not read ``git config ratchet.jobs`` as the template's does.
+
+    Why: the owner's setting caps the gates at once for every work tree and every agent's shell;
+    a justfile adopted before it keeps the older line, so the setting does nothing and tier 0
+    runs on every core. A line a release wrote is rewritten; a line the project wrote is named.
+    """
+    justfile = read_justfile(root)
+    template = template_file("justfile")
+    found = JOBS_LINE.search(justfile or "")
+    if justfile is None or found is None:
+        return
+    template_jobs = justfile_text.definition(template, "jobs")
+    if not template_jobs or "ratchet.jobs" in justfile_text.code_of(justfile):
+        return
+    number = justfile[: found.start()].count("\n") + 1
+    problem = (
+        f"justfile:{number}: `jobs` does not read `git config ratchet.jobs`, so the owner's cap on"
+        " gates at once does nothing and tier 0 runs on every core; use the template's"
+        " `configured_jobs` and `jobs` lines"
+    )
+    if found.group(0) in RELEASED_JOBS_LINES:
+        fix: Fix = Edit(
+            "make `jobs` the template's lines, which read `git config ratchet.jobs`",
+            with_template_jobs(template),
+            Agent(start=template_jobs),
+        )
+    else:
+        fix = Agent(start=template_jobs)
+    yield Finding("justfile", problem, fix, identity="jobs does not read ratchet.jobs")
 
 
 def check_pre_commit_recipe(root: Path) -> Iterable[Finding]:
