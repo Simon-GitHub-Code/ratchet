@@ -266,6 +266,7 @@ def test_a_group_whose_chain_outlasts_every_gate_beside_it_is_named(
     units = [("coverage", "mutation-changed"), ("lint",), ("fmt", "types"), ("perf",)]
     scheduler = parallel.Scheduler(units, [], options)
     scheduler.pending = []
+    scheduler.alone.clear()
     scheduler.finished = [
         parallel.Finished("coverage", 106.0, 0, ""),
         parallel.Finished("mutation-changed", 206.4, 0, ""),
