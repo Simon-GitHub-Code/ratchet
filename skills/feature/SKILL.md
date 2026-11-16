@@ -49,7 +49,7 @@ Pick the mode from what the owner typed:
 
    **The publish check, each time the run returns or errors,** before anything is committed and before a resume: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/publish_check.py" <the report file of step 2> --root .` in one Bash call.
    - **Exit 0:** nothing moved. Go on.
-   - **Exit 1:** a role committed, pushed or opened a pull request, or the orchestrator committed before the final check. Run `git stash push -u -m "<branch>: blocked run"`, then `git switch <base>`. Tell the owner what the check printed, and stop. Never commit on that branch.
+   - **Exit 1:** a role committed, pushed or opened a pull request, or you committed before this check. Run `git stash push -u -m "<branch>: blocked run"`, then `git switch <base>`. Tell the owner what the check printed, and stop. Never commit on that branch.
    - **Exit 2 or 3:** the start or the present state cannot be read, and neither is a pass. Report what it printed and stop.
 
    **The run errors instead of returning** (an agent died): resume it once. If it errors again, tell the owner which stage died and stop.

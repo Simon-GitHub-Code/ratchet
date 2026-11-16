@@ -955,7 +955,7 @@ def read_present(
     drain: Drain, tree: Path, start: publish_check.Start
 ) -> tuple[list[str], bool, str | None]:
     try:
-        return publish_check.check(tree, start, forge_gh(drain))
+        return publish_check.check(tree, start, forge_gh(drain), drained=True)
     except publish_check.UnreadableError as error:
         return [], False, str(error)
 
