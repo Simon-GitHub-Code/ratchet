@@ -162,10 +162,15 @@ def main_graph(*, gate: bool) -> tuple[frozenset[model.State], list[model.Edge]]
     return model.graph(model.guarded) if gate else model.graph()
 
 
+RULE_PARTS = tuple(tuple(sorted(model.RULES))[part::3] for part in range(3))
+"""The rules in three parts, each searched in a test of its own so no shard carries every rule."""
+
+
 @functools.cache
-def search(*, gate: bool) -> Search:
-    """What the graph's breadth-first steps show, with the guard's gate or without it."""
+def search(*, gate: bool, rules: tuple[str, ...]) -> Search:
+    """What the breadth-first steps show of ``rules``, with the guard's gate or without it."""
     _, edges = main_graph(gate=gate)
+    checked = {name: model.RULES[name] for name in rules}
     came: dict[model.State, tuple[model.State, str] | None] = {model.INITIAL: None}
     breaks: dict[str, list[str]] = {}
     cuts: dict[tuple[str, bool], list[str]] = {}
@@ -178,7 +183,7 @@ def search(*, gate: bool) -> Search:
         return path[::-1]
 
     for before, said, after in edges:
-        for name, rule_holds in model.RULES.items():
+        for name, rule_holds in checked.items():
             if name not in breaks and not rule_holds(before, said, after):
                 breaks[name] = path_to(said, came[before])
         kill, _, last = said.rpartition(" ")
@@ -201,12 +206,18 @@ def landed_unchecked(*, gate: bool) -> list[str]:
     ]
 
 
-def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_path() -> None:
-    # Why: one test reads the graph, so a run that spreads the tests over processes builds it once.
-    found = search(gate=False)
-    for name in model.RULES:
+@pytest.mark.parametrize(
+    "part", [pytest.param(n, marks=pytest.mark.shard_slot(4 * n)) for n in range(len(RULE_PARTS))]
+)
+def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_path(
+    part: int,
+) -> None:
+    found = search(gate=False, rules=RULE_PARTS[part])
+    for name in RULE_PARTS[part]:
         path = found.breaks.get(name)
         assert path == COUNTEREXAMPLES[name], f"{name}: shortest break is\n" + "\n".join(path or [])
+    if part:
+        return
     assert list(found.cuts.values()) == KILL_CUTS, "the kills' cuts are\n" + "\n".join(
         map(str, found.cuts.values())
     )
@@ -216,14 +227,20 @@ def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_pa
     assert not unchecked, f"a branch lands on a start no check passed: {unchecked[0]}"
 
 
-def test_with_the_guards_gate_each_rule_but_10_holds_and_no_role_commits() -> None:
+@pytest.mark.parametrize(
+    "part",
+    [pytest.param(n, marks=pytest.mark.shard_slot(4 * n + 2)) for n in range(len(RULE_PARTS))],
+)
+def test_with_the_guards_gate_each_rule_but_10_holds_and_no_role_commits(part: int) -> None:
     # Why: the guard refuses a commit on a start no final check passed, so neither the agent's
     # commit before the check nor a role's commit, by which rule 11b breaks, is a step.
-    found = search(gate=True)
-    for name in model.RULES:
+    found = search(gate=True, rules=RULE_PARTS[part])
+    for name in RULE_PARTS[part]:
         path = found.breaks.get(name)
         pinned = COUNTEREXAMPLES[name] if name == NO_TREE else None
         assert path == pinned, f"{name}: shortest break is\n" + "\n".join(path or [])
+    if part:
+        return
     assert list(found.cuts.values()) == KILL_CUTS, "the kills' cuts are the same"
     for kind in Kind:
         taken = any(name.startswith(kind.value) for name in found.taken)
