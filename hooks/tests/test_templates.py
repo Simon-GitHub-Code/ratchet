@@ -15,6 +15,7 @@ import pytest
 
 import change_size
 import conformance
+import parallel
 import pins
 import plugin_pin
 from tests import repos
@@ -199,16 +200,39 @@ def test_a_serial_group_is_declared_per_tier_and_empty_until_the_stack_needs_one
     tmp_path: Path,
 ) -> None:
     needs_just()
-    for variable in ("serial0", "serial1", "serial2"):
-        assert f'{variable} := ""' in JUSTFILE
+    assert 'serial0 := ""' in JUSTFILE
     bound = tmp_path / "justfile"
     bound.write_text(
-        JUSTFILE.replace('serial1 := ""', 'serial1 := "--serial coverage diff-coverage"'),
+        JUSTFILE.replace(
+            'serial1 := "--serial coverage test mutation-changed"',
+            'serial1 := "--serial coverage diff-coverage"',
+        ),
         encoding="utf-8",
     )
     assert " --serial coverage diff-coverage -- " in dry_run("check", bound)
     assert " --serial coverage diff-coverage -- " in dry_run("tier1", bound)
     assert "--serial" not in dry_run("tier0", bound)
+
+
+def test_no_two_gates_that_take_every_core_run_side_by_side_in_any_run_of_tiers() -> None:
+    needs_just()
+    every_core = {"coverage", "test", "mutation-changed", "mutation", "test-stability"}
+    tiers = [gate_list(f"tier{n}_gates") for n in range(3)]
+    groups = [
+        [
+            group.split()
+            for group in " ".join(gate_list(f"serial{n}")).split("--serial")
+            if group.split()
+        ]
+        for n in range(3)
+    ]
+    alone = set(gate_list("alone")[1:])
+    for joined in ((1,), (2,), (0, 1), (0, 1, 2)):
+        gates = [gate for n in joined for gate in tiers[n]]
+        serial = [group for n in joined for group in groups[n]]
+        units = parallel.plan(gates, serial, frozenset(alone & set(gates)))
+        beside = [unit for unit in units if every_core & set(unit)]
+        assert len(beside) <= 1, (joined, beside)
 
 
 def test_a_recipe_learns_its_shard_from_the_environment_and_is_whole_without_one() -> None:
