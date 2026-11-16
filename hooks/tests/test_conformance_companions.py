@@ -210,3 +210,12 @@ def test_a_blank_line_then_text_ends_the_item(repo: Path) -> None:
     assert edited == (
         f"# P\n\n- `pstack`\n\nFour plugins build here.\n\n{SECTION}\n\n- **x** `pstack`: styles.\n"
     )
+
+
+@pytest.mark.parametrize(
+    "item", ["- **x** `pstack`: styles.", "- **x** `pstack`: styles,\n  wrapped."]
+)
+def test_an_item_that_ends_a_file_with_no_final_newline_moves_whole(repo: Path, item: str) -> None:
+    old = f"# P\n\n{item}"
+    edited = fix_of(repo, old).want(old)
+    assert edited == f"# P\n\n- `pstack`\n\n{SECTION}\n\n{item}\n"
