@@ -677,7 +677,7 @@ def sweep(repo: real.Repo, world: World, span: range, *, scratch: Path) -> int:
     return taken
 
 
-def cost(edge: model.Edge) -> int:
+def cost(edge: model.Edge) -> float:
     """What the sweep spends on ``edge``, in steps: the step taken, then the route asked.
 
     Why not one each: a fill runs the real ``upgrade.py``, whose checks try each edit a finding
@@ -686,19 +686,21 @@ def cost(edge: model.Edge) -> int:
     steps; before, about 7. An upgrade costs about 17. Where the route names a safeguard, ``ask``
     reads it three times. Where it names a waiting branch's merge, the read lists every unmerged
     branch and reads the branch's change twice, once to find it and once for the judge: some fifty
-    git calls where another read makes about twelve, so the step costs about 3. Measured from CI's
-    times of the chunks cut by steps alone, from a profile of the slowest of them, where the fills
-    took four fifths of the time, and from a count of the git calls each read makes.
+    git calls where another read makes about twelve, so the step costs about 3. Where it names the
+    architecture review, the read also reads the log, and the step costs about 1.5. Measured from
+    CI's times of the chunks cut by steps alone, from a profile of the slowest of them, where the
+    fills took four fifths of the time, and from the time and the git calls of each read.
     """
     if edge.action is ActionName.AGENT_FILLS_ROWS:
         return 7 if edge.source.flag is Flag.WAITS else 19
     if edge.action is ActionName.UPGRADE_LEAVES_ROWS_TO_FILL:
         return 17
-    return {Advice.SAFEGUARD: 2, Advice.MERGE_RECORDS: 3}.get(model.real_advice(edge.target), 1)
+    reads = {Advice.SAFEGUARD: 2, Advice.MERGE_RECORDS: 3, Advice.REVIEW: 1.5}
+    return reads.get(model.real_advice(edge.target), 1)
 
 
 @cache
-def costs() -> list[int]:
+def costs() -> list[float]:
     """The cost of the steps out of each state, in the order of the walk."""
     return [sum(map(cost, leaving()[state])) for state in spanning().order]
 
@@ -738,11 +740,11 @@ def cut(share: float) -> list[range]:
     return [range(start, stop) for start, stop in itertools.pairwise(bounds)]
 
 
-def spend(span: range) -> int:
+def spend(span: range) -> float:
     """What ``sweep`` spends on ``span``: its states' steps and the steps that reach them."""
     tree = spanning()
 
-    def below(world: World) -> int:
+    def below(world: World) -> float:
         here = tree.place[world] in span
         total = costs()[tree.place[world]] if here else 0
         for child in tree.children[world]:
