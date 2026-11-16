@@ -922,7 +922,7 @@ def test_a_change_to_an_ignore_file_at_any_depth_goes_to_every_gate(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str
 ) -> None:
     root = targeted(tmp_path)
-    write(root, path, "ignored/\n*.secret\n" + ("src/_*\n" if path == ".gitignore" else ""))
+    write(root, path, "ignored/\n*.secret\n" + "build/\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
     assert out[1] == every(
