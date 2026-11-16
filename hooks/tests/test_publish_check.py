@@ -60,10 +60,7 @@ def refs(root: Path) -> str:
     return git(root, "for-each-ref", "--format=%(refname) %(objectname)")
 
 
-ORCHESTRATOR = (
-    ", or the orchestrator committed before `drain.py check <ticket> --final`; commit only after"
-    " that check is green"
-)
+ORCHESTRATOR = ", or the orchestrator committed before `drain.py check <ticket> --final`"
 GREEN = "publish check: green, nothing was committed, pushed or opened since the run started"
 RED = (
     "publish check: red, a role published: the ticket ends as a role that published, never as an"

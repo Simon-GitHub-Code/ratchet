@@ -387,8 +387,7 @@ def head_move(root: Path, start: Start, new: str) -> str | None:
     if gatelib.git(root, "merge-base", "--is-ancestor", start.head, new) is not None:
         return (
             f"`{branch}` moved from {old} to {short(new)}, which holds it with commits on"
-            f" top: a role committed, or the orchestrator committed before {FINAL_CHECK}; commit"
-            " only after that check is green"
+            f" top: a role committed, or the orchestrator committed before {FINAL_CHECK}"
         )
     rewritten = f"`{branch}` is at {short(new)}, which does not hold {old}, where it started"
     if start.rebase is None:

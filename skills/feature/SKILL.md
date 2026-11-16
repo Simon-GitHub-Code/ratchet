@@ -49,7 +49,7 @@ Pick the mode from what the owner typed:
 
    **The publish check, each time the run returns or errors,** before anything is committed and before a resume: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/publish_check.py" <the report file of step 2> --root .` in one Bash call.
    - **Exit 0:** nothing moved. Go on.
-   - **Exit 1:** a role committed, pushed or opened a pull request. Run `git stash push -u -m "<branch>: blocked run"`, then `git switch <base>`. Tell the owner what the check printed, and stop. Never commit on that branch.
+   - **Exit 1:** a role committed, pushed or opened a pull request, or the orchestrator committed before the final check. Run `git stash push -u -m "<branch>: blocked run"`, then `git switch <base>`. Tell the owner what the check printed, and stop. Never commit on that branch.
    - **Exit 2 or 3:** the start or the present state cannot be read, and neither is a pass. Report what it printed and stop.
 
    **The run errors instead of returning** (an agent died): resume it once. If it errors again, tell the owner which stage died and stop.
@@ -201,10 +201,10 @@ Run every command below from the repository's own checkout, on the default branc
 
 ### The publish check
 
-`D check <ticket>` compares the ticket's branch and the forge with the start that `open`, or a rebasing `update`, recorded in the ticket's note (ADR 0060). Only `--final` marks the start passed, and `land` refuses a start that no final check passed. Pass `--final` only on the check just before a commit. The guard enforces this order: a `git commit` in a queue work tree is refused until the start has passed its final check.
+`D check <ticket>` compares the ticket's branch and the forge with the start that `open`, or a rebasing `update`, recorded in the ticket's note (ADR 0060). Only `--final` marks the start passed, and `land` refuses a start that no final check passed. Pass `--final` only on the check just before a commit. The guard enforces this order: a commit in a queue work tree, by `git commit`, `am`, `cherry-pick` or `revert`, is refused until the start has passed its final check.
 
 - **Exit 0:** nothing moved. Go on.
-- **Exit 1:** a role committed, pushed or opened a pull request. The check has parked the ticket, kept what was uncommitted as a stash, and holds the ticket until its text changes. Commit nothing and land nothing. Go on at step 5 (`D plan`), and the report names it. When the line is `check: <ref> is merged and is not checked`, the ticket has landed instead: go on at step 5.
+- **Exit 1:** a role committed, pushed or opened a pull request, or the orchestrator committed before the final check. The check has parked the ticket, kept what was uncommitted as a stash, and holds the ticket until its text changes. Commit nothing and land nothing. Go on at step 5 (`D plan`), and the report names it. When the line is `check: <ref> is merged and is not checked`, the ticket has landed instead: go on at step 5.
 - **Exit 2:** the note holds no start, which `open` records. Report the line, leave the ticket, and go on at step 5.
 - **Exit 3:** either the check found a rebase left unfinished or a state it cannot read, and has closed the ticket as waiting for a later drain to retry; or it refused before checking, since the ticket is held or its branch has no commit of its own and no work tree. Report the line and go on at step 5.
 

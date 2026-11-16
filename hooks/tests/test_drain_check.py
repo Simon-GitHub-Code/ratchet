@@ -264,5 +264,4 @@ def test_update_names_the_orchestrator_too_when_the_commit_came_after_a_check_wi
     assert "a role committed, or the orchestrator committed before `drain.py check <ticket>" in (
         printed
     )
-    assert "--final`; commit only after that check is green" in printed
     assert note(root, BRANCH_A)["outcome"] == "parked"
