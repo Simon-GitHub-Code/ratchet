@@ -1028,3 +1028,187 @@ def test_a_step_or_permission_no_marker_names_is_listed_with_its_line() -> None:
         (12, "- run: echo nothing"),
         (14, "run: |\n          echo still nothing"),
     ]
+
+
+TEMPLATE_ROW = (
+    "| `suite` | `just suite-report` | <`path` of the coverage report, Cobertura or LCOV>,"
+    " <`path` of the test results, JUnit XML> | `just test`, `just coverage`,"
+    " `just diff-coverage`, `just test-counts` | `just test` |"
+)
+SELF_TEST_NONE = "| none: the self-test shares no report | none | none | none | none |"
+SHARED = (
+    "| suite | `just build` | `suite.xml` | `just coverage`, `just diff-coverage` |"
+    " `just coverage` |"
+)
+SCRIPT = '{{plugin_py}} "{{ratchet_plugin}}/scripts/report.py" suite'
+
+
+def sharing(repo: Path) -> None:
+    replace(BINDING, SELF_TEST_NONE, SHARED)(repo)
+
+
+def test_a_reader_that_opens_its_shared_reports_path_itself_is_red_with_the_line(
+    repo: Path,
+) -> None:
+    sharing(repo)
+    assert red(repo) == []
+    replace("justfile", "coverage: _plugin\n", "coverage: _plugin\n    cat suite.xml\n")(repo)
+    problem = (
+        "justfile: the recipe 'coverage' reads the shared report 'suite' (suite.xml) other than"
+        " as the --path argument of scripts/report.py: cat suite.xml"
+    )
+    assert red(repo) == [problem]
+
+
+@pytest.mark.parametrize(
+    "written", ["--path suite.xml", "--path 'suite.xml'", '--path="suite.xml"']
+)
+def test_a_reader_that_asks_the_script_for_the_path_is_green(repo: Path, written: str) -> None:
+    sharing(repo)
+    replace(
+        "justfile",
+        "coverage: _plugin\n",
+        f"coverage: _plugin\n    cat $({SCRIPT} --reader coverage {written})\n",
+    )(repo)
+    assert red(repo) == []
+
+
+def test_a_path_named_beside_a_call_of_the_script_is_still_red(repo: Path) -> None:
+    sharing(repo)
+    line = f"{SCRIPT} --reader coverage --path suite.xml && cat suite.xml"
+    replace("justfile", "coverage: _plugin\n", f"coverage: _plugin\n    {line}\n")(repo)
+    assert [found.split(": ")[-1] for found in red(repo)] == [line]
+
+
+def test_a_path_named_in_a_comment_or_by_a_recipe_that_does_not_read_is_green(repo: Path) -> None:
+    sharing(repo)
+    replace("justfile", "coverage: _plugin\n", "coverage: _plugin\n    # cat suite.xml\n")(repo)
+    replace("justfile", "lint:\n", "lint:\n    cat suite.xml\n")(repo)
+    assert red(repo) == []
+
+
+def test_a_continued_line_is_one_line(repo: Path) -> None:
+    sharing(repo)
+    replace(
+        "justfile",
+        "coverage: _plugin\n",
+        f"coverage: _plugin\n    {SCRIPT} --reader coverage --path suite.xml \\\n      && cat x\n",
+    )(repo)
+    assert red(repo) == []
+
+
+@pytest.mark.parametrize("kind", ["producer", "reader"])
+def test_a_shared_report_names_recipes_the_justfile_defines(repo: Path, kind: str) -> None:
+    sharing(repo)
+    row = (
+        SHARED.replace("just build", "just gone")
+        if kind == "producer"
+        else SHARED.replace("just diff-coverage", "just gone")
+    )
+    replace(BINDING, SHARED, row)(repo)
+    problem = (
+        "justfile: the shared report 'suite' names the recipe 'gone', which the justfile does not"
+        " define"
+    )
+    assert red(repo) == [problem]
+
+
+def test_a_binding_without_the_shared_reports_section_gets_the_templates(repo: Path) -> None:
+    replace(BINDING, conformance.report.SECTION, "## Elsewhere")(repo)
+    found = conformance.findings(repo)
+    problem = (
+        "has no '## Shared reports' section; add the template's, bind `suite-report` first to run"
+        " the suite once, then bind the `test`, `coverage`, `diff-coverage` and `test-counts`"
+        " gates as readers of the shared suite report (ADR 0071)"
+    )
+    assert [finding.problem for finding in found] == [problem]
+    assert isinstance(found[0].fix, conformance.Auto)
+
+
+def test_a_shared_reports_table_the_template_left_is_red(repo: Path) -> None:
+    replace(
+        BINDING,
+        SELF_TEST_NONE,
+        TEMPLATE_ROW,
+    )(repo)
+    assert red(repo) == [f"{BINDING}: {conformance.report.PLACEHOLDER}"]
+
+
+def test_a_repository_with_no_binding_has_no_shared_reports_to_hold(repo: Path) -> None:
+    remove(BINDING)(repo)
+    assert not any("shared report" in line for line in red(repo))
+
+
+def test_a_repository_with_no_justfile_has_no_recipes_to_hold_a_report_to(repo: Path) -> None:
+    sharing(repo)
+    remove("justfile")(repo)
+    assert not any("shared report" in line for line in red(repo))
+
+
+def test_a_report_path_git_does_not_ignore_is_red_with_the_reason(repo: Path) -> None:
+    sharing(repo)
+    git(repo, "init", "-q")
+    problem = (
+        ".gitignore: the shared report 'suite' writes 'suite.xml', which git does not ignore; a"
+        " report that is tracked or untracked changes the tree's content, so it is never reused"
+    )
+    assert red(repo) == [problem]
+    write(".gitignore", "suite.xml\n")(repo)
+    assert red(repo) == []
+
+
+@pytest.mark.parametrize("judged", ["`just build`", "`just coverage`, `just diff-coverage`", ""])
+def test_a_judge_that_is_not_exactly_one_of_the_readers_is_red(repo: Path, judged: str) -> None:
+    sharing(repo)
+    replace(
+        BINDING,
+        SHARED,
+        SHARED.replace(
+            "`just diff-coverage` | `just coverage` |", f"`just diff-coverage` | {judged} |"
+        ),
+    )(repo)
+    problem = (
+        f"{BINDING}: the shared reports row 'suite' needs exactly one judge in `Judged by`, and"
+        " it is one of the row's readers"
+    )
+    assert red(repo) == [problem]
+
+
+def test_a_producer_the_template_defines_and_the_justfile_lacks_is_copied(repo: Path) -> None:
+    replace(BINDING, SELF_TEST_NONE, SHARED.replace("just build", "just suite-report"))(repo)
+    text = (repo / "justfile").read_text(encoding="utf-8")
+    block = "\n".join(justfile_text.definition(text, "suite-report"))
+    assert block
+    replace("justfile", block, "")(repo)
+    found = [f for f in conformance.findings(repo) if "`suite-report`" in f.problem]
+    problem = (
+        "has no `suite-report` recipe, which the shared report 'suite' names; copy it from the"
+        " template justfile; it is a placeholder for the project to bind"
+    )
+    assert [f.problem for f in found] == [problem]
+    assert isinstance(found[0].fix, conformance.Auto)
+
+
+def test_a_report_with_one_reader_is_red(repo: Path) -> None:
+    sharing(repo)
+    replace(BINDING, "`just coverage`, `just diff-coverage` |", "`just coverage` |")(repo)
+    problem = (
+        f"{BINDING}: the shared reports row 'suite' has fewer than two readers, so it is not"
+        " shared: say `none: <reason>` in its Report cell"
+    )
+    assert red(repo) == [problem]
+
+
+def test_the_template_row_is_red_until_its_paths_are_bound_and_still_brings_the_producer(
+    repo: Path,
+) -> None:
+    replace(BINDING, SELF_TEST_NONE, TEMPLATE_ROW)(repo)
+    text = (repo / "justfile").read_text(encoding="utf-8")
+    block = "\n".join(justfile_text.definition(text, "suite-report"))
+    replace("justfile", block, "")(repo)
+    placeholder = f"{BINDING}: {conformance.report.PLACEHOLDER}"
+    producer = (
+        "justfile: has no `suite-report` recipe, which the shared report 'suite' names; copy it"
+        " from the template justfile; it is a placeholder for the project to bind"
+    )
+    assert sorted(red(repo)) == sorted([placeholder, producer])

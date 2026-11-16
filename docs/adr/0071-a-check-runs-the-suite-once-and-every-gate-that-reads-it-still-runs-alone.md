@@ -60,6 +60,7 @@ This is wrong if any of these is seen:
 - One local `check` runs the suite once, under the coverage tool, where it ran four times.
 - A reader waiting on the report holds one of the tier's job slots while it waits.
 - `test` runs under the coverage tool locally, which is slower than a bare run. CI's `test` job runs the same instrumented run (item 3 below).
+- Accepted risk, by the owner on 2026-11-16: a `RATCHET_RUN` left set in a shell makes every run started there one run, so a local check can reuse an earlier report when the tree's content is unchanged and something outside it changed. It is the class ADR 0068 accepts for a variable a tool reads. CI is not affected: each job produces its own report.
 
 ## Settled by the owner, 2026-11-16
 

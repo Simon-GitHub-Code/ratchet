@@ -985,6 +985,7 @@ def test_the_real_upgrade_owes_more_than_the_model_and_leaves_a_faithful_adoptio
         "manifest",
         "operability",
         "quality",
+        "shared_reports",
         "speed",
     }
     red, _ = conformance.owed_split(repo.root, conformance.findings(repo.root))

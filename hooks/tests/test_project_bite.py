@@ -1632,6 +1632,13 @@ def test_the_scripts_own_environment_names_no_other_tree(monkeypatch: pytest.Mon
     assert project_bite.environment()["PATH"] == os.environ["PATH"]
 
 
+def test_a_run_around_the_copy_hands_its_run_id_to_no_gate_in_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RATCHET_RUN", "the-tiers-run")
+    assert "RATCHET_RUN" not in project_bite.environment()
+
+
 @pytest.mark.parametrize("path", ["link/planted.txt", "file-link"])
 def test_a_write_fault_does_not_follow_a_tracked_link_out_of_the_copy(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str
