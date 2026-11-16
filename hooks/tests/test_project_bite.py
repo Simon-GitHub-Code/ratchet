@@ -889,7 +889,10 @@ def test_a_patch_fault_that_renames_a_file_is_targeted_by_both_names(tmp_path: P
 def test_a_patch_fault_that_edits_a_file_with_a_non_ascii_name_is_targeted(
     tmp_path: Path,
 ) -> None:
-    patch = PATCH_FILE.replace("src/code.txt", "src/caf\u00e9.txt")
+    quoted = '"%s/src/caf\\303\\251.txt"'
+    patch = PATCH_FILE.replace("a/src/code.txt", quoted % "a").replace(
+        "b/src/code.txt", quoted % "b"
+    )
     named_by(patch_targets(tmp_path, patch), "src/caf\u00e9.txt")
 
 
