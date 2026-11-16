@@ -27,9 +27,10 @@ Cutting a release:
 
 * The version PR bumps the version in ``.claude-plugin/plugin.json`` and writes the CHANGELOG
   ``## V`` section.
-* In the same PR it switches the ratchet entry of ``.claude-plugin/marketplace.json`` to
-  ``{"source": "github", "repo": "Simon-GitHub-Code/ratchet", "ref": "vV"}`` and removes the
-  strict ``xfail`` mark on the marketplace-entry test.
+* In the same PR it sets the ``ref`` of the ratchet entry of ``.claude-plugin/marketplace.json``
+  to ``vV``. The entry is ``{"source": "url", "url":
+  "https://github.com/Simon-GitHub-Code/ratchet.git", "ref": "vV"}``: a ``github`` source lets the
+  harness update over SSH, which fails on a machine with no SSH key.
 * Merging it to main runs ``.github/workflows/release.yml``, which makes and pushes the tag, runs
   ``scripts/release_check.py`` and publishes the release page. When the tag already exists, the
   run checks it again and publishes the page only if it is missing. A manual run of the workflow

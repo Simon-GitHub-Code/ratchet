@@ -400,7 +400,7 @@ def test_the_marketplace_installs_the_tag_of_the_version() -> None:
         if plugin["name"] == "ratchet"
     )
     assert entry["source"] == {
-        "source": "github",
-        "repo": "Simon-GitHub-Code/ratchet",
+        "source": "url",
+        "url": "https://github.com/Simon-GitHub-Code/ratchet.git",
         "ref": f"v{version}",
     }

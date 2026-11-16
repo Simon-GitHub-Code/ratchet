@@ -68,6 +68,8 @@ claude plugin install ratchet@ratchet
 
 The last line installs all four plugins: Ratchet declares the other three as dependencies. Ratchet installs from its latest release's tag, never from the default branch. For another harness, see [Harness support](#harness-support).
 
+If an install or update fails with `Permission denied (publickey)`, the harness cloned over SSH on a machine with no SSH key. Run the same command with `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` in front of it, as the [plugin troubleshooting page](https://code.claude.com/docs/en/plugins/troubleshooting) says.
+
 ### 3. Type four commands
 
 Run these in your repository. It can be empty.
@@ -227,6 +229,15 @@ The feature pipeline runs on Claude Code's Workflow tool. The method, its gates 
 Outside Claude Code, a ticket is built by the roles [the pipeline page](skills/method/pipeline.md) describes, in any harness with subagents.
 
 ## Upgrading
+
+Update the plugin, marketplace first, so the update reads the current entry:
+
+```bash
+claude plugin marketplace update ratchet
+claude plugin update ratchet@ratchet
+```
+
+If the update fails with `Permission denied (publickey)`, your marketplace copy still holds the entry that cloned over SSH, or a harness clones another source the same way. Run it as `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1 claude plugin update ratchet@ratchet`.
 
 Every tier's first line names the plugin copy it runs: `plugin-pin: using <version> at <commit>, in <dir>`. The local gates run only the release your project pins (ADR 0068). After the plugin updates, they keep running the pinned release while the harness still has it on disk, and `/ratchet:next` offers the upgrade. Once no copy on disk is the pinned release, every local tier is red in one line that names the upgrade command:
 
