@@ -1518,11 +1518,12 @@ def check_changed_tests(root: Path) -> Iterable[Finding]:
     found, problems = suites.parse(text)
     if suites_table_owed(text):
         problem = (
-            f"{problems[0]}; one fill writes three edits together: the template's table, one row"
-            " per suite with the gate that runs it whole, the globs of its test files and the"
-            " recipe that runs given files; the Gates row 'changed tests run' bound to"
-            " `just tests-changed`; and `tests-changed` in the justfile's `tier1_gates`. Write none"
-            " alone: a Gates row bound before its table exists turns tier 1 red (ADR 0073)"
+            "'## Tests' has no suites table (Suite | Gate | Files | Run files). Write it in one"
+            " fill with two other edits, since a Gates row bound before the table exists turns"
+            " tier 1 red (ADR 0073): the table, one row per suite naming the gate that runs it"
+            " whole, the globs of its test files and the recipe that runs given files of it, or"
+            " `none: <reason>`; the Gates row 'changed tests run', bound to `just tests-changed`;"
+            " and `tests-changed` in the justfile's `tier1_gates`."
         )
         template = markdown_text.section(template_binding(), suites.SECTION)
         start = tuple(line for line in template.splitlines() if line.startswith("|"))

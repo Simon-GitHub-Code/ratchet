@@ -903,5 +903,5 @@ def test_an_upgrade_leaves_bound_suites_green_and_owes_the_gate_and_the_files_ta
     assert red == []
     owing = [e.problem for e in owed.read(root).entries if e.rule == "changed_tests"]
     assert len(owing) == 1
-    assert owing[0].startswith("'## Tests' lacks its suites table with the columns")
+    assert owing[0].startswith("'## Tests' has no suites table (Suite | Gate | Files | Run files).")
     assert "changed tests run" in "\n".join(e.problem for e in owed.read(root).entries)

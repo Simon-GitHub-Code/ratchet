@@ -49,12 +49,12 @@ def owing(root: Path) -> list[owed.Entry]:
 def test_the_owed_entry_for_the_suites_table_names_all_three_edits(tmp_path: Path) -> None:
     [entry] = owing(upgraded(tmp_path))
     assert entry.problem == (
-        "'## Tests' lacks its suites table with the columns Suite | Gate | Files | Run files;"
-        " one fill writes three edits together: the template's table, one row per suite with the"
-        " gate that runs it whole, the globs of its test files and the recipe that runs given"
-        " files; the Gates row 'changed tests run' bound to `just tests-changed`; and"
-        " `tests-changed` in the justfile's `tier1_gates`. Write none alone: a Gates row bound"
-        " before its table exists turns tier 1 red (ADR 0073)"
+        "'## Tests' has no suites table (Suite | Gate | Files | Run files). Write it in one fill"
+        " with two other edits, since a Gates row bound before the table exists turns tier 1 red"
+        " (ADR 0073): the table, one row per suite naming the gate that runs it whole, the globs"
+        " of its test files and the recipe that runs given files of it, or `none: <reason>`; the"
+        " Gates row 'changed tests run', bound to `just tests-changed`; and `tests-changed` in the"
+        " justfile's `tier1_gates`."
     )
     assert entry.rule in owed.FILL_FIRST
 

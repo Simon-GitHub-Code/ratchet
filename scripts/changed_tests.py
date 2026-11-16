@@ -21,6 +21,7 @@ recipe cannot start.
 from __future__ import annotations
 
 import argparse
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -85,10 +86,14 @@ def run_suite(root: Path, suite: suites.Suite, files: list[str]) -> int:
     print(f"changed_tests: {suite.name}: running {count} through `{suite.run}`")
     argv = [*suite.run.split(), *files]
     try:
-        return subprocess.run(argv, cwd=root, check=False).returncode
+        status = subprocess.run(argv, cwd=root, check=False).returncode
     except OSError as error:
         print(f"changed_tests: {suite.name}: cannot run {argv[0]}: {error}")
         return 127
+    if status < 0:
+        print(f"changed_tests: {suite.name}: killed by {signal.Signals(-status).name}")
+        return 128 - status
+    return status
 
 
 def refuse(problems: list[str]) -> int:
@@ -121,7 +126,8 @@ def main(argv: list[str]) -> int:
     for suite in scoped:
         if files := by_suite[suite.name]:
             ran += 1
-            status = max(status, run_suite(root, suite, files))
+            result = run_suite(root, suite, files)
+            status = status or result
     if not ran:
         names = ", ".join(suite.name for suite in scoped) or "none"
         print(f"changed_tests: green: no test file of the suites in scope ({names}) changed")

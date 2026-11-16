@@ -38,10 +38,15 @@ def just(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     bin_dir.mkdir()
     log = tmp_path / "just.log"
     stub = bin_dir / "just"
-    stub.write_text(f'#!/bin/sh\necho "$@" >> "{log}"\nexit "${{STATUS:-0}}"\n', encoding="utf-8")
+    stub.write_text(
+        f'#!/bin/sh\necho "$@" >> "{log}"\n[ -n "$SIGNAL" ] && kill -"$SIGNAL" $$\n'
+        'exit "${STATUS:-0}"\n',
+        encoding="utf-8",
+    )
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.delenv("STATUS", raising=False)
+    monkeypatch.delenv("SIGNAL", raising=False)
     return log
 
 
@@ -184,6 +189,30 @@ def test_a_failing_suite_run_is_red(
     monkeypatch.setenv("STATUS", "3")
     assert run(root) == 3
     assert "changed_tests: red: 1 of 1 suites had changed test files" in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("just")
+def test_a_suite_run_killed_by_a_signal_is_red_and_names_the_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Out
+) -> None:
+    root = project(tmp_path, UNIT, E2E)
+    write(root, "tests/e2e/c_test.txt", "new\n")
+    monkeypatch.setenv("SIGNAL", "9")
+    assert run(root, "all") == 137
+    out = capsys.readouterr().out
+    assert "changed_tests: e2e: killed by SIGKILL" in out
+    assert "changed_tests: red: 1 of 2 suites had changed test files" in out
+
+
+def test_a_later_suite_that_passes_keeps_the_first_failure(
+    tmp_path: Path, just: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path, UNIT, E2E)
+    write(root, "tests/unit/a_test.txt", "edited\n")
+    write(root, "tests/e2e/c_test.txt", "new\n")
+    monkeypatch.setenv("STATUS", "3")
+    assert run(root, "all") == 3
+    assert len(calls(just)) == 2
 
 
 def test_a_suite_that_cannot_run_by_file_says_why_and_is_not_run(
