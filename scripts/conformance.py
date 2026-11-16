@@ -1887,6 +1887,21 @@ def check_speed_parts(body: str) -> Iterable[Finding]:
             yield agent(f"{BINDING_PATH}: the Speed section does not say how '{part}' is met")
 
 
+def check_local_caches(root: Path) -> Iterable[Finding]:
+    """The optional ``Local caches`` bullet of ``## Speed`` holds only paths, each a code span."""
+    body = markdown_text.section(read(root / BINDING_PATH) or "", SPEED_SECTION)
+    value = markdown_text.bullets(body).get(runrecord.LOCAL_CACHES)
+    if value is None or value.startswith("<"):
+        return
+    spans = markdown_text.ticked(value)
+    if not spans or any(" " in span for span in spans):
+        yield agent(
+            f"{BINDING_PATH}: the Local caches bullet of the Speed section is not a list of paths,"
+            " each as a code span with no space in it",
+            then=("name each path the tools write locally as a code span, or take the bullet out",),
+        )
+
+
 def check_manifest(root: Path) -> Iterable[Finding]:
     path = root / "guards/manifest.toml"
     if not path.is_file():
@@ -3175,7 +3190,7 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
 
 
 def check_cache_written(root: Path) -> Iterable[Finding]:
-    """The last tier run's record names a path of the Cache line that did not exist after it."""
+    """The last tier run's record names a Local caches path that did not exist after the run."""
     lines = (gatelib.read_text(root / gatelib.STATE / "timing.jsonl") or "").splitlines()
     records = []
     for line in lines:
@@ -3190,12 +3205,12 @@ def check_cache_written(root: Path) -> Iterable[Finding]:
     for record in after:
         if record.get("kind") == runrecord.CACHE_MISSING:
             yield agent(
-                f"{BINDING_PATH}: the Cache line names {record.get('path')}, which did not exist"
-                " after the last tier run",
+                f"{BINDING_PATH}: the Local caches bullet names {record.get('path')}, which did not"
+                " exist after the last tier run",
                 then=(
                     (
                         "make the recipe that owns the cache write it, or take the path off the"
-                        " Cache line, then run the tier again"
+                        " Local caches bullet, then run the tier again"
                     ),
                 ),
             )
@@ -3354,6 +3369,7 @@ CHECKS: tuple[Check, ...] = (
     check_quality,
     check_bite_all_ceiling,
     check_cache_written,
+    check_local_caches,
     check_gate_reads,
     check_bites,
     check_incidents,
@@ -4290,7 +4306,7 @@ TYPES_PLACEHOLDER = re.compile(r"^- Application types: <[^\n]*>$", re.MULTILINE)
 EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
 TEST_PATHS_PLACEHOLDER = re.compile(r"^- Tests: <[^\n]*>$", re.MULTILINE)
 TRIGGERS_PLACEHOLDER = re.compile(r"^\| <kind> \|[^\n]*$", re.MULTILINE)
-SPEED_PLACEHOLDER = re.compile(r"^(- [A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
+SPEED_PLACEHOLDER = re.compile(r"^(- (?!Local caches)[A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
 INSTALL_PLACEHOLDER = re.compile(r"^- Install: <[^\n]*>$", re.MULTILINE)
 DEPENDENCY_PLACEHOLDER = re.compile(
     r"^- (Manifests|Lockfiles|Entry point): <[^\n]*>$", re.MULTILINE

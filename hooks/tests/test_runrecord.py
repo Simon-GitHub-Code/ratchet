@@ -17,11 +17,16 @@ import report
 import runrecord
 from tests import repos
 
+CACHE_PROSE = (
+    "`lint` and `lint-types` read `.cache/linter` through `ci/setup-action`, keyed on `deps.lock`"
+    " and `config.json`; `.cache/linter`, `lint`, `lint-types`, `ci/setup-action`, `deps.lock`,"
+    " `config.json`"
+)
 AT = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
 PASS = shlex.join([sys.executable, "-c", "pass"])
 BINDING = (
-    "## Speed\n\n- Parallel: all\n- Cache: the lockfile `deps.lock`, the caches `.cache/checker`,"
-    " `.cache/*.bin`, `~/.ratchet-nothing-here/x` and `a b`\n- Shards: 1\n"
+    "## Speed\n\n- Parallel: all\n- Cache: " + CACHE_PROSE + "\n- Local caches: `deps.lock`,"
+    " `.cache/checker`, `.cache/*.bin`, `~/.ratchet-nothing-here/x` and `a b`\n- Shards: 1\n"
 )
 
 
@@ -149,12 +154,13 @@ def test_the_runner_says_each_cache_path_that_is_missing_and_records_it(
     record = work / ".ratchet/timing.jsonl"
     code = parallel.main(["parallel", "--report", str(record), "--root", str(work), "--", PASS])
     out = capsys.readouterr().out.splitlines()
-    named = [line for line in out if "Cache line names" in line]
+    named = [line for line in out if "Local caches bullet names" in line]
     assert code == 0
     assert named[0] == (
-        "parallel: the binding's Cache line names deps.lock, which does not exist after this run"
+        "parallel: the binding's Local caches bullet names deps.lock, which does not exist"
+        " after this run"
     )
-    assert [line.split()[6] for line in named] == [
+    assert [line.split()[7] for line in named] == [
         "deps.lock,",
         ".cache/checker,",
         ".cache/*.bin,",
@@ -175,7 +181,7 @@ def test_without_a_report_the_cache_line_is_said_and_nothing_is_written(
     work: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert parallel.main(["parallel", "--root", str(work), "--", PASS]) == 0
-    assert "Cache line names deps.lock" in capsys.readouterr().out
+    assert "Local caches bullet names deps.lock" in capsys.readouterr().out
     assert not (work / ".ratchet/timing.jsonl").exists()
 
 
@@ -187,7 +193,7 @@ def test_a_cache_path_that_exists_is_not_said(
     record = work / ".ratchet/timing.jsonl"
     argv = ["parallel", "--report", str(record), "--root", str(work), "--", PASS]
     assert parallel.main(argv) == 0
-    named = [line for line in capsys.readouterr().out.splitlines() if "Cache line" in line]
+    named = [line for line in capsys.readouterr().out.splitlines() if "Local caches bullet" in line]
     assert len(named) == 1
     assert [each.get("kind") for each in lines(record)] == [None, runrecord.TIER, "cache-missing"]
 
@@ -218,7 +224,9 @@ def test_conformance_holds_the_last_runs_missing_cache_paths_as_findings(work: P
     here = {"kind": runrecord.CACHE_MISSING, "path": "deps.lock"}
     rows = [json.dumps(each) for each in (gone, tier, {"key": "lint"}, here)]
     record.write_text("\n".join([*rows[:1], "not json", "[1]", *rows[1:]]) + "\n", encoding="utf-8")
-    assert held() == ["the Cache line names deps.lock, which did not exist after the last tier run"]
+    assert held() == [
+        "the Local caches bullet names deps.lock, which did not exist after the last tier run"
+    ]
     record.write_text("\n".join([*rows, json.dumps(tier)]) + "\n", encoding="utf-8")
     assert held() == [], "a later tier run that left nothing missing clears them"
     record.write_text(rows[0] + "\n", encoding="utf-8")
@@ -242,3 +250,39 @@ def test_the_tiers_line_names_its_gates_in_the_order_given(work: Path) -> None:
     assert parallel.main(argv) == 0
     [tier] = [each for each in lines(record) if each.get("kind") == runrecord.TIER]
     assert tier["gates"] == [slow, PASS], "the gate that finished first is not first"
+
+
+def test_a_cache_line_of_prose_spans_alone_yields_no_runner_line_and_no_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    prose = f"## Speed\n\n- Cache: {CACHE_PROSE}\n- Shards: 1\n"
+    root = repos.repository(tmp_path, {str(gatelib.BINDING): prose})
+    record = root / ".ratchet/timing.jsonl"
+    argv = ["parallel", "--report", str(record), "--root", str(root), "--", PASS]
+    assert parallel.main(argv) == 0
+    assert "Local caches" not in capsys.readouterr().out
+    assert [each.get("kind") for each in lines(record)] == [None, runrecord.TIER]
+    assert list(conformance.check_local_caches(root)) == []
+    assert list(conformance.check_cache_written(root)) == []
+
+
+def test_a_placeholder_local_caches_bullet_names_nothing_and_is_no_finding(tmp_path: Path) -> None:
+    text = "## Speed\n\n- Local caches: <the paths, each as a code span>\n"
+    root = repos.repository(tmp_path, {str(gatelib.BINDING): text})
+    assert runrecord.missing_cache(root) == []
+    assert list(conformance.check_local_caches(root)) == []
+
+
+def test_a_malformed_local_caches_bullet_is_a_finding(tmp_path: Path) -> None:
+    for value in ("`a b`, `deps.lock`", "the caches the tools keep"):
+        text = f"## Speed\n\n- Local caches: {value}\n"
+        root = repos.repository(tmp_path / str(len(value)), {str(gatelib.BINDING): text})
+        [found] = conformance.check_local_caches(root)
+        assert found.problem == (
+            "the Local caches bullet of the Speed section is not a list of paths, each as a code"
+            " span with no space in it"
+        )
+    ok = "## Speed\n\n- Local caches: `deps.lock`, `.cache/checker`\n"
+    root = repos.repository(tmp_path / "ok", {str(gatelib.BINDING): ok})
+    assert list(conformance.check_local_caches(root)) == []
+    assert list(conformance.check_local_caches(tmp_path / "ok" / "docs")) == []

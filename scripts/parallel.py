@@ -59,9 +59,9 @@ Usage::
   one gate runs alone, as CI does. The slowest gate is named in the closing lines either way.
   When the run ends, one more line (``kind`` ``tier``) holds the wall time of the whole run and the
   gate names in the order given.
-* After the closing lines, each path the binding's Cache line names (its code spans) that does
-  not exist is said in one line, and with ``--report`` has a line of its own (``kind``
-  ``cache-missing``, ``path``) after the tier's.
+* After the closing lines, each path the binding's ``Local caches`` bullet of ``## Speed`` names
+  (its code spans) that does not exist is said in one line, and with ``--report`` has a line of
+  its own (``kind`` ``cache-missing``, ``path``) after the tier's.
 * SIGINT, SIGTERM and SIGHUP stop every running gate's whole process group (each gate runs in a
   session of its own), then exit 128 plus the signal. Nothing is left running except what a gate
   detached from its own group; SIGKILL cannot be caught by anything.
@@ -432,10 +432,13 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
 
 
 def record(scheduler: Scheduler, wall: float, *, exit_code: int, gates: list[str]) -> None:
-    """The tier's whole line, then one line for each Cache path the run left missing."""
+    """The tier's whole line, then one line for each Local caches path the run left missing."""
     missing = runrecord.missing_cache(scheduler.root)
     for path in missing:
-        say(f"parallel: the binding's Cache line names {path}, which does not exist after this run")
+        say(
+            f"parallel: the binding's Local caches bullet names {path}, which does not exist"
+            " after this run"
+        )
     if scheduler.report_to is None:
         return
     stamp = runrecord.stamp(scheduler.root, scheduler.tree)
