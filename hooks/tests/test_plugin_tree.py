@@ -156,9 +156,9 @@ def test_a_copy_with_a_mode_changed_is_red(tmp_path: Path) -> None:
 
 def sibling_world(tmp_path: Path, *, matching: bool) -> tuple[Path, Path, Path, str]:
     folder = tmp_path / "cache/ratchet"
-    good = release_copy(folder / "0.12.2")
+    good = release_copy(folder / "earlier")
     pinned = raw_tree_id(good, tmp_path)
-    recorded = release_copy(folder / "0.12.3")
+    recorded = release_copy(folder / "later")
     repos.write(recorded, "scripts/extra.py", "print('extra')\n")
     if not matching:
         repos.write(good, "scripts/extra.py", "print('another')\n")
@@ -280,9 +280,9 @@ child: _plugin
 def test_a_child_just_runs_the_folder_its_parent_checked_whatever_the_record_says_later(
     tmp_path: Path,
 ) -> None:
-    good = release_copy(tmp_path / "cache/0.12.2")
+    good = release_copy(tmp_path / "cache/earlier")
     pinned = raw_tree_id(good, tmp_path)
-    other = release_copy(tmp_path / "cache/0.12.3")
+    other = release_copy(tmp_path / "cache/later")
     repos.write(other, "scripts/extra.py", "print('extra')\n")
     root = project(tmp_path / "repo", good, pinned, record=good, extra=CHILD)
     done = just(root, "probe", env={"OTHER": str(other)})
