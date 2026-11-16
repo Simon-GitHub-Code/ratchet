@@ -32,6 +32,10 @@ BITE_PLACEHOLDER = (
     '    @echo "bind: run every project fitness test and gate tool against its synthetic'
     ' violation"; exit 1\n'
 )
+SECONDS_COMMENT = (
+    "# [ceilings.seconds]\n# tier0 = 60\n# tier1 = 600\n# tier2 = 3600\n# bite-all = 3600\n"
+)
+SECONDS_WITHOUT_BITE_ALL = "[ceilings.seconds]\ntier1 = 600\ntier2 = 3600\n"
 PROJECT_BITE = "    ./scripts/project-bites --all\n"
 
 
@@ -63,6 +67,9 @@ def fill(files: dict[str, str], commit: str) -> dict[str, str]:
         TOOLCHAIN, PROJECT_STEP
     )
     filled["justfile"] = filled["justfile"].replace(BITE_PLACEHOLDER, PROJECT_BITE)
+    filled["quality/thresholds.toml"] = filled["quality/thresholds.toml"].replace(
+        SECONDS_COMMENT, SECONDS_WITHOUT_BITE_ALL
+    )
     filled["GLOSSARY.md"] = filled["GLOSSARY.md"].replace("<project>", "the project")
     filled["AGENTS.md"] = filled["AGENTS.md"].replace("# <project>", "# The project")
     filled["guards/manifest.toml"] = UNBOUND_GROUP.sub(

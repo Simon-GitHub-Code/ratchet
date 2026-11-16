@@ -263,7 +263,7 @@ Tell the owner this before step 1. It is not a question.
 
     The rehearsal may reuse that compiler cache and nothing else; it still cannot supply a missing config or tool. Remove each worktree when its round ends.
 
-    Run `check-deep` once. Its last gate is the proof: the `bite-all` entry point plants each fault of `quality/bites.toml` in a scratch copy and is green only when each gate was green without its fault and red with it. Then run `just budget bite-all --set`, which records the `bite-all` ceiling of its own in `[ceilings.seconds]`; the tier 1 ceilings never hold it.
+    Run `check-deep` once. Its last gate is the proof: the `bite-all` entry point plants each fault of `quality/bites.toml` in a scratch copy and is green only when each gate was green without its fault and red with it. Then run `just budget bite-all --set`, which records the `bite-all` ceiling of its own in `[ceilings.seconds]`; the tier 1 ceiling never holds it. Until it is recorded, the pull request's proof is held to tier 1's ceiling and the full proof to tier 2's.
 
     Done when `check` is green in a fresh worktree of the commit, `conformance` and `check-deep` exit 0, no rehearsal worktree is left, and the rehearsal passed, or its second round ended with the edits it still needs named.
 
