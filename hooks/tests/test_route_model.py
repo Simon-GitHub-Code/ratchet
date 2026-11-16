@@ -12,6 +12,7 @@ exporter is held to a stable output, and the charts to the export.
 import itertools
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -62,7 +63,7 @@ from tests.test_drain import approval
 HOOKS_DIRECTORY = Path(__file__).resolve().parents[1]
 CHARTS = PLUGIN_ROOT / "docs/model/route.md"
 HOOKS_EVERY = 7  # the steps between the times a run takes the commit hooks away
-SWEEP_CHUNKS = 32
+SWEEP_CHUNKS = 48
 
 # Why no shrinking: every step runs real git, and the message names the whole path to the first
 # disagreement, so a red run ends in seconds, not in the minutes Hypothesis spends shrinking.
@@ -702,16 +703,67 @@ def costs() -> list[int]:
     return [sum(map(cost, leaving()[state])) for state in spanning().order]
 
 
+def cut(share: float) -> list[range]:
+    """The walk's places cut so that the first ``n`` chunks cost about ``n * share`` together.
+
+    A chunk ends before a state when more than half of that state's cost would fall past the mark.
+    A chunk's cost counts the steps it takes again to reach a state whose parent is in another
+    chunk, as ``sweep`` takes them, each at the cost of the step and its read.
+    """
+    tree = spanning()
+    bounds, done, within, reached = [0], 0, set(), {World()}
+
+    def unreached(state: World) -> list[World]:
+        path = []
+        while state not in reached:
+            path.append(state)
+            state = tree.parent[state].source
+        return path
+
+    def again(path: list[World]) -> int:
+        return sum(cost(tree.parent[s]) for s in path if tree.parent[s].source not in within)
+
+    for place, state in enumerate(tree.order):
+        step = again(unreached(state)) + costs()[place]
+        if within and len(bounds) < SWEEP_CHUNKS and done + step / 2 > share * len(bounds):
+            bounds.append(place)
+            within.clear()
+            reached.clear()
+            reached.add(World())
+        path = unreached(state)
+        done += again(path) + costs()[place]
+        within.add(state)
+        reached.update(path)
+    bounds.append(len(tree.order))
+    return [range(start, stop) for start, stop in itertools.pairwise(bounds)]
+
+
+def spend(span: range) -> int:
+    """What ``sweep`` spends on ``span``: its states' steps and the steps that reach them."""
+    tree = spanning()
+
+    def below(world: World) -> int:
+        here = tree.place[world] in span
+        total = costs()[tree.place[world]] if here else 0
+        for child in tree.children[world]:
+            if tree.place[child] < span.stop and tree.place[child] + tree.size[child] > span.start:
+                total += below(child) + (0 if here else cost(tree.parent[child]))
+        return total
+
+    return below(World())
+
+
 @cache
 def spans() -> list[range]:
-    """The walk's places cut into chunks that each cost about the same."""
-    total, bounds, done = sum(costs()), [0], 0
-    for place, spent in enumerate(costs()):
-        done += spent
-        if done * SWEEP_CHUNKS >= total * len(bounds) and len(bounds) < SWEEP_CHUNKS:
-            bounds.append(place + 1)
-    bounds.append(len(costs()))
-    return [range(start, stop) for start, stop in itertools.pairwise(bounds)]
+    """Of the cuts each made with the mean cost of the last one's chunks, the one least dear.
+
+    Why several: the steps a chunk takes again to reach its states depend on where it starts, so
+    the mean moves with the cut, and the last chunk takes up whatever the share was off by.
+    """
+    tried = [cut(sum(costs()) / SWEEP_CHUNKS)]
+    for _ in range(8):
+        tried.append(cut(sum(map(spend, tried[-1])) / SWEEP_CHUNKS))
+    return min(tried, key=lambda chunks: max(map(spend, chunks)))
 
 
 def test_the_chunks_cover_every_state_once() -> None:
@@ -720,9 +772,16 @@ def test_the_chunks_cover_every_state_once() -> None:
 
 
 def test_every_chunk_costs_within_a_tenth_of_the_mean() -> None:
-    spent = [sum(costs()[place] for place in span) for span in spans()]
-    mean = sum(spent) / len(spent)
-    assert all(abs(chunk - mean) <= mean / 10 for chunk in spent), spent
+    each = [spend(span) for span in spans()]
+    mean = sum(each) / len(each)
+    assert all(abs(chunk - mean) <= mean / 10 for chunk in each), each
+
+
+def test_every_shard_takes_as_many_chunks() -> None:
+    text = (PLUGIN_ROOT / "justfile").read_text(encoding="utf-8")
+    shards = re.search(r'^test_shards := "(\d+)"$', text, re.MULTILINE)
+    assert shards, "the justfile names its `test_shards`"
+    assert SWEEP_CHUNKS % int(shards[1]) == 0, f"{SWEEP_CHUNKS} chunks over {shards[1]} shards"
 
 
 @pytest.fixture
