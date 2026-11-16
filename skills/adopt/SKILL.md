@@ -108,7 +108,7 @@ Tell the owner this before step 1. It is not a question.
 
 5. **Take the tool for every row bound now, and for the tests.** Go through the floor, the owed rows of step 4 and the tests one at a time, each with the tool the architecture round chose for its concept. Any other `later:` row gets no tool until its trigger fires. A row bound now whose concept the round named no tool for gets one chosen by the rules below, which are also the rules the sets you offered at step 3 were chosen by.
 
-   - **The tests are provisioned, not asked.** The first feature writes its tests before any module exists, so every repository gets its test runner now, and a property-testing library where the runner has none, while their row stays `later: code:source`. Step 7 names them in the binding's Tests section and step 9 sets `test_runner` in the `justfile`. `/ratchet:safeguard` later binds the row to them and installs nothing.
+   - **The tests are provisioned, not asked.** The first feature writes its tests before any module exists, so every repository gets its test runner now, and a property-testing library where the runner has none, while their row stays `later: code:source`. Step 7 names them in the binding's Tests section, with one row of its suites table for each suite and the recipe that runs given files of it (`none: <reason>` where it cannot), and step 9 sets `test_runner` in the `justfile`. `/ratchet:safeguard` later binds the row to them and installs nothing.
    - **What is there wins**, unless you give the reason to replace it.
    - **Look it up, now.** What you remember of a tool is a conjecture. Check its current documentation (Context7 or a web search) that it exists, is maintained and answers the row, and say which rows you could not check. Versions come from the registry through the package manager's add command, never from memory, and never from this plugin.
    - **Prefer** one tool for several rows; a tool the package manager locks; a tool that fails when it finds nothing to run; a tool that uses every core and can run one shard of several.
@@ -173,7 +173,7 @@ Tell the owner this before step 1. It is not a question.
    - a `later:` row with `@echo "later: <trigger>"`, the same words as its Tool cell;
    - a row bound `none` with `@echo "none: <reason>"`.
 
-   The two `@echo` bodies exit 0. Set `test_runner` to the command that runs the test files named after it. The test runner's configuration includes the test directories and the Critique tests directory.
+   The two `@echo` bodies exit 0. Set `test_runner` to the command that runs the test files named after it, and make the recipe of every suite the suites table lists take files the same way. The test runner's configuration includes the test directories and the Critique tests directory.
 
    **Test paths.** Fill the binding's `## Test paths` section from what you know of this stack: the globs of every file that is a test, a fixture or test support, the Critique tests directory included, so the change-size gate counts product code against the product ceiling and tests against their own. The gate counts every line as product while the section is unfilled.
 
@@ -235,6 +235,7 @@ Tell the owner this before step 1. It is not a question.
     - Write the plugin's version (from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`) and its commit (`git -C "${CLAUDE_PLUGIN_ROOT}" rev-parse HEAD` when that is a checkout, else the latest commit of `Simon-GitHub-Code/ratchet` that changed that file) and the tree id of that commit (`<commit>^{tree}`; for a copy with no history, the id the template justfile computes) into the binding's `- Ratchet plugin: <version> at <commit> tree <tree id>` line.
     - Write the same commit into every `ref: "<ratchet-sha>"` of `ci.yml`, `deep.yml`, `weekly.yml` and `merge.yml`, so CI and every local tier run the plugin's gates at one version, which `just plugin-pin` and the conformance gate hold.
     - Add the toolchain setup, pinned by commit SHA with the version in a trailing comment, so `just pins` stays green.
+    - Where a suite's gate sits in a later tier, set up what that suite needs in the `tier1` job of `ci.yml`, under `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole suite, then delete the bind line there. Delete it as well where no suite sits in a later tier.
     - Set the nightly hour in `deep.yml`.
 
     Done when the brief is dated and holds the owner's words, the ADRs and glossary entries are written and the glossary names the project, with user-interface surfaces `DESIGN.md` exists, with none there is no `DESIGN.md` and slice one says the first surface is built with `impeccable shape` and that an agent runs `impeccable document` once it merges, the binding names the plugin's version and commit, and the workflows name no placeholder.

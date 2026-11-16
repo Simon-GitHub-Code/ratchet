@@ -105,6 +105,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | coverage, absolute and ratcheted | `ratchet` plugin `scripts/coverage_groups.py` over the suite's Cobertura or LCOV report | 1 | 100% for absolute paths; `quality/thresholds.toml` for the rest | `just coverage` |
 | diff coverage | | 1 | every changed line and branch | `just diff-coverage` |
 | test count did not fall | | 1 | the merge base's count | `just test-counts` |
+| changed tests run | the suites' own runners, through `ratchet` plugin `scripts/changed_tests.py` | 1 | the suites table of the Tests section | `just tests-changed` |
 | changed-code mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 1 | `quality/mutation-register.toml` | `just mutation-changed` |
 | contract drift | | 1 | | `just contracts-check` |
 | shipped-dependency audit | | 1 | any advisory fails | `just audit` |
@@ -136,7 +137,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | architecture reviewed when its shape changes | `ratchet` plugin `scripts/triggers.py` | 1 | the Triggers section below and `docs/adr/`, as the merge base holds them | `just triggers` |
 | full mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 2 | `quality/mutation-register.toml` | `just mutation` |
 | deep interface conformance | | 2 | | `just api-deep` |
-| symbolic checking | | 2 | | `just symbolic` |
+| symbolic checking | | 2 | the recipe's `each` (seconds a target) and `cap` (seconds in total) | `just symbolic` |
 | fuzzing | | 2 | the recipe's `each` (seconds a target) and `cap` (seconds in total) | `just fuzz` |
 | end to end | | 2 | | `just e2e` |
 | suite order-independent and repeatable | | 2 | | `just test-stability` |
@@ -235,6 +236,14 @@ Every Gates row whose question a directive can silence (the catalogue marks them
 
 <The test frameworks and directories every role writes tests with, chosen and installed at adoption so the first feature has nothing to install: the test runner and its configuration file; the property-testing library, or `built in` where the runner has one; where unit and property tests live and how their files are named. The `unit, property and fitness tests` row stays `later: code:source` until the first module of logic arrives: no gate runs these tests until then, each role runs its own with `just test-files <file>...`, and `/ratchet:safeguard` binds the row to what this section names.>
 
+### Suites
+
+One row per suite (ADR 0073): its name, the gate of the Gates table that runs it whole, the globs of its test files, and how to run given files of it. `just tests-changed` runs the test files a change adds or edits in each suite whose gate sits in a later tier, or in every suite where none does, and `just tests-changed all` runs them in every suite, for the inner loop. `Run files` is the entry point of the suite taking paths as arguments, in the environment and with the build the gate itself has (`just <recipe>`), or `none: <reason>` for a suite that cannot run by file. A test file belongs to one suite: a file that two rows match is a conformance finding. A project with no tests yet writes one row, `none: <reason>`, in `Suite`.
+
+| Suite | Gate | Files | Run files |
+| --- | --- | --- | --- |
+| <suite name> | <`just <gate>`, the entry point that runs the whole suite> | <`globs` of its test files> | <`just <recipe>` taking the files as arguments, or `none: <reason>`> |
+
 ## Test paths
 
 What the change-size gate reads to count tests apart from product code (ADR 0045): the ceiling on product lines and files bounds the unguarded code a change brings, and test lines have a ceiling of their own that only stops a runaway. The method knows no stack, so name the files of this one, from what you know of its tools. The gate reads this section at the merge base, so a change cannot widen what it exempts; until it is filled every changed line counts as product.
@@ -265,8 +274,16 @@ How this repository stays fast, from the first commit (the Speed section of `ski
 - One pipeline: <CI calls the entry points above and nothing else, so a red job is reproduced by its one command; or the pipeline engine that runs the same definition in both places>
 - Shards: 1
 - Cache: <the lockfiles and tool configs each CI cache is keyed on, the tool caches it restores, and the caches the tools keep locally>
-- Affected only: <what a pull request does not run: the changed-code gates, the path filters, the affected-only tool of a monorepo; the default branch runs everything>
+- Affected only: <what a pull request does not run: the changed-code gates, the later-tier suites past the test files the change adds or edits (`tests-changed` runs those), the path filters, the affected-only tool of a monorepo; the default branch runs everything>
 - Ceilings: <`quality/thresholds.toml` `[ceilings.seconds]`, one per tier, set by `just budget <tier> --set` from the first green run and only lowered since; the seconds one gate may take before it is sharded>
+
+## Shared reports
+
+A report that more than one gate reads is produced once for each run (ADR 0071). One row per report: the recipe that produces it, the paths it writes, the recipes that read it, and the reader that judges a failed run. When the run that produced the report failed, every reader is red, and each reader but the judge says in one line that the judge's gate names the failure. A reader never opens a path itself: it runs `scripts/report.py <report>` of the `ratchet` plugin, which prints the paths. Take out of Readers any gate this stack's tools cannot answer from the files the producer writes, and bind that gate to run its own command: conformance holds every reader to `report.py`, so a reader is only a gate that can be one. The judge stays a reader. A report left with fewer than two readers is not shared, and its Report cell says `none: <reason>`. With no report shared, the Report cell says `none: <reason>`.
+
+| Report | Producer | Paths | Readers | Judged by |
+| --- | --- | --- | --- | --- |
+| `suite` | `just suite-report` | <`path` of the coverage report, Cobertura or LCOV>, <`path` of the test results, JUnit XML> | `just test`, `just coverage`, `just diff-coverage`, `just test-counts` | `just test` |
 
 ## Weekly and advisory
 

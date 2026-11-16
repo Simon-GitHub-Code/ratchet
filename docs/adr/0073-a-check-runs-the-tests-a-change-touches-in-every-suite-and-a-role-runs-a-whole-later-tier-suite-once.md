@@ -37,7 +37,7 @@ Any answer must keep three things:
 
 **6. The suites table is the gate's own declaration.** For the proof of ADR 0069, a change to a row of the table names `tests-changed` and no other gate, as a row of the Gates table names its own.
 
-**7. Conformance holds the shape.** Red where `## Tests` has no suites table, a row names a gate the Entry points table does not hold, or a row has neither a way to run files nor a reason. Red where the Gates table has no `tests-changed` row. An upgraded project meets these as owed findings, and the fault that proves the new gate is the project's to register, as for every bound gate.
+**7. Conformance holds the shape.** Red where `## Tests` has no suites table, a row names a gate the Gates table does not hold, or a row has neither a way to run files nor a reason. Red where the Gates table has no `tests-changed` row. An upgraded project meets these as owed findings, and the fault that proves the new gate is the project's to register, as for every bound gate.
 
 ## Refutation criterion
 

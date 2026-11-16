@@ -19,6 +19,7 @@ import markdown_text
 import owed
 import plugin_pin
 import project_bite
+import suites
 import triggers
 import upgrade
 from tests import adopted
@@ -124,7 +125,7 @@ def test_a_binding_without_a_tests_section_gains_the_templates_beside_its_neighb
 ) -> None:
     replace(BINDING, "\n## Tests\n", "\n## Trials\n")(repo)
     assert any("has no '## Tests' section" in f.problem for f in conformance.findings(repo))
-    assert settle(repo) == []
+    assert [f.problem for f in settle(repo)] == [suites.PLACEHOLDER]
     after = text(repo, BINDING)
     assert markdown_text.has_section(after, "## Tests")
     assert after.index("## Absolute paths") < after.index("## Tests") < after.index("## Trials")
@@ -231,6 +232,39 @@ def test_a_later_row_of_a_kind_the_table_lacks_is_named_as_not_running(repo: Pat
     cells[2] = " later: code:flag "
     replace(BINDING, row, "|".join(cells))(repo)
     assert conformance.not_running(repo, []) == ["changed flags off and on"]
+
+
+def gate_row(root: Path, question: str) -> str:
+    lines = text(root, BINDING).splitlines()
+    return next(
+        line for line in lines if line.startswith("|") and line.split("|")[1].strip() == question
+    )
+
+
+@pytest.mark.parametrize("layout", ["padded", "as written"])
+def test_a_row_waiting_on_a_trigger_its_question_lost_waits_on_the_new_one(
+    repo: Path, layout: str
+) -> None:
+    padded = layout == "padded"
+    row = gate_row(repo, "symbolic checking")
+    cells = row.split("|")
+    cells[2] = " later: code:formal-model "
+    replace(BINDING, row, "|".join(cells))(repo)
+    if padded:
+        formatted = markdown_text.padded(text(repo, BINDING), "## Gates")
+        (repo / BINDING).write_text(formatted, encoding="utf-8")
+    before = {line for line in text(repo, BINDING).splitlines() if "symbolic" not in line}
+    left = settle(repo)
+    after = gate_row(repo, "symbolic checking")
+    assert after.split("|")[2].strip() == "later: code:untrusted-input"
+    assert not [f for f in left if "symbolic checking" in f.problem], left
+    written = markdown_text.table(text(repo, BINDING), "## Gates")
+    assert written is not None
+    assert written.padded == padded
+    if not padded:
+        assert {line for line in text(repo, BINDING).splitlines() if "symbolic" not in line} == (
+            before
+        )
 
 
 def test_an_operability_row_of_the_plugin_s_own_gate_is_bound_and_another_is_an_agent_s(

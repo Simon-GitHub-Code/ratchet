@@ -438,3 +438,9 @@ def test_pipe_lines_that_are_not_a_table_are_left_as_they_are() -> None:
     )
     loose = "| just a line |\nplain\n"
     assert markdown_text.padded_tables(loose) == loose
+
+
+def test_a_cell_of_a_row_the_table_does_not_hold_is_left_as_it_was() -> None:
+    text = "## Gates\n\n| Question | Tool |\n| --- | --- |\n| lint | `just lint` |\n"
+    assert markdown_text.with_cell("## Gates", "fuzz", column=1, value="later: x")(text) == text
+    assert markdown_text.with_cell("## Other", "lint", column=1, value="later: x")(text) == text
