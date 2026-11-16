@@ -626,6 +626,15 @@ def test_a_released_jobs_line_is_named_and_the_upgrade_makes_it_the_templates(re
     assert made.count("How many gates run at once") == template.count("How many gates run at once")
 
 
+def test_the_jobs_edit_leaves_a_justfile_that_already_has_the_templates_lines(repo: Path) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    with_jobs_line(repo, RELEASED_JOBS)
+    [found] = jobs_findings(repo)
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.fix.want(text) == text
+
+
 def test_a_projects_own_jobs_line_is_named_and_not_rewritten(repo: Path) -> None:
     mine = 'jobs := env_var_or_default("RATCHET_JOBS", "2")'
     path = with_jobs_line(repo, mine)
