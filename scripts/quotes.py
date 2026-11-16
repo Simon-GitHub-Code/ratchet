@@ -26,12 +26,29 @@ name that is not one of these is not a record of the ADR's list and nothing in i
 record whose file is absent, or whose directory holds no text file, holds no quote.
 
 How a quote matches: the quote and each file of the record are cut into words, a word being a run
-of characters other than white space, and rejoined with one space. A quote is found when its text
-is then a stretch of a file's text. Everything but white space is compared as written: case,
-punctuation, markup and hyphenation, so a quote with ``ADR`` does not match ``adr`` and one that
-drops a backtick does not match. Only white space is read loosely: any run of spaces, tabs and
-line breaks equals any other run, so a quote may join a line the record wrapped. A quote with no
-word is never found. A quote does not span two files.
+of characters other than white space. Words are compared whole and as written: case, punctuation,
+markup and hyphenation, so ``ADR`` does not match ``adr`` and a quote that drops a backtick does
+not match. Only white space is read loosely: any run of spaces, tabs and line breaks equals any
+other run, so a quote may join the lines of a wrapped block. A quote is found in a file when its
+words equal one of these, and nothing shorter:
+
+- a block of a markdown file: a heading, with its ``#`` marker set aside; a list item with its
+  continuation lines joined, its marker and checkbox set aside; or a paragraph, all its lines
+  joined. A paragraph is the lines up to a blank line, a heading, a list item's start or a table
+  row. A ``>`` that starts a line is set aside. A line inside a wrapped block is not a block;
+- a table cell of a markdown file: a line that starts with ``|`` is split on each ``|`` not
+  escaped by a backslash, and each cell is a unit;
+- a line of a file that is not markdown (a ``.toml`` file has no paragraphs);
+- whole words inside one paragraph or list item, from a sentence start to a sentence end. A
+  sentence starts at the paragraph's first word, or at the word after one that ends in ``.``,
+  ``!`` or ``?``, with an optional closing quote or bracket after it. A sentence ends at the
+  paragraph's last word, or at a word that ends so. An abbreviation such as ``e.g.`` only adds a
+  place a quote may start or end.
+
+A quote with no letter or digit is never found, so no rule, table separator or marker is a quote.
+A quote does not span two files. It cannot tell that the quoted sentence is the one the finding
+breaks: that judgement is the review's and the owner's, with the quote in front of them on the
+pull request.
 
 Prints JSON: ``found``, the checked findings whose quote the record holds, and ``not_found``, the
 others with a ``reason``. Each entry names the finding by its ``index`` in the list and its
@@ -50,7 +67,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 import gatelib
 
@@ -67,9 +84,23 @@ FIXED = {
 ADR_FILES = "docs/adr/"
 SPEC_PATH = re.compile(r"docs/features/[^/]+/spec\.md")
 BLOCKING = frozenset({"blocker", "major"})
-WORDS = re.compile(r"\S+")
+QUOTER = re.compile(r"^(?:>\s*)+")
+HEADING = re.compile(r"^#{1,6}(?:\s+|$)")
+LIST_ITEM = re.compile(r"^(?:[-*+]|\d+[.)])(?:\s+|$)")
+CHECKBOX = re.compile(r"^\[[ xX]\]\s+")
+CELL_BREAK = re.compile(r"(?<!\\)\|")
+SENTENCE_END = re.compile(r"""[.!?]["'\u2019\u201d)\]]*$""")
+NOT_MARKDOWN = ".toml"
 
-Records = dict[str, list[str] | None]
+
+class Document(NamedTuple):
+    """A file of a record: its text, and whether it is markdown."""
+
+    text: str
+    markdown: bool
+
+
+Records = dict[str, list[Document] | None]
 
 
 class Entry(TypedDict):
@@ -98,25 +129,78 @@ class UnreadableError(ValueError):
     """The findings, or a given record, cannot be read."""
 
 
-def words(text: str) -> str:
-    return " ".join(WORDS.findall(text))
+def blocks(document: Document) -> tuple[list[list[str]], list[list[str]]]:
+    """The whole units of a document, and its paragraphs, each as its words.
+
+    A markdown document's units are its headings, its list items and paragraphs with their
+    lines joined, and its table cells. Its paragraphs are the list items and paragraphs. A
+    document that is not markdown has each line as a unit and no paragraphs.
+    """
+    if not document.markdown:
+        lines = (line.split() for line in document.text.splitlines())
+        return [words for words in lines if words], []
+    units: list[list[str]] = []
+    paragraphs: list[list[str]] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        if current:
+            units.append(current.copy())
+            paragraphs.append(current.copy())
+            current.clear()
+
+    for line in document.text.splitlines():
+        text = QUOTER.sub("", line.strip()).strip()
+        item = LIST_ITEM.match(text)
+        heading = HEADING.match(text)
+        if not text or text.startswith("|") or heading or item:
+            flush()
+        if text.startswith("|"):
+            units.extend(words for cell in CELL_BREAK.split(text) if (words := cell.split()))
+        elif heading:
+            units.extend(rest for rest in [text[heading.end() :].split()] if rest)
+        elif item:
+            current.extend(CHECKBOX.sub("", text[item.end() :]).split())
+        else:
+            current.extend(text.split())
+    flush()
+    return units, paragraphs
 
 
-def holds(text: str, quote: str) -> bool:
-    """Whether ``text`` holds ``quote`` word for word, white space aside."""
-    wanted = words(quote)
-    return bool(wanted) and wanted in words(text)
+def sentence(paragraph: list[str], wanted: list[str]) -> bool:
+    """Whether ``wanted`` is whole words of ``paragraph``, from a sentence start to an end."""
+    size = len(wanted)
+    return any(
+        paragraph[start : start + size] == wanted
+        and (start == 0 or SENTENCE_END.search(paragraph[start - 1]) is not None)
+        and (start + size == len(paragraph) or SENTENCE_END.search(wanted[-1]) is not None)
+        for start in range(len(paragraph) - size + 1)
+    )
 
 
-def files_of(root: Path, relative: str) -> list[str] | None:
-    """The text of the file at ``relative``, or of each text file under it; ``None`` when absent."""
+def holds(document: Document, quote: str) -> bool:
+    """Whether ``document`` holds ``quote`` as a whole unit or whole sentences of a paragraph."""
+    wanted = quote.split()
+    if not any(character.isalnum() for character in quote):
+        return False
+    units, paragraphs = blocks(document)
+    return wanted in units or any(sentence(paragraph, wanted) for paragraph in paragraphs)
+
+
+def document_of(path: Path) -> Document | None:
+    text = gatelib.read_text(path)
+    return None if text is None else Document(text, path.suffix != NOT_MARKDOWN)
+
+
+def files_of(root: Path, relative: str) -> list[Document] | None:
+    """The documents of the file at ``relative``, or under it; ``None`` when it is absent."""
     path = root / relative
     if path.is_dir():
-        texts = (gatelib.read_text(entry) for entry in sorted(path.rglob("*")) if entry.is_file())
-        return [text for text in texts if text is not None]
-    text = gatelib.read_text(path)
-    if text is not None:
-        return [text]
+        entries = (document_of(entry) for entry in sorted(path.rglob("*")) if entry.is_file())
+        return [entry for entry in entries if entry is not None]
+    document = document_of(path)
+    if document is not None:
+        return [document]
     return [] if path.is_file() else None
 
 
@@ -128,7 +212,7 @@ def place_of(name: str) -> str | None:
     return name if inside or SPEC_PATH.fullmatch(name) else None
 
 
-def texts_of(name: str, root: Path, given: Records) -> list[str] | str | None:
+def texts_of(name: str, root: Path, given: Records) -> list[Document] | str | None:
     """The texts of the record ``name``; ``None`` when absent; a reason when it is no record."""
     if name in given:
         return given[name]
@@ -166,7 +250,7 @@ def reason_missed(
         return texts
     if texts is None:
         return f"the record `{entry['record']}` is absent"
-    if not any(holds(text, entry["quote"]) for text in texts):
+    if not any(holds(document, entry["quote"]) for document in texts):
         return f"the record `{entry['record']}` does not hold the quote"
     return None
 

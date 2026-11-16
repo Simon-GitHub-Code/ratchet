@@ -61,9 +61,126 @@ def test_only_white_space_is_read_loosely(tmp_path: Path) -> None:
         assert quotes.check([finding("AGENTS.md", changed)], tmp_path)["found"] == []
 
 
-def test_a_quote_may_stop_inside_a_word(tmp_path: Path) -> None:
-    put(tmp_path, "AGENTS.md", "A blocker or a major quotes what it breaks.\n")
-    assert quotes.check([finding("AGENTS.md", "quotes what it break")], tmp_path)["found"]
+AGENTS = """# Rules and the handler
+
+The handler must stop. A page that fails is a blocker. The page, e.g. a file, is a unit.
+Fatal errors end the run; the run never resumes! Is that clear?
+
+- Every page passes the automated accessibility checks
+  at the agreed level.
+- [ ] The tool lists every file.
+> A quoted line stays whole.
+
+| Name | Meaning |
+| :---: | :--- |
+| --- | --- |
+| the cell | a \\| b |
+
+---
+
+***
+
+A sentence
+wrapped over two lines.
+"""
+
+
+def found(root: Path, quote: str, record: str = "AGENTS.md") -> bool:
+    return bool(quotes.check([finding(record, quote)], root)["found"])
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "the",
+        "andler",
+        "a",
+        "#",
+        "---",
+        ":---",
+        "***",
+        "| --- |",
+        ":---:",
+        "Fatal errors end the run; the",
+        "e.g. a file, is a unit.",
+        "The handler must stop. A page that fails",
+        "A page that fails is a",
+        "page that fails is a blocker.",
+        "that fails is a blocker.",
+        "at the agreed level.",
+        "Every page passes the automated accessibility checks",
+        "Rules and the",
+        "the run never resumes! Is that",
+        "The tool",
+        "wrapped over two lines",
+        "A sentence wrapped",
+    ],
+)
+def test_a_quote_that_is_not_a_whole_unit_is_not_found(tmp_path: Path, quote: str) -> None:
+    put(tmp_path, "AGENTS.md", AGENTS)
+    assert not found(tmp_path, quote)
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "The handler must stop.",
+        "The handler must stop. A page that fails is a blocker.",
+        "A page that fails is a blocker.",
+        "The page, e.g. a file, is a unit.",
+        "A page that fails is a blocker. The page, e.g. a file, is a unit.",
+        "Fatal errors end the run; the run never resumes!",
+        "Is that clear?",
+        "Rules and the handler",
+        "Every page passes the automated accessibility checks at the agreed level.",
+        "Every page passes the automated accessibility checks\nat the agreed level.",
+        "The tool lists every file.",
+        "A quoted line stays whole.",
+        "the cell",
+        "a \\| b",
+        "Name",
+        "A sentence wrapped over two lines.",
+        "A sentence\nwrapped over two lines.",
+        (
+            "A page that fails is a blocker. The page, e.g. a file, is a unit.\nFatal errors end"
+            " the run; the run never resumes! Is that clear?"
+        ),
+    ],
+)
+def test_a_whole_unit_of_the_record_is_found(tmp_path: Path, quote: str) -> None:
+    put(tmp_path, "AGENTS.md", AGENTS)
+    assert found(tmp_path, quote)
+
+
+def test_a_sentence_after_an_abbreviation_inside_one_sentence_is_found(tmp_path: Path) -> None:
+    put(tmp_path, "AGENTS.md", "Use tools, e.g. a linter. It runs.\n")
+    assert found(tmp_path, "a linter.")
+    assert found(tmp_path, "Use tools, e.g. a linter.")
+    assert found(tmp_path, "Use tools, e.g. a linter. It runs.")
+
+
+def test_a_closing_quote_or_bracket_after_the_full_stop_still_ends_the_sentence(
+    tmp_path: Path,
+) -> None:
+    put(tmp_path, "AGENTS.md", 'He said "stop." Then (it ended.) Then ended.\n')
+    assert found(tmp_path, 'He said "stop."')
+    assert found(tmp_path, "Then (it ended.)")
+    assert found(tmp_path, "Then ended.")
+
+
+def test_the_manifest_is_read_by_line_and_a_one_word_path_line_is_found(tmp_path: Path) -> None:
+    put(tmp_path, "guards/manifest.toml", 'paths = [\n  "scripts/gate.py",\n]\nname = "gate one"\n')
+    assert found(tmp_path, '"scripts/gate.py",', "guards/manifest.toml")
+    assert found(tmp_path, 'name = "gate one"', "guards/manifest.toml")
+    assert not found(tmp_path, '"gate', "guards/manifest.toml")
+    assert not found(tmp_path, 'paths = [ "scripts/gate.py",', "guards/manifest.toml")
+
+
+def test_a_list_item_that_is_empty_or_a_bare_heading_marker_holds_nothing(tmp_path: Path) -> None:
+    put(tmp_path, "AGENTS.md", "#\n\n- \n-\nText.\n")
+    assert not found(tmp_path, "#")
+    assert not found(tmp_path, "-")
+    assert found(tmp_path, "Text.")
 
 
 def test_a_quote_with_no_word_is_never_found(tmp_path: Path) -> None:
@@ -150,7 +267,10 @@ def test_a_name_that_is_not_on_the_adrs_list_is_no_record(tmp_path: Path) -> Non
 
 def test_a_record_given_by_text_replaces_its_place(tmp_path: Path) -> None:
     put(tmp_path, "AGENTS.md", "the file says one thing\n")
-    given: quotes.Records = {"ticket": ["the ticket says so"], "AGENTS.md": ["given says another"]}
+    given: quotes.Records = {
+        "ticket": [quotes.Document("the ticket says so", markdown=True)],
+        "AGENTS.md": [quotes.Document("given says another", markdown=True)],
+    }
     findings = [
         finding("ticket", "the ticket says so"),
         finding("AGENTS.md", "given says another"),
