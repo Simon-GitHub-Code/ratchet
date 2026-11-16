@@ -167,17 +167,19 @@ tier2_sharded := "mutation e2e test-stability"
 # Gates that cannot share a working tree at the same time, one variable per tier. Declare a group as
 # `--serial A B`, repeated for more groups, each name a gate of that tier. The runner cannot see what
 # a command touches, and a template cannot know this stack's tools, so the template declares one
-# group only: the tier 1 gates that run the whole suite, since each such run takes every core and
-# two side by side starve the tests inside them until they time out. Declare one for:
+# group only: the coverage gate and the changed-code mutation gate, which each run the whole suite
+# on every core and were seen to time out side by side. Declare one for:
 #   - two gates that write one file or directory (a coverage data file, a cache, a lock);
 #   - a gate that mutates the tree (a formatter, a generator, a migration) and every gate that
 #     reads what it writes;
 #   - two gates that bind one fixed port (better: `{port}` through `with_service.py`);
-#   - two more gates that each take every core.
+#   - two more gates whose tools each start a worker for every core, when a run shows one starving
+#     the other or a timed run is faster with them grouped. A group runs its gates one after
+#     another, so keep its chain shorter than the slowest gate outside it; the runner says when not.
 # Giving each gate an output of its own is better than a group. A gate that is red in parallel
 # and green alone shares state with another.
 serial0 := ""
-serial1 := "--serial coverage test mutation-changed"
+serial1 := "--serial coverage mutation-changed"
 serial2 := ""
 
 # How many gates run at once: every core unless RATCHET_JOBS, else `git config ratchet.jobs`, says
