@@ -981,3 +981,41 @@ def test_the_ci_template_job_that_runs_tests_changed_asks_for_the_later_tier_set
     assert "if: matrix.gate == 'tests-changed'" in job
     assert "deep.yml sets up the whole suite" in job
     assert "tests-changed" not in WORKFLOWS["deep.yml"]
+
+
+def mutation_command(ci: str | None, tmp_path: Path) -> str:
+    just = shutil.which("just")
+    assert just
+    bound = JUSTFILE.replace(
+        "bind: the mutation tool's option that reuses the last run's results", "--mode-on"
+    )
+    path = tmp_path / "justfile"
+    path.write_text(bound, encoding="utf-8")
+    env = {key: value for key, value in os.environ.items() if key != "CI"}
+    if ci is not None:
+        env["CI"] = ci
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
+        [just, "--justfile", str(path), "--dry-run", "mutation-changed"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return " ".join(done.stderr.split())
+
+
+def test_the_mutation_recipe_adds_the_bound_incremental_mode_locally_and_not_in_ci(
+    tmp_path: Path,
+) -> None:
+    needs_just()
+    assert "with --mode-on added to the tool's command" in mutation_command(None, tmp_path)
+    assert "--mode-on" not in mutation_command("true", tmp_path)
+    assert "with added to the tool's command" in mutation_command("true", tmp_path)
+
+
+def test_the_binding_template_has_an_incremental_line_naming_the_justfile_variable() -> None:
+    line = next(item for item in BINDING.splitlines() if item.startswith("- Incremental:"))
+    assert "`mutation_incremental`" in line
+    assert "`none: <reason>`" in line
+    assert "mutation_incremental :=" in JUSTFILE
+    assert "{{mutation_incremental}}" in recipe("mutation-changed")
