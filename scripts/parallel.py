@@ -49,7 +49,9 @@ Usage::
   gates still running, starts no more, and names what it stopped and what never started.
 * ``--serial A B`` declares a group: its gates run one after another, in the order written,
   inside the parallel run, while other gates run beside it. The group takes one job at a time.
-  Repeat the option for more groups. A gate is in at most one group.
+  Repeat the option for more groups. A gate is in at most one group. When a group's gates took
+  longer one after another than the slowest gate outside every group and ``--alone``, the group
+  set the run's wall clock, and one line after the closing summary says so. It is never red.
 * ``--report PATH`` appends one JSON line per finished gate, in the record ``budget.py``
   writes (``key``, ``seconds``, ``ceiling``, ``status``, ``exit``), so one reader serves both.
   The ceiling is null: a parallel run's seconds include contention for the machine, so ceilings
@@ -237,6 +239,8 @@ class Scheduler:
     ) -> None:
         """Queue every unit; nothing runs until ``run``."""
         self.pending = [deque(unit) for unit in units]
+        self.groups = [unit for unit in units if len(unit) > 1]
+        self.measured_alone = frozenset(options.alone)
         self.alone: deque[str] = deque(options.alone)
         self.runner = runner
         self.root: Path = options.root
@@ -365,6 +369,31 @@ def collect(gate: Live, code: int) -> Finished:
     return Finished(gate.name, seconds, 128 - code if code < 0 else code, output, gate.tool)
 
 
+def chains(scheduler: Scheduler) -> list[str]:
+    """One line for each group whose gates, one after another, outlasted every gate beside it."""
+    seconds = {result.name: result.seconds for result in scheduler.finished}
+    grouped = {name for group in scheduler.groups for name in group}
+    beside = [
+        result
+        for result in scheduler.finished
+        if result.name not in grouped and result.name not in scheduler.measured_alone
+    ]
+    if not beside:
+        return []
+    slowest = max(beside, key=lambda result: result.seconds)
+    lines = []
+    for group in scheduler.groups:
+        chain = sum(seconds.get(name, 0.0) for name in group)
+        if chain > slowest.seconds:
+            lines.append(
+                f"parallel: the group {', '.join(group)} took {chain:.1f}s one after another,"
+                f" longer than {slowest.name} at {slowest.seconds:.1f}s, the slowest gate outside"
+                " every group, so the group set this run's wall clock. Time the tier without it,"
+                " and keep it only if the run is slower without it or a gate times out."
+            )
+    return lines
+
+
 def closing(scheduler: Scheduler, wall: float) -> list[str]:
     """What is wrong with the run, after the slowest gate is named."""
     slowest = max(scheduler.finished, key=lambda result: result.seconds)
@@ -381,6 +410,8 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
         f"parallel: {checks} in {wall:.1f}s ({work:.1f}s of check time): {tally}; "
         f"slowest: {slowest.name} {slowest.seconds:.1f}s"
     )
+    for line in chains(scheduler):
+        say(line)
     problems = [
         f"{result.name}: red (exit {result.exit_code})"
         for result in scheduler.finished
