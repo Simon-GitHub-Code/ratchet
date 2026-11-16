@@ -390,9 +390,6 @@ def test_main_never_holds_the_release_commit_file() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="the version PR switches the marketplace entry to the vV tag (step b)"
-)
 def test_the_marketplace_installs_the_tag_of_the_version() -> None:
     version = json.loads((PLUGIN_ROOT / MANIFEST).read_text("utf-8"))["version"]
     entry = next(
@@ -406,4 +403,4 @@ def test_the_marketplace_installs_the_tag_of_the_version() -> None:
         "source": "github",
         "repo": "Simon-GitHub-Code/ratchet",
         "ref": f"v{version}",
-    }, "the version PR switches the marketplace entry to the vV tag and removes this xfail (step b)"
+    }

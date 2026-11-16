@@ -6,7 +6,11 @@
   "plugins": [
     {
       "name": "ratchet",
-      "source": "./",
+      "source": {
+        "source": "github",
+        "repo": "Simon-GitHub-Code/ratchet",
+        "ref": "v0.12.4"
+      },
       "description": "The Ratchet method: tiered deterministic gates with ceilings that only fall, guards, disputes, the four-role pipeline and the merge rule of critical rationalism; runs in Claude Code, Grok, Codex, Antigravity, pi and OpenCode; composes with mattpocock-skills, pstack and impeccable.",
       "dependencies": [
         "mattpocock-skills@mattpocock",
