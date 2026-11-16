@@ -268,6 +268,14 @@ How this repository stays fast, from the first commit (the Speed section of `ski
 - Affected only: <what a pull request does not run: the changed-code gates, the path filters, the affected-only tool of a monorepo; the default branch runs everything>
 - Ceilings: <`quality/thresholds.toml` `[ceilings.seconds]`, one per tier, set by `just budget <tier> --set` from the first green run and only lowered since; the seconds one gate may take before it is sharded>
 
+## Shared reports
+
+A report that more than one gate reads is produced once for each run (ADR 0071). One row per report: the recipe that produces it, the paths it writes and the recipes that read it. The first reader judges a failed run. A reader never opens a path itself: it runs `scripts/report.py <report>` of the `ratchet` plugin, which prints the paths. With no report shared, the Report cell says `none: <reason>`.
+
+| Report | Producer | Paths | Readers |
+| --- | --- | --- | --- |
+| <name> | <`just recipe`> | <`path`, ...> | <`just recipe`, ...> |
+
 ## Weekly and advisory
 
 `just audit-all`, `just licenses`, `just drift`, `just load-soak`, `just restore-drill` and `just prod-probe` run weekly as `just weekly`, from the `weekly` workflow or, with no forge, from the machine's scheduler, and block nothing; a red run opens or updates one issue, and a finding gets its own pull request. `just reports` prints hotspots, coupling, cohesion and complexity. They inform and never gate.

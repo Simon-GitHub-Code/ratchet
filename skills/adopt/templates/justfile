@@ -97,6 +97,7 @@ plugin_py := if plugin_pyc_ok == "" { "python3 -E -s -B -X pycache_prefix=/nonex
 export RATCHET_PLUGIN_DIR := replace_regex(plugin_choice, '(?s)^R.*|^D[0-9a-f]{40} ', '')
 export RATCHET_PLUGIN_REFUSAL := replace_regex(plugin_choice, '(?s)^D.*|^R', '')
 export RATCHET_PLUGIN_CHECKED := replace_regex(plugin_choice, '(?s)^R.*', '')
+export RATCHET_RUN := env("RATCHET_RUN", uuid())
 ratchet_plugin := "$RATCHET_PLUGIN_DIR"
 
 # The deliverable as a running thing, for `start` and the three service gates the plugin ships
