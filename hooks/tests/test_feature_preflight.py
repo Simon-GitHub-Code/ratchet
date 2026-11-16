@@ -345,7 +345,12 @@ def test_on_its_branch_the_report_carries_the_start_the_publish_check_reads(
     assert publish_check.read_start(saved) == report.start
     publish_check.result_path(saved).write_text(
         json.dumps(
-            {"criticFindingsByRound": [], "unresolvedBlockingFindings": [], "reviewIssues": []}
+            {
+                "criticFindingsByRound": [],
+                "unresolvedBlockingFindings": [],
+                "reviewIssues": [],
+                "reviewIssuesByRound": [],
+            }
         ),
         encoding="utf-8",
     )
