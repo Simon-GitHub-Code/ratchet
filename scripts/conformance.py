@@ -930,10 +930,8 @@ def check_binding(root: Path) -> Iterable[Finding]:
     typing = catalogue.types_problem(text)
     fired = Fired.of(root, text) if dropped else Fired({}, frozenset())
     moved = moved_triggers(catalogue, rows)
-    for failure in catalogue.failures(text, rows, adrs):
+    for failure in unfolded(catalogue.failures(text, rows, adrs), dropped, text):
         question = dropped.get(failure)
-        if question == CHANGED_TESTS_STOPS and suites_table_owed(text):
-            continue
         if question is not None:
             trigger = catalogue.trigger_of(question)
             yield dropped_row(failure, question, trigger=trigger, fired=fired)
@@ -1540,6 +1538,12 @@ def check_changed_tests(root: Path) -> Iterable[Finding]:
         yield from suite_findings(text, justfile, suite)
     yield from clashing_suites(root, found or [])
     yield from later_tier_setup(root, text, found or [])
+
+
+def unfolded(failures: Iterable[str], dropped: dict[str, str], binding: str) -> Iterable[str]:
+    """The failures but the Gates row the suites finding already owes with its table."""
+    folded = suites_table_owed(binding)
+    return (f for f in failures if not (folded and dropped.get(f) == CHANGED_TESTS_STOPS))
 
 
 def suites_table_owed(binding: str) -> bool:
