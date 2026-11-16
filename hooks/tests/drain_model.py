@@ -564,6 +564,14 @@ def unchecked(ticket: Ticket) -> bool:
     return live and not (note is not None and note.passed)
 
 
+def commit_refused(ticket: Ticket) -> bool:
+    """Whether a commit in the ticket's queue work tree is refused: one stands on a start unpassed.
+
+    The note of a branch always holds a start, so a start no check passed is ``unchecked``.
+    """
+    return ticket.tree is not Tree.NONE and unchecked(ticket)
+
+
 def checked(ticket: Ticket) -> Ticket:
     """The ticket once a check passed its start: the note carries the mark."""
     note = ticket.note or Note(Outcome.OPENED)

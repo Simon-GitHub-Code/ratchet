@@ -97,6 +97,14 @@ def _hooks_redirected(configs: Sequence[str]) -> bool:
     return any(config.partition("=")[0].lower() == _HOOKS_PATH for config in configs)
 
 
+def _final(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
+    del context
+    branch = guard.repo.awaiting_final(call.cwd)
+    if branch is None:
+        return []
+    return [Verdict("queue-final-check", f"git {call.subcommand} on `{branch}`")]
+
+
 def _commit(call: Invocation, context: Context, guard: Guard) -> list[Verdict]:
     del context
     options = scan(call.args, _COMMIT)
@@ -250,8 +258,8 @@ def _all(*rules: Rule) -> Rule:
 
 
 _SUBCOMMANDS: dict[str, Rule] = {
-    "commit": _commit,
-    "am": _all(_am, merges.cherry_pick),
+    "commit": _all(_commit, _final),
+    "am": _all(_am, _final, merges.cherry_pick),
     "read-tree": merges.read_tree,
     "commit-tree": _commit_tree,
     "push": _push,
@@ -272,7 +280,8 @@ _SUBCOMMANDS: dict[str, Rule] = {
     "fetch": refmoves.fetch,
     "pull": _all(refmoves.fetch, merges.pull),
     "merge": merges.merge,
-    "cherry-pick": merges.cherry_pick,
+    "cherry-pick": _all(_final, merges.cherry_pick),
+    "revert": _final,
     "rebase": refmoves.rebase,
     "remote": refmoves.remote,
     "reflog": refmoves.reflog,

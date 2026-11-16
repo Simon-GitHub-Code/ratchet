@@ -384,6 +384,32 @@ class GitRepoState:
         ref = default_branch(root)
         return None if ref is None else _output(root, "show", f"{ref}:{relative}")
 
+    def awaiting_final(self, cwd: Path) -> str | None:
+        """The branch of the queue work tree at ``cwd`` whose start no final check has passed.
+
+        The drain's notes are in the state directory of the main checkout, and each records its
+        work tree's path, which is how a tree is found when it is detached mid-rebase.
+        """
+        tree = _git(cwd, "rev-parse", "--show-toplevel")
+        common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if not tree or not common:
+            return None
+        for path in sorted((Path(common).parent / ".ratchet" / "queue" / "tickets").glob("*.json")):
+            try:
+                note: object = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(note, dict) or not note.get("start") or note.get("passed") is True:
+                continue
+            where, branch = note.get("worktree"), note.get("branch")
+            if (
+                isinstance(where, str)
+                and isinstance(branch, str)
+                and Path(where).resolve() == Path(tree).resolve()
+            ):
+                return branch
+        return None
+
     def head_is_pushed(self, cwd: Path) -> bool | None:
         """Whether any remote-tracking branch contains ``HEAD`` (``--contains`` defaults to it)."""
         listed = _git(cwd, "branch", "--remotes", "--contains")

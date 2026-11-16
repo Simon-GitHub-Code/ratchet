@@ -101,6 +101,13 @@ def test_the_rule_catalogue_is_pinned() -> None:
                 "path that only the owner changes, or one on the default branch"
             ),
         ),
+        "queue-final-check": (
+            "DENY",
+            (
+                "commits in a queue work tree before its start has passed its final check, which "
+                "leaves nothing to tell the orchestrator's commit from a role's"
+            ),
+        ),
         "merge-pr": ("ASK", "merges a pull request"),
         "merge-default": ("ASK", "merges another branch into the default branch"),
         "branch-protection": ("DENY", "reads or changes branch protection or rulesets"),
@@ -140,6 +147,7 @@ def test_only_a_rule_with_a_way_out_of_its_own_points_somewhere_other_than_a_dis
         "guard-path-unseen-switch",
         "unresolved-directory",
         "push-main",
+        "queue-final-check",
         "merge-pr",
         "merge-default",
         "unreadable",
