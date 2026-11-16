@@ -530,6 +530,19 @@ def test_an_upgrade_owes_the_bite_all_ceiling_a_project_adopted_before_it_lacks(
     ]
 
 
+def test_the_upgrade_report_shows_what_the_missing_bite_all_ceiling_costs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = fixture("0.9.2", tmp_path)
+    path = root / "quality/thresholds.toml"
+    path.write_text(budget.with_ceiling(path.read_text(encoding="utf-8"), "tier1", 600.0))
+    repos.git(root, "commit", "-q", "-am", "chore(quality): the first ceilings")
+    repos.branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    report = capsys.readouterr().out
+    assert "held to tier 1's ceiling of 600s and goes red when it runs longer" in report
+
+
 def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

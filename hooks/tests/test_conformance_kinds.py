@@ -349,6 +349,41 @@ def test_a_seconds_table_with_no_bite_all_ceiling_is_an_agent_finding_naming_the
     assert ceiling_findings(repo) == []
 
 
+def seconds_problem(repo: Path, tier1: float | None, took: float | None) -> str:
+    path = repo / THRESHOLDS
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        budget.with_ceiling(text, "tier1", tier1)
+        if tier1 is not None
+        else text + "\n[ceilings.seconds]\nlint = 5\n"
+    )
+    if took is not None:
+        timing = repo / ".ratchet/timing.jsonl"
+        timing.parent.mkdir(exist_ok=True)
+        timing.write_text(json.dumps({"key": "bite-all", "seconds": took}) + "\n")
+    [found] = ceiling_findings(repo)
+    return found.problem
+
+
+def test_the_missing_bite_all_ceiling_says_the_full_proof_goes_red_over_tier_1s(
+    repo: Path,
+) -> None:
+    problem = seconds_problem(repo, 900.0, None)
+    assert "is held to tier 1's ceiling of 900s and goes red when it runs longer" in problem
+    assert "last full proof" not in problem
+
+
+def test_the_missing_bite_all_ceiling_names_the_last_measured_full_proof(repo: Path) -> None:
+    problem = seconds_problem(repo, 900.0, 1052.4)
+    assert problem.endswith("; the last full proof took 1052.4s")
+
+
+def test_the_missing_bite_all_ceiling_with_no_tier_1_ceiling_says_there_is_none(
+    repo: Path,
+) -> None:
+    assert "has no ceiling at all" in seconds_problem(repo, None, None)
+
+
 READS = "\n## What each gate reads\n\n"
 
 

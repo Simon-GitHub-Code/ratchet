@@ -2526,8 +2526,7 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
     if isinstance(seconds, dict) and budget.ceiling_of(text or "", budget.FULL_PROOF) is None:
         yield Finding(
             "quality/thresholds.toml",
-            "`[ceilings.seconds]` has no `bite-all`, so the full proof after a merge is held to no"
-            " ceiling of its own and a long one could be held to the tier 1 ceiling",
+            full_proof_problem(root, text or ""),
             Agent(
                 then=(
                     (
@@ -2537,6 +2536,31 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
                 )
             ),
         )
+
+
+def full_proof_problem(root: Path, text: str) -> str:
+    """What the missing ``bite-all`` ceiling costs: the tier 1 ceiling it falls to, the last run."""
+    tier = budget.ceiling_of(text, "tier1")
+    start = "`[ceilings.seconds]` has no `bite-all`, so the full proof after a merge "
+    if tier is None:
+        return start + "has no ceiling at all, since no `tier1` ceiling is recorded either"
+    problem = f"{start}is held to tier 1's ceiling of {tier:g}s and goes red when it runs longer"
+    last = last_full_proof(root)
+    return problem + (f"; the last full proof took {last:g}s" if last is not None else "")
+
+
+def last_full_proof(root: Path) -> float | None:
+    """The seconds of the last ``bite-all`` run the timing report holds."""
+    seconds = None
+    for line in (gatelib.read_text(root / gatelib.STATE / "timing.jsonl") or "").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and record.get("key") == budget.FULL_PROOF:
+            value = record.get("seconds")
+            seconds = float(value) if isinstance(value, int | float) else seconds
+    return seconds
 
 
 def check_gate_reads(root: Path) -> Iterable[Finding]:
