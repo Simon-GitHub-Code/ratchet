@@ -47,6 +47,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import events
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import gatelib
 
 # Why: the settings belong to a repository that has adopted the method, and the patterns an
@@ -219,16 +221,18 @@ def stricter(settings: dict[str, object], manifest: dict[str, object]) -> list[s
     Why: ``deny`` is as strict as a rule gets. A rule the plugin could write that the project
     holds there is the owner's choice, and taking it out of ``deny`` would loosen it.
     """
+    writes = plugin_writer(manifest)
     return [
         rule
         for rule in dict.fromkeys(listed(settings, "deny"))
-        if rule not in DENY and plugin_writes(rule, manifest)
+        if rule not in DENY and writes(rule)
     ]
 
 
 def drifts_of(manifest: dict[str, object], settings: dict[str, object]) -> list[Drift]:
     """The drift of ``settings`` from the fixed lists, read against ``manifest``."""
     kept = stricter(settings, manifest)
+    writes = plugin_writer(manifest)
     found: list[Drift] = []
     for key, expected in (("deny", [*DENY, *kept]), ("ask", ASK)):
         actual = listed(settings, key)
@@ -240,7 +244,7 @@ def drifts_of(manifest: dict[str, object], settings: dict[str, object]) -> list[
         found.extend(
             Drift(
                 f"{SETTINGS}: '{r}' in {key} is not a rule this tool writes",
-                Fault.MISPLACED if plugin_writes(r, manifest) else Fault.OWN,
+                Fault.MISPLACED if writes(r) else Fault.OWN,
             )
             for r in actual
             if r not in expected
@@ -253,8 +257,8 @@ def drift(root: Path) -> list[str]:
     return [found.line for found in drifts(root)]
 
 
-def plugin_writes(rule: str, manifest: dict[str, object]) -> bool:
-    """Whether some version of the plugin writes ``rule`` for this manifest, in either list."""
+def plugin_writer(manifest: dict[str, object]) -> Callable[[str], bool]:
+    """Whether some version of the plugin writes a rule for this manifest, in either list."""
     groups = manifest.get("group")
     mirrored = {
         edit_rule(pattern)
@@ -263,16 +267,19 @@ def plugin_writes(rule: str, manifest: dict[str, object]) -> bool:
         for pattern in group["paths"]
         if isinstance(pattern, str)
     }
-    return rule in DENY or rule in EARLIER_ASKS or rule in mirrored
+    return lambda rule: rule in DENY or rule in EARLIER_ASKS or rule in mirrored
+
+
+def plugin_writes(rule: str, manifest: dict[str, object]) -> bool:
+    """Whether some version of the plugin writes ``rule`` for this manifest, in either list."""
+    return plugin_writer(manifest)(rule)
 
 
 def own_rules(settings: dict[str, object], manifest: dict[str, object]) -> list[tuple[str, str]]:
     """The project's own rules, as (list, rule) in order: those no version of the plugin writes."""
+    writes = plugin_writer(manifest)
     return [
-        (key, rule)
-        for key in ("deny", "ask")
-        for rule in listed(settings, key)
-        if not plugin_writes(rule, manifest)
+        (key, rule) for key in ("deny", "ask") for rule in listed(settings, key) if not writes(rule)
     ]
 
 
