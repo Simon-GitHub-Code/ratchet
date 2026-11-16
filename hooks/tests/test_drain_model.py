@@ -229,7 +229,7 @@ def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_pa
 
 @pytest.mark.parametrize(
     "part",
-    [pytest.param(n, marks=pytest.mark.shard_slot(4 * n + 2)) for n in range(len(RULE_PARTS))],
+    [pytest.param(n, marks=pytest.mark.shard_slot(slot)) for n, slot in enumerate((2, 6, 8))],
 )
 def test_with_the_guards_gate_each_rule_but_10_holds_and_no_role_commits(part: int) -> None:
     # Why: the guard refuses a commit on a start no final check passed, so neither the agent's
