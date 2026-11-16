@@ -1906,6 +1906,78 @@ def check_speed_parts(body: str) -> Iterable[Finding]:
             yield agent(f"{BINDING_PATH}: the Speed section does not say how '{part}' is met")
 
 
+INCREMENTAL_VARIABLE = "mutation_incremental"
+INCREMENTAL_RECIPE = "mutation-changed"
+CI_SWITCH = ('env_var_or_default("CI"', 'env_var_or_default("RATCHET_BITING"')
+
+
+def incremental_line(root: Path) -> str | None:
+    """What the Speed section's ``- Incremental:`` line says, or None when it says nothing."""
+    text = read(root / BINDING_PATH) or ""
+    if not markdown_text.has_section(text, SPEED_SECTION):
+        return None
+    value = dict(SPEED_PART.findall(markdown_text.section(text, SPEED_SECTION))).get("Incremental")
+    return value if value and not value.startswith("<") else None
+
+
+def check_incremental(root: Path) -> Iterable[Finding]:
+    """The justfile carries the mode the binding's Incremental line names, and CI leaves it out."""
+    justfile = read_justfile(root)
+    if justfile is None:
+        return
+    line = incremental_line(root)
+    held = justfile_text.variables(justfile).get(INCREMENTAL_VARIABLE)
+    if line is not None and NONE_WITH_REASON.fullmatch(line):
+        if held is not None and held.strip() not in ('""', "''"):
+            yield Finding(
+                "justfile",
+                f"the binding's '- Incremental:' line says `none`, and `{INCREMENTAL_VARIABLE}`"
+                ' names a mode; set it to "", which is what a tool with none needs',
+                Agent(start=template_definition(INCREMENTAL_VARIABLE)),
+            )
+        return
+    if held is None:
+        problem = (
+            f"has no `{INCREMENTAL_VARIABLE}` variable, which holds the mutation tool's incremental"
+            " mode for the recipe `mutation-changed` and is empty in CI; add the template's"
+        )
+        does = f"add the template's `{INCREMENTAL_VARIABLE}`, left for the project to bind"
+        want = justfile_text.with_variable(
+            INCREMENTAL_VARIABLE,
+            lambda _: justfile_text.variables(template_file("justfile"))[INCREMENTAL_VARIABLE],
+        )
+        fix = Agent(start=template_definition(INCREMENTAL_VARIABLE))
+        yield Finding("justfile", problem, Edit(does, want, fix))
+        return
+    if line is None:
+        return
+    start = Agent(start=template_definition(INCREMENTAL_VARIABLE))
+    if not all(part in held for part in CI_SWITCH):
+        yield Finding(
+            "justfile",
+            f"`{INCREMENTAL_VARIABLE}` is not empty in CI and in the bite proof's copy; both run"
+            " without the cache, so give it the template's switch on the `CI` and"
+            " `RATCHET_BITING` environment variables, which is empty when either is set",
+            start,
+        )
+    if justfile_text.BINDS in held:
+        yield Finding(
+            "justfile",
+            f"`{INCREMENTAL_VARIABLE}` still holds the template's `bind:` placeholder; bind it to"
+            " the mutation tool's option that the binding's '- Incremental:' line names",
+            start,
+        )
+    body = "\n".join(justfile_text.definition(justfile, INCREMENTAL_RECIPE))
+    if body and justfile_text.BINDS not in body and f"{{{{{INCREMENTAL_VARIABLE}}}}}" not in body:
+        yield Finding(
+            "justfile",
+            f"the recipe `{INCREMENTAL_RECIPE}` does not use `{{{{{INCREMENTAL_VARIABLE}}}}}`, so"
+            " the binding's '- Incremental:' line is not what it runs; add the variable to the"
+            " mutation tool's command",
+            Agent(start=justfile_text.definition(justfile, INCREMENTAL_RECIPE)),
+        )
+
+
 def check_manifest(root: Path) -> Iterable[Finding]:
     path = root / "guards/manifest.toml"
     if not path.is_file():
@@ -3331,6 +3403,7 @@ CHECKS: tuple[Check, ...] = (
     check_mutation_filter,
     check_operability,
     check_speed,
+    check_incremental,
     check_shared_reports,
     check_changed_tests,
     check_manifest,
@@ -4286,6 +4359,7 @@ TYPES_PLACEHOLDER = re.compile(r"^- Application types: <[^\n]*>$", re.MULTILINE)
 EMPTY_TOOL_CELL = re.compile(r"^(\| [^|\n]+ \|) \|", re.MULTILINE)
 TEST_PATHS_PLACEHOLDER = re.compile(r"^- Tests: <[^\n]*>$", re.MULTILINE)
 TRIGGERS_PLACEHOLDER = re.compile(r"^\| <kind> \|[^\n]*$", re.MULTILINE)
+INCREMENTAL_PLACEHOLDER = re.compile(r'"bind: the mutation tool\'s option[^"]*"')
 SPEED_PLACEHOLDER = re.compile(r"^(- [A-Z][a-z ]+: )<[^\n]*>$", re.MULTILINE)
 INSTALL_PLACEHOLDER = re.compile(r"^- Install: <[^\n]*>$", re.MULTILINE)
 DEPENDENCY_PLACEHOLDER = re.compile(
@@ -4414,6 +4488,10 @@ def fill_placeholders(root: Path) -> None:
         str(WORKFLOWS / MERGE_WORKFLOW): pinned,
         str(WORKFLOWS / WEEKLY_WORKFLOW): pinned,
     }
+    justfile = root / "justfile"
+    justfile.write_text(
+        INCREMENTAL_PLACEHOLDER.sub('"stated for this stack"', justfile.read_text())
+    )
     for name, replacements in fills.items():
         target = root / name
         text = LATER_SETUP_PLACEHOLDER.sub("", target.read_text())

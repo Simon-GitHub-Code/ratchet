@@ -983,34 +983,34 @@ def test_the_ci_template_job_that_runs_tests_changed_asks_for_the_later_tier_set
     assert "tests-changed" not in WORKFLOWS["deep.yml"]
 
 
-def mutation_command(ci: str | None, tmp_path: Path) -> str:
+def mutation_value(env_set: dict[str, str], tmp_path: Path) -> str:
     just = shutil.which("just")
     assert just
     bound = JUSTFILE.replace(
         "bind: the mutation tool's option that reuses the last run's results", "--mode-on"
     )
     path = tmp_path / "justfile"
-    path.write_text(bound, encoding="utf-8")
-    env = {key: value for key, value in os.environ.items() if key != "CI"}
-    if ci is not None:
-        env["CI"] = ci
+    path.write_text(
+        f'{bound}\nshow:\n    @echo "[{{{{mutation_incremental}}}}]"\n', encoding="utf-8"
+    )
+    env = {k: v for k, v in os.environ.items() if k not in ("CI", "RATCHET_BITING")}
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
-        [just, "--justfile", str(path), "--dry-run", "mutation-changed"],
-        env=env,
+        [just, "--justfile", str(path), "show"],
+        env={**env, **env_set},
         capture_output=True,
         text=True,
         check=True,
     )
-    return " ".join(done.stderr.split())
+    return done.stdout.strip()
 
 
-def test_the_mutation_recipe_adds_the_bound_incremental_mode_locally_and_not_in_ci(
+def test_the_mutation_incremental_variable_holds_the_bound_mode_locally_only(
     tmp_path: Path,
 ) -> None:
     needs_just()
-    assert "with --mode-on added to the tool's command" in mutation_command(None, tmp_path)
-    assert "--mode-on" not in mutation_command("true", tmp_path)
-    assert "with added to the tool's command" in mutation_command("true", tmp_path)
+    assert mutation_value({}, tmp_path) == "[--mode-on]"
+    assert mutation_value({"CI": "true"}, tmp_path) == "[]"
+    assert mutation_value({"RATCHET_BITING": "1"}, tmp_path) == "[]"
 
 
 def test_the_binding_template_has_an_incremental_line_naming_the_justfile_variable() -> None:
@@ -1018,4 +1018,4 @@ def test_the_binding_template_has_an_incremental_line_naming_the_justfile_variab
     assert "`mutation_incremental`" in line
     assert "`none: <reason>`" in line
     assert "mutation_incremental :=" in JUSTFILE
-    assert "{{mutation_incremental}}" in recipe("mutation-changed")
+    assert "`mutation_incremental` option" in recipe("mutation-changed")
