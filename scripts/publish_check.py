@@ -53,6 +53,17 @@ not publish.
 
 Uncommitted, staged and untracked changes are not a move: the roles write files and leave them.
 
+The run's result is a second input (ADR 0072). The orchestrator writes the pipeline's result, as
+JSON, before it publishes anything, to the start file's path with ``.result.json`` added (the
+start file ``/x/report.json`` has the result ``/x/report.json.result.json``). A run that returned
+has one, so a missing file, text that is not a JSON object, or a result missing its lists of
+findings is refused, never tolerated. The check runs ``quotes.py`` over every blocker and major
+finding of ``criticFindingsByRound``, ``unresolvedBlockingFindings`` and ``reviewIssues``: the
+findings the run treated as owed. It is red when one carries no ``breaks`` or quotes a record that
+does not hold the quote word for word. A minor is not checked. The records are read from the
+checkout, ``spec.md`` from the result's ``specPath`` and ``ticket`` from the result's ``ref``. A
+run that errored returned no result; ``--errored`` says so and skips this check alone.
+
 What it does not see: a tag, a stash or another branch a role made, locally or on the forge; a
 remote other than ``origin``, and any remote at all when the start had no forge; a pull request
 whose head is another branch, and an edit to one that stays open; whatever was undone before the
@@ -69,14 +80,16 @@ Exit status:
 
 - 0: nothing moved;
 - 1: a role published: a line for each thing that moved, then the verdict; a forge that could not
-  be read is named too, since what moved already decides;
-- 2: the start state cannot be read: no file, not JSON, or a member missing or malformed;
+  be read is named too, since what moved already decides. Or a finding the run treated as owed
+  quotes what its record does not hold: a line for each, then the verdict;
+- 2: the start state cannot be read: no file, not JSON, or a member missing or malformed. Or the
+  result cannot be read;
 - 3: the present state cannot be read: not a git checkout, the forge cannot be reached, or, with
   ``rebase``, a rebase left unfinished.
 
 Neither 2 nor 3 is ever a pass.
 
-Usage: ``publish_check.py START [--root DIR]``.
+Usage: ``publish_check.py START [--root DIR] [--errored]``.
 """
 
 from __future__ import annotations
@@ -91,6 +104,7 @@ from pathlib import Path
 
 import feature_preflight as preflight
 import gatelib
+import quotes
 
 COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 DATE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:Z|[+-]\d\d:\d\d)")
@@ -109,14 +123,34 @@ GREEN = f"{SAID} green, nothing was committed, pushed or opened since the run st
 RED = (
     f"{SAID} red, a role published: the ticket ends as a role that published, never as an approval"
 )
+RESULT_SUFFIX = ".result.json"
+ROUNDS = "criticFindingsByRound"
+FINDING_LISTS = (ROUNDS, "unresolvedBlockingFindings", "reviewIssues")
+QUOTES_RED = (
+    f"{SAID} red, a finding the run treated as owed quotes what its record does not hold: the"
+    " ticket is not approved"
+)
 
 
 class MalformedError(ValueError):
     """The start state is missing, or a member of it is missing or malformed."""
 
 
+class ResultError(ValueError):
+    """The run's result file is missing, or it is not a result with its lists of findings."""
+
+
 class UnreadableError(RuntimeError):
     """The checkout or the forge cannot be read."""
+
+
+@dataclass(frozen=True)
+class Result:
+    """What the check reads of the run's result: its owed findings, its spec's path, its ticket."""
+
+    owed: list[object]
+    spec: str | None
+    ref: str | None
 
 
 @dataclass(frozen=True)
@@ -351,6 +385,75 @@ def start_of(
     return Start(branch, head, forge, Rebase(rebase_onto, commits))
 
 
+# --- the run's result ------------------------------------------------------------------------
+
+
+def result_path(start: Path) -> Path:
+    """Where the run's result is: the start file's path with ``.result.json`` added."""
+    return start.with_name(start.name + RESULT_SUFFIX)
+
+
+def read_result(path: Path) -> Result:
+    """The result in the file at ``path``; raises ``ResultError`` naming what is wrong."""
+    text = gatelib.read_text(path)
+    if text is None:
+        message = "there is no such file, or it is not text"
+        raise ResultError(message)
+    try:
+        data: object = json.loads(text)
+    except ValueError as error:
+        message = f"it is not JSON ({error})"
+        raise ResultError(message) from None
+    if not isinstance(data, dict):
+        message = "it is not a JSON object"
+        raise ResultError(message)
+    listed: list[object] = []
+    for name in FINDING_LISTS:
+        entries = data.get(name)
+        if not isinstance(entries, list):
+            message = f"`{name}` is missing or is not a list"
+            raise ResultError(message)
+        for entry in entries:
+            inner = entry.get("findings") if name == ROUNDS and isinstance(entry, dict) else None
+            listed.extend(inner if isinstance(inner, list) else [entry])
+    unique = {json.dumps(finding, sort_keys=True): finding for finding in listed}
+    owed = [
+        finding
+        for finding in unique.values()
+        if not isinstance(finding, dict) or finding.get("severity") in quotes.BLOCKING
+    ]
+    spec, ref = data.get("specPath"), data.get("ref")
+    return Result(
+        owed, spec if isinstance(spec, str) else None, ref if isinstance(ref, str) else None
+    )
+
+
+def quoted_record(finding: object) -> object:
+    breaks = finding.get("breaks") if isinstance(finding, dict) else None
+    return breaks.get("record") if isinstance(breaks, dict) else None
+
+
+def given_records(result: Result, root: Path, gh: preflight.Runner) -> quotes.Records:
+    """The texts of the records no fixed place holds: the result's spec, and its ticket."""
+    given: quotes.Records = {
+        "spec.md": None if result.spec is None else quotes.files_of(root, result.spec)
+    }
+    if any(quoted_record(finding) == "ticket" for finding in result.owed):
+        ticket = None if result.ref is None else preflight.fetch(result.ref, root, gh)
+        given["ticket"] = None if ticket is None else [ticket.body]
+    return given
+
+
+def quote_lines(result: Result, root: Path, gh: preflight.Runner) -> list[str]:
+    """A line for each owed finding whose record does not hold its quote."""
+    verdict = quotes.check(result.owed, root, given_records(result, root, gh))
+    return [
+        f"{SAID} the finding `{entry['title']}` quotes `{entry['record']}` with"
+        f' "{entry["quote"]}" and {entry["reason"]}'
+        for entry in verdict["not_found"]
+    ]
+
+
 # --- what moved ------------------------------------------------------------------------------
 
 
@@ -490,21 +593,23 @@ def check(
     return moves + forge_moves(start.branch, start.forge, now), halted, None
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="publish_check.py", description=__doc__.splitlines()[0])
-    parser.add_argument("start", type=Path, help="the start state: a JSON object with `start`")
-    parser.add_argument("--root", default=".")
-    options = parser.parse_args(argv[1:])
+def read_inputs(options: argparse.Namespace) -> tuple[Start, Result | None] | int:
+    """The start and the result the check reads, or the exit status of refusing to."""
     try:
         start = read_start(options.start)
     except MalformedError as error:
         print(f"{SAID} the start state in {options.start} cannot be read: {error}; {NEVER}")
         return 2
+    where = result_path(options.start)
     try:
-        moves, halted, unread = check(Path(options.root).resolve(), start, preflight.run_gh)
-    except UnreadableError as error:
-        print(f"{SAID} the present state cannot be read: {error}; {NEVER}")
-        return 3
+        return start, None if options.errored else read_result(where)
+    except ResultError as error:
+        print(f"{SAID} the run's result in {where} cannot be read: {error}; {NEVER}")
+        return 2
+
+
+def settle(moves: list[str], quoted: list[str], *, halted: bool, unread: str | None) -> int:
+    """Say what the check found and return its exit status."""
     for move in moves:
         print(f"{SAID} {move}")
     if halted:
@@ -513,6 +618,11 @@ def main(argv: list[str]) -> int:
         print(f"{SAID} the forge cannot be read either: {unread}")
     if moves:
         print(RED)
+    for line in quoted:
+        print(line)
+    if quoted:
+        print(QUOTES_RED)
+    if moves or quoted:
         return 1
     if unread is not None:
         print(f"{SAID} the present state cannot be read: {unread}; {NEVER}")
@@ -521,6 +631,28 @@ def main(argv: list[str]) -> int:
         return 3
     print(GREEN)
     return 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="publish_check.py", description=__doc__.splitlines()[0])
+    parser.add_argument("start", type=Path, help="the start state: a JSON object with `start`")
+    parser.add_argument("--root", default=".")
+    parser.add_argument(
+        "--errored", action="store_true", help="the run errored and returned no result"
+    )
+    options = parser.parse_args(argv[1:])
+    inputs = read_inputs(options)
+    if isinstance(inputs, int):
+        return inputs
+    start, result = inputs
+    root = Path(options.root).resolve()
+    try:
+        moves, halted, unread = check(root, start, preflight.run_gh)
+    except UnreadableError as error:
+        print(f"{SAID} the present state cannot be read: {error}; {NEVER}")
+        return 3
+    quoted = [] if result is None else quote_lines(result, root, preflight.run_gh)
+    return settle(moves, quoted, halted=halted, unread=unread)
 
 
 if __name__ == "__main__":
