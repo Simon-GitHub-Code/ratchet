@@ -72,8 +72,13 @@ Fatal errors end the run; the run never resumes! Is that clear?
 > A quoted line stays whole.
 
 | Name | Meaning |
+| :---: | :--- |
 | --- | --- |
 | the cell | a \\| b |
+
+---
+
+***
 
 A sentence
 wrapped over two lines.
@@ -91,6 +96,11 @@ def found(root: Path, quote: str, record: str = "AGENTS.md") -> bool:
         "andler",
         "a",
         "#",
+        "---",
+        ":---",
+        "***",
+        "| --- |",
+        ":---:",
         "Fatal errors end the run; the",
         "e.g. a file, is a unit.",
         "The handler must stop. A page that fails",

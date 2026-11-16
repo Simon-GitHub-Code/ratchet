@@ -45,9 +45,10 @@ words equal one of these, and nothing shorter:
   paragraph's last word, or at a word that ends so. An abbreviation such as ``e.g.`` only adds a
   place a quote may start or end.
 
-A quote with no word is never found. A quote does not span two files. It cannot tell that the
-quoted sentence is the one the finding breaks: that judgement is the review's and the owner's,
-with the quote in front of them on the pull request.
+A quote with no letter or digit is never found, so no rule, table separator or marker is a quote.
+A quote does not span two files. It cannot tell that the quoted sentence is the one the finding
+breaks: that judgement is the review's and the owner's, with the quote in front of them on the
+pull request.
 
 Prints JSON: ``found``, the checked findings whose quote the record holds, and ``not_found``, the
 others with a ``reason``. Each entry names the finding by its ``index`` in the list and its
@@ -180,7 +181,7 @@ def sentence(paragraph: list[str], wanted: list[str]) -> bool:
 def holds(document: Document, quote: str) -> bool:
     """Whether ``document`` holds ``quote`` as a whole unit or whole sentences of a paragraph."""
     wanted = quote.split()
-    if not wanted:
+    if not any(character.isalnum() for character in quote):
         return False
     units, paragraphs = blocks(document)
     return wanted in units or any(sentence(paragraph, wanted) for paragraph in paragraphs)
