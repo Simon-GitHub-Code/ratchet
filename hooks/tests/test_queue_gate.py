@@ -26,8 +26,8 @@ from tests.test_drain import (
 COMMIT = "git commit -m 'feat(core): the change'"
 GATED = ["queue-final-check"]
 FINAL = (
-    "Run `drain.py check <ticket> --final` in a drain, or `publish_check.py` in a one-ticket "
-    "run, first, and commit when it is green."
+    "First run `drain.py check <ticket> --final` in a drain, or `publish_check.py` in a "
+    "one-ticket run, and commit when it is green."
 )
 
 

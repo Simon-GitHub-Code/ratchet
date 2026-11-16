@@ -259,7 +259,7 @@ Tell the owner this before step 1. It is not a question.
        - `check` is red on nothing but `triggers`;
        - the tests fail or pass on their assertions and not on a configuration or an import;
        - the deliverable answers `ready` or its run exits 0;
-       - and `PYTHONPATH="${CLAUDE_PLUGIN_ROOT}/hooks" python3 -m ratchet_guards.diff --root . --base HEAD` lists no guard path but the dependency manifest, its lockfile and their snapshots.
+       - and `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode -P -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from ratchet_guards import diff; sys.exit(diff.main())' "${CLAUDE_PLUGIN_ROOT}/hooks" --root . --base HEAD` lists no guard path but the dependency manifest, its lockfile and their snapshots.
     7. **Fix in the adoption.** Any other edit the rehearsal needed is a config the adoption owes, or a key it removed: make it in the adoption, commit, run `check`, and rehearse once more in a fresh worktree. Rehearse at most twice: an edit the second round still needs is not chased, but named with its file for the hand-over.
 
     The rehearsal may reuse that compiler cache and nothing else; it still cannot supply a missing config or tool. Remove each worktree when its round ends.

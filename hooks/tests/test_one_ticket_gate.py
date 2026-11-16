@@ -4,6 +4,8 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+import pytest
+
 import drain
 import publish_check
 import queue_notes
@@ -116,3 +118,23 @@ def test_the_start_is_a_locked_guard_path_in_every_checkout() -> None:
     assert hit is not None
     assert hit.group.locked
     assert hit.group.name == "feature-starts"
+
+
+def test_a_write_killed_midway_leaves_the_old_note_and_the_commit_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, saved = started(tmp_path)
+    give_result(saved)
+    note = queue_notes.feature_start_path(root, BRANCH)
+    assert note is not None
+    before = note.read_text(encoding="utf-8")
+
+    def killed(*_: object) -> Path:
+        message = "killed"
+        raise OSError(message)
+
+    monkeypatch.setattr(Path, "replace", killed)
+    with pytest.raises(OSError, match="killed"):
+        publish(root, saved)
+    assert note.read_text(encoding="utf-8") == before
+    assert [v.rule for v in judged(COMMIT, root)] == GATED

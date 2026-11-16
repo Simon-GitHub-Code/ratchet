@@ -1866,6 +1866,8 @@ def test_no_skill_runs_a_plugin_script_with_a_bare_python3() -> None:
     for page in pages:
         for number, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
             assert not re.search(r"python3 (?!-E -s )\S*scripts/", line), (page.name, number)
+            assert "PYTHONPATH=" not in line, (page.name, number)
+            assert not re.search(r"python3 (?:\S+ )*-m ", line), (page.name, number)
             runs += line.count(f'{PLUGIN_PY} "${{CLAUDE_PLUGIN_ROOT}}/scripts/')
     assert runs
 

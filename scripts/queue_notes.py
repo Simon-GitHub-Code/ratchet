@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -137,7 +138,9 @@ def read_note(root: Path, branch: str) -> dict[str, object]:
 
 def write_note(path: Path, note: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(note, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    staged.write_text(json.dumps(note, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    staged.replace(path)
 
 
 def safeguarded(root: Path, note: dict[str, object]) -> bool:
