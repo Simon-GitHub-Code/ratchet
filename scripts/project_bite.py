@@ -177,6 +177,7 @@ import plugin_pin
 # Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import diff as guard_paths
+from ratchet_guards.manifest import Manifest
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -1482,7 +1483,7 @@ def gate_paths_changed(root: Path, base: str | None) -> list[Touched] | None:
             group.name
             for manifest in manifests
             for group in manifest.groups
-            if guard_paths.Manifest((group,)).group_of(path)
+            if Manifest((group,)).group_of(path)
         }
         if gatelib.matches(path, list(GATE_PATHS)):
             touched.append(Touched(path, ""))
