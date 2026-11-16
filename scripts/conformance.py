@@ -3385,7 +3385,9 @@ def upgrade_mutations() -> list[Mutation]:
         ),
         (
             "justfile timing perf and load beside other gates",
-            rewrite("justfile", 'alone := "--alone perf load"', 'alone := ""'),
+            rewrite(
+                "justfile", 'alone := "--alone perf load mutation test-stability"', 'alone := ""'
+            ),
         ),
         (
             "justfile booting the route gates with the defaults only",

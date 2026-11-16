@@ -565,7 +565,9 @@ def test_the_pin_line_says_what_a_copy_without_history_cannot(tmp_path: Path) ->
             "justfile: passes `--jobs` without reading RATCHET_JOBS",
         ),
         (
-            replace(JUSTFILE, 'alone := "--alone perf load"', 'alone := ""'),
+            replace(
+                JUSTFILE, 'alone := "--alone perf load mutation test-stability"', 'alone := ""'
+            ),
             "justfile: nothing runs `perf` and `load` alone",
         ),
         (
@@ -592,7 +594,7 @@ def test_a_runner_item_is_asked_only_where_its_gates_are_bound(repo: Path) -> No
         cells[2] = " none: not this repository's concern "
         replace(BINDING, row, "|".join(cells))(repo)
     for old, new in (
-        ('alone := "--alone perf load"', 'alone := ""'),
+        ('alone := "--alone perf load mutation test-stability"', 'alone := ""'),
         ("each key of flags.py --temporary on", "every flag on"),
         ("/scripts/changed.py", "/scripts/base.py"),
     ):
