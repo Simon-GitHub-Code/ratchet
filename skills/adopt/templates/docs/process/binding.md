@@ -156,7 +156,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 
 ## What each gate reads
 
-One bullet per tier 0 or tier 1 gate, keyed by the last word of its entry point: `- <gate>: <path>, <path>`. Each entry is a repository-relative file, directory or glob (`*`, `**`) that the gate's tool reads besides the code it judges. A change to a path in `tool-config` and in no other gate group proves only the gates whose bullet matches it, and every gate with no bullet (ADR 0069). The conformance gate is red on an entry that matches no file, a bullet that names no gate, and an empty bullet.
+One bullet per tier 0 or tier 1 gate, keyed by the last word of its entry point: `- <gate>: <path>, <path>`. Each entry is a repository-relative file, directory or glob (`*`, `**`) that the gate's tool reads besides the code it judges. A change to a path in `tool-config` and in no other gate group proves the gates whose bullet matches it and every gate with no bullet. A path that no bullet matches proves every gate (ADR 0069). The conformance gate is red on an entry that matches no file, a bullet that names no gate, and an empty bullet.
 
 ## Triggers
 

@@ -381,6 +381,20 @@ def test_the_missing_bite_all_ceiling_names_the_last_measured_full_proof(repo: P
     assert problem.endswith("; the last full proof took 1052.4s")
 
 
+def test_the_last_full_proof_skips_unreadable_lines_and_other_keys(repo: Path) -> None:
+    timing = repo / ".ratchet/timing.jsonl"
+    timing.parent.mkdir(exist_ok=True)
+    lines = [
+        json.dumps({"key": "bite-all", "seconds": 1000}),
+        "not json",
+        json.dumps({"key": "lint", "seconds": 5}),
+        json.dumps(["bite-all"]),
+        json.dumps({"key": "bite-all", "seconds": "slow"}),
+    ]
+    timing.write_text("\n".join(lines) + "\n")
+    assert conformance.last_full_proof(repo) == 1000
+
+
 def test_the_missing_bite_all_ceiling_with_no_tier_1_ceiling_says_there_is_none(
     repo: Path,
 ) -> None:

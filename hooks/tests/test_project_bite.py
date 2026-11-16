@@ -852,6 +852,132 @@ def test_a_file_a_patch_fault_edits_proves_that_bites_gate(tmp_path: Path) -> No
     assert project_bite.targeted_by(targets, "src/code.txt") == {("tests", "by patch")}
 
 
+def test_a_patch_fault_that_edits_a_file_with_a_space_in_its_name_is_targeted(
+    tmp_path: Path,
+) -> None:
+    patch = PATCH_FILE + PATCH_FILE.replace("src/code.txt", "src/my code.txt")
+    named = bite("tests", "by patch", 'patch = "quality/bites/p.patch"')
+    registry = bite("lint", WORD) + named + bite("slow", WORD)
+    files = {"quality/bites/p.patch": patch, "src/my code.txt": "clean\n"}
+    root = targeted(tmp_path, registry=registry, files=files)
+    targets = project_bite.fault_targets(root, "main")
+    assert project_bite.targeted_by(targets, "src/my code.txt") == {("tests", "by patch")}
+
+
+def patch_targets(tmp_path: Path, patch: str) -> project_bite.Targets:
+    named = bite("tests", "by patch", 'patch = "quality/bites/p.patch"')
+    registry = bite("lint", WORD) + named + bite("slow", WORD)
+    root = targeted(tmp_path, registry=registry, files={"quality/bites/p.patch": patch})
+    return project_bite.fault_targets(root, "main")
+
+
+def named_by(targets: project_bite.Targets, *paths: str) -> None:
+    for path in paths:
+        assert project_bite.targeted_by(targets, path) == {("tests", "by patch")}, path
+
+
+def test_a_patch_fault_that_renames_a_file_is_targeted_by_both_names(tmp_path: Path) -> None:
+    patch = (
+        "diff --git a/old name.txt b/new name.txt\nsimilarity index 100%\n"
+        "rename from old name.txt\nrename to new name.txt\n"
+    )
+    targets = patch_targets(tmp_path, patch)
+    named_by(targets, "old name.txt", "new name.txt")
+    assert project_bite.targeted_by(targets, "other.txt") == set()
+
+
+def test_a_patch_fault_that_edits_a_file_with_a_non_ascii_name_is_targeted(
+    tmp_path: Path,
+) -> None:
+    patch = PATCH_FILE.replace("src/code.txt", "src/caf\u00e9.txt")
+    named_by(patch_targets(tmp_path, patch), "src/caf\u00e9.txt")
+
+
+def test_a_patch_fault_that_only_changes_a_mode_is_targeted(tmp_path: Path) -> None:
+    patch = "diff --git a/src/code.txt b/src/code.txt\nold mode 100644\nnew mode 100755\n"
+    named_by(patch_targets(tmp_path, patch), "src/code.txt")
+
+
+def test_a_patch_fault_written_with_mnemonic_prefixes_is_targeted(tmp_path: Path) -> None:
+    patch = PATCH_FILE.replace("--- a/", "--- i/").replace("+++ b/", "+++ w/")
+    named_by(patch_targets(tmp_path, patch), "src/code.txt")
+
+
+def test_a_fault_target_with_glob_characters_in_its_name_is_matched_literally(
+    tmp_path: Path,
+) -> None:
+    fault = 'replace = { path = "src/[id].txt", old = "clean", new = "planted" }'
+    registry = bite("lint", WORD, fault) + bite("tests", WORD) + bite("slow", WORD)
+    root = targeted(tmp_path, registry=registry, files={"src/[id].txt": "clean\n"})
+    targets = project_bite.fault_targets(root, "main")
+    assert project_bite.targeted_by(targets, "src/[id].txt") == {("lint", WORD)}
+    assert project_bite.targeted_by(targets, "src/i.txt") == set()
+
+
+@pytest.mark.parametrize("path", [".gitignore", "src/.gitattributes"])
+def test_a_change_to_an_ignore_file_at_any_depth_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str
+) -> None:
+    root = targeted(tmp_path)
+    write(root, path, "ignored/\n*.secret\n" + ("src/_*\n" if path == ".gitignore" else ""))
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == every(
+        f"{path} changed, and the proof reads the ignore rules when it plants a fault"
+    )
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_a_patch_git_cannot_read_adds_its_gate_to_any_change(tmp_path: Path) -> None:
+    named = bite("tests", "by patch", 'patch = "quality/bites/p.patch"')
+    registry = bite("lint", WORD) + named + bite("slow", WORD)
+    root = targeted(tmp_path, registry=registry, files={"quality/bites/p.patch": "garbage\n"})
+    targets = project_bite.fault_targets(root, "main")
+    assert project_bite.targeted_by(targets, "anything/at/all.txt") == {("tests", "by patch")}
+
+
+def test_a_tool_config_path_no_bullet_names_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = targeted(tmp_path, inserts=with_reads("- lint: src/**\n- tests: src/**\n"))
+    write(root, "lint.cfg", "changed\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == every("lint.cfg changed, and no bullet names it")
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_a_file_a_replace_fault_edits_proves_that_bites_gate(tmp_path: Path) -> None:
+    swapped = bite(
+        "tests", "swapped", 'replace = { path = "src/code.txt", old = "clean", new = "planted" }'
+    )
+    root = targeted(tmp_path, registry=bite("lint", WORD) + swapped + bite("slow", WORD))
+    targets = project_bite.fault_targets(root, "main")
+    assert project_bite.targeted_by(targets, "src/code.txt") == {("tests", "swapped")}
+
+
+def test_a_registry_added_by_the_change_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", GATES, None, rows=GATE_ROWS)
+    write(root, "guards/manifest.toml", COMMANDS_MANIFEST)
+    commit(root, "feat(core): a manifest")
+    branch(root)
+    write(root, REGISTRY, registry_of())
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == every(f"{REGISTRY} was added, removed or does not parse")
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_a_patch_fault_whose_file_is_absent_names_no_path(tmp_path: Path) -> None:
+    named = bite("tests", "by patch", 'patch = "quality/bites/missing.patch"')
+    root = targeted(tmp_path, registry=bite("lint", WORD) + named + bite("slow", WORD))
+    assert (
+        project_bite.targeted_by(project_bite.fault_targets(root, "main"), "src/code.txt") == set()
+    )
+
+
 def test_a_removed_file_a_remove_fault_covers_proves_that_bites_gate(tmp_path: Path) -> None:
     emptied = bite("tests", "empty", 'remove = ["tests/*.t"]', expect="no test")
     root = targeted(tmp_path, registry=bite("lint", WORD) + emptied + bite("slow", WORD))

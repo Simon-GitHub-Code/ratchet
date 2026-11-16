@@ -301,14 +301,14 @@ def split_gates(binding: str) -> tuple[tuple[Row, ...], str]:
 
 
 def run_git(
-    root: Path, *args: str, index: Path | None = None, stdin: str | None = None
+    root: Path, *args: str, index: Path | None = None, stdin: str | bytes | None = None
 ) -> subprocess.CompletedProcess[bytes]:
     """``git -C root args``, judging ``root`` and no other tree, through ``index`` when given."""
     return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True,
         check=False,
-        input=None if stdin is None else stdin.encode(),
+        input=stdin.encode() if isinstance(stdin, str) else stdin,
         env=environment() | ({"GIT_INDEX_FILE": str(index)} if index else {}),
     )
 
@@ -1462,10 +1462,11 @@ class Cause(NamedTuple):
     why: str
 
 
+Targets = dict[tuple[bool, str], set[tuple[str, str]]]
+IGNORE_NAMES = (".gitignore", ".gitattributes")
 JUSTFILE_NAMES = ("justfile", ".justfile", "Justfile")
 READER = {"gate-commands": "runs it"}
 READS = "## What each gate reads"
-PATCH_PATH = re.compile(r"^(?:---|\+\+\+) (?:[ab]/)?(\S+)", re.MULTILINE)
 READS_BULLET = re.compile(r"^- ([^:\s]+):[ \t]*(.*)$")
 
 
@@ -1498,6 +1499,8 @@ def gate_paths_changed(root: Path, base: str | None) -> list[Touched] | None:
             touched.append(Touched(path, ""))
         elif defining_group(names):
             touched.append(Touched(path, defining_group(names)))
+        elif PurePosixPath(path).name in IGNORE_NAMES:
+            touched.append(Touched(path, "ignore-rules"))
         elif targeted_by(targets, path):
             touched.append(Touched(path, "fault"))
     return touched
@@ -1541,39 +1544,60 @@ def patch_causes(root: Path, base: str, path: str) -> list[Cause]:
     return [Cause(gate, f"patch {path} is named by bite `{name}`") for gate, name in sorted(named)]
 
 
-def patch_paths(text: str | None) -> set[str]:
-    """The files a patch's headers name, old and new."""
-    return {path for path in PATCH_PATH.findall(text or "") if path != "/dev/null"}
+def patch_paths(root: Path, patch: bytes | None) -> set[str]:
+    """The files a patch touches, new names and old, as git lists them; ``**`` when it cannot.
+
+    Git is asked both ways, since a rename or a mode change lists only one name going forward.
+    """
+    if not patch:
+        return set()
+    forward = run_git(root, "apply", "--numstat", "-z", stdin=patch)
+    backward = run_git(root, "apply", "-R", "--numstat", "-z", stdin=patch)
+    if forward.returncode != 0 or backward.returncode != 0:
+        return {"**"}
+    fields = (forward.stdout + backward.stdout).decode(errors="replace").split("\0")
+    return {field.rpartition("\t")[2] for field in fields if field}
 
 
-def fault_targets(root: Path, base: str) -> dict[str, set[tuple[str, str]]]:
+def committed_bytes(root: Path, base: str, path: str) -> bytes | None:
+    """``path`` as the merge base holds it, byte for byte; ``None`` when it holds none."""
+    result = run_git(root, "show", f"{base}:{path}")
+    return result.stdout if result.returncode == 0 else None
+
+
+def fault_targets(root: Path, base: str) -> Targets:
     """Each file or glob a bite's fault changes, with the bites that change it.
 
-    A ``write`` or ``replace`` names its files, a ``remove`` its globs, and a ``patch`` the files
-    its diff names at the merge base and at head.
+    A ``write`` or ``replace`` names its files, a ``remove`` its patterns, and a ``patch`` the files
+    its diff lists at the merge base and at head. Only the patterns are globs.
     """
-    targets: dict[str, set[tuple[str, str]]] = {}
+    targets: Targets = {}
     for registry in registries(root, base):
         for bite in registry.bites if registry else ():
             fault = bite.fault
             if isinstance(fault, Write):
-                names = {fault.path}
+                names, glob = {fault.path}, False
             elif isinstance(fault, Replace):
-                names = {swap.path for swap in fault.swaps}
+                names, glob = {swap.path for swap in fault.swaps}, False
             elif isinstance(fault, Remove):
-                names = set(fault.patterns)
+                names, glob = set(fault.patterns), True
             else:
-                names = patch_paths(gatelib.show(root, base, fault.path))
-                names |= patch_paths(gatelib.read_text(root / fault.path))
+                head = (root / fault.path).read_bytes() if (root / fault.path).is_file() else None
+                names = patch_paths(root, committed_bytes(root, base, fault.path))
+                names |= patch_paths(root, head)
+                glob = False
             for name in names:
-                targets.setdefault(name, set()).add((bite.gate, bite.name))
+                targets.setdefault((glob or name == "**", name), set()).add((bite.gate, bite.name))
     return targets
 
 
-def targeted_by(targets: dict[str, set[tuple[str, str]]], path: str) -> set[tuple[str, str]]:
+def targeted_by(targets: Targets, path: str) -> set[tuple[str, str]]:
     """The bites whose fault changes ``path``."""
     return {
-        who for name, bites in targets.items() if gatelib.matches(path, [name]) for who in bites
+        who
+        for (pattern, name), bites in targets.items()
+        if (gatelib.matches(path, [name]) if pattern else name == path)
+        for who in bites
     }
 
 
@@ -1584,9 +1608,8 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
     the text outside the rows is compared stripped. A changed row that names no gate falls back.
     """
     binding = str(gatelib.BINDING)
-    old, new = gatelib.show(root, base, binding), gatelib.read_text(root / binding)
-    if old is None or new is None:
-        return [Cause(None, f"{binding} was added or removed")]
+    old = gatelib.show(root, base, binding) or ""
+    new = gatelib.read_text(root / binding) or ""
     (old_rows, old_rest), (new_rows, new_rest) = split_gates(old), split_gates(new)
     if (
         plugin_pin.PIN_LINE.sub("", old_rest).strip()
@@ -1661,6 +1684,8 @@ def unnamed_causes(root: Path, path: str, group: str) -> list[Cause]:
     if not reads:
         who = READER.get(group, "reads it")
         return [Cause(None, f"{path} changed, and no record says which gate {who}")]
+    if not any(reading(path, entry) for entries in reads.values() for entry in entries):
+        return [Cause(None, f"{path} changed, and no bullet names it")]
     causes = []
     for row in pull_request_gates(gate_rows(binding)):
         entries = reads.get(row.gate)
@@ -1692,6 +1717,9 @@ def could_affect(root: Path, base: str | None, touched: Sequence[Touched] | None
         elif PurePosixPath(path).name in JUSTFILE_NAMES:
             name = PurePosixPath(path).name
             why = f"the {name} changed, and its recipes are code the proof cannot read"
+            causes.append(Cause(None, why))
+        elif PurePosixPath(path).name in IGNORE_NAMES:
+            why = f"{path} changed, and the proof reads the ignore rules when it plants a fault"
             causes.append(Cause(None, why))
         elif group != "fault":
             causes += unnamed_causes(root, path, group)
