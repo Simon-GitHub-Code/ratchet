@@ -247,6 +247,14 @@ def test_a_branch_a_run_owns_is_not_waiting_records(
     assert route.records_waiting(route.observe(root)) is None
 
 
+def test_a_branch_that_changes_nothing_is_not_waiting_records(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    branch(root, "empty/work")
+    commit(root, "chore: nothing yet")
+    git(root, "checkout", "-q", "main")
+    assert route.records_waiting(route.observe(root)) is None
+
+
 def test_the_checked_out_branch_is_not_waiting_records(tmp_path: Path) -> None:
     root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
     tickets_on(root, "tickets/a")
