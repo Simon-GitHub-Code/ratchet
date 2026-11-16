@@ -38,7 +38,7 @@ A blocker or major whose quote the check did not find is moved to `unstated` by 
 - A departure from a criterion ends the run, `blocked`, after the role that returned it.
 - A departure from an assumption goes to the fork test. Where the test gives the choice to the role, the departure is the amended assumption, and the next critic and the review judge against it.
 
-**5. A finding that survives the fix round it was given ends the loop.** The script numbers a critique's findings, and a re-critique says which earlier finding each of its own carries. When a finding the round was owed, by the same rule that made it owed, is carried and still owed after it, the script does not start another round, and the ticket parks with its findings as a refused review does today (ADR 0056). That is not a question. A new blocker or major that the re-critique finds still gets the second round (the owner's decision of 2026-11-16).
+**5. A finding that survives the fix round it was given ends the loop.** The script numbers a critique's findings, and a re-critique says which earlier finding each of its own carries. When a finding the round was owed, by the same rule that made it owed, is carried and still owed after it, the script does not start another round, and the ticket parks with its findings as a refused review does today (ADR 0056). The review does not run. That is not a question. A new blocker or major that the re-critique finds still gets the second round (the owner's decision of 2026-11-16).
 
 **6. A blocked run is built again from the ticket.** The questions of points 3 and 4 go to the owner in one message, each with the role's recommended answer first, as the spec role's questions do today. The answers go on the ticket. The run's work is kept as the stash a run that is not approved leaves today, and the ticket is built again from the preflight, so spec.md holds the answer from its first line.
 
@@ -56,6 +56,7 @@ This is wrong if any of these is seen:
 - A role's result holds a departure from a criterion, or an `unstated` case the fork test gives the owner, and the run's result holds no question for it.
 - A run is approved whose result holds a blocker or major treated as owed, with a quote the record it names does not hold.
 - The owner is asked a question that a record of point 1 already answers, or that the fork test gives to the role.
+- The review leaves a moved finding unclassified in more than a rare run.
 - Runs block so often on points 3 and 4 that building again from the ticket costs more than the rounds it saves. That is the sign to build the resume below.
 
 ## Considered options

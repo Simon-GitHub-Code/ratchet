@@ -54,11 +54,13 @@ const AGENTS_AT_MOST = {"young": 9, "dependedOn": 12, "rejudge": 2}
 // ---------------------------------------------------------------------------
 // The slash form of a workflow passes no args, so a missing ref is answered, not thrown: the
 // result says what to run instead, and no agent has been spawned.
+const NOTHING_FOUND = { criticFindingsByRound: [], unresolvedBlockingFindings: [], reviewIssues: [] }
 const ARGS = typeof args === 'string' ? { ref: args } : (args && typeof args === 'object' ? args : {})
 const REF = typeof ARGS.ref === 'string' ? ARGS.ref.trim() : ''
 if (!REF) {
   return {
     verdict: 'blocked',
+    ...NOTHING_FOUND,
     preflight: { ok: false, failures: [{ check: 'ticket', detail: 'no ticket ref was passed', produce: 'run the /ratchet:feature skill with the ticket number or path; it runs the preflight and passes args = { ref, branch, base }' }] },
     requiredByOrchestrator: ['Run `/ratchet:feature <ticket>`; the slash form of this workflow passes no args and spawns nothing'],
   }
@@ -602,7 +604,9 @@ function unstatedField(classifies) {
   return {
     unstated: {
       type: 'array',
-      description: 'Every case you saw or measured where no record says which behaviour is right, each put through the fork test; empty when none',
+      description: classifies
+        ? 'Every case you saw or measured where no record says which behaviour is right, each put through the fork test; and one entry for each moved critic finding the prompt lists, its `of` set to that finding\'s id, so that none is left unclassified; empty when none'
+        : 'Every case you saw or measured where no record says which behaviour is right, each put through the fork test; empty when none',
       items: {
         type: 'object',
         properties: {
@@ -809,7 +813,7 @@ const REVIEW_INPUTS_FIELD = {
   ...ACCEPTED_INPUTS_FIELD,
   items: {
     ...ACCEPTED_INPUTS_FIELD.items,
-    properties: { ...ACCEPTED_INPUTS_FIELD.items.properties, named: { ...BREAKS_FIELD.breaks, description: 'The record that names this input, the ticket or spec.md, and the sentence that names it, quoted as for `breaks`' } },
+    properties: { ...ACCEPTED_INPUTS_FIELD.items.properties, named: { ...BREAKS_FIELD.breaks, description: 'The record that names this input, the ticket or spec.md, and the sentence that names it, quoted as for `breaks`. The rule an undecided case breaks is the method\'s own, that every case of an input a record names is decided, and not a promise of the project. `named` is the proof that the input is the record\'s, so the quote check refuses an input that was invented' } },
     required: [...ACCEPTED_INPUTS_FIELD.items.required, 'named'],
   },
 }
@@ -1658,6 +1662,7 @@ function tooLarge(stop, spec, extra) {
     slug: SLUG,
     ref: REF,
     verdict: 'blocked',
+    ...NOTHING_FOUND,
     verdictForcedBy: [stop.reason],
     tooLarge: stop,
     openQuestions: [],
@@ -1687,6 +1692,7 @@ function specStop(spec) {
     slug: SLUG,
     ref: REF,
     verdict: 'blocked',
+    ...NOTHING_FOUND,
     openQuestions: spec.openQuestions,
     guardEdits,
     specPath: spec.specPath,
@@ -1772,7 +1778,7 @@ function sift(findings, quoteOutput, idOf, from) {
     } else if (quoteHeld(finding, index, verdict)) {
       kept.push({ ...finding, id, quoted: true })
     } else {
-      moved.push({ id, from, severity: finding.severity, title: finding.title, evidence: finding.evidence, breaks: finding.breaks ?? null, reason: whyMissed(index, verdict) })
+      moved.push({ id, from, severity: finding.severity, title: finding.title, detail: finding.location ?? finding.suggestedTest ?? '', evidence: finding.evidence, breaks: finding.breaks ?? null, reason: whyMissed(index, verdict) })
     }
   })
   return { kept, moved }
@@ -1790,17 +1796,24 @@ function readReview(raw) {
 }
 
 function ownerEntry(moved) {
+  const view = moved.from === 'critic' ? 'The critic\'s view' : 'The reviewer\'s view'
+  const quote = moved.breaks ? `${moved.breaks.record}: "${moved.breaks.quote}"` : 'none given'
   return {
     of: moved.id,
+    unclassified: true,
     now: moved.evidence,
     evidence: moved.evidence,
-    question: `A ${moved.from} found a case no record states: ${moved.title}`,
+    question: `A ${moved.from} found a case no record states, and nothing classified it: ${moved.title}. Where: ${moved.detail || 'not given'}. Evidence: ${moved.evidence}. The quote that was not found: ${quote}.`,
     whose: 'owner',
     kind: 'direction',
-    options: ['Change the code so the case is handled', 'Leave the code as it is'],
+    options: [`${view}: ${moved.title}. Change the code as the finding asks`, 'What the code does now. Leave it as it is'],
     recommendation: `Nothing quoted decides it: ${moved.reason}`,
     refuter: 'Wrong if a record already states which behaviour is right',
   }
+}
+
+function unclassifiedCount() {
+  return ALL_UNSTATED.filter(entry => entry.unclassified === true).length
 }
 
 function assumedFrom(entry) {
@@ -1851,13 +1864,12 @@ function settleCases(after, entries, departures, context) {
     openQuestions: asks.map(questionOf),
     departures: ALL_DEPARTURES,
     unstated: ALL_UNSTATED,
+    unclassified: unclassifiedCount(),
     assumptions: ROLE_ASSUMPTIONS,
     specPath: context.specPath,
     testFiles: context.testFiles,
     branch: BRANCH,
-    criticFindingsByRound: [],
-    unresolvedBlockingFindings: [],
-    reviewIssues: [],
+    ...NOTHING_FOUND,
     ...context.extra,
     requiredByOrchestrator: [
       'Put every open question to the owner in one message, each with your recommended answer first and why, so the owner can accept them all at once: through the question tool, all in one call where it takes them; each answer goes on the ticket under `## Answers`, where the next spec agent reads it',
@@ -2013,7 +2025,7 @@ function ticketIssues(review) {
     severity: 'major',
     title: `the change does not say what the app does when ${ownerName(entry)} is ${INPUT_CASES[entry.case].owner}`,
     location: entry.input,
-    evidence: `the change decides no ${entry.case} value`,
+    evidence: `the change decides no ${entry.case} value. The rule it breaks is the method's own, that every case of an input a record names is decided, and not a promise of the project; the quote shows the input is the record's, and the quote check refuses an invented input`,
     breaks: entry.named,
     quoted: true,
   }))
@@ -2103,6 +2115,7 @@ if (REJUDGE) {
     slug: SLUG,
     ref: REF,
     rejudged: true,
+    ...NOTHING_FOUND,
     verdict: judged.verdict,
     verdictForcedBy: judged.forced,
     filesChanged: reconcile ? reconcile.filesChanged : [],
@@ -2113,6 +2126,7 @@ if (REJUDGE) {
     ticketPromises: review.ticketPromises,
     acceptedInputs: review.acceptedInputs,
     unstated: ALL_UNSTATED,
+    unclassified: unclassifiedCount(),
     departures: ALL_DEPARTURES,
     adrSuggested: review.adrSuggested,
     guardChanges: review.guardChanges,
@@ -2154,6 +2168,7 @@ if (!preflight.ok) {
   return {
     verdict: 'blocked',
     ref: REF,
+    ...NOTHING_FOUND,
     preflight,
     branch: BRANCH || preflight.branch || '',
     requiredByOrchestrator: [
@@ -2282,6 +2297,68 @@ if (unresolved.length) log(`Fix loop exhausted with ${unresolved.length} unresol
 else if (CRITIC && iterations === 0) log('No blocking findings; fix loop skipped')
 
 // ---------------------------------------------------------------------------
+// A finding still owed after the round it was owed in ends the run before the review (ADR 0072,
+// point 5). The result keeps the findings and their quotes in `unresolvedBlockingFindings`; no
+// review ran, so `reviewIssues` is empty.
+// ---------------------------------------------------------------------------
+function parkCarried() {
+  const left = PENDING_MOVED.map(ownerEntry)
+  PENDING_MOVED = []
+  ALL_UNSTATED.push(...left.map(entry => ({ ...entry, by: `critique-${iterations}` })))
+  const stillOwed = owed(critique.findings)
+  const guardChanges = union(critique.guardFilesChanged)
+  const covered = coveredGuardPaths(disputes, [])
+  const undisputedGuardChanges = guardChanges.filter(path => !covered.has(path))
+  const forced = [`${stillOwed.length} unresolved blocker/major critic finding(s)`]
+  if (undisputedGuardChanges.length) forced.push(`guard paths changed without a dispute record, a spec-named dependency or an additions note covering them: ${undisputedGuardChanges.join(', ')}`)
+  if (!lastCheckPasses) forced.push('the last implement/fix result reported checkPasses: false')
+  if (!spec.failingForRightReason) forced.push('the spec reported failingForRightReason: false')
+  const questions = left.map(questionOf)
+  const assumptions = withSurfaced([...(spec.assumptions || []), ...kept, ...assumedByRun, ...ROLE_ASSUMPTIONS], check)
+  log(`Parked after critique-${iterations}: ${carriedStillOwed.join(', ')} carried through the round it was owed and is still owed; the review does not run`)
+  return {
+    slug: SLUG,
+    ref: REF,
+    verdict: 'request_changes',
+    stop: 'carried',
+    stoppedAfter: `critique-${iterations}`,
+    verdictForcedBy: forced,
+    iterations,
+    filesChanged,
+    critic: { ran: CRITIC, reason: CRITIC_REASON },
+    criticFindings: critique.findings,
+    criticFindingsByRound: allCriticFindings,
+    unresolvedBlockingFindings: stillOwed,
+    carriedStillOwed,
+    reviewIssues: [],
+    ticketFindings: [],
+    unstated: ALL_UNSTATED,
+    unclassified: unclassifiedCount(),
+    departures: ALL_DEPARTURES,
+    openQuestions: questions,
+    assumptions,
+    settled,
+    disputes,
+    guardChanges,
+    undisputedGuardChanges,
+    specPath: spec.specPath,
+    testFiles: spec.testFiles,
+    testsAdded: critique.testsAdded,
+    checkPasses: false,
+    checkOutput: lastCheckOutput,
+    namedGates: NAMED_GATES,
+    branch: BRANCH,
+    verdictRecord: verdictRecord({ slug: SLUG, ticket: REF, verdict: 'request_changes', forcedBy: forced, findings: stillOwed, openQuestions: questions, assumptions }),
+    requiredByOrchestrator: [
+      'verdict is "request_changes" and no review ran: a critic finding was still owed after the fix round it was given',
+      'Commit nothing and open no PR. Park the ticket with each entry of `unresolvedBlockingFindings`, its `breaks` quote with it, as a refused review\'s issues are parked; `openQuestions` holds the critic findings no role classified, for the owner',
+    ],
+  }
+}
+
+if (carriedStillOwed.length) return parkCarried()
+
+// ---------------------------------------------------------------------------
 // Phase 5: Review (independent)
 // ---------------------------------------------------------------------------
 phase('Review')
@@ -2356,6 +2433,7 @@ return {
   unresolvedBlockingFindings: unresolved,
   carriedStillOwed,
   unstated: ALL_UNSTATED,
+  unclassified: unclassifiedCount(),
   departures: ALL_DEPARTURES,
   reviewIssues: issues,
   ticketFindings: ticketIssues(review),

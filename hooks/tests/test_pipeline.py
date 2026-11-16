@@ -1423,6 +1423,11 @@ def test_an_input_case_the_change_leaves_undecided_blocks(case: str) -> None:
     title = f"the change does not say what the app does when the link you paste is {words}"
     assert result["verdictRecord"]["unresolved"] == [title]
     assert [i["title"] for i in result["ticketFindings"]] == [title]
+    evidence = result["ticketFindings"][0]["evidence"]
+    assert "the method's own, that every case of an input a record names is decided" in evidence
+    assert "and not a promise of the project" in evidence
+    assert "the quote shows the input is the record's" in evidence
+    assert "the quote check refuses an invented input" in evidence
 
 
 def test_a_run_after_a_lost_promise_hands_the_spec_role_what_was_lost() -> None:
@@ -1691,7 +1696,18 @@ def test_a_finding_that_quotes_a_sentence_no_record_holds_is_never_fixed_and_nev
     (entry,) = result["unstated"]
     assert (entry["of"], entry["whose"], entry["by"]) == ("C0-1", "owner", "review")
     assert "does not hold the quote" in entry["recommendation"]
-    assert len(result["openQuestions"]) == 1
+    assert result["unclassified"] == 1
+    (question,) = result["openQuestions"]
+    for words in (
+        MAJOR["title"],
+        MAJOR["evidence"],
+        f'AGENTS.md: "{INVENTED["quote"]}"',
+    ):
+        assert words in question["question"], words
+    assert question["options"] == [
+        f"The critic's view: {MAJOR['title']}. Change the code as the finding asks",
+        "What the code does now. Leave it as it is",
+    ]
     prompt = ran["prompts"]["review"]
     assert '"id": "C0-1"' in prompt
     assert "A change always keeps the saved order." in prompt
@@ -1724,6 +1740,8 @@ def test_a_blocker_the_review_cannot_quote_is_moved_and_stops_the_run() -> None:
         "question",
     )
     assert [e["of"] for e in result["unstated"]] == ["R1"]
+    assert result["unclassified"] == 1
+    assert result["openQuestions"][0]["options"][0].startswith("The reviewer's view:")
 
 
 def test_a_minor_with_a_failing_test_and_no_quote_is_still_owed_a_fix() -> None:
@@ -1737,12 +1755,36 @@ def test_a_finding_carried_through_the_round_it_was_owed_ends_the_loop_and_parks
     first = _critique(MAJOR)
     again = _critique({**MAJOR, "carries": "C0-1"})
     ran = _built_run(critique=first, **{"critique-1": again})
-    assert ran["labels"][-4:] == ["critique", "fix-1", "critique-1", "review"]
+    assert ran["labels"][-3:] == ["critique", "fix-1", "critique-1"]
+    assert "review" not in ran["labels"], "the review does not run"
     assert '"id": "C0-1"' in ran["prompts"]["critique-1"]
     result = ran["result"]
     assert (result["verdict"], result["iterations"]) == ("request_changes", 1)
+    assert (result["stop"], result["stoppedAfter"]) == ("carried", "critique-1")
     assert result["carriedStillOwed"] == ["C1-1"]
     assert [f["id"] for f in result["unresolvedBlockingFindings"]] == ["C1-1"]
+    assert result["unresolvedBlockingFindings"][0]["breaks"] == BREAKS
+    assert (result["reviewIssues"], result["ticketFindings"]) == ([], [])
+    assert result["verdictRecord"]["unresolved"] == [MAJOR["title"]]
+    assert result["verdictRecord"]["verdict"] == "request_changes"
+    assert (result["unclassified"], result["openQuestions"]) == (0, [])
+
+
+def test_a_parked_run_hands_the_findings_no_role_classified_to_the_owner_as_questions() -> None:
+    moved = {**MAJOR, "title": "reverses a saved list", "breaks": INVENTED}
+    first = _critique(MAJOR, moved)
+    again = _critique({**MAJOR, "carries": "C0-1"})
+    ran = _built_run(critique=first, **{"critique-1": again})
+    assert "review" not in ran["labels"]
+    result = ran["result"]
+    assert (result["verdict"], result["stop"]) == ("request_changes", "carried")
+    assert result["unclassified"] == 1
+    (entry,) = [e for e in result["unstated"] if e["of"] == "C0-2"]
+    assert entry["unclassified"] is True
+    (question,) = result["openQuestions"]
+    assert result["verdictRecord"]["openQuestions"] == [question["question"]]
+    assert question["options"][0].startswith("The critic's view: reverses a saved list")
+    assert question["options"][1].startswith("What the code does now")
 
 
 def test_a_new_blocker_after_a_fix_round_keeps_the_second_round() -> None:
@@ -1896,6 +1938,15 @@ def test_the_schemas_carry_breaks_unstated_departures_and_the_quote_output() -> 
     for label in ("implement", "fix-1"):
         assert {"unstated", "departures"} <= set(schemas[label]["required"]), label
     unstated = schemas["review"]["properties"]["unstated"]["items"]
+    asked = schemas["review"]["properties"]["unstated"]["description"]
+    assert "one entry for each moved critic finding the prompt lists" in asked
+    assert "none is left unclassified" in asked
+    named = schemas["review"]["properties"]["acceptedInputs"]["items"]["properties"]["named"]
+    assert "the method's own" in named["description"]
+    assert "every case of an input a record names is decided" in named["description"]
+    assert "not a promise of the project" in named["description"]
+    assert "proof that the input is the record's" in named["description"]
+    assert "refuses an input that was invented" in named["description"]
     assert unstated["properties"]["whose"]["enum"] == ["owner", "role"]
     assert "of" in unstated["required"]
     assert "of" not in schemas["critique"]["properties"]["unstated"]["items"]["properties"]

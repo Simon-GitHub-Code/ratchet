@@ -226,6 +226,7 @@ class Stop(Enum):
     TOO_LARGE = "too large"
     DEPARTURE = "a departure from the spec the owner decides"
     QUESTION_AFTER_BUILD = "a question for the owner after a role that builds or judges"
+    CARRIED = "a critic finding still owed after the fix round it was given, parked with no review"
 
 
 class Ceiling(Enum):
@@ -334,6 +335,8 @@ class Ending:
     """Whether the result's ``unstated`` entries hold the finding the critic could not quote."""
     assumes_role: bool = False
     """Whether the result's assumptions hold what the fork test gave a role."""
+    unclassified: bool = False
+    """Whether the result counts a moved finding that no role classified."""
 
 
 @dataclass(frozen=True)
@@ -500,9 +503,16 @@ def _check(state: State, action: Action) -> State:
     return replace(state, kept=True, awaiting=Role.IMPLEMENT)
 
 
-def _asks(state: State, stop: Stop, after: Role) -> State:
+def _asks(state: State, stop: Stop, after: Role, *, unclassified: bool = False) -> State:
     """The run ends blocked on a question for the owner, after the role that returned the case."""
-    ending = Ending(Outcome.BLOCKED, stop=stop, after=after, asks=True, rejudged=state.rejudge)
+    ending = Ending(
+        Outcome.BLOCKED,
+        stop=stop,
+        after=after,
+        asks=True,
+        rejudged=state.rejudge,
+        unclassified=unclassified,
+    )
     return _ended(replace(state, asked=True), ending)
 
 
@@ -525,7 +535,7 @@ def _critique(state: State, action: Action) -> State:
     owed = answer in OWED
     carried = answer is Critique.OWED_CARRIED and state.owed and state.rounds > 0
     again = owed and state.rounds < fix_rounds(state) and not carried
-    return replace(
+    state = replace(
         state,
         owed=owed,
         carried=carried,
@@ -534,6 +544,31 @@ def _critique(state: State, action: Action) -> State:
         silent=answer is Critique.SILENT,
         awaiting=Role.FIX if again else Role.REVIEW,
     )
+    return _parked(state) if carried else state
+
+
+def _parked(state: State) -> State:
+    """A finding still owed after its fix round ends the run refused, and no review starts.
+
+    Why: ADR 0072, point 5. The moved findings no role classified go to the owner as questions.
+    """
+    ending = Ending(
+        Outcome.REQUEST_CHANGES,
+        stop=Stop.CARRIED,
+        objections=standing(state),
+        rounds=state.rounds,
+        unresolved=True,
+        kept=state.kept,
+        record=Outcome.REQUEST_CHANGES,
+        rejudged=state.rejudge,
+        after=Role.CRITIQUE,
+        asks=state.moved,
+        carried=True,
+        unstated=state.moved,
+        assumes_role=state.assumed,
+        unclassified=state.moved,
+    )
+    return _ended(state, ending)
 
 
 def _built_late(state: State, action: Action, awaiting: Role) -> State:
@@ -566,8 +601,14 @@ def _review(state: State, action: Action) -> State:
     place the critic's owed findings take once the project is depended-on. A rebased branch has no
     fix loop, so its review always ends the run.
     """
-    if action.answer in ASKING or (state.moved and action.answer is not Review.CLASSIFIES_ROLE):
-        return _asks(state, Stop.QUESTION_AFTER_BUILD, action.role)
+    left = state.moved and action.answer is not Review.CLASSIFIES_ROLE
+    if action.answer in ASKING or left:
+        return _asks(
+            state,
+            Stop.QUESTION_AFTER_BUILD,
+            action.role,
+            unclassified=left or action.answer is Review.ISSUE_NO_QUOTE,
+        )
     issue = Objection.REVIEW_ISSUE in REVIEW_OBJECTIONS[action.answer]
     state = replace(
         state, issue=issue, assumed=state.assumed or action.answer is Review.CLASSIFIES_ROLE
@@ -951,22 +992,45 @@ def unquoted(_: State, name: str, after: State) -> bool:
     ending = after.ending
     if not after.moved or ending is None or ending.outcome is Outcome.ERROR:
         return True
-    if ending.outcome is Outcome.BLOCKED:
+    if ending.outcome is Outcome.BLOCKED or ending.stop is Stop.CARRIED:
         return ending.asks
     return ending.unstated and ending.assumes_role
 
 
-def parks_carried(before: State, name: str, after: State) -> bool:
-    """A critic finding still owed after the round it was fixed in starts no further round, and the run ends refused with it unresolved."""  # noqa: E501
-    action = named(name)
-    if action.role is Role.CRITIQUE and after.carried and after.awaiting is not Role.REVIEW:
-        return False
+def parks_carried(_: State, name: str, after: State) -> bool:
+    """A critic finding still owed after the round it was fixed in starts no further round, and the run ends refused with it unresolved, after that critique."""  # noqa: E501
+    if not (named(name).role is Role.CRITIQUE and after.carried):
+        return True
     ending = after.ending
-    if not before.carried or action.role not in REVIEWS or ending is None:
+    return (
+        ending is not None
+        and ending.outcome is Outcome.REQUEST_CHANGES
+        and ending.stop is Stop.CARRIED
+        and ending.after is Role.CRITIQUE
+        and ending.unresolved
+        and ending.carried
+    )
+
+
+def unreviewed(before: State, name: str, after: State) -> bool:
+    """No review starts after a finding is parked as still owed."""
+    if not (before.ending is not None and before.ending.stop is Stop.CARRIED):
         return True
-    if ending.outcome in {Outcome.BLOCKED, Outcome.ERROR}:
+    return named(name).role not in REVIEWS and after.ending == before.ending
+
+
+def counted(before: State, name: str, after: State) -> bool:
+    """A moved finding that no role classified is counted in the result, and nothing else is."""
+    ending = after.ending
+    if ending is None or ending.outcome is Outcome.ERROR:
         return True
-    return ending.outcome is Outcome.REQUEST_CHANGES and ending.unresolved and ending.carried
+    action = named(name)
+    judged = action.role in REVIEWS and action.answer not in FAILED
+    left = judged and (
+        action.answer is Review.ISSUE_NO_QUOTE
+        or (before.moved and action.answer is not Review.CLASSIFIES_ROLE)
+    )
+    return ending.unclassified == (left or (ending.stop is Stop.CARRIED and after.moved))
 
 
 def second_round_kept(before: State, name: str, after: State) -> bool:
@@ -1005,6 +1069,8 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "19. a finding whose quote is not found sends no fix agent and is never dropped": unquoted,
     "20. a finding still owed after its fix round parks the run": parks_carried,
     "21. a new finding after a fix round keeps the next round": second_round_kept,
+    "22. no review starts after a finding is parked as still owed": unreviewed,
+    "23. a moved finding no role classified is counted in the result": counted,
 }
 
 
@@ -1041,6 +1107,7 @@ ENDED_AS: dict[str, Callable[[Ending], object]] = {
     "carriedOwed": lambda ending: ending.carried,
     "keepsUnstated": lambda ending: ending.unstated,
     "assumesRole": lambda ending: ending.assumes_role,
+    "unclassified": lambda ending: ending.unclassified,
 }
 NOT_ENDED = Ending(Outcome.ERROR)
 """What ``ENDED_AS`` reads of a run that has not ended: every field's default."""

@@ -34,7 +34,7 @@ What it leaves out is listed [at the end](#left-out).
 | A role published | yes once any agent committed, pushed or opened a pull request |
 | How it ended | still running; approved; changes requested, with what forced it; stopped (blocked) with the reason, and for too large the ceiling, where it was measured, whether parts are proposed and whether the orchestrator splits it unasked; or the script's error, naming the agent and whether to resume. A stop after a role that builds or judges names that role and says the open questions hold the case. A verdict also carries the fix rounds, an unresolved finding, the lost promises for the next run, the kept promise in the assumptions, the verdict record, and whether the branch was judged again. A stop for too large says that too |
 
-A builder is the agent that changes code: the build, a fix round or the reconcile. From the start the model reaches 6,164 states and 21,086 steps. 5,144 of the states are a run that has ended. Every state after the first answer is there twice, once with a role that published and once without.
+A builder is the agent that changes code: the build, a fix round or the reconcile. From the start the model reaches 5,948 states and 18,782 steps. 5,024 of the states are a run that has ended. Every state after the first answer is there twice, once with a role that published and once without.
 
 ## Steps
 
@@ -82,8 +82,10 @@ The method's promises are twenty-five rules, each about a step. The model number
 | 17 | `Asked` | A case the fork test gives the owner, from any role that returns one, ends the run blocked after that role with a question, so no run holding one is approved. | holds |
 | 18 | `RoleDecided` | A case or an amended assumption the fork test gives a role reaches the assumptions of every run that ends with a verdict. | holds |
 | 19 | `Unquoted` | A blocker or major whose quote its record does not hold sends no fix agent and is never dropped: it reaches the review, which gives it to a role or the owner. | holds |
-| 20 | `ParksCarried` | A critic finding still owed after the round it was fixed in starts no further round, and the run ends refused with it unresolved. | holds |
+| 20 | `ParksCarried` | A critic finding still owed after the round it was fixed in starts no further round, and the run ends refused with it unresolved, after that critique. | holds |
 | 21 | `SecondRoundKept` | A new blocker or major after a fix round, which carries no earlier finding, still gets the next round while one is left. | holds |
+| 22 | `Unreviewed` | No review starts after a finding is parked as still owed. | holds |
+| 23 | `Counted` | A moved finding that no role classified is counted in the result, and nothing else is. | holds |
 
 `Bounded` and `Unpublished` cover the script's own `agent()` calls and the text of its prompts, and no more. Neither covers what a role does: an agent a role spawns, or a commit, push or pull request a role makes. Only the prompt tells a role not to.
 
@@ -121,15 +123,15 @@ The model was turned first to the owner's decision that a project nobody depends
 
 ## The real script against the model
 
-The answers are finite and the script is deterministic given them, so nothing here samples. The test walks every complete run of the model in which no role published: 33,305 sequences of answers from the start to an end. A run in which a role published hands the script the same answers, so it plays the same. 33,237 are first builds, 27 judge a branch whose rebase conflicted, 27 one whose check went red, 12 one that rebased cleanly, one has no slug or spec path and one has no ticket. The longest has 12 answers. 4,536 of the first builds spend the fix pass. Each abstract answer stands for one concrete answer the script's schema allows, and every play checks it against the schema the script passed for that call.
+The answers are finite and the script is deterministic given them, so nothing here samples. The test walks every complete run of the model in which no role published: 29,345 sequences of answers from the start to an end. A run in which a role published hands the script the same answers, so it plays the same. 29,277 are first builds, 27 judge a branch whose rebase conflicted, 27 one whose check went red, 12 one that rebased cleanly, one has no slug or spec path and one has no ticket. The longest has 13 answers. 4,536 of the first builds spend the fix pass. Each abstract answer stands for one concrete answer the script's schema allows, and every play checks it against the schema the script passed for that call.
 
 All of them run on `workflows/pipeline.js` itself in one node process, in a context whose only globals are the language's own, with `agent`, `phase` and `log` passed in. The longest first build and the longest conflicted rejudge run once more, reading the ticket from a local file. That makes 33,307 plays. Each must call the same agents in the same stages as the model, and end as the model ends: the same verdict, the same reasons it was forced, the same stop or error. Every git or forge command any prompt names must be one the model allows that role. The test file takes about a minute and a half on four workers.
 
 ## Charts
 
-The rules were checked in Python on `Pipeline.tla`, SHA-256 `5312843f980222e01e5bd4ac33e0c3cac4f2e164af9e6f5e7402da03de96e174`: 6,164 states and 21,086 steps, twenty-two rules hold and three break, each by the run above. TLC has not been run on this module and the charts below were drawn from the model before ADR 0072; both are owed to the next change that runs the `statechart` command. A run that has ended has no step out, so the module tells TLC that this is no deadlock.
+The rules were checked in Python on `Pipeline.tla`, SHA-256 `ca70c472d2fc232c0f8635929fd482a0be4272124ace8c2b250f21badc25c9db`: 5,948 states and 18,782 steps, twenty-four rules hold and three break, each by the run above. TLC has not been run on this module and the charts below were drawn from the model before ADR 0072; both are owed to the next change that runs the `statechart` command. A run that has ended has no step out, so the module tells TLC that this is no deadlock.
 
-That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `189f798b36211f6a5f276a2fab72d2429ac272f868982451650ca72ca364b02b`: the same graph seen through the stage a run is at, and each step through the answer the script reads, so whether a role published does not show there. The stage is the agent the run waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 79 states and 175 steps. A box groups states, and an arrow from a box leaves every state in it.
+That module is too large for the statechart tool to draw whole. The tool draws only the shortest run to each rule that breaks, which is the last chart. The others are drawn from `PipelineStage.tla`, SHA-256 `7ae39112b64e5a56a85bc70954caff98e967f430b7cf466ccc95035edfbec237`: the same graph seen through the stage a run is at, and each step through the answer the script reads, so whether a role published does not show there. The stage is the agent the run waits on, or how it ended and after which stage, with whether it is a rejudge, whether the critic runs, and the fix rounds. Each of those reports says that TLC reached 79 states and 175 steps. A box groups states, and an arrow from a box leaves every state in it.
 
 ### A first build
 

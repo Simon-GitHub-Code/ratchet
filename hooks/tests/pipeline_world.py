@@ -284,6 +284,7 @@ function refused(schema, value, at) {
   return found
 }
 const broken = {}
+const shapes = {}
 function kept(result) {
   const too = result.tooLarge
   return {
@@ -302,6 +303,7 @@ function kept(result) {
     built: (result.filesChanged || []).length,
     stoppedAfter: result.stoppedAfter ?? null,
     carried: (result.carriedStillOwed || []).length,
+    unclassified: result.unclassified ?? 0,
     unstated: (result.unstated || []).filter(e => e.of).length,
     questions: (result.openQuestions || []).length,
     guardEdits: (result.guardEdits || []).length,
@@ -337,7 +339,9 @@ async function main() {
       return JSON.parse(text)
     }
     try {
-      const result = kept(await pipeline(run.args, agent, () => {}, () => {}))
+      const full = await pipeline(run.args, agent, () => {}, () => {})
+      shapes[Object.keys(full).sort().join(',')] ??= full
+      const result = kept(full)
       played.push({ calls, told, result })
     } catch (error) {
       played.push({ calls, told, error: { name: error.name, message: String(error.message) } })
@@ -345,7 +349,7 @@ async function main() {
   }
   const effects = Object.fromEntries(
     Object.entries(commands).map(([role, found]) => [role, [...found].sort()]))
-  console.log(JSON.stringify({ played, effects, broken }))
+  console.log(JSON.stringify({ played, effects, broken, shapes: Object.values(shapes) }))
 }
 main()
 """
@@ -367,6 +371,8 @@ class Batch:
     played: list[Played]
     effects: dict[Role, frozenset[str]]
     """Per role, every git or forge command any of its prompts named."""
+    results: list[dict[str, Any]]
+    """One whole result for each distinct set of members a run returned."""
 
 
 def expected_calls(actions: list[Action]) -> tuple[tuple[str, str], ...]:
@@ -414,7 +420,7 @@ def play(runs: list[list[Action]], local: list[list[Action]] | None = None) -> B
         for raw in out["played"]
     ]
     effects = {Role(role): frozenset(found) for role, found in out["effects"].items()}
-    return Batch(played, effects)
+    return Batch(played, effects, out["shapes"])
 
 
 FORCED = {
@@ -483,6 +489,7 @@ def stopped(result: dict[str, Any]) -> Ending:
             after=Role(ROUND.sub("", result["stoppedAfter"])),
             asks=result["questions"] > 0,
             rejudged=result["rejudged"],
+            unclassified=result["unclassified"] > 0,
         )
     stops = [
         (Stop.QUESTION, result["questions"] > 0),
@@ -502,8 +509,13 @@ def ending(raw: dict[str, Any]) -> Ending:
     outcome = Outcome(result["verdict"])
     if outcome is Outcome.BLOCKED:
         return stopped(result)
+    parked = result["stop"] == "carried"
     return Ending(
         outcome,
+        stop=Stop.CARRIED if parked else None,
+        after=Role(ROUND.sub("", result["stoppedAfter"])) if parked else None,
+        asks=parked and result["questions"] > 0,
+        unclassified=result["unclassified"] > 0,
         objections=frozenset(map(objection, result["forcedBy"])),
         rounds=result["iterations"],
         unresolved=result["unresolved"] > 0,
