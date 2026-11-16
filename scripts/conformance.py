@@ -409,9 +409,12 @@ def made(tree: Path, name: str, want: gatelib.Want) -> Iterator[bool]:
     created = [parent for parent in target.parents if not parent.exists()]
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(after)
+    listed = gatelib.listings.set(None) if data is None else None
     try:
         yield True
     finally:
+        if listed is not None:
+            gatelib.listings.reset(listed)
         if data is not None:
             target.write_bytes(data)
         elif created:
@@ -2716,7 +2719,13 @@ def findings(root: Path, *, owned: bool = False) -> list[Finding]:
             tree = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="ratchet-trial-")))
             copied(root, tree)
         raised_after: Raised = {}
-        return [tried(tree, check, failure, raised_after=raised_after) for check, failure in found]
+        listed = gatelib.listings.set({})
+        try:
+            return [
+                tried(tree, check, failure, raised_after=raised_after) for check, failure in found
+            ]
+        finally:
+            gatelib.listings.reset(listed)
 
 
 def failures(root: Path) -> list[str]:
