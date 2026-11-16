@@ -57,7 +57,8 @@ Usage::
   ``tree`` from ``runrecord.py``), so one reader serves both. The ceiling is null: a parallel
   run's seconds include contention for the machine, so ceilings are judged by ``budget.py`` where
   one gate runs alone, as CI does. The slowest gate is named in the closing lines either way.
-  When the run ends, one more line (``kind`` ``tier``) holds the wall time of the whole run.
+  When the run ends, one more line (``kind`` ``tier``) holds the wall time of the whole run and the
+  gate names in the order given.
 * After the closing lines, each path the binding's Cache line names (its code spans) that does
   not exist is said in one line, and with ``--report`` has a line of its own (``kind``
   ``cache-missing``, ``path``) after the tier's.
@@ -430,7 +431,7 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     return problems
 
 
-def record(scheduler: Scheduler, wall: float, exit_code: int) -> None:
+def record(scheduler: Scheduler, wall: float, *, exit_code: int, gates: list[str]) -> None:
     """The tier's whole line, then one line for each Cache path the run left missing."""
     missing = runrecord.missing_cache(scheduler.root)
     for path in missing:
@@ -443,7 +444,7 @@ def record(scheduler: Scheduler, wall: float, exit_code: int) -> None:
         "seconds": round(wall, 3),
         "status": "red" if exit_code else "green",
         "exit": exit_code,
-        "gates": len(scheduler.finished),
+        "gates": gates,
         **stamp,
     }
     runrecord.append(scheduler.report_to, whole)
@@ -513,7 +514,7 @@ def main(argv: list[str]) -> int:
     problems = closing(scheduler, wall)
     for line in problems:
         say(line)
-    record(scheduler, wall, 1 if problems else 0)
+    record(scheduler, wall, exit_code=1 if problems else 0, gates=gates)
     say(verdict(scheduler, problems))
     return 1 if problems else 0
 
