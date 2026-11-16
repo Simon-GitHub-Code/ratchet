@@ -10,6 +10,7 @@ is the merge base, before is ``HEAD~1``. ``lowered``, ``guard-diff`` and the gat
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import errno
 import fnmatch
 import ipaddress
@@ -132,8 +133,26 @@ def changed_paths(root: Path, base: str) -> list[str]:
     return sorted({p for p in (tracked + (untracked or "")).split("\0") if p})
 
 
+listings: contextvars.ContextVar[dict[Path, list[str]] | None] = contextvars.ContextVar(
+    "listings", default=None
+)
+
+
 def tracked_paths(root: Path, ref: str | None = None) -> list[str]:
-    """Every path git tracks at ``ref`` (the work tree when ``None``), untracked files included."""
+    """Every path git tracks at ``ref`` (the work tree when ``None``), untracked files included.
+
+    Why: while ``listings`` holds a dict, a tree's work-tree listing is read once. The holder
+    promises that no file of the tree appears or goes meanwhile.
+    """
+    if ref is None and (kept := listings.get()) is not None:
+        if root not in kept:
+            kept[root] = listed_paths(root)
+        return list(kept[root])
+    return listed_paths(root, ref)
+
+
+def listed_paths(root: Path, ref: str | None = None) -> list[str]:
+    """What git lists of ``root`` at ``ref``, as ``tracked_paths`` says."""
     if ref is not None:
         listed = git(root, "ls-tree", "-r", "--name-only", "-z", ref) or ""
         return sorted(p for p in listed.split("\0") if p)
