@@ -1,8 +1,12 @@
 """``report``: a shared report is produced once for a run and read by every gate that asks."""
 
+import fcntl
 import os
 import stat
 import subprocess
+import sys
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -18,6 +22,11 @@ FAKE_JUST = (
     "#!/bin/sh\n"
     'echo "$@" >> "$COUNT"\n'
     '[ -n "$PRINT" ] && echo "$PRINT"\n'
+    'if [ -n "$RELEASE" ]; then\n'
+    '  echo start >> "$MARKS"\n'
+    '  while [ ! -e "$RELEASE" ]; do sleep 0.05; done\n'
+    '  echo end >> "$MARKS"\n'
+    "fi\n"
     "sleep 0.3\n"
     '[ -n "$WRITES" ] && echo built > out.txt\n'
     'exit "${STATUS:-0}"\n'
@@ -62,6 +71,8 @@ def work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COUNT", str(tmp_path / "count"))
     monkeypatch.setenv("WRITES", "1")
     monkeypatch.setenv("PRINT", "")
+    monkeypatch.setenv("RELEASE", "")
+    monkeypatch.setenv("MARKS", str(tmp_path / "marks"))
     for name in (report.RUN, "SHARD", "SHARDS", "STATUS"):
         monkeypatch.delenv(name, raising=False)
     return root
@@ -328,3 +339,72 @@ def test_a_binding_that_shares_none_names_no_report() -> None:
     assert report.parse(
         binding("| none: the suite is one gate's own | none | none | none | none |\n")
     ) == ([], [])
+
+
+def test_a_path_is_printed_alone_and_one_the_row_does_not_list_is_refused(
+    work: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    assert report.main(["suite", "--reader", "test", "--path", "out.txt", "--root", str(work)]) == 0
+    assert capfd.readouterr().out == "out.txt\n"
+    args = ["suite", "--reader", "test", "--path", "other.txt", "--root", str(work)]
+    assert report.main(args) == 2
+    assert capfd.readouterr().err == (
+        "report suite: 'other.txt' is not one of its paths in '## Shared reports'\n"
+    )
+
+
+def test_a_report_produced_again_in_one_run_says_why(
+    work: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(report.RUN, "run-1")
+    ask(work)
+    assert capfd.readouterr().err == ""
+    (work / "src.txt").write_text("two\n", encoding="utf-8")
+    ask(work)
+    assert capfd.readouterr().err == (
+        "report suite: produced again, because the tree's content changed since this run"
+        " produced it\n"
+    )
+    monkeypatch.setenv(report.RUN, "run-2")
+    (work / "src.txt").write_text("three\n", encoding="utf-8")
+    ask(work)
+    assert capfd.readouterr().err == ""
+
+
+def waiting_for(condition: Callable[[], bool], what: str) -> None:
+    deadline = time.monotonic() + 30
+    while not condition():
+        assert time.monotonic() < deadline, what
+        time.sleep(0.05)
+
+
+def test_a_reader_killed_mid_production_leaves_the_lock_held_and_no_record(
+    work: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    release = tmp_path / "release"
+    marks = tmp_path / "marks"
+    monkeypatch.setenv(report.RUN, "run-1")
+    monkeypatch.setenv("RELEASE", str(release))
+    command = [sys.executable, report.__file__, "suite", "--reader", "test", "--root", str(work)]
+    first = subprocess.Popen(  # noqa: S603 # -- a fixed argv, no shell
+        command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    second = None
+    try:
+        waiting_for(marks.exists, "the producer started")
+        first.kill()
+        first.wait()
+        folder = work / report.FOLDER
+        assert not list(folder.glob("*.json"))
+        with (folder / "suite-1of1.lock").open("w") as lock, pytest.raises(BlockingIOError):
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        second = subprocess.Popen(  # noqa: S603 # -- a fixed argv, no shell
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        assert marks.read_text(encoding="utf-8").split() == ["start"]
+    finally:
+        release.write_text("", encoding="utf-8")
+        if second is not None:
+            assert second.wait(timeout=60) == 0
+    waiting_for(lambda: marks.read_text(encoding="utf-8").split().count("end") == 2, "both ended")
+    assert marks.read_text(encoding="utf-8").split() == ["start", "end", "start", "end"]

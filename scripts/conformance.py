@@ -1441,6 +1441,13 @@ def unignored_paths(root: Path, shared: report.Report) -> Iterable[Finding]:
             )
 
 
+def outside_path_argument(line: str, path: str) -> str:
+    if report.SCRIPT not in line:
+        return line
+    argument = re.compile(rf"--path[ =]+(['\"]?){re.escape(path)}\1(?![\w./-])")
+    return argument.sub("", line)
+
+
 def recipe_lines(justfile: str, recipe: str) -> list[str]:
     body = justfile_text.code_of("\n".join(justfile_text.definition(justfile, recipe)))
     return [line for line in body.replace("\\\n", " ").splitlines() if line[:1] in " \t"]
@@ -1457,11 +1464,12 @@ def shared_report_recipes(justfile: str, shared: report.Report) -> Iterable[Find
     for command in shared.readers:
         name = report.recipe_of(command)
         for line in recipe_lines(justfile, name):
-            named = [path for path in shared.paths if path in line]
-            if named and report.SCRIPT not in line:
+            named = [path for path in shared.paths if path in outside_path_argument(line, path)]
+            if named:
                 yield agent(
                     f"justfile: the recipe '{name}' reads the shared report '{shared.name}'"
-                    f" ({', '.join(named)}) other than through {report.SCRIPT}: {line.strip()}"
+                    f" ({', '.join(named)}) other than as the --path argument of {report.SCRIPT}:"
+                    f" {line.strip()}"
                 )
 
 

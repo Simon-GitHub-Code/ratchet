@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """A shared report: produced once for a run, read by every gate that asks (ADR 0071).
 
-Usage: ``report.py [--root DIR] <report>`` prints the report's paths, one per line, and exits 0.
+Usage: ``report.py [--root DIR] <report> --reader <gate> [--path <path>]`` prints the report's
+paths, or the one path asked for, one per line, and exits 0.
 It runs the producer the binding's ``## Shared reports`` table names unless this run already
 produced the report from this tree's content, and readers that ask together wait for the first.
 It exits 1 with one line when the producer failed or a path is missing.
+The run id, ``RATCHET_RUN``, is trusted as given: one left set in a shell makes every run started
+there one run, as ADR 0071 accepts.
 """
 
 from __future__ import annotations
@@ -173,12 +176,20 @@ def obtain(root: Path, report: Report) -> tuple[int, Path]:
         stored = held(record)
         if run and stored and stored[:2] == (run, content):
             return stored[2], log
+        if run and stored and stored[0] == run:
+            print(
+                f"report {report.name}: produced again, because the tree's content changed since"
+                " this run produced it",
+                file=sys.stderr,
+            )
+        record.unlink(missing_ok=True)
         with log.open("wb") as output:
             status = subprocess.run(
                 shlex.split(report.producer),
                 cwd=root,
                 stdout=output,
                 stderr=subprocess.STDOUT,
+                pass_fds=(lock.fileno(),),
                 check=False,
             ).returncode
         record.write_text(
@@ -187,27 +198,42 @@ def obtain(root: Path, report: Report) -> tuple[int, Path]:
         return status, log
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="report.py")
-    parser.add_argument("report")
-    parser.add_argument("--reader", required=True)
-    parser.add_argument("--root", type=Path, default=Path())
-    args = parser.parse_args(argv)
-    root = args.root.resolve()
+def choose(root: Path, args: argparse.Namespace) -> tuple[Report | None, int]:
     reports, problems = parse(gatelib.read_text(root / gatelib.BINDING))
     if reports is None:
         print(f"report: {gatelib.BINDING}: {'; '.join(problems)}", file=sys.stderr)
-        return 1
+        return None, 1
     report = next((found for found in reports if found.name == args.report), None)
     if report is None:
         print(f"report: '{SECTION}' names no report '{args.report}'", file=sys.stderr)
-        return 1
+        return None, 1
     if args.reader not in map(recipe_of, report.readers):
         print(
             f"report {report.name}: '{args.reader}' is not one of its readers in '{SECTION}'",
             file=sys.stderr,
         )
-        return 2
+        return None, 2
+    if args.path is not None and args.path not in report.paths:
+        print(
+            f"report {report.name}: '{args.path}' is not one of its paths in '{SECTION}'",
+            file=sys.stderr,
+        )
+        return None, 2
+    return report, 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="report.py")
+    parser.add_argument("report")
+    parser.add_argument("--reader", required=True)
+    parser.add_argument("--path")
+    parser.add_argument("--root", type=Path, default=Path())
+    args = parser.parse_args(argv)
+    root = args.root.resolve()
+    report, refused = choose(root, args)
+    if report is None:
+        return refused
+    wanted = report.paths if args.path is None else (args.path,)
     status, log = obtain(root, report)
     if status:
         judge = recipe_of(report.judge)
@@ -219,14 +245,14 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
-    missing = [path for path in report.paths if not (root / path).exists()]
+    missing = [path for path in wanted if not (root / path).exists()]
     if missing:
         print(
             f"report {report.name}: `{report.producer}` wrote no {', '.join(missing)}",
             file=sys.stderr,
         )
         return 1
-    print("\n".join(report.paths))
+    print("\n".join(wanted))
     return 0
 
 

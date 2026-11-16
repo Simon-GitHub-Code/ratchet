@@ -243,7 +243,13 @@ def test_a_recipe_learns_its_shard_from_the_environment_and_is_whole_without_one
         assert "shard {{shard}} of {{shards}}" in recipe(name), name
     for gate in ("test", "coverage", "diff-coverage", "test-counts"):
         assert f"report.py --reader {gate}" in recipe(gate), f"{gate} reads the shared suite report"
-    assert "--reader coverage | sed -n 1p" in recipe("coverage"), "coverage takes the row's path"
+    body = recipe("coverage")
+    assert 'report="$(' in body, "coverage keeps report.py's exit status"
+    assert "--reader coverage --path " in body, "coverage asks for its path"
+    assert (
+        '&& {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report "$report"'
+        in body
+    )
     assert "--report coverage.xml" not in recipe("coverage")
     assert "test_runner" in recipe("suite-report"), "the producer runs the runner adoption set up"
 

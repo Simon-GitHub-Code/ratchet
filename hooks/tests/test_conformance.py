@@ -1055,19 +1055,29 @@ def test_a_reader_that_opens_its_shared_reports_path_itself_is_red_with_the_line
     replace("justfile", "coverage: _plugin\n", "coverage: _plugin\n    cat suite.xml\n")(repo)
     problem = (
         "justfile: the recipe 'coverage' reads the shared report 'suite' (suite.xml) other than"
-        " through scripts/report.py: cat suite.xml"
+        " as the --path argument of scripts/report.py: cat suite.xml"
     )
     assert red(repo) == [problem]
 
 
-def test_a_reader_that_asks_the_script_for_the_path_is_green(repo: Path) -> None:
+@pytest.mark.parametrize(
+    "written", ["--path suite.xml", "--path 'suite.xml'", '--path="suite.xml"']
+)
+def test_a_reader_that_asks_the_script_for_the_path_is_green(repo: Path, written: str) -> None:
     sharing(repo)
     replace(
         "justfile",
         "coverage: _plugin\n",
-        f"coverage: _plugin\n    cat $({SCRIPT}) suite.xml\n",
+        f"coverage: _plugin\n    cat $({SCRIPT} --reader coverage {written})\n",
     )(repo)
     assert red(repo) == []
+
+
+def test_a_path_named_beside_a_call_of_the_script_is_still_red(repo: Path) -> None:
+    sharing(repo)
+    line = f"{SCRIPT} --reader coverage --path suite.xml && cat suite.xml"
+    replace("justfile", "coverage: _plugin\n", f"coverage: _plugin\n    {line}\n")(repo)
+    assert [found.split(": ")[-1] for found in red(repo)] == [line]
 
 
 def test_a_path_named_in_a_comment_or_by_a_recipe_that_does_not_read_is_green(repo: Path) -> None:
@@ -1082,7 +1092,7 @@ def test_a_continued_line_is_one_line(repo: Path) -> None:
     replace(
         "justfile",
         "coverage: _plugin\n",
-        f"coverage: _plugin\n    {SCRIPT} \\\n      && cat suite.xml\n",
+        f"coverage: _plugin\n    {SCRIPT} --reader coverage --path suite.xml \\\n      && cat x\n",
     )(repo)
     assert red(repo) == []
 
