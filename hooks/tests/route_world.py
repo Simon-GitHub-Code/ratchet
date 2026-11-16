@@ -5,9 +5,10 @@ commits ``AGENTS.md``, ``/ratchet:adopt`` commits the binding, the manifest and 
 quality files on its own branch and merges it, the spec skills leave records uncommitted on the
 default branch, ``merge --records`` commits them on a ``records/<time>`` branch and merges it or
 leaves it parked, and the drain writes its note through ``drain.close``, parking for the safeguard
-on what the real triggers gate printed. An owner's edit of a ticket is committed on the default
-branch at once, as the model has it. ``classify`` reads a real ``route.Step`` back as the model's
-advice label.
+on what the real triggers gate printed. In about half the states where records landed from the
+default branch are left parked, an agent committed them on a ``docs/tickets-<n>`` branch it named
+itself instead. An owner's edit of a ticket is committed on the default branch at once, as the
+model has it. ``classify`` reads a real ``route.Step`` back as the model's advice label.
 
 ``apply`` never runs ``scripts/merge.py``. Each merge it makes, of a working branch, of a records
 branch, or the drain's, is written with git: the merge that leaves the default branch checked out,
@@ -42,10 +43,12 @@ import functools
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -145,6 +148,12 @@ FLAG_ANSWER = (
     "## Operability\n\n- Flag: none: the owner chose to have it appear as soon as it is finished,"
     " while the project is not deployed\n"
 )
+CRITERIA = "## Acceptance criteria"
+STORIES = "## User Stories"
+SPEC = f"# Settle\n\n{STORIES}\n\n1. As the owner, I am told the next command.\n"
+CONJECTURE_SKILL: Final = plugin_pin.PLUGIN / "skills/conjecture/SKILL.md"
+CRITERIA_LINE: Final = re.compile(r"^- Criteria: .*$", re.MULTILINE)
+DIGEST: Final = re.compile(r"[0-9a-f]{40}")
 GLOSSARY = "# Glossary\n\n**Customer**: who pays.\n"
 PLACEHOLDER = "# <project>\n"
 ADOPT_TEMPLATES: Final = plugin_pin.PLUGIN / "skills/adopt/templates"
@@ -161,6 +170,51 @@ OWN_CONJECTURE: Final = frozenset(Ticket) - {
     Ticket.RESOLVED,
 }
 LETTERS: Final = "ab"
+TICKETS_BRANCH: Final = "docs/tickets-"
+
+
+@functools.cache
+def digest_command() -> str:
+    line = next(
+        line
+        for line in CONJECTURE_SKILL.read_text(encoding="utf-8").splitlines()
+        if "**The body is a file**" in line
+    )
+    return re.findall(r"`([^`]+)`", line)[-1]
+
+
+@functools.cache
+def criteria_digest(body: str, heading: str) -> str:
+    with tempfile.TemporaryDirectory(prefix="ratchet-criteria-") as scratch:
+        path = Path(scratch) / "body.md"
+        path.write_text(body, encoding="utf-8")
+        command = digest_command().replace("<file>", shlex.quote(str(path)))
+        ran = subprocess.run(  # noqa: S603 # -- the conjecture skill's own command
+            ["sh", "-c", command.replace("<heading>", heading)],  # noqa: S607 # -- as the skill runs it
+            cwd=scratch,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    digest = ran.stdout.strip()
+    assert DIGEST.fullmatch(digest), f"the digest command printed {ran.stdout!r}"
+    return digest
+
+
+def criteria_line(body: str, heading: str) -> str:
+    return f"- Criteria: `{heading}` `{criteria_digest(body, heading)}`\n"
+
+
+def redraft(path: Path, heading: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    line = criteria_line(text, heading).rstrip("\n")
+    path.write_text(CRITERIA_LINE.sub(lambda _old: line, text), encoding="utf-8")
+
+
+def add_criterion(path: Path, heading: str, criterion: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    held = markdown_text.section(text, heading).strip("\n")
+    path.write_text(with_body(text, heading, f"{held}\n{criterion}"), encoding="utf-8")
 
 
 def share_objects(source: str, target: str) -> None:
@@ -292,6 +346,9 @@ class Repo:
         left = [entry for entry in owed.read(self.root).entries if not done(entry)]
         write(self.root, str(owed.LEDGER), owed.render(left))
 
+    def spec_path(self) -> str:
+        return f"{self.feature()}/spec.md"
+
     def ticket_path(self, slot: int) -> str:
         """The local ticket in ``slot``: ``.scratch/f<n>/issues/NN-<letter><n>.md``."""
         return f"{self.feature()}/issues/{slot + 1:02d}-{LETTERS[slot]}{self.spec}.md"
@@ -301,12 +358,17 @@ class Repo:
         return f"feature/{slot + 1}-{LETTERS[slot]}{self.spec}"
 
     def ticket_text(self, slot: int, ticket: Ticket, *, inherits: bool) -> str:
-        """The ticket file: title, blocker, status and, when it has one, its own conjecture."""
+        """The ticket file: title, blocker, status, criteria and, if it has one, its conjecture."""
         blocker = "Blocked by: 01\n\n" if slot == 1 else ""
-        head = f"# {slot + 1:02d}: {LETTERS[slot].upper()}{self.spec}\n\n{blocker}"
-        own = CONJECTURE if ticket in OWN_CONJECTURE and not inherits else ""
+        name = f"{LETTERS[slot].upper()}{self.spec}"
+        head = f"# {slot + 1:02d}: {name}\n\n{blocker}"
         status = STATUS.get(ticket, "ready-for-agent")
-        return f"{head}Status: {status}\n" + (f"\n{own}" if own else "")
+        criteria = f"{CRITERIA}\n\n- [ ] The route names the next command for {name}.\n"
+        text = f"{head}Status: {status}\n\n{criteria}"
+        if ticket in OWN_CONJECTURE and not inherits:
+            text = f"{text}\n{CONJECTURE}"
+            return f"{text}\n{criteria_line(text, CRITERIA)}"
+        return text
 
     def write_ticket(self, slot: int, ticket: Ticket, *, inherits: bool) -> None:
         """Write the ticket in ``slot`` in its new state, leaving it uncommitted."""
@@ -319,9 +381,11 @@ class Repo:
         path.write_text(f"{path.read_text(encoding='utf-8')}\n{text} ({self.edits})\n", "utf-8")
         snapshot(self.root, f"docs(tracker): {text.lower()}")
 
-    def next_records_branch(self) -> str:
-        """A fresh ``records/<time>`` name; a counter stands for the time."""
+    def next_records_branch(self, *, named: bool = False) -> str:
+        """A fresh ``records/<time>`` name, a counter for the time; ``named``, an agent's own."""
         self.records += 1
+        if named:
+            return f"{TICKETS_BRANCH}{self.records}"
         return f"{merge.RECORDS}20261113-{self.records:06d}"
 
 
@@ -337,6 +401,20 @@ class Change:
         """The ticket the action moved."""
         pairs = zip(self.before.tickets, self.after.tickets, strict=True)
         return next(slot for slot, (old, new) in enumerate(pairs) if old != new)
+
+
+def named_by_an_agent(change: Change) -> bool:
+    """Whether a landing from the default branch leaves its records on a branch an agent named.
+
+    Why a hash of the state it leaves: the route finds a waiting branch by what it holds, not by
+    its name, so about half the states where one waits name it otherwise, whatever else they
+    hold. A run that stopped on its ``records/<time>`` branch keeps that name.
+    """
+    return (
+        change.before.head is Head.MAIN
+        and change.after.parked
+        and zlib.crc32(repr(change.after).encode()) % 2 == 1
+    )
 
 
 Handler = Callable[[Repo, Change], None]
@@ -438,13 +516,14 @@ def _owner_grills(repo: Repo, _change: Change) -> None:
 @does(ActionName.OWNER_WRITES_SPEC)
 def _owner_writes_spec(repo: Repo, _change: Change) -> None:
     repo.spec += 1
-    write(repo.root, f"{repo.feature()}/spec.md", "# Settle\n")
+    write(repo.root, repo.spec_path(), SPEC)
 
 
 @does(ActionName.OWNER_STATES_SPEC_CONJECTURE)
 def _owner_states_spec_conjecture(repo: Repo, change: Change) -> None:
     flag = f"\n{FLAG_ANSWER}" if change.after.flag is not Flag.WAITS else ""
-    write(repo.root, f"{repo.feature()}/spec.md", f"# Settle\n\n{CONJECTURE}{flag}")
+    stated = f"{SPEC}\n{CONJECTURE}"
+    write(repo.root, repo.spec_path(), f"{stated}\n{criteria_line(stated, STORIES)}{flag}")
 
 
 def answers_the_flag_on_the_spec(repo: Repo) -> None:
@@ -462,11 +541,31 @@ def _owner_states_conjecture(repo: Repo, change: Change) -> None:
     Why the spec: the conjecture writes the answer on the spec when the ticket has one, and each
     ticket of the spec reads it there (ADR 0061).
     """
-    if change.before.tickets != change.after.tickets:
-        repo.write_ticket(change.slot, Ticket.STATED, inherits=change.after.inherits)
+    moved = list(enumerate(zip(change.before.tickets, change.after.tickets, strict=True)))
+    for slot, pair in moved:
+        if pair == (Ticket.READY, Ticket.STATED):
+            repo.write_ticket(slot, Ticket.STATED, inherits=change.after.inherits)
+    redrafts = [slot for slot, pair in moved if pair == (Ticket.STALE, Ticket.STATED)]
+    if redrafts and change.after.inherits:
+        redraft(repo.root / repo.spec_path(), STORIES)
+    elif redrafts:
+        for slot in redrafts:
+            redraft(repo.root / repo.ticket_path(slot), CRITERIA)
     if change.after.flag is not Flag.WAITS:
         answers_the_flag_on_the_spec(repo)
     snapshot(repo.root, "docs(tracker): the owner's conjecture of a ticket")
+
+
+@does(ActionName.OWNER_EDITS_CRITERIA)
+def _owner_edits_criteria(repo: Repo, change: Change) -> None:
+    repo.edits += 1
+    if change.after.inherits:
+        story = f"2. As the owner, I am told why ({repo.edits})."
+        add_criterion(repo.root / repo.spec_path(), STORIES, story)
+    else:
+        criterion = f"- [ ] The route says why ({repo.edits})."
+        add_criterion(repo.root / repo.ticket_path(change.slot), CRITERIA, criterion)
+    snapshot(repo.root, "docs(tracker): the owner's edit of the criteria")
 
 
 @does(ActionName.OWNER_SPLITS_SPEC)
@@ -628,7 +727,7 @@ def _owner_lands_guard_edits(repo: Repo, _change: Change) -> None:
 
 @does(ActionName.OWNER_CHANGES_TICKET)
 def _owner_changes_ticket(repo: Repo, change: Change) -> None:
-    repo.add_to_ticket(change.slot, "Narrowed: the first half only")
+    repo.add_to_ticket(change.slot, "## Scope\n\nNarrowed: the first half only")
 
 
 @does(ActionName.KIND_OF_CODE_ARRIVES)
@@ -863,7 +962,7 @@ def _records_run_stops(repo: Repo, _change: Change) -> None:
 @does(ActionName.AGENT_LANDS_RECORDS)
 def _agent_lands_records(repo: Repo, change: Change) -> None:
     if change.before.head is Head.MAIN:
-        branch(repo.root, repo.next_records_branch())
+        branch(repo.root, repo.next_records_branch(named=named_by_an_agent(change)))
     name = repo.head()
     if git(repo.root, "status", "--porcelain"):
         snapshot(repo.root, "docs(records): land what the owner's conversation wrote")
@@ -916,6 +1015,7 @@ RELEASES: Final = {
     "land the guard edits the run of": Advice.LAND_GUARD,
     "change ticket": Advice.CHANGE_TICKET,
 }
+WAITING: Final = "its change holds only records"
 
 
 def classify(step: route.Step) -> Advice | None:
@@ -924,7 +1024,8 @@ def classify(step: route.Step) -> Advice | None:
     One stage names several labels: ``records`` for the glossary, a stopped run, records to land
     and a branch to merge; ``specify`` for the spec, its conjecture and its split; ``blocked-run``
     for a feature run's stash and each kind of hold the drain's note records. The command tells
-    them apart, and the why where two labels share one (``merge --records``).
+    them apart, and the why where two labels share one (``merge --records``) or where the command
+    names a branch whatever its name: a waiting branch is one whose change holds only records.
     """
     if step.stage == "records":
         return _records(step)
@@ -942,7 +1043,7 @@ def _records(step: route.Step) -> Advice | None:
         return Advice.GRILL
     if "--records" in step.command:
         return Advice.FINISH_RECORDS if "stopped on branch" in step.why else Advice.LAND_RECORDS
-    return Advice.MERGE_RECORDS if merge.RECORDS in step.command else None
+    return Advice.MERGE_RECORDS if WAITING in step.why else None
 
 
 def _specify(step: route.Step) -> Advice | None:

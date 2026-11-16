@@ -600,6 +600,12 @@ def _judged(text: str, make_guard: Callable[[], Guard]) -> tuple[object, Verdict
     return payload, verdict
 
 
+def common_directory(root: Path) -> Path | None:
+    """The git common directory of the repository holding ``root``, or ``None`` outside one."""
+    common = _git(root, "rev-parse", "--git-common-dir", timeout=LOG_TIMEOUT_SECONDS)
+    return root / common if common else None
+
+
 def _log(root: Path, payload: object, verdict: Verdict) -> None:
     """Append ``verdict`` to the event log in the git common directory of ``root``, if any.
 
@@ -607,8 +613,8 @@ def _log(root: Path, payload: object, verdict: Verdict) -> None:
     hook's own time limit.
     """
     deadline = time.monotonic() + LOG_TIMEOUT_SECONDS
-    common = _git(root, "rev-parse", "--git-common-dir", timeout=LOG_TIMEOUT_SECONDS)
-    if not common:
+    common = common_directory(root)
+    if common is None:
         return
     tool = None
     if isinstance(payload, dict):
@@ -622,7 +628,7 @@ def _log(root: Path, payload: object, verdict: Verdict) -> None:
         detail=verdict.detail,
         branch=_head(root, max(deadline - time.monotonic(), 0)),
     )
-    events.append(root / common / events.LOG_NAME, event.line())
+    events.append(common / events.LOG_NAME, event.line())
 
 
 def repository_root(path: Path) -> Path:

@@ -40,7 +40,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path, PurePosixPath
 
-from ratchet_guards.events import LOG_NAME
+from ratchet_guards.events import LOG_NAME, PLUGIN_RECORD
 from ratchet_guards.globs import matches
 
 MANIFEST_PATH = "guards/manifest.toml"
@@ -243,12 +243,24 @@ GUARD_LOG_REASON = (
     "The guard's log of each tool call it denied or asked about (ADR 0060). Only the guard "
     "writes it, so a reader can trust what it shows."
 )
+PLUGIN_RECORD_GROUP = "plugin-record"
+PLUGIN_RECORD_REASON = (
+    "The record of the plugin folder a session runs from. Gate recipes run the scripts it names, "
+    "so only the session hook writes it."
+)
 # Why: the log has a group of its own, not a line in GIT_STATE_PATTERNS, which the template's
 # `local-git` group and `just settings` keep in step with; the hook guards it by itself.
 GIT_STATE = Manifest(
     (
         Group(GIT_STATE_GROUP, GIT_STATE_REASON, GIT_STATE_PATTERNS, EditRule.DENY, source=""),
         Group(GUARD_LOG_GROUP, GUARD_LOG_REASON, (f".git/{LOG_NAME}",), EditRule.DENY, source=""),
+        Group(
+            PLUGIN_RECORD_GROUP,
+            PLUGIN_RECORD_REASON,
+            (f".git/{PLUGIN_RECORD}",),
+            EditRule.DENY,
+            source="",
+        ),
     )
 )
 # Why: the guards are read from this file, so it is locked in every adopted checkout, on every

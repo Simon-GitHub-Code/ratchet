@@ -103,7 +103,7 @@ TESTS_BITE = (
 )
 BINDING = (
     "# Binding\n\n- Default branch: `main`\n- Life events: deployed\n"
-    f"- Ratchet plugin: 1.0.0 at {'0' * 40}\n\n## Gates\n\n"
+    f"- Ratchet plugin: 1.0.0 at {'0' * 40} tree <tree>\n\n## Gates\n\n"
     "| Question | Tool | Tier | Threshold source | Entry point |\n|---|---|---|---|---|\n"
     "| lint | a linter | 0 | | `sh own-gates.sh lint` |\n"
     "| unit, property and fitness tests | a test runner | 1 | | `sh own-gates.sh tests` |\n"
@@ -129,6 +129,11 @@ REPORT = (
     'condition-coverage="{cond}% (1/{total})"/></lines></class></classes></package>'
     "</packages></coverage>"
 )
+
+
+def pinned(root: Path, binding: str) -> str:
+    """``binding`` with the tree id of the plugin copy the scratch repository carries."""
+    return binding.replace("<tree>", plugin_pin.copy_tree_id(root / PLUGIN_COPY) or "")
 
 
 def git(root: Path, *args: str) -> None:
@@ -161,9 +166,9 @@ def scratch(root: Path) -> None:
     write(root, TICKET_PATH, TICKET)
     write(root, "flags.toml", "# No flags yet.\n")
     write(root, "surface.txt", "f(a, b)\n")
-    write(root, "docs/process/binding.md", BINDING + SUPPRESSIONS)
-    write(root, "own-gates.sh", OWN_GATES)
     write(root, PLUGIN_MANIFEST, '{"version": "1.0.0"}\n')
+    write(root, "docs/process/binding.md", pinned(root, BINDING + SUPPRESSIONS))
+    write(root, "own-gates.sh", OWN_GATES)
     write(root, "tests/test_a.py", "def test_f():\n    assert True\n")
     write(root, str(project_bite.REGISTRY), LINT_BITE + TESTS_BITE)
     install_hooks(root)
@@ -381,7 +386,11 @@ def triggers_gate(argv: list[str]) -> int:
     """
     root = Path(argv[2])
     if not (root / "src/client.py").is_file():
-        write(root, "docs/process/binding.md", BINDING + LATER_ROW + TRIGGERS_TABLE + SUPPRESSIONS)
+        write(
+            root,
+            "docs/process/binding.md",
+            pinned(root, BINDING + LATER_ROW + TRIGGERS_TABLE + SUPPRESSIONS),
+        )
         write(root, "src/client.py", OUTBOUND_CALL)
         commit(root, "feat(core): the first outbound call")
     return triggers.main([*argv, "--base", "HEAD"])
@@ -401,7 +410,11 @@ def review_gate(argv: list[str]) -> int:
     """
     root = Path(argv[2])
     if not (root / "src/client.py").is_file():
-        write(root, "docs/process/binding.md", BINDING + REVIEW_ROW + TRIGGERS_TABLE + SUPPRESSIONS)
+        write(
+            root,
+            "docs/process/binding.md",
+            pinned(root, BINDING + REVIEW_ROW + TRIGGERS_TABLE + SUPPRESSIONS),
+        )
         commit(root, "chore(method): ask the architecture review")
         write(root, "src/client.py", OUTBOUND_CALL)
         commit(root, "feat(core): the first outbound call")

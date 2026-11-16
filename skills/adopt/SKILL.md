@@ -230,7 +230,7 @@ Tell the owner this before step 1. It is not a question.
     - Run `mattpocock-skills:domain-modeling` for the ADRs and glossary entries the answers crystallised, and replace `<project>` in `GLOSSARY.md`.
     - **The tree has user-interface surfaces:** run `impeccable document` for `DESIGN.md`.
     - **It has none:** do not create `DESIGN.md`. Write under slice one that the first surface is built with `impeccable shape`, and that an agent runs `impeccable document` once it merges.
-    - Write the plugin's version (from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`) and its commit (`git -C "${CLAUDE_PLUGIN_ROOT}" rev-parse HEAD` when that is a checkout, else the latest commit of `Simon-GitHub-Code/ratchet` that changed that file) into the binding's `- Ratchet plugin:` line.
+    - Write the plugin's version (from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`) and its commit (`git -C "${CLAUDE_PLUGIN_ROOT}" rev-parse HEAD` when that is a checkout, else the latest commit of `Simon-GitHub-Code/ratchet` that changed that file) and the tree id of that commit (`<commit>^{tree}`; for a copy with no history, the id the template justfile computes) into the binding's `- Ratchet plugin: <version> at <commit> tree <tree id>` line.
     - Write the same commit into every `ref: "<ratchet-sha>"` of `ci.yml`, `deep.yml`, `weekly.yml` and `merge.yml`, so CI and every local tier run the plugin's gates at one version, which `just plugin-pin` and the conformance gate hold.
     - Add the toolchain setup, pinned by commit SHA with the version in a trailing comment, so `just pins` stays green.
     - Set the nightly hour in `deep.yml`.
@@ -261,7 +261,7 @@ Tell the owner this before step 1. It is not a question.
 
     The rehearsal may reuse that compiler cache and nothing else; it still cannot supply a missing config or tool. Remove each worktree when its round ends.
 
-    Run `check-deep` once. Its last gate is the proof: the `bite-all` entry point plants each fault of `quality/bites.toml` in a scratch copy and is green only when each gate was green without its fault and red with it.
+    Run `check-deep` once. Its last gate is the proof: the `bite-all` entry point plants each fault of `quality/bites.toml` in a scratch copy and is green only when each gate was green without its fault and red with it. Then run `just budget bite-all --set`, which records the `bite-all` ceiling of its own in `[ceilings.seconds]`; the tier 1 ceilings never hold it.
 
     Done when `check` is green in a fresh worktree of the commit, `conformance` and `check-deep` exit 0, no rehearsal worktree is left, and the rehearsal passed, or its second round ended with the edits it still needs named.
 

@@ -47,7 +47,7 @@ The session hook answers `SessionStart` with `{"injectSteps": [{"systemMessage":
 
 | In the skills | Here |
 | --- | --- |
-| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | export it as `~/.gemini/config/plugins/ratchet`, the folder the install made |
+| `RATCHET_PLUGIN`, the plugin an adopted repository's gates run from | unset: the session hook, once it has run in the repository, records the installed copy's folder in `.git/ratchet-plugin`, and the template `justfile` reads it. Until then, export it as `~/.gemini/config/plugins/ratchet`, the folder the install made |
 | `${CLAUDE_SKILL_DIR}` | the skill folder under `~/.gemini/config/plugins/<plugin>/skills/<name>/` |
 | `${CLAUDE_PLUGIN_ROOT}` | the plugin folder, `~/.gemini/config/plugins/ratchet`. Hooks run with it as their working directory. Whether Antigravity sets this variable in the shell of a skill's command is not verified. Export `CLAUDE_PLUGIN_ROOT="$HOME/.gemini/config/plugins/ratchet"` before starting a session, so the commands in the skills resolve |
 | `disable-model-invocation: true` | read the `SKILL.md` and follow it |

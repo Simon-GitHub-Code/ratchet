@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import tomllib
 from collections import Counter
@@ -177,6 +178,9 @@ def never(key: Key) -> bool:
     return (rule, None) in NEVER or (rule, path) in NEVER
 
 
+BLOCK_START = re.compile(rf"^\[\[{TABLE}\]\]\n", re.MULTILINE)
+
+
 def kept(found: Counter[Key]) -> gatelib.Want:
     """The want that leaves the ledger as many entries of each key as ``found`` has findings.
 
@@ -186,15 +190,21 @@ def kept(found: Counter[Key]) -> gatelib.Want:
 
     def keep(text: str | None) -> str:
         ledger = parse(text)
-        if ledger.problems:
+        head, *blocks = BLOCK_START.split(text or "")
+        if ledger.problems or len(blocks) != len(ledger.entries):
             return text or ""
         seen: Counter[Key] = Counter()
-        entries = []
-        for entry in ledger.entries:
+        flags = []
+        for block in blocks:
+            (entry,) = parse(f"[[{TABLE}]]\n{block}").entries
             seen[entry.key] += 1
-            if seen[entry.key] <= found[entry.key]:
-                entries.append(entry)
-        return render(entries) if len(entries) < len(ledger.entries) else text or ""
+            flags.append(seen[entry.key] <= found[entry.key])
+        if all(flags):
+            return text or ""
+        body = [f"[[{TABLE}]]\n{block}" for block, keep in zip(blocks, flags, strict=True) if keep]
+        if body and not flags[-1]:
+            body[-1] = body[-1].rstrip("\n") + "\n"
+        return head + "".join(body)
 
     return keep
 

@@ -21,6 +21,8 @@ A map of the repository. [The README](../README.md) says what the method is and 
 | `workflows/pipeline.js` | the feature pipeline (preflight, spec, ticket check, implement, review; one fix pass on a review blocker until the project is depended on, the critic and its fix loop after) the feature skill runs, and the reconcile and second review of a change brought up to date behind another merge |
 | `scripts/feature_preflight.py` | what must be true of a ticket and the checkout before the pipeline's first agent spawns |
 | `scripts/publish_check.py` | whether a pipeline role committed, pushed or opened a pull request, judged after the run and before the orchestrator's first commit (ADR 0060) |
+| `scripts/release.py` | the release of a version: the tag `vV` on main's commit plus `.claude-plugin/commit`, and the changelog section its page carries; run by `.github/workflows/release.yml` (ADR 0068) |
+| `scripts/release_check.py` | whether a version tag is main's commit plus its commit file, run after the tag is pushed and by anyone later (ADR 0068) |
 | `scripts/` | the gates that ship, listed in [gates.md](gates.md) |
 | `hooks/` | the PreToolUse guard hook, the SessionStart and SubagentStart hook that puts the stance in every agent's context on an adopted checkout and names a bare one, and their `ratchet_guards` package (`guard-diff` lives here too) |
 | `scripts/adapter.py` | wires the guard into Codex or OpenCode when the harness does not load the plugin's hooks |

@@ -223,6 +223,48 @@ def upgrade_moves_a_ticket(_label: Label) -> set[World]:
     }
 
 
+def builds_on_a_stale_conjecture(label: Label) -> set[World]:
+    return {s for s in model.graph().states if not model.stale_before_the_build(label)(s)}
+
+
+def stale_slots(world: World) -> set[int]:
+    return {slot for slot, ticket in enumerate(world.tickets) if ticket is Ticket.STALE}
+
+
+def runs_on_a_stale_conjecture(_label: Label) -> set[World]:
+    return {
+        source
+        for source, act, target in model.graph().edges
+        if act in model.RUNS and stale_slots(source) - stale_slots(target)
+    }
+
+
+def cleared_by_another(_label: Label) -> set[World]:
+    return {
+        source
+        for source, act, target in model.graph().edges
+        for slot in stale_slots(source) - stale_slots(target)
+        if act is not ActionName.OWNER_STATES_CONJECTURE
+        or target.tickets[slot] is not Ticket.STATED
+    }
+
+
+def edit_moves_more(_label: Label) -> set[World]:
+    stale = (Ticket.STATED, Ticket.STALE)
+    return {
+        source
+        for source, act, target in model.graph().edges
+        if act is ActionName.OWNER_EDITS_CRITERIA
+        and (
+            replace(source, tickets=target.tickets) != target
+            or any(
+                a != b and (a, b) != stale
+                for a, b in zip(source.tickets, target.tickets, strict=True)
+            )
+        )
+    }
+
+
 CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "AdviceCanBeFollowed": (cannot_be_followed, model.advice),
     "AdviceReachesRest": (never_rests, model.advice),
@@ -250,6 +292,11 @@ CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "TheUpgradeMovesNoTicket": (upgrade_moves_a_ticket, model.advice),
     "UnprovedAdoptionNeverBuilds": (builds_unproved, model.advice),
     "RealUnprovedAdoptionNeverBuilds": (builds_unproved, model.real_advice),
+    "StaleConjectureBeforeTheBuild": (builds_on_a_stale_conjecture, model.advice),
+    "RealStaleConjectureBeforeTheBuild": (builds_on_a_stale_conjecture, model.real_advice),
+    "NoRunStartsOnAStaleConjecture": (runs_on_a_stale_conjecture, model.advice),
+    "OnlyTheRedraftClearsAStaleConjecture": (cleared_by_another, model.advice),
+    "TheCriteriaEditMovesNothingElse": (edit_moves_more, model.advice),
 }
 
 
@@ -269,13 +316,19 @@ def test_a_rule_breaks_only_where_a_divergence_says_it_does(name: str) -> None:
     broken = check(label)
     where: dict[str, set[World]] = defaultdict(set)
     for state in model.graph().states:
-        if (entry := model.divergence(state)) and name in entry.breaks:
-            where[entry.name].add(state)
+        for entry in model.divergences(state):
+            if name in entry.breaks:
+                where[entry.name].add(state)
     assert broken <= set().union(*where.values())
     assert all(broken & states for states in where.values()), sorted(where)
     named = {entry.name for entry in model.DIVERGENCES if name in entry.breaks}
     assert set(where) == named
     assert label is model.real_advice or not broken
+
+
+def test_no_state_holds_two_divergences() -> None:
+    both = [s for s in model.graph().states if sum(e.holds(s) for e in model.DIVERGENCES) > 1]
+    assert both == []
 
 
 def test_the_architecture_rules_are_met_where_they_bite() -> None:
@@ -296,6 +349,27 @@ def test_the_architecture_rules_are_met_where_they_bite() -> None:
     }
     adopted = {b.architecture for _, act, b in graph.edges if act is ActionName.OWNER_ADOPTS}
     assert adopted == {Architecture.RECORDED}
+
+
+def test_the_stale_conjecture_rules_are_met_where_they_bite() -> None:
+    graph = model.graph()
+    edits = [(a, b) for a, act, b in graph.edges if act is ActionName.OWNER_EDITS_CRITERIA]
+    assert {a.inherits for a, _ in edits} == {True, False}
+    assert any(len(stale_slots(b)) == 2 for a, b in edits if a.inherits)
+    named = {
+        (model.advice(s), model.real_advice(s))
+        for s in graph.states
+        if stale_slots(s) and model.advice(model.as_its_criteria_unread(s)) in model.BUILDS
+    }
+    assert named >= {
+        (Advice.CONJECTURE, Advice.BUILD),
+        (Advice.CONJECTURE, Advice.DRAIN),
+        (Advice.BUILD, Advice.DRAIN),
+    }
+    for state in graph.states:
+        if stale_slots(state) and model.advice(state) is Advice.CONJECTURE:
+            redrafts = model.ACTIONS[ActionName.OWNER_STATES_CONJECTURE].successors(state)
+            assert any(stale_slots(after) < stale_slots(state) for after in redrafts), state
 
 
 def advice_loop(graph: model.Graph) -> list[World]:
@@ -379,7 +453,7 @@ def test_a_divergence_names_a_sentence_of_the_pages_and_a_state_where_it_holds(
     page = (PLUGIN_ROOT / entry.source).read_text(encoding="utf-8")
     assert entry.contradicts in " ".join(page.split())
     assert entry.example in model.graph().states
-    assert model.divergence(entry.example) is entry
+    assert model.divergences(entry.example) == (entry,)
     assert entry.breaks <= set(model.RULES)
 
 
@@ -530,15 +604,16 @@ def ask(repo: real.Repo, world: World, path: list[str]) -> None:
     """The route on ``repo`` names what the model says it names in ``world``.
 
     Where that is the owed architecture, the route also offers the step it would otherwise name,
-    and that step is the one the model gives beneath it. Where it is a safeguard, ``then:`` names
-    what the route names once the rows are bound, the owed architecture where there is one, and
-    the route still offers the work.
+    and that step is the one the model gives beneath it, read as the real route reads it. Where it
+    is a safeguard, ``then:`` names what the route names once the rows are bound, the owed
+    architecture where there is one, and the route still offers the work.
     """
     step = real.read(repo)
     assert real.classify(step) is model.real_advice(world), disagreement(world, step, path)
     if real.classify(step) is Advice.ARCHITECTURE:
         instead = without(repo, "architecture_step")
-        assert real.classify(instead) is model.beneath(world), disagreement(world, instead, path)
+        under = model.beneath(model.as_the_route_reads(world))
+        assert real.classify(instead) is under, disagreement(world, instead, path)
         assert step.then == instead.command, disagreement(world, step, path)
         assert f"Or carry on with {instead.command}:" in step.why, disagreement(world, step, path)
     if real.classify(step) is Advice.SAFEGUARD:
@@ -645,7 +720,9 @@ def hooks_checked_once(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("hooks_checked_once")
-@pytest.mark.parametrize("chunk", range(SWEEP_CHUNKS))
+@pytest.mark.parametrize(
+    "chunk", [pytest.param(n, marks=pytest.mark.shard_slot(n)) for n in range(SWEEP_CHUNKS)]
+)
 def test_the_route_names_what_the_model_says_after_every_step(tmp_path: Path, chunk: int) -> None:
     span = spans()[chunk]
     repo = real.Repo.start(tmp_path)
@@ -658,14 +735,14 @@ def test_the_route_names_what_the_model_says_after_every_step(tmp_path: Path, ch
 
 def disagreement(world: World, step: route.Step, path: list[str]) -> str:
     """The path taken, the world, what the model says the route names and what it said."""
-    entry = model.divergence(world)
+    names = ", ".join(entry.name for entry in model.divergences(world))
     return "\n".join(
         [
             "the route and the model disagree after:",
             *(f"  {index}. {line}" for index, line in enumerate(path, 1)),
             f"world:        {world}",
             f"model:        {model.real_advice(world)}"
-            + (f" (divergence {entry.name}; the pages say {model.advice(world)})" if entry else ""),
+            + (f" (divergence {names}; the pages say {model.advice(world)})" if names else ""),
             f"classified:   {real.classify(step)}",
             f"route stage:  {step.stage}",
             f"route next:   {step.command}",
@@ -776,6 +853,58 @@ def built(tmp_path: Path, world: World) -> real.Repo:
     for source, name, target in path_to(world):
         real.apply(repo, name, real.Change(source, target))
     return repo
+
+
+def parked_by(world: World) -> real.Change:
+    """The landing on the walk's path to ``world`` that left its records branch waiting."""
+    tree = spanning()
+    edge = tree.parent[world]
+    while edge.source.parked:
+        edge = tree.parent[edge.source]
+    return real.Change(edge.source, edge.target)
+
+
+def test_the_walk_leaves_records_waiting_on_branches_of_both_kinds_of_name() -> None:
+    waiting = [world for world in spanning().order if world.parked]
+    named = sum(real.named_by_an_agent(parked_by(world)) for world in waiting)
+    assert 0 < named < len(waiting), (
+        f"of the {len(waiting)} states of the walk where a records branch waits, {named} name it"
+        f" as an agent picked it and {len(waiting) - named} `records/<time>`"
+    )
+
+
+@cache
+def landings_on_a_branch_an_agent_named() -> list[model.Edge]:
+    """The landings that leave records on a branch an agent named, nearest the start first."""
+    tree = spanning()
+    landings = [
+        edge
+        for edge in model.graph().edges
+        if edge.action is ActionName.AGENT_LANDS_RECORDS
+        and real.named_by_an_agent(real.Change(edge.source, edge.target))
+    ]
+    return sorted(landings, key=lambda edge: len(tree.trail(edge.source)))
+
+
+@pytest.mark.parametrize("tickets", [False, True], ids=["a spec", "tickets"])
+def test_records_waiting_on_a_branch_an_agent_named_are_named_for_its_merge(
+    tmp_path: Path, *, tickets: bool
+) -> None:
+    landing = next(
+        edge
+        for edge in landings_on_a_branch_an_agent_named()
+        if (edge.source.tickets != (Ticket.NONE, Ticket.NONE)) == tickets
+    )
+    edges = [*path_to(landing.source), landing]
+    repo = real.Repo.start(tmp_path)
+    for source, name, target in edges:
+        real.apply(repo, name, real.Change(source, target))
+    step = real.read(repo)
+    why = disagreement(landing.target, step, [str(edge.action) for edge in edges])
+    assert str(repo.parked).startswith(real.TICKETS_BRANCH), repo.parked
+    assert model.real_advice(landing.target) is Advice.MERGE_RECORDS, why
+    assert real.classify(step) is Advice.MERGE_RECORDS, why
+    assert f" {repo.parked}`" in step.command, why
 
 
 def upgraded(repo: real.Repo, world: World) -> World:
@@ -1247,3 +1376,46 @@ def test_the_route_names_each_switch_past_its_removal_date(tmp_path: Path) -> No
     repo = built(tmp_path / "start", ADOPTED)
     also = routed(with_an_expired_switch(repo, tmp_path / "expired"))["also"]
     assert any(EXPIRED_SWITCH in line for line in also), also
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="feature_preflight.py reads the `- Criteria:` line as a conjecture: flip it with that",
+)
+def test_a_conjecture_that_holds_only_its_criteria_line_states_none(tmp_path: Path) -> None:
+    agreed = replace(ADOPTED, foundation=True, tickets=(Ticket.READY, Ticket.TRIAGE))
+    repo = built(tmp_path, agreed)
+    text = repo.ticket_text(0, Ticket.READY, inherits=False)
+    lined = f"{text}\n## Conjecture\n\n{real.criteria_line(text, real.CRITERIA)}"
+    (repo.root / repo.ticket_path(0)).write_text(lined, encoding="utf-8")
+    snapshot(repo.root, "docs(tracker): a conjecture of its criteria line alone")
+    assert real.classify(real.read(repo)) is Advice.CONJECTURE
+
+
+def criteria_current(path: Path) -> bool:
+    text = path.read_text(encoding="utf-8")
+    (line,) = real.CRITERIA_LINE.findall(text)
+    heading = line.split("`")[1]
+    return line == real.criteria_line(text, heading).rstrip("\n")
+
+
+HOLDERS = {"issues/01-a1.md": False, "spec.md": True}
+
+
+@pytest.mark.parametrize("holder", list(HOLDERS))
+def test_the_criteria_line_the_world_writes_is_read_as_the_skill_reads_it(
+    tmp_path: Path, holder: str
+) -> None:
+    tickets = (Ticket.STALE, Ticket.TRIAGE)
+    stale = replace(ADOPTED, foundation=True, tickets=tickets, inherits=HOLDERS[holder])
+    repo = real.Repo.start(tmp_path)
+    path = repo.root / ".scratch/f1" / holder
+    for source, name, target in path_to(stale):
+        if name is ActionName.OWNER_EDITS_CRITERIA:
+            assert criteria_current(path)
+        real.apply(repo, name, real.Change(source, target))
+    assert not criteria_current(path)
+    (stated,) = model.ACTIONS[ActionName.OWNER_STATES_CONJECTURE].successors(stale)
+    real.apply(repo, ActionName.OWNER_STATES_CONJECTURE, real.Change(stale, stated))
+    assert criteria_current(path)
+    assert real.classify(real.read(repo)) is model.real_advice(stated) is Advice.BUILD
