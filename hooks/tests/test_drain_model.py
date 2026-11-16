@@ -158,14 +158,14 @@ class Search(NamedTuple):
 
 
 @functools.cache
-def main_graph() -> tuple[frozenset[model.State], list[model.Edge]]:
-    return model.graph()
+def main_graph(*, gate: bool) -> tuple[frozenset[model.State], list[model.Edge]]:
+    return model.graph(model.guarded) if gate else model.graph()
 
 
 @functools.cache
-def search() -> Search:
-    """What the graph's breadth-first steps show."""
-    _, edges = main_graph()
+def search(*, gate: bool) -> Search:
+    """What the graph's breadth-first steps show, with the guard's gate or without it."""
+    _, edges = main_graph(gate=gate)
     came: dict[model.State, tuple[model.State, str] | None] = {model.INITIAL: None}
     breaks: dict[str, list[str]] = {}
     cuts: dict[tuple[str, bool], list[str]] = {}
@@ -191,9 +191,19 @@ def search() -> Search:
     return Search(breaks, frozenset(said for _, said, _ in edges), cuts)
 
 
+def landed_unchecked(*, gate: bool) -> list[str]:
+    """The steps that land a branch on a start no check passed."""
+    return [
+        said
+        for before, said, after in main_graph(gate=gate)[1]
+        for name in Name
+        if after.of(name).merged and model.unchecked(before.of(name))
+    ]
+
+
 def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_path() -> None:
     # Why: one test reads the graph, so a run that spreads the tests over processes builds it once.
-    found = search()
+    found = search(gate=False)
     for name in model.RULES:
         path = found.breaks.get(name)
         assert path == COUNTEREXAMPLES[name], f"{name}: shortest break is\n" + "\n".join(path or [])
@@ -202,24 +212,31 @@ def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_pa
     )
     for kind in Kind:
         assert any(name.startswith(kind.value) for name in found.taken), kind
-    unchecked = [
-        said
-        for before, said, after in main_graph()[1]
-        for name in Name
-        if after.of(name).merged and model.unchecked(before.of(name))
-    ]
+    unchecked = landed_unchecked(gate=False)
     assert not unchecked, f"a branch lands on a start no check passed: {unchecked[0]}"
 
 
-def test_a_branch_a_role_committed_on_is_never_committed_on_where_the_skill_keeps_its_order() -> (
-    None
-):
-    # Why: rule 11b holds only where the agent commits after the check, as the feature skill says.
-    _, edges = model.graph(model.in_order)
-    holds = model.RULES[UNTOUCHED]
-    broken = next((said for before, said, after in edges if not holds(before, said, after)), None)
-    assert broken is None, broken
-    assert all(model.RULES[UNLANDED](before, said, after) for before, said, after in edges)
+def test_with_the_guards_gate_each_rule_but_10_holds_and_no_role_commits() -> None:
+    # Why: the guard refuses a commit on a start no final check passed, so neither the agent's
+    # commit before the check nor a role's commit, by which rule 11b breaks, is a step.
+    found = search(gate=True)
+    for name in model.RULES:
+        path = found.breaks.get(name)
+        pinned = COUNTEREXAMPLES[name] if name == NO_TREE else None
+        assert path == pinned, f"{name}: shortest break is\n" + "\n".join(path or [])
+    assert list(found.cuts.values()) == KILL_CUTS, "the kills' cuts are the same"
+    for kind in Kind:
+        taken = any(name.startswith(kind.value) for name in found.taken)
+        assert taken is (kind is not Kind.PUBLISH), kind
+    unchecked = landed_unchecked(gate=True)
+    assert not unchecked, f"a branch lands on a start no check passed: {unchecked[0]}"
+    moved = {
+        (ticket.branch, ticket.note is not None and ticket.note.rebasing)
+        for state in main_graph(gate=True)[0]
+        for ticket in state.tickets
+        if ticket.since
+    }
+    assert moved == {(Branch.BARE, True)}, "only a killed update moves a branch from its start"
 
 
 def test_every_rule_reads_as_one_sentence() -> None:
@@ -236,6 +253,8 @@ class Play:
         self.world = World(directory)
         self.state = model.INITIAL
         self.path: list[str] = []
+        self.answers: set[bool] = set()
+        """What the real guard answered at the commit steps it was asked about: allowed or not."""
 
     def says(self, what: str) -> str:
         lines = [what, "path:", *(f"  {name}" for name in self.path)]
@@ -276,10 +295,25 @@ class Play:
         for name, kept in self.state.each():
             if kept.tree is Tree.NONE:
                 continue
-            gated = GATE in {v.rule for v in judged(COMMIT, self.world.tree(name))}
+            gated = self.guard_refuses(name)
             said = f"the guard {'refuses' if gated else 'lets through'} a commit in {name.value}"
             refused = model.commit_refused(kept)
             assert gated == refused, self.says(said)
+
+    def guard_refuses(self, name: Name) -> bool:
+        """Whether the real guard refuses a commit in the ticket's queue work tree now."""
+        return GATE in {v.rule for v in judged(COMMIT, self.world.tree(name))}
+
+    def guard_allows(self, action: model.Action) -> bool:
+        """Whether the real guard lets ``action`` through here, which the gated model must say too."""  # noqa: E501
+        name = action.ticket
+        if action.kind not in model.COMMITS or name is None:
+            return True
+        refused = self.guard_refuses(name)
+        said = f"the guard {'refuses' if refused else 'lets through'} {action.name}"
+        assert refused is not model.guarded(self.state, action), self.says(said)
+        self.answers.add(not refused)
+        return not refused
 
 
 # Why: the families an action is drawn from, a family as often as it is listed. A landing runs
@@ -320,11 +354,11 @@ WEIGHTED = [
     Kind.CHECK_HALTED,
     Kind.CHECK_HALTED_NOT_FINAL,
 ]
-WALKED: list[list[str]] = []
+WALKED: list[Play] = []
 
 
 class DrainOnARepository(RuleBasedStateMachine):
-    """Random actions on the model and on a real repository together."""
+    """Random actions on the model and on a real repository together, each commit only where the real guard lets it through."""  # noqa: E501
 
     def __init__(self) -> None:
         super().__init__()
@@ -337,7 +371,8 @@ class DrainOnARepository(RuleBasedStateMachine):
         # change the state ahead of those that do not makes that example walk the lifecycle,
         # not repeat one refused command.
         state = self.play.state
-        moves = sorted(model.moves(state), key=lambda move: move[1] == state)
+        allowed = [move for move in model.moves(state) if self.play.guard_allows(move[0])]
+        moves = sorted(allowed, key=lambda move: move[1] == state)
         changes = [
             kind for kind in WEIGHTED if any(a.kind is kind and b != state for a, b in moves)
         ]
@@ -350,7 +385,7 @@ class DrainOnARepository(RuleBasedStateMachine):
         self.play.take(action, after)
 
     def teardown(self) -> None:
-        WALKED.append(self.play.path)
+        WALKED.append(self.play)
         shutil.rmtree(self.scratch, ignore_errors=True)
 
 
@@ -368,8 +403,10 @@ def test_the_real_drain_agrees_with_the_model_on_every_step() -> None:
             suppress_health_check=[HealthCheck.too_slow],
         ),
     )
-    walked = {name for path in WALKED for name in path}
-    assert f"{Kind.CHECK_NOT_FINAL.value} a" in walked, "the walk takes the check without --final"
+    answers = {answer for play in WALKED for answer in play.answers}
+    assert answers == {True, False}, (
+        "the guard refuses a commit the walk is offered, and allows one"
+    )
 
 
 def test_the_real_drain_agrees_with_the_model_after_each_kind_of_kill(tmp_path: Path) -> None:
@@ -496,12 +533,11 @@ def test_the_agent_that_commits_before_the_check_commits_on_a_branch_a_role_comm
 ) -> None:
     path = COUNTEREXAMPLES[UNTOUCHED] or []
     assert broken_by(path) == {UNTOUCHED}
-    before = model.INITIAL
-    for name in path[:-1]:
-        before = next(after for action, after in model.moves(before) if action.name == name)
-    last = next(action for action, _ in model.moves(before) if action.name == path[-1])
-    assert not model.in_order(before, last), "the skill checks before the agent's first commit"
-    replay(tmp_path, path)
+    play = replay(tmp_path, path[:-2])
+    for name in path[-2:]:
+        step = next(action for action, _ in model.moves(play.state) if action.name == name)
+        assert not play.guard_allows(step), f"the guard refuses {name}"
+        play.named(name)
 
 
 def test_land_refuses_a_branch_a_role_committed_on_whose_start_no_check_passed(
@@ -538,6 +574,17 @@ def test_check_records_the_start_and_marks_it_passed_in_the_note(tmp_path: Path)
     assert play.named(CHECK_A).startswith(publish_check.GREEN)
     assert play.world.code == 0
     assert note_of(play)["passed"] is True
+
+
+def test_a_check_after_an_update_killed_past_the_rebase_of_a_bare_branch_parks_it_as_published(
+    tmp_path: Path,
+) -> None:
+    path = [*MARK_LEFT[:-1], KILL_AFTER_REBASE, CHECK_A]
+    assert broken_by(path) == set()
+    assert model.held_by_note(walked(path)[-1].of(Name.A)), "parked and held"
+    play = replay(tmp_path, path)
+    assert play.world.code == 1
+    assert note_of(play)["reasons"][0].startswith("a role published: `feature/1-alpha` moved")
 
 
 def test_a_check_after_a_run_that_died_makes_the_tree_and_parks_a_branch_a_role_committed_on(
@@ -638,8 +685,9 @@ def test_land_refuses_a_branch_a_role_committed_on_in_the_resume_after_a_check_w
     assert broken == [set(), set(), set(), {UNTOUCHED}, set()], broken
     states = walked(RESUMED)
     assert states[1] == states[0], "a check without --final marks nothing"
-    recorded = next(action for action, _ in model.moves(states[2]) if action.name == RECORD_A)
-    assert not model.in_order(states[2], recorded), "the skill's last check, with --final, parks it"
+    for before, name in [(states[1], ROLE_A), (states[2], RECORD_A)]:
+        step = next(action for action, _ in model.moves(before) if action.name == name)
+        assert not model.guarded(before, step), f"the guard refuses {name}"
     assert states[-1] == states[-2], "land refuses it"
     play = replay(tmp_path, RESUMED[:2])
     assert (play.world.code, play.world.printed) == (0, f"{publish_check.GREEN}\n")

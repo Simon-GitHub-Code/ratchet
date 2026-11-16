@@ -56,6 +56,7 @@ from typing import Final
 
 import application_types
 import architecture
+import conformance
 import drain
 import feature_preflight as preflight
 import gatelib
@@ -848,6 +849,24 @@ def with_body(text: str, heading: str, body: str) -> str:
     return "\n".join([*lines[: start + 1], "", *body.rstrip("\n").split("\n"), "", *lines[end:]])
 
 
+def with_changed_tests(repo: Repo, text: str) -> str:
+    """``text`` with the suites table and the Gates row, and the justfile's tier 1 list to match."""
+    table = (
+        "| Suite | Gate | Files | Run files |\n| --- | --- | --- | --- |\n"
+        f"{conformance.SELF_TEST_SUITES}\n"
+    )
+    row = conformance.template_gate_row("changed tests run")
+    text = text.replace("\n## Tests\n", f"\n## Tests\n\n{table}", 1)
+    text = text.replace("| test count did not fall |", f"{row}\n| test count did not fall |", 1)
+    path = repo.root / "justfile"
+    if path.exists():
+        listed = (gatelib.read_text(path) or "").replace(
+            'tier1_gates := "test coverage', 'tier1_gates := "test coverage tests-changed', 1
+        )
+        write(repo.root, "justfile", listed)
+    return text
+
+
 @does(ActionName.UPGRADE_ASKS_THE_FLAG_LINE)
 def _upgrade_asks_the_flag_line(repo: Repo, _change: Change) -> None:
     """The project becomes one the ``Flag:`` line is asked of, not deployed: a type that asks it.
@@ -881,7 +900,7 @@ def _agent_fills_rows(repo: Repo, _change: Change) -> None:
     text = gatelib.read_text(repo.root / route.BINDING) or ""
     for heading, body in FILLED.items():
         text = with_body(text, heading, body)
-    write(repo.root, str(route.BINDING), text)
+    write(repo.root, str(route.BINDING), with_changed_tests(repo, text))
     run_upgrade(repo)
     landed(repo, name, "docs(process): fill the rows the upgrade left")
 

@@ -628,7 +628,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
     assert "Would write 13 files (run with --apply):" in out
-    assert "  quality/owed.toml\n    - write down 89 things owed since " in out
+    assert "  quality/owed.toml\n    - write down 94 things owed since " in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
@@ -640,7 +640,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 70 edits in 13 files. 89 items are owed")
+    assert verdict(out).startswith("upgrade: would write 71 edits in 13 files. 94 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -648,15 +648,16 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 70 changes in 13"
-                " files. The project owes 89 things since the upgrade. None of them turns a check"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 71 changes in 13"
+                " files. The project owes 94 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
                 " make all the fixes in one change on a branch, and you decide at that one merge."
             ),
             (
-                "Checks that do not run until then: the weekly checks, configuration hardening,"
-                " load smoke, refuses bad configuration, rolls back safely, shuts down gracefully,"
+                "Checks that do not run until then: the weekly checks, changed tests run,"
+                " configuration hardening, load smoke, refuses bad configuration, rolls back"
+                " safely, shuts down gracefully,"
                 " survives failing dependencies, telemetry emitted, the dependency-only"
                 " judgement of guard-diff and the merge judge, which sends every dependency change"
                 " to the owner until the section is filled, the suppressions gate and the coverage"
@@ -823,3 +824,84 @@ def test_an_unfiltered_changed_recipe_is_red_in_the_summary_and_not_owed(
     assert "Red until fixed" in out
     assert "    - a recipe hands the output of mutation_survivors.py --changed" in out
     assert "1 thing stops a merge until fixed." in plain(out)
+
+
+READERS = ("test", "coverage", "diff-coverage", "test-counts")
+
+
+def bound_readers(root: Path) -> None:
+    path = root / "justfile"
+    text = path.read_text(encoding="utf-8")
+    for gate in READERS:
+        pattern = re.compile(
+            rf'^({re.escape(gate)}:[^\n]*\n    )@echo "bind:[^\n]*; exit 1\n(?:    [^\n]*\n)*',
+            re.MULTILINE,
+        )
+        text, count = pattern.subn(rf"\1@echo ran-{gate}\n", text, count=1)
+        assert count == 1, gate
+    path.write_text(text, encoding="utf-8")
+    repos.git(root, "commit", "-q", "-am", "feat(tests): bind the suite gates")
+
+
+def test_an_upgrade_leaves_bound_suite_gates_as_they_are_and_owes_the_producer_first(
+    tmp_path: Path,
+) -> None:
+    root = fixture("0.12.3", tmp_path)
+    bound_readers(root)
+    repos.branch(root, "upgrade")
+    text = (root / "justfile").read_text(encoding="utf-8")
+    before = {gate: justfile_text.definition(text, gate)[1:] for gate in READERS}
+    assert all(f"@echo ran-{gate}" in "\n".join(body) for gate, body in before.items())
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    after_text = (root / "justfile").read_text(encoding="utf-8")
+    assert {gate: justfile_text.definition(after_text, gate)[1:] for gate in READERS} == before
+    assert justfile_text.defines_recipe(after_text, "suite-report")
+    producer = "\n".join(justfile_text.definition(after_text, "suite-report"))
+    assert "suite-report" not in after_text.replace(producer, "")
+    red, _ = conformance.owed_split(root, conformance.findings(root))
+    assert red == []
+    owing = [e.problem for e in owed.read(root).entries if e.rule == "shared_reports"]
+    assert len(owing) == 1
+    assert "bind `suite-report` first" in owing[0]
+    assert all(f"`{gate}`" in owing[0] for gate in READERS)
+
+
+SUITE_RECIPES = ("test", "e2e")
+
+
+def bound_suites(root: Path) -> None:
+    path = root / "justfile"
+    text = path.read_text(encoding="utf-8")
+    for gate in SUITE_RECIPES:
+        pattern = re.compile(
+            rf'^({re.escape(gate)}(?: [*+]\w+)?:[^\n]*\n    )@echo "bind:[^\n]*; exit 1\n',
+            re.MULTILINE,
+        )
+        text, count = pattern.subn(rf"\1@echo ran-{gate}\n", text, count=1)
+        assert count == 1, gate
+    path.write_text(text, encoding="utf-8")
+    repos.git(root, "commit", "-q", "-am", "feat(tests): bind the suites")
+
+
+def test_an_upgrade_leaves_bound_suites_green_and_owes_the_gate_and_the_files_taking_bind(
+    tmp_path: Path,
+) -> None:
+    root = fixture("0.12.3", tmp_path)
+    bound_suites(root)
+    repos.branch(root, "upgrade")
+    text = (root / "justfile").read_text(encoding="utf-8")
+    before = {gate: justfile_text.definition(text, gate)[1:] for gate in SUITE_RECIPES}
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    after_text = (root / "justfile").read_text(encoding="utf-8")
+    assert {
+        gate: justfile_text.definition(after_text, gate)[1:] for gate in SUITE_RECIPES
+    } == before
+    assert justfile_text.defines_recipe(after_text, "tests-changed")
+    recipe = "\n".join(justfile_text.definition(after_text, "tests-changed"))
+    assert "changed_tests.py" in recipe
+    red, _ = conformance.owed_split(root, conformance.findings(root))
+    assert red == []
+    owing = [e.problem for e in owed.read(root).entries if e.rule == "changed_tests"]
+    assert len(owing) == 1
+    assert owing[0].startswith("'## Tests' has no suites table (Suite | Gate | Files | Run files).")
+    assert "changed tests run" in "\n".join(e.problem for e in owed.read(root).entries)

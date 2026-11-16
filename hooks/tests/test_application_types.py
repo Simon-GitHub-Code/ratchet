@@ -61,7 +61,11 @@ def test_every_proof_a_question_requires_is_described_and_every_description_is_r
         "telemetry emitted": ("outside-the-seam",),
         "changed flags off and on": ("broken-flag-state",),
         "load smoke": ("erroring-route",),
+        "fuzzing": ("guarded-crash",),
+        "symbolic checking": ("related-fields",),
     }
+    assert SHIPPED.trigger_of("symbolic checking") == "code:untrusted-input"
+    assert SHIPPED.trigger_of("formal verification") == "code:formal-model"
     assert set(SHIPPED.proofs) <= SHIPPED.questions
     assert Catalogue({}, {}, frozenset(), proofs={"only proofs": ("x",)}).questions == {
         "only proofs"

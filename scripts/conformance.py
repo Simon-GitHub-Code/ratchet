@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -27,6 +28,7 @@ import application_types
 import architecture
 import budget
 import change_size
+import changed_tests
 import gatelib
 import hooks_installed
 import installs
@@ -36,7 +38,9 @@ import owed
 import pins
 import plugin_pin
 import project_bite
+import report
 import settings_rules
+import suites
 import suppressions
 import triggers
 from ratchet_guards import committed
@@ -238,6 +242,7 @@ GUARD_DIFF_CALL = re.compile(
 )
 NO_EXIT_MESSAGE = "[no-exit-message]"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
+SUITE_SETUP_MARKER = "# bind: the setup each later-tier suite needs"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
 RULE_VERBS = {
@@ -298,6 +303,12 @@ RUNS_JUST = re.compile(r"^just\s+@?([A-Za-z_][\w-]*)")
 # Why: a gate over the change compares with a base; `changed.py` hands it one, and judges nothing
 # on the adoption, whose base holds no binding.
 OVER_THE_CHANGE = frozenset({"diff-coverage", "test-counts", "mutation-changed"})
+# Why: ADR 0073. A gate the plugin runs through a recipe the template carries, whose Tool cell
+# also names the project's runners, so its fault is the project's to register.
+CARRIED_GATES = frozenset({"tests-changed"})
+CHANGED_TESTS_STOPS = "changed tests run"
+SHOWN = 3
+VARIADIC = re.compile(r"\s[*+]\w")
 # Why: these gates judge elapsed time, which a gate running beside them disturbs.
 TIMED = frozenset({"perf", "load"})
 
@@ -825,15 +836,18 @@ def entry_row(name: str, rows: dict[str, tuple[str, str]], *, on_just: bool) -> 
 
 
 @functools.cache
-def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
+def missing_recipe(
+    justfile: str, recipe: str, name: str, *, needed: str = "", placeholder: bool = False
+) -> Finding:
     """A recipe an entry point runs and the justfile lacks, copied when it stands on its own."""
     text = template_file("justfile")
     start = justfile_text.definition(text, recipe)
-    problem = (
-        f"has no `{recipe}` recipe, which the binding's entry point '{name}' runs; copy it from"
-        " the template justfile"
-    )
+    needed = needed or f"the binding's entry point '{name}' runs"
+    problem = f"has no `{recipe}` recipe, which {needed}; copy it from the template justfile"
     reasons = justfile_text.unmet(text, justfile, recipe)
+    if placeholder:
+        reasons = tuple(reason for reason in reasons if justfile_text.BINDS not in reason)
+        problem += "; it is a placeholder for the project to bind"
     if reasons:
         return Finding(
             "justfile",
@@ -915,11 +929,19 @@ def check_binding(root: Path) -> Iterable[Finding]:
     }
     typing = catalogue.types_problem(text)
     fired = Fired.of(root, text) if dropped else Fired({}, frozenset())
-    for failure in catalogue.failures(text, rows, adrs):
+    moved = moved_triggers(catalogue, rows)
+    for failure in unfolded(catalogue.failures(text, rows, adrs), dropped, text):
         question = dropped.get(failure)
         if question is not None:
             trigger = catalogue.trigger_of(question)
             yield dropped_row(failure, question, trigger=trigger, fired=fired)
+        elif failure in moved:
+            question, trigger = moved[failure]
+            does = f"write the '{question}' row as `later: {trigger}`"
+            want = markdown_text.with_cell(
+                "## Gates", question, column=1, value=f"later: {trigger}"
+            )
+            yield Finding(BINDING_PATH, failure, Edit(does, want, Agent()))
         elif failure == typing:
             yield agent(f"{BINDING_PATH}: {failure}", then=triggers_follow(catalogue))
         else:
@@ -993,6 +1015,26 @@ class Fired:
             return False, f"'{kind}' has no instance here yet"
         many = "instances" if count > 1 else "instance"
         return True, f"'{kind}' has {count} {many} here: {triggers.listing(self.found[kind])}"
+
+
+def moved_triggers(
+    catalogue: application_types.Catalogue, rows: Sequence[tuple[str, str]]
+) -> dict[str, tuple[str, str]]:
+    """Each `later:` row waiting on a trigger its question no longer has: its failure, the fix.
+
+    Why: ADR 0070. A question whose trigger the catalogue moved is owed on the new trigger at
+    once, so the upgrade writes `later: <trigger>` and the triggers gate says whether it fired.
+    """
+    moved = {}
+    for question, tool in rows:
+        waits = application_types.LATER.match(tool)
+        if waits is None or question not in catalogue.questions:
+            continue
+        trigger = catalogue.trigger_of(question)
+        failure = catalogue.later_problem(question, waits.group(1).strip())
+        if failure is not None and trigger != application_types.ALWAYS:
+            moved[failure] = (question, trigger)
+    return moved
 
 
 def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> Finding:
@@ -1376,6 +1418,203 @@ def check_pins(root: Path) -> Iterable[Finding]:
         return
     for problem in problems:
         yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=PINS_STOPS)
+
+
+def check_shared_reports(root: Path) -> Iterable[Finding]:
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    reports, problems = report.parse(text)
+    if reports is None and problems[0] == f"has no '{report.SECTION}' section":
+        problem = (
+            f"{problems[0]}; add the template's, bind `suite-report` first to run the suite once,"
+            " then bind the `test`, `coverage`, `diff-coverage` and `test-counts` gates as"
+            " readers of the shared suite report (ADR 0071)"
+        )
+        yield missing_section(
+            BINDING_PATH, problem, report.SECTION, template_text=template_binding()
+        )
+        return
+    for problem in problems:
+        yield agent(f"{BINDING_PATH}: {problem}")
+    for shared in reports or []:
+        yield from unignored_paths(root, shared)
+    justfile = read_justfile(root)
+    if justfile is None:
+        return
+    for name, recipe in report.producers(text):
+        yield from producer_recipe(justfile, name, recipe)
+    for shared in reports or []:
+        yield from shared_report_recipes(justfile, shared)
+
+
+def producer_recipe(justfile: str, name: str, recipe: str) -> Iterable[Finding]:
+    if justfile_text.defines_recipe(justfile, recipe):
+        return
+    template = template_file("justfile")
+    if justfile_text.defines_recipe(template, recipe):
+        needed = f"the shared report '{name}' names"
+        yield missing_recipe(justfile, recipe, name, needed=needed, placeholder=True)
+        return
+    yield agent(
+        f"justfile: the shared report '{name}' names the recipe '{recipe}',"
+        " which the justfile does not define"
+    )
+
+
+def unignored_paths(root: Path, shared: report.Report) -> Iterable[Finding]:
+    for path in shared.paths:
+        ignored = subprocess.run(
+            ["git", "-C", str(root), "check-ignore", "-q", "--", path],
+            capture_output=True,
+            check=False,
+            env={k: v for k, v in os.environ.items() if k not in gatelib.REPOSITORY_VARIABLES},
+        )
+        if ignored.returncode == 1:
+            yield agent(
+                f".gitignore: the shared report '{shared.name}' writes '{path}', which git does"
+                " not ignore; a report that is tracked or untracked changes the tree's content,"
+                " so it is never reused"
+            )
+
+
+def outside_path_argument(line: str, path: str) -> str:
+    if report.SCRIPT not in line:
+        return line
+    argument = re.compile(rf"--path[ =]+(['\"]?){re.escape(path)}\1(?![\w./-])")
+    return argument.sub("", line)
+
+
+def recipe_lines(justfile: str, recipe: str) -> list[str]:
+    body = justfile_text.code_of("\n".join(justfile_text.definition(justfile, recipe)))
+    return [line for line in body.replace("\\\n", " ").splitlines() if line[:1] in " \t"]
+
+
+def shared_report_recipes(justfile: str, shared: report.Report) -> Iterable[Finding]:
+    for command in shared.readers:
+        name = report.recipe_of(command)
+        if not justfile_text.defines_recipe(justfile, name):
+            yield agent(
+                f"justfile: the shared report '{shared.name}' names the recipe '{name}',"
+                " which the justfile does not define"
+            )
+    for command in shared.readers:
+        name = report.recipe_of(command)
+        for line in recipe_lines(justfile, name):
+            named = [path for path in shared.paths if path in outside_path_argument(line, path)]
+            if named:
+                yield agent(
+                    f"justfile: the recipe '{name}' reads the shared report '{shared.name}'"
+                    f" ({', '.join(named)}) other than as the --path argument of {report.SCRIPT}:"
+                    f" {line.strip()}"
+                )
+
+
+def check_changed_tests(root: Path) -> Iterable[Finding]:
+    """The suites table of the Tests section, the recipes it names and the gate that runs them."""
+    text = read(root / BINDING_PATH)
+    if text is None or not markdown_text.has_section(text, suites.SECTION):
+        return
+    found, problems = suites.parse(text)
+    if suites_table_owed(text):
+        problem = (
+            "'## Tests' has no suites table (Suite | Gate | Files | Run files). Write it in one"
+            " fill with two other edits, since a Gates row bound before the table exists turns"
+            " tier 1 red (ADR 0073): the table, one row per suite naming the gate that runs it"
+            " whole, the globs of its test files and the recipe that runs given files of it, or"
+            " `none: <reason>`; the Gates row 'changed tests run', bound to `just tests-changed`;"
+            " and `tests-changed` in the justfile's `tier1_gates`."
+        )
+        template = markdown_text.section(template_binding(), suites.SECTION)
+        start = tuple(line for line in template.splitlines() if line.startswith("|"))
+        yield Finding(BINDING_PATH, problem, Agent(start=start), stops=CHANGED_TESTS_STOPS)
+    else:
+        for problem in problems:
+            yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=CHANGED_TESTS_STOPS)
+    justfile = read_justfile(root)
+    if justfile is not None and not justfile_text.defines_recipe(justfile, "tests-changed"):
+        needed = "the method's 'changed tests run' gate runs (ADR 0073)"
+        yield missing_recipe(justfile, "tests-changed", CHANGED_TESTS_STOPS, needed=needed)
+    for suite in found or []:
+        yield from suite_findings(text, justfile, suite)
+    yield from clashing_suites(root, found or [])
+    yield from later_tier_setup(root, text, found or [])
+
+
+def unfolded(failures: Iterable[str], dropped: dict[str, str], binding: str) -> Iterable[str]:
+    """The failures but the Gates row the suites finding already owes with its table."""
+    folded = suites_table_owed(binding)
+    return (f for f in failures if not (folded and dropped.get(f) == CHANGED_TESTS_STOPS))
+
+
+def suites_table_owed(binding: str) -> bool:
+    """Whether no suites table is written yet: the fill that writes it writes the gate row too."""
+    found, problems = suites.parse(binding)
+    return found is None and problems[0].startswith(f"'{suites.SECTION}' lacks")
+
+
+def suite_findings(binding: str, justfile: str | None, suite: suites.Suite) -> Iterable[Finding]:
+    held = {row.command for row in project_bite.gate_rows(binding)}
+    if suite.gate not in held:
+        yield agent(
+            f"{BINDING_PATH}: the suites row '{suite.name}' names `{suite.gate}`, which no row of"
+            " the Gates table holds as its entry point"
+        )
+    if not suite.run or justfile is None:
+        return
+    recipe = suite.run.split()[1]
+    if not justfile_text.defines_recipe(justfile, recipe):
+        yield agent(
+            f"justfile: the suites row '{suite.name}' runs given files with the recipe '{recipe}',"
+            " which the justfile does not define"
+        )
+        return
+    definition = justfile_text.definition(justfile, recipe)
+    head = next(line for line in definition if line[:1] not in "#[")
+    if not VARIADIC.search(head.partition(":")[0]):
+        yield Finding(
+            "justfile",
+            f"the recipe '{recipe}' runs given files of the suite '{suite.name}' and takes none;"
+            " give it a variadic parameter, such as `*files`, and run only the files it is given,"
+            " in the environment and with the build the whole suite has (ADR 0073)",
+            Agent(start=definition),
+            stops=CHANGED_TESTS_STOPS,
+        )
+
+
+def clashing_suites(root: Path, found: list[suites.Suite]) -> Iterable[Finding]:
+    clashes: dict[tuple[str, ...], list[str]] = {}
+    for path in gatelib.tracked_paths(root):
+        owners = tuple(suite.name for suite in suites.owners(found, path))
+        if len(owners) > 1:
+            clashes.setdefault(owners, []).append(path)
+    for owners, paths in sorted(clashes.items()):
+        names = ", ".join(f"'{name}'" for name in owners)
+        shown = ", ".join(paths[:SHOWN]) + (
+            f" and {len(paths) - SHOWN} more" if len(paths) > SHOWN else ""
+        )
+        yield Finding(
+            BINDING_PATH,
+            f"{shown} match the suites {names}; a test file belongs to one suite, so narrow the"
+            " globs of one row",
+            Agent(),
+            identity=f"the suites {names} claim one file",
+            stops=CHANGED_TESTS_STOPS,
+        )
+
+
+def later_tier_setup(root: Path, binding: str, found: list[suites.Suite]) -> Iterable[Finding]:
+    workflow = read(root / WORKFLOWS / "ci.yml")
+    rows = project_bite.gate_rows(binding)
+    if workflow is None or "tests-changed" in workflow:
+        return
+    if any(changed_tests.later(rows, suite) for suite in found):
+        yield agent(
+            f"{WORKFLOWS / 'ci.yml'}: a suite of the suites table has its gate in a later tier,"
+            " and no step of the job that runs `tests-changed` sets up what it needs; add the"
+            " steps under `if: matrix.gate == 'tests-changed'`, as `deep.yml` sets up the whole"
+            " suite"
+        )
 
 
 def check_mutation(root: Path) -> Iterable[Finding]:
@@ -1896,8 +2135,13 @@ def check_toolchain(root: Path) -> Iterable[Finding]:
             if following in unbound:
                 # Why: the line moves when one is added above it, the job does not, so an owed
                 # entry names the job and excuses no placeholder in another (ADR 0037).
+                marker = (
+                    SUITE_SETUP_MARKER
+                    if SUITE_SETUP_MARKER in lines[number - 1]
+                    else TOOLCHAIN_MARKER
+                )
                 unset = (
-                    f"in job `{job_of(lines, number)}` still says '{TOOLCHAIN_MARKER}' and the"
+                    f"in job `{job_of(lines, number)}` still says '{marker}' and the"
                     " next line is the template's, so no step sets up the project's toolchain"
                 )
                 yield Finding(
@@ -1924,7 +2168,7 @@ def after_marker(lines: list[str]) -> dict[int, str]:
     return {
         number: lines[number]
         for number, line in enumerate(lines, start=1)
-        if TOOLCHAIN_MARKER in line and number < len(lines)
+        if (TOOLCHAIN_MARKER in line or SUITE_SETUP_MARKER in line) and number < len(lines)
     }
 
 
@@ -2487,6 +2731,13 @@ def gates_of(recipe: str) -> Callable[[str], str]:
     return value
 
 
+def runs_from_plugin(row: project_bite.Row) -> bool:
+    """Whether the plugin runs a Gates row's gate: its own script, or a carried gate once bound."""
+    return bool(project_bite.SHIPPED.fullmatch(row.tool)) or (
+        row.gate in CARRIED_GATES and row.bound
+    )
+
+
 def unrun_gates(binding: str, justfile: str) -> Iterable[Finding]:
     """A gate the plugin ships, bound at tier 0 or 1, that its tier's recipe never reaches.
 
@@ -2498,7 +2749,7 @@ def unrun_gates(binding: str, justfile: str) -> Iterable[Finding]:
     template = template_file("justfile")
     for row in project_bite.gate_rows(binding):
         tier = f"tier{row.tier}"
-        if not project_bite.SHIPPED.fullmatch(row.tool) or tier not in ("tier0", "tier1"):
+        if not runs_from_plugin(row) or tier not in ("tier0", "tier1"):
             continue
         recipe = tiers.get(tier)
         if recipe is None or justfile_text.undefined(justfile, recipe):
@@ -2602,7 +2853,7 @@ def ci_unrun(root: Path, binding: str) -> Iterable[Finding]:
     if matrix is None:
         return
     for row in project_bite.gate_rows(binding):
-        if row.tier != "1" or not project_bite.SHIPPED.fullmatch(row.tool):
+        if row.tier != "1" or not runs_from_plugin(row):
             continue
         if row.gate in matrix.gates:
             continue
@@ -3060,6 +3311,8 @@ CHECKS: tuple[Check, ...] = (
     check_mutation_filter,
     check_operability,
     check_speed,
+    check_shared_reports,
+    check_changed_tests,
     check_manifest,
     check_default_branch,
     check_doors,
@@ -3235,6 +3488,8 @@ def mutations() -> list[Mutation]:
         *suppression_mutations(),
         *signs_mutations(),
         *pins_mutations(),
+        *report_mutations(),
+        *changed_tests_mutations(),
         *mutation_gate_mutations(),
         *dependency_mutations(),
         *weekly_mutations(),
@@ -3867,6 +4122,72 @@ def pins_mutations() -> list[Mutation]:
     ]
 
 
+def report_mutations() -> list[Mutation]:
+    row = SELF_TEST_REPORTS
+    shared = (
+        "| suite | `just build` | `suite.xml` | `just coverage`, `just diff-coverage` |"
+        " `just coverage` |"
+    )
+    reading = rewrite("justfile", "coverage: _plugin\n", "coverage: _plugin\n    cat suite.xml\n")
+
+    sharing = rebind(row, shared)
+
+    def reading_directly(root: Path) -> None:
+        sharing(root)
+        reading(root)
+
+    return [
+        ("binding without a Shared reports section", rebind(report.SECTION, "## Reports")),
+        (
+            "Shared reports row that says none with no reason",
+            rebind(row, "| none: x | none | none | none | none |"),
+        ),
+        (
+            "Shared reports row left as the template wrote it",
+            rebind(
+                row,
+                "| `suite` | `just suite-report` | <`path` of the coverage report, Cobertura or"
+                " LCOV>, <`path` of the test results, JUnit XML> | `just test`, `just coverage`,"
+                " `just diff-coverage`, `just test-counts` | `just test` |",
+            ),
+        ),
+        (
+            "Shared reports row whose producer is no recipe of the justfile",
+            rebind(row, shared.replace("just build", "just no-such-recipe")),
+        ),
+        ("reader recipe that opens its shared report's path itself", reading_directly),
+    ]
+
+
+def changed_tests_mutations() -> list[Mutation]:
+    row = SELF_TEST_SUITES
+    unit = "| unit | `just test` | `tests/**` | `just test-files` |"
+    header = "| Suite | Gate | Files | Run files |"
+    ungated = unit.replace("just test`", "just no-such-gate`")
+    unreasoned = unit.replace("`just test-files`", "")
+    filesless = rewrite("justfile", "test-files *files:", "test-files:")
+    binding = rebind(row, unit)
+
+    def taking_none(root: Path) -> None:
+        binding(root)
+        filesless(root)
+
+    return [
+        ("Tests section without a suites table", rebind(header, "| Name | Gate | Files | Run |")),
+        (
+            "suites row that says none with no reason",
+            rebind(row, "| none: x | none | none | none |"),
+        ),
+        ("suites row naming a gate the Gates table lacks", rebind(row, ungated)),
+        ("suites row with neither a way to run files nor a reason", rebind(row, unreasoned)),
+        ("suites row whose recipe takes no files", taking_none),
+        (
+            "justfile without the tests-changed recipe",
+            rewrite("justfile", "tests-changed *suites: _plugin", "tests-moved *suites: _plugin"),
+        ),
+    ]
+
+
 def mutation_gate_mutations() -> list[Mutation]:
     """A recipe that hands the mutation gate a tool's own report (ADR 0050)."""
 
@@ -3952,6 +4273,13 @@ SELF_TEST_KIND = "self-test-silence"
 SIGNS_PLACEHOLDER = re.compile(r"^\| (deployed|irreplaceable-data) \| <[^\n]*$", re.MULTILINE)
 PINS_PLACEHOLDER = re.compile(r"^\| <`globs` of the files that name an image[^\n]*$", re.MULTILINE)
 SELF_TEST_PINS = "| none: the self-test names no image | none |"
+REPORTS_PLACEHOLDER = re.compile(r"^\| `suite` \|[^\n]*$", re.MULTILINE)
+SELF_TEST_REPORTS = "| none: the self-test shares no report | none | none | none | none |"
+SUITES_PLACEHOLDER = re.compile(r"^\| <suite name> \|[^\n]*$", re.MULTILINE)
+SELF_TEST_SUITES = "| none: the self-test has no tests | none | none | none |"
+LATER_SETUP_PLACEHOLDER = re.compile(
+    r"^ *# bind: the setup each later-tier suite needs[^\n]*\n", re.MULTILINE
+)
 DECISION_PLACEHOLDER = re.compile(r"^- Decision: <[^\n]*>$", re.MULTILINE)
 PARTS_PLACEHOLDER = re.compile(r"^\| <part> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_RECORD = "docs/adr/0002-the-tool-is-one-command-over-its-rules.md"
@@ -4003,6 +4331,8 @@ def fill_binding(text: str) -> str:
     text = SUPPRESSION_QUESTION_PLACEHOLDER.sub(suppression_rows, text)
     text = SIGNS_PLACEHOLDER.sub(r"| \1 | none: the self-test has no such file |", text)
     text = PINS_PLACEHOLDER.sub(SELF_TEST_PINS, text)
+    text = REPORTS_PLACEHOLDER.sub(SELF_TEST_REPORTS, text)
+    text = SUITES_PLACEHOLDER.sub(SELF_TEST_SUITES, text)
     text = EMPTY_TOOL_CELL.sub(r"\1 a tool |", text)
     return SPEED_PLACEHOLDER.sub(r"\1stated for this stack", text)
 
@@ -4061,7 +4391,7 @@ def fill_placeholders(root: Path) -> None:
     }
     for name, replacements in fills.items():
         target = root / name
-        text = target.read_text()
+        text = LATER_SETUP_PLACEHOLDER.sub("", target.read_text())
         for placeholder, value in replacements.items():
             text = text.replace(placeholder, value)
         target.write_text(text)

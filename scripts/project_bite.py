@@ -135,13 +135,14 @@ change touches a path that defines a gate (the manifest's ``tool-config``, ``gat
 ``fitness``, ``gate-tools`` and ``formal`` groups, the registry and the binding), and then proves
 the gates of tiers 0 and 1 that the change could affect (ADR 0069), one line each saying why.
 The registry names a gate by each bite added, removed or changed; a patch names the gates whose
-bites apply it; the binding names the gates of the rows that changed, and every gate when
-anything else in it changed, the plugin pin line included; a change to the justfile affects every
-gate, since its recipes are code the proof cannot read. Any other path, and a path whose reading
-fails, affects every gate of tiers 0 and 1. ``--pull-request-gates`` proves every gate of tiers 0
-and 1 with no change to read, to measure what the pull-request form costs; it cannot be combined
-with ``--changed``. The proof proves nothing on the adoption either, the change whose base holds
-no binding: every gate is new there, and the whole proof runs once in tier 2.
+bites apply it; the binding names the gates of the rows that changed, a changed row of the suites
+table naming `tests-changed` and no other gate (ADR 0069, amended by ADR 0073, point 6), and every
+gate when anything else in it changed, the plugin pin line included; a change to the justfile
+affects every gate, since its recipes are code the proof cannot read. Any other path, and a path
+whose reading fails, affects every gate of tiers 0 and 1. ``--pull-request-gates`` proves every
+gate of tiers 0 and 1 with no change to read, to measure what the pull-request form costs; it
+cannot be combined with ``--changed``. The proof proves nothing on the adoption either, the change
+whose base holds no binding: every gate is new there, and the whole proof runs once in tier 2.
 """
 
 from __future__ import annotations
@@ -172,6 +173,8 @@ import application_types
 import budget
 import gatelib
 import plugin_pin
+import report
+import suites
 
 # Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -328,7 +331,7 @@ def git_in(root: Path, *args: str, index: Path | None = None, stdin: str | None 
 
 
 def environment() -> dict[str, str]:
-    kept = {key: value for key, value in os.environ.items() if key not in REAL_TREE}
+    kept = {key: value for key, value in os.environ.items() if key not in (*REAL_TREE, report.RUN)}
     return {**kept, BITING: "1"}
 
 
@@ -1463,6 +1466,7 @@ class Cause(NamedTuple):
 
 
 Targets = dict[tuple[bool, str], set[tuple[str, str]]]
+SUITES_GATE = "tests-changed"
 IGNORE_NAMES = (".gitignore", ".gitattributes")
 JUSTFILE_NAMES = ("justfile", ".justfile", "Justfile")
 READER = {"gate-commands": "runs it"}
@@ -1610,6 +1614,8 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
     binding = str(gatelib.BINDING)
     old = gatelib.show(root, base, binding) or ""
     new = gatelib.read_text(root / binding) or ""
+    old_suites, old = suites.split(old)
+    new_suites, new = suites.split(new)
     (old_rows, old_rest), (new_rows, new_rest) = split_gates(old), split_gates(new)
     if (
         plugin_pin.PIN_LINE.sub("", old_rest).strip()
@@ -1634,7 +1640,14 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
             why = f"the binding's row `{question}` {verb} and names no gate"
             return [Cause(None, why)]
         causes += [Cause(row.gate, f"the binding's row `{question}` {verb}") for row in rows]
-    return causes
+    changed = sorted(
+        name
+        for name in old_suites.keys() | new_suites.keys()
+        if old_suites.get(name) != new_suites.get(name)
+    )
+    return causes + [
+        Cause(SUITES_GATE, f"the binding's suites row `{name}` changed") for name in changed
+    ]
 
 
 def read_reads(binding: str) -> tuple[dict[str, list[str]], list[str]]:

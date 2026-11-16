@@ -3,7 +3,7 @@ status: accepted
 ---
 # A pull request proves the gates its change could affect, and the merge proves them all
 
-Amends ADR 0020, point 6: what the tier 1 `bite` proves when a change touches a path that defines a gate. Settles issue #168.
+Amends ADR 0020, point 6: what the tier 1 `bite` proves when a change touches a path that defines a gate. Settles issue #168. Amended by ADR 0073, point 6: a changed row of the binding's suites table affects `tests-changed` and no other gate.
 
 The tier 1 `bite` (`project_bite.py --changed`) proves every tier 0 and tier 1 gate whenever a change touches a path that defines one. In one adopted project that is 32 faults over 28 gates, each in a cold scratch copy, and it took 867 to 1137 seconds when green. A change to one gate's recipe paid the whole proof in each of the five `check` runs of its pipeline, and every upgrade pays it, since an upgrade touches the binding. Under load the proof went red at 27 to 31 of 32 with verdicts that read as gates unable to fail (`NOT PROVEN`, `DOES NOT BITE`, `RED BEFORE THE FAULT`), when the cause was time. After two merges, the proof was green with 32 of 32, in 1205 and 1055 seconds, but the tier 1 time budget of 900 seconds turned the default branch red. A check that takes a quarter of an hour stops being run, and a proof that goes red on load teaches its reader to distrust it. The owner chose on 2026-11-15 that a pull request and the local check prove only what the change could affect, and that the full proof runs after the merge.
 
