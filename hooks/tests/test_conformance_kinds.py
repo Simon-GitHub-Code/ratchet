@@ -424,3 +424,9 @@ def test_a_pin_with_no_tree_id_at_the_plugin_in_use_is_fixed_by_the_upgrade(repo
     pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
     replace(BINDING, pin, f"- Ratchet plugin: 0.0.0 at {commit}")(repo)
     assert kind(repo, f"{BINDING}: the pin names no tree id") == "Auto"
+
+
+def test_a_quote_inside_a_command_substitution_is_its_own_level() -> None:
+    assert conformance.inside_quotes('x="$(echo "a") ')
+    assert not conformance.inside_quotes('x="$(echo "a")" ')
+    assert not conformance.inside_quotes('x=$(echo "a"; ')

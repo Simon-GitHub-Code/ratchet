@@ -98,15 +98,13 @@ def version_in(repo: Path, commit: str) -> str | None:
 def bump_commit(repo: Path, ref: str, version: str) -> str | None:
     """The first commit on ``ref``'s first-parent line where the version became ``version``.
 
-    It holds ``version`` and its first parent, if it has one, holds another. ``None`` when no
-    commit on the line is that.
+    The commits that changed the manifest, oldest first, are each a change of the version or a
+    touch of the file, so the first that holds ``version`` is where it became that. ``None`` when
+    no commit on the line holds it.
     """
     listed = try_git(repo, "log", "--first-parent", "--format=%H", ref, "--", MANIFEST) or ""
     for commit in reversed(listed.splitlines()):
-        if version_in(repo, commit) != version:
-            continue
-        before = try_git(repo, "rev-parse", "-q", "--verify", f"{commit}^1^{{commit}}")
-        if before is None or version_in(repo, before) != version:
+        if version_in(repo, commit) == version:
             return commit
     return None
 

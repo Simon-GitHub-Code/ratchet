@@ -101,3 +101,12 @@ def test_a_version_that_goes_back_is_refused_and_the_old_tag_stays_green(
     assert "v1.2.0" in error
     code, lines = checked(root, capsys, tag="v1.1.0")
     assert (code, lines) == (0, ["release-check: v1.1.0 green"])
+
+
+def test_a_version_that_is_not_dotted_numbers_is_refused(tmp_path: Path, capsys: Out) -> None:
+    manifest = json.dumps({"version": "next"})
+    root = repos.repository(
+        tmp_path / "work", {MANIFEST: manifest, "CHANGELOG.md": "## next\n\nx\n"}
+    )
+    assert release.main(["release.py", "--repo", str(root)]) == 1
+    assert "is not dotted numbers" in capsys.readouterr().err
