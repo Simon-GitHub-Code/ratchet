@@ -352,12 +352,12 @@ def test_a_seconds_table_with_no_bite_all_ceiling_is_an_agent_finding_naming_the
     assert ceiling_findings(repo) == []
 
 
-def seconds_problem(repo: Path, tier1: float | None, took: float | None) -> str:
+def seconds_problem(repo: Path, tier2: float | None, took: float | None) -> str:
     path = repo / THRESHOLDS
     text = path.read_text(encoding="utf-8")
     path.write_text(
-        budget.with_ceiling(text, "tier2", tier1)
-        if tier1 is not None
+        budget.with_ceiling(text, "tier2", tier2)
+        if tier2 is not None
         else text + "\n[ceilings.seconds]\nlint = 5\n"
     )
     if took is not None:
