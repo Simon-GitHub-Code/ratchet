@@ -80,9 +80,17 @@ EXCLUDED = (
     ":(exclude,glob)**/__pycache__/**",
 )
 NEUTRAL = (
-    "-c core.autocrlf=false -c core.safecrlf=false -c core.filemode=true"
-    " -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null"
-).split()
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "core.safecrlf=false",
+    "-c",
+    "core.filemode=true",
+    "-c",
+    "core.excludesFile=/dev/null",
+    "-c",
+    "core.attributesFile=/dev/null",
+)
 UNFILTERED = "* -text -eol -ident -filter -working-tree-encoding\n"
 DOTTED = re.compile(r"\d+(?:\.\d+)*")
 NONE_RECORDED = (
@@ -227,7 +235,8 @@ def release_tree(plugin: Path) -> str | None:
 
 def line_for(plugin: Path) -> str:
     """The binding's pin line naming ``plugin``, with a stand-in for what the copy cannot say."""
-    version, commit, tree = version_of(plugin) or "<version>", commit_of(plugin), release_tree(plugin)
+    version = version_of(plugin) or "<version>"
+    commit, tree = commit_of(plugin), release_tree(plugin)
     if commit in (None, UNREADABLE):
         commit = f"<the full commit of {version}>"
     return f"- Ratchet plugin: {version} at {commit} tree {tree or f'<the tree of {version}>'}"
@@ -341,6 +350,31 @@ def relation(pin: Pin | None, plugin: Path) -> Relation:
     return Relation.NEWER if order else Relation.OLDER
 
 
+def tree_problem(pin: Pin, plugin: Path) -> str | None:
+    """Why ``plugin`` is not the release the pin's tree id names, or ``None`` when it is."""
+    home, apply = gatelib.BINDING, upgrade_command(plugin)
+    if pin.tree is None:
+        return (
+            f"{home} pins no tree id, so nothing holds the plugin at {plugin} to the release:"
+            f" run `{apply}`, which writes `{line_for(plugin)}`"
+        )
+    committed = release_tree(plugin)
+    if committed != pin.tree:
+        return (
+            f"the plugin at {plugin} is at a commit whose tree is {committed or 'unreadable'},"
+            f" not the {pin.tree} that {home} pins: the pin names no release. Run `{apply}`"
+            " from the release it should name"
+        )
+    held = copy_tree_id(plugin)
+    if held != pin.tree:
+        return (
+            f"the plugin at {plugin} is tree {held or 'unreadable'}, not the {pin.tree} that"
+            f" {home} pins: it is not the pinned release. Install the pinned release, or"
+            f" upgrade this project with `{apply}`"
+        )
+    return None
+
+
 def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
     """The line to print about ``plugin`` against ``pin``, and whether it is a problem."""
     version, commit = version_of(plugin), commit_of(plugin)
@@ -355,28 +389,9 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
             True,
         )
     if standing is Relation.PINNED:
-        held = copy_tree_id(plugin)
-        if pin.tree is None:
-            return (
-                f"{home} pins no tree id, so nothing holds the plugin at {plugin} to the release:"
-                f" run `{apply}`, which writes `{line_for(plugin)}`",
-                True,
-            )
-        committed = release_tree(plugin)
-        if committed != pin.tree:
-            return (
-                f"the plugin at {plugin} is at a commit whose tree is {committed or 'unreadable'},"
-                f" not the {pin.tree} that {home} pins: the pin names no release. Run `{apply}`"
-                " from the release it should name",
-                True,
-            )
-        if held != pin.tree:
-            return (
-                f"the plugin at {plugin} is tree {held or 'unreadable'}, not the {pin.tree} that"
-                f" {home} pins: it is not the pinned release. Install the pinned release, or"
-                f" upgrade this project with `{apply}`",
-                True,
-            )
+        problem = tree_problem(pin, plugin)
+        if problem is not None:
+            return problem, True
         if commit is None:
             compared = "this copy carries no commit, and its tree is the pinned one"
             return f"plugin-pin: {version}, as {home} pins; {compared}", False

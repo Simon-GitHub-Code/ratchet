@@ -32,7 +32,7 @@ def raw_tree_id(copy: Path, scratch: Path) -> str:
             if relative == ".claude-plugin/commit":
                 continue
             if path.is_symlink():
-                mode, sha = "120000", hash_object(work, "--stdin", feed=os.readlink(path))
+                mode, sha = "120000", hash_object(work, "--stdin", feed=str(path.readlink()))
             else:
                 executable = path.stat().st_mode & stat.S_IXUSR
                 mode = "100755" if executable else "100644"
@@ -58,7 +58,7 @@ def release_copy(destination: Path) -> Path:
 
 
 def project(
-    root: Path, copy: Path, tree: str, record: Path | None = None, extra: str = ""
+    root: Path, copy: Path, tree: str, *, record: Path | None = None, extra: str = ""
 ) -> Path:
     version = plugin_pin.version_of(copy)
     pin = f"- Ratchet plugin: {version} at {'1' * 40} tree {tree}"
@@ -210,8 +210,9 @@ def test_the_id_is_the_same_under_a_hostile_global_git_configuration(tmp_path: P
     assert done.returncode == 0, done.stdout + done.stderr
 
 
-@pytest.mark.parametrize("changed", [False, True])
-def test_a_folder_name_with_shell_syntax_runs_nothing(tmp_path: Path, changed: bool) -> None:
+@pytest.mark.parametrize("extra", [False, True], ids=["as pinned", "with an extra file"])
+def test_a_folder_name_with_shell_syntax_runs_nothing(tmp_path: Path, *, extra: bool) -> None:
+    changed = extra
     copy = release_copy(tmp_path / HOSTILE)
     pinned = raw_tree_id(copy, tmp_path)
     if changed:
@@ -303,8 +304,9 @@ def release_clone(tmp_path: Path) -> tuple[Path, str, str]:
 
 def plugin_clone_source(work: Path) -> tuple[Path, str]:
     repos.repository(work, {".claude-plugin/plugin.json": '{"version": "1.2.3"}'})
+    merged = repos.git(work, "rev-parse", "HEAD")
     repos.write(work, "CHANGELOG.md", "# Changelog\n\n## 1.2.3\n\nThe release.\n")
-    merged = repos.commit(work, "docs(core): the changelog")
+    repos.commit(work, "docs(core): the changelog")
     assert release.main(["release.py", "--repo", str(work)]) == 0
     return work, merged
 

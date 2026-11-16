@@ -353,9 +353,12 @@ def test_smoke_boots_a_deliverable_on_the_port_the_gate_picked(
     just = shutil.which("just")
     if just is None:
         pytest.skip("just is not installed")
-    env = {k: v for k, v in os.environ.items() if k != "PORT"} | {
-        "RATCHET_PLUGIN": str(PLUGIN_ROOT)
-    }
+    copy = repos.installed_copy()
+    pin = f"- Ratchet plugin: {plugin_pin.version_of(copy)} at {'1' * 40}"
+    binding = tmp_path / "docs/process/binding.md"
+    binding.parent.mkdir(parents=True)
+    binding.write_text(f"{pin} tree {plugin_pin.copy_tree_id(copy)}\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "PORT"} | {"RATCHET_PLUGIN": str(copy)}
     sets = ["--set", "boot", boot, "--set", "ready", "http://127.0.0.1:{port}/"]
     done = subprocess.run(  # noqa: S603 # -- a fixed argv; the justfile is the template's own
         [just, "--justfile", str(TEMPLATES / "justfile"), *sets, "smoke"],
