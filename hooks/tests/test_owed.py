@@ -285,6 +285,37 @@ def test_every_stale_entry_goes_in_one_edit(repo: Path, capsys: pytest.CaptureFi
     assert owed.read(repo).entries == held
 
 
+def test_the_fix_removes_the_stale_entries_and_keeps_every_other_byte() -> None:
+    live = owed.Entry("quality/b.toml", "bites", "gate 'lint' has no bite", "0.12.0")
+    gone = owed.Entry("quality/a.toml", "bites", "gate 'old' has no bite", "0.12.0")
+    also = owed.Entry("quality/c.toml", "bites", "gate 'older' has no bite", "0.12.0")
+
+    def block(entry: owed.Entry) -> str:
+        return (
+            f'[[owed]]\nrule = "{entry.rule}"\npath = "{entry.path}"\n'
+            f'problem = "{entry.problem}"\nsince = "{entry.since}"\n'
+        )
+
+    note = "# kept as the owner wrote it\n"
+    text = f"{note}\n{block(also)}\n{block(live)}  \n# between\n{block(gone)}"
+    want = owed.kept(Counter({live.key: 1}))
+    first = want(text)
+    assert first == f"{note}\n{block(live)}  \n# between\n"
+    assert want(first) == first
+    assert owed.parse(first).entries == (live,)
+
+
+def test_a_stale_entry_names_the_upgrade_that_drops_it(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    add(repo, entry(problem="a finding fixed long ago"))
+    capsys.readouterr()
+    assert conformance.run(repo) == 1
+    out = capsys.readouterr().out
+    command = plugin_pin.upgrade_command(plugin_pin.PLUGIN)
+    assert f"  then: run `{command}`" in out
+
+
 def test_an_entry_whose_finding_is_fixed_goes_and_the_count_drops(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

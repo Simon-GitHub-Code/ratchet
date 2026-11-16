@@ -224,7 +224,8 @@ CLOSED: Final = frozenset({Ticket.NONE, Ticket.RESOLVED})
 class World:
     """The repository as far as the route can tell.
 
-    ``parked``: a ``records/<time>`` branch waits unmerged. ``foundation``: the glossary and the
+    ``parked``: a branch waits unmerged whose change holds only records, that no run owns and no
+    work tree has checked out, whatever its name. ``foundation``: the glossary and the
     design brief are written. ``inherits``: the tickets were split from a spec that states its
     conjecture, so none needs one of its own. ``owes``: a safeguard is owed. ``reviews``: an
     architecture review is owed (ADR 0052). ``fills``: an upgrade left rows an agent writes from

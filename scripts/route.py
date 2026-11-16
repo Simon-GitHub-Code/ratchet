@@ -768,14 +768,6 @@ def could_be_records(root: Path, default: str, name: str) -> bool:
     return bool(paths) and all(any(shape.fullmatch(path) for shape in shapes) for path in paths)
 
 
-def holds_only_records(root: Path, default: str, name: str) -> bool:
-    base = f"{merge.HEADS}{default}"
-    change = merge_ready.read(root, base, f"{merge.HEADS}{name}")
-    return not isinstance(change, merge_ready.Reason) and not merge_ready.not_records(
-        root, base, change.paths
-    )
-
-
 def first_commit_time(root: Path, default: str, name: str) -> int:
     said = gatelib.git(root, "log", "--reverse", "--format=%at", f"{default}..{name}")
     log = (said or "").split()
@@ -809,7 +801,7 @@ def waiting_records(checkout: Checkout) -> list[str]:
         and name not in held
         and could_be_records(root, default, name)
         and not owned_by_a_run(root, name)
-        and holds_only_records(root, default, name)
+        and merge.holds_only_records(root, default, name)
     ]
     return sorted(names, key=lambda name: first_commit_time(root, default, name))
 
