@@ -154,10 +154,6 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | backup restores | | weekly | | `just restore-drill` |
 | production answers | | weekly | | `just prod-probe` |
 
-## What each gate reads
-
-One bullet per tier 0 or tier 1 gate, keyed by the last word of its entry point: `- <gate>: <path>, <path>`. Each entry is a repository-relative file, directory or glob (`*`, `**`) that the gate's tool reads besides the code it judges. A change to tool config, or to another path no gate's row names, proves only the gates whose bullet matches it, and every gate with no bullet (ADR 0069). The conformance gate is red on an entry that matches no file, a bullet that names no gate, and an empty bullet.
-
 ## Triggers
 
 Where each `code:<kind>` trigger of the Gates table finds its instances in this stack (ADR 0028). One row per kind that a question asked of this repository's application types names, and one per kind whose arrival reopens the architecture, whatever the types (ADR 0052); `skills/method/application-types.toml` in the `ratchet` plugin lists the kinds and what each means. `Paths` are comma-separated globs over tracked files. Without a `Pattern` each matching file is one instance; with one, each matching line is, and a literal `|` in it is written `\|`. A repository that never has the kind writes `none: <reason>`. The `triggers` gate counts instances at the merge base and at head, reads this table as the merge base holds it, and holds the rule that the change that brings a kind is free, in any number of files, and a later one that adds another instance while a row it owes is still `later:`, or while the architecture review its arrival reopened has not landed as a decision record, is red.

@@ -177,8 +177,6 @@ Tell the owner this before step 1. It is not a question.
 
    **Test paths.** Fill the binding's `## Test paths` section from what you know of this stack: the globs of every file that is a test, a fixture or test support, the Critique tests directory included, so the change-size gate counts product code against the product ceiling and tests against their own. The gate counts every line as product while the section is unfilled.
 
-   **What each gate reads.** For each tier 0 and tier 1 gate you bound, write a bullet under the binding's `## What each gate reads`, keyed by the last word of its entry point: the files its tool reads besides the code it judges, such as its config and any script its recipe runs, as repository-relative paths, directories or globs. Take them from the tool's documentation and the recipe, not from guesses. A change to such a path then proves only the gates that read it. Leave out a gate whose reads you cannot name: with no bullet it is proven on every such change, which is slower and never wrong.
-
    **Fill the three stack sections of the binding from the tools you bound.** The method names no package manager, lockfile, linter or directive, so each fact below is yours to state, from what you know of the tools you chose and what the human decided, in plain terms and without copying from this text.
    - `## Install`: say whether a fresh checkout must install the tools before a recipe runs one.
      - **It must:** bind the `install` recipe to an install frozen to the lockfile you name that does nothing once it has run. List every recipe that runs a tool the install provides, make each depend on `install`, and put it after `plugin-pin` in each tier, so a tier installs once before its gates start.
@@ -213,7 +211,7 @@ Tell the owner this before step 1. It is not a question.
    - A verdict other than `bites` is a defect of the recipe or the fault ([tiers.md](../method/tiers.md#every-bound-gate-is-shown-to-bite)): fix it, never loosen `expect`.
    - A gate you cannot plant a fault for is bound `none`, with its reason and ADR.
 
-   Done when tier 0 and tier 1 are green, every tier 2 gate is green alone, `just hooks-install` has printed `hooks: green` or the owner has the command its `owner:` line names, no `bind:` body is left, `test_runner` runs the test files named after it, `## Test paths` and the three stack sections are filled, each tier 0 and tier 1 gate whose reads you can name has its bullet under `## What each gate reads`, `boot`, `ready` and `service` are filled for every type that boots, every gate you bound has its `[[bite]]`, and the first thresholds are committed or stay as you wrote them while the owner's hooks command waits.
+   Done when tier 0 and tier 1 are green, every tier 2 gate is green alone, `just hooks-install` has printed `hooks: green` or the owner has the command its `owner:` line names, no `bind:` body is left, `test_runner` runs the test files named after it, `## Test paths` and the three stack sections are filled, `boot`, `ready` and `service` are filled for every type that boots, every gate you bound has its `[[bite]]`, and the first thresholds are committed or stay as you wrote them while the owner's hooks command waits.
 
 10. **Speed.** Build it in while nothing is slow ([tiers.md](../method/tiers.md#speed)).
     - Turn on the parallel mode of the test runner, provisioned or bound, and of the mutation tool where it is bound, in the committed configuration.
