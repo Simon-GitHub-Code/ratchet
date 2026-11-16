@@ -58,16 +58,20 @@ def just(
     )
 
 
-def pin_line() -> str:
-    version = plugin_pin.version_of(PLUGIN_ROOT)
-    commit = plugin_pin.commit_of(PLUGIN_ROOT) or "1" * 40
-    return f"- Ratchet plugin: {version} at {commit}\n"
+def pin_line(copy: Path | None = None) -> str:
+    copy = copy or repos.installed_copy()
+    version = plugin_pin.version_of(copy)
+    commit = plugin_pin.commit_of(copy) or "1" * 40
+    return f"- Ratchet plugin: {version} at {commit} tree {plugin_pin.copy_tree_id(copy)}\n"
 
 
-def adopted(root: Path, record: str | None = None) -> Path:
+def adopted(root: Path, record: str | None = None, pinned: Path | None = None) -> Path:
     repos.repository(
         root,
-        {"justfile": JUSTFILE, "docs/process/binding.md": f"# B\n\n## Runner\n\n{pin_line()}"},
+        {
+            "justfile": JUSTFILE,
+            "docs/process/binding.md": f"# B\n\n## Runner\n\n{pin_line(pinned)}",
+        },
     )
     if record is not None:
         (root / ".git" / events.PLUGIN_RECORD).write_text(f"{record}\n", encoding="utf-8")
@@ -81,7 +85,7 @@ def stub_plugin(root: Path, scripts: tuple[str, ...]) -> Path:
 
 
 def test_an_empty_plugin_variable_is_unset_and_the_record_is_read(tmp_path: Path) -> None:
-    root = adopted(tmp_path / "repo", str(PLUGIN_ROOT))
+    root = adopted(tmp_path / "repo", str(repos.installed_copy()))
     for plugin in ("", None):
         done = just(root, "plugin-pin", plugin=plugin)
         assert done.returncode == 0, done.stdout
@@ -90,11 +94,11 @@ def test_an_empty_plugin_variable_is_unset_and_the_record_is_read(tmp_path: Path
 
 def test_a_named_plugin_wins_over_the_record(tmp_path: Path) -> None:
     root = adopted(tmp_path / "repo", str(tmp_path / "gone"))
-    assert just(root, "plugin-pin", plugin=str(PLUGIN_ROOT)).returncode == 0
+    assert just(root, "plugin-pin", plugin=str(repos.installed_copy())).returncode == 0
 
 
 def test_the_record_is_read_from_a_subdirectory(tmp_path: Path) -> None:
-    root = adopted(tmp_path / "repo", str(PLUGIN_ROOT))
+    root = adopted(tmp_path / "repo", str(repos.installed_copy()))
     below = root / "a/b"
     below.mkdir(parents=True)
     done = just(below, "plugin-pin")
@@ -103,7 +107,7 @@ def test_the_record_is_read_from_a_subdirectory(tmp_path: Path) -> None:
 
 
 def test_the_record_is_read_from_a_linked_work_tree(tmp_path: Path) -> None:
-    root = adopted(tmp_path / "repo", str(PLUGIN_ROOT))
+    root = adopted(tmp_path / "repo", str(repos.installed_copy()))
     linked = tmp_path / "linked"
     repos.git(root, "worktree", "add", "-q", str(linked), "-b", "side")
     assert not (linked / ".git").is_dir()
@@ -117,7 +121,7 @@ def test_a_record_naming_a_copy_that_is_gone_says_where_it_looked(tmp_path: Path
     root = adopted(tmp_path / "repo", str(gone))
     done = just(root, "plugin-pin")
     assert done.returncode == 1
-    assert f"plugin-pin: no Ratchet plugin at {gone}" in done.stdout
+    assert f"the plugin at {gone} is gone, and no copy on disk has the tree " in done.stdout
 
 
 def test_the_first_line_of_a_tier_names_the_copy_its_version_and_its_commit(
@@ -132,9 +136,9 @@ def test_the_first_line_of_a_tier_names_the_copy_its_version_and_its_commit(
     repos.write(copy, ".claude-plugin/commit", f"{'c' * 40}\n")
     version = plugin_pin.version_of(copy)
     root = adopted(tmp_path / "repo", str(copy))
-    repos.write(
-        root, "docs/process/binding.md", f"## Runner\n\n- Ratchet plugin: {version} at {'c' * 40}\n"
-    )
+    held = plugin_pin.copy_tree_id(copy)
+    pin = f"- Ratchet plugin: {version} at {'c' * 40} tree {held}"
+    repos.write(root, "docs/process/binding.md", f"## Runner\n\n{pin}\n")
     done = just(root, "tier2")
     assert done.returncode == 0, done.stdout + done.stderr
     assert done.stdout.splitlines()[0] == f"plugin-pin: using {version} at {'c' * 40}, in {copy}"
@@ -143,7 +147,7 @@ def test_the_first_line_of_a_tier_names_the_copy_its_version_and_its_commit(
 @pytest.mark.parametrize("via", ["variable", "record"])
 def test_a_folder_name_with_shell_syntax_runs_nothing(tmp_path: Path, via: str) -> None:
     folder = stub_plugin(tmp_path / HOSTILE, ("plugin_pin.py", "commits.py", "settings_rules.py"))
-    root = adopted(tmp_path / "repo", str(folder) if via == "record" else None)
+    root = adopted(tmp_path / "repo", str(folder) if via == "record" else None, folder)
     for recipe in (("plugin-pin",), ("commit-msg", "message"), ("settings",)):
         done = just(root, *recipe, plugin=str(folder) if via == "variable" else None)
         assert done.returncode == 0, done.stdout + done.stderr

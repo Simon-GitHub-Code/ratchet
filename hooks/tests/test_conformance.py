@@ -512,7 +512,7 @@ def test_an_entry_point_whose_recipe_is_missing_names_the_recipe_to_copy(repo: P
 
 
 def test_a_missing_pin_prints_the_line_for_the_plugin_in_use(repo: Path) -> None:
-    pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40}"
+    pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
     replace(BINDING, pin, "")(repo)
     replace(JUSTFILE, "plugin_pin.py", "pin.py")(repo)
     line = conformance.plugin_pin.line_for(conformance.plugin_pin.PLUGIN)
@@ -536,7 +536,8 @@ def test_the_pin_line_says_what_a_copy_without_history_cannot(tmp_path: Path) ->
     (tmp_path / ".claude-plugin").mkdir()
     (tmp_path / ".claude-plugin/plugin.json").write_text('{"version": "1.2.3"}')
     line = conformance.plugin_pin.line_for(tmp_path)
-    assert line == "- Ratchet plugin: 1.2.3 at <the full commit of 1.2.3>"
+    tree = conformance.plugin_pin.copy_tree_id(tmp_path)
+    assert line == f"- Ratchet plugin: 1.2.3 at <the full commit of 1.2.3> tree {tree}"
 
 
 @pytest.mark.parametrize(

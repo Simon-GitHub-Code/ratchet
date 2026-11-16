@@ -21,9 +21,9 @@ the checkout, red with the exact failure and the skill that produces the missing
 - in an adopted repository the ticket, or its parent, says how the change is operated under
   ``## Operability``: a ``Flag:``, ``Signal:``, ``Load:`` and ``Security:`` line, each asked only
   when the binding declares an application type its question is asked of
-  (``skills/method/application-types.toml``) and its row is not bound ``later: ...`` (the
-  ``Flag:`` line waits for the ``deployed`` life event instead), and each a statement or ``none``
-  with the reason (ADR 0028);
+  (``skills/method/application-types.toml``) and its row is not bound ``later: ...``; the
+  ``Flag:`` line is asked by type alone, before deployment as after and whatever its row says
+  (ADR 0061); each a statement or ``none`` with the reason (ADR 0028);
 - with ``--branch``, ``HEAD`` is that branch and it is not the base branch;
 - in an adopted repository (``docs/process/binding.md``), a commit would run tier 0:
   ``hooks_installed.py`` proves it by running the commit hooks, and its failure carries the
@@ -82,9 +82,7 @@ OPERABILITY_LINES = (
     ("Load", "load smoke", "the route or input the load gates gain"),
     ("Security", "dynamic security scan", "the surface it adds: routes, inputs, who may call"),
 )
-# Why: the Flag line is asked of the owner once others can reach what ships, not on its row.
 FLAG_LINE = "Flag"
-FLAG_EVENT = "deployed"
 CRITIC_EVENT = "depended-on"
 LATER = re.compile(r"^\|\s*([^|]+?)\s*\|\s*`?later:", re.MULTILINE | re.IGNORECASE)
 GATES = "## Gates"
@@ -397,8 +395,13 @@ def slug_of(title: str, number: int | None) -> str:
     return words or (f"ticket-{number}" if number else "feature")
 
 
+FEATURE_BRANCHES = "feature/"
+
+
 def branch_of(ticket: Ticket, slug: str) -> str:
-    return f"feature/{ticket.number}-{slug}" if ticket.number else f"feature/{slug}"
+    if ticket.number:
+        return f"{FEATURE_BRANCHES}{ticket.number}-{slug}"
+    return f"{FEATURE_BRANCHES}{slug}"
 
 
 def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:
@@ -430,7 +433,8 @@ def operability_asked(root: Path) -> list[tuple[str, str]]:
     """The ``## Operability`` lines asked here, each with what it says; none before adoption.
 
     A line is asked when its question is asked of a declared type and its row is not waiting
-    (``later: ...``); the ``Flag`` line is asked once ``deployed`` is declared.
+    (``later: ...``); the ``Flag`` line is asked of every declared type the catalogue asks it of,
+    whatever the life events and whatever its row says.
     """
     text = binding_text(root)
     if text is None:
@@ -438,12 +442,10 @@ def operability_asked(root: Path) -> list[tuple[str, str]]:
     kinds = frozenset(application_types.declared(text) or ())
     asked_of = application_types.load().asked_of
     waiting = {question.casefold() for question in LATER.findall(section(text, GATES))}
-    live = FLAG_EVENT in application_types.life_events(text)
     return [
         (name, says)
         for name, question, says in OPERABILITY_LINES
-        if asked_of(question) & kinds
-        and (live if name == FLAG_LINE else question.casefold() not in waiting)
+        if asked_of(question) & kinds and (name == FLAG_LINE or question.casefold() not in waiting)
     ]
 
 

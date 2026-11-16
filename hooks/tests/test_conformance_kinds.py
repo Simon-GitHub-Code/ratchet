@@ -22,7 +22,7 @@ from tests.test_conformance import (
 
 CI = ".github/workflows/ci.yml"
 SETTINGS = ".claude/settings.json"
-PIN_LINE = f"- Ratchet plugin: 0.0.0 at {'0' * 40}"
+PIN_LINE = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
 
 
 @pytest.fixture
@@ -409,3 +409,18 @@ def test_an_owner_use_of_the_plugin_variable_as_a_folder_is_one_red_line(
     [found] = value_findings(repo)
     assert isinstance(found.fix, conformance.Agent)
     assert '"$RATCHET_PLUGIN_DIR"' in found.problem
+
+
+def test_a_pin_with_no_tree_id_is_a_finding_for_an_agent_when_the_plugin_is_another_commit(
+    repo: Path,
+) -> None:
+    pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
+    replace(BINDING, pin, f"- Ratchet plugin: 0.0.0 at {'0' * 40}")(repo)
+    assert kind(repo, f"{BINDING}: the pin names no tree id") == "Agent"
+
+
+def test_a_pin_with_no_tree_id_at_the_plugin_in_use_is_fixed_by_the_upgrade(repo: Path) -> None:
+    commit = conformance.plugin_pin.commit_of(conformance.plugin_pin.PLUGIN)
+    pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
+    replace(BINDING, pin, f"- Ratchet plugin: 0.0.0 at {commit}")(repo)
+    assert kind(repo, f"{BINDING}: the pin names no tree id") == "Auto"

@@ -20,6 +20,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 import application_types
 import architecture
@@ -209,14 +210,17 @@ ADR_FRONT_MATTER = re.compile(
 )
 ADR_STATUS_WORDS = "proposed|accepted|deprecated|rejected|superseded"
 GLOSSARY_PLACEHOLDER = "<project>"
-PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha>"
+PLUGIN_PIN_PLACEHOLDER = "<X.Y.Z> at <ratchet-sha> tree <ratchet-tree-id>"
 PLUGIN_CHECKOUT_PLACEHOLDER = "<ratchet-sha>"
 PIN_RECIPE = "plugin-pin"
 PIN_SCRIPT = "plugin_pin.py"
 PLUGIN_VARIABLE = "ratchet_plugin"
 MARKETPLACE_FALLBACK = ".claude/plugins/marketplaces/ratchet"
 PLUGIN_LINE = re.compile(
-    rf"^(?:export[ \t]+RATCHET_PLUGIN_DIR[ \t]*:=.*\n)?{PLUGIN_VARIABLE}[ \t]*:=.*$", re.MULTILINE
+    r"^(?:plugin_choice[ \t]*:=[ \t]*```(?s:.*?)```\n)?"
+    r"(?:export[ \t]+RATCHET_PLUGIN_(?:DIR|REFUSAL|CHECKED)[ \t]*:=.*\n)*"
+    rf"{PLUGIN_VARIABLE}[ \t]*:=.*$",
+    re.MULTILINE,
 )
 PLUGIN_GUARD = "_plugin"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
@@ -271,9 +275,11 @@ ADOPT_TEMPLATES = TEMPLATES / "adopt/templates"
 INIT_TEMPLATES = TEMPLATES / "init/templates"
 AGENTS_TEMPLATE = INIT_TEMPLATES / "AGENTS.md"
 ASKING = "## Asking the owner"
+MOVED = "## Moved by the Ratchet upgrade"
 MARKETPLACE = Path(__file__).resolve().parents[1] / ".claude-plugin/marketplace.json"
 BOLD_NAME = re.compile(r"^- \*\*([^*]+)\*\*")
 BACKTICKED_WORD = re.compile(r"`([^`\s]+)`")
+ITEM_BREAK = re.compile(r"^(#|[-*+] |\d+[.)] |>|```|~~~|\||<|---|\*\*\*|___)")
 RUNS_JUST = re.compile(r"^just\s+@?([A-Za-z_][\w-]*)")
 # Why: a gate over the change compares with a base; `changed.py` hands it one, and judges nothing
 # on the adoption, whose base holds no binding.
@@ -554,27 +560,100 @@ def companion_of(line: str, names: Sequence[str]) -> str | None:
     return ticked.group(1) if ticked and ticked.group(1) in names else None
 
 
-def companion_lines(text: str, names: Sequence[str]) -> Iterator[tuple[int, str, str]]:
-    """Each companion line before the first ``## `` heading: its index, its name, its line."""
-    for index, line in enumerate(text.splitlines(keepends=True)):
-        if line.startswith("##"):
-            return
-        if (name := companion_of(line, names)) is not None:
-            yield index, name, line
+class CompanionItem(NamedTuple):
+    """A companion list item: its lines' span, the plugin it names, and its lines as written."""
+
+    start: int
+    stop: int
+    name: str
+    lines: tuple[str, ...]
+
+
+def item_end(lines: Sequence[str], start: int) -> int:
+    """Where the list item that starts at ``start`` ends: past every line that continues it."""
+    stop = start + 1
+    index = stop
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            index += 1
+            continue
+        if not line[0].isspace() and (index > stop or ITEM_BREAK.match(line)):
+            break
+        index += 1
+        stop = index
+    return stop
+
+
+def companion_items(text: str, names: Sequence[str]) -> Iterator[CompanionItem]:
+    """Each companion item before the first ``## `` heading, with its wrapped and nested lines."""
+    lines = text.splitlines(keepends=True)
+    index = 0
+    while index < len(lines) and not lines[index].startswith("##"):
+        name = companion_of(lines[index], names)
+        if name is None:
+            index += 1
+            continue
+        stop = item_end(lines, index)
+        yield CompanionItem(index, stop, name, tuple(lines[index:stop]))
+        index = stop
 
 
 def plain_companion(name: str) -> str:
     return f"- `{name}`"
 
 
+def is_plain(item: CompanionItem) -> bool:
+    return len(item.lines) == 1 and item.lines[0].rstrip("\r\n") == plain_companion(item.name)
+
+
+def newline_of(text: str) -> str:
+    """The file's own line ending: its first line's, or a newline when it has none."""
+    first = text.splitlines(keepends=True)[:1]
+    return first[0][len(first[0].rstrip("\r\n")) :] or "\n" if first else "\n"
+
+
+def with_moved_items(text: str, items: Sequence[str]) -> str:
+    """The text with each line appended to the moved section, which is made at the end if absent."""
+    newline = newline_of(text)
+    added = [f"{item}{newline}" for item in items]
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += newline
+    starts = [i for i, line in enumerate(lines) if line.rstrip() == MOVED]
+    if not starts:
+        return "".join([*lines, newline, MOVED, newline, newline, *added])
+    start = starts[-1]
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    last = next((i for i in range(end - 1, start, -1) if lines[i].strip()), start)
+    lines[last + 1 : last + 1] = added
+    return "".join(lines)
+
+
+def moved_items(text: str) -> list[str]:
+    """The lines the moved section holds."""
+    return [line.rstrip("\r") for line in markdown_text.section(text, MOVED).splitlines() if line]
+
+
 def with_plain_companions(names: Sequence[str]) -> gatelib.Want:
-    """The text with each companion line rewritten to the plugin's name alone."""
+    """The text with each companion line the project wrote on rewritten to the plugin's name alone.
+
+    Every line it rewrites is appended word for word to the moved section of the same file.
+    """
 
     def want(text: str | None) -> str:
         lines = (text or "").splitlines(keepends=True)
-        for index, name, line in companion_lines(text or "", names):
-            lines[index] = plain_companion(name) + line[len(line.rstrip("\r\n")) :]
-        return "".join(lines)
+        moved: list[str] = []
+        for item in reversed(list(companion_items(text or "", names))):
+            if is_plain(item):
+                continue
+            first = item.lines[0]
+            moved[:0] = [line.rstrip("\r\n") for line in item.lines]
+            lines[item.start : item.stop] = [
+                plain_companion(item.name) + first[len(first.rstrip("\r\n")) :]
+            ]
+        made = "".join(lines)
+        return with_moved_items(made, moved) if moved else made
 
     return want
 
@@ -586,18 +665,17 @@ def check_companion_lines(root: Path) -> Iterable[Finding]:
     if text is None:
         name, text = "CLAUDE.md", read(root / "CLAUDE.md")
     names = companions()
-    stale = [
-        (plugin, line)
-        for _, plugin, line in companion_lines(text or "", names)
-        if line.rstrip("\r\n") != plain_companion(plugin)
-    ]
+    stale = [item.name for item in companion_items(text or "", names) if not is_plain(item)]
     if stale:
-        plugins = ", ".join(plugin for plugin, _ in stale)
-        problem = f"the lines for {plugins} are not exactly `- `<plugin>``"
+        plugins = ", ".join(stale)
+        problem = (
+            f"the lines for {plugins} are not exactly `- `<plugin>``; the project's own text on"
+            f" them moves to '{MOVED}' and is not deleted"
+        )
         edit = Edit(
-            "write each companion line as the plugin's name alone",
+            f"write each companion line as the plugin's name alone, its text moved to '{MOVED}'",
             with_plain_companions(names),
-            Agent(start=tuple(plain_companion(plugin) for plugin, _ in stale)),
+            Agent(start=tuple(plain_companion(plugin) for plugin in stale)),
         )
         yield Finding(name, problem, edit)
 
@@ -1724,6 +1802,22 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
             "add the pin line for the plugin in use", plugin_pin.with_pin(line), Agent((line,))
         )
         yield Finding(BINDING_PATH, problem, edit)
+    elif pin.tree is None:
+        line = plugin_pin.line_for(plugin_pin.PLUGIN)
+        problem = (
+            f"the pin names no tree id, so no copy of the plugin can be held to the release; write"
+            f" `- Ratchet plugin: {pin.version} at {pin.commit} tree <the tree of that commit>`"
+            " (`git rev-parse <commit>^{tree}` in a clone of the plugin gives it), or run the"
+            " plugin's upgrade"
+        )
+        if plugin_pin.commit_of(plugin_pin.PLUGIN) == pin.commit:
+            yield Finding(
+                BINDING_PATH,
+                problem,
+                Edit("add the tree id of the plugin in use", plugin_pin.with_pin(line), Agent()),
+            )
+        else:
+            yield Finding(BINDING_PATH, problem, Agent())
     yield from check_pin_recipe(root)
     yield from check_plugin_fallback(root)
     yield from check_plugin_uses(root)
@@ -3268,7 +3362,11 @@ def pin_mutations() -> list[Mutation]:
     return [
         (
             "binding with the plugin pin unfilled",
-            rewrite(binding, f"0.0.0 at {pinned}", PLUGIN_PIN_PLACEHOLDER),
+            rewrite(binding, f"0.0.0 at {pinned} tree {pinned}", PLUGIN_PIN_PLACEHOLDER),
+        ),
+        (
+            "binding whose plugin pin names no tree id",
+            rewrite(binding, f"0.0.0 at {pinned} tree {pinned}", f"0.0.0 at {pinned}"),
         ),
         (
             "workflow at a commit the binding does not pin",
@@ -3572,7 +3670,7 @@ Wrong if a change to the rules keeps needing a change to the command.
 
 def fill_binding(text: str) -> str:
     """A command line tool's binding: one row its type leaves out, a tool in every other."""
-    text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40}")
+    text = text.replace(PLUGIN_PIN_PLACEHOLDER, f"0.0.0 at {'0' * 40} tree {'0' * 40}")
     text = TYPES_PLACEHOLDER.sub("- Application types: cli", text)
     text = TEST_PATHS_PLACEHOLDER.sub("- Tests: `tests/**`", text)
     text = DECISION_PLACEHOLDER.sub(f"- Decision: `{SELF_TEST_RECORD}`", text)

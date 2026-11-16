@@ -42,6 +42,7 @@ import functools
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -145,6 +146,12 @@ FLAG_ANSWER = (
     "## Operability\n\n- Flag: none: the owner chose to have it appear as soon as it is finished,"
     " while the project is not deployed\n"
 )
+CRITERIA = "## Acceptance criteria"
+STORIES = "## User Stories"
+SPEC = f"# Settle\n\n{STORIES}\n\n1. As the owner, I am told the next command.\n"
+CONJECTURE_SKILL: Final = plugin_pin.PLUGIN / "skills/conjecture/SKILL.md"
+CRITERIA_LINE: Final = re.compile(r"^- Criteria: .*$", re.MULTILINE)
+DIGEST: Final = re.compile(r"[0-9a-f]{40}")
 GLOSSARY = "# Glossary\n\n**Customer**: who pays.\n"
 PLACEHOLDER = "# <project>\n"
 ADOPT_TEMPLATES: Final = plugin_pin.PLUGIN / "skills/adopt/templates"
@@ -161,6 +168,50 @@ OWN_CONJECTURE: Final = frozenset(Ticket) - {
     Ticket.RESOLVED,
 }
 LETTERS: Final = "ab"
+
+
+@functools.cache
+def digest_command() -> str:
+    line = next(
+        line
+        for line in CONJECTURE_SKILL.read_text(encoding="utf-8").splitlines()
+        if "**The body is a file**" in line
+    )
+    return re.findall(r"`([^`]+)`", line)[-1]
+
+
+@functools.cache
+def criteria_digest(body: str, heading: str) -> str:
+    with tempfile.TemporaryDirectory(prefix="ratchet-criteria-") as scratch:
+        path = Path(scratch) / "body.md"
+        path.write_text(body, encoding="utf-8")
+        command = digest_command().replace("<file>", shlex.quote(str(path)))
+        ran = subprocess.run(  # noqa: S603 # -- the conjecture skill's own command
+            ["sh", "-c", command.replace("<heading>", heading)],  # noqa: S607 # -- as the skill runs it
+            cwd=scratch,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    digest = ran.stdout.strip()
+    assert DIGEST.fullmatch(digest), f"the digest command printed {ran.stdout!r}"
+    return digest
+
+
+def criteria_line(body: str, heading: str) -> str:
+    return f"- Criteria: `{heading}` `{criteria_digest(body, heading)}`\n"
+
+
+def redraft(path: Path, heading: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    line = criteria_line(text, heading).rstrip("\n")
+    path.write_text(CRITERIA_LINE.sub(lambda _old: line, text), encoding="utf-8")
+
+
+def add_criterion(path: Path, heading: str, criterion: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    held = markdown_text.section(text, heading).strip("\n")
+    path.write_text(with_body(text, heading, f"{held}\n{criterion}"), encoding="utf-8")
 
 
 def share_objects(source: str, target: str) -> None:
@@ -292,6 +343,9 @@ class Repo:
         left = [entry for entry in owed.read(self.root).entries if not done(entry)]
         write(self.root, str(owed.LEDGER), owed.render(left))
 
+    def spec_path(self) -> str:
+        return f"{self.feature()}/spec.md"
+
     def ticket_path(self, slot: int) -> str:
         """The local ticket in ``slot``: ``.scratch/f<n>/issues/NN-<letter><n>.md``."""
         return f"{self.feature()}/issues/{slot + 1:02d}-{LETTERS[slot]}{self.spec}.md"
@@ -301,12 +355,17 @@ class Repo:
         return f"feature/{slot + 1}-{LETTERS[slot]}{self.spec}"
 
     def ticket_text(self, slot: int, ticket: Ticket, *, inherits: bool) -> str:
-        """The ticket file: title, blocker, status and, when it has one, its own conjecture."""
+        """The ticket file: title, blocker, status, criteria and, if it has one, its conjecture."""
         blocker = "Blocked by: 01\n\n" if slot == 1 else ""
-        head = f"# {slot + 1:02d}: {LETTERS[slot].upper()}{self.spec}\n\n{blocker}"
-        own = CONJECTURE if ticket in OWN_CONJECTURE and not inherits else ""
+        name = f"{LETTERS[slot].upper()}{self.spec}"
+        head = f"# {slot + 1:02d}: {name}\n\n{blocker}"
         status = STATUS.get(ticket, "ready-for-agent")
-        return f"{head}Status: {status}\n" + (f"\n{own}" if own else "")
+        criteria = f"{CRITERIA}\n\n- [ ] The route names the next command for {name}.\n"
+        text = f"{head}Status: {status}\n\n{criteria}"
+        if ticket in OWN_CONJECTURE and not inherits:
+            text = f"{text}\n{CONJECTURE}"
+            return f"{text}\n{criteria_line(text, CRITERIA)}"
+        return text
 
     def write_ticket(self, slot: int, ticket: Ticket, *, inherits: bool) -> None:
         """Write the ticket in ``slot`` in its new state, leaving it uncommitted."""
@@ -438,13 +497,14 @@ def _owner_grills(repo: Repo, _change: Change) -> None:
 @does(ActionName.OWNER_WRITES_SPEC)
 def _owner_writes_spec(repo: Repo, _change: Change) -> None:
     repo.spec += 1
-    write(repo.root, f"{repo.feature()}/spec.md", "# Settle\n")
+    write(repo.root, repo.spec_path(), SPEC)
 
 
 @does(ActionName.OWNER_STATES_SPEC_CONJECTURE)
 def _owner_states_spec_conjecture(repo: Repo, change: Change) -> None:
     flag = f"\n{FLAG_ANSWER}" if change.after.flag is not Flag.WAITS else ""
-    write(repo.root, f"{repo.feature()}/spec.md", f"# Settle\n\n{CONJECTURE}{flag}")
+    stated = f"{SPEC}\n{CONJECTURE}"
+    write(repo.root, repo.spec_path(), f"{stated}\n{criteria_line(stated, STORIES)}{flag}")
 
 
 def answers_the_flag_on_the_spec(repo: Repo) -> None:
@@ -462,11 +522,31 @@ def _owner_states_conjecture(repo: Repo, change: Change) -> None:
     Why the spec: the conjecture writes the answer on the spec when the ticket has one, and each
     ticket of the spec reads it there (ADR 0061).
     """
-    if change.before.tickets != change.after.tickets:
-        repo.write_ticket(change.slot, Ticket.STATED, inherits=change.after.inherits)
+    moved = list(enumerate(zip(change.before.tickets, change.after.tickets, strict=True)))
+    for slot, pair in moved:
+        if pair == (Ticket.READY, Ticket.STATED):
+            repo.write_ticket(slot, Ticket.STATED, inherits=change.after.inherits)
+    redrafts = [slot for slot, pair in moved if pair == (Ticket.STALE, Ticket.STATED)]
+    if redrafts and change.after.inherits:
+        redraft(repo.root / repo.spec_path(), STORIES)
+    elif redrafts:
+        for slot in redrafts:
+            redraft(repo.root / repo.ticket_path(slot), CRITERIA)
     if change.after.flag is not Flag.WAITS:
         answers_the_flag_on_the_spec(repo)
     snapshot(repo.root, "docs(tracker): the owner's conjecture of a ticket")
+
+
+@does(ActionName.OWNER_EDITS_CRITERIA)
+def _owner_edits_criteria(repo: Repo, change: Change) -> None:
+    repo.edits += 1
+    if change.after.inherits:
+        story = f"2. As the owner, I am told why ({repo.edits})."
+        add_criterion(repo.root / repo.spec_path(), STORIES, story)
+    else:
+        criterion = f"- [ ] The route says why ({repo.edits})."
+        add_criterion(repo.root / repo.ticket_path(change.slot), CRITERIA, criterion)
+    snapshot(repo.root, "docs(tracker): the owner's edit of the criteria")
 
 
 @does(ActionName.OWNER_SPLITS_SPEC)
@@ -628,7 +708,7 @@ def _owner_lands_guard_edits(repo: Repo, _change: Change) -> None:
 
 @does(ActionName.OWNER_CHANGES_TICKET)
 def _owner_changes_ticket(repo: Repo, change: Change) -> None:
-    repo.add_to_ticket(change.slot, "Narrowed: the first half only")
+    repo.add_to_ticket(change.slot, "## Scope\n\nNarrowed: the first half only")
 
 
 @does(ActionName.KIND_OF_CODE_ARRIVES)
@@ -755,10 +835,10 @@ def _upgrade_asks_the_flag_line(repo: Repo, _change: Change) -> None:
 
     Why a type, not an upgrade to a copy of the plugin: the scripts under test are this checkout's,
     so the plugin that ships ADR 0061 is the one the tests run. Before this step the binding
-    declares no type, which no plugin asks the line of; after it, the line is asked as far as the
-    scripts ask it. It touches no ticket and no spec, and lands on the default branch, from a work
-    tree of its own while the build's branch is checked out. It keeps the pin as the last real
-    upgrade wrote it, so the fill that upgrade owes still runs from the plugin it names.
+    declares no type, which no plugin asks the line of; after it, the line is asked. It touches no
+    ticket and no spec, and lands on the default branch, from a work tree of its own while the
+    build's branch is checked out. It keeps the pin as the last real upgrade wrote it, so the fill
+    that upgrade owes still runs from the plugin it names.
     """
     repo.asked = True
     tree = repo.root

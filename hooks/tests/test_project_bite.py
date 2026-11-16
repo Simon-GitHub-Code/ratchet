@@ -1,14 +1,16 @@
 """``project_bite.py``: every gate a repository bound goes red on its planted fault."""
 
-import contextlib
 import json
 import os
+import re
 import shlex
+import shutil
 import signal
 import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 
 import pytest
@@ -59,6 +61,14 @@ def project(
     return repository(root, files)
 
 
+TIMING = re.compile(r" \(\d+\.\ds, lane \d+(; [^)]*)?\)")
+AID = re.compile(r"^bite: (limit|load): .*\n", re.MULTILINE)
+
+
+def shown(capsys: pytest.CaptureFixture[str]) -> str:
+    return AID.sub("", TIMING.sub("", capsys.readouterr().out))
+
+
 def prove(root: Path, *flags: str) -> int:
     return project_bite.main(["project_bite.py", "--root", str(root), "--jobs", "1", *flags])
 
@@ -86,7 +96,7 @@ def test_a_gate_that_goes_red_on_its_fault_bites_and_the_real_tree_is_untouched(
     write(root, "untracked.txt", "seen by git\n")
     before = state(root)
     assert prove(root) == 0
-    out = capsys.readouterr().out.splitlines()
+    out = shown(capsys).splitlines()
     assert out[0] == "bite: lint: a planted word: bites"
     assert out[1].startswith("bite: green: 1 of 1 faults bit, over 1 gates in ")
     assert state(root) == before
@@ -107,7 +117,7 @@ def test_each_way_a_gate_fails_to_bite_is_named_and_red(
     registry = "".join(bite(name, "a planted word") for name in gates).replace('"absent"', '"x"')
     root = project(tmp_path / "repo", gates, registry, rows=rows)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: asleep: a planted word: DOES NOT BITE\n  the gate is green with the fault" in out
     assert "bite: broken: a planted word: RED BEFORE THE FAULT\n  broken from the start" in out
     assert "bite: vague: a planted word: RED FOR ANOTHER REASON\n" in out
@@ -125,7 +135,7 @@ def test_words_a_recipe_echoes_on_every_run_count_only_when_the_fault_adds_to_th
     gates = {"lint": f"echo the recipe says L001\n{LINT}"}
     root = project(tmp_path / "repo", gates, bite("lint", "a planted word"))
     assert prove(root) == 0
-    assert "bite: lint: a planted word: bites" in capsys.readouterr().out
+    assert "bite: lint: a planted word: bites" in shown(capsys)
 
 
 def test_an_emptied_collection_is_a_fault_and_comes_back_for_the_next_gate(
@@ -145,7 +155,7 @@ def test_an_emptied_collection_is_a_fault_and_comes_back_for_the_next_gate(
     write(root, "deep/er/two.t", "nested\n")
     write(root, "deep/keep.txt", "stays\n")
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: tests: no test: bites" in out
     assert "bite: tests: no directory: bites" in out
     assert "bite: after: no file at the top: RED FOR ANOTHER REASON" in out
@@ -164,7 +174,7 @@ def test_a_fault_that_cannot_be_planted_is_red_and_says_why(
     )
     root = project(tmp_path / "repo", {"lint": LINT}, registry)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: no such file: THE FAULT WAS NOT PLANTED\n" in out
     assert (
         "  no file matches benchmarks/**: the collection is empty already, and the gate was" in out
@@ -195,7 +205,7 @@ def test_a_patch_and_a_new_file_are_changes_git_sees(
     write(tmp_path / "repo", "quality/bites/two.patch", patch)
     root = project(tmp_path / "repo", gates, registry)
     assert prove(root) == 0
-    assert capsys.readouterr().out.count(": bites\n") == 2
+    assert shown(capsys).count(": bites\n") == 2
 
 
 def test_a_replace_keeps_biting_after_an_unrelated_edit_breaks_the_same_patch(
@@ -216,11 +226,11 @@ def test_a_replace_keeps_biting_after_an_unrelated_edit_breaks_the_same_patch(
     write(root, "src/code.txt", lines)
     commit(root, "feat(core): eight lines")
     assert prove(root) == 0
-    assert capsys.readouterr().out.count(": bites\n") == 2
+    assert shown(capsys).count(": bites\n") == 2
     write(root, "src/code.txt", lines.replace("line 2\n", "line 2\nan unrelated line\n"))
     commit(root, "feat(core): an unrelated line")
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: by replace: bites\n" in out
     assert "bite: lint: by patch: THE FAULT WAS NOT PLANTED\n  git apply" in out
 
@@ -235,7 +245,7 @@ def test_a_replace_may_change_several_places_and_leaves_the_tree_as_it_was(
     root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "two steps", fault))
     before = state(root)
     assert prove(root) == 0
-    assert "bite: lint: two steps: bites" in capsys.readouterr().out
+    assert "bite: lint: two steps: bites" in shown(capsys)
     assert state(root) == before
 
 
@@ -265,7 +275,7 @@ def test_a_replace_that_no_longer_applies_is_red_and_says_why(
     (root / "dir-link").symlink_to("ignored", target_is_directory=True)
     commit(root, "feat(core): a link out of the repository and one to what git ignores")
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: gone: THE FAULT WAS NOT PLANTED\n" in out
     assert says in out
     assert outside.read_text(encoding="utf-8") == "clean\n"
@@ -283,7 +293,7 @@ def test_a_committed_fault_is_in_history_for_one_run_only(
     registry = bite("history", "a commit", f"{PLANT}\ncommit = true", expect="test(bite): a commit")
     root = project(tmp_path / "repo", gates, registry + bite("later", "a planted word"))
     assert prove(root) == 0
-    assert capsys.readouterr().out.count(": bites\n") == 2
+    assert shown(capsys).count(": bites\n") == 2
 
 
 def test_what_a_gate_leaves_in_the_copy_is_gone_before_the_next_run(
@@ -298,7 +308,7 @@ def test_what_a_gate_leaves_in_the_copy_is_gone_before_the_next_run(
     registry = bite("messy", "a planted word") + bite("tidy", "a planted word")
     root = project(tmp_path / "repo", gates, registry)
     assert prove(root) == 0
-    assert capsys.readouterr().out.count(": bites\n") == 2
+    assert shown(capsys).count(": bites\n") == 2
 
 
 def test_args_are_appended_and_each_set_of_args_has_its_own_green_run(
@@ -312,7 +322,7 @@ def test_args_are_appended_and_each_set_of_args_has_its_own_green_run(
     )
     root = project(tmp_path / "repo", gates, registry)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert out.count(": bites\n") == 2
     assert "bite: fuzz: red from the start: RED BEFORE THE FAULT\n  refused red" in out
 
@@ -337,7 +347,7 @@ def test_a_copy_holds_what_git_sees_and_setup_and_include_supply_the_rest(
     commit(root, "feat(core): a link and a file")
     (root / "gone.txt").unlink()
     assert prove(root) == 0
-    assert "bite: lint: a planted word: bites" in capsys.readouterr().out
+    assert "bite: lint: a planted word: bites" in shown(capsys)
 
 
 def test_a_setup_that_fails_is_red_and_plants_nothing(
@@ -346,7 +356,7 @@ def test_a_setup_that_fails_is_red_and_plants_nothing(
     registry = "setup = [\"sh -c 'echo no lockfile; exit 3'\"]\n" + bite("lint", "a planted word")
     root = project(tmp_path / "repo", {"lint": LINT}, registry)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "setup `sh -c 'echo no lockfile; exit 3'` exited 3 in the scratch copy" in out
     assert out.endswith("no lockfile\nbite: red\n")
 
@@ -361,7 +371,7 @@ def test_a_detached_head_a_remote_head_and_a_linked_worktree_are_copied(
     linked = tmp_path / "linked"
     git(root, "worktree", "add", "-q", "--detach", str(linked))
     assert prove(linked) == 0
-    assert "bite: refs: a planted word: bites" in capsys.readouterr().out
+    assert "bite: refs: a planted word: bites" in shown(capsys)
 
 
 def test_lanes_run_at_once_each_in_a_copy_of_its_own(
@@ -374,7 +384,7 @@ def test_lanes_run_at_once_each_in_a_copy_of_its_own(
     registry = "".join(bite(name, "a planted word") for name in gates)
     root = project(tmp_path / "repo", gates, registry)
     assert prove(root, "--jobs", "2") == 0
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert out.count(": bites\n") == 3
     assert prove(root, "--jobs", "0") == 0
 
@@ -387,7 +397,10 @@ def test_ratchet_jobs_caps_the_lanes_as_it_caps_the_gates(
     root = project(tmp_path / "repo", gates, registry)
     seen: list[int] = []
 
-    def record(_root: Path, _registry: object, _tasks: object, *, lanes: int) -> int:
+    def record(
+        _root: Path, _registry: object, _tasks: object, *, lanes: int, limit: float | None
+    ) -> int:
+        assert limit is None
         seen.append(lanes)
         return 0
 
@@ -404,15 +417,11 @@ def test_one_gate_is_proven_alone_before_the_registry_is_whole(
     gates = {"lint": LINT, "unproven": "exit 0"}
     root = project(tmp_path / "repo", gates, bite("lint", "a planted word"))
     assert prove(root) == 1
-    assert (
-        "gate 'unproven' (unproven) is bound to a tool and no [[bite]]" in capsys.readouterr().out
-    )
+    assert "gate 'unproven' (unproven) is bound to a tool and no [[bite]]" in shown(capsys)
     assert prove(root, "--gate", "lint") == 0
-    assert "bite: green: 1 of 1 faults bit, over 1 gates" in capsys.readouterr().out
+    assert "bite: green: 1 of 1 faults bit, over 1 gates" in shown(capsys)
     assert prove(root, "--gate", "unproven") == 1
-    assert capsys.readouterr().out == (
-        "no bite to run: a gate with nothing to run is red\nbite: red\n"
-    )
+    assert shown(capsys) == ("no bite to run: a gate with nothing to run is red\nbite: red\n")
 
 
 def changed(root: Path) -> Path:
@@ -432,7 +441,7 @@ def test_a_pull_request_that_touches_no_gate_proves_nothing(
     write(root, "quality/thresholds.toml", "[coverage]\nlines = 90\n")
     commit(root, "feat(core): more")
     assert prove(root, "--changed") == 0
-    assert capsys.readouterr().out == (
+    assert shown(capsys) == (
         "bite: green: the change touches no path that defines a gate; nothing to prove\n"
     )
     assert list(scratch.iterdir()) == []
@@ -450,7 +459,7 @@ def test_a_pull_request_that_touches_a_gate_proves_the_gates_of_tiers_0_and_1(
     root = changed(project(tmp_path / "repo", gates, registry, rows=rows))
     write(root, path, (gatelib.read_text(root / path) or "") + "\n")
     assert prove(root, "--changed") == 0
-    out = capsys.readouterr().out.splitlines()
+    out = shown(capsys).splitlines()
     assert out[0] == f"bite: a gate may have changed ({path})"
     assert out[1:3] == ["bite: lint: a planted word: bites", "bite: tests: a planted word: bites"]
     assert out[3].startswith("bite: green: 2 of 2 faults bit, over 2 gates")
@@ -461,7 +470,7 @@ def test_a_pull_request_with_nothing_to_compare_with_proves_the_gates(
 ) -> None:
     root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
     assert prove(root, "--changed") == 0
-    assert "bite: a gate may have changed (no merge base)\n" in capsys.readouterr().out
+    assert "bite: a gate may have changed (no merge base)\n" in shown(capsys)
 
 
 def test_a_bite_of_the_gate_that_runs_the_bites_is_refused(
@@ -470,9 +479,7 @@ def test_a_bite_of_the_gate_that_runs_the_bites_is_refused(
     root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
     monkeypatch.setenv(project_bite.BITING, "1")
     assert prove(root) == 1
-    assert capsys.readouterr().out == (
-        "a bite cannot plant a fault for the gate that runs it\nbite: red\n"
-    )
+    assert shown(capsys) == ("a bite cannot plant a fault for the gate that runs it\nbite: red\n")
 
 
 def test_a_gate_in_the_copy_judges_the_copy_and_knows_it_is_being_bitten(
@@ -485,7 +492,7 @@ def test_a_gate_in_the_copy_judges_the_copy_and_knows_it_is_being_bitten(
     root = project(tmp_path / "repo", gates, bite("env", "a planted word"))
     monkeypatch.setenv("VIRTUAL_ENV", str(root / ".venv"))
     assert prove(root) == 0
-    assert "bite: env: a planted word: bites" in capsys.readouterr().out
+    assert "bite: env: a planted word: bites" in shown(capsys)
 
 
 def lanes() -> list[threading.Thread]:
@@ -522,7 +529,7 @@ def test_an_interrupt_stops_the_gates_promptly_whichever_thread_receives_it(
     threading.Thread(target=interrupt, daemon=True).start()
     assert prove(root) == 128 + 15
     assert time.monotonic() - sent[0] < STOPS_WITHIN
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert out.endswith("bite: red: interrupted by signal 15\n")
     assert "bite: next" not in out
     assert stopped.read_text(encoding="utf-8") == "ended by the runner\n"
@@ -556,7 +563,7 @@ def test_after_an_interrupt_the_gate_it_stopped_runs_no_other_bite_and_prints_no
     threading.Thread(target=interrupt, daemon=True).start()
     assert prove(root) == 128 + 15
     assert time.monotonic() - sent[0] < STOPS_WITHIN
-    assert capsys.readouterr().out == "bite: red: interrupted by signal 15\n"
+    assert shown(capsys) == "bite: red: interrupted by signal 15\n"
 
 
 def test_an_interrupt_while_the_lanes_start_waits_for_every_lane_before_the_copies_go(
@@ -576,7 +583,7 @@ def test_an_interrupt_while_the_lanes_start_waits_for_every_lane_before_the_copi
 
     monkeypatch.setattr(threading.Thread, "start", start_then_interrupt)
     assert prove(root, "--jobs", "2") == 128 + 15
-    assert capsys.readouterr().out.endswith("bite: red: interrupted by signal 15\n")
+    assert shown(capsys).endswith("bite: red: interrupted by signal 15\n")
     assert lanes() == []
     assert list((tmp_path / "scratch").iterdir()) == []
 
@@ -585,12 +592,12 @@ def test_what_a_gate_leaves_running_ends_with_it_and_cannot_hold_the_run_open(
     tmp_path: Path,
 ) -> None:
     forked = tmp_path / "forked"
-    code, output = project_bite.Shell().run(
+    ran = project_bite.Shell().run(
         ["sh", "-c", f"sleep 60 & echo $! > {forked}; echo done"], tmp_path
     )
-    assert (code, output) == (0, f"done\nbite: {gatelib.LEFT_RUNNING}\n")
+    assert ran[:2] == (0, f"done\nbite: {gatelib.LEFT_RUNNING}\n")
     assert gone(int(forked.read_text()))
-    assert project_bite.Shell().run(["sh", "-c", "echo tidy"], tmp_path) == (0, "tidy\n")
+    assert project_bite.Shell().run(["sh", "-c", "echo tidy"], tmp_path)[:2] == (0, "tidy\n")
 
 
 def test_the_first_copy_is_set_up_alone_so_the_others_find_what_it_cached(
@@ -602,7 +609,7 @@ def test_the_first_copy_is_set_up_alone_so_the_others_find_what_it_cached(
     registry = f'setup = ["{setup}"]\n' + "".join(bite(name, "a planted word") for name in gates)
     root = project(tmp_path / "repo", gates, registry)
     assert prove(root, "--jobs", "3") == 0
-    assert capsys.readouterr().out.count(": bites\n") == 3
+    assert shown(capsys).count(": bites\n") == 3
     lines = log.read_text(encoding="utf-8").split()
     assert lines[:2] == ["+", "-"]
     assert sorted(lines) == ["+"] * 3 + ["-"] * 3
@@ -625,7 +632,7 @@ def test_in_a_copy_the_change_is_what_the_tree_holds_beyond_head(
     write(root, "src/more.txt", "the feature\n")
     commit(root, "feat(core): more")
     assert prove(root) == 0
-    assert "bite: changed: a planted word: bites" in capsys.readouterr().out
+    assert "bite: changed: a planted word: bites" in shown(capsys)
     assert git(root, "rev-parse", "--abbrev-ref", "HEAD") == "change"
     assert git(root, "rev-parse", "main") != git(root, "rev-parse", "HEAD")
 
@@ -639,7 +646,7 @@ def test_the_adoption_proves_nothing_on_a_pull_request_since_tier_2_proves_it_wh
     for path in ("docs/process/binding.md", "gate", "quality/bites.toml", "src/code.txt"):
         write(root, path, (project_files / path).read_text(encoding="utf-8"))
     assert prove(root, "--changed") == 0
-    assert capsys.readouterr().out == (
+    assert shown(capsys) == (
         "bite: green: this change is the adoption, whose base holds no binding; nothing is"
         " proven here, and `bite-all` proves every gate in tier 2\n"
     )
@@ -649,9 +656,211 @@ def test_the_adoption_proves_nothing_on_a_pull_request_since_tier_2_proves_it_wh
 
 def test_a_stopped_shell_runs_nothing_more(tmp_path: Path) -> None:
     shell = project_bite.Shell()
-    assert shell.run(["sh", "-c", "echo out; echo err >&2; exit 4"], tmp_path) == (4, "out\nerr\n")
+    assert shell.run(["sh", "-c", "echo out; echo err >&2; exit 4"], tmp_path)[:2] == (
+        4,
+        "out\nerr\n",
+    )
     shell.stop()
-    assert shell.run(["sh", "-c", "exit 0"], tmp_path) == (130, "stopped")
+    assert shell.run(["sh", "-c", "exit 0"], tmp_path)[:2] == (130, "stopped")
+
+
+def test_each_verdict_line_ends_with_its_wall_time_and_lane(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(
+        tmp_path / "repo", {"lint": f"sleep 0.2; {LINT}"}, bite("lint", "a planted word")
+    )
+    assert prove(root) == 0
+    line = capsys.readouterr().out.splitlines()[1]
+    match = re.fullmatch(r"bite: lint: a planted word: bites \((\d+\.\d)s, lane 0\)", line)
+    assert match is not None
+    assert float(match[1]) >= 0.4
+
+
+def test_a_lane_is_named_on_the_lines_of_its_gates(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gates = dict.fromkeys(("one", "two"), f"sleep 0.3; {LINT}")
+    registry = "".join(bite(name, "a planted word") for name in gates)
+    root = project(tmp_path / "repo", gates, registry)
+    assert project_bite.main(["project_bite.py", "--root", str(root), "--jobs", "2"]) == 0
+    lanes = set(re.findall(r"lane (\d)\)", capsys.readouterr().out))
+    assert lanes == {"0", "1"}
+
+
+@pytest.mark.parametrize(
+    "gate",
+    [
+        pytest.param("sleep 5; exit 0", id="green"),
+        pytest.param("sleep 5; echo L001; exit 1", id="red with the words"),
+        pytest.param("sleep 5; exit 1", id="red"),
+    ],
+)
+def test_a_gate_ended_by_the_time_limit_is_timed_out_whatever_its_exit_code_would_say(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], gate: str
+) -> None:
+    root = project(tmp_path / "repo", {"lint": gate}, bite("lint", "a planted word"))
+    assert prove(root, "--limit", "0.5") == 1
+    out = shown(capsys)
+    assert "bite: lint: a planted word: TIMED OUT\n" in out
+    assert "bite: timed out after 0.5s" in out
+    assert "bite: red: 0 of 1 faults bit" in out
+
+
+def ceilings(**keys: float) -> str:
+    return "[ceilings.seconds]\n" + "".join(f"{key} = {value}\n" for key, value in keys.items())
+
+
+def limited_project(tmp_path: Path, tier: str, thresholds: str) -> Path:
+    root = project(
+        tmp_path / "repo",
+        {"lint": f"sleep 3; {LINT}"},
+        bite("lint", "a planted word"),
+        rows=row("lint", tier),
+    )
+    write(root, "quality/thresholds.toml", thresholds)
+    commit(root, "thresholds")
+    return root
+
+
+def test_a_tier_or_gate_ceiling_far_below_a_cold_run_never_limits_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = limited_project(tmp_path, "0", ceilings(lint=0.5, tier0=0.5, tier1=0.5))
+    assert prove(root) == 0
+    out = shown(capsys)
+    assert "bite: lint: a planted word: bites" in out
+    assert "timed out" not in out
+
+
+def test_the_bite_run_ceiling_limits_every_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = limited_project(tmp_path, "1", ceilings(**{"bite-run": 0.5}))
+    assert prove(root) == 1
+    assert "bite: timed out after 0.5s" in shown(capsys)
+
+
+def test_the_limit_flag_overrides_the_bite_run_ceiling(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = limited_project(tmp_path, "1", ceilings(**{"bite-run": 60}))
+    assert prove(root, "--limit", "0.5") == 1
+    assert "bite: timed out after 0.5s" in shown(capsys)
+
+
+def test_with_no_ceiling_at_all_a_run_is_limited_to_the_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    limits: set[float | None] = set()
+    run = project_bite.Shell.run
+
+    def watch(*args: object) -> project_bite.Run:
+        limits.add(args[3])  # type: ignore[arg-type]
+        return run(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(project_bite.Shell, "run", watch)
+    assert prove(root) == 0
+    assert limits == {900.0}
+
+
+def test_a_run_ended_by_the_limit_has_an_integer_code_and_says_it_timed_out(
+    tmp_path: Path,
+) -> None:
+    ran = project_bite.Shell().run(["sleep", "5"], tmp_path, 0.3)
+    assert isinstance(ran.code, int)
+    assert ran.timed_out
+
+
+def test_a_process_that_left_the_group_holding_the_output_cannot_hold_the_run_past_the_limit(
+    tmp_path: Path,
+) -> None:
+    started = time.monotonic()
+    ran = project_bite.Shell().run(["sh", "-c", "setsid sleep 6 & sleep 30"], tmp_path, 0.3)
+    assert ran.timed_out
+    assert time.monotonic() - started < 4
+
+
+def test_the_proof_names_the_limit_in_use_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    assert prove(root) == 0
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "bite: limit: 900s a run; no `bite-run` in quality/thresholds.toml"
+    )
+    write(root, "quality/thresholds.toml", ceilings(tier0=60, **{"bite-run": 600}))
+    commit(root, "thresholds")
+    assert prove(root) == 0
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "bite: limit: 600s a run, `bite-run` in quality/thresholds.toml"
+    )
+    assert prove(root, "--limit", "30") == 0
+    assert capsys.readouterr().out.splitlines()[0] == "bite: limit: 30s a run"
+
+
+def test_a_red_proof_ends_with_the_load_at_its_start_and_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, bite("lint", "a planted word"))
+    assert prove(root) == 1
+    last = capsys.readouterr().out.splitlines()[-1]
+    assert re.fullmatch(r"bite: load: \d+\.\d on \d+ cores at the start, .* at the end", last)
+
+
+def test_a_green_proof_prints_no_load(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
+    assert prove(root) == 0
+    assert "bite: load:" not in capsys.readouterr().out
+
+
+def test_a_missing_load_average_is_unknown(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delattr(os, "getloadavg")
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, bite("lint", "a planted word"))
+    assert prove(root) == 1
+    assert "bite: load: unknown at the start, unknown at the end" in capsys.readouterr().out
+
+
+def test_a_red_run_over_twice_the_fastest_green_run_says_how_much_slower(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    body = 'if grep -rl planted src; then sleep 1; echo "no words"; exit 1; fi'
+    root = project(tmp_path / "repo", {"lint": body}, bite("lint", "a planted word"))
+    assert prove(root) == 1
+    line = capsys.readouterr().out.splitlines()[1]
+    assert re.search(
+        r"RED FOR ANOTHER REASON \(\d+\.\ds, lane 0; \d+\.\dx this gate's fastest green run\)", line
+    )
+
+
+def test_a_red_run_no_slower_than_its_green_runs_says_nothing_more(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, bite("lint", "a planted word"))
+    assert prove(root) == 1
+    assert "fastest green run" not in capsys.readouterr().out
+
+
+def test_a_gate_that_times_out_only_with_the_fault_planted_is_timed_out(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    body = f"if grep -rl planted src; then sleep 5; fi; {LINT}"
+    root = project(tmp_path / "repo", {"lint": body}, bite("lint", "a planted word"))
+    assert prove(root, "--limit", "1") == 1
+    assert "bite: lint: a planted word: TIMED OUT\n" in shown(capsys)
+
+
+def test_a_later_run_that_times_out_turns_a_bite_into_timed_out_not_not_proven(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    counted = tmp_path / "runs"
+    body = f'echo x >> {counted}; if [ "$(wc -l < {counted})" -ge 3 ]; then sleep 5; fi; {LINT}'
+    root = project(tmp_path / "repo", {"lint": body}, bite("lint", "a planted word"))
+    assert prove(root, "--limit", "1") == 1
+    assert "bite: lint: a planted word: TIMED OUT\n" in shown(capsys)
 
 
 def test_a_repository_with_no_commit_cannot_be_copied(
@@ -662,7 +871,7 @@ def test_a_repository_with_no_commit_cannot_be_copied(
     write(root, "docs/process/binding.md", f"# Binding\n\n## Gates\n\n{TABLE}{row('lint')}")
     write(root, "quality/bites.toml", bite("lint", "a planted word"))
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "git rev-parse HEAD failed" in out
     assert out.endswith("bite: red\n")
 
@@ -879,7 +1088,7 @@ def test_a_write_fault_does_not_follow_a_tracked_link_out_of_the_copy(
     (root / "file-link").symlink_to(outside / "kept.txt")
     commit(root, "feat(core): two links out of the repository")
     assert prove(root) == 1
-    assert f"{path} is reached through a symbolic link" in capsys.readouterr().out
+    assert f"{path} is reached through a symbolic link" in shown(capsys)
     assert sorted(p.name for p in outside.iterdir()) == ["kept.txt"]
     assert (outside / "kept.txt").read_text(encoding="utf-8") == "the owner's\n"
 
@@ -893,7 +1102,7 @@ def test_a_write_fault_through_a_link_that_stays_in_the_copy_is_not_planted_eith
     commit(root, "feat(core): a link inside the repository")
     before = state(root)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: through a link: THE FAULT WAS NOT PLANTED\n  alias.txt is reached" in out
     assert state(root) == before
 
@@ -911,7 +1120,7 @@ def test_an_include_that_leaves_the_repository_through_a_link_is_red(
     (root / "ignored/out").symlink_to(outside, target_is_directory=True)
     (root / "env.secret").symlink_to(outside / "kept.txt")
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert f"include '{include}' leaves the repository through a symbolic link" in out
     assert "bites" not in out
 
@@ -1035,7 +1244,7 @@ def test_a_fault_is_planted_only_in_a_file_git_sees_and_never_through_a_link(
     if prepare is not None:
         prepare(root)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: first: THE FAULT WAS NOT PLANTED\n" in out
     assert says in out
     assert "bite: lint: blind: DOES NOT BITE" in out
@@ -1056,7 +1265,7 @@ def test_a_fault_in_a_file_another_name_shares_stays_in_the_name_it_was_planted_
     )
     root = project(tmp_path / "repo", {"lint": gate}, registry)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: by replace: DOES NOT BITE" in out
     assert "bite: lint: by write: DOES NOT BITE" in out
 
@@ -1082,7 +1291,7 @@ def test_each_bite_is_judged_against_a_green_run_of_its_own_just_before_it(
     registry = bite("lint", "first") + bite("lint", "blind", BLIND)
     root = project(tmp_path / "repo", {"lint": gate}, registry)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert f"bite: lint: first: NOT PROVEN\n{RETURNS}\n  L001 still red" in out
     assert "bite: lint: blind: RED BEFORE THE FAULT\n  L001 still red" in out
 
@@ -1100,7 +1309,7 @@ def test_a_gate_red_again_with_no_fault_planted_proves_no_bite_before_it(
     )
     root = project(tmp_path / "repo", {"lint": gate}, bite("lint", "blind", BLIND))
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert f"bite: lint: blind: NOT PROVEN\n{RETURNS}\n  L001 on run 3\n" in out
     assert "bite: red: 0 of 1 faults bit" in out
 
@@ -1125,7 +1334,7 @@ def test_every_kind_of_fault_that_cannot_be_planted_says_so_and_nothing_else(
     (root / "src/code.txt").unlink()
     write(root, "src/other.txt", "clean\n")
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: gone: THE FAULT WAS NOT PLANTED\n" in out
     assert says in out
 
@@ -1141,7 +1350,7 @@ def test_a_file_a_gate_hid_from_git_is_gone_before_the_next_run(
     registry = bite("lint", "first") + bite("lint", "second")
     root = project(tmp_path / "repo", {"lint": gate}, registry)
     assert prove(root) == 0
-    assert capsys.readouterr().out.count(": bites\n") == 2
+    assert shown(capsys).count(": bites\n") == 2
 
 
 def test_a_copy_that_cannot_be_put_back_as_it_stood_makes_the_run_red(
@@ -1155,8 +1364,8 @@ def test_a_copy_that_cannot_be_put_back_as_it_stood_makes_the_run_red(
     finally:
         for locked in scratch.rglob("locked"):
             locked.chmod(0o755)
-    out = capsys.readouterr().out
-    assert "warning: failed to remove locked/f" in out
+    out = shown(capsys)
+    assert "failed to remove locked" in out
     assert "bites" not in out
 
 
@@ -1190,7 +1399,7 @@ def test_a_cache_or_faults_that_cancel_get_the_verdict_the_gate_earns(
     gate, registry, verdicts = case
     root = project(tmp_path / "repo", {"lint": gate}, registry)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     for verdict in verdicts:
         assert f"bite: lint: {verdict}" in out
 
@@ -1251,7 +1460,7 @@ def test_the_first_green_run_judges_the_copy_as_every_later_run_does(
     if prepare is not None:
         prepare(root)
     assert prove(root) == 1
-    assert f"bite: lint: blind: {verdict}\n" in capsys.readouterr().out
+    assert f"bite: lint: blind: {verdict}\n" in shown(capsys)
 
 
 @pytest.mark.parametrize(
@@ -1314,7 +1523,7 @@ def test_what_a_fault_or_its_run_changed_is_put_back_before_the_next_bite(
     if prepare is not None:
         prepare(root)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert f"bite: lint: first: {verdict}\n" in out
     assert "bite: lint: blind: DOES NOT BITE\n" in out
 
@@ -1335,7 +1544,7 @@ def test_a_fault_inside_a_repository_setup_made_is_not_planted(
     )
     root = project(tmp_path / "repo", {"lint": gate}, registry)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: first: THE FAULT WAS NOT PLANTED\n" in out
     assert "vendor/x/planted.txt is inside vendor/x, a repository of its own" in out
     assert "bite: lint: blind: DOES NOT BITE\n" in out
@@ -1401,7 +1610,7 @@ def test_a_path_swapped_for_a_link_between_the_check_and_the_plant_is_refused(
     monkeypatch.setattr(project_bite, "owned", check_then_swap)
     prove(root)
     assert fingerprint(root) == before
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: swapped: THE FAULT WAS NOT PLANTED\n" in out
     assert "is reached through a symbolic link; a fault changes the copy's own file" in out
 
@@ -1440,7 +1649,7 @@ def test_a_directory_swapped_once_the_walk_holds_it_still_takes_the_fault(
     monkeypatch.setattr(project_bite, "entry", look_then_swap)
     prove(root)
     assert fingerprint(root) == before
-    assert "bite: lint: swapped: " in capsys.readouterr().out
+    assert "bite: lint: swapped: " in shown(capsys)
 
 
 @pytest.mark.parametrize(
@@ -1466,7 +1675,7 @@ def test_a_setup_that_leaves_a_link_leading_out_of_the_copy_is_unsafe_and_red(
     before = fingerprint(root)
     assert prove(root) == 1
     assert fingerprint(root) == before
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "setup left " in out
     assert "leads outside the scratch copy" in out
 
@@ -1493,7 +1702,7 @@ def test_a_setup_link_that_stays_inside_the_copy_is_accepted_and_the_proof_goes_
     )
     commit(root, "registry")
     assert prove(root) == 0
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "leads outside the scratch copy" not in out
     assert "bite: green" in out
 
@@ -1523,7 +1732,7 @@ def test_a_link_the_snapshot_holds_is_judged_though_the_directory_is_back_by_the
     monkeypatch.setattr(project_bite, "contained", put_back_then_look)
     assert prove(root) == 1
     assert fingerprint(root) == before
-    assert "leads outside the scratch copy" in capsys.readouterr().out
+    assert "leads outside the scratch copy" in shown(capsys)
 
 
 @pytest.mark.parametrize("committed", [True, False], ids=["committed", "ignored"])
@@ -1550,7 +1759,7 @@ def test_a_link_reached_back_up_through_another_link_is_judged_by_where_the_firs
     before = fingerprint(root)
     assert prove(root) == 1
     assert fingerprint(root) == before
-    assert "setup left M" in capsys.readouterr().out
+    assert "setup left M" in shown(capsys)
 
 
 def test_links_that_lead_round_in_a_ring_are_refused_as_leading_nowhere_safe(
@@ -1564,48 +1773,128 @@ def test_links_that_lead_round_in_a_ring_are_refused_as_leading_nowhere_safe(
     )
     commit(root, "registry")
     assert prove(root) == 1
-    assert "leads outside the scratch copy" in capsys.readouterr().out
+    assert "leads outside the scratch copy" in shown(capsys)
 
 
-def test_a_process_setup_left_swapping_a_directory_for_a_link_never_changes_the_real_tree(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def made_copy(tmp_path: Path) -> tuple[Path, project_bite.Copy]:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    (root / "src/junk.txt").write_text("real\n", encoding="utf-8")
+    return root, copy
+
+
+def test_a_directory_swapped_for_a_link_between_listing_and_restoring_never_reaches_the_real_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Why: the race the seam test fixes in place, run for real. The swapper ends by itself a
-    # little after the proof would, and is killed by its pid once the proof is done.
-    pidfile, swapper = tmp_path / "swapper.pid", tmp_path / "swap.sh"
-    faults = [
-        'write = { path = "src/w{n}.txt", content = "planted\\n" }',
-        'replace = { path = "src/code.txt", old = "clean", new = "planted" }',
-        'remove = ["src/code.txt"]',
-    ]
-    registry = (
-        'setup = ["setsid -f sh '
-        + str(swapper)
-        + '"]\n'
-        + "".join(bite("lint", f"f{n}", faults[n % 3].replace("{n}", str(n))) for n in range(24))
-    )
-    root = project(tmp_path / "repo", {"lint": "exit 0"}, registry)
-    until = int(time.time()) + 20
-    swapper.write_text(
-        f"echo $$ > {pidfile}\n"
-        f'while [ "$(date +%s)" -lt {until} ]; do\n'
-        f"  [ -d src ] && [ ! -L src ] && mv src aside && ln -s {root / 'src'} src\n"
-        "  sleep 0.001\n"
-        "  [ -L src ] && rm src && mv aside src\n"
-        "done\n",
-        encoding="utf-8",
-    )
+    root, copy = made_copy(tmp_path)
+    (copy.path / "src/junk.txt").write_text("left by a gate\n", encoding="utf-8")
+    (copy.path / "src/code.txt").write_text("changed\n", encoding="utf-8")
     before = fingerprint(root)
-    try:
-        # Why: red either way, on a fault the gate never reads or on a copy the swapper left
-        # in a state restoring refuses; what counts is the real tree.
-        assert prove(root) == 1
-    finally:
-        if pidfile.exists():
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(int(pidfile.read_text(encoding="utf-8")), signal.SIGKILL)
+    at, swapped = project_bite.Tree.at, []
+
+    def swapping(
+        self: project_bite.Tree, path: str, **kwargs: bool
+    ) -> AbstractContextManager[tuple[int, str]]:
+        if not swapped and path.startswith("src/"):
+            swapped.append(path)
+            (copy.path / "src").rename(copy.path / "aside")
+            (copy.path / "src").symlink_to(root / "src", target_is_directory=True)
+        return at(self, path, **kwargs)
+
+    monkeypatch.setattr(project_bite.Tree, "at", swapping)
+    with pytest.raises(project_bite.Unprovable, match="reached through a symbolic link"):
+        copy.restore()
+    assert swapped
     assert fingerprint(root) == before
-    assert "bite: red" in capsys.readouterr().out
+    assert (root / "src/junk.txt").read_text(encoding="utf-8") == "real\n"
+
+
+def test_a_file_a_gate_changed_to_the_same_length_with_its_times_put_back_is_restored(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    old = 1_000_000_000_000_000_000
+    os.utime(root / "src/code.txt", ns=(old, old))
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    target = copy.path / "src/code.txt"
+    assert target.stat().st_mtime_ns == old
+    target.write_text("dirty\n", encoding="utf-8")
+    os.utime(target, ns=(old, old))
+    copy.restore()
+    assert target.read_text(encoding="utf-8") == "clean\n"
+
+
+def test_a_link_standing_where_a_directory_belongs_is_replaced_and_the_real_tree_is_untouched(
+    tmp_path: Path,
+) -> None:
+    root, copy = made_copy(tmp_path)
+    (copy.path / "src/code.txt").write_text("changed\n", encoding="utf-8")
+    (copy.path / "src").rename(copy.path / "aside")
+    (copy.path / "src").symlink_to(root / "src", target_is_directory=True)
+    before = fingerprint(root)
+    copy.restore()
+    assert fingerprint(root) == before
+    assert not (copy.path / "src").is_symlink()
+    assert (copy.path / "src/code.txt").read_text(encoding="utf-8") == "clean\n"
+    assert not (copy.path / "src/junk.txt").exists()
+
+
+def test_a_tracked_link_a_gate_pointed_elsewhere_is_restored_as_the_link_it_was(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    (root / "src/link").symlink_to("code.txt")
+    commit(root, "a link")
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    link = copy.path / "src/link"
+    link.unlink()
+    link.symlink_to("elsewhere")
+    copy.restore()
+    assert link.is_symlink()
+    assert str(link.readlink()) == "code.txt"
+
+
+def test_a_repository_setup_made_is_left_as_its_own_history_moved_it(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    setup = (
+        "sh -c 'git init -q nested && git -C nested -c user.name=s -c user.email=s@example.invalid"
+        " commit -q --allow-empty -m one'"
+    )
+    copy = project_bite.make_copy(
+        root,
+        tmp_path / "copy",
+        registry=project_bite.Registry(setup=(setup,)),
+        shell=project_bite.Shell(),
+    )
+    nested = copy.path / "nested"
+    git(nested, *project_bite.IDENTITY, "commit", "-q", "--allow-empty", "-m", "two")
+    moved = git(nested, "rev-parse", "HEAD")
+    copy.restore()
+    assert git(nested, "rev-parse", "HEAD") == moved
+
+
+def test_what_stands_in_the_way_of_a_tracked_path_is_replaced_by_it(tmp_path: Path) -> None:
+    root, copy = made_copy(tmp_path)
+    shutil.rmtree(copy.path / "src")
+    (copy.path / "src").write_text("a file where a directory belongs\n", encoding="utf-8")
+    (copy.path / "tests/one.t").unlink()
+    (copy.path / "tests/one.t").mkdir()
+    (copy.path / "tests/one.t/inner").write_text("x\n", encoding="utf-8")
+    (copy.path / "gate").unlink()
+    (copy.path / "gate").symlink_to(root / "src/junk.txt")
+    before = fingerprint(root)
+    copy.restore()
+    assert fingerprint(root) == before
+    assert (copy.path / "src/code.txt").read_text(encoding="utf-8") == "clean\n"
+    assert (copy.path / "tests/one.t").read_text(encoding="utf-8") == "a test\n"
+    assert (copy.path / "gate").is_file()
+    assert not (copy.path / "gate").is_symlink()
 
 
 def test_a_system_that_cannot_open_a_directory_without_following_a_link_plants_nothing(
@@ -1615,7 +1904,7 @@ def test_a_system_that_cannot_open_a_directory_without_following_a_link_plants_n
     root = project(tmp_path / "repo", {"lint": LINT}, bite("lint", "a planted word"))
     before = fingerprint(root)
     assert prove(root) == 1
-    assert capsys.readouterr().out == f"{project_bite.UNSUPPORTED}\nbite: red\n"
+    assert shown(capsys) == f"{project_bite.UNSUPPORTED}\nbite: red\n"
     assert fingerprint(root) == before
 
 
@@ -1654,7 +1943,7 @@ def test_a_patch_deletes_a_file_and_a_patch_that_makes_a_link_is_not_planted(
     )
     root = project(tmp_path / "repo", gates, registry)
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: deleted: bites\n" in out
     assert (
         "bite: lint: a link: THE FAULT WAS NOT PLANTED\n  src/link would be a symbolic link or a"
@@ -1677,7 +1966,7 @@ def test_the_closing_run_runs_once_for_each_set_of_args_among_the_bites_that_bit
     )
     root = project(tmp_path / "repo", {"lint": gate}, registry)
     assert prove(root) == 1
-    assert "bite: lint: c, blind: DOES NOT BITE" in capsys.readouterr().out
+    assert "bite: lint: c, blind: DOES NOT BITE" in shown(capsys)
     assert log.read_text(encoding="utf-8").split() == [*"aabbaacc", "a", "b"]
 
 
@@ -1701,7 +1990,7 @@ def test_a_gate_stopped_during_its_closing_run_prints_no_verdict(
     threading.Thread(target=interrupt, daemon=True).start()
     assert prove(root) == 128 + 15
     assert runs.read_text(encoding="utf-8") == "3\n"
-    assert capsys.readouterr().out == "bite: red: interrupted by signal 15\n"
+    assert shown(capsys) == "bite: red: interrupted by signal 15\n"
 
 
 @pytest.mark.parametrize(
@@ -1730,7 +2019,7 @@ def test_a_rules_file_that_exists_may_be_changed_or_removed(
         bite("lint", "rules", fault) + bite("lint", "blind", BLIND),
     )
     assert prove(root) == 1
-    out = capsys.readouterr().out
+    out = shown(capsys)
     assert "bite: lint: rules: bites\n" in out
     assert "bite: lint: blind: DOES NOT BITE\n" in out
 
@@ -1742,4 +2031,4 @@ def test_a_copy_its_directories_cannot_reach_is_red_and_says_why(
     registry = "setup = [\"sh -c 'rm -r .git/info && echo x > .git/info'\"]\n" + bite("lint", "a")
     root = project(tmp_path / "repo", {"lint": LINT}, registry)
     assert prove(root) == 1
-    assert capsys.readouterr().out == "[Errno 20] Not a directory: '.git/info'\nbite: red\n"
+    assert shown(capsys) == "[Errno 20] Not a directory: '.git/info'\nbite: red\n"

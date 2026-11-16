@@ -180,7 +180,8 @@ def test_what_the_project_wrote_survives_the_upgrade(name: str, tmp_path: Path) 
     names = conformance.companions()
     plugin_written = {
         line.rstrip("\r\n")
-        for _, _, line in conformance.companion_lines(before["AGENTS.md"], names)
+        for item in conformance.companion_items(before["AGENTS.md"], names)
+        for line in item.lines
     }
     project_written = "\n".join(
         line for line in before["AGENTS.md"].splitlines() if line not in plugin_written
