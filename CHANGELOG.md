@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.12.3
 
-0.12.2 limited each run of the proof that gates can fail to the gate's own time ceiling, else its tier's (issue #168). Those ceilings are measured in the warm work tree, and one run of a gate in a cold scratch copy, with no cache, takes several times as long, so a slow gate's runs were ended and read `TIMED OUT`, and the proof was red: for example `bite: lint: an explicit any: TIMED OUT (60.4s, lane 2)` and `bite: red: 30 of 32 faults bit`. Any change that touches a gate path ran into it, the upgrade to 0.12.2 included. A run is now limited to `--limit`, else the `bite-run` key of `[ceilings.seconds]` in `quality/thresholds.toml`, else 900 seconds, and the proof's first line says which. No gate's or tier's ceiling limits a run.
+A defect of 0.12.2 is fixed. Under 0.12.2, the proof that gates can fail ended a slow gate's runs early, so its faults read `TIMED OUT` and tier 1 was red on any change to a path that defines a gate, the upgrade to 0.12.2 included. If you saw that, upgrade: nothing in the project needs to change, and the next proof is judged under the new limit. Upgrade from any version from 0.10.0 on. Run the upgrade as the README's Upgrading section says: until installs come from a tagged release, from a clone at the commit this version was published at.
+
+- 0.12.2 ended one run of a gate, in the proof that gates can fail, after the gate's own time ceiling, else its tier's (issue #193). Those ceilings bound warm runs in the project's work tree, and a proof's run is in a fresh copy with no cache, so a slow gate was ended early and its fault read `TIMED OUT`. A run's limit is now `--limit` where given, else `bite-run` under `[ceilings.seconds]` in `quality/thresholds.toml`, else 900 seconds, and no gate's or tier's ceiling is read for it. The limit only ends a run that hangs, and the proof's first line says which of the three it is.
+
+The upgrade keeps a project's own words (issue #188). Where a project had written rules of its own on a companion line of `AGENTS.md`, making the line the plugin's name alone used to leave deleting them as the shortest way to green. The upgrade now moves each such item whole, wrapped lines and nested bullets with it, word for word to the section `## Moved by the Ratchet upgrade` at the end of the same file. The finding says the text moves and is not deleted, and the upgrade's report lists what it moved. Read that section after the upgrade, move what still applies, and delete it.
+
+The models took two more turns, each ahead of the script change it describes. The drain model has the check without `--final`: a role's commit after it never lands, and `land` names the final check as the way on. The route model has a conjecture gone stale: the real route still names a build for a ticket whose criteria changed after its conjecture was written, and a strict expected failure pins that until the route and the preflight read the digest.
 
 ## 0.12.2
 
