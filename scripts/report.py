@@ -215,7 +215,8 @@ def choose(root: Path, args: argparse.Namespace) -> tuple[Report | None, int]:
         return None, 2
     if args.path is not None and args.path not in report.paths:
         print(
-            f"report {report.name}: '{args.path}' is not one of its paths in '{SECTION}'",
+            f"report {report.name}: '{args.path}' is not a path the {report.name} row of"
+            f" {SECTION} in {gatelib.BINDING} lists",
             file=sys.stderr,
         )
         return None, 2

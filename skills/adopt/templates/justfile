@@ -407,7 +407,7 @@ test:
 
 coverage: _plugin
     @echo "bind: judge the coverage report that report.py --reader coverage prints, passed as --report below"; exit 1
-    report="$({{plugin_py}} "{{ratchet_plugin}}/scripts/report.py" suite --reader coverage --path 'bind: the coverage report path the binding row lists')" && {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report "$report"
+    report="$({{plugin_py}} "{{ratchet_plugin}}/scripts/report.py" suite --reader coverage --path 'bind: the coverage report path, as the suite row of ## Shared reports lists it')" && {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report "$report"
 
 diff-coverage:
     @echo "bind: through changed, every line and branch changed since {base} ran, read from the coverage report that report.py --reader diff-coverage prints"; exit 1

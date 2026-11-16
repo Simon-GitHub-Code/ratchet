@@ -349,7 +349,8 @@ def test_a_path_is_printed_alone_and_one_the_row_does_not_list_is_refused(
     args = ["suite", "--reader", "test", "--path", "other.txt", "--root", str(work)]
     assert report.main(args) == 2
     assert capfd.readouterr().err == (
-        "report suite: 'other.txt' is not one of its paths in '## Shared reports'\n"
+        "report suite: 'other.txt' is not a path the suite row of ## Shared reports in"
+        " docs/process/binding.md lists\n"
     )
 
 
