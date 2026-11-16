@@ -2548,7 +2548,10 @@ def check_gate_reads(root: Path) -> Iterable[Finding]:
     gates = {row.gate for row in project_bite.gate_rows(binding)}
     heading = project_bite.READS
     tracked = gatelib.tracked_paths(root)
-    for gate, entries in project_bite.gate_reads(binding).items():
+    reads, strays = project_bite.read_reads(binding)
+    for stray in strays:
+        yield agent(f"{BINDING_PATH}: '{heading}' has a line that is no bullet: '{stray}'")
+    for gate, entries in reads.items():
         if gate not in gates:
             yield agent(f"{BINDING_PATH}: '{heading}' has a bullet for '{gate}', no entry point")
         if not entries:

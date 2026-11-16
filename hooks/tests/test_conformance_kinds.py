@@ -379,3 +379,17 @@ def test_a_bullet_of_what_each_gate_reads_is_red_for_no_gate_no_path_or_no_entry
 def test_a_bullet_that_names_a_gate_and_a_file_that_exists_is_green(repo: Path) -> None:
     gate = project_bite.gate_rows((repo / BINDING).read_text(encoding="utf-8"))[0].gate
     assert read_problems(repo, f"- {gate}: AGENTS.md, docs\n") == []
+
+
+def test_a_line_that_is_no_bullet_after_the_first_bullet_is_red(repo: Path) -> None:
+    gate = project_bite.gate_rows((repo / BINDING).read_text(encoding="utf-8"))[0].gate
+    assert read_problems(repo, f"- {gate}: AGENTS.md\nstray words\n") == [
+        "'## What each gate reads' has a line that is no bullet: 'stray words'"
+    ]
+
+
+def test_a_bullet_that_wraps_is_read_on_its_second_line_too(repo: Path) -> None:
+    gate = project_bite.gate_rows((repo / BINDING).read_text(encoding="utf-8"))[0].gate
+    assert read_problems(repo, f"- {gate}: AGENTS.md,\n  missing/**\n") == [
+        f"gate '{gate}' reads 'missing/**', matching no file"
+    ]

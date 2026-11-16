@@ -2,14 +2,18 @@
 
 Two texts of a justfile, at the merge base and at head, are written to scratch files and dumped
 with ``--justfile``, so nothing in them runs. A changed recipe affects each gate whose command
-reaches it, through its dependencies and through ``just <recipe>`` calls in recipe bodies, and
-transitively. A change anywhere else in the justfile (an assignment, a ``set`` line, an import, a
-module), or a dump that fails, affects every gate: the ``Cause`` has no gate then.
+reaches it. A command reaches a recipe by naming it or an alias of it, and a recipe reaches the
+recipes it depends on and every recipe a word of its body names, so ``just x``, a runner held in
+a variable and ``{{just_executable()}} x`` all count. A body that runs ``just`` with a name it
+cannot read reaches every recipe. A justfile with any ``import`` or ``mod`` line, a change
+anywhere else in it (an assignment, a ``set`` line), or a dump that fails, affects every gate: the
+``Cause`` has no gate then.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -22,6 +26,9 @@ if TYPE_CHECKING:
 
 DUMP_TIMEOUT = 30
 OUTSIDE_RECIPES = frozenset({"recipes", "source", "first", "warnings"})
+NAME = re.compile(r"[A-Za-z_][\w-]*")
+RUNNER = re.compile(r"@?just")
+JUST_WORD = re.compile(r"\bjust\b")
 
 
 class Cause(NamedTuple):
@@ -29,6 +36,14 @@ class Cause(NamedTuple):
 
     gate: str | None
     why: str
+
+
+class Graph(NamedTuple):
+    """The recipes of one dump, the aliases that name them, and the variables that hold ``just``."""
+
+    recipes: dict[str, dict[str, object]]
+    aliases: dict[str, str]
+    runners: frozenset[str]
 
 
 def dump(text: str, file: Path) -> dict[str, object] | None:
@@ -50,41 +65,97 @@ def dump(text: str, file: Path) -> dict[str, object] | None:
     return data if isinstance(data, dict) else None
 
 
-def recipes_of(data: Mapping[str, object]) -> dict[str, dict[str, object]]:
-    table = data.get("recipes")
-    if not isinstance(table, dict):
+def table(data: Mapping[str, object], key: str) -> dict[str, dict[str, object]]:
+    found = data.get(key)
+    if not isinstance(found, dict):
         return {}
-    return {name: recipe for name, recipe in table.items() if isinstance(recipe, dict)}
+    return {name: value for name, value in found.items() if isinstance(value, dict)}
 
 
-def called(recipe: Mapping[str, object]) -> set[str]:
-    """The recipes one recipe names: its dependencies and the ``just x`` calls in its body."""
-    names: set[str] = set()
+def graph_of(data: Mapping[str, object]) -> Graph:
+    aliases = {name: str(alias.get("target")) for name, alias in table(data, "aliases").items()}
+    runners = frozenset(
+        name
+        for name, assignment in table(data, "assignments").items()
+        if JUST_WORD.search(str(assignment.get("value")))
+    )
+    return Graph(table(data, "recipes"), aliases, runners)
+
+
+def items_of(line: object) -> list[str | list[object]]:
+    """A body line as its words and its interpolations, in order."""
+    parts = line if isinstance(line, list) else []
+    items: list[str | list[object]] = []
+    for part in parts:
+        if isinstance(part, str):
+            items += part.split()
+        elif isinstance(part, list):
+            items.append(part)
+    return items
+
+
+def runs_just(item: str | list[object], graph: Graph) -> bool:
+    if isinstance(item, str):
+        return RUNNER.fullmatch(item) is not None
+    shown = json.dumps(item)
+    return "just_executable" in shown or any(f'["variable", "{v}"]' in shown for v in graph.runners)
+
+
+def unreadable(items: list[str | list[object]], graph: Graph) -> bool:
+    """Whether a line runs ``just`` with something after it that is no recipe name."""
+    for at, item in enumerate(items):
+        if not runs_just(item, graph):
+            continue
+        rest = [
+            other for other in items[at + 1 :] if not (isinstance(other, str) and other[:1] == "-")
+        ]
+        if rest and not (isinstance(rest[0], str) and NAME.fullmatch(rest[0])):
+            return True
+    return False
+
+
+def named(words: str, graph: Graph) -> set[str]:
+    """The recipes a text names by their own name or an alias's."""
+    found = set(NAME.findall(words))
+    return {
+        graph.aliases.get(name, name)
+        for name in found
+        if name in graph.recipes or name in graph.aliases
+    }
+
+
+def called(recipe: Mapping[str, object], graph: Graph) -> set[str] | None:
+    """The recipes one recipe reaches by itself; ``None`` when it may reach every recipe."""
     dependencies = recipe.get("dependencies")
-    for dependency in dependencies if isinstance(dependencies, list) else []:
-        if isinstance(dependency, dict):
-            names.add(str(dependency.get("recipe")))
+    names = {
+        str(dependency.get("recipe"))
+        for dependency in (dependencies if isinstance(dependencies, list) else [])
+        if isinstance(dependency, dict)
+    }
     body = recipe.get("body")
     for line in body if isinstance(body, list) else []:
-        words = (
-            "".join(part for part in line if isinstance(part, str))
-            if isinstance(line, list)
-            else ""
-        )
-        names.update(justfile_text.JUST_CALL.findall(words))
+        items = items_of(line)
+        if unreadable(items, graph):
+            return None
+        names |= named(" ".join(item for item in items if isinstance(item, str)), graph)
     return names
 
 
-def reached(recipes: Mapping[str, Mapping[str, object]], command: str) -> set[str]:
+def reached(graph: Graph, command: str) -> set[str]:
     """Every recipe a gate's command runs, directly or through what a recipe runs."""
-    pending = list(justfile_text.JUST_CALL.findall(command))
+    if unreadable(items_of([command]), graph):
+        return set(graph.recipes)
+    pending = list(named(command, graph))
     seen: set[str] = set()
     while pending:
         name = pending.pop()
-        if name in seen or name not in recipes:
+        if name in seen or name not in graph.recipes:
             continue
         seen.add(name)
-        pending.extend(called(recipes[name]))
+        more = called(graph.recipes[name], graph)
+        if more is None:
+            return set(graph.recipes)
+        pending.extend(more)
     return seen
 
 
@@ -94,10 +165,8 @@ def causes(
     """The gates a change from ``old`` to ``new`` could affect; ``commands``: gate to command."""
     if old is None or new is None:
         return [Cause(None, f"{path} was added or removed, and no record says which gate runs it")]
-    if justfile_text.imports(old) != justfile_text.imports(new) or justfile_text.modules(
-        old
-    ) != justfile_text.modules(new):
-        return [Cause(None, f"{path} changed an import or a module")]
+    if any(justfile_text.imports(text) or justfile_text.modules(text) for text in (old, new)):
+        return [Cause(None, f"{path} has an import or a module, which the dump does not follow")]
     with tempfile.TemporaryDirectory(prefix="ratchet-bite-just-") as scratch:
         before = dump(old, Path(scratch) / "base")
         after = dump(new, Path(scratch) / "head")
@@ -109,15 +178,15 @@ def causes(
     ]
     if outside[0] != outside[1]:
         return [Cause(None, f"{path} changed an assignment or a setting, which every recipe reads")]
-    old_recipes, new_recipes = recipes_of(before), recipes_of(after)
+    old_graph, new_graph = graph_of(before), graph_of(after)
     changed = sorted(
         name
-        for name in old_recipes.keys() | new_recipes.keys()
-        if old_recipes.get(name) != new_recipes.get(name)
+        for name in old_graph.recipes.keys() | new_graph.recipes.keys()
+        if old_graph.recipes.get(name) != new_graph.recipes.get(name)
     )
     found: list[Cause] = []
     for gate, command in sorted(commands.items()):
-        reach = reached(old_recipes, command) | reached(new_recipes, command)
+        reach = reached(old_graph, command) | reached(new_graph, command)
         found += [
             Cause(gate, f"recipe `{name}` changed, and the gate's command reaches it")
             for name in changed

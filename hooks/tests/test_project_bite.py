@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import gatelib
+import justfile_dump
 import project_bite
 from tests import repos
 from tests.repos import branch, commit, git, repository, write
@@ -575,14 +576,16 @@ def test_a_patch_a_bite_names_proves_that_bites_gate(
     assert proved(out) == ["tests"]
 
 
-def test_a_patch_no_bite_names_proves_nothing(
-    tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
+def test_a_file_under_the_bites_directory_no_bite_names_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = patched(tmp_path)
-    write(root, "quality/bites/unused.patch", PATCH_FILE)
+    write(root, "quality/bites/helper.sh", "echo setup helper\n")
     assert prove(root, "--changed") == 0
-    assert shown(capsys).endswith(NOTHING)
-    assert list(scratch.iterdir()) == []
+    out = shown(capsys).splitlines()
+    why = "quality/bites/helper.sh is under quality/bites/ and no bite names it as its patch, so"
+    assert out[1] == every(f"{why} setup may run it")
+    assert proved(out) == ["lint", "tests"]
 
 
 def test_a_binding_row_that_changed_proves_its_gate(
@@ -746,6 +749,109 @@ def test_a_change_that_affects_only_a_tier_2_gate_says_so_and_proves_nothing(
     assert out.endswith(NOTHING)
     assert "touches no path" not in out
     assert list(scratch.iterdir()) == []
+
+
+def test_a_changed_file_a_write_fault_plants_proves_that_bites_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plant = 'write = { path = "src/t.txt", content = "planted\\n" }'
+    registry = bite("lint", WORD) + bite("tests", "w", plant) + bite("slow", WORD)
+    root = targeted(tmp_path, registry=registry, files={"src/t.txt": "one\n"})
+    write(root, "src/t.txt", "two\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[0] == "bite: a gate may have changed (src/t.txt)"
+    assert out[1] == "bite: tests: src/t.txt is changed by bite `w`"
+    assert proved(out) == ["tests"]
+
+
+def test_a_path_in_two_groups_takes_the_wider_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wide = COMMANDS_MANIFEST.replace('"scripts/lint.sh"]', '"scripts/lint.sh", "lint.cfg"]')
+    inserts = with_reads("- lint: lint.cfg\n- tests: src/**\n")
+    root = targeted(tmp_path, inserts=inserts, files={"guards/manifest.toml": wide})
+    write(root, "lint.cfg", "changed\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == every("lint.cfg changed, and no record says which gate runs it")
+    assert proved(out) == ["lint", "tests"]
+
+
+def test_a_bullet_that_wraps_onto_a_second_line_reads_both_lines(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reads = with_reads("- lint: other.cfg,\n  lint.cfg\n- tests: src/**\n")
+    root = targeted(tmp_path, inserts=reads)
+    write(root, "lint.cfg", "changed\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == "bite: lint: lint.cfg changed, and `lint` reads it"
+    assert proved(out) == ["lint"]
+
+
+def test_a_change_that_names_only_gates_with_no_bite_is_green_and_says_so(
+    tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    waiting = row("later", tool="later: code:listener")
+    root = targeted(tmp_path, rows=GATE_ROWS + waiting)
+    replaced(
+        root,
+        BINDING,
+        "| later | later: code:listener | 0 |",
+        "| later | later: code:listener | 1 |",
+    )
+    assert prove(root, "--changed") == 0
+    assert shown(capsys).endswith(
+        "bite: green: the gates the change affects have no bite; nothing to prove\n"
+    )
+    assert list(scratch.iterdir()) == []
+
+
+def test_a_gate_chosen_outside_the_affected_set_is_green_under_changed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = targeted(tmp_path)
+    replaced(root, BINDING, "| tests | a tool | 1 |", "| tests | a tool | 0 |")
+    assert prove(root, "--changed", "--gate", "lint") == 0
+    assert shown(capsys).endswith(
+        "bite: green: the gates the change affects have no bite; nothing to prove\n"
+    )
+
+
+JUST_BASE = "lint:\n    echo a\nci:\n    echo ci\n"
+REACHES = [
+    ("alias l := lint\n" + JUST_BASE, "just l"),
+    (JUST_BASE.replace("echo ci", "{{just_executable()}} lint"), "just ci"),
+    ('runner := "just"\n' + JUST_BASE.replace("echo ci", "{{runner}} lint"), "just ci"),
+    (JUST_BASE.replace("ci:", "ci target:").replace("echo ci", "just {{target}}"), "just ci x"),
+]
+
+
+@pytest.mark.parametrize(
+    ("justfile", "command"),
+    REACHES,
+    ids=[
+        "an alias",
+        "the runner's function",
+        "a variable holding the runner",
+        "an unreadable name",
+    ],
+)
+def test_a_gate_reaches_a_recipe_through_an_alias_a_runner_or_a_name_it_cannot_read(
+    justfile: str, command: str
+) -> None:
+    head = justfile.replace("echo a", "exit 0")
+    found = justfile_dump.causes("justfile", justfile, head, commands={"gate": command})
+    why = "recipe `lint` changed, and the gate's command reaches it"
+    assert found == [justfile_dump.Cause("gate", why)]
+
+
+def test_a_justfile_with_an_optional_import_goes_to_every_gate() -> None:
+    justfile = "import? 'more.just'\n" + JUST_BASE
+    head = justfile.replace("echo a", "exit 0")
+    found = justfile_dump.causes("justfile", justfile, head, commands={"gate": "just lint"})
+    assert [cause.gate for cause in found] == [None]
 
 
 def test_a_pull_request_with_nothing_to_compare_with_proves_the_gates(

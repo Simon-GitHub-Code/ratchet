@@ -126,12 +126,12 @@ def test_main_warns_on_a_green_run_near_its_ceiling_and_stays_green(
         budget.with_ceiling("", "bite-all", 100.0), encoding="utf-8"
     )
     command = ["--", sys.executable, "-c", "pass"]
-    monkeypatch.setattr(budget, "timed", lambda _command, _cwd: budget.Timed(90.0, 0))
+    monkeypatch.setattr(budget, "timed", lambda _command, _cwd: (90.0, 0))
     assert budget.main(["budget", "bite-all", "--root", str(tmp_path), *command]) == 0
     out = capsys.readouterr().out
     assert "(ceiling 100s, 90% used): green" in out
     assert "::warning title=ratchet-budget::ratchet-budget: bite-all used 90%" in out
-    monkeypatch.setattr(budget, "timed", lambda _command, _cwd: budget.Timed(74.0, 0))
+    monkeypatch.setattr(budget, "timed", lambda _command, _cwd: (74.0, 0))
     assert budget.main(["budget", "bite-all", "--root", str(tmp_path), *command]) == 0
     assert "::warning" not in capsys.readouterr().out
 
@@ -168,29 +168,48 @@ def test_main_holds_a_gate_to_its_tier_and_only_reports_when_told(
     assert budget.ceiling_of(thresholds.read_text(), "tier1") == 0.0
 
 
-def test_a_proof_that_fell_back_to_every_gate_is_held_to_bite_all_and_never_to_tier_1(
+def proof_argv(root: Path, key: str = "bite") -> list[str]:
+    return ["budget", key, "--root", str(root), "--tier", "tier1"]
+
+
+PRINT = ["--", sys.executable, "-c", "print('bite: fallback: x; proving every gate')"]
+
+
+def test_the_pull_request_proof_is_held_to_its_own_ceiling_else_bite_all_and_never_to_tier_1(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     (tmp_path / "quality").mkdir()
     thresholds = tmp_path / "quality/thresholds.toml"
     tier1_only = budget.with_ceiling("", "tier1", 0.0)
     thresholds.write_text(tier1_only, encoding="utf-8")
-    argv = ["budget", "bite", "--root", str(tmp_path), "--tier", "tier1", "--set"]
-    line = "bite: fallback: scripts/x changed; proving every gate"
-    fell = ["--", sys.executable, "-c", f"print({line!r})"]
-    plain = ["--", sys.executable, "-c", "print('bite: lint: a fault')"]
-    assert budget.main([*argv, *plain]) == 1, "a run that targeted is held to tier 1"
-    capsys.readouterr()
-    assert budget.main([*argv, *fell]) == 0, "no bite-all ceiling yet: nothing to be red against"
+    argv = proof_argv(tmp_path)
+    assert budget.main([*argv, *PRINT]) == 0, "no bite or bite-all ceiling yet: unbounded"
     assert "no ceiling recorded of bite-all" in capsys.readouterr().out
     thresholds.write_text(budget.with_ceiling(tier1_only, "bite-all", 1000.0), encoding="utf-8")
-    assert budget.main([*argv, *fell]) == 0
-    out = capsys.readouterr().out
-    assert line in out, "the line still shows"
-    assert "(ceiling 1000s of bite-all" in out
-    assert budget.ceiling_of(thresholds.read_text(), "bite") is None, "a fallback sets no ceiling"
-    thresholds.write_text(budget.with_ceiling(tier1_only, "bite-all", 0.0), encoding="utf-8")
-    assert budget.main([*argv, *fell]) == 1, "over bite-all's own ceiling is red"
+    assert budget.main([*argv, *PRINT]) == 0
+    assert "(ceiling 1000s of bite-all" in capsys.readouterr().out
+    both = budget.with_ceiling(budget.with_ceiling(tier1_only, "bite-all", 1000.0), "bite", 0.0)
+    thresholds.write_text(both, encoding="utf-8")
+    assert budget.main([*argv, *PRINT]) == 1, "its own ceiling holds it when it is recorded"
+    assert "(ceiling 0s)" in capsys.readouterr().out
+
+
+def test_a_command_cannot_claim_a_longer_ceiling_by_what_it_prints(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "quality").mkdir()
+    text = budget.with_ceiling(budget.with_ceiling("", "tier1", 0.0), "bite-all", 1000.0)
+    (tmp_path / "quality/thresholds.toml").write_text(text, encoding="utf-8")
+    assert budget.main([*proof_argv(tmp_path, "test"), *PRINT]) == 1
+    assert "(ceiling 0s of tier1): red" in capsys.readouterr().out
+
+
+def test_a_command_whose_output_is_not_utf_8_is_timed_and_does_not_crash(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "quality").mkdir()
+    command = ["--", sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\xff\\xfe\\n')"]
+    assert budget.main(["budget", "test", "--root", str(tmp_path), *command]) == 0
 
 
 def test_main_times_a_command_reports_and_sets(

@@ -8,10 +8,9 @@ thresholds file. Exit status: the command's own when it fails; 1 when it passed 
 its ceiling; 0 otherwise. A missing ceiling reports and passes: that is the first adoption.
 ``--report`` appends one JSON line per run so CI can publish the timings.
 
-A command that prints a line starting ``bite: fallback:`` proved every gate because it could not
-tell which the change affected, and is held to ``ceilings.seconds.bite-all`` instead of its own
-and its tier's: a fallback never goes red on the tier ceiling, and with no ``bite-all`` ceiling
-yet it is unbounded. Such a run never sets a ceiling.
+The pull-request proof, key ``bite``, is held to its own ``bite`` ceiling when one is recorded,
+else to ``bite-all``'s, and never to its tier's: whatever gates it proves are a part of the full
+proof, so ``bite-all`` bounds it. Nothing is read from its output (ADR 0069).
 
 A green run prints its wall clock as a share of its ceiling, and at 75 percent or more of it a
 warning line follows, raised as an annotation: a warning is not red, and shows a tier drifting
@@ -47,13 +46,12 @@ import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
 
 CEILINGS_TABLE = "ceilings.seconds"
 DEFAULT_HEADROOM = 1.5
 WARN_SHARE = 75.0
-FALLBACK = "bite: fallback: "
 FULL_PROOF = "bite-all"
+PROOF = "bite"
 TIER_BUDGETS = {"tier0": 60.0, "tier1": 900.0}
 _TABLE_HEADER = re.compile(r"^\[ceilings\.seconds\]\s*$", re.MULTILINE)
 _ANY_HEADER = re.compile(r"^\[", re.MULTILINE)
@@ -113,6 +111,8 @@ class Outcome:
 def held(text: str, key: str, tier: str | None) -> tuple[float | None, str | None]:
     """The ceiling ``key`` is judged against, and the tier it belongs to when it is the tier's."""
     own = ceiling_of(text, key)
+    if key == PROOF:
+        return (own, None) if own is not None else (ceiling_of(text, FULL_PROOF), FULL_PROOF)
     shared = ceiling_of(text, tier) if tier else None
     if shared is not None and (own is None or shared < own):
         return shared, tier
@@ -156,23 +156,10 @@ def lowered_ceiling(
     return proposed if existing is None or proposed < existing else None
 
 
-class Timed(NamedTuple):
-    """A command's wall clock and exit code, and whether it said it fell back to the full proof."""
-
-    seconds: float
-    code: int
-    fallback: bool = False
-
-
-def timed(command: list[str], cwd: Path) -> Timed:
+def timed(command: list[str], cwd: Path) -> tuple[float, int]:
     started = time.monotonic()
-    fell = False
-    with subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, text=True) as child:
-        for line in child.stdout or []:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            fell = fell or line.startswith(FALLBACK)
-    return Timed(time.monotonic() - started, child.returncode, fell)
+    completed = subprocess.run(command, cwd=cwd, check=False)
+    return time.monotonic() - started, completed.returncode
 
 
 def report(path: Path, outcome: Outcome) -> None:
@@ -211,10 +198,8 @@ def main(argv: list[str]) -> int:
     root = Path(options.root).resolve()
     thresholds = root / options.file
     text = thresholds.read_text(encoding="utf-8") if thresholds.is_file() else ""
-    seconds, exit_code, fallback = timed(command, root)
+    seconds, exit_code = timed(command, root)
     ceiling, tier = held(text, options.key, options.tier)
-    if fallback:
-        ceiling, tier = ceiling_of(text, FULL_PROOF), FULL_PROOF
     outcome = Outcome(options.key, seconds, ceiling, exit_code, tier, options.over == "block")
     print(outcome.line())
     if outcome.status == "red" and not outcome.blocks:
@@ -229,7 +214,7 @@ def main(argv: list[str]) -> int:
         )
     if options.report:
         report(root / options.report, outcome)
-    if options.headroom is not None and exit_code == 0 and not fallback:
+    if options.headroom is not None and exit_code == 0:
         floor = TIER_BUDGETS.get(options.key, 0.0)
         own = ceiling_of(text, options.key)
         new = lowered_ceiling(own, seconds, options.headroom, floor=floor)

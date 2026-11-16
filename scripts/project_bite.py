@@ -1462,19 +1462,34 @@ READS = "## What each gate reads"
 READS_BULLET = re.compile(r"^- ([^:\s]+):[ \t]*(.*)$")
 
 
+def defining_group(names: set[str]) -> str:
+    """The widest gate-defining group among ``names`` (``tool-config`` is narrowest)."""
+    wide = [name for name in GATE_GROUPS if name in names and name != "tool-config"]
+    return wide[0] if wide else "tool-config" if "tool-config" in names else ""
+
+
 def gate_paths_changed(root: Path, base: str | None) -> list[Touched] | None:
     """The changed paths that define a gate; ``None`` when there is no commit to compare with."""
     if base is None:
         return None
     git = guard_paths.git_in(root)
     paths = guard_paths.changed_paths(git, base)
-    groups = dict(guard_paths.guarded(paths, guard_paths.manifests(git, base, root)))
+    manifests = guard_paths.manifests(git, base, root)
+    targets = fault_targets(root, base)
     touched = []
     for path in paths:
+        names = {
+            group.name
+            for manifest in manifests
+            for group in manifest.groups
+            if guard_paths.Manifest((group,)).group_of(path)
+        }
         if gatelib.matches(path, list(GATE_PATHS)):
             touched.append(Touched(path, ""))
-        elif path in groups and groups[path].name in GATE_GROUPS:
-            touched.append(Touched(path, groups[path].name))
+        elif defining_group(names):
+            touched.append(Touched(path, defining_group(names)))
+        elif path in targets:
+            touched.append(Touched(path, "fault"))
     return touched
 
 
@@ -1510,7 +1525,28 @@ def patch_causes(root: Path, base: str, path: str) -> list[Cause]:
         for bite in bites
         if isinstance(bite.fault, Patch) and bite.fault.path == path
     }
+    if not named:
+        why = f"{path} is under {PATCHES} and no bite names it as its patch, so setup may run it"
+        return [Cause(None, why)]
     return [Cause(gate, f"patch {path} is named by bite `{name}`") for gate, name in sorted(named)]
+
+
+def fault_targets(root: Path, base: str) -> dict[str, set[tuple[str, str]]]:
+    """Each file a bite's ``write`` or ``replace`` fault changes, with the bites that change it."""
+    targets: dict[str, set[tuple[str, str]]] = {}
+    for registry in registries(root, base):
+        for bite in registry.bites if registry else ():
+            fault = bite.fault
+            paths = (
+                [fault.path]
+                if isinstance(fault, Write)
+                else [swap.path for swap in fault.swaps]
+                if isinstance(fault, Replace)
+                else []
+            )
+            for path in paths:
+                targets.setdefault(path, set()).add((bite.gate, bite.name))
+    return targets
 
 
 def binding_causes(root: Path, base: str) -> list[Cause]:
@@ -1558,16 +1594,35 @@ def justfile_causes(root: Path, base: str, path: str) -> list[Cause]:
     )
 
 
-def gate_reads(binding: str) -> dict[str, list[str]]:
-    """Each bullet of ``## What each gate reads``: the gate, and the paths it reads."""
+def read_reads(binding: str) -> tuple[dict[str, list[str]], list[str]]:
+    """The bullets of ``## What each gate reads``, and each line after the first that is no bullet.
+
+    An indented line continues the bullet above it.
+    """
     _, marker, body = binding.partition(f"\n{READS}\n")
     reads: dict[str, list[str]] = {}
+    strays: list[str] = []
+    gate = None
     for line in body.partition("\n## ")[0].splitlines() if marker else []:
         found = READS_BULLET.match(line)
         if found:
-            entries = [entry.strip().strip("`") for entry in found[2].split(",")]
-            reads.setdefault(found[1], []).extend(entry for entry in entries if entry)
-    return reads
+            gate, text = found[1], found[2]
+            reads.setdefault(gate, [])
+        elif gate is not None and line.strip() and line[0] in " \t":
+            text = line
+        else:
+            text = ""
+            if gate is not None and line.strip():
+                strays.append(line.strip())
+        if gate is not None:
+            entries = (entry.strip().strip("`") for entry in text.split(","))
+            reads[gate].extend(entry for entry in entries if entry)
+    return reads, strays
+
+
+def gate_reads(binding: str) -> dict[str, list[str]]:
+    """Each bullet of ``## What each gate reads``: the gate, and the paths it reads."""
+    return read_reads(binding)[0]
 
 
 def reading(path: str, entry: str) -> bool:
@@ -1606,6 +1661,7 @@ def could_affect(root: Path, base: str | None, touched: Sequence[Touched] | None
     if base is None or touched is None:
         return [Cause(None, "there is no merge base to compare with")]
     causes: list[Cause] = []
+    targets = fault_targets(root, base)
     for path, group in touched:
         if path == str(REGISTRY):
             causes += registry_causes(root, base)
@@ -1615,8 +1671,12 @@ def could_affect(root: Path, base: str | None, touched: Sequence[Touched] | None
             causes += binding_causes(root, base)
         elif group == "gate-commands" and path in JUSTFILE_NAMES:
             causes += justfile_causes(root, base, path)
-        else:
+        elif group != "fault":
             causes += unnamed_causes(root, path, group)
+        causes += [
+            Cause(gate, f"{path} is changed by bite `{name}`")
+            for gate, name in sorted(targets.get(path, ()))
+        ]
     return causes
 
 
@@ -1642,7 +1702,7 @@ def explain(rows: Sequence[Row], causes: Sequence[Cause]) -> list[str]:
     """One line for each gate in the set; on a fallback one line, which ``budget.py`` reads."""
     if any(cause.gate is None for cause in causes):
         whys = dict.fromkeys(cause.why for cause in causes if cause.gate is None)
-        return [f"{budget.FALLBACK}{'; '.join(whys)}; proving every gate"]
+        return [f"bite: fallback: {'; '.join(whys)}; proving every gate"]
     return [
         f"bite: {row.gate}: "
         + "; ".join(dict.fromkeys(cause.why for cause in causes if cause.gate == row.gate))
@@ -1711,6 +1771,9 @@ def main(argv: list[str]) -> int:
         if not options.gate or row.gate in options.gate
     ]
     tasks = [task for task in tasks if task[1]]
+    if not tasks and options.changed:
+        print("bite: green: the gates the change affects have no bite; nothing to prove")
+        return 0
     if not tasks:
         return gatelib.report("bite", ["no bite to run: a gate with nothing to run is red"])
     lanes = max(1, min(options.jobs, len(tasks)))
