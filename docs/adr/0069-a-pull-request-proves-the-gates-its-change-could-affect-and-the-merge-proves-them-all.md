@@ -35,7 +35,7 @@ So the cost is in gates slow to run even once, not in setup. A shared build coul
 
 **A green run says how close it came.** The `budget` gate prints, on a green run, its wall clock as a share of its ceiling. At 75 percent or more it raises a warning on the run's page as it does for a red on a pull request, so the owner sees a tier drifting toward its ceiling before runner variance turns it red.
 
-**Each verdict says how long it took and why it went red.** The proof prints each fault's wall time and lane on its verdict line, so every run measures itself. A verdict caused by the gate's time limit is `TIMED OUT`, in its own words, and never `NOT PROVEN`, `DOES NOT BITE` or `RED BEFORE THE FAULT`. `TIMED OUT` is red, never a pass. One run of a gate is limited to the gate's own `[ceilings.seconds]` key where it has one, and else to its tier's key, since one run never needs longer than the gate is allowed in CI. With neither key set, the limit is 900 seconds, the tier 1 budget of the tier table. `--limit` overrides it for one proof.
+**Each verdict says how long it took and why it went red.** The proof prints each fault's wall time and lane on its verdict line, so every run measures itself. A verdict caused by the gate's time limit is `TIMED OUT`, in its own words, and never `NOT PROVEN`, `DOES NOT BITE` or `RED BEFORE THE FAULT`. `TIMED OUT` is red, never a pass. One run of a gate is limited by `--limit` where given, else by the `bite-run` key under `[ceilings.seconds]` in `quality/thresholds.toml`, else to 900 seconds. A gate's and a tier's ceilings bound its warm runs in CI, and a proof's run is a cold one in a fresh copy, so neither limits it: 0.12.2 read them and ended slow gates early (#193, fixed in 0.12.3). The limit only ends a run that hangs.
 
 ## Refutation criterion
 
@@ -55,7 +55,7 @@ This is wrong if any of these is seen:
 
 ### What may be built now, and what waits
 
-Built in 0.12.2 (#179): each verdict's wall time and lane, `TIMED OUT` and the limit of one gate run, the budget's share of its ceiling and its 75 percent warning.
+Built in 0.12.2 (#179) and 0.12.3 (#195): each verdict's wall time and lane, `TIMED OUT` and the limit of one gate run, the budget's share of its ceiling and its 75 percent warning.
 
 Everything else in this record may be built, in this order:
 
