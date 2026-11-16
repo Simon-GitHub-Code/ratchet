@@ -100,6 +100,7 @@ REMOTE = "origin"
 SHORT = 12
 SAID = "publish check:"
 NEVER = "that is never a pass"
+FINAL_CHECK = "`drain.py check <ticket> --final`"
 HALTED = (
     "a rebase is under way in the checkout and was not finished: a role stopped halfway, which"
     " is not publishing, and a branch half rebased cannot be judged"
@@ -386,7 +387,8 @@ def head_move(root: Path, start: Start, new: str) -> str | None:
     if gatelib.git(root, "merge-base", "--is-ancestor", start.head, new) is not None:
         return (
             f"`{branch}` moved from {old} to {short(new)}, which holds it with commits on"
-            " top: a role committed"
+            f" top: a role committed, or the orchestrator committed before {FINAL_CHECK}; commit"
+            " only after that check is green"
         )
     rewritten = f"`{branch}` is at {short(new)}, which does not hold {old}, where it started"
     if start.rebase is None:

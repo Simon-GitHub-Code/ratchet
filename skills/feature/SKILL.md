@@ -201,7 +201,7 @@ Run every command below from the repository's own checkout, on the default branc
 
 ### The publish check
 
-`D check <ticket>` compares the ticket's branch and the forge with the start that `open`, or a rebasing `update`, recorded in the ticket's note (ADR 0060). Only `--final` marks the start passed, and `land` refuses a start that no final check passed. Pass `--final` only on the check just before a commit.
+`D check <ticket>` compares the ticket's branch and the forge with the start that `open`, or a rebasing `update`, recorded in the ticket's note (ADR 0060). Only `--final` marks the start passed, and `land` refuses a start that no final check passed. Pass `--final` only on the check just before a commit. The guard enforces this order: a `git commit` in a queue work tree is refused until the start has passed its final check.
 
 - **Exit 0:** nothing moved. Go on.
 - **Exit 1:** a role committed, pushed or opened a pull request. The check has parked the ticket, kept what was uncommitted as a stash, and holds the ticket until its text changes. Commit nothing and land nothing. Go on at step 5 (`D plan`), and the report names it. When the line is `check: <ref> is merged and is not checked`, the ticket has landed instead: go on at step 5.

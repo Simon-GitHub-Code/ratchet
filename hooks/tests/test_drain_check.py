@@ -248,3 +248,21 @@ def test_the_forge_is_the_drains_own_runner_unless_it_is_the_real_gh(tmp_path: P
         return "[]"
 
     assert drain.forge_gh(drain.Drain(root, fake)) is fake
+
+
+def test_update_names_the_orchestrator_too_when_the_commit_came_after_a_check_without_final(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = opened(tmp_path)
+    tree = drain.tree_of(root, BRANCH_A)
+    write(tree, "src/b.py", "B = 1\n")
+    assert run(root, "check", ALPHA) == 0
+    commit(tree, "feat(core): committed one step early")
+    capsys.readouterr()
+    assert run(root, "update", ALPHA) == 1
+    printed = capsys.readouterr().out
+    assert "a role committed, or the orchestrator committed before `drain.py check <ticket>" in (
+        printed
+    )
+    assert "--final`; commit only after that check is green" in printed
+    assert note(root, BRANCH_A)["outcome"] == "parked"

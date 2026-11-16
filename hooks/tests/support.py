@@ -131,6 +131,10 @@ class FakeRepo:
     names: dict[str, str] = field(default_factory=lambda: dict(NAMES))
     default_files: dict[str, str] = field(default_factory=dict)
 
+    def awaiting_final(self, cwd: Path) -> str | None:
+        del cwd
+        return None
+
     def default_file(self, root: Path, relative: str) -> str | None:
         del root
         return self.default_files.get(relative)

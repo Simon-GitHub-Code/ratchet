@@ -35,6 +35,10 @@ class RepoState(Protocol):
         """Whether a remote-tracking branch already contains ``HEAD``."""
         ...
 
+    def awaiting_final(self, cwd: Path) -> str | None:
+        """The branch at ``cwd`` when a queue work tree's start has not passed its final check."""
+        ...
+
     def default_file(self, root: Path, relative: str) -> str | None:
         """The file as the default branch's tip holds it, or ``None`` when it holds none."""
         ...
