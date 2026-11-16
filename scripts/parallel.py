@@ -437,7 +437,7 @@ def record(scheduler: Scheduler, wall: float, *, exit_code: int, gates: list[str
     for path in missing:
         say(
             f"parallel: the binding's Local caches bullet names {path}, which does not exist"
-            " after this run"
+            " after this run, so the tool that owns it ran without its cache"
         )
     if scheduler.report_to is None:
         return

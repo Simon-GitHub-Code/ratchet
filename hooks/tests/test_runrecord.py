@@ -158,7 +158,7 @@ def test_the_runner_says_each_cache_path_that_is_missing_and_records_it(
     assert code == 0
     assert named[0] == (
         "parallel: the binding's Local caches bullet names deps.lock, which does not exist"
-        " after this run"
+        " after this run, so the tool that owns it ran without its cache"
     )
     assert [line.split()[7] for line in named] == [
         "deps.lock,",
