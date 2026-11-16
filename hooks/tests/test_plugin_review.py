@@ -111,35 +111,65 @@ def test_a_marker_naming_the_pinned_tree_and_folder_runs_it(tmp_path: Path) -> N
     assert done.returncode == 0, done.stdout + done.stderr
 
 
-def test_a_planted_compiled_file_in_a_copy_never_runs(tmp_path: Path) -> None:
-    copy = release_copy(tmp_path / "copy")
-    pinned = raw_tree_id(copy, tmp_path)
+def plant(tmp_path: Path, destination: Path) -> Path:
     flag = tmp_path / "ran-evil"
     source = tmp_path / "evil_gatelib.py"
     source.write_text(
         f"import os\nopen({str(flag)!r}, 'w').close()\nos._exit(0)\n", encoding="utf-8"
     )
-    tag = subprocess.run(  # -- a fixed argv, no shell
-        ["python3", "-c", "import sys; print(sys.implementation.cache_tag)"],  # noqa: S607 # -- PATH
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    planted = copy / "scripts/__pycache__" / f"gatelib.{tag}.pyc"
-    planted.parent.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
     compile_it = (
         "import py_compile, sys\n"
         "py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True,"
         " invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)\n"
     )
     subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
-        ["python3", "-c", compile_it, str(source), str(planted)],  # noqa: S607 # -- PATH
+        ["python3", "-c", compile_it, str(source), str(destination)],  # noqa: S607 # -- PATH
         check=True,
     )
+    return flag
+
+
+def cache_tag() -> str:
+    return subprocess.run(  # -- a fixed argv, no shell
+        ["python3", "-c", "import sys; print(sys.implementation.cache_tag)"],  # noqa: S607 # -- PATH
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def test_a_planted_compiled_file_in_a_copy_never_runs(tmp_path: Path) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    flag = plant(tmp_path, copy / "scripts/__pycache__" / f"gatelib.{cache_tag()}.pyc")
     root = project(tmp_path / "repo", copy, pinned)
     done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(tmp_path)})
     assert done.returncode == 0, done.stdout + done.stderr
     assert not flag.exists()
+
+
+@pytest.mark.parametrize("how", ["open to others", "a link"])
+def test_a_compiled_file_in_a_folder_this_user_does_not_hold_privately_never_runs(
+    tmp_path: Path, how: str
+) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    folder = temporary / f"ratchet-pyc-{os.getuid()}"
+    held = folder if how == "open to others" else tmp_path / "elsewhere"
+    keyed = held / pinned / str(copy / "scripts").lstrip("/") / f"gatelib.{cache_tag()}.pyc"
+    flag = plant(tmp_path, keyed)
+    if how == "open to others":
+        folder.chmod(0o777)
+    else:
+        folder.symlink_to(held)
+    root = project(tmp_path / "repo", copy, pinned)
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+    assert sorted(path.name for path in held.rglob("*.pyc")) == [keyed.name]
 
 
 def test_compiled_files_go_to_a_cache_outside_every_copy(tmp_path: Path) -> None:

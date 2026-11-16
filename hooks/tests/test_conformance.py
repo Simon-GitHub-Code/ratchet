@@ -529,6 +529,11 @@ def test_a_missing_pin_prints_the_line_for_the_plugin_in_use(repo: Path) -> None
             " the binding pins; copy `plugin-pin` from the template justfile, as the first"
             " dependency of each tier"
         ),
+        (
+            "justfile: `pre-commit` neither runs plugin_pin.py first nor carries"
+            " `[no-exit-message]`, so the commit hook can run a plugin no check held to the"
+            " release"
+        ),
     ]
 
 

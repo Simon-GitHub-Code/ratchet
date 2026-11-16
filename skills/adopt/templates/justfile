@@ -20,7 +20,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # tree id, and a child hashes that folder again and reads no record. The folder reaches every
 # recipe as the environment variable RATCHET_PLUGIN_DIR and is only ever read as a shell variable,
 # so a folder name with a quote, a `$` or a backtick runs nothing. Compiled files are cached
-# outside every copy, in a folder named by the tree id, and none is read from inside a copy.
+# outside every copy, in a folder named by the tree id under a private folder this user owns; with
+# no such folder, none is read or written.
 plugin_choice := ```
     want=$(sed -n 's/^- Ratchet plugin: [^ ]* at [0-9a-f]\{40\} tree \([0-9a-f]\{40\}\)[ \t\r]*$/\1/p' docs/process/binding.md 2>/dev/null | head -n 1 || true)
     checked=${RATCHET_PLUGIN_CHECKED:-}
@@ -62,8 +63,14 @@ plugin_choice := ```
     printf 'Rthe plugin at %s is tree %s, not the %s that docs/process/binding.md pins, and no copy on disk matches: upgrade this project with `python3 %s/scripts/upgrade.py --apply`, or install the plugin release the pin names' "$rec" "${have:-unreadable}" "$want" "$rec"
 ```
 plugin_tree := replace_regex(plugin_choice, '(?s)^R.*|^D([0-9a-f]{40}) .*', '$1')
-plugin_uid := `id -u`
-export PYTHONPYCACHEPREFIX := if plugin_tree == "" { "" } else { env_var_or_default("TMPDIR", "/tmp") + "/ratchet-pyc-" + plugin_uid + "/" + plugin_tree }
+plugin_pyc := ```
+    d=${TMPDIR:-/tmp}/ratchet-pyc-$(id -u)
+    mkdir -m 700 -- "$d" 2>/dev/null || true
+    if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && [ -z "$(find "$d" -maxdepth 0 -perm /022)" ]; then printf '%s' "$d"; fi
+```
+plugin_pyc_ok := if plugin_tree == "" { "" } else { plugin_pyc }
+export PYTHONPYCACHEPREFIX := if plugin_pyc_ok == "" { "/nonexistent/ratchet-no-bytecode" } else { plugin_pyc_ok + "/" + plugin_tree }
+export PYTHONDONTWRITEBYTECODE := if plugin_pyc_ok == "" { "1" } else { "" }
 export RATCHET_PLUGIN_DIR := replace_regex(plugin_choice, '(?s)^R.*|^D[0-9a-f]{40} ', '')
 export RATCHET_PLUGIN_REFUSAL := replace_regex(plugin_choice, '(?s)^D.*|^R', '')
 export RATCHET_PLUGIN_CHECKED := replace_regex(plugin_choice, '(?s)^R.*', '')

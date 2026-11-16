@@ -217,9 +217,9 @@ PIN_SCRIPT = "plugin_pin.py"
 PLUGIN_VARIABLE = "ratchet_plugin"
 MARKETPLACE_FALLBACK = ".claude/plugins/marketplaces/ratchet"
 PLUGIN_LINE = re.compile(
-    r"^(?:plugin_choice[ \t]*:=[ \t]*```(?s:.*?)```\n)?"
-    r"(?:(?:export[ \t]+)?(?:RATCHET_PLUGIN_(?:DIR|REFUSAL|CHECKED)|PYTHONPYCACHEPREFIX"
-    r"|plugin_tree|plugin_uid)[ \t]*:=.*\n)*"
+    r"^(?:(?:plugin_(?:choice|pyc)[ \t]*:=[ \t]*```(?s:.*?)```"
+    r"|(?:export[ \t]+)?(?:RATCHET_PLUGIN_(?:DIR|REFUSAL|CHECKED)|PYTHONPYCACHEPREFIX"
+    r"|PYTHONDONTWRITEBYTECODE|plugin_tree|plugin_pyc_ok)[ \t]*:=.*)\n)*"
     rf"{PLUGIN_VARIABLE}[ \t]*:=.*$",
     re.MULTILINE,
 )
