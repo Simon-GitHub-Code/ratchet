@@ -8,6 +8,8 @@ import pytest
 import quotes
 
 Out = pytest.CaptureFixture[str]
+COPY = ": copy the whole sentence, list item, cell or line as the record writes it"
+
 QUOTE = "A blocker or a major quotes what it breaks."
 
 
@@ -38,7 +40,7 @@ def test_a_quote_the_record_does_not_hold_is_not_found(tmp_path: Path) -> None:
     put(tmp_path, "AGENTS.md", "Every change is reviewed.\n")
     verdict = quotes.check([finding("AGENTS.md", "No change is ever reviewed.")], tmp_path)
     assert verdict["found"] == []
-    assert reasons(verdict) == ["the record `AGENTS.md` does not hold the quote"]
+    assert reasons(verdict) == ["the record `AGENTS.md` does not hold the quote" + COPY]
 
 
 def test_a_quote_that_spans_lines_is_found_however_the_record_wraps_it(tmp_path: Path) -> None:
@@ -186,7 +188,7 @@ def test_a_list_item_that_is_empty_or_a_bare_heading_marker_holds_nothing(tmp_pa
 def test_a_quote_with_no_word_is_never_found(tmp_path: Path) -> None:
     put(tmp_path, "AGENTS.md", "Some text\n")
     assert reasons(quotes.check([finding("AGENTS.md", " \n\t ")], tmp_path)) == [
-        "the record `AGENTS.md` does not hold the quote"
+        "the record `AGENTS.md` does not hold the quote" + COPY
     ]
 
 
@@ -203,7 +205,7 @@ def test_a_record_that_is_a_directory_holds_what_any_file_in_it_holds(tmp_path: 
         assert quotes.check([finding(name, QUOTE)], tmp_path)["not_found"] == []
         assert quotes.check([finding(name, "A deeper rule says so.")], tmp_path)["not_found"] == []
     assert reasons(quotes.check([finding("docs/adr/", "an invented rule")], tmp_path)) == [
-        "the record `docs/adr/` does not hold the quote"
+        "the record `docs/adr/` does not hold the quote" + COPY
     ]
 
 
@@ -221,13 +223,13 @@ def test_a_directory_with_no_text_file_or_none_at_all_holds_no_quote(tmp_path: P
     (tmp_path / "docs/adr").mkdir(parents=True)
     (tmp_path / "docs/adr/image.bin").write_bytes(b"\0\1\2")
     assert reasons(quotes.check([finding("docs/adr/", QUOTE)], tmp_path)) == [
-        "the record `docs/adr/` does not hold the quote"
+        "the record `docs/adr/` does not hold the quote" + COPY
     ]
     assert reasons(quotes.check([finding("docs/adr/0009-x.md", QUOTE)], tmp_path)) == [
         "the record `docs/adr/0009-x.md` is absent"
     ]
     assert reasons(quotes.check([finding("docs/adr/image.bin", QUOTE)], tmp_path)) == [
-        "the record `docs/adr/image.bin` does not hold the quote"
+        "the record `docs/adr/image.bin` does not hold the quote" + COPY
     ]
 
 
@@ -351,7 +353,9 @@ def test_the_cli_exits_1_and_says_why_when_a_quote_is_not_found(written: Path, c
     assert run(written, text) == 1
     printed = json.loads(capsys.readouterr().out)
     assert printed["found"] == []
-    assert printed["not_found"][0]["reason"] == "the record `AGENTS.md` does not hold the quote"
+    assert (
+        printed["not_found"][0]["reason"] == "the record `AGENTS.md` does not hold the quote" + COPY
+    )
 
 
 def test_the_cli_reads_the_ticket_from_a_path_it_is_given(written: Path, capsys: Out) -> None:

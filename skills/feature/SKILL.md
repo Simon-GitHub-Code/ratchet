@@ -65,6 +65,7 @@ Pick the mode from what the owner typed:
    - **`guardEdits`:** list them. The owner lands them on the default branch, or builds the ticket with `/pstack:poteto-mode` while present.
    - **`tooLarge`:** split it yourself and go on, as [Too large](#too-large-the-agent-splits-it) says. Splitting by size is no product decision, so the owner is asked nothing and is told afterwards, in the hand-over.
    - **A dispute:** relay it to the owner.
+   - **`unresolvedBlockingFindings`, and `reviewIssues` when a review ran:** list each blocker or major in the hand-over with the record it breaks and the sentence it quotes. A result with `stop` `carried` ran no review, so its findings are in `unresolvedBlockingFindings` alone; its `openQuestions` hold each critic finding no role classified, with the critic's view as the first option.
    - **`ticketFindings`:** the build lost a promise of the ticket, or left a case of an input undecided, that the plan had kept. The owner has nothing to decide and the ticket nothing to change. Build the ticket again once, from step 1 in the same turn, with `"ticketFindings": <the result's ticketFindings>` added to the pipeline's args, so the spec role writes the next spec with them in hand. If that run is refused for the same reason, report the findings to the owner.
    - **A `triggers:` red line in `checkOutput`:** the ticket adds another instance of a kind whose safeguard is owed, or whose architecture review is owed (`triggers: architecture review owed:`). Tell the owner to type `/ratchet:safeguard`, or `/ratchet:architecture` for a review, then build the ticket again. Nothing in the ticket needs to change.
 
@@ -266,7 +267,7 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
 
 ## Questions for the owner
 
-A question reaches the owner only when it is a product question: its answer shapes the product (`direction`) or cannot be taken back (`irreversible`). The spec role's result marks each one, with two to four options, the recommended one first, and a sentence on why. Never ask the owner to confirm what you would do anyway, and never ask whether to go on.
+A question reaches the owner only when it is a product question: its answer shapes the product (`direction`) or cannot be taken back (`irreversible`). The result marks each one, from the spec role or from the role its `stoppedAfter` names, with two to four options, the recommended one first, and a sentence on why. Never ask the owner to confirm what you would do anyway, and never ask whether to go on.
 
 1. **Ask** `feature.open-question`: "<the question the build stopped on, in the words of someone using the product>" All of them in one message, each as the spec role wrote it, so the owner can accept them all at once. The recommended option is first and its label ends with `(recommended)`; the description gives the reason.
 2. **Write each answer on the ticket** under `## Answers`, the question and the answer in one line each.
