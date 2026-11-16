@@ -19,6 +19,7 @@ import markdown_text
 import owed
 import plugin_pin
 import project_bite
+import suites
 import triggers
 import upgrade
 from tests import adopted
@@ -124,7 +125,7 @@ def test_a_binding_without_a_tests_section_gains_the_templates_beside_its_neighb
 ) -> None:
     replace(BINDING, "\n## Tests\n", "\n## Trials\n")(repo)
     assert any("has no '## Tests' section" in f.problem for f in conformance.findings(repo))
-    assert settle(repo) == []
+    assert [f.problem for f in settle(repo)] == [suites.PLACEHOLDER]
     after = text(repo, BINDING)
     assert markdown_text.has_section(after, "## Tests")
     assert after.index("## Absolute paths") < after.index("## Tests") < after.index("## Trials")

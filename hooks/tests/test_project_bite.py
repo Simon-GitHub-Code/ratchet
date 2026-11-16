@@ -598,6 +598,87 @@ def test_a_binding_row_that_changed_proves_its_gate(
     assert proved(out) == ["tests"]
 
 
+SUITES = (
+    "## Tests\n\n| Suite | Gate | Files | Run files |\n| --- | --- | --- | --- |\n"
+    "| unit | `sh gate tests` | `tests/**` | `just test-files` |\n"
+    "| slow | `sh gate slow` | `slow/**` | `none: it boots the whole service` |\n"
+)
+
+
+def suited(tmp_path: Path) -> Path:
+    """A branch off a ``main`` whose binding holds the suites table and a `tests-changed` row."""
+    gates = {**GATES, "tests-changed": LINT}
+    rows = GATE_ROWS + row("tests-changed", "1")
+    registry = registry_of(bite("tests-changed", WORD))
+    root = project(tmp_path / "repo", gates, registry, rows=rows)
+    replaced(root, BINDING, "## Speed", f"{SUITES}\n## Speed")
+    write(root, "guards/manifest.toml", COMMANDS_MANIFEST)
+    write(root, "lint.cfg", "x\n")
+    commit(root, "feat(core): a manifest")
+    branch(root)
+    return root
+
+
+def test_a_changed_suites_row_proves_tests_changed_and_no_other_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = suited(tmp_path)
+    replaced(
+        root,
+        BINDING,
+        "| unit | `sh gate tests` | `tests/**` |",
+        "| unit | `sh gate tests` | `t/**` |",
+    )
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == "bite: tests-changed: the binding's suites row `unit` changed"
+    assert proved(out) == ["tests-changed"]
+
+
+def test_an_added_or_removed_suites_row_names_the_gate_once_for_each_row(
+    tmp_path: Path,
+) -> None:
+    root = suited(tmp_path)
+    replaced(
+        root,
+        BINDING,
+        "| slow | `sh gate slow` | `slow/**` | `none: it boots the whole service` |\n",
+        "",
+    )
+    replaced(
+        root, BINDING, "\n## Speed", "| big | `sh gate slow` | `big/**` | `just big` |\n\n## Speed"
+    )
+    base = gatelib.base_commit(root)
+    assert project_bite.binding_causes(root, base) == [
+        project_bite.Cause("tests-changed", "the binding's suites row `big` changed"),
+        project_bite.Cause("tests-changed", "the binding's suites row `slow` changed"),
+    ]
+
+
+def test_a_padded_suites_table_changes_no_row(tmp_path: Path) -> None:
+    root = suited(tmp_path)
+    replaced(root, BINDING, "| --- | --- | --- | --- |", "| ----- | ----- | ----- | ----- |")
+    replaced(root, BINDING, "| unit |", "| unit    |")
+    assert project_bite.binding_causes(root, gatelib.base_commit(root)) == []
+
+
+def test_a_binding_change_beside_the_suites_table_still_goes_to_every_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = suited(tmp_path)
+    replaced(root, BINDING, "## Tests\n", "## Tests\n\nA word more.\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert out[1] == every(f"{BINDING} changed outside its gate rows, which a gate may read")
+
+
+def test_a_binding_without_a_suites_table_has_no_suites_cause(tmp_path: Path) -> None:
+    root = targeted(tmp_path)
+    replaced(root, BINDING, "| tests | a tool | 1 |", "| tests | a tool | 0 |")
+    causes = project_bite.binding_causes(root, gatelib.base_commit(root))
+    assert {c.gate for c in causes} == {"tests"}
+
+
 def test_a_binding_change_outside_the_rows_goes_to_every_gate(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

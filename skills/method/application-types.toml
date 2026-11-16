@@ -223,6 +223,10 @@ name = "test count did not fall"
 trigger = "code:source"
 
 [[question]]
+name = "changed tests run"
+trigger = "code:source"
+
+[[question]]
 name = "changed-code mutation"
 directives = true
 trigger = "life:depended-on"
