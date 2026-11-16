@@ -50,8 +50,11 @@ def test_a_tests_section_without_the_suites_table_gets_the_templates_to_start_fr
     [found] = [f for f in conformance.findings(repo) if f.rule == "changed_tests"]
     assert found.problem == (
         "'## Tests' lacks its suites table with the columns Suite | Gate | Files | Run files;"
-        " add the template's, one row per suite, the gate that runs it whole, the globs of its"
-        " test files and the recipe that runs given files (ADR 0073)"
+        " one fill writes three edits together: the template's table, one row per suite with the"
+        " gate that runs it whole, the globs of its test files and the recipe that runs given"
+        " files; the Gates row 'changed tests run' bound to `just tests-changed`; and"
+        " `tests-changed` in the justfile's `tier1_gates`. Write none alone: a Gates row bound"
+        " before its table exists turns tier 1 red (ADR 0073)"
     )
     assert isinstance(found.fix, conformance.Agent)
     assert found.fix.start[0] == HEADER
@@ -242,9 +245,9 @@ def test_the_ci_template_s_later_tier_marker_is_red_until_the_project_answers_it
     shutil.copytree(pristine(), scratch, symlinks=True)
     path = scratch / CI
     marker = (
-        "      # bind: toolchain setup of each later-tier suite, pinned, in steps under"
+        "      # bind: the setup each later-tier suite needs, pinned, in steps under"
         " `if: matrix.gate == 'tests-changed'`, as deep.yml sets up the whole suite; delete this"
-        " line when no suite sits in a later tier\n"
+        " line where no suite sits in a later tier\n"
     )
     assert marker in template
     text = path.read_text(encoding="utf-8")
@@ -254,5 +257,5 @@ def test_the_ci_template_s_later_tier_marker_is_red_until_the_project_answers_it
     path.write_text(text.replace(anchor, marker + anchor, 1), encoding="utf-8")
     found = [line for line in red(scratch) if "toolchain" in line]
     assert len(found) == 1
-    assert "in job `tier1` still says '# bind: toolchain setup'" in found[0]
+    assert "in job `tier1` still says '# bind: the setup each later-tier suite needs'" in found[0]
     shutil.rmtree(scratch)

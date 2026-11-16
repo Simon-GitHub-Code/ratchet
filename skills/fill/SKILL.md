@@ -28,6 +28,7 @@ An upgrade adds sections to the binding whose rows state what this project's own
    - **Suppressions:** the directives the bound tools read, including the kinds that silence the coverage question.
    - **Install:** whether an install comes first.
    - **Dependencies:** how dependencies are read.
+   - **Suites:** the suites table under `## Tests`, one row per suite, and in the same pass the Gates row `changed tests run`, bound to `just tests-changed`, and `tests-changed` in the justfile's `tier1_gates`. Write all three together: a Gates row bound before its table exists turns tier 1 red.
    - **A mutation recipe that passes a tool's own report:** rewrite the recipe so it converts that report to the neutral format that `${CLAUDE_PLUGIN_ROOT}/scripts/mutation_survivors.py` documents. Write the register's entries again for the new identities.
 
    Name no tool in a page the plugin ships. The binding is the project's.

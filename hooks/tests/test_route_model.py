@@ -919,7 +919,9 @@ DONE = World(
 )
 
 
-FILLED_BY_THE_UPGRADE = frozenset({"dependencies", "installs", "pins", "signs", "suppressions"})
+FILLED_BY_THE_UPGRADE = frozenset(
+    {"changed_tests", "dependencies", "installs", "pins", "signs", "suppressions"}
+)
 
 
 def owes(repo: real.Repo, rules: frozenset[str]) -> list[owed.Entry]:
@@ -979,7 +981,6 @@ def test_the_real_upgrade_owes_more_than_the_model_and_leaves_a_faithful_adoptio
         "adrs",
         "binding",
         "brief",
-        "changed_tests",
         "commit_hooks",
         "doors",
         "glossary",

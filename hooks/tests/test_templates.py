@@ -961,7 +961,7 @@ def test_the_tests_changed_recipe_runs_the_plugin_script_through_changed_and_tak
 
 def test_the_later_tier_suite_recipe_of_the_template_takes_files() -> None:
     assert re.search(r"^e2e \*files:$", JUSTFILE, re.MULTILINE)
-    assert "{{files}}" in recipe("e2e")
+    assert "with files given, only those files" in recipe("e2e")
     assert re.search(r"^test-files \*files:$", JUSTFILE, re.MULTILINE)
 
 
@@ -977,7 +977,7 @@ def test_the_binding_template_holds_the_suites_table_and_names_the_gate_in_affec
 
 def test_the_ci_template_job_that_runs_tests_changed_asks_for_the_later_tier_setup() -> None:
     job = WORKFLOWS["ci.yml"].partition("  tier1:\n")[2].partition("  tier1-long:")[0]
-    assert "# bind: toolchain setup of each later-tier suite" in job
+    assert "# bind: the setup each later-tier suite needs" in job
     assert "if: matrix.gate == 'tests-changed'" in job
     assert "deep.yml sets up the whole suite" in job
     assert "tests-changed" not in WORKFLOWS["deep.yml"]

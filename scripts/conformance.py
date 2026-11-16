@@ -242,6 +242,7 @@ GUARD_DIFF_CALL = re.compile(
 )
 NO_EXIT_MESSAGE = "[no-exit-message]"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
+SUITE_SETUP_MARKER = "# bind: the setup each later-tier suite needs"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
 RULE_VERBS = {
@@ -930,6 +931,8 @@ def check_binding(root: Path) -> Iterable[Finding]:
     fired = Fired.of(root, text) if dropped else Fired({}, frozenset())
     for failure in catalogue.failures(text, rows, adrs):
         question = dropped.get(failure)
+        if question == CHANGED_TESTS_STOPS and suites_table_owed(text):
+            continue
         if question is not None:
             trigger = catalogue.trigger_of(question)
             yield dropped_row(failure, question, trigger=trigger, fired=fired)
@@ -1487,10 +1490,13 @@ def check_changed_tests(root: Path) -> Iterable[Finding]:
     if text is None or not markdown_text.has_section(text, suites.SECTION):
         return
     found, problems = suites.parse(text)
-    if found is None and problems[0].startswith(f"'{suites.SECTION}' lacks"):
+    if suites_table_owed(text):
         problem = (
-            f"{problems[0]}; add the template's, one row per suite, the gate that runs it whole,"
-            " the globs of its test files and the recipe that runs given files (ADR 0073)"
+            f"{problems[0]}; one fill writes three edits together: the template's table, one row"
+            " per suite with the gate that runs it whole, the globs of its test files and the"
+            " recipe that runs given files; the Gates row 'changed tests run' bound to"
+            " `just tests-changed`; and `tests-changed` in the justfile's `tier1_gates`. Write none"
+            " alone: a Gates row bound before its table exists turns tier 1 red (ADR 0073)"
         )
         template = markdown_text.section(template_binding(), suites.SECTION)
         start = tuple(line for line in template.splitlines() if line.startswith("|"))
@@ -1506,6 +1512,12 @@ def check_changed_tests(root: Path) -> Iterable[Finding]:
         yield from suite_findings(text, justfile, suite)
     yield from clashing_suites(root, found or [])
     yield from later_tier_setup(root, text, found or [])
+
+
+def suites_table_owed(binding: str) -> bool:
+    """Whether no suites table is written yet: the fill that writes it writes the gate row too."""
+    found, problems = suites.parse(binding)
+    return found is None and problems[0].startswith(f"'{suites.SECTION}' lacks")
 
 
 def suite_findings(binding: str, justfile: str | None, suite: suites.Suite) -> Iterable[Finding]:
@@ -2090,8 +2102,13 @@ def check_toolchain(root: Path) -> Iterable[Finding]:
             if following in unbound:
                 # Why: the line moves when one is added above it, the job does not, so an owed
                 # entry names the job and excuses no placeholder in another (ADR 0037).
+                marker = (
+                    SUITE_SETUP_MARKER
+                    if SUITE_SETUP_MARKER in lines[number - 1]
+                    else TOOLCHAIN_MARKER
+                )
                 unset = (
-                    f"in job `{job_of(lines, number)}` still says '{TOOLCHAIN_MARKER}' and the"
+                    f"in job `{job_of(lines, number)}` still says '{marker}' and the"
                     " next line is the template's, so no step sets up the project's toolchain"
                 )
                 yield Finding(
@@ -2118,7 +2135,7 @@ def after_marker(lines: list[str]) -> dict[int, str]:
     return {
         number: lines[number]
         for number, line in enumerate(lines, start=1)
-        if TOOLCHAIN_MARKER in line and number < len(lines)
+        if (TOOLCHAIN_MARKER in line or SUITE_SETUP_MARKER in line) and number < len(lines)
     }
 
 
@@ -4228,7 +4245,7 @@ SELF_TEST_REPORTS = "| none: the self-test shares no report | none | none | none
 SUITES_PLACEHOLDER = re.compile(r"^\| <suite name> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_SUITES = "| none: the self-test has no tests | none | none | none |"
 LATER_SETUP_PLACEHOLDER = re.compile(
-    r"^ *# bind: toolchain setup of each later-tier suite[^\n]*\n", re.MULTILINE
+    r"^ *# bind: the setup each later-tier suite needs[^\n]*\n", re.MULTILINE
 )
 DECISION_PLACEHOLDER = re.compile(r"^- Decision: <[^\n]*>$", re.MULTILINE)
 PARTS_PLACEHOLDER = re.compile(r"^\| <part> \|[^\n]*$", re.MULTILINE)

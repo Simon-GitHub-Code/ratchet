@@ -238,7 +238,7 @@ Every Gates row whose question a directive can silence (the catalogue marks them
 
 ### Suites
 
-One row per suite (ADR 0073): its name, the gate of the Gates table that runs it whole, the globs of its test files, and how to run given files of it. `just tests-changed` runs the test files a change adds or edits through each row, and `just tests-changed all` runs every suite's changed files: the inner loop of a role, which never runs a suite whole to see whether its own tests pass. `Run files` is the entry point of the suite taking paths as arguments, in the environment and with the build the gate itself has (`just <recipe>`), or `none: <reason>` for a suite that cannot run by file. A test file belongs to one suite: a file that two rows match is a conformance finding. A project with no tests yet writes one row, `none: <reason>`, in `Suite`.
+One row per suite (ADR 0073): its name, the gate of the Gates table that runs it whole, the globs of its test files, and how to run given files of it. `just tests-changed` runs the test files a change adds or edits in each suite whose gate sits in a later tier, or in every suite where none does, and `just tests-changed all` runs them in every suite, for the inner loop. `Run files` is the entry point of the suite taking paths as arguments, in the environment and with the build the gate itself has (`just <recipe>`), or `none: <reason>` for a suite that cannot run by file. A test file belongs to one suite: a file that two rows match is a conformance finding. A project with no tests yet writes one row, `none: <reason>`, in `Suite`.
 
 | Suite | Gate | Files | Run files |
 | --- | --- | --- | --- |
@@ -274,7 +274,7 @@ How this repository stays fast, from the first commit (the Speed section of `ski
 - One pipeline: <CI calls the entry points above and nothing else, so a red job is reproduced by its one command; or the pipeline engine that runs the same definition in both places>
 - Shards: 1
 - Cache: <the lockfiles and tool configs each CI cache is keyed on, the tool caches it restores, and the caches the tools keep locally>
-- Affected only: <what a pull request does not run: the changed-code gates, `tests-changed` for the later-tier suites (it runs only their test files the change adds or edits), the path filters, the affected-only tool of a monorepo; the default branch runs everything>
+- Affected only: <what a pull request does not run: the changed-code gates, the later-tier suites past the test files the change adds or edits (`tests-changed` runs those), the path filters, the affected-only tool of a monorepo; the default branch runs everything>
 - Ceilings: <`quality/thresholds.toml` `[ceilings.seconds]`, one per tier, set by `just budget <tier> --set` from the first green run and only lowered since; the seconds one gate may take before it is sharded>
 
 ## Shared reports

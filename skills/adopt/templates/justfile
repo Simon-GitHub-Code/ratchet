@@ -532,7 +532,7 @@ fuzz each="30" cap="600":
     @echo "bind: fuzz each target for {{each}} seconds, {{cap}} at most in total; red when there is no fuzz target"; exit 1
 
 e2e *files:
-    @echo "bind: end-to-end suite, shard {{shard}} of {{shards}}, building what it needs first and running only the test files named in {{files}} when there are any; red when it holds no test"; exit 1
+    @echo "bind: end-to-end suite, shard {{shard}} of {{shards}}, building what it needs first; with files given, only those files; red when it holds no test"; exit 1
 
 test-stability:
     @echo "bind: run the suite shuffled and repeated, each run a fresh seed that is printed"; exit 1

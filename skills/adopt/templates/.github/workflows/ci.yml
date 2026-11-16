@@ -87,7 +87,7 @@ jobs:
           restore-keys: |
             tier1-${{ runner.os }}-${{ matrix.gate }}-
       # bind: toolchain setup, pinned, with the setup action's own cache on
-      # bind: toolchain setup of each later-tier suite, pinned, in steps under `if: matrix.gate == 'tests-changed'`, as deep.yml sets up the whole suite; delete this line when no suite sits in a later tier
+      # bind: the setup each later-tier suite needs, pinned, in steps under `if: matrix.gate == 'tests-changed'`, as deep.yml sets up the whole suite; delete this line where no suite sits in a later tier
       - run: python3 "$RATCHET_PLUGIN/scripts/budget.py" "${{ matrix.gate }}" --tier tier1 --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
