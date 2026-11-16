@@ -275,6 +275,7 @@ How this repository stays fast, from the first commit (the Speed section of `ski
 - Shards: 1
 - Cache: <the lockfiles and tool configs each CI cache is keyed on, the tool caches it restores, and the caches the tools keep locally>
 - Local caches: <the paths the tools write locally, each as a code span; leave the placeholder until a tool writes one>
+- Incremental: <the mutation tool's incremental mode: the option that has a local run reuse the last run's results and test only the mutants whose code or tests changed, which the `justfile`'s `mutation_incremental` holds and CI leaves out; or `none: <reason>` where the tool has none>
 - Affected only: <what a pull request does not run: the changed-code gates, the later-tier suites past the test files the change adds or edits (`tests-changed` runs those), the path filters, the affected-only tool of a monorepo; the default branch runs everything>
 - Ceilings: <`quality/thresholds.toml` `[ceilings.seconds]`, one per tier, set by `just budget <tier> --set` from the first green run and only lowered since; the seconds one gate may take before it is sharded>
 
