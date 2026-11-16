@@ -1470,7 +1470,10 @@ READS_BULLET = re.compile(r"^- ([^:\s]+):[ \t]*(.*)$")
 
 
 def defining_group(names: set[str]) -> str:
-    """The widest gate-defining group among ``names`` (``tool-config`` is narrowest)."""
+    """The first gate group of ``names`` besides ``tool-config``, else ``tool-config``, else none.
+
+    A path in ``tool-config`` and in any other gate group is therefore judged by the other group.
+    """
     wide = [name for name in GATE_GROUPS if name in names and name != "tool-config"]
     return wide[0] if wide else "tool-config" if "tool-config" in names else ""
 

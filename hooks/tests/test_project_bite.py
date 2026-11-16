@@ -636,6 +636,22 @@ def test_a_path_that_names_no_gate_goes_to_every_gate(
     assert proved(out) == ["lint", "tests"]
 
 
+def test_a_path_in_tool_config_and_fitness_goes_to_every_gate_whatever_the_bullets_say(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fitness = '[[group]]\nname = "fitness"\nreason = "A fitness test."\npaths = ["lint.cfg"]\n'
+    files = {"guards/manifest.toml": COMMANDS_MANIFEST + fitness}
+    root = targeted(
+        tmp_path, inserts=with_reads("- lint: lint.cfg\n- tests: src/**\n"), files=files
+    )
+    write(root, "lint.cfg", "changed\n")
+    assert prove(root, "--changed") == 0
+    out = shown(capsys).splitlines()
+    assert proved(out) == ["lint", "tests"]
+    assert out[1].startswith("bite: fallback: lint.cfg")
+    assert out[1].endswith("proving every gate")
+
+
 def test_a_path_no_row_names_proves_the_gates_whose_bullet_reads_it_and_those_with_none(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
