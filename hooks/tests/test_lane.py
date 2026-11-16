@@ -48,7 +48,8 @@ PROSE_PAGES = [
     ({"docs/harness/a.md": "# h\n"}, ["skills"]),
     ({"docs/acceptance.md": "# a\n"}, ["acceptance_record", "skills"]),
     ({"docs/adr/0034-x.md": "# 34\n"}, ["skills"]),
-    ({"docs/adr/0001-x.md": "# 1b\n", "CHANGELOG.md": "# c\n"}, []),
+    ({"docs/adr/0001-x.md": "# 1b\n"}, []),
+    ({"CHANGELOG.md": "# c\n"}, ["release"]),
 ]
 MODEL_PAGES = [
     ({"docs/model/route.md": "# r\n"}, ["skills", "route_model"]),
@@ -255,10 +256,17 @@ def test_every_test_file_the_mapping_names_exists() -> None:
     assert all((root / name).is_file() for name in owed)
 
 
-def test_no_other_test_reads_the_changelog() -> None:
+def test_the_changelog_owes_the_test_that_reads_its_notes_through_the_release_script() -> None:
     tests = Path(__file__).parent
-    readers = [p.name for p in tests.glob("*.py") if "CHANGELOG" in p.read_text(encoding="utf-8")]
-    assert set(readers) == {"test_lane.py", "page_reads.py"}
+    readers = {
+        p.name
+        for p in tests.glob("test_*.py")
+        if p.name != "test_lane.py"
+        and "PLUGIN_ROOT" in (text := p.read_text(encoding="utf-8"))
+        and "release.notes(PLUGIN_ROOT" in text
+    }
+    assert readers == {"test_release.py"}
+    assert lane.PAGES["CHANGELOG.md"] == tuple(f"hooks/tests/{name}" for name in sorted(readers))
 
 
 NOT_SEEN = (
@@ -335,6 +343,8 @@ def test_a_path_joined_to_the_root_by_a_name_the_scan_cannot_resolve_is_reviewed
         "test_owed.py": "skills, scripts and .claude-plugin to copy",
         "test_stack_names.py": "the shipped globs: skills, workflows, scripts, hooks",
         "test_lane.py": "the files lane.PAGES names",
+        "repos.py": "every tracked file, as an installed copy the tests hash or run as the plugin",
+        "test_release.py": "the manifest and workflows; CHANGELOG.md through release.notes",
     }
     joined = {
         path.name

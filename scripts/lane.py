@@ -42,7 +42,7 @@ PAGES: dict[str, tuple[str, ...]] = {
     "docs/model/route.md": (PROSE, TESTS.format("route_model")),
     "docs/model/safeguard.md": (PROSE, TESTS.format("safeguard_model")),
     "README.md": (PROSE,),
-    "CHANGELOG.md": (),
+    "CHANGELOG.md": (TESTS.format("release"),),
 }
 FULL_LANE = "full"
 PAGES_LANE = "pages"
