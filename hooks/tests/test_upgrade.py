@@ -203,20 +203,32 @@ def test_a_second_upgrade_changes_nothing(name: str, tmp_path: Path) -> None:
     assert files(root) == settled
 
 
-def test_an_upgrade_that_stops_after_any_file_is_finished_by_running_it_again(
-    tmp_path: Path,
-) -> None:
-    whole = fixture("0.8.2", tmp_path / "whole")
+STOP_CHUNKS = 6
+
+
+@pytest.fixture(scope="module")
+def whole_upgrade(tmp_path_factory: pytest.TempPathFactory) -> tuple[upgrade.Plan, dict[str, str]]:
+    whole = fixture("0.8.2", tmp_path_factory.mktemp("whole"))
     complete = planned(whole)
     upgrade.apply(whole, complete.changes)
+    return complete, files(whole)
+
+
+@pytest.mark.parametrize(
+    "chunk", [pytest.param(n, marks=pytest.mark.shard_slot(n + 6)) for n in range(STOP_CHUNKS)]
+)
+def test_an_upgrade_that_stops_after_any_file_is_finished_by_running_it_again(
+    tmp_path: Path, whole_upgrade: tuple[upgrade.Plan, dict[str, str]], chunk: int
+) -> None:
+    complete, settled = whole_upgrade
     order = upgrade.write_order(complete.changes)
     assert order[-1] == str(gatelib.BINDING)
-    for stopped in range(len(order)):
+    for stopped in range(chunk, len(order), STOP_CHUNKS):
         root = fixture("0.8.2", tmp_path / f"stopped-{stopped}")
         partial = {name: complete.changes[name] for name in order[:stopped]}
         upgrade.apply(root, partial)
         upgrade.apply(root, planned(root).changes)
-        assert files(root) == files(whole), f"stopped after {stopped} files"
+        assert files(root) == settled, f"stopped after {stopped} files"
 
 
 def keeps_in_order(before: str, after: str) -> bool:
