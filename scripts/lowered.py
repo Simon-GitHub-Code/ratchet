@@ -232,7 +232,8 @@ def unfound(root: Path, base: str, *, pin: plugin_pin.Pin, added: Counter[owed.E
     Why: ADR 0037. An entry may be added only for a finding red at head that the same plan also
     leaves red on the merge base, so a violation the change itself brought is never owed. The plan
     is the plugin's, so the answer is the pinned plugin's: another plugin skips this, and says so.
-    CI always runs the pinned one.
+    CI always runs the pinned one. An entry whose finding is no longer red, paid by hand since the
+    upgrade wrote it, is not judged here: the conformance gate names it as stale.
     """
     if plugin_pin.relation(pin, plugin_pin.PLUGIN) is not plugin_pin.Relation.PINNED:
         print(
@@ -245,11 +246,12 @@ def unfound(root: Path, base: str, *, pin: plugin_pin.Pin, added: Counter[owed.E
     import conformance  # noqa: PLC0415 -- only a change that moves the pin and adds pays for it
     import upgrade  # noqa: PLC0415
 
-    allowed = upgrade.red_at_base(root, base, plugin_pin.PLUGIN) & Counter(
-        finding.key() for finding in conformance.findings(root)
-    )
+    red = Counter(finding.key() for finding in conformance.findings(root))
+    allowed = upgrade.red_at_base(root, base, plugin_pin.PLUGIN) & red
     problems = []
     for entry in sorted(added.elements()):
+        if red[entry.key] == 0:
+            continue
         if allowed[entry.key] > 0:
             allowed[entry.key] -= 1
             continue

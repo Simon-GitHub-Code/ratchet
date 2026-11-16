@@ -591,6 +591,60 @@ def test_a_projects_own_inline_python_recipe_is_left_alone(repo: Path) -> None:
     assert not [f for f in conformance.findings(repo) if "bare `python3`" in f.problem]
 
 
+RELEASED_JOBS = 'jobs := env_var_or_default("RATCHET_JOBS", num_cpus())'
+
+
+def jobs_findings(repo: Path) -> list[conformance.Finding]:
+    return [f for f in conformance.findings(repo) if "ratchet.jobs" in f.problem]
+
+
+def with_jobs_line(repo: Path, line: str) -> Path:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    start = next(i for i, held in enumerate(lines) if held.startswith("configured_jobs :="))
+    end = next(i for i, held in enumerate(lines) if held.startswith("jobs :="))
+    path.write_text("\n".join([*lines[:start], line, *lines[end + 1 :]]), encoding="utf-8")
+    return path
+
+
+def test_the_templates_jobs_lines_are_not_a_finding(repo: Path) -> None:
+    assert jobs_findings(repo) == []
+
+
+def test_a_released_jobs_line_is_named_and_the_upgrade_makes_it_the_templates(repo: Path) -> None:
+    path = repo / JUSTFILE
+    template = path.read_text(encoding="utf-8")
+    with_jobs_line(repo, RELEASED_JOBS)
+    [found] = jobs_findings(repo)
+    assert "does not read `git config ratchet.jobs`" in found.problem
+    assert isinstance(found.fix, conformance.Auto)
+    made = found.fix.want(path.read_text(encoding="utf-8"))
+    assert "configured_jobs :=" in made
+    assert RELEASED_JOBS not in made
+    assert made.count("jobs := env_var_or_default") == 1
+    assert made.count("How many gates run at once") == template.count("How many gates run at once")
+
+
+def test_the_jobs_edit_leaves_a_justfile_that_already_has_the_templates_lines(repo: Path) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    with_jobs_line(repo, RELEASED_JOBS)
+    [found] = jobs_findings(repo)
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.fix.want(text) == text
+
+
+def test_a_projects_own_jobs_line_is_named_and_not_rewritten(repo: Path) -> None:
+    mine = 'jobs := env_var_or_default("RATCHET_JOBS", "2")'
+    path = with_jobs_line(repo, mine)
+    before = path.read_text(encoding="utf-8")
+    [found] = jobs_findings(repo)
+    assert not isinstance(found.fix, conformance.Auto | conformance.Edit)
+    assert f"justfile:{before.split(chr(10)).index(mine) + 1}: `jobs`" in found.problem
+    assert path.read_text(encoding="utf-8") == before
+
+
 def test_the_templates_plugin_block_is_not_a_finding(repo: Path) -> None:
     assert block_findings(repo) == []
 
