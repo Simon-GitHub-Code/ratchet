@@ -282,7 +282,7 @@ def test_a_child_just_runs_the_folder_its_parent_checked_whatever_the_record_say
 ) -> None:
     good = release_copy(tmp_path / "cache/earlier")
     pinned = raw_tree_id(good, tmp_path)
-    other = release_copy(tmp_path / "cache/later")
+    other = release_copy(tmp_path / "elsewhere/other")
     repos.write(other, "scripts/extra.py", "print('extra')\n")
     root = project(tmp_path / "repo", good, pinned, record=good, extra=CHILD)
     done = just(root, "probe", env={"OTHER": str(other)})
