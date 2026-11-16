@@ -98,6 +98,7 @@ export RATCHET_PLUGIN_DIR := replace_regex(plugin_choice, '(?s)^R.*|^D[0-9a-f]{4
 export RATCHET_PLUGIN_REFUSAL := replace_regex(plugin_choice, '(?s)^D.*|^R', '')
 export RATCHET_PLUGIN_CHECKED := replace_regex(plugin_choice, '(?s)^R.*', '')
 ratchet_plugin := "$RATCHET_PLUGIN_DIR"
+export RATCHET_RUN := env_var_or_default("RATCHET_RUN", uuid())
 
 # The deliverable as a running thing, for `start` and the three service gates the plugin ships
 # (`smoke`, `load-smoke`, `telemetry-e2e`). Adoption fills `boot`, `ready` and `service` for every
@@ -398,18 +399,21 @@ prose: _plugin
 
 # --- tier 1 bodies ---------------------------------------------------------------
 
+suite-report:
+    @echo "bind: the whole suite once, on every core, under the coverage tool: test_runner with the runner's shard flags, shard {{shard}} of {{shards}}, writing the paths the binding's Shared reports row names; red when none is collected"; exit 1
+
 test:
-    @echo "bind: unit, property and fitness tests on every core: test_runner with the runner's shard flags, shard {{shard}} of {{shards}}; red when none is collected"; exit 1
+    @echo "bind: through report.py --reader test; red when the suite run failed or collected none"; exit 1
 
 coverage: _plugin
-    @echo "bind: run the suite with a Cobertura or LCOV report, named in --report below"; exit 1
-    {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
+    @echo "bind: judge the coverage report that report.py --reader coverage prints, passed as --report below"; exit 1
+    report="$({{plugin_py}} "{{ratchet_plugin}}/scripts/report.py" suite --reader coverage --path 'bind: the coverage report path, as the suite row of ## Shared reports lists it')" && {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report "$report"
 
 diff-coverage:
-    @echo "bind: through changed, every line and branch changed since {base} ran"; exit 1
+    @echo "bind: through changed, every line and branch changed since {base} ran, read from the coverage report that report.py --reader diff-coverage prints"; exit 1
 
 test-counts:
-    @echo "bind: through changed, collected test count at head >= at {base}"; exit 1
+    @echo "bind: through changed, collected test count at head, read from the test results that report.py --reader test-counts prints, >= at {base}"; exit 1
 
 # The recipe runs the mutation tool, converts its outcomes to the plugin's neutral format (one JSON
 # line per mutant; the docstring of `scripts/mutation_survivors.py` has it) and hands the lines to

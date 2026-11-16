@@ -1,7 +1,7 @@
 import * as c from "./view_common.mjs";
 
-// Drawn from DrainTicketLife: ticket a, the one ticket with no Flag: line, across the upgrade
-// that ships ADR 0061, and b, which waits on it.
+// Drawn from DrainTicketLifeGated: ticket a, the one ticket with no Flag: line, across the
+// upgrade that ships ADR 0061, and b, which waits on it.
 export const title = "The upgrade, a ticket with no Flag line, and the ticket that waits on it";
 export const state = (v) => {
   if (v.mergedA || v.branchA !== "none" && v.branchA !== "bare") return "Built, so the preflight reads it no more";
