@@ -288,6 +288,7 @@ class Auto:
 
     does: str
     want: gatelib.Want
+    then: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -432,7 +433,8 @@ def tried(tree: Path, check: Check, finding: Finding) -> Finding:
         cleared = changed and all(
             (again.path, again.problem) != (finding.path, finding.problem) for again in check(tree)
         )
-    return replace(finding, fix=Auto(fix.does, fix.want) if cleared else fix.otherwise)
+    then = fix.otherwise.then if isinstance(fix.otherwise, Agent) else ()
+    return replace(finding, fix=Auto(fix.does, fix.want, then) if cleared else fix.otherwise)
 
 
 def read(path: Path) -> str | None:
@@ -2649,6 +2651,7 @@ def ledger_raised(root: Path, keys: list[owed.Key]) -> list[tuple[Check, Finding
     and the upgrade drops it. No check reads the ledger, so dropping an entry changes no other
     finding, and the check that judges the drop compares the edited ledger with ``keys``.
     """
+    upgrade_line = f"run `{plugin_pin.upgrade_command(plugin_pin.PLUGIN)}`, which drops them"
 
     def check_owed(tree: Path) -> Iterator[Finding]:
         ledger = owed.read(tree)
@@ -2671,7 +2674,7 @@ def ledger_raised(root: Path, keys: list[owed.Key]) -> list[tuple[Check, Finding
         yield Finding(
             str(owed.LEDGER),
             f"{problem}; an entry goes once its finding is fixed",
-            Edit(does, owed.kept(Counter(keys)), Agent()),
+            Edit(does, owed.kept(Counter(keys)), Agent(then=(upgrade_line,))),
             rule=owed.OWN,
         )
 
@@ -2727,7 +2730,7 @@ def not_running(root: Path, found: Sequence[Finding]) -> list[str]:
 def then_lines(fix: Fix) -> tuple[str, ...]:
     """What a red finding asks next, from the fix that needs judgement."""
     judged = fix.otherwise if isinstance(fix, Edit) else fix
-    return judged.then if isinstance(judged, Agent) else ()
+    return judged.then if isinstance(judged, Agent | Auto) else ()
 
 
 def run(root: Path) -> int:
