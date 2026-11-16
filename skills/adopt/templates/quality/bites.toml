@@ -35,9 +35,11 @@
 #   proof    the named proof this bite is, where the row's question requires one
 #            (`skills/method/application-types.toml` in the `ratchet` plugin, under `[proofs]`):
 #            `outside-the-seam` for `telemetry emitted`, `broken-flag-state` for `changed flags
-#            off and on`, `erroring-route` for `load smoke`. The conformance gate is red while a
-#            bound row lacks one.
-#   args     optional words appended to the gate's command, such as the seconds a fuzz run takes
+#            off and on`, `erroring-route` for `load smoke`, `guarded-crash` for `fuzzing`,
+#            `related-fields` for `symbolic checking`. The conformance gate is red while a bound
+#            row lacks one.
+#   args     optional words appended to the gate's command, such as the seconds a fuzz or solver
+#            run takes
 #            or the one file a whole-tree mutation run is narrowed to
 #   commit   optional; true commits the fault in the copy first, for a gate that reads history
 #            or the index (a secret scanner over commits, a linter over tracked files)

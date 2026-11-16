@@ -136,7 +136,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | architecture reviewed when its shape changes | `ratchet` plugin `scripts/triggers.py` | 1 | the Triggers section below and `docs/adr/`, as the merge base holds them | `just triggers` |
 | full mutation | the mutation tool, judged by `ratchet` plugin `scripts/mutation_survivors.py` | 2 | `quality/mutation-register.toml` | `just mutation` |
 | deep interface conformance | | 2 | | `just api-deep` |
-| symbolic checking | | 2 | | `just symbolic` |
+| symbolic checking | | 2 | the recipe's `each` (seconds a target) and `cap` (seconds in total) | `just symbolic` |
 | fuzzing | | 2 | the recipe's `each` (seconds a target) and `cap` (seconds in total) | `just fuzz` |
 | end to end | | 2 | | `just e2e` |
 | suite order-independent and repeatable | | 2 | | `just test-stability` |

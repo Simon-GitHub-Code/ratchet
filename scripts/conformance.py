@@ -915,11 +915,19 @@ def check_binding(root: Path) -> Iterable[Finding]:
     }
     typing = catalogue.types_problem(text)
     fired = Fired.of(root, text) if dropped else Fired({}, frozenset())
+    moved = moved_triggers(catalogue, rows)
     for failure in catalogue.failures(text, rows, adrs):
         question = dropped.get(failure)
         if question is not None:
             trigger = catalogue.trigger_of(question)
             yield dropped_row(failure, question, trigger=trigger, fired=fired)
+        elif failure in moved:
+            question, trigger = moved[failure]
+            does = f"write the '{question}' row as `later: {trigger}`"
+            want = markdown_text.with_cell(
+                "## Gates", question, column=1, value=f"later: {trigger}"
+            )
+            yield Finding(BINDING_PATH, failure, Edit(does, want, Agent()))
         elif failure == typing:
             yield agent(f"{BINDING_PATH}: {failure}", then=triggers_follow(catalogue))
         else:
@@ -993,6 +1001,26 @@ class Fired:
             return False, f"'{kind}' has no instance here yet"
         many = "instances" if count > 1 else "instance"
         return True, f"'{kind}' has {count} {many} here: {triggers.listing(self.found[kind])}"
+
+
+def moved_triggers(
+    catalogue: application_types.Catalogue, rows: Sequence[tuple[str, str]]
+) -> dict[str, tuple[str, str]]:
+    """Each `later:` row waiting on a trigger its question no longer has: its failure, the fix.
+
+    Why: ADR 0070. A question whose trigger the catalogue moved is owed on the new trigger at
+    once, so the upgrade writes `later: <trigger>` and the triggers gate says whether it fired.
+    """
+    moved = {}
+    for question, tool in rows:
+        waits = application_types.LATER.match(tool)
+        if waits is None or question not in catalogue.questions:
+            continue
+        trigger = catalogue.trigger_of(question)
+        failure = catalogue.later_problem(question, waits.group(1).strip())
+        if failure is not None and trigger != application_types.ALWAYS:
+            moved[failure] = (question, trigger)
+    return moved
 
 
 def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> Finding:
