@@ -1516,7 +1516,11 @@ def binding_causes(root: Path, base: str) -> list[Cause]:
     if old is None or new is None:
         return [Cause(None, f"{binding} was added or removed")]
     (old_rows, old_rest), (new_rows, new_rest) = split_gates(old), split_gates(new)
-    if plugin_pin.PIN_LINE.sub("", old_rest) != plugin_pin.PIN_LINE.sub("", new_rest):
+    # Why: `gatelib.show` strips the text it returns, and the work tree's file keeps its newline.
+    if (
+        plugin_pin.PIN_LINE.sub("", old_rest).strip()
+        != plugin_pin.PIN_LINE.sub("", new_rest).strip()
+    ):
         return [Cause(None, f"{binding} changed outside its gate rows, which a gate may read")]
     if any(len({row.question for row in rows}) != len(rows) for rows in (old_rows, new_rows)):
         why = f"{binding} has two gate rows for one question, so one could hide behind the other"
@@ -1543,7 +1547,7 @@ def justfile_causes(root: Path, base: str, path: str) -> list[Cause]:
     for text in (gatelib.show(root, base, binding), gatelib.read_text(root / binding)):
         commands |= {row.gate: row.command for row in gate_rows(text or "") if row.gate}
     return justfile_dump.causes(
-        path, gatelib.show(root, base, path), gatelib.read_text(root / path), commands
+        path, gatelib.show(root, base, path), gatelib.read_text(root / path), commands=commands
     )
 
 
@@ -1639,6 +1643,32 @@ def explain(rows: Sequence[Row], causes: Sequence[Cause]) -> list[str]:
     ]
 
 
+def changed_gates(root: Path, rows: Sequence[Row]) -> list[Row] | int:
+    """The gates a pull request proves, or the exit code of a run that proves nothing."""
+    base = gatelib.base_commit(root)
+    if gatelib.adoption(root, base):
+        print(
+            "bite: green: this change is the adoption, whose base holds no binding; nothing is"
+            " proven here, and `bite-all` proves every gate in tier 2"
+        )
+        return 0
+    touched = gate_paths_changed(root, base)
+    if touched == []:
+        print("bite: green: the change touches no path that defines a gate; nothing to prove")
+        return 0
+    print(
+        "bite: a gate may have changed"
+        f" ({', '.join(t.path for t in touched or []) or 'no merge base'})"
+    )
+    causes = could_affect(root, base, touched)
+    chosen = targeted(rows, causes)
+    if not chosen:
+        print("bite: green: the change affects no gate of tiers 0 and 1; nothing to prove")
+        return 0
+    print("\n".join(explain(rows, causes)))
+    return chosen
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="project_bite.py")
     parser.add_argument("--root", type=Path, default=Path())
@@ -1664,27 +1694,10 @@ def main(argv: list[str]) -> int:
         return gatelib.report("bite", [f"{REGISTRY}: {problem}" for problem in problems])
     chosen = pull_request_gates(rows) if options.pull_request_gates else rows
     if options.changed:
-        base = gatelib.base_commit(root)
-        if gatelib.adoption(root, base):
-            print(
-                "bite: green: this change is the adoption, whose base holds no binding; nothing is"
-                " proven here, and `bite-all` proves every gate in tier 2"
-            )
-            return 0
-        touched = gate_paths_changed(root, base)
-        if touched == []:
-            print("bite: green: the change touches no path that defines a gate; nothing to prove")
-            return 0
-        print(
-            "bite: a gate may have changed"
-            f" ({', '.join(t.path for t in touched or []) or 'no merge base'})"
-        )
-        causes = could_affect(root, base, touched)
-        chosen = targeted(rows, causes)
-        if not chosen:
-            print("bite: green: the change affects no gate of tiers 0 and 1; nothing to prove")
-            return 0
-        print("\n".join(explain(rows, causes)))
+        found = changed_gates(root, rows)
+        if isinstance(found, int):
+            return found
+        chosen = found
     tasks: list[Task] = [
         (row, [bite for bite in registry.bites if bite.gate == row.gate])
         for row in chosen

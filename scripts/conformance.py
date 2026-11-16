@@ -2528,8 +2528,10 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
             " ceiling of its own and a long one could be held to the tier 1 ceiling",
             Agent(
                 then=(
-                    "run `just check-deep` once on a quiet machine, then `just budget bite-all"
-                    " --set`, which records the ceiling from that measured run",
+                    (
+                        "run `just check-deep` once on a quiet machine, then `just budget"
+                        " bite-all --set`, which records the ceiling from that measured run"
+                    ),
                 )
             ),
         )

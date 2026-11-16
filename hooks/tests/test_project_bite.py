@@ -448,7 +448,7 @@ def test_a_pull_request_that_touches_no_gate_proves_nothing(
 
 
 GATES = {"lint": LINT, "tests": LINT, "slow": "exit 1"}
-ROWS = row("lint") + row("tests", "1") + row("slow", "2")
+GATE_ROWS = row("lint") + row("tests", "1") + row("slow", "2")
 WORD = "a planted word"
 BINDING = "docs/process/binding.md"
 REGISTRY = "quality/bites.toml"
@@ -464,7 +464,7 @@ JUSTFILE = (
     "prepare:\n    echo prepare\n"
     "finish:\n    echo finish\n"
 )
-JUST_ROWS = ROWS.replace("`sh gate ", "`just ")
+JUST_ROWS = GATE_ROWS.replace("`sh gate ", "`just ")
 PIN = "- Ratchet plugin: 0.1.0 at " + "0" * 40
 NOTHING = "bite: green: the change affects no gate of tiers 0 and 1; nothing to prove\n"
 
@@ -480,18 +480,15 @@ def registry_of(*extra: str) -> str:
 def targeted(
     tmp_path: Path,
     *,
-    rows: str = ROWS,
+    rows: str = GATE_ROWS,
     registry: str | None = None,
     files: dict[str, str] | None = None,
-    pinned: bool = False,
-    reads: str = "",
+    inserts: str = "",
 ) -> Path:
     """A branch off a ``main`` that holds the manifest, the registry and ``files``."""
     root = project(tmp_path / "repo", GATES, registry or registry_of(), rows=rows)
-    if pinned:
-        replaced(root, BINDING, "## Speed", f"{PIN}\n\n## Speed")
-    if reads:
-        replaced(root, BINDING, "## Speed", f"## What each gate reads\n\n{reads}\n## Speed")
+    if inserts:
+        replaced(root, BINDING, "## Speed", f"{inserts}\n## Speed")
     write(root, "guards/manifest.toml", COMMANDS_MANIFEST)
     for path, text in {"lint.cfg": "x\n", "scripts/check.sh": "x\n", **(files or {})}.items():
         write(root, path, text)
@@ -500,7 +497,11 @@ def targeted(
     return root
 
 
-def replaced(root: Path, path: str, old: str, new: str) -> None:
+def with_reads(bullets: str) -> str:
+    return f"## What each gate reads\n\n{bullets}"
+
+
+def replaced(root: Path, path: str, old: str, new: str) -> None:  # noqa: PLR0917 # -- a test helper
     text = (root / path).read_text(encoding="utf-8")
     assert old in text
     write(root, path, text.replace(old, new, 1))
@@ -608,7 +609,7 @@ def test_a_binding_change_outside_the_rows_goes_to_every_gate(
 def test_a_change_to_the_plugin_pin_line_alone_proves_nothing(
     tmp_path: Path, scratch: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = targeted(tmp_path, pinned=True)
+    root = targeted(tmp_path, inserts=f"{PIN}\n")
     replaced(root, BINDING, PIN, PIN.replace("0.1.0", "0.2.0"))
     assert prove(root, "--changed") == 0
     assert shown(capsys).endswith(NOTHING)
@@ -616,15 +617,15 @@ def test_a_change_to_the_plugin_pin_line_alone_proves_nothing(
 
 
 @pytest.mark.parametrize(
-    ("recipe", "old", "new"),
-    [("prepare", "echo prepare", "echo prepared"), ("finish", "echo finish", "echo finished")],
+    "recipe",
+    ["prepare", "finish"],
     ids=["through a dependency", "through a just call in a body"],
 )
 def test_a_recipe_goes_to_the_gates_whose_command_reaches_it(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], recipe: str, old: str, new: str
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], recipe: str
 ) -> None:
     root = targeted(tmp_path, rows=JUST_ROWS, files={"justfile": JUSTFILE})
-    replaced(root, "justfile", old, new)
+    replaced(root, "justfile", f"echo {recipe}", f"echo {recipe}d")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
     assert out[0] == "bite: a gate may have changed (justfile)"
@@ -645,16 +646,13 @@ def test_a_top_level_assignment_in_the_justfile_goes_to_every_gate(
 
 
 @pytest.mark.parametrize(
-    ("path", "why"),
-    [
-        ("scripts/check.sh", "scripts/check.sh changed, and no record says which gate runs it"),
-        ("lint.cfg", "lint.cfg changed, and no record says which gate reads it"),
-    ],
-    ids=["gate-commands", "tool-config"],
+    "path", ["scripts/check.sh", "lint.cfg"], ids=["gate-commands", "tool-config"]
 )
 def test_a_path_that_names_no_gate_goes_to_every_gate(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str, why: str
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], path: str
 ) -> None:
+    verb = "runs" if path.startswith("scripts") else "reads"
+    why = f"{path} changed, and no record says which gate {verb} it"
     root = targeted(tmp_path)
     write(root, path, "changed\n")
     assert prove(root, "--changed") == 0
@@ -666,7 +664,7 @@ def test_a_path_that_names_no_gate_goes_to_every_gate(
 def test_a_path_no_row_names_proves_the_gates_whose_bullet_reads_it_and_those_with_none(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = targeted(tmp_path, reads="- lint: lint.cfg\n")
+    root = targeted(tmp_path, inserts=with_reads("- lint: lint.cfg\n"))
     write(root, "lint.cfg", "changed\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
@@ -681,7 +679,7 @@ def test_a_gate_whose_bullet_names_none_of_the_changed_paths_is_left_out(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     reads = "- lint: lint.cfg\n- tests: src/**, docs\n"
-    root = targeted(tmp_path, reads=reads)
+    root = targeted(tmp_path, inserts=with_reads(reads))
     write(root, "lint.cfg", "changed\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
@@ -693,7 +691,7 @@ def test_a_gate_whose_bullet_names_none_of_the_changed_paths_is_left_out(
 def test_a_path_that_is_not_tool_config_ignores_the_bullets_and_goes_to_every_gate(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = targeted(tmp_path, reads="- lint: scripts/lint.sh\n- tests: src/**\n")
+    root = targeted(tmp_path, inserts=with_reads("- lint: scripts/lint.sh\n- tests: src/**\n"))
     write(root, "scripts/check.sh", "changed\n")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
@@ -717,7 +715,7 @@ def test_a_question_in_two_rows_sends_a_binding_change_to_every_gate(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     twin = row("lint", "1", tool="none").replace("`sh gate lint`", "`sh gate other`")
-    root = targeted(tmp_path, rows=ROWS + twin)
+    root = targeted(tmp_path, rows=GATE_ROWS + twin)
     replaced(root, BINDING, "| tests | a tool | 1 |", "| tests | a tool | 0 |")
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()

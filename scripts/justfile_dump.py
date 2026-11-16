@@ -13,7 +13,7 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import justfile_text
 
@@ -31,12 +31,12 @@ class Cause(NamedTuple):
     why: str
 
 
-def dump(text: str, file: Path) -> dict[str, Any] | None:
+def dump(text: str, file: Path) -> dict[str, object] | None:
     """The justfile ``text`` as ``just`` parses it, or ``None`` when ``just`` cannot read it."""
     file.write_text(text, encoding="utf-8")
     command = ["just", "--justfile", str(file), "--dump", "--dump-format", "json"]
     try:
-        done = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        done = subprocess.run(  # -- a fixed argv, no shell
             command,
             cwd=file.parent,
             capture_output=True,
@@ -50,23 +50,32 @@ def dump(text: str, file: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def recipes_of(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+def recipes_of(data: Mapping[str, object]) -> dict[str, dict[str, object]]:
     table = data.get("recipes")
     if not isinstance(table, dict):
         return {}
     return {name: recipe for name, recipe in table.items() if isinstance(recipe, dict)}
 
 
-def called(recipe: Mapping[str, Any]) -> set[str]:
+def called(recipe: Mapping[str, object]) -> set[str]:
     """The recipes one recipe names: its dependencies and the ``just x`` calls in its body."""
-    names = {str(dependency["recipe"]) for dependency in recipe.get("dependencies", [])}
-    for line in recipe.get("body", []):
-        words = "".join(part for part in line if isinstance(part, str))
+    names: set[str] = set()
+    dependencies = recipe.get("dependencies")
+    for dependency in dependencies if isinstance(dependencies, list) else []:
+        if isinstance(dependency, dict):
+            names.add(str(dependency.get("recipe")))
+    body = recipe.get("body")
+    for line in body if isinstance(body, list) else []:
+        words = (
+            "".join(part for part in line if isinstance(part, str))
+            if isinstance(line, list)
+            else ""
+        )
         names.update(justfile_text.JUST_CALL.findall(words))
     return names
 
 
-def reached(recipes: Mapping[str, Mapping[str, Any]], command: str) -> set[str]:
+def reached(recipes: Mapping[str, Mapping[str, object]], command: str) -> set[str]:
     """Every recipe a gate's command runs, directly or through what a recipe runs."""
     pending = list(justfile_text.JUST_CALL.findall(command))
     seen: set[str] = set()
@@ -80,7 +89,7 @@ def reached(recipes: Mapping[str, Mapping[str, Any]], command: str) -> set[str]:
 
 
 def causes(
-    path: str, old: str | None, new: str | None, commands: Mapping[str, str]
+    path: str, old: str | None, new: str | None, *, commands: Mapping[str, str]
 ) -> list[Cause]:
     """The gates a change from ``old`` to ``new`` could affect; ``commands``: gate to command."""
     if old is None or new is None:

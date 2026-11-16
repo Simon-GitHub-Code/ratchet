@@ -167,7 +167,7 @@ class Timed(NamedTuple):
 def timed(command: list[str], cwd: Path) -> Timed:
     started = time.monotonic()
     fell = False
-    with subprocess.Popen(  # noqa: S603 # -- the command to time, as given
+    with subprocess.Popen(  # -- the command to time, as given
         command, cwd=cwd, stdout=subprocess.PIPE, text=True
     ) as child:
         for line in child.stdout or []:

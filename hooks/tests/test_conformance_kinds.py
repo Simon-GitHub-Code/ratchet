@@ -354,7 +354,10 @@ READS = "\n## What each gate reads\n\n"
 
 def read_problems(root: Path, bullets: str) -> list[str]:
     binding = root / BINDING
-    binding.write_text(binding.read_text(encoding="utf-8") + READS + bullets, encoding="utf-8")
+    head, marker, rest = binding.read_text(encoding="utf-8").partition(READS.rstrip("\n"))
+    body, divider, tail = rest.partition("\n## ")
+    text = head + marker + body.rstrip("\n") + "\n\n" + bullets + "\n" + divider + tail
+    binding.write_text(text if marker else head + READS + bullets, encoding="utf-8")
     repos.git(root, "init", "-q")
     ours = ("'## What", "gate ")
     return [f.problem for f in conformance.findings(root) if f.problem.startswith(ours)]
