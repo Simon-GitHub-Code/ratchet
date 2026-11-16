@@ -255,6 +255,20 @@ def test_a_branch_that_changes_nothing_is_not_waiting_records(tmp_path: Path) ->
     assert route.records_waiting(route.observe(root)) is None
 
 
+def test_a_branch_checked_out_in_a_linked_work_tree_waits_until_it_is_removed(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path / "main", {**ADOPTED, "guards/manifest.toml": MANIFEST})
+    tickets_on(root, "tickets/a")
+    other = tmp_path / "other"
+    git(root, "worktree", "add", "-q", str(other), "tickets/a")
+    assert route.records_waiting(route.observe(root)) is None
+    git(root, "worktree", "remove", str(other))
+    step = route.records_waiting(route.observe(root))
+    assert step is not None
+    assert "tickets/a" in step.why
+
+
 def test_the_checked_out_branch_is_not_waiting_records(tmp_path: Path) -> None:
     root = repository(tmp_path, {**ADOPTED, "guards/manifest.toml": MANIFEST})
     tickets_on(root, "tickets/a")

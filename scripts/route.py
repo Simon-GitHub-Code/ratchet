@@ -755,12 +755,25 @@ def owned_by_a_run(root: Path, name: str) -> bool:
     return name.startswith(preflight.FEATURE_BRANCHES) or bool(queue_notes.read_note(root, name))
 
 
+def could_be_records(root: Path, default: str, name: str) -> bool:
+    """Whether the branch's change is not empty and every path of it has a record's shape.
+
+    Why: reading the judge's manifest costs far more than a diff, so a branch with a path no
+    record can have is dropped before the judge's read.
+    """
+    listed = gatelib.git(root, "diff", "--name-only", "--no-renames", f"{default}...{name}")
+    paths = (listed or "").split("\n")
+    paths = [path for path in paths if path]
+    shapes = [kind.shape for kind in merge_ready.RECORDS]
+    return bool(paths) and all(any(shape.fullmatch(path) for shape in shapes) for path in paths)
+
+
 def holds_only_records(root: Path, default: str, name: str) -> bool:
     base = f"{merge.HEADS}{default}"
     change = merge_ready.read(root, base, f"{merge.HEADS}{name}")
-    if isinstance(change, merge_ready.Reason) or not change.paths:
-        return False
-    return not merge_ready.not_records(root, base, change.paths)
+    return not isinstance(change, merge_ready.Reason) and not merge_ready.not_records(
+        root, base, change.paths
+    )
 
 
 def first_commit_time(root: Path, default: str, name: str) -> int:
@@ -769,19 +782,32 @@ def first_commit_time(root: Path, default: str, name: str) -> int:
     return int(log[0]) if log else 0
 
 
+def checked_out(root: Path) -> set[str]:
+    """The branches any work tree of the repository has checked out."""
+    listed = gatelib.git(root, "worktree", "list", "--porcelain") or ""
+    return {
+        line.removeprefix("branch refs/heads/")
+        for line in listed.splitlines()
+        if line.startswith("branch refs/heads/")
+    }
+
+
 def waiting_records(checkout: Checkout) -> list[str]:
     """Local branches not merged into the default branch whose change holds records alone.
 
     Why: the name plays no part. An agent that commits tickets on a branch of its own leaves the
-    route as blind to it as to a records branch; a branch a run owns, and the checked-out one,
-    are other steps' to name. The oldest by its first commit comes first.
+    route as blind to it as to a records branch; a branch a run owns, and one any work tree has
+    checked out, are other steps' to name. The oldest by its first commit comes first.
     """
     root, default = checkout.root, checkout.default_branch
     listed = gatelib.git(root, "branch", "--no-merged", default, "--format=%(refname:short)")
+    held = checked_out(root)
     names = [
         name
         for name in (listed or "").split()
         if name not in (default, checkout.branch)
+        and name not in held
+        and could_be_records(root, default, name)
         and not owned_by_a_run(root, name)
         and holds_only_records(root, default, name)
     ]
