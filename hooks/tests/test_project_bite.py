@@ -609,11 +609,25 @@ def test_a_binding_change_outside_the_rows_goes_to_every_gate(
     assert proved(out) == ["lint", "tests"]
 
 
+TREE = " tree " + "1" * 40
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (PIN, PIN.replace("0.1.0", "0.2.0")),
+        (PIN + TREE, PIN.replace("0.1.0", "0.2.0") + TREE),
+        (PIN, PIN + TREE),
+        (PIN + TREE, PIN + TREE.replace("1", "2")),
+        (PIN + TREE, ""),
+    ],
+    ids=["version", "tree form, version", "tree added", "tree changed", "line removed"],
+)
 def test_a_change_to_the_plugin_pin_line_alone_proves_every_gate(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, old: str, new: str
 ) -> None:
-    root = targeted(tmp_path, inserts=f"{PIN}\n")
-    replaced(root, BINDING, PIN, PIN.replace("0.1.0", "0.2.0"))
+    root = targeted(tmp_path, inserts=f"{old}\n")
+    replaced(root, BINDING, old, new)
     assert prove(root, "--changed") == 0
     out = shown(capsys).splitlines()
     assert out[1] == every("the plugin pin changed, and the plugin supplies gates")
