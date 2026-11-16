@@ -83,7 +83,16 @@ ENTRY_POINTS = (
 SPEED_SECTION = "## Speed"
 # Why: ADR 0019. Speed is asked by concept from the first commit; the binding says how this
 # stack meets each one, and CI reads the shard count from the `- Shards:` line.
-SPEED_PARTS = ("Parallel", "One pipeline", "Shards", "Cache", "Affected only", "Ceilings")
+SPEED_PARTS = (
+    "Parallel",
+    "One pipeline",
+    "Shards",
+    "Cache",
+    "Incremental",
+    "Affected only",
+    "Ceilings",
+)
+NONE_WITH_REASON = re.compile(r"none: \S.*")
 SPEED_PART = re.compile(r"^- ([A-Z][a-z ]+):[ \t]*(.*)$", re.MULTILINE)
 SHARD_COUNT = re.compile(r"[1-9]\d*")
 TIER_WORKFLOWS = ("ci.yml", "deep.yml")
@@ -1882,6 +1891,17 @@ def check_speed_parts(body: str) -> Iterable[Finding]:
             )
             edit = Edit("state the template's day-one shard count, 1", with_shards, Agent())
             yield Finding(BINDING_PATH, problem, edit)
+        elif part == "Incremental" and (not value or value.startswith("<")):
+            yield agent(
+                f"{BINDING_PATH}: the Speed section has no '- Incremental:' line naming the"
+                " mutation tool's incremental mode, or `none: <reason>` where the tool has none"
+            )
+        elif part == "Incremental" and not NONE_WITH_REASON.fullmatch(value):
+            if value.startswith("none"):
+                yield agent(
+                    f"{BINDING_PATH}: the Speed section's '- Incremental:' line says `none` with"
+                    " no reason: write `none: <reason>`, or name the mode"
+                )
         elif not value or value.startswith("<"):
             yield agent(f"{BINDING_PATH}: the Speed section does not say how '{part}' is met")
 
@@ -3784,6 +3804,11 @@ def speed_mutations() -> list[Mutation]:
             rebind(f"- Parallel: {stated}", "- Parallel: <how>"),
         ),
         ("Speed section with no shard count", rebind("- Shards: 1", "- Shards: a few")),
+        ("Speed section without an incremental line", rebind("- Incremental: ", "- Mode: ")),
+        (
+            "Speed section with an incremental line of none and no reason",
+            rebind(f"- Incremental: {stated}", "- Incremental: none:"),
+        ),
         ("CI workflow without concurrency control", rewrite(ci, "concurrency:", "serial:")),
         ("CI workflow without a cache", rewrite(deep, "cache", "store")),
         (
