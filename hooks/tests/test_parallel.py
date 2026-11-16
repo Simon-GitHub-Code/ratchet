@@ -257,6 +257,47 @@ def test_the_closing_lines_name_the_slowest_gate(capsys: pytest.CaptureFixture[s
     )
 
 
+def test_a_group_whose_chain_outlasts_every_gate_beside_it_is_named(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    options = argparse.Namespace(
+        root=Path(), jobs=4, fail_fast=False, report=None, alone=["perf"], wide=[]
+    )
+    units = [("coverage", "mutation-changed"), ("lint",), ("fmt", "types"), ("perf",)]
+    scheduler = parallel.Scheduler(units, [], options)
+    scheduler.pending = []
+    scheduler.finished = [
+        parallel.Finished("coverage", 106.0, 0, ""),
+        parallel.Finished("mutation-changed", 206.4, 0, ""),
+        parallel.Finished("lint", 182.0, 0, ""),
+        parallel.Finished("fmt", 1.0, 0, ""),
+        parallel.Finished("types", 2.0, 0, ""),
+        parallel.Finished("perf", 500.0, 0, ""),
+    ]
+    assert parallel.closing(scheduler, 320.0) == []
+    assert capsys.readouterr().out.splitlines()[1:] == [
+        (
+            "parallel: the group coverage, mutation-changed took 312.4s one after another,"
+            " longer than lint at 182.0s, the slowest gate outside every group, so the group set"
+            " this run's wall clock. Time the tier without it, and keep it only if the run is"
+            " slower without it or a gate times out."
+        )
+    ]
+
+
+def test_a_run_with_no_gate_outside_every_group_names_no_group(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    options = argparse.Namespace(
+        root=Path(), jobs=1, fail_fast=False, report=None, alone=[], wide=[]
+    )
+    scheduler = parallel.Scheduler([("a", "b")], [], options)
+    scheduler.pending = []
+    scheduler.finished = [parallel.Finished("a", 5.0, 0, ""), parallel.Finished("b", 5.0, 0, "")]
+    assert parallel.closing(scheduler, 10.0) == []
+    assert len(capsys.readouterr().out.splitlines()) == 1
+
+
 def binding(root: Path, rows: dict[str, str]) -> Path:
     """A binding at ``root`` whose Gates table gives each entry point its Tool cell."""
     table = "".join(

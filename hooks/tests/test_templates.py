@@ -204,7 +204,7 @@ def test_a_serial_group_is_declared_per_tier_and_empty_until_the_stack_needs_one
     bound = tmp_path / "justfile"
     bound.write_text(
         JUSTFILE.replace(
-            'serial1 := "--serial coverage test mutation-changed"',
+            'serial1 := "--serial coverage mutation-changed"',
             'serial1 := "--serial coverage diff-coverage"',
         ),
         encoding="utf-8",
@@ -214,9 +214,9 @@ def test_a_serial_group_is_declared_per_tier_and_empty_until_the_stack_needs_one
     assert "--serial" not in dry_run("tier0", bound)
 
 
-def test_no_two_gates_that_take_every_core_run_side_by_side_in_any_run_of_tiers() -> None:
+def test_the_gates_seen_to_starve_each_other_never_run_side_by_side_in_any_run_of_tiers() -> None:
     needs_just()
-    every_core = {"coverage", "test", "mutation-changed", "mutation", "test-stability"}
+    seen = {"coverage", "mutation-changed", "mutation", "test-stability"}
     tiers = [gate_list(f"tier{n}_gates") for n in range(3)]
     groups = [
         [
@@ -231,8 +231,9 @@ def test_no_two_gates_that_take_every_core_run_side_by_side_in_any_run_of_tiers(
         gates = [gate for n in joined for gate in tiers[n]]
         serial = [group for n in joined for group in groups[n]]
         units = parallel.plan(gates, serial, frozenset(alone & set(gates)))
-        beside = [unit for unit in units if every_core & set(unit)]
+        beside = [unit for unit in units if seen & set(unit)]
         assert len(beside) <= 1, (joined, beside)
+        assert {"mutation", "test-stability"} & set(gates) <= alone
 
 
 def test_a_recipe_learns_its_shard_from_the_environment_and_is_whole_without_one() -> None:
