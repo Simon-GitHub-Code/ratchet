@@ -14,7 +14,7 @@ import json
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from tests.pipeline_model import (
@@ -36,10 +36,12 @@ from tests.pipeline_model import (
 )
 from tests.test_pipeline import (
     ASKED,
+    CASE_QUESTION,
     CHECKED,
     CRITIQUED,
     GAP,
     IMPLEMENTED,
+    INVENTED,
     NO_SCRIPT,
     PIPELINE,
     PREFLIGHT,
@@ -47,6 +49,9 @@ from tests.test_pipeline import (
     REVIEW,
     SPECIFIED,
     YOUNG,
+    _case,
+    _departure,
+    _quoted,
 )
 
 TICKET_FILE = ".scratch/list/issues/01-save-a-link.md"
@@ -78,11 +83,16 @@ PARTS = [
 OPEN = {
     "severity": "major",
     "title": "loses the order",
+    "carries": None,
     "evidence": "two saves in one second came back reversed",
     "suggestedTest": "tests/critique/expiry.core.critique.test.py",
     "testFails": False,
     "heldByKeptTest": False,
 }
+PREVIOUS = "@previous"
+WAS = "@title"
+NOW = "@now"
+MOVED = "@moved"
 BLOCKER = {
     "axis": "spec",
     "severity": "blocker",
@@ -112,7 +122,29 @@ SPECS: dict[Said, object] = {
     Spec.FITS: {**SPECIFIED, "changeSize": FITS},
     Spec.WRONG_REASON: {**SPECIFIED, "changeSize": FITS, "failingForRightReason": False},
 }
+
+
+def reviewed(**fields: object) -> dict[str, Any]:
+    """A review whose blocker quotes the record it breaks, as the quote check printed it."""
+    return _quoted({**REVIEW, **fields}, "issues")
+
+
 BUILDS: dict[Said, object] = {
+    Build.DEPARTS_CRITERION: {
+        **IMPLEMENTED,
+        "changeSize": FITS,
+        "departures": [_departure("criterion")],
+    },
+    Build.DEPARTS_ASSUMPTION_ROLE: {
+        **IMPLEMENTED,
+        "changeSize": FITS,
+        "departures": [_departure("assumption", "role")],
+    },
+    Build.DEPARTS_ASSUMPTION_OWNER: {
+        **IMPLEMENTED,
+        "changeSize": FITS,
+        "departures": [_departure("assumption", "owner")],
+    },
     Build.PRODUCT_OVER: {**IMPLEMENTED, "changeSize": sized(1001, 100)},
     Build.TESTS_OVER: {**IMPLEMENTED, "changeSize": sized(100, 3001)},
     Build.TESTS_MARGIN: {**IMPLEMENTED, "changeSize": sized(100, 2500)},
@@ -122,22 +154,24 @@ BUILDS: dict[Said, object] = {
 REVIEWS: dict[Said, object] = {
     Review.APPROVES: REVIEW,
     Review.REFUSES: {**REVIEW, "verdict": "request_changes"},
-    Review.REFUSES_ISSUE: {**REVIEW, "verdict": "request_changes", "issues": [BLOCKER]},
+    Review.REFUSES_ISSUE: reviewed(verdict="request_changes", issues=[BLOCKER]),
     Review.REFUSES_MINOR: {
         **REVIEW,
         "verdict": "request_changes",
         "issues": [{**BLOCKER, "severity": "minor"}],
     },
-    Review.REFUSES_DROPPED: {
-        **REVIEW,
-        "verdict": "request_changes",
-        "issues": [BLOCKER],
-        "ticketPromises": GAP["ticketPromises"],
-    },
+    Review.REFUSES_DROPPED: reviewed(
+        verdict="request_changes", issues=[BLOCKER], ticketPromises=GAP["ticketPromises"]
+    ),
     Review.APPROVES_RED: {**REVIEW, "checkPasses": False},
-    Review.APPROVES_ISSUE: {**REVIEW, "issues": [BLOCKER]},
+    Review.APPROVES_ISSUE: reviewed(issues=[BLOCKER]),
     Review.APPROVES_DROPPED: {**REVIEW, "ticketPromises": GAP["ticketPromises"]},
     Review.APPROVES_GUARD: {**REVIEW, "guardChanges": ["guards/manifest.toml"]},
+    Review.UNSTATED_OWNER: {**REVIEW, "unstated": [_case("owner", of=None)]},
+    Review.ISSUE_NO_QUOTE: reviewed(
+        verdict="request_changes", issues=[{**BLOCKER, "breaks": INVENTED}]
+    ),
+    Review.CLASSIFIES_ROLE: {**REVIEW, "unstated": [_case("role", of=MOVED)]},
 }
 CONCRETE: dict[Said, object] = {
     Preflight.RED: {
@@ -159,7 +193,30 @@ CONCRETE: dict[Said, object] = {
     **BUILDS,
     Critique.CLEAR: CRITIQUED,
     Critique.SILENT: {**CRITIQUED, "attempted": []},
-    Critique.OWED: {**CRITIQUED, "findings": [OPEN], "testsAdded": [OPEN["suggestedTest"]]},
+    Critique.OWED: _quoted(
+        {
+            **CRITIQUED,
+            "findings": [{**OPEN, "title": f"{OPEN['title']} {NOW}"}],
+            "testsAdded": [OPEN["suggestedTest"]],
+        }
+    ),
+    Critique.OWED_RELABELED: _quoted(
+        {
+            **CRITIQUED,
+            "findings": [{**OPEN, "title": WAS}],
+            "testsAdded": [OPEN["suggestedTest"]],
+        }
+    ),
+    Critique.OWED_CARRIED: _quoted(
+        {
+            **CRITIQUED,
+            "findings": [{**OPEN, "carries": PREVIOUS, "title": WAS}],
+            "testsAdded": [OPEN["suggestedTest"]],
+        }
+    ),
+    Critique.NO_QUOTE: _quoted({**CRITIQUED, "findings": [{**OPEN, "breaks": INVENTED}]}),
+    Critique.UNSTATED_OWNER: {**CRITIQUED, "unstated": [_case("owner")]},
+    Critique.UNSTATED_ROLE: {**CRITIQUED, "unstated": [_case("role")]},
     **REVIEWS,
 }
 
@@ -240,6 +297,7 @@ function refused(schema, value, at) {
   return found
 }
 const broken = {}
+const shapes = {}
 function kept(result) {
   const too = result.tooLarge
   return {
@@ -254,6 +312,14 @@ function kept(result) {
           instructions: (result.requiredByOrchestrator || []).join('\\n'),
         }
       : null,
+    stop: result.stop ?? null,
+    built: (result.filesChanged || []).length,
+    stoppedAfter: result.stoppedAfter ?? null,
+    carried: (result.carriedStillOwed || []).length,
+    unclassified: result.unclassified ?? 0,
+    unquotedReview: result.unquotedReviewIssues ?? 0,
+    reviewRounds: (result.reviewIssuesByRound || []).length,
+    unstated: (result.unstated || []).filter(e => e.of).length,
     questions: (result.openQuestions || []).length,
     guardEdits: (result.guardEdits || []).length,
     preflight: Boolean(result.preflight),
@@ -270,6 +336,7 @@ async function main() {
   for (const run of runs) {
     const calls = []
     const told = []
+    let lastTitle = 'loses the order'
     const agent = async (prompt, options) => {
       calls.push([options.label, options.phase])
       const rounds = options.label.startsWith('fix-') && prompt.match(ROUNDS)
@@ -278,12 +345,24 @@ async function main() {
       const name = run.answers[options.label]
       const answer = catalogue[name]
       if (answer == null) return null
-      const found = options.schema ? refused(options.schema, answer, name) : []
+      const round = Number((options.label.match(/-(\\d+)$/) || [0, 0])[1])
+      const moved = (prompt.match(/"id": "(C\\d+-\\d+)"/) || [])[1]
+      const text = JSON.stringify(answer)
+        .replace(/"@previous"/g, JSON.stringify(`C${round - 1}-1`))
+        .replace(/@title/g, lastTitle)
+        .replace(/@now/g, `round ${round}`)
+        .replace(/"@moved"/g, JSON.stringify(moved || 'no id in the prompt'))
+      const found = options.schema ? refused(options.schema, JSON.parse(text), name) : []
       if (found.length) broken[`${options.label} ${name}`] = found
-      return JSON.parse(JSON.stringify(answer))
+      const parsed = JSON.parse(text)
+      const first = (parsed.findings || [])[0]
+      if (options.label.startsWith('critique') && first) lastTitle = first.title
+      return parsed
     }
     try {
-      const result = kept(await pipeline(run.args, agent, () => {}, () => {}))
+      const full = await pipeline(run.args, agent, () => {}, () => {})
+      shapes[Object.keys(full).sort().join(',')] ??= full
+      const result = kept(full)
       played.push({ calls, told, result })
     } catch (error) {
       played.push({ calls, told, error: { name: error.name, message: String(error.message) } })
@@ -291,7 +370,7 @@ async function main() {
   }
   const effects = Object.fromEntries(
     Object.entries(commands).map(([role, found]) => [role, [...found].sort()]))
-  console.log(JSON.stringify({ played, effects, broken }))
+  console.log(JSON.stringify({ played, effects, broken, shapes: Object.values(shapes) }))
 }
 main()
 """
@@ -313,6 +392,8 @@ class Batch:
     played: list[Played]
     effects: dict[Role, frozenset[str]]
     """Per role, every git or forge command any of its prompts named."""
+    results: list[dict[str, Any]]
+    """One whole result for each distinct set of members a run returned."""
 
 
 def expected_calls(actions: list[Action]) -> tuple[tuple[str, str], ...]:
@@ -360,7 +441,7 @@ def play(runs: list[list[Action]], local: list[list[Action]] | None = None) -> B
         for raw in out["played"]
     ]
     effects = {Role(role): frozenset(found) for role, found in out["effects"].items()}
-    return Batch(played, effects)
+    return Batch(played, effects, out["shapes"])
 
 
 FORCED = {
@@ -381,6 +462,7 @@ STAGES = {
     "fix round 2": Role.FIX,
     "the reconcile": Role.RECONCILE,
 }
+ROUND = re.compile(r"-(\d+)$")
 DIED = re.compile(r"^(.+) agent returned no result")
 RESUME = "resume the run"
 # Why: the "Too large" section of skills/feature/SKILL.md has the orchestrator split the ticket and
@@ -421,6 +503,16 @@ def stopped(result: dict[str, Any]) -> Ending:
             split_unasked=unasked,
             rejudged=result["rejudged"],
         )
+    if result["stop"]:
+        return Ending(
+            Outcome.BLOCKED,
+            stop=Stop.DEPARTURE if result["stop"] == "departure" else Stop.QUESTION_AFTER_BUILD,
+            after=Role(ROUND.sub("", result["stoppedAfter"])),
+            asks=result["questions"] > 0,
+            rejudged=result["rejudged"],
+            unclassified=result["unclassified"] > 0,
+            unquoted_review=result["unquotedReview"] > 0,
+        )
     stops = [
         (Stop.QUESTION, result["questions"] > 0),
         (Stop.GUARD_EDIT, result["guardEdits"] > 0),
@@ -438,9 +530,16 @@ def ending(raw: dict[str, Any]) -> Ending:
     result = raw["result"]
     outcome = Outcome(result["verdict"])
     if outcome is Outcome.BLOCKED:
-        return stopped(result)
+        return replace(stopped(result), review_rounds=result["reviewRounds"] > 0)
+    parked = result["stop"] == "carried"
     return Ending(
         outcome,
+        stop=Stop.CARRIED if parked else None,
+        after=Role(ROUND.sub("", result["stoppedAfter"])) if parked else None,
+        asks=parked and result["questions"] > 0,
+        unclassified=result["unclassified"] > 0,
+        unquoted_review=result["unquotedReview"] > 0,
+        review_rounds=result["reviewRounds"] > 0,
         objections=frozenset(map(objection, result["forcedBy"])),
         rounds=result["iterations"],
         unresolved=result["unresolved"] > 0,
@@ -448,4 +547,7 @@ def ending(raw: dict[str, Any]) -> Ending:
         kept=NO_SCRIPT in result["assumptions"],
         record=Outcome(result["record"]),
         rejudged=result["rejudged"],
+        carried=result["carried"] > 0,
+        unstated=result["unstated"] > 0,
+        assumes_role=CASE_QUESTION in result["assumptions"],
     )

@@ -15,6 +15,8 @@ from tests.repos import branch, commit, git, repository, write
 from tests.test_feature_preflight import gh_returning
 
 Out = pytest.CaptureFixture[str]
+COPY = ": copy the whole sentence, list item, cell or line as the record writes it"
+
 BRANCH = "feature/4-publish"
 NONE_OPEN = "[]"
 
@@ -37,7 +39,19 @@ def started(
     start = publish_check.start_of(root, BRANCH, gh_returning(prs), rebase_onto=rebase_onto)
     path = tmp_path / "start.json"
     path.write_text(json.dumps({"ok": True, "branch": BRANCH, "start": asdict(start)}), "utf-8")
+    resulted(path, {})
     return path
+
+
+def resulted(start: Path, fields: dict[str, object]) -> None:
+    """The run's result beside the start, with no findings unless ``fields`` say otherwise."""
+    result = {
+        "criticFindingsByRound": [],
+        "reviewIssuesByRound": [],
+        "unresolvedBlockingFindings": [],
+        "reviewIssues": [],
+    }
+    publish_check.result_path(start).write_text(json.dumps(result | fields), "utf-8")
 
 
 class Check(Protocol):
@@ -789,3 +803,255 @@ def test_a_start_with_a_rebase_is_read_whole_and_a_null_one_is_none() -> None:
         )
     )
     assert publish_check.parse(json.dumps({"start": START | {"rebase": None}})).rebase is None
+
+
+QUOTE = "A blocker or a major quotes what it breaks."
+QUOTES_RED = (
+    "publish check: red, a finding the run treated as owed quotes what its record does not hold:"
+    " the ticket is not approved"
+)
+NOTHING = (
+    "publish check: nothing may be published on this check; it authorises a resume and nothing else"
+)
+NO_BREAKS = "it carries no `breaks` with a `record` and a `quote`, both text"
+
+
+def breaking(record: str, quote: str, severity: str = "major", *, title: str = "a finding") -> dict:
+    return {"severity": severity, "title": title, "breaks": {"record": record, "quote": quote}}
+
+
+def unquoted(record: str, quote: str, *, title: str = "a finding", why: str | None = None) -> str:
+    reason = why or f"the record `{record}` does not hold the quote" + COPY
+    return f'publish check: the finding `{title}` quotes `{record}` with "{quote}" and {reason}'
+
+
+def test_a_result_file_that_is_absent_is_refused(tmp_path: Path, checked: Check) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    publish_check.result_path(path).unlink()
+    code, lines = checked(path, root)
+    assert code == 2
+    assert lines == [
+        (
+            f"publish check: the run's result in {path}.result.json cannot be read: there is no"
+            " such file, or it is not text; that is never a pass"
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [
+        ("not json", "it is not JSON"),
+        ("[]", "it is not a JSON object"),
+        (
+            '{"criticFindingsByRound": [], "reviewIssuesByRound": [], "reviewIssues": []}',
+            "`unresolvedBlockingFindings` is",
+        ),
+        (
+            '{"criticFindingsByRound": [], "unresolvedBlockingFindings": [], "reviewIssues": []}',
+            "`reviewIssuesByRound` is missing or is not a list",
+        ),
+        (
+            (
+                '{"criticFindingsByRound": {}, "reviewIssuesByRound": [],'
+                ' "unresolvedBlockingFindings": [], "reviewIssues": []}'
+            ),
+            "`criticFindingsByRound` is missing or is not a list",
+        ),
+    ],
+)
+def test_a_result_that_is_not_a_result_is_refused(
+    tmp_path: Path, checked: Check, *, text: str, why: str
+) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    publish_check.result_path(path).write_text(text, "utf-8")
+    code, lines = checked(path, root)
+    assert code == 2
+    assert lines[0].startswith(f"publish check: the run's result in {path}.result.json cannot be")
+    assert why in lines[0]
+    assert lines[0].endswith("; that is never a pass")
+    assert len(lines) == 1
+
+
+def test_a_run_that_errored_has_no_result_and_is_checked_for_moves_alone(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    publish_check.result_path(path).unlink()
+    monkeypatch.setattr(preflight, "run_gh", gh_returning(NONE_OPEN))
+    argv = ["publish_check.py", str(path), "--root", str(root), "--before-resume"]
+    assert publish_check.main(argv) == 0
+    assert capsys.readouterr().out.splitlines() == [GREEN, NOTHING]
+    commit(root, "feat(core): a role committed")
+    assert publish_check.main(argv) == 1
+    assert capsys.readouterr().out.splitlines()[-2:] == [RED, NOTHING]
+
+
+def test_before_resume_with_a_result_file_present_is_refused(
+    tmp_path: Path, capsys: Out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    resulted(path, {"reviewIssues": [breaking("AGENTS.md", "invented")]})
+    monkeypatch.setattr(preflight, "run_gh", gh_returning(NONE_OPEN))
+    argv = ["publish_check.py", str(path), "--root", str(root), "--before-resume"]
+    assert publish_check.main(argv) == 2
+    assert capsys.readouterr().out.splitlines() == [
+        (
+            f"publish check: `--before-resume` was given, but the run's result is in"
+            f" {path}.result.json; a run that returned is checked without it"
+        )
+    ]
+
+
+def test_the_result_is_beside_the_start_file() -> None:
+    assert publish_check.result_path(Path("/x/report.json")) == Path("/x/report.json.result.json")
+
+
+def test_an_invented_quote_on_a_fixed_major_is_red(tmp_path: Path, checked: Check) -> None:
+    root = checkout(tmp_path)
+    write(root, "AGENTS.md", f"{QUOTE}\n")
+    path = started(tmp_path, root)
+    invented = breaking("AGENTS.md", "Every finding is fixed.")
+    resulted(path, {"criticFindingsByRound": [{"round": 1, "findings": [invented]}]})
+    assert checked(path, root) == (
+        1,
+        [unquoted("AGENTS.md", "Every finding is fixed."), QUOTES_RED],
+    )
+
+
+def test_a_found_quote_is_green(tmp_path: Path, checked: Check) -> None:
+    root = checkout(tmp_path)
+    write(root, "AGENTS.md", f"{QUOTE}\n")
+    path = started(tmp_path, root)
+    held = breaking("AGENTS.md", QUOTE, "blocker")
+    resulted(
+        path,
+        {
+            "criticFindingsByRound": [{"round": 1, "findings": [held]}],
+            "unresolvedBlockingFindings": [held],
+            "reviewIssues": [breaking("AGENTS.md", QUOTE)],
+        },
+    )
+    assert checked(path, root) == (0, [GREEN])
+
+
+def test_a_minor_with_a_quote_its_record_does_not_hold_does_not_block(
+    tmp_path: Path, checked: Check
+) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    minor = breaking("AGENTS.md", "x", "minor")
+    resulted(path, {"reviewIssues": [minor, {"severity": "minor", "title": "no breaks"}]})
+    assert checked(path, root) == (0, [GREEN])
+
+
+def test_a_blocker_or_major_with_no_breaks_is_red(tmp_path: Path, checked: Check) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    resulted(path, {"unresolvedBlockingFindings": [{"severity": "blocker", "title": "bare"}]})
+    assert checked(path, root) == (
+        1,
+        [f'publish check: the finding `bare` quotes `` with "" and {NO_BREAKS}', QUOTES_RED],
+    )
+
+
+def test_a_finding_in_two_lists_is_said_once(tmp_path: Path, checked: Check) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    invented = breaking("AGENTS.md", "invented")
+    resulted(
+        path,
+        {
+            "criticFindingsByRound": [{"round": 1, "findings": [invented]}, {"round": 2}],
+            "unresolvedBlockingFindings": [invented],
+        },
+    )
+    assert checked(path, root) == (
+        1,
+        [unquoted("AGENTS.md", "invented", why="the record `AGENTS.md` is absent"), QUOTES_RED],
+    )
+
+
+def test_a_blocker_of_a_review_round_that_sent_a_fix_pass_is_checked(
+    tmp_path: Path, checked: Check
+) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    invented = breaking("AGENTS.md", "invented")
+    resulted(path, {"reviewIssuesByRound": [{"round": 0, "findings": [invented]}]})
+    assert checked(path, root) == (
+        1,
+        [unquoted("AGENTS.md", "invented", why="the record `AGENTS.md` is absent"), QUOTES_RED],
+    )
+
+
+def test_a_finding_that_is_not_an_object_is_red(tmp_path: Path, checked: Check) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    resulted(path, {"reviewIssues": ["a finding as text"]})
+    assert checked(path, root) == (
+        1,
+        ['publish check: the finding `` quotes `` with "" and it is not an object', QUOTES_RED],
+    )
+
+
+def test_a_quote_of_the_spec_is_read_from_the_specs_path(tmp_path: Path, checked: Check) -> None:
+    root = checkout(tmp_path)
+    write(root, "docs/features/x/spec.md", "- [ ] It does the thing.\n")
+    path = started(tmp_path, root)
+    findings = [breaking("spec.md", "It does the thing."), breaking("spec.md", "It does more.")]
+    resulted(path, {"reviewIssues": findings, "specPath": "docs/features/x/spec.md"})
+    assert checked(path, root) == (1, [unquoted("spec.md", "It does more."), QUOTES_RED])
+
+
+def test_a_quote_of_the_spec_with_no_spec_path_is_red(tmp_path: Path, checked: Check) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    resulted(path, {"reviewIssues": [breaking("spec.md", "It does the thing.")]})
+    assert checked(path, root)[1][0] == unquoted(
+        "spec.md", "It does the thing.", why="the record `spec.md` is absent"
+    )
+
+
+def test_a_quote_of_the_ticket_is_read_from_the_ticket_the_result_names(
+    tmp_path: Path, checked: Check
+) -> None:
+    root = checkout(tmp_path)
+    write(root, ".scratch/x/issues/01-x.md", "# T\n\n- [ ] The tool lists every file.\n")
+    path = started(tmp_path, root)
+    findings = [
+        breaking("ticket", "The tool lists every file."),
+        breaking("ticket", "The tool lists no file."),
+    ]
+    resulted(path, {"reviewIssues": findings, "ref": ".scratch/x/issues/01-x.md"})
+    assert checked(path, root) == (1, [unquoted("ticket", "The tool lists no file."), QUOTES_RED])
+
+
+@pytest.mark.parametrize("ref", [None, 4, "not-a-ticket"])
+def test_a_quote_of_a_ticket_that_cannot_be_read_is_red(
+    tmp_path: Path, checked: Check, ref: object
+) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    resulted(path, {"reviewIssues": [breaking("ticket", "The tool lists.")], "ref": ref})
+    assert checked(path, root)[1][0] == unquoted(
+        "ticket", "The tool lists.", why="the record `ticket` is absent"
+    )
+
+
+def test_a_moved_branch_and_an_invented_quote_are_both_said(tmp_path: Path, checked: Check) -> None:
+    root = checkout(tmp_path)
+    path = started(tmp_path, root)
+    resulted(path, {"reviewIssues": [breaking("DESIGN.md", "invented")]})
+    commit(root, "feat(core): a role committed")
+    code, lines = checked(path, root)
+    assert code == 1
+    assert lines[1] == RED
+    assert lines[2:] == [
+        unquoted("DESIGN.md", "invented", why="the record `DESIGN.md` is absent"),
+        QUOTES_RED,
+    ]
