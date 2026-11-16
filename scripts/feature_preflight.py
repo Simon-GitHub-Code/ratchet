@@ -395,8 +395,13 @@ def slug_of(title: str, number: int | None) -> str:
     return words or (f"ticket-{number}" if number else "feature")
 
 
+FEATURE_BRANCHES = "feature/"
+
+
 def branch_of(ticket: Ticket, slug: str) -> str:
-    return f"feature/{ticket.number}-{slug}" if ticket.number else f"feature/{slug}"
+    if ticket.number:
+        return f"{FEATURE_BRANCHES}{ticket.number}-{slug}"
+    return f"{FEATURE_BRANCHES}{slug}"
 
 
 def conjecture_failure(ticket: Ticket, root: Path, gh: Runner) -> str | None:

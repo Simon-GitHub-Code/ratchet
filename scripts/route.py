@@ -750,40 +750,72 @@ def records_stopped(checkout: Checkout) -> Step | None:
     )
 
 
+def owned_by_a_run(root: Path, name: str) -> bool:
+    """Whether the drain or a feature run owns ``name``: its note, or the feature branch prefix."""
+    return name.startswith(preflight.FEATURE_BRANCHES) or bool(queue_notes.read_note(root, name))
+
+
+def holds_only_records(root: Path, default: str, name: str) -> bool:
+    base = f"{merge.HEADS}{default}"
+    change = merge_ready.read(root, base, f"{merge.HEADS}{name}")
+    if isinstance(change, merge_ready.Reason) or not change.paths:
+        return False
+    return not merge_ready.not_records(root, base, change.paths)
+
+
+def first_commit_time(root: Path, default: str, name: str) -> int:
+    said = gatelib.git(root, "log", "--reverse", "--format=%at", f"{default}..{name}")
+    log = (said or "").split()
+    return int(log[0]) if log else 0
+
+
+def waiting_records(checkout: Checkout) -> list[str]:
+    """Local branches not merged into the default branch whose change holds records alone.
+
+    Why: the name plays no part. An agent that commits tickets on a branch of its own leaves the
+    route as blind to it as to a records branch; a branch a run owns, and the checked-out one,
+    are other steps' to name. The oldest by its first commit comes first.
+    """
+    root, default = checkout.root, checkout.default_branch
+    listed = gatelib.git(root, "branch", "--no-merged", default, "--format=%(refname:short)")
+    names = [
+        name
+        for name in (listed or "").split()
+        if name not in (default, checkout.branch)
+        and not owned_by_a_run(root, name)
+        and holds_only_records(root, default, name)
+    ]
+    return sorted(names, key=lambda name: first_commit_time(root, default, name))
+
+
 def records_waiting(checkout: Checkout) -> Step | None:
-    """A records branch ``merge --records`` left unmerged; the judge says whose merge it is.
+    """A branch holding records alone that was left unmerged; the judge says whose merge it is.
 
     Why the judge is asked here: a run stopped while ``check`` ran never heard its answer, and the
     branch it leaves looks like one the judge left to the owner.
     """
     root, default = checkout.root, checkout.default_branch
-    listed = gatelib.git(
-        root,
-        "branch",
-        "--list",
-        f"{merge.RECORDS}*",
-        "--no-merged",
-        default,
-        "--format=%(refname:short)",
-    )
-    waiting = (listed or "").split()
+    waiting = waiting_records(checkout)
     if not waiting:
         return None
     name = waiting[0]
+    count = len(waiting)
+    more = f"; {count} such branches wait, and this is the oldest" if count > 1 else ""
     reasons = merge_ready.judge(root, f"{merge.HEADS}{default}", f"{merge.HEADS}{name}")
     if not reasons:
         return Step(
             merge_command(root, name),
-            f"branch `{name}` holds records a run of {merge_command(root, '--records')} committed"
-            " and did not merge; the merge judge passes them, so an agent runs this, and it merges"
-            " them when `check` is green on the merge result",
+            f"branch `{name}` holds records and was not merged; its change holds only records,"
+            " and the merge judge passes them, so an agent runs this, and it merges them when"
+            f" `check` is green on the merge result{more}",
             NEXT,
             "records",
         )
     return Step(
         f"`git switch {default} && git merge --no-ff {name}`, typed by the owner",
-        f"the merge judge leaves branch `{name}` to the owner: {reasons[0].text};"
-        f" {merge_command(root, name)} prints every reason",
+        f"the merge judge leaves branch `{name}` to the owner, and its change holds only"
+        f" records, so the owner merges or deletes it: {reasons[0].text};"
+        f" {merge_command(root, name)} prints every reason{more}",
         NEXT,
         "records",
     )
