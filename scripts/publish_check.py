@@ -358,10 +358,11 @@ def short(commit: str) -> str:
     return commit[:SHORT]
 
 
-def branch_moves(root: Path, start: Start, *, halted: bool) -> list[str]:
+def branch_moves(root: Path, start: Start, *, halted: bool, drained: bool) -> list[str]:
     """How ``HEAD`` and the local branch moved since ``start``.
 
     ``halted``: a rebase the start asked for is under way, so a detached ``HEAD`` is said apart.
+    ``drained``: the start is a drain note's, so the step the line names is its final check.
     """
     on = gatelib.git(root, "rev-parse", "--abbrev-ref", "HEAD")
     if on is None:
@@ -376,19 +377,19 @@ def branch_moves(root: Path, start: Start, *, halted: bool) -> list[str]:
         moves.append(
             f"`{start.branch}` is gone; it was at {short(start.head)} when the run started"
         )
-    elif head != start.head and (move := head_move(root, start, head)) is not None:
+    elif head != start.head and (move := head_move(root, start, head, drained=drained)) is not None:
         moves.append(move)
     return moves
 
 
-def head_move(root: Path, start: Start, new: str) -> str | None:
+def head_move(root: Path, start: Start, new: str, *, drained: bool) -> str | None:
     """How the local branch moved to ``new``; ``None`` when it finished the start's rebase."""
     branch, old = start.branch, short(start.head)
+    step = FINAL_CHECK if drained else "this check"
     if gatelib.git(root, "merge-base", "--is-ancestor", start.head, new) is not None:
         return (
             f"`{branch}` moved from {old} to {short(new)}, which holds it with commits on"
-            f" top: a role committed, or the orchestrator committed before {FINAL_CHECK}; commit"
-            " only after that check is green"
+            f" top: a role committed, or the orchestrator committed before {step}"
         )
     rewritten = f"`{branch}` is at {short(new)}, which does not hold {old}, where it started"
     if start.rebase is None:
@@ -471,13 +472,15 @@ def forge_moves(branch: str, start: Forge, now: Forge) -> list[str]:
     return remote_move(branch, start.remote, now.remote) + opened + closed
 
 
-def check(root: Path, start: Start, gh: preflight.Runner) -> tuple[list[str], bool, str | None]:
+def check(
+    root: Path, start: Start, gh: preflight.Runner, *, drained: bool = False
+) -> tuple[list[str], bool, str | None]:
     """Every move since ``start``, a rebase it asked for left halfway, and an unread forge's why.
 
     Raises ``UnreadableError`` when the checkout cannot be read.
     """
     halted = start.rebase is not None and rebasing(root)
-    moves = branch_moves(root, start, halted=halted)
+    moves = branch_moves(root, start, halted=halted, drained=drained)
     if start.forge is None:
         return moves, halted, None
     try:

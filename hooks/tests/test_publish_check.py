@@ -60,10 +60,7 @@ def refs(root: Path) -> str:
     return git(root, "for-each-ref", "--format=%(refname) %(objectname)")
 
 
-ORCHESTRATOR = (
-    ", or the orchestrator committed before `drain.py check <ticket> --final`; commit only after"
-    " that check is green"
-)
+ORCHESTRATOR = ", or the orchestrator committed before this check"
 GREEN = "publish check: green, nothing was committed, pushed or opened since the run started"
 RED = (
     "publish check: red, a role published: the ticket ends as a role that published, never as an"
@@ -104,6 +101,16 @@ def test_uncommitted_staged_and_untracked_changes_are_not_a_move(
     git(root, "add", "src/new.txt")
     write(root, "notes.txt", "untracked\n")
     assert checked(path, root) == (0, [GREEN])
+
+
+def test_a_start_from_a_drain_note_names_the_final_check_as_the_step(tmp_path: Path) -> None:
+    root = checkout(tmp_path)
+    start = publish_check.read_start(started(tmp_path, root))
+    commit(root, "feat(core): a role committed")
+    moves, _, _ = publish_check.check(root, start, preflight.run_gh, drained=True)
+    assert moves[0].endswith(
+        "a role committed, or the orchestrator committed before `drain.py check <ticket> --final`"
+    )
 
 
 def test_a_commit_on_the_branch_is_a_role_that_published(tmp_path: Path, checked: Check) -> None:
