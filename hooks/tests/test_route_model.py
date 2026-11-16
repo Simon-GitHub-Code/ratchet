@@ -919,7 +919,9 @@ DONE = World(
 )
 
 
-FILLED_BY_THE_UPGRADE = frozenset({"dependencies", "installs", "pins", "signs", "suppressions"})
+FILLED_BY_THE_UPGRADE = frozenset(
+    {"changed_tests", "dependencies", "installs", "pins", "signs", "suppressions"}
+)
 
 
 def owes(repo: real.Repo, rules: frozenset[str]) -> list[owed.Entry]:
