@@ -23,7 +23,7 @@ Pick the mode from what the owner typed:
 
 1. **Preflight, before any agent exists.**
    - Run, in one Bash call: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" "<ticket>" --root .`.
-   - It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`) and exits 1 when red. `base` is the default branch, read from the checkout and the binding.
+   - It prints JSON (`ok`, `failures`, `number`, `title`, `slug`, `branch`, `base`, `label`, `critic`, `critic_reason`, `named_gates`) and exits 1 when red. `base` is the default branch, read from the checkout and the binding.
    - **Red on `size` alone** (the ticket's own `## Size` passes a product ceiling): split it as [Too large](#too-large-the-agent-splits-it) says, then build the first part that is free.
    - **A `hooks` failure whose `produce` does not start `the owner:`** is yours to repair. Run the command it names in one Bash call, then the preflight again.
    - **A `hooks` failure whose `produce` starts `the owner:`** is a change of git config, which the guard refuses from an agent. Report it with the rest below; do not run it.
@@ -42,7 +42,7 @@ Pick the mode from what the owner typed:
 
    ```
    name: "ratchet:pipeline"
-   args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
+   args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py", "namedGates": <the preflight's named_gates> }
    ```
 
    The run is the one [pipeline.md](../method/pipeline.md) describes. It never commits, pushes or opens a pull request. The critic runs only when `critic` is true (the binding declares the `depended-on` life event).
@@ -114,13 +114,13 @@ Run every command below from the repository's own checkout, on the default branc
    Done when `blocked` is empty and you have said what the drain will do, or you have reported each line and stopped.
 
 3. **Start the pipelines.**
-   - For each ticket in `start`, run `D open <ticket> --root .`. Exit 0 prints its `branch`, `worktree` and `base`. Exit 1 means the plan does not start it.
+   - For each ticket in `start`, run `D open <ticket> --root .`. Exit 0 prints its `branch`, `worktree`, `base` and `named_gates`. Exit 1 means the plan does not start it.
    - `open` is the gate on the order and the cap, so make every branch and work tree through it, none by hand.
    - Call the Workflow tool once per ticket opened, every call in one message so the runs are concurrent:
 
    ```
    name: "ratchet:pipeline"
-   args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" }
+   args: { "ref": "<ticket>", "branch": "<branch>", "base": "<base>", "root": "<worktree>", "preflight": "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py", "namedGates": <the open's named_gates> }
    ```
 
    **A run that errors.** An agent that dies ends the run in a thrown error ("resume the run to retry") and no result.

@@ -481,6 +481,12 @@ def named_gates(body: str, binding: str | None) -> list[NamedGate]:
     return list(found.values())
 
 
+def ticket_named_gates(ref: str, root: Path, gh: Runner) -> list[NamedGate]:
+    """The gates the criteria of ticket ``ref`` name, read against the binding in ``root``."""
+    ticket = fetch(ref, root, gh)
+    return [] if ticket is None else named_gates(ticket.body, binding_text(root))
+
+
 def operability_asked(root: Path) -> list[tuple[str, str]]:
     """The ``## Operability`` lines asked here, each with what it says; none before adoption.
 

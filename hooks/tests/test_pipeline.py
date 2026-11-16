@@ -1494,7 +1494,6 @@ def test_the_drain_counts_every_agent_a_run_can_spawn() -> None:
 
 E2E_GATE = {"gate": "e2e-browser", "tier": "2", "criterion": "`e2e-browser` is green"}
 SPEC_GATE = "`e2e-api`"
-NAMING = {**PREFLIGHT, "named_gates": [E2E_GATE]}
 FIXED = {"fix-1": IMPLEMENTED, "critique-1": CRITIQUED}
 KEPT_FAILING = {
     **CRITIQUED,
@@ -1506,7 +1505,7 @@ def _named(spec: dict[str, object], **answers: object) -> dict[str, Any]:
     answers = (
         {"implement": IMPLEMENTED, "critique": KEPT_FAILING, "review": REVIEW} | FIXED | answers
     )
-    return _run({"ref": "4"}, preflight=NAMING, spec=spec, **answers)
+    return _run({"ref": "4", "namedGates": [E2E_GATE]}, preflight=PREFLIGHT, spec=spec, **answers)
 
 
 def test_the_gates_the_criteria_name_reach_every_role_and_the_specs_add_to_them() -> None:
@@ -1569,3 +1568,27 @@ def test_the_result_says_which_named_gates_each_role_ran() -> None:
 def test_a_rejudge_reviews_against_the_gates_the_first_run_named() -> None:
     ran = _again({"namedGates": [{"gate": "e2e-browser", "tier": "2"}]}, **{"review-again": REVIEW})
     assert "`e2e-browser` (tier 2)" in ran["prompts"]["review-again"]
+
+
+def test_the_preflight_role_relays_no_named_gates_and_its_report_changes_nothing() -> None:
+    ran = _run(
+        {"ref": "4"},
+        preflight={**PREFLIGHT, "named_gates": [E2E_GATE]},
+        spec=SPECIFIED,
+        implement=IMPLEMENTED,
+        critique=CRITIQUED,
+        review=REVIEW,
+    )
+    assert "named_gates" not in ran["schemas"]["preflight"]["properties"]
+    assert "named_gates" not in ran["prompts"]["preflight"]
+    assert "No criterion of the ticket or of spec.md names a gate" in ran["prompts"]["review"]
+    assert ran["result"]["namedGates"] == []
+
+
+def test_the_skill_passes_the_named_gates_of_the_preflight_and_of_the_drain_open() -> None:
+    feature = (PIPELINE.parents[1] / "skills/feature/SKILL.md").read_text(encoding="utf-8")
+    assert "`critic_reason`, `named_gates`) and exits 1" in feature
+    assert '"namedGates": <the preflight\'s named_gates> }' in feature
+    assert '"namedGates": <the open\'s named_gates> }' in feature
+    assert "`branch`, `worktree`, `base` and `named_gates`" in feature
+    assert '"namedGates": <the first result\'s namedGates>' in feature

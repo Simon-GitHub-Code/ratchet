@@ -27,7 +27,7 @@
 export const meta = {
   name: 'pipeline',
   description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> ticket check (one amend of the spec when it finds a gap) -> implement -> adversarial critique -> fix loop (up to two rounds when the project is depended-on, one pass on a review blocker before that) -> independent review',
-  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, namedGates?, assumptions?, settled? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
+  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, namedGates?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, namedGates?, assumptions?, settled? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
   phases: [
     { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
     { title: 'Spec', detail: 'ticket -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the ticket leaves open questions' },
@@ -86,7 +86,7 @@ let SLUG = ''
 // not say runs them, since the older script predates the field and more scrutiny is the safe side.
 let CRITIC = true
 let CRITIC_REASON = ''
-let NAMED_GATES = namedGatesOf(REJUDGE && REJUDGE.namedGates)
+let NAMED_GATES = namedGatesOf(REJUDGE ? REJUDGE.namedGates : ARGS.namedGates)
 
 function namedGatesOf(list) {
   const seen = new Map()
@@ -707,19 +707,6 @@ const PREFLIGHT_SCHEMA = {
     label: { type: 'string', description: 'the "label" field: the agent-ready label as this tracker spells it' },
     critic: { type: 'boolean', description: 'the "critic" field: whether the project is depended-on, so the critique and fix phases run' },
     critic_reason: { type: 'string', description: 'the "critic_reason" field, verbatim' },
-    named_gates: {
-      type: 'array',
-      description: 'the "named_gates" field, verbatim: the gates the ticket\'s criteria name as code spans; empty when none does',
-      items: {
-        type: 'object',
-        properties: {
-          gate: { type: 'string' },
-          tier: { type: 'string' },
-          criterion: { type: 'string' },
-        },
-        required: ['gate', 'tier', 'criterion'],
-      },
-    },
     failures: {
       type: 'array',
       description: 'the "failures" field, verbatim; when the script could not run, one entry with check "script"',
@@ -819,7 +806,7 @@ In ${ROOT_HINT}, run, in a single Bash call:
     python3 ${script} "${REF}" --root .${baseFlag}${branchFlag}
 
 It prints a JSON object on stdout ({ ok, ref, failures: [{ check, detail, produce }], number,
-title, slug, branch, base, label, critic, critic_reason, named_gates: [{ gate, tier, criterion }] }) and a verdict line on stderr. Return that JSON's fields in the
+title, slug, branch, base, label, critic, critic_reason }) and a verdict line on stderr. Return that JSON's fields in the
 structured result, verbatim, plus the full output. Do not fix, label, edit or commit anything,
 and do not re-run with different arguments. If the script cannot be found or Python refuses
 it, return ok: false with one failure { check: "script", detail: <what happened>, produce:
@@ -1835,7 +1822,6 @@ BRANCH = BRANCH || preflight.branch
 BASE = BASE || preflight.base || ''
 CRITIC = preflight.critic !== false
 CRITIC_REASON = String(preflight.critic_reason || '')
-NAMED_GATES = namedGatesOf(preflight.named_gates)
 if (!SLUG || !BRANCH) throw new Error(`preflight returned ok without a slug and branch: ${JSON.stringify(preflight)}`)
 log(`Preflight green: ticket ${preflight.number || REF} "${preflight.title}" on branch ${BRANCH}`)
 
