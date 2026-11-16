@@ -5,9 +5,10 @@ commits ``AGENTS.md``, ``/ratchet:adopt`` commits the binding, the manifest and 
 quality files on its own branch and merges it, the spec skills leave records uncommitted on the
 default branch, ``merge --records`` commits them on a ``records/<time>`` branch and merges it or
 leaves it parked, and the drain writes its note through ``drain.close``, parking for the safeguard
-on what the real triggers gate printed. An owner's edit of a ticket is committed on the default
-branch at once, as the model has it. ``classify`` reads a real ``route.Step`` back as the model's
-advice label.
+on what the real triggers gate printed. In about half the states where records landed from the
+default branch are left parked, an agent committed them on a ``docs/tickets-<n>`` branch it named
+itself instead. An owner's edit of a ticket is committed on the default branch at once, as the
+model has it. ``classify`` reads a real ``route.Step`` back as the model's advice label.
 
 ``apply`` never runs ``scripts/merge.py``. Each merge it makes, of a working branch, of a records
 branch, or the drain's, is written with git: the merge that leaves the default branch checked out,
@@ -47,6 +48,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -168,6 +170,7 @@ OWN_CONJECTURE: Final = frozenset(Ticket) - {
     Ticket.RESOLVED,
 }
 LETTERS: Final = "ab"
+TICKETS_BRANCH: Final = "docs/tickets-"
 
 
 @functools.cache
@@ -378,9 +381,11 @@ class Repo:
         path.write_text(f"{path.read_text(encoding='utf-8')}\n{text} ({self.edits})\n", "utf-8")
         snapshot(self.root, f"docs(tracker): {text.lower()}")
 
-    def next_records_branch(self) -> str:
-        """A fresh ``records/<time>`` name; a counter stands for the time."""
+    def next_records_branch(self, *, named: bool = False) -> str:
+        """A fresh ``records/<time>`` name, a counter for the time; ``named``, an agent's own."""
         self.records += 1
+        if named:
+            return f"{TICKETS_BRANCH}{self.records}"
         return f"{merge.RECORDS}20261113-{self.records:06d}"
 
 
@@ -396,6 +401,20 @@ class Change:
         """The ticket the action moved."""
         pairs = zip(self.before.tickets, self.after.tickets, strict=True)
         return next(slot for slot, (old, new) in enumerate(pairs) if old != new)
+
+
+def named_by_an_agent(change: Change) -> bool:
+    """Whether a landing from the default branch leaves its records on a branch an agent named.
+
+    Why a hash of the state it leaves: the route finds a waiting branch by what it holds, not by
+    its name, so about half the states where one waits name it otherwise, whatever else they
+    hold. A run that stopped on its ``records/<time>`` branch keeps that name.
+    """
+    return (
+        change.before.head is Head.MAIN
+        and change.after.parked
+        and zlib.crc32(repr(change.after).encode()) % 2 == 1
+    )
 
 
 Handler = Callable[[Repo, Change], None]
@@ -943,7 +962,7 @@ def _records_run_stops(repo: Repo, _change: Change) -> None:
 @does(ActionName.AGENT_LANDS_RECORDS)
 def _agent_lands_records(repo: Repo, change: Change) -> None:
     if change.before.head is Head.MAIN:
-        branch(repo.root, repo.next_records_branch())
+        branch(repo.root, repo.next_records_branch(named=named_by_an_agent(change)))
     name = repo.head()
     if git(repo.root, "status", "--porcelain"):
         snapshot(repo.root, "docs(records): land what the owner's conversation wrote")
@@ -996,6 +1015,7 @@ RELEASES: Final = {
     "land the guard edits the run of": Advice.LAND_GUARD,
     "change ticket": Advice.CHANGE_TICKET,
 }
+WAITING: Final = "its change holds only records"
 
 
 def classify(step: route.Step) -> Advice | None:
@@ -1004,7 +1024,8 @@ def classify(step: route.Step) -> Advice | None:
     One stage names several labels: ``records`` for the glossary, a stopped run, records to land
     and a branch to merge; ``specify`` for the spec, its conjecture and its split; ``blocked-run``
     for a feature run's stash and each kind of hold the drain's note records. The command tells
-    them apart, and the why where two labels share one (``merge --records``).
+    them apart, and the why where two labels share one (``merge --records``) or where the command
+    names a branch whatever its name: a waiting branch is one whose change holds only records.
     """
     if step.stage == "records":
         return _records(step)
@@ -1022,7 +1043,7 @@ def _records(step: route.Step) -> Advice | None:
         return Advice.GRILL
     if "--records" in step.command:
         return Advice.FINISH_RECORDS if "stopped on branch" in step.why else Advice.LAND_RECORDS
-    return Advice.MERGE_RECORDS if merge.RECORDS in step.command else None
+    return Advice.MERGE_RECORDS if WAITING in step.why else None
 
 
 def _specify(step: route.Step) -> Advice | None:

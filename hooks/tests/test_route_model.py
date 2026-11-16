@@ -882,6 +882,58 @@ def built(tmp_path: Path, world: World) -> real.Repo:
     return repo
 
 
+def parked_by(world: World) -> real.Change:
+    """The landing on the walk's path to ``world`` that left its records branch waiting."""
+    tree = spanning()
+    edge = tree.parent[world]
+    while edge.source.parked:
+        edge = tree.parent[edge.source]
+    return real.Change(edge.source, edge.target)
+
+
+def test_the_walk_leaves_records_waiting_on_branches_of_both_kinds_of_name() -> None:
+    waiting = [world for world in spanning().order if world.parked]
+    named = sum(real.named_by_an_agent(parked_by(world)) for world in waiting)
+    assert 0 < named < len(waiting), (
+        f"of the {len(waiting)} states of the walk where a records branch waits, {named} name it"
+        f" as an agent picked it and {len(waiting) - named} `records/<time>`"
+    )
+
+
+@cache
+def landings_on_a_branch_an_agent_named() -> list[model.Edge]:
+    """The landings that leave records on a branch an agent named, nearest the start first."""
+    tree = spanning()
+    landings = [
+        edge
+        for edge in model.graph().edges
+        if edge.action is ActionName.AGENT_LANDS_RECORDS
+        and real.named_by_an_agent(real.Change(edge.source, edge.target))
+    ]
+    return sorted(landings, key=lambda edge: len(tree.trail(edge.source)))
+
+
+@pytest.mark.parametrize("tickets", [False, True], ids=["a spec", "tickets"])
+def test_records_waiting_on_a_branch_an_agent_named_are_named_for_its_merge(
+    tmp_path: Path, *, tickets: bool
+) -> None:
+    landing = next(
+        edge
+        for edge in landings_on_a_branch_an_agent_named()
+        if (edge.source.tickets != (Ticket.NONE, Ticket.NONE)) == tickets
+    )
+    edges = [*path_to(landing.source), landing]
+    repo = real.Repo.start(tmp_path)
+    for source, name, target in edges:
+        real.apply(repo, name, real.Change(source, target))
+    step = real.read(repo)
+    why = disagreement(landing.target, step, [str(edge.action) for edge in edges])
+    assert str(repo.parked).startswith(real.TICKETS_BRANCH), repo.parked
+    assert model.real_advice(landing.target) is Advice.MERGE_RECORDS, why
+    assert real.classify(step) is Advice.MERGE_RECORDS, why
+    assert f" {repo.parked}`" in step.command, why
+
+
 def upgraded(repo: real.Repo, world: World) -> World:
     """``world`` after the upgrade, which ``repo`` takes too."""
     (after,) = model.ACTIONS[ActionName.UPGRADE_LEAVES_ROWS_TO_FILL].successors(world)

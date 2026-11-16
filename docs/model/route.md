@@ -23,9 +23,9 @@ What it leaves out is listed [at the end](#left-out).
 | --- | --- |
 | Setup | nothing; an init that stopped before its questions; init done; the tracker set up; an adoption that stopped before it wrote the plugin pin; one that stopped after the pin, before its proof; adopted |
 | Commit hooks | installed, or not |
-| Checked out | the default branch; a working branch; a working branch the default branch already holds; a `records/<time>` branch |
+| Checked out | the default branch; a working branch; a working branch the default branch already holds; the `records/<time>` branch a stopped `just merge --records` run left |
 | Work tree | clean; records only; more than records |
-| A records branch waits for the owner's merge | yes or no |
+| A records branch waits for the owner's merge: a local branch the default branch does not hold, whose change holds only records, that no run owns and no work tree has checked out | yes or no |
 | The glossary and the design brief | written, or not |
 | A spec not yet split | none; written; stating its conjecture |
 | Each of the two tickets | none; needs triage; agent-ready; agent-ready with a conjecture; agent-ready with a stale conjecture, one whose criteria changed after it was written; held by a blocked run's stash; parked by the drain for open questions, for guard edits, for an owed safeguard, or by a note older than the kinds of hold or than the base commit a guard hold needs; built on its branch; merged but open; resolved |
@@ -35,6 +35,8 @@ What it leaves out is listed [at the end](#left-out).
 | An upgrade left rows an agent fills | yes or no |
 | The architecture | never asked, as before adoption and after an adoption by a plugin from before ADR 0049; owed since an upgrade; recorded |
 | The `Flag:` line | not yet asked, as before the upgrade that ships ADR 0061, whose plugin asked it only once `deployed` was declared; missing from the spec in flight and its tickets, which state their conjecture; asked, the conjecture writing it on the spec |
+
+A waiting records branch is known by what it holds, not by its name. A feature run owns a `feature/` branch, and the drain owns a branch its note names. `just merge --records` names its branch `records/<time>`, and an agent that commits tickets on a branch of its own names it as it likes. The tests leave it on a branch an agent named in about half the states where one waits, and on a `records/<time>` branch in the others.
 
 From an empty directory the model reaches 2778 states and 7642 steps. Nine of the states are at rest: adopted, nothing unfinished, nothing owed, and every ticket resolved or none written. In three the architecture is recorded, in three it was never asked, and in three it is recorded and the `Flag:` line is asked. At rest the route names the next spec.
 
@@ -67,7 +69,7 @@ The route asks in this order, and the first case that applies is its answer. Eac
 | `commit` | anything else is uncommitted | `just check`, then a commit on a branch |
 | `switch` | a working branch the default branch already holds is checked out | `git switch <default>` |
 | `merge` | a working branch is checked out | `just merge <branch>` |
-| `merge-records` | a records branch waits | the owner's merge of it |
+| `merge-records` | a records branch waits, whatever its name | the owner's merge of it |
 | `fill` | an upgrade left rows an agent writes from the repository | `/ratchet:fill` |
 | `review` | an architecture review is owed | `/ratchet:architecture` |
 | `safeguard` | a safeguard is owed | `/ratchet:safeguard` |
@@ -189,6 +191,7 @@ The tests also check that:
 - on a real repository whose binding runs `merge.py`, the merge the route names, of the adoption's branch before its proof or of a working branch, leaves the default branch checked out and keeps the branch, and the route names what the model says after it; checked out again, the branch is named for the switch, a second merge of it changes nothing, and the switch goes back;
 - on such a repository, a merge with a dirty tree, or with the default branch checked out elsewhere, leaves HEAD on the branch and its `next:` line names the switch first, and a merge run from the default branch leaves HEAD there; the route then names what the model says;
 - on a real repository, a build that stops on the branch it cut is left by the switch and built again, and following the route from there never comes back to it;
+- the walk leaves records waiting on branches of both kinds of name, and on a real repository, records waiting on a branch an agent named are named for their merge, those of a spec and those of the two tickets;
 - where the real route names the owed architecture, its `then:` names the step it names once the architecture is no longer owed, and its `why:` offers carrying on with it; that step is the one the model gives beneath, read as the real route reads the state;
 - where the real route names a safeguard, its `then:` names the step it names once the rows are bound, which is the owed architecture exactly where the model owes one, and its `why:` still offers carrying on with the work;
 - on a real repository, a commit on the default branch that a guard hold did not name leaves the ticket held, and landing the guard edits releases it;
