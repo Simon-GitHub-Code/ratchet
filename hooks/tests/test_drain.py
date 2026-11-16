@@ -1284,3 +1284,31 @@ def test_a_plan_that_does_not_parse_is_a_refused_split_and_a_split_parent_blocks
         text = (root / child).read_text(encoding="utf-8")
         (root / child).write_text(text.replace("Status:", "Status: done\nWas:"), encoding="utf-8")
     assert drain.preflight.open_blockers(waiting, root, gh) == []
+
+
+GATED_BINDING = binding(MERGE) + (
+    "\n## Gates\n\n| Question | Tool | Tier | Threshold source | Entry point |\n"
+    "| --- | --- | --- | --- | --- |\n| the browser suite | driver | 2 | | `just e2e-browser` |\n"
+)
+
+
+def test_open_hands_the_pipeline_the_gates_the_tickets_criteria_name(
+    tmp_path: Path, capsys: Out
+) -> None:
+    criteria = "## Acceptance criteria\n\n- [ ] `e2e-browser` is green\n- [ ] the list shows\n\n"
+    root = project(
+        tmp_path,
+        **{"docs/process/binding.md": GATED_BINDING, ALPHA: ticket(1, "Alpha", criteria)},
+    )
+    assert run(root, "open", ALPHA) == 0
+    assert json.loads(capsys.readouterr().out)["named_gates"] == [
+        {"gate": "e2e-browser", "tier": "2", "criterion": "`e2e-browser` is green"}
+    ]
+
+
+def test_open_hands_the_pipeline_no_gate_when_no_criterion_names_one(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path, **{"docs/process/binding.md": GATED_BINDING})
+    assert run(root, "open", ALPHA) == 0
+    assert json.loads(capsys.readouterr().out)["named_gates"] == []

@@ -27,7 +27,7 @@
 export const meta = {
   name: 'pipeline',
   description: 'Build one feature from an agent-ready ticket with the Ratchet method: preflight -> spec -> ticket check (one amend of the spec when it finds a gap) -> implement -> adversarial critique -> fix loop (up to two rounds when the project is depended-on, one pass on a review blocker before that) -> independent review',
-  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, assumptions?, settled? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
+  whenToUse: 'Run by the /ratchet:feature skill with args { ref, branch, base?, root?, preflight?, namedGates?, ticketFindings? } after its own preflight is green; not by hand. ticketFindings are the last run\'s, when its review found the build lost a promise of the ticket. With args.rejudge = { slug, specPath, conflicts?, checkRed?, dependencies?, namedGates?, assumptions?, settled? } it judges again a branch that was brought up to date behind another merge: Reconcile when the rebase conflicted or check went red, then Review. Never commits, pushes or opens a PR; the orchestrator does that after reading the result.',
   phases: [
     { title: 'Preflight', detail: 'scripts/feature_preflight.py on the ticket: open, `## Conjecture` stated, agent-ready label, clean tree; stops with verdict "blocked" naming what produces each missing piece' },
     { title: 'Spec', detail: 'ticket -> docs/features/<slug>/spec.md + failing tests; stops with verdict "blocked" if the ticket leaves open questions' },
@@ -86,6 +86,24 @@ let SLUG = ''
 // not say runs them, since the older script predates the field and more scrutiny is the safe side.
 let CRITIC = true
 let CRITIC_REASON = ''
+let NAMED_GATES = namedGatesOf(REJUDGE ? REJUDGE.namedGates : ARGS.namedGates)
+
+function namedGatesOf(list) {
+  const seen = new Map()
+  for (const entry of Array.isArray(list) ? list : []) {
+    const gate = String(typeof entry === 'string' ? entry : (entry && entry.gate) || '').replace(/`/g, '').trim()
+    if (!gate) continue
+    const tier = entry && typeof entry === 'object' && entry.tier !== undefined && entry.tier !== '' ? String(entry.tier) : ''
+    if (!seen.has(gate) || (tier && !seen.get(gate).tier)) seen.set(gate, tier ? { gate, tier } : { gate })
+  }
+  return [...seen.values()]
+}
+
+function namedGatesList() {
+  if (!NAMED_GATES.length) return '- No criterion of the ticket or of spec.md names a gate.'
+  const names = NAMED_GATES.map(g => `\`${g.gate}\`${g.tier ? ` (tier ${g.tier})` : ''}`).join(', ')
+  return `- The gates the criteria name, as code spans: ${names}. A gate of tier 2 or later, or any other gate \`check\` does not run, is the one the rule below sends to a role.`
+}
 
 const ROOT_HINT = ROOT
   ? `the repository root (${ROOT}, the directory holding AGENTS.md)`
@@ -169,15 +187,33 @@ Guard paths and gate disputes:
 // implementation exists; the critic keeps tests that fail) cannot get a green `check` anyway, so
 // it runs tier 0 and only the tests it wrote. Implement, fix and review run the full `check`,
 // and the review's run on the final tree is the one that counts.
-const CHECK_RULE = `- Before returning, run \`check\` from the repository root and include the LAST ~40 lines of
+const WORKING_RULE = `- While you work, run the \`tier0\` entry point and \`tests-changed all\`. Never run a suite whole
+  to see whether your own tests pass.`
+const CHECK_RULE = `${WORKING_RULE}
+- Run \`check\` from the repository root last, before you return, and again only after an edit: do
+  not run it again on a tree you have not changed since a green run. Include the LAST ~40 lines of
   its output verbatim in the \`checkOutput\` field of your structured result.`
-const OWN_TESTS_RULE = `- Your tree is red on purpose, so do not run \`check\`. Before returning, run the \`tier0\`
-  entry point from the repository root, then only the tests you wrote, with the test runner
-  binding.md names. Include the LAST ~40 lines of that output verbatim in the \`checkOutput\`
-  field of your structured result. The implementer, the fixer and the reviewer run the full
-  \`check\`; the reviewer's run on the final tree is the one that counts.`
+const OWN_TESTS_RULE = `${WORKING_RULE}
+- Your tree is red on purpose, so do not run \`check\`. Before returning, run the \`tier0\` entry
+  point from the repository root, then only the tests you wrote, with \`tests-changed all\`.
+  Include the LAST ~40 lines of that output verbatim in the \`checkOutput\` field of your
+  structured result. The implementer, the fixer and the reviewer run \`check\` last; the reviewer's
+  run on the final tree is the one that counts.`
+const NAMED_GATE_RULES = {
+  implement: `- A gate outside \`check\` that a criterion names is run whole, once, by you, after your
+  \`check\` is green. Return the ones you ran in \`namedGatesRun\`, as code spans.`,
+  review: `- A gate outside \`check\` that a criterion names is run whole, once, by you, on the tree you
+  judge. Return the ones you ran in \`namedGatesRun\`, as code spans.`,
+}
+const NO_NAMED_GATE_RULE = `- You run no gate a criterion names that \`check\` does not: the implementer runs each once and
+  each review once.`
 
-function commonRules(rebasing, ownTestsOnly) {
+function namedGatesRules(role) {
+  return `${namedGatesList()}
+${NAMED_GATE_RULES[role] || NO_NAMED_GATE_RULE}`
+}
+
+function commonRules(role, rebasing) {
   const uncommitted = rebasing
     ? `- The branch holds the change as commits. Every edit you make stays uncommitted on the
   working tree; the orchestrator commits it. The git commands you run are read-only, plus the
@@ -197,7 +233,8 @@ ${uncommitted}
 - The project's non-negotiables are whatever AGENTS.md lists; its declared paths and their
   dependency direction are whatever AGENTS.md and docs/process/binding.md define. Each is a
   hard rule.
-${ownTestsOnly ? OWN_TESTS_RULE : CHECK_RULE}
+${role === 'spec' || role === 'critic' ? OWN_TESTS_RULE : CHECK_RULE}
+${namedGatesRules(role)}
 - Your final output is consumed by a script, not a human: return only the structured object.
 ${GUARD_RULES}`
 }
@@ -287,6 +324,11 @@ const ESTIMATE_FIELD = {
 const SPEC_SCHEMA = {
   type: 'object',
   properties: {
+    namedGates: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'The gates of the binding\'s Gates table that spec.md\'s criteria name as a code span and the list you were given does not hold, each as the code span of its name; empty when the criteria add none',
+    },
     ...CHANGE_SIZE_FIELD,
     ...ESTIMATE_FIELD,
     slug: {
@@ -382,7 +424,7 @@ const SPEC_SCHEMA = {
     },
     ...checkOutputField(true),
   },
-  required: ['slug', 'specPath', 'testFiles', 'layersTouched', 'openQuestions', 'assumptions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
+  required: ['slug', 'specPath', 'namedGates', 'testFiles', 'layersTouched', 'openQuestions', 'assumptions', 'dependencies', 'guardEdits', 'failingForRightReason', 'failures', 'checkOutput'],
 }
 
 const DISPUTES_FIELD = {
@@ -451,6 +493,20 @@ const IMPLEMENT_SCHEMA = {
     ...checkOutputField(),
   },
   required: ['filesChanged', 'allNewTestsPass', 'checkPasses', 'notes', 'disputes', 'checkOutput'],
+}
+
+const NAMED_GATES_RUN_FIELD = {
+  namedGatesRun: {
+    type: 'array',
+    items: { type: 'string' },
+    description: 'The gates a criterion names that you ran whole, each as the code span of its name; empty when none was named or none lies outside `check`',
+  },
+}
+
+const BUILD_SCHEMA = {
+  ...IMPLEMENT_SCHEMA,
+  properties: { ...IMPLEMENT_SCHEMA.properties, ...NAMED_GATES_RUN_FIELD },
+  required: [...IMPLEMENT_SCHEMA.required, 'namedGatesRun'],
 }
 
 const CRITIQUE_SCHEMA = {
@@ -630,9 +686,10 @@ const REVIEW_SCHEMA = {
       },
     },
     checkPasses: { type: 'boolean', description: 'true only if `check` exited 0 when you ran it' },
+    ...NAMED_GATES_RUN_FIELD,
     ...checkOutputField(),
   },
-  required: ['verdict', 'ticketPromises', 'acceptedInputs', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'recordNotes', 'disputeCoverage', 'checkPasses', 'checkOutput'],
+  required: ['verdict', 'ticketPromises', 'acceptedInputs', 'issues', 'adrSuggested', 'guardChanges', 'dependencyNotes', 'recordNotes', 'disputeCoverage', 'checkPasses', 'namedGatesRun', 'checkOutput'],
 }
 
 // ---------------------------------------------------------------------------
@@ -775,7 +832,7 @@ const PROMISE_RAISED = 'A promise of the ticket you believe cannot or should not
 function specPrompt(gaps = []) {
   return `${PREAMBLE}
 You are the SPEC agent for one feature of this repository.
-${commonRules(false, true)}
+${commonRules('spec')}
 Load the \`mattpocock-skills:tdd\` skill: it says what a good test is and how the seams under
 test are chosen. The spec names those seams; the owner has agreed the approach through the
 ticket's \`## Conjecture\` section and the agent-ready label.
@@ -993,7 +1050,7 @@ ${JSON.stringify(assumed, null, 2)}
     : ''
   return `${PREAMBLE}
 You are the IMPLEMENT agent for feature \`${spec.slug}\` of this repository.
-${commonRules()}
+${commonRules('implement')}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The failing tests: ${JSON.stringify(spec.testFiles)}
@@ -1027,7 +1084,7 @@ function fixPrompt(spec, findings, testsAdded, iteration, rounds) {
   const minors = findings.filter(f => f.severity === 'minor' && !blockingFindings.includes(f))
   return `${PREAMBLE}
 You are the FIX agent (round ${iteration} of ${rounds}) for feature \`${spec.slug}\` of this repository.
-${commonRules()}
+${commonRules('fix')}
 A previous implementer built this feature and a critic or reviewer found problems. You start
 fresh, from the spec and the code as they are; the previous implementer's reasoning is not
 among your inputs.
@@ -1065,7 +1122,7 @@ function reconcilePrompt(spec, conflicts) {
 You are the RECONCILE agent for feature \`${spec.slug}\` of this repository. The feature was
 built and approved. Then another change merged into \`${BASE}\`, and this branch must hold
 that change before it can merge. You bring the two together and change nothing else.
-${commonRules(true)}
+${commonRules('reconcile', true)}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The branch's own change: \`git diff ${BASE}...${BRANCH}\`
@@ -1111,7 +1168,7 @@ in-process; the owner may run \`/pstack:interrogate\` on the branch afterwards, 
 to type, not yours to imitate). The rule of evidence: a finding survives only when a run proves
 it, so each carries the exact command, the output it printed and the output the spec requires;
 leave out anything you did not run; "no findings" is a valid result when you name what you ran.
-${commonRules(false, true)}
+${commonRules('critic')}
 Inputs you may read:
 - The spec: \`${spec.specPath}\`
 - The spec's tests: ${JSON.stringify(spec.testFiles)}
@@ -1215,7 +1272,7 @@ top; \`git diff ${BASE}\` shows both, and nothing of the other change.
     : ''
   return `${PREAMBLE}
 You are the independent REVIEWER for feature \`${spec.slug}\` of this repository.
-${commonRules()}${second}
+${commonRules('review')}${second}
 Inputs you may read, and nothing else:
 - The ticket: ${ticketHint()}, with its comments and its \`## Answers\` section: what the owner
   asked for and agreed. Read it; never edit it or comment on it.
@@ -1796,6 +1853,7 @@ const spec = found.length
   : written
 const amendStop = found.length ? specStop(spec) : null
 if (amendStop) return amendStop
+NAMED_GATES = namedGatesOf([...NAMED_GATES, ...(Array.isArray(spec.namedGates) ? spec.namedGates : [])])
 const check = found.length
   ? must(
     await agent(ticketCheckPrompt(spec), { label: 'ticket-recheck', phase: 'Ticket check', schema: TICKET_CHECK_SCHEMA }),
@@ -1813,7 +1871,7 @@ if (assumedByRun.length) log(`Ticket check: ${assumedByRun.length} input case(s)
 // ---------------------------------------------------------------------------
 phase('Implement')
 const impl = must(
-  await agent(implementPrompt(spec, kept.map(k => k.question), assumedByRun), { label: 'implement', phase: 'Implement', schema: IMPLEMENT_SCHEMA }),
+  await agent(implementPrompt(spec, kept.map(k => k.question), assumedByRun), { label: 'implement', phase: 'Implement', schema: BUILD_SCHEMA }),
   'implement',
 )
 let filesChanged = union(spec.testFiles, impl.filesChanged)
@@ -1958,6 +2016,8 @@ return {
   criticAttempted: critique.attempted,
   checkPasses: lastCheckPasses && review.checkPasses === true,
   checkOutput: lastCheckOutput,
+  namedGates: NAMED_GATES,
+  namedGatesRun: { implement: impl.namedGatesRun ?? [], review: review.namedGatesRun ?? [] },
   branch: BRANCH,
   verdictRecord: verdictRecord({
     slug: SLUG,

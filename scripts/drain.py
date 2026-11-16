@@ -833,9 +833,17 @@ def open_ticket(drain: Drain, ref: str) -> int:
     keep = prior.get("reported") is False and prior.get("outcome") not in {None, MERGED}
     kept = {k: v for k, v in prior.items() if k not in START_DROPPED} if keep else {}
     queue_notes.write_note(path, {**kept, **asdict(entry), "opened": opened, "start": start})
+    named = [asdict(n) for n in preflight.ticket_named_gates(entry.ref, tree, drain.tracker)]
     print(
         json.dumps(
-            {**asdict(entry), "state": BUILDING, "base": drafted.base, "start": start}, indent=2
+            {
+                **asdict(entry),
+                "state": BUILDING,
+                "base": drafted.base,
+                "start": start,
+                "named_gates": named,
+            },
+            indent=2,
         )
     )
     return 0
