@@ -7,11 +7,16 @@ sequence of abstract answers up to the fix loop's bound runs on the model and on
 
 from __future__ import annotations
 
+import fcntl
 import functools
 import json
+import os
+import pickle
 from collections import deque
 from dataclasses import replace
 from typing import TYPE_CHECKING
+
+import pytest
 
 import publish_check
 from tests import model_tla
@@ -261,9 +266,41 @@ def described(
 Case = tuple[list[model.Action], model.Ending | None, world.Played]
 
 
+REPLAYED = pytest.mark.shard_slot(9)
+"""The shard every test that reads ``played()`` runs in, so one shard pays for the replay."""
+SHARED: list[Path] = []
+"""The folder this run's workers share, when the run is spread over workers."""
+
+
+@pytest.fixture(scope="session", autouse=True)
+def shared_replay(tmp_path_factory: pytest.TempPathFactory) -> None:
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        SHARED[:] = [tmp_path_factory.getbasetemp().parent]
+
+
 @functools.cache
 def played() -> tuple[list[Case], world.Batch]:
-    """Every run of the model with the ending it expects, and what the real workflow did on it."""
+    """Every run of the model with the ending it expects, and what the real workflow did on it.
+
+    Why: the replay is the longest work in the suite, so the first worker of a run to need it
+    plays it and keeps it in the folder the run's workers share, and the others wait and read it.
+    """
+    if not SHARED:
+        return replay()
+    kept = SHARED[0] / "pipeline-replay.pickle"
+    with (SHARED[0] / "pipeline-replay.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if kept.exists():
+            found: tuple[list[Case], world.Batch] = pickle.loads(kept.read_bytes())  # noqa: S301
+            return found
+        made = replay()
+        part = kept.with_suffix(".part")
+        part.write_bytes(pickle.dumps(made, protocol=pickle.HIGHEST_PROTOCOL))
+        part.replace(kept)
+        return made
+
+
+def replay() -> tuple[list[Case], world.Batch]:
     cases = [(actions, state.ending) for actions, state in runs()]
     # Why: a local ticket file changes what the roles that read the ticket are told to run, so the
     # longest build and the longest rejudge run once more reading one.
@@ -276,6 +313,7 @@ def played() -> tuple[list[Case], world.Batch]:
     return [(actions, ending, real) for (actions, ending), real in together], batch
 
 
+@REPLAYED
 def test_the_real_workflow_does_what_the_model_does_on_every_sequence_of_answers() -> None:
     cases, batch = played()
     differ = [
@@ -303,6 +341,7 @@ def told(actions: list[model.Action]) -> tuple[tuple[str, int], ...]:
     return tuple(rounds)
 
 
+@REPLAYED
 def test_on_the_real_workflow_each_fix_agent_is_told_the_rounds_its_loop_has() -> None:
     # Why: the fix agent reads its round count to know whether another round follows, so a young
     # project's fixer told of two rounds would leave to a round that never runs what one can close.
@@ -317,6 +356,7 @@ def ending_on(test: Callable[[model.Action], bool]) -> list[tuple[model.Action, 
     return [(actions[-1], real) for actions, _, real in played()[0] if test(actions[-1])]
 
 
+@REPLAYED
 def test_on_the_real_workflow_a_change_any_measuring_role_finds_over_a_ceiling_stops() -> None:
     over = ending_on(lambda last: last.role in model.MEASURED_AT and last.answer in model.OVER)
     stage = {
@@ -336,6 +376,7 @@ def test_on_the_real_workflow_a_change_any_measuring_role_finds_over_a_ceiling_s
         ), last.name
 
 
+@REPLAYED
 def test_every_result_the_real_workflow_returns_passes_the_publish_checks_reading(
     tmp_path: Path,
 ) -> None:
@@ -347,11 +388,13 @@ def test_every_result_the_real_workflow_returns_passes_the_publish_checks_readin
         publish_check.read_result(path)
 
 
+@REPLAYED
 def test_every_stop_of_the_model_is_reached_on_a_run_of_the_real_workflow() -> None:
     reached = {real.ending.stop for _, _, real in played()[0] if real.ending.stop is not None}
     assert reached == set(model.Stop)
 
 
+@REPLAYED
 def test_on_the_real_workflow_no_review_starts_after_a_finding_is_parked_as_still_owed() -> None:
     parked = [
         (actions, real)
@@ -368,6 +411,7 @@ def test_on_the_real_workflow_no_review_starts_after_a_finding_is_parked_as_stil
         assert result["unresolved"] > 0
 
 
+@REPLAYED
 def test_on_the_real_workflow_a_stop_after_a_role_keeps_what_was_built_and_asks_the_owner() -> None:
     stops = {model.Stop.DEPARTURE, model.Stop.QUESTION_AFTER_BUILD}
     stopped = [(actions, real) for actions, _, real in played()[0] if real.ending.stop in stops]
@@ -380,6 +424,7 @@ def test_on_the_real_workflow_a_stop_after_a_role_keeps_what_was_built_and_asks_
             assert result["built"] > 0, actions[-1].name
 
 
+@REPLAYED
 def test_on_the_real_workflow_every_dead_agent_ends_in_an_error_that_says_to_resume() -> None:
     dead = ending_on(lambda last: last.answer in model.FAILED)
     assert {last.role for last, _ in dead} == set(model.Role)
@@ -391,6 +436,7 @@ def test_on_the_real_workflow_every_dead_agent_ends_in_an_error_that_says_to_res
         assert world.RESUME in error["message"], error
 
 
+@REPLAYED
 def test_on_the_real_workflow_a_too_large_stop_ends_there_and_leaves_the_split_unasked() -> None:
     stopped = [
         (actions, real)
