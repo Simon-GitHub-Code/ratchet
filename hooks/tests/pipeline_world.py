@@ -36,10 +36,12 @@ from tests.pipeline_model import (
 )
 from tests.test_pipeline import (
     ASKED,
+    CASE_QUESTION,
     CHECKED,
     CRITIQUED,
     GAP,
     IMPLEMENTED,
+    INVENTED,
     NO_SCRIPT,
     PIPELINE,
     PREFLIGHT,
@@ -47,6 +49,9 @@ from tests.test_pipeline import (
     REVIEW,
     SPECIFIED,
     YOUNG,
+    _case,
+    _departure,
+    _quoted,
 )
 
 TICKET_FILE = ".scratch/list/issues/01-save-a-link.md"
@@ -78,11 +83,14 @@ PARTS = [
 OPEN = {
     "severity": "major",
     "title": "loses the order",
+    "carries": None,
     "evidence": "two saves in one second came back reversed",
     "suggestedTest": "tests/critique/expiry.core.critique.test.py",
     "testFails": False,
     "heldByKeptTest": False,
 }
+PREVIOUS = "@previous"
+MOVED = "@moved"
 BLOCKER = {
     "axis": "spec",
     "severity": "blocker",
@@ -112,7 +120,29 @@ SPECS: dict[Said, object] = {
     Spec.FITS: {**SPECIFIED, "changeSize": FITS},
     Spec.WRONG_REASON: {**SPECIFIED, "changeSize": FITS, "failingForRightReason": False},
 }
+
+
+def reviewed(**fields: object) -> dict[str, Any]:
+    """A review whose blocker quotes the record it breaks, as the quote check printed it."""
+    return _quoted({**REVIEW, **fields}, "issues")
+
+
 BUILDS: dict[Said, object] = {
+    Build.DEPARTS_CRITERION: {
+        **IMPLEMENTED,
+        "changeSize": FITS,
+        "departures": [_departure("criterion")],
+    },
+    Build.DEPARTS_ASSUMPTION_ROLE: {
+        **IMPLEMENTED,
+        "changeSize": FITS,
+        "departures": [_departure("assumption", "role")],
+    },
+    Build.DEPARTS_ASSUMPTION_OWNER: {
+        **IMPLEMENTED,
+        "changeSize": FITS,
+        "departures": [_departure("assumption", "owner")],
+    },
     Build.PRODUCT_OVER: {**IMPLEMENTED, "changeSize": sized(1001, 100)},
     Build.TESTS_OVER: {**IMPLEMENTED, "changeSize": sized(100, 3001)},
     Build.TESTS_MARGIN: {**IMPLEMENTED, "changeSize": sized(100, 2500)},
@@ -122,22 +152,24 @@ BUILDS: dict[Said, object] = {
 REVIEWS: dict[Said, object] = {
     Review.APPROVES: REVIEW,
     Review.REFUSES: {**REVIEW, "verdict": "request_changes"},
-    Review.REFUSES_ISSUE: {**REVIEW, "verdict": "request_changes", "issues": [BLOCKER]},
+    Review.REFUSES_ISSUE: reviewed(verdict="request_changes", issues=[BLOCKER]),
     Review.REFUSES_MINOR: {
         **REVIEW,
         "verdict": "request_changes",
         "issues": [{**BLOCKER, "severity": "minor"}],
     },
-    Review.REFUSES_DROPPED: {
-        **REVIEW,
-        "verdict": "request_changes",
-        "issues": [BLOCKER],
-        "ticketPromises": GAP["ticketPromises"],
-    },
+    Review.REFUSES_DROPPED: reviewed(
+        verdict="request_changes", issues=[BLOCKER], ticketPromises=GAP["ticketPromises"]
+    ),
     Review.APPROVES_RED: {**REVIEW, "checkPasses": False},
-    Review.APPROVES_ISSUE: {**REVIEW, "issues": [BLOCKER]},
+    Review.APPROVES_ISSUE: reviewed(issues=[BLOCKER]),
     Review.APPROVES_DROPPED: {**REVIEW, "ticketPromises": GAP["ticketPromises"]},
     Review.APPROVES_GUARD: {**REVIEW, "guardChanges": ["guards/manifest.toml"]},
+    Review.UNSTATED_OWNER: {**REVIEW, "unstated": [_case("owner", of=None)]},
+    Review.ISSUE_NO_QUOTE: reviewed(
+        verdict="request_changes", issues=[{**BLOCKER, "breaks": INVENTED}]
+    ),
+    Review.CLASSIFIES_ROLE: {**REVIEW, "unstated": [_case("role", of=MOVED)]},
 }
 CONCRETE: dict[Said, object] = {
     Preflight.RED: {
@@ -159,7 +191,19 @@ CONCRETE: dict[Said, object] = {
     **BUILDS,
     Critique.CLEAR: CRITIQUED,
     Critique.SILENT: {**CRITIQUED, "attempted": []},
-    Critique.OWED: {**CRITIQUED, "findings": [OPEN], "testsAdded": [OPEN["suggestedTest"]]},
+    Critique.OWED: _quoted(
+        {**CRITIQUED, "findings": [OPEN], "testsAdded": [OPEN["suggestedTest"]]}
+    ),
+    Critique.OWED_CARRIED: _quoted(
+        {
+            **CRITIQUED,
+            "findings": [{**OPEN, "carries": PREVIOUS}],
+            "testsAdded": [OPEN["suggestedTest"]],
+        }
+    ),
+    Critique.NO_QUOTE: _quoted({**CRITIQUED, "findings": [{**OPEN, "breaks": INVENTED}]}),
+    Critique.UNSTATED_OWNER: {**CRITIQUED, "unstated": [_case("owner")]},
+    Critique.UNSTATED_ROLE: {**CRITIQUED, "unstated": [_case("role")]},
     **REVIEWS,
 }
 
@@ -254,6 +298,11 @@ function kept(result) {
           instructions: (result.requiredByOrchestrator || []).join('\\n'),
         }
       : null,
+    stop: result.stop ?? null,
+    built: (result.filesChanged || []).length,
+    stoppedAfter: result.stoppedAfter ?? null,
+    carried: (result.carriedStillOwed || []).length,
+    unstated: (result.unstated || []).filter(e => e.of).length,
     questions: (result.openQuestions || []).length,
     guardEdits: (result.guardEdits || []).length,
     preflight: Boolean(result.preflight),
@@ -278,9 +327,14 @@ async function main() {
       const name = run.answers[options.label]
       const answer = catalogue[name]
       if (answer == null) return null
-      const found = options.schema ? refused(options.schema, answer, name) : []
+      const round = Number((options.label.match(/-(\\d+)$/) || [0, 0])[1])
+      const moved = (prompt.match(/"id": "(C\\d+-\\d+)"/) || [])[1]
+      const text = JSON.stringify(answer)
+        .replace(/"@previous"/g, JSON.stringify(`C${round - 1}-1`))
+        .replace(/"@moved"/g, JSON.stringify(moved || 'no id in the prompt'))
+      const found = options.schema ? refused(options.schema, JSON.parse(text), name) : []
       if (found.length) broken[`${options.label} ${name}`] = found
-      return JSON.parse(JSON.stringify(answer))
+      return JSON.parse(text)
     }
     try {
       const result = kept(await pipeline(run.args, agent, () => {}, () => {}))
@@ -381,6 +435,7 @@ STAGES = {
     "fix round 2": Role.FIX,
     "the reconcile": Role.RECONCILE,
 }
+ROUND = re.compile(r"-(\d+)$")
 DIED = re.compile(r"^(.+) agent returned no result")
 RESUME = "resume the run"
 # Why: the "Too large" section of skills/feature/SKILL.md has the orchestrator split the ticket and
@@ -421,6 +476,14 @@ def stopped(result: dict[str, Any]) -> Ending:
             split_unasked=unasked,
             rejudged=result["rejudged"],
         )
+    if result["stop"]:
+        return Ending(
+            Outcome.BLOCKED,
+            stop=Stop.DEPARTURE if result["stop"] == "departure" else Stop.QUESTION_AFTER_BUILD,
+            after=Role(ROUND.sub("", result["stoppedAfter"])),
+            asks=result["questions"] > 0,
+            rejudged=result["rejudged"],
+        )
     stops = [
         (Stop.QUESTION, result["questions"] > 0),
         (Stop.GUARD_EDIT, result["guardEdits"] > 0),
@@ -448,4 +511,7 @@ def ending(raw: dict[str, Any]) -> Ending:
         kept=NO_SCRIPT in result["assumptions"],
         record=Outcome(result["record"]),
         rejudged=result["rejudged"],
+        carried=result["carried"] > 0,
+        unstated=result["unstated"] > 0,
+        assumes_role=CASE_QUESTION in result["assumptions"],
     )

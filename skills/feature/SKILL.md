@@ -266,7 +266,7 @@ A ticket that passes the product ceilings (the preflight's `size` failure, the s
 
 ## Questions for the owner
 
-A question reaches the owner only when it is a product question: its answer shapes the product (`direction`) or cannot be taken back (`irreversible`). The spec role's result marks each one, with two to four options, the recommended one first, and a sentence on why. Never ask the owner to confirm what you would do anyway, and never ask whether to go on.
+A question reaches the owner only when it is a product question: its answer shapes the product (`direction`) or cannot be taken back (`irreversible`). The result marks each one, from the spec role or from the role its `stoppedAfter` names, with two to four options, the recommended one first, and a sentence on why. Never ask the owner to confirm what you would do anyway, and never ask whether to go on.
 
 1. **Ask** `feature.open-question`: "<the question the build stopped on, in the words of someone using the product>" All of them in one message, each as the spec role wrote it, so the owner can accept them all at once. The recommended option is first and its label ends with `(recommended)`; the description gives the reason.
 2. **Write each answer on the ticket** under `## Answers`, the question and the answer in one line each.

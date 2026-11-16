@@ -15,6 +15,8 @@ from tests.repos import branch, commit, git, repository, write
 from tests.test_feature_preflight import gh_returning
 
 Out = pytest.CaptureFixture[str]
+COPY = ": copy the whole sentence, list item, cell or line as the record writes it"
+
 BRANCH = "feature/4-publish"
 NONE_OPEN = "[]"
 
@@ -818,7 +820,7 @@ def breaking(record: str, quote: str, severity: str = "major", *, title: str = "
 
 
 def unquoted(record: str, quote: str, *, title: str = "a finding", why: str | None = None) -> str:
-    reason = why or f"the record `{record}` does not hold the quote"
+    reason = why or f"the record `{record}` does not hold the quote" + COPY
     return f'publish check: the finding `{title}` quotes `{record}` with "{quote}" and {reason}'
 
 

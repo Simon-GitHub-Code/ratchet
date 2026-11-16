@@ -42,6 +42,12 @@ PAGE = PLUGIN_ROOT / "docs/model/pipeline.md"
     CHECK_ASKS_NOTHING,
     NEVER_CRASHES,
     LOST,
+    DEPARTED,
+    ASKED,
+    ROLE_DECIDED,
+    UNQUOTED,
+    PARKS_CARRIED,
+    SECOND_ROUND_KEPT,
 ) = model.RULES
 
 # Why: a rule the workflow does not keep is pinned here by the shortest run from the start to a
@@ -92,6 +98,12 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     CHECK_ASKS_NOTHING: None,
     NEVER_CRASHES: None,
     LOST: None,
+    DEPARTED: None,
+    ASKED: None,
+    ROLE_DECIDED: None,
+    UNQUOTED: None,
+    PARKS_CARRIED: None,
+    SECOND_ROUND_KEPT: None,
 }
 # Why: a fix round over a ceiling, which the real workflow stops as too large, as it does the
 # reconcile of RECONCILED_OVER.
@@ -313,6 +325,27 @@ def test_on_the_real_workflow_a_change_any_measuring_role_finds_over_a_ceiling_s
             model.OVER[last.answer].value,
             True,
         ), last.name
+
+
+def test_every_stop_of_the_model_is_reached_on_a_run_of_the_real_workflow() -> None:
+    reached = {
+        real.ending.stop
+        for _, _, real in played()[0]
+        if real.ending.outcome is model.Outcome.BLOCKED
+    }
+    assert reached == set(model.Stop)
+
+
+def test_on_the_real_workflow_a_stop_after_a_role_keeps_what_was_built_and_asks_the_owner() -> None:
+    stops = {model.Stop.DEPARTURE, model.Stop.QUESTION_AFTER_BUILD}
+    stopped = [(actions, real) for actions, _, real in played()[0] if real.ending.stop in stops]
+    assert {real.ending.stop for _, real in stopped} == stops
+    for actions, real in stopped:
+        result = real.raw["result"]
+        assert result["stoppedAfter"] == real.calls[-1][0], actions[-1].name
+        assert result["questions"] > 0, actions[-1].name
+        if actions[0].answer is model.Start.BUILD:
+            assert result["built"] > 0, actions[-1].name
 
 
 def test_on_the_real_workflow_every_dead_agent_ends_in_an_error_that_says_to_resume() -> None:

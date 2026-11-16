@@ -143,6 +143,9 @@ class Build(Enum):
     TESTS_MARGIN = "measures tests over two thirds of their ceiling"
     GREEN = "is green"
     RED = "is red"
+    DEPARTS_CRITERION = "departs from a criterion of the spec"
+    DEPARTS_ASSUMPTION_ROLE = "departs from an assumption of the spec, which is its own to amend"
+    DEPARTS_ASSUMPTION_OWNER = "departs from an assumption of the spec, which is the owner's"
 
 
 class Critique(Enum):
@@ -150,6 +153,10 @@ class Critique(Enum):
     CLEAR = "finds nothing"
     SILENT = "finds nothing and tried nothing"
     OWED = "finds a major it does not see fixed"
+    OWED_CARRIED = "finds again the major it was fixed for, still owed"
+    NO_QUOTE = "finds a major whose quote its record does not hold"
+    UNSTATED_OWNER = "finds a case no record states, which is the owner's"
+    UNSTATED_ROLE = "finds a case no record states, which is its own to decide"
 
 
 class Review(Enum):
@@ -163,6 +170,9 @@ class Review(Enum):
     APPROVES_ISSUE = "approves with a blocker of its own open"
     APPROVES_DROPPED = "approves a change that drops a promise of the ticket"
     APPROVES_GUARD = "approves a guard path change nothing covers"
+    UNSTATED_OWNER = "finds a case no record states, which is the owner's"
+    ISSUE_NO_QUOTE = "requests changes with a blocker whose quote its record does not hold"
+    CLASSIFIES_ROLE = "approves and gives the finding the critic could not quote to a role"
 
 
 Answer = Preflight | Spec | Check | Build | Critique | Review
@@ -170,7 +180,7 @@ Said = Start | Answer
 
 # Why: ADR 0055. The script reads a size after the spec, the implementation, each fix round and
 # the reconcile; one answer over a ceiling shows all a fixer or a reconcile agent can bring.
-LATE_BUILD = (Build.DIES, Build.GREEN, Build.RED, Build.PRODUCT_OVER)
+LATE_BUILD = (Build.DIES, Build.GREEN, Build.RED, Build.PRODUCT_OVER, Build.DEPARTS_CRITERION)
 ANSWERS: dict[Role, tuple[Answer, ...]] = {
     Role.PREFLIGHT: tuple(Preflight),
     Role.SPEC: tuple(Spec),
@@ -182,10 +192,11 @@ ANSWERS: dict[Role, tuple[Answer, ...]] = {
     Role.FIX: LATE_BUILD,
     Role.REVIEW: tuple(Review),
     Role.RECONCILE: LATE_BUILD,
-    Role.REVIEW_AGAIN: tuple(Review),
+    Role.REVIEW_AGAIN: tuple(answer for answer in Review if answer is not Review.CLASSIFIES_ROLE),
 }
 FAILED = frozenset({Preflight.DIES, Spec.DIES, Check.DIES, Build.DIES, Critique.DIES, Review.DIES})
 MALFORMED = frozenset({Preflight.NO_SLUG})
+OWED = frozenset({Critique.OWED, Critique.OWED_CARRIED})
 REFUSED = "refused"
 DIES_AS = {
     Role.CHECK: "ticket check",
@@ -213,6 +224,8 @@ class Stop(Enum):
     QUESTION = "a question for the owner"
     GUARD_EDIT = "a guard path the owner must change"
     TOO_LARGE = "too large"
+    DEPARTURE = "a departure from the spec the owner decides"
+    QUESTION_AFTER_BUILD = "a question for the owner after a role that builds or judges"
 
 
 class Ceiling(Enum):
@@ -243,7 +256,13 @@ REVIEW_OBJECTIONS: dict[Said, frozenset[Objection]] = {
     Review.APPROVES_ISSUE: frozenset({Objection.REVIEW_ISSUE}),
     Review.APPROVES_DROPPED: frozenset({Objection.REVIEW_ISSUE}),
     Review.APPROVES_GUARD: frozenset({Objection.GUARD}),
+    Review.UNSTATED_OWNER: frozenset(),
+    Review.ISSUE_NO_QUOTE: frozenset(),
+    Review.CLASSIFIES_ROLE: frozenset(),
 }
+APPROVING = frozenset({Review.APPROVES, Review.CLASSIFIES_ROLE})
+ASKING = frozenset({Review.UNSTATED_OWNER, Review.ISSUE_NO_QUOTE})
+STOPPING_DEPARTURES = frozenset({Build.DEPARTS_CRITERION, Build.DEPARTS_ASSUMPTION_OWNER})
 # Why: the review's blocking issues in the change are what a fix pass can answer. A dropped promise
 # of the ticket is refused and goes to the next run (rule 15), not to a fix agent, even beside a
 # blocker, and minor issues alone are no blocking finding.
@@ -305,6 +324,16 @@ class Ending:
     """Whether the result's assumptions list the promise the run kept from the ticket."""
     record: Outcome | None = None
     rejudged: bool = False
+    after: Role | None = None
+    """The role whose answer a run stopped on a question after, for the two stops of ADR 0072."""
+    asks: bool = False
+    """Whether the result's open questions hold the case or the departure the run stopped on."""
+    carried: bool = False
+    """Whether the result names a critic finding that was still owed after the round it was fixed in."""  # noqa: E501
+    unstated: bool = False
+    """Whether the result's ``unstated`` entries hold the finding the critic could not quote."""
+    assumes_role: bool = False
+    """Whether the result's assumptions hold what the fork test gave a role."""
 
 
 @dataclass(frozen=True)
@@ -325,6 +354,10 @@ class State:
     owed: bool = False
     silent: bool = False
     issue: bool = False
+    carried: bool = False
+    moved: bool = False
+    assumed: bool = False
+    asked: bool = False
     published: bool = False
     ending: Ending | None = None
 
@@ -467,19 +500,40 @@ def _check(state: State, action: Action) -> State:
     return replace(state, kept=True, awaiting=Role.IMPLEMENT)
 
 
+def _asks(state: State, stop: Stop, after: Role) -> State:
+    """The run ends blocked on a question for the owner, after the role that returned the case."""
+    ending = Ending(Outcome.BLOCKED, stop=stop, after=after, asks=True, rejudged=state.rejudge)
+    return _ended(replace(state, asked=True), ending)
+
+
 def _implement(state: State, action: Action) -> State:
     ceiling = stops_on(action.answer, critic=state.critic)
     if ceiling is not None:
         return _too_large(state, ceiling, Role.IMPLEMENT, parts=False)
+    if action.answer in STOPPING_DEPARTURES:
+        return _asks(replace(state, built=True), Stop.DEPARTURE, Role.IMPLEMENT)
+    assumed = state.assumed or action.answer is Build.DEPARTS_ASSUMPTION_ROLE
     after = Role.CRITIQUE if state.critic else Role.REVIEW
-    return replace(state, built=True, green=action.answer is not Build.RED, awaiting=after)
+    green = action.answer is not Build.RED
+    return replace(state, built=True, green=green, assumed=assumed, awaiting=after)
 
 
 def _critique(state: State, action: Action) -> State:
-    owed = action.answer is Critique.OWED
-    again = owed and state.rounds < fix_rounds(state)
-    silent = action.answer is Critique.SILENT
-    return replace(state, owed=owed, silent=silent, awaiting=Role.FIX if again else Role.REVIEW)
+    answer = action.answer
+    if answer is Critique.UNSTATED_OWNER:
+        return _asks(state, Stop.QUESTION_AFTER_BUILD, Role.CRITIQUE)
+    owed = answer in OWED
+    carried = answer is Critique.OWED_CARRIED and state.owed and state.rounds > 0
+    again = owed and state.rounds < fix_rounds(state) and not carried
+    return replace(
+        state,
+        owed=owed,
+        carried=carried,
+        moved=state.moved or answer is Critique.NO_QUOTE,
+        assumed=state.assumed or answer is Critique.UNSTATED_ROLE,
+        silent=answer is Critique.SILENT,
+        awaiting=Role.FIX if again else Role.REVIEW,
+    )
 
 
 def _built_late(state: State, action: Action, awaiting: Role) -> State:
@@ -490,6 +544,8 @@ def _built_late(state: State, action: Action, awaiting: Role) -> State:
     ceiling = stops_on(action.answer, critic=False)
     if ceiling is not None:
         return _too_large(state, ceiling, action.role, parts=False)
+    if action.answer in STOPPING_DEPARTURES:
+        return _asks(state, Stop.DEPARTURE, action.role)
     green = action.answer is not Build.RED
     return replace(state, green=green, awaiting=awaiting)
 
@@ -510,8 +566,12 @@ def _review(state: State, action: Action) -> State:
     place the critic's owed findings take once the project is depended-on. A rebased branch has no
     fix loop, so its review always ends the run.
     """
+    if action.answer in ASKING or (state.moved and action.answer is not Review.CLASSIFIES_ROLE):
+        return _asks(state, Stop.QUESTION_AFTER_BUILD, action.role)
     issue = Objection.REVIEW_ISSUE in REVIEW_OBJECTIONS[action.answer]
-    state = replace(state, issue=issue)
+    state = replace(
+        state, issue=issue, assumed=state.assumed or action.answer is Review.CLASSIFIES_ROLE
+    )
     if action.answer in FIXABLE and state.critic is False and state.rounds < fix_rounds(state):
         return replace(state, awaiting=Role.FIX)
     objections = standing(state) | REVIEW_OBJECTIONS[action.answer]
@@ -526,6 +586,9 @@ def _review(state: State, action: Action) -> State:
         kept=state.kept,
         record=outcome,
         rejudged=state.rejudge,
+        carried=state.carried,
+        unstated=state.moved,
+        assumes_role=state.assumed,
     )
     return _ended(state, ending)
 
@@ -576,6 +639,8 @@ def numbered(state: State) -> int:
 def _answer(state: State) -> Iterator[Move]:
     if state.awaiting is not None:
         for answer in ANSWERS[state.awaiting]:
+            if answer is Review.CLASSIFIES_ROLE and not state.moved:
+                continue
             for published in (False, True):
                 action = Action(answer, state.awaiting, numbered(state), published)
                 yield action, answered(state, action)
@@ -650,7 +715,7 @@ def evidenced(before: State, name: str, after: State) -> bool:
         return after.awaiting is Role.FIX
     if after.ending is None or after.ending.outcome is not Outcome.APPROVE:
         return True
-    return action.role in REVIEWS and action.answer is Review.APPROVES and before.green is not False
+    return action.role in REVIEWS and action.answer in APPROVING and before.green is not False
 
 
 def bounded(_: State, __: str, after: State) -> bool:
@@ -659,10 +724,12 @@ def bounded(_: State, __: str, after: State) -> bool:
 
 
 def ordered(before: State, name: str, _: State) -> bool:
-    """Agents run in the documented order of stages, save the fix pass a review of a project nobody depends on hands back, and the implementer runs only after a spec with no open question has been through the ticket check."""  # noqa: E501
+    """Agents run in the documented order of stages, save the fix pass a review of a project nobody depends on hands back, nothing is built after a role asks the owner, and the implementer runs only after a spec with no open question has been through the ticket check."""  # noqa: E501
     action = named(name)
     if action.phase is None:
         return True
+    if before.asked:
+        return False
     if before.phase is not None and PHASES.index(action.phase) < PHASES.index(before.phase):
         handed_back = before.critic is False and before.phase is Phase.REVIEW
         return action.role is Role.FIX and handed_back
@@ -757,7 +824,7 @@ def judged_again(_: State, name: str, after: State) -> bool:
     ending = after.ending
     if not after.rejudge or ending is None or ending.outcome not in VERDICTS:
         return True
-    approval = ending.outcome is not Outcome.APPROVE or action.answer is Review.APPROVES
+    approval = ending.outcome is not Outcome.APPROVE or action.answer in APPROVING
     return action.role is Role.REVIEW_AGAIN and ending.record is ending.outcome and approval
 
 
@@ -823,16 +890,91 @@ def never_crashes(_: State, name: str, after: State) -> bool:
     )
 
 
-def lost(_: State, name: str, after: State) -> bool:
-    """A change the review finds dropping a promise of the ticket is refused, and a first build returns what it lost for the next run."""  # noqa: E501
+def lost(before: State, name: str, after: State) -> bool:
+    """A change the review finds dropping a promise of the ticket is refused, and a first build returns what it lost for the next run, unless a case no record states stops the run first."""  # noqa: E501
     ending = after.ending
-    if named(name).answer not in DROPS:
+    if named(name).answer not in DROPS or before.moved:
         return True
     return (
         ending is not None
         and ending.outcome is Outcome.REQUEST_CHANGES
         and ending.lost == (not after.rejudge)
     )
+
+
+def departed(_: State, name: str, after: State) -> bool:
+    """A departure from a criterion, or from an assumption the owner decides, ends the run blocked after the role that returned it, with a question."""  # noqa: E501
+    action = named(name)
+    if action.answer not in STOPPING_DEPARTURES:
+        return True
+    ending = after.ending
+    return (
+        ending is not None
+        and ending.outcome is Outcome.BLOCKED
+        and ending.stop is Stop.DEPARTURE
+        and ending.after is action.role
+        and ending.asks
+    )
+
+
+def asked(before: State, name: str, after: State) -> bool:
+    """A case the fork test gives the owner, from any role that returns one, ends the run blocked after that role with a question, so no run holding one is approved."""  # noqa: E501
+    action = named(name)
+    unquoted = before.moved and action.role in REVIEWS and action.answer not in APPROVING
+    if action.answer in FAILED or not (
+        action.answer in {Critique.UNSTATED_OWNER, *ASKING} or unquoted
+    ):
+        return True
+    ending = after.ending
+    return (
+        ending is not None
+        and ending.outcome is Outcome.BLOCKED
+        and ending.stop is Stop.QUESTION_AFTER_BUILD
+        and ending.after is action.role
+        and ending.asks
+    )
+
+
+def role_decided(_: State, __: str, after: State) -> bool:
+    """A case or an amended assumption the fork test gives a role reaches the assumptions of every run that ends with a verdict."""  # noqa: E501
+    ending = after.ending
+    if not after.assumed or ending is None or ending.outcome not in VERDICTS:
+        return True
+    return ending.assumes_role
+
+
+def unquoted(_: State, name: str, after: State) -> bool:
+    """A blocker or major whose quote its record does not hold sends no fix agent and is never dropped: it reaches the review, which gives it to a role or the owner."""  # noqa: E501
+    action = named(name)
+    if action.answer is Critique.NO_QUOTE and after.awaiting is not Role.REVIEW:
+        return False
+    ending = after.ending
+    if not after.moved or ending is None or ending.outcome is Outcome.ERROR:
+        return True
+    if ending.outcome is Outcome.BLOCKED:
+        return ending.asks
+    return ending.unstated and ending.assumes_role
+
+
+def parks_carried(before: State, name: str, after: State) -> bool:
+    """A critic finding still owed after the round it was fixed in starts no further round, and the run ends refused with it unresolved."""  # noqa: E501
+    action = named(name)
+    if action.role is Role.CRITIQUE and after.carried and after.awaiting is not Role.REVIEW:
+        return False
+    ending = after.ending
+    if not before.carried or action.role not in REVIEWS or ending is None:
+        return True
+    if ending.outcome in {Outcome.BLOCKED, Outcome.ERROR}:
+        return True
+    return ending.outcome is Outcome.REQUEST_CHANGES and ending.unresolved and ending.carried
+
+
+def second_round_kept(before: State, name: str, after: State) -> bool:
+    """A new blocker or major after a fix round, which carries no earlier finding, still gets the next round while one is left."""  # noqa: E501
+    action = named(name)
+    if action.answer is not Critique.OWED or before.rounds >= fix_rounds(before):
+        return True
+    return after.awaiting is Role.FIX
 
 
 RULES: dict[str, Callable[[State, str, State], bool]] = {
@@ -857,6 +999,12 @@ RULES: dict[str, Callable[[State, str, State], bool]] = {
     "13. the ticket check never stops the run": check_asks_nothing,
     "14. a failed answer is never approved and never crashes the run": never_crashes,
     "15. a dropped promise is refused and handed to the next run": lost,
+    "16. a departure the owner decides ends the run after the role that returned it": departed,
+    "17. a case the fork test gives the owner ends the run after the role that returned it": asked,
+    "18. a case the fork test gives a role is in the assumptions of the result": role_decided,
+    "19. a finding whose quote is not found sends no fix agent and is never dropped": unquoted,
+    "20. a finding still owed after its fix round parks the run": parks_carried,
+    "21. a new finding after a fix round keeps the next round": second_round_kept,
 }
 
 
@@ -888,6 +1036,11 @@ ENDED_AS: dict[str, Callable[[Ending], object]] = {
     "assumesKept": lambda ending: ending.kept,
     "record": lambda ending: spelled(ending.record),
     "rejudged": lambda ending: ending.rejudged,
+    "after": lambda ending: spelled(ending.after),
+    "asks": lambda ending: ending.asks,
+    "carriedOwed": lambda ending: ending.carried,
+    "keepsUnstated": lambda ending: ending.unstated,
+    "assumesRole": lambda ending: ending.assumes_role,
 }
 NOT_ENDED = Ending(Outcome.ERROR)
 """What ``ENDED_AS`` reads of a run that has not ended: every field's default."""
@@ -907,6 +1060,10 @@ AS_STATE: dict[str, Callable[[State], object]] = {
     "owed": lambda state: state.owed,
     "silent": lambda state: state.silent,
     "issue": lambda state: state.issue,
+    "carried": lambda state: state.carried,
+    "moved": lambda state: state.moved,
+    "assumed": lambda state: state.assumed,
+    "asked": lambda state: state.asked,
     "published": lambda state: state.published,
     "outcome": outcome,
     **{
@@ -917,7 +1074,7 @@ AS_STATE: dict[str, Callable[[State], object]] = {
 
 
 def export() -> model_tla.Export:
-    """Every run as a TLA+ module, with the nineteen rules, each named after its predicate.
+    """Every run as a TLA+ module, with the twenty-five rules, each named after its predicate.
 
     Every rule is about a step, so each is a ``model_tla.Step``. A run that has ended has no step
     out, so the module tells TLC that its end is no deadlock.

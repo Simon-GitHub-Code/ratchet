@@ -84,6 +84,7 @@ FIXED = {
 ADR_FILES = "docs/adr/"
 SPEC_PATH = re.compile(r"docs/features/[^/]+/spec\.md")
 BLOCKING = frozenset({"blocker", "major"})
+COPY_WHOLE = "copy the whole sentence, list item, cell or line as the record writes it"
 QUOTER = re.compile(r"^(?:>\s*)+")
 HEADING = re.compile(r"^#{1,6}(?:\s+|$)")
 LIST_ITEM = re.compile(r"^(?:[-*+]|\d+[.)])(?:\s+|$)")
@@ -251,7 +252,7 @@ def reason_missed(
     if texts is None:
         return f"the record `{entry['record']}` is absent"
     if not any(holds(document, entry["quote"]) for document in texts):
-        return f"the record `{entry['record']}` does not hold the quote"
+        return f"the record `{entry['record']}` does not hold the quote: {COPY_WHOLE}"
     return None
 
 
