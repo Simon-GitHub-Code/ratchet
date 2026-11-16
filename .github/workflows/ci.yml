@@ -14,7 +14,35 @@ env:
   # Why: a ceiling in quality/thresholds.toml is the wall clock of one job. Each shard job of
   # `test` and `test-floor` is held to its gate's ceiling, not the sum of its shards.
 jobs:
+  # Why: a pull request of records and pages alone runs only the tests that read the pages it
+  # changes (`scripts/lane.py` holds the mapping), under the same job names, so a required check
+  # still reports. The classifier is read from the base, so a change to it cannot pick its own
+  # lane; a base without it, or any doubt, is the full lane.
+  lane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      lane: ${{ steps.lane.outputs.lane }}
+      tests: ${{ steps.lane.outputs.tests }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with: { fetch-depth: 0 }
+      - id: lane
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+        run: |
+          said=full
+          if [ -n "$BASE" ] && git show "$BASE:scripts/lane.py" > "$RUNNER_TEMP/lane.py"; then
+            said="$(python3 "$RUNNER_TEMP/lane.py" "$BASE" || echo full)"
+          fi
+          case "$said" in
+            pages | pages\ hooks/tests/test_*.py*) lane=pages tests="${said#pages}" ;;
+            *) lane=full tests= ;;
+          esac
+          echo "lane=$lane" >> "$GITHUB_OUTPUT"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
   gates:
+    needs: lane
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -24,11 +52,15 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
+        if: needs.lane.outputs.lane == 'full'
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        if: needs.lane.outputs.lane == 'full'
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with: { enable-cache: true, cache-dependency-glob: uv.lock }
+        if: needs.lane.outputs.lane == 'full'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with: { node-version: 24 }
+        if: needs.lane.outputs.lane == 'full'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
@@ -38,10 +70,13 @@ jobs:
           key: tools-${{ runner.os }}-${{ matrix.gate }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
             tools-${{ runner.os }}-${{ matrix.gate }}-
+        if: needs.lane.outputs.lane == 'full'
       - run: uv sync --frozen
+        if: needs.lane.outputs.lane == 'full'
       - run: python3 scripts/budget.py "${{ matrix.gate }}" --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+        if: needs.lane.outputs.lane == 'full'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: always()
+        if: always() && needs.lane.outputs.lane == 'full'
         with: { name: "timing-${{ matrix.gate }}", path: .ratchet/timing.jsonl }
   # Why: the long gates run as one job per shard, and the count is `test_shards` in the justfile,
   # the one number. A gate's ceiling is the wall clock of one job, so the budget wrapper holds each shard
@@ -64,7 +99,7 @@ jobs:
   # Why: `test` runs under coverage and `test-floor` on Python 3.11; each shard job runs its slice
   # (`conftest.py` reads SHARD and SHARDS). A `test` shard keeps its coverage data for `coverage`.
   sharded:
-    needs: shape
+    needs: [shape, lane]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -78,30 +113,37 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with: { fetch-depth: 0 }
+        if: needs.lane.outputs.lane == 'full'
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        if: needs.lane.outputs.lane == 'full'
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with: { enable-cache: true, cache-dependency-glob: uv.lock }
+        if: needs.lane.outputs.lane == 'full'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with: { node-version: 24 }
+        if: needs.lane.outputs.lane == 'full'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .hypothesis
           key: tools-${{ runner.os }}-${{ matrix.gate }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
           restore-keys: |
             tools-${{ runner.os }}-${{ matrix.gate }}-
+        if: needs.lane.outputs.lane == 'full'
       - run: uv sync --frozen
+        if: needs.lane.outputs.lane == 'full'
       - run: python3 scripts/budget.py "${{ matrix.gate }}" --over "$OVER" --report .ratchet/timing.jsonl -- just "${{ matrix.gate }}"
+        if: needs.lane.outputs.lane == 'full'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: always()
+        if: always() && needs.lane.outputs.lane == 'full'
         with: { name: "timing-${{ matrix.gate }}-${{ matrix.shard }}", path: .ratchet/timing.jsonl }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: matrix.gate == 'test'
+        if: matrix.gate == 'test' && needs.lane.outputs.lane == 'full'
         with: { name: "coverage-${{ matrix.shard }}", path: "coverage-shard-${{ matrix.shard }}.data" }
   # Why: no shard can reach every line alone, so the verdict is the whole suite's. This job
   # combines the shards' coverage data and holds it to `fail_under = 100`; its red lists the lines
   # no shard ran.
   coverage:
-    needs: sharded
+    needs: [sharded, lane]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -111,30 +153,48 @@ jobs:
         with: { enable-cache: true, cache-dependency-glob: uv.lock }
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with: { pattern: "coverage-*", path: coverage-shards, merge-multiple: true }
+        if: needs.lane.outputs.lane == 'full'
       - run: uv sync --frozen
       - run: just coverage-combine
+        if: needs.lane.outputs.lane == 'full'
+      - run: uv run --frozen pytest -n auto $TESTS
+        if: needs.lane.outputs.lane == 'pages' && needs.lane.outputs.tests != ''
+        env:
+          TESTS: ${{ needs.lane.outputs.tests }}
   # Why: a test that falls in no shard, or in two, makes a green run a lie about the suite.
   shard-partition:
+    needs: lane
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        if: needs.lane.outputs.lane == 'full'
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        if: needs.lane.outputs.lane == 'full'
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with: { enable-cache: true, cache-dependency-glob: uv.lock }
+        if: needs.lane.outputs.lane == 'full'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with: { node-version: 24 }
+        if: needs.lane.outputs.lane == 'full'
       - run: just shard-check
+        if: needs.lane.outputs.lane == 'full'
   validate:
+    needs: lane
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        if: needs.lane.outputs.lane == 'full'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with: { node-version: 24 }
+        if: needs.lane.outputs.lane == 'full'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.npm
           key: npm-claude-${{ runner.os }}
+        if: needs.lane.outputs.lane == 'full'
       - run: npm install -g @anthropic-ai/claude-code
+        if: needs.lane.outputs.lane == 'full'
       - run: claude plugin validate .
+        if: needs.lane.outputs.lane == 'full'

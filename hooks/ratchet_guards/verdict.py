@@ -79,6 +79,12 @@ RULES: dict[str, Rule] = {
         SWITCH_ALONE,
     ),
     "no-verify": Rule(Decision.DENY, "skips the git hooks"),
+    "queue-final-check": Rule(
+        Decision.DENY,
+        "commits in a queue work tree before its start has passed its final check, which leaves "
+        "nothing to tell the orchestrator's commit from a role's",
+        "Run `drain.py check <ticket> --final` first, and commit when it is green.",
+    ),
     "skip-hooks": Rule(Decision.DENY, "skips or uninstalls the pre-commit hooks"),
     "hooks-path": Rule(Decision.DENY, "redirects git hooks or overrides git config"),
     "force-push": Rule(

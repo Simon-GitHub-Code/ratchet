@@ -25,6 +25,7 @@ from typing import NamedTuple
 
 import application_types
 import architecture
+import budget
 import change_size
 import gatelib
 import hooks_installed
@@ -2818,6 +2819,80 @@ def check_register(data: dict[str, object]) -> Iterable[Finding]:
             )
 
 
+def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
+    """ADR 0069: the full proof after a merge has a ceiling of its own, never the tier 1 one.
+
+    Only a measured run sets it, so the finding names the command and offers no edit.
+    """
+    text = read(root / "quality/thresholds.toml")
+    try:
+        data = tomllib.loads(text or "")
+    except tomllib.TOMLDecodeError:
+        return
+    ceilings = data.get("ceilings")
+    seconds = ceilings.get("seconds") if isinstance(ceilings, dict) else None
+    if isinstance(seconds, dict) and budget.ceiling_of(text or "", budget.FULL_PROOF) is None:
+        yield Finding(
+            "quality/thresholds.toml",
+            full_proof_problem(root, text or ""),
+            Agent(
+                then=(
+                    (
+                        "run `just check-deep` once on a quiet machine, then `just budget"
+                        " bite-all --set`, which records the ceiling from that measured run"
+                    ),
+                )
+            ),
+        )
+
+
+def full_proof_problem(root: Path, text: str) -> str:
+    """What the missing ``bite-all`` ceiling costs: the tier 1 ceiling it falls to, the last run."""
+    tier = budget.ceiling_of(text, "tier1")
+    start = "`[ceilings.seconds]` has no `bite-all`, so the full proof after a merge "
+    if tier is None:
+        return start + "has no ceiling at all, since no `tier1` ceiling is recorded either"
+    problem = f"{start}is held to tier 1's ceiling of {tier:g}s and goes red when it runs longer"
+    last = last_full_proof(root)
+    return problem + (f"; the last full proof took {last:g}s" if last is not None else "")
+
+
+def last_full_proof(root: Path) -> float | None:
+    """The seconds of the last ``bite-all`` run the timing report holds."""
+    seconds = None
+    for line in (gatelib.read_text(root / gatelib.STATE / "timing.jsonl") or "").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and record.get("key") == budget.FULL_PROOF:
+            value = record.get("seconds")
+            seconds = float(value) if isinstance(value, int | float) else seconds
+    return seconds
+
+
+def check_gate_reads(root: Path) -> Iterable[Finding]:
+    """ADR 0069: a bullet for no gate, an empty one, or an entry covering no file skips a gate.
+
+    The bullets of ``## What each gate reads`` narrow which gates a change to tool config proves.
+    """
+    binding = read(root / BINDING_PATH) or ""
+    gates = {row.gate for row in project_bite.gate_rows(binding)}
+    heading = project_bite.READS
+    tracked = gatelib.tracked_paths(root)
+    reads, strays = project_bite.read_reads(binding)
+    for stray in strays:
+        yield agent(f"{BINDING_PATH}: '{heading}' has a line that is no bullet: '{stray}'")
+    for gate, entries in reads.items():
+        if gate not in gates:
+            yield agent(f"{BINDING_PATH}: '{heading}' has a bullet for '{gate}', no entry point")
+        if not entries:
+            yield agent(f"{BINDING_PATH}: '{heading}' has an empty bullet for '{gate}'")
+        for entry in entries:
+            if not any(project_bite.reading(path, entry) for path in tracked):
+                yield agent(f"{BINDING_PATH}: gate '{gate}' reads '{entry}', matching no file")
+
+
 def check_bites(root: Path) -> Iterable[Finding]:
     # Why: ADR 0020. The method ships no tool, so the repository shows each gate it bound going
     # red on a planted fault; a gate with no bite, or a collection never shown empty, is unproven.
@@ -2920,6 +2995,8 @@ CHECKS: tuple[Check, ...] = (
     check_runner,
     check_installs,
     check_quality,
+    check_bite_all_ceiling,
+    check_gate_reads,
     check_bites,
     check_incidents,
     check_disputes,

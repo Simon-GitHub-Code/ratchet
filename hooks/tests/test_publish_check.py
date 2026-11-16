@@ -60,6 +60,7 @@ def refs(root: Path) -> str:
     return git(root, "for-each-ref", "--format=%(refname) %(objectname)")
 
 
+ORCHESTRATOR = ", or the orchestrator committed before this check"
 GREEN = "publish check: green, nothing was committed, pushed or opened since the run started"
 RED = (
     "publish check: red, a role published: the ticket ends as a role that published, never as an"
@@ -102,6 +103,16 @@ def test_uncommitted_staged_and_untracked_changes_are_not_a_move(
     assert checked(path, root) == (0, [GREEN])
 
 
+def test_a_start_from_a_drain_note_names_the_final_check_as_the_step(tmp_path: Path) -> None:
+    root = checkout(tmp_path)
+    start = publish_check.read_start(started(tmp_path, root))
+    commit(root, "feat(core): a role committed")
+    moves, _, _ = publish_check.check(root, start, preflight.run_gh, drained=True)
+    assert moves[0].endswith(
+        "a role committed, or the orchestrator committed before `drain.py check <ticket> --final`"
+    )
+
+
 def test_a_commit_on_the_branch_is_a_role_that_published(tmp_path: Path, checked: Check) -> None:
     root = checkout(tmp_path)
     path = started(tmp_path, root)
@@ -112,7 +123,7 @@ def test_a_commit_on_the_branch_is_a_role_that_published(tmp_path: Path, checked
     assert lines == [
         (
             f"publish check: `{BRANCH}` moved from {old[:12]} to {new[:12]}, which holds it with"
-            " commits on top: a role committed"
+            " commits on top: a role committed" + ORCHESTRATOR
         ),
         RED,
     ]
@@ -648,7 +659,7 @@ def test_with_the_rebase_member_commits_on_top_of_the_start_are_still_a_move(
         [
             (
                 f"publish check: `{BRANCH}` moved from {old[:12]} to {new[:12]}, which holds it"
-                " with commits on top: a role committed"
+                " with commits on top: a role committed" + ORCHESTRATOR
             ),
             RED,
         ],

@@ -445,8 +445,8 @@ load-smoke: _plugin
 
 # Shipped: the pull-request half of the proof that every bound gate bites. It proves nothing, at
 # the cost of a few git calls, unless the change touches a path that defines a gate; then it
-# plants each fault of quality/bites.toml for the tier 0 and tier 1 gates. `bite-all` is the
-# whole proof.
+# plants each fault of quality/bites.toml for the tier 0 and tier 1 gates the change could
+# affect, and says why each is in the set. `bite-all` is the whole proof.
 bite: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --changed
 
