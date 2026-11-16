@@ -1212,3 +1212,39 @@ def test_the_template_row_is_red_until_its_paths_are_bound_and_still_brings_the_
         " from the template justfile; it is a placeholder for the project to bind"
     )
     assert sorted(red(repo)) == sorted([placeholder, producer])
+
+
+def speed_findings(repo: Path) -> list[str]:
+    return [line for line in red(repo) if "Incremental" in line]
+
+
+def test_a_speed_section_without_an_incremental_line_is_found(repo: Path) -> None:
+    replace(BINDING, "- Incremental: ", "- Mode: ")(repo)
+    missing = (
+        "docs/process/binding.md: the Speed section has no '- Incremental:' line naming the"
+        " mutation tool's incremental mode, or `none: <reason>` where the tool has none"
+    )
+    assert speed_findings(repo) == [missing]
+
+
+def test_an_incremental_line_left_as_the_template_placeholder_is_found(repo: Path) -> None:
+    replace(BINDING, "- Incremental: stated for this stack", "- Incremental: <the mode>")(repo)
+    assert len(speed_findings(repo)) == 1
+
+
+@pytest.mark.parametrize("value", ["none:", "none: ", "none", "none:\t"])
+def test_an_incremental_line_of_none_with_no_reason_is_found(repo: Path, value: str) -> None:
+    replace(BINDING, "- Incremental: stated for this stack", f"- Incremental: {value}")(repo)
+    unreasoned = (
+        "docs/process/binding.md: the Speed section's '- Incremental:' line says `none` with no"
+        " reason: write `none: <reason>`, or name the mode"
+    )
+    assert speed_findings(repo) == [unreasoned]
+
+
+@pytest.mark.parametrize("value", ["--mode on", "none: the tool keeps no results between runs"])
+def test_an_incremental_line_naming_a_mode_or_none_with_a_reason_is_green(
+    repo: Path, value: str
+) -> None:
+    replace(BINDING, "- Incremental: stated for this stack", f"- Incremental: {value}")(repo)
+    assert speed_findings(repo) == []
