@@ -8,6 +8,14 @@ thresholds file. Exit status: the command's own when it fails; 1 when it passed 
 its ceiling; 0 otherwise. A missing ceiling reports and passes: that is the first adoption.
 ``--report`` appends one JSON line per run so CI can publish the timings.
 
+``--set`` never records the pull-request proof's key, ``bite``: what a targeted proof takes
+depends on what the change touched, so the owner records it by hand.
+
+The pull-request proof, key ``bite``, is held to its own ``bite`` ceiling when one is recorded
+and no higher than ``bite-all``'s, else to ``bite-all``'s, else to its tier's: whatever gates it
+proves are a part of the full proof, so ``bite-all`` bounds it. It is never unbounded where the
+default branch is bounded. Nothing is read from its output (ADR 0069).
+
 A green run prints its wall clock as a share of its ceiling, and at 75 percent or more of it a
 warning line follows, raised as an annotation: a warning is not red, and shows a tier drifting
 toward its ceiling before runner variance turns it red.
@@ -46,6 +54,8 @@ from pathlib import Path
 CEILINGS_TABLE = "ceilings.seconds"
 DEFAULT_HEADROOM = 1.5
 WARN_SHARE = 75.0
+FULL_PROOF = "bite-all"
+PROOF = "bite"
 TIER_BUDGETS = {"tier0": 60.0, "tier1": 900.0}
 _TABLE_HEADER = re.compile(r"^\[ceilings\.seconds\]\s*$", re.MULTILINE)
 _ANY_HEADER = re.compile(r"^\[", re.MULTILINE)
@@ -106,6 +116,13 @@ def held(text: str, key: str, tier: str | None) -> tuple[float | None, str | Non
     """The ceiling ``key`` is judged against, and the tier it belongs to when it is the tier's."""
     own = ceiling_of(text, key)
     shared = ceiling_of(text, tier) if tier else None
+    if key == PROOF:
+        full = ceiling_of(text, FULL_PROOF)
+        if own is not None and (full is None or own <= full):
+            return own, None
+        if full is not None:
+            return full, FULL_PROOF
+        return (shared, tier) if shared is not None else (None, None)
     if shared is not None and (own is None or shared < own):
         return shared, tier
     return own, None
@@ -206,7 +223,9 @@ def main(argv: list[str]) -> int:
         )
     if options.report:
         report(root / options.report, outcome)
-    if options.headroom is not None and exit_code == 0:
+    if options.headroom is not None and options.key == PROOF:
+        print(f"ratchet-budget: the owner records {CEILINGS_TABLE}.{PROOF} by hand; --set skips it")
+    elif options.headroom is not None and exit_code == 0:
         floor = TIER_BUDGETS.get(options.key, 0.0)
         own = ceiling_of(text, options.key)
         new = lowered_ceiling(own, seconds, options.headroom, floor=floor)

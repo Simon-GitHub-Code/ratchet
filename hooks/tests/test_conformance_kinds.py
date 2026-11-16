@@ -6,9 +6,12 @@ from pathlib import Path
 
 import pytest
 
+import budget
 import conformance
 import gatelib
 import justfile_text
+import project_bite
+from tests import repos
 from tests.test_conformance import (
     BINDING,
     JUSTFILE,
@@ -327,6 +330,121 @@ def test_a_linewise_recipe_does_not_read_its_later_lines(repo: Path) -> None:
 
 def test_a_here_string_fed_with_the_variable_is_a_filter() -> None:
     assert not conformance.unfiltered_changed(f'{CAPTURE}; keep <<< "$files"')
+
+
+THRESHOLDS = "quality/thresholds.toml"
+
+
+def ceiling_findings(root: Path) -> list[conformance.Finding]:
+    return [f for f in conformance.findings(root) if "bite-all" in f.problem]
+
+
+def test_a_seconds_table_with_no_bite_all_ceiling_is_an_agent_finding_naming_the_command(
+    repo: Path,
+) -> None:
+    path = repo / THRESHOLDS
+    path.write_text(budget.with_ceiling(path.read_text(encoding="utf-8"), "tier1", 600.0))
+    [found] = ceiling_findings(repo)
+    assert (found.path, found.rule) == (THRESHOLDS, "bite_all_ceiling")
+    assert isinstance(found.fix, conformance.Agent)
+    assert "`just budget bite-all --set`" in " ".join(found.fix.then)
+    path.write_text(budget.with_ceiling(path.read_text(encoding="utf-8"), "bite-all", 3600.0))
+    assert ceiling_findings(repo) == []
+
+
+def seconds_problem(repo: Path, tier1: float | None, took: float | None) -> str:
+    path = repo / THRESHOLDS
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        budget.with_ceiling(text, "tier1", tier1)
+        if tier1 is not None
+        else text + "\n[ceilings.seconds]\nlint = 5\n"
+    )
+    if took is not None:
+        timing = repo / ".ratchet/timing.jsonl"
+        timing.parent.mkdir(exist_ok=True)
+        timing.write_text(json.dumps({"key": "bite-all", "seconds": took}) + "\n")
+    [found] = ceiling_findings(repo)
+    return found.problem
+
+
+def test_the_missing_bite_all_ceiling_says_the_full_proof_goes_red_over_tier_1s(
+    repo: Path,
+) -> None:
+    problem = seconds_problem(repo, 900.0, None)
+    assert "is held to tier 1's ceiling of 900s and goes red when it runs longer" in problem
+    assert "last full proof" not in problem
+
+
+def test_the_missing_bite_all_ceiling_names_the_last_measured_full_proof(repo: Path) -> None:
+    problem = seconds_problem(repo, 900.0, 1052.4)
+    assert problem.endswith("; the last full proof took 1052.4s")
+
+
+def test_the_last_full_proof_skips_unreadable_lines_and_other_keys(repo: Path) -> None:
+    timing = repo / ".ratchet/timing.jsonl"
+    timing.parent.mkdir(exist_ok=True)
+    lines = [
+        json.dumps({"key": "bite-all", "seconds": 1000}),
+        "not json",
+        json.dumps({"key": "lint", "seconds": 5}),
+        json.dumps(["bite-all"]),
+        json.dumps({"key": "bite-all", "seconds": "slow"}),
+    ]
+    timing.write_text("\n".join(lines) + "\n")
+    assert conformance.last_full_proof(repo) == 1000
+
+
+def test_the_missing_bite_all_ceiling_with_no_tier_1_ceiling_says_there_is_none(
+    repo: Path,
+) -> None:
+    assert "has no ceiling at all" in seconds_problem(repo, None, None)
+
+
+READS = "\n## What each gate reads\n\n"
+
+
+def read_problems(root: Path, bullets: str) -> list[str]:
+    binding = root / BINDING
+    head, marker, rest = binding.read_text(encoding="utf-8").partition(READS.rstrip("\n"))
+    body, divider, tail = rest.partition("\n## ")
+    text = head + marker + body.rstrip("\n") + "\n\n" + bullets + "\n" + divider + tail
+    binding.write_text(text if marker else head + READS + bullets, encoding="utf-8")
+    repos.git(root, "init", "-q")
+    ours = ("'## What", "gate ")
+    return [f.problem for f in conformance.findings(root) if f.problem.startswith(ours)]
+
+
+def test_a_bullet_of_what_each_gate_reads_is_red_for_no_gate_no_path_or_no_entry(
+    repo: Path,
+) -> None:
+    gate = project_bite.gate_rows((repo / BINDING).read_text(encoding="utf-8"))[0].gate
+    bullets = f"- {gate}: AGENTS.md, missing/**\n- nosuch: AGENTS.md\n- {gate}2:\n"
+    assert read_problems(repo, bullets) == [
+        f"gate '{gate}' reads 'missing/**', matching no file",
+        "'## What each gate reads' has a bullet for 'nosuch', no entry point",
+        f"'## What each gate reads' has a bullet for '{gate}2', no entry point",
+        f"'## What each gate reads' has an empty bullet for '{gate}2'",
+    ]
+
+
+def test_a_bullet_that_names_a_gate_and_a_file_that_exists_is_green(repo: Path) -> None:
+    gate = project_bite.gate_rows((repo / BINDING).read_text(encoding="utf-8"))[0].gate
+    assert read_problems(repo, f"- {gate}: AGENTS.md, docs\n") == []
+
+
+def test_a_line_that_is_no_bullet_after_the_first_bullet_is_red(repo: Path) -> None:
+    gate = project_bite.gate_rows((repo / BINDING).read_text(encoding="utf-8"))[0].gate
+    assert read_problems(repo, f"- {gate}: AGENTS.md\nstray words\n") == [
+        "'## What each gate reads' has a line that is no bullet: 'stray words'"
+    ]
+
+
+def test_a_bullet_that_wraps_is_read_on_its_second_line_too(repo: Path) -> None:
+    gate = project_bite.gate_rows((repo / BINDING).read_text(encoding="utf-8"))[0].gate
+    assert read_problems(repo, f"- {gate}: AGENTS.md,\n  missing/**\n") == [
+        f"gate '{gate}' reads 'missing/**', matching no file"
+    ]
 
 
 OLD_PLUGIN_LINE = (

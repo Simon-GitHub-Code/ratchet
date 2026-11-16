@@ -129,11 +129,18 @@ process group is ended when the command exits. A process that left the group, as
 daemon does, is not ended, and runs on, and a copy it is still writing in when the proof ends is
 left behind.
 
-Usage: ``project_bite.py [--root DIR] [--changed] [--gate NAME]... [--jobs N] [--limit S]``.
-``--changed`` is the pull-request form: it proves nothing unless the change touches a path that
-defines a gate (the manifest's ``tool-config``, ``gate-commands``, ``fitness``, ``gate-tools``
-and ``formal`` groups, the registry and the binding), and then proves the gates of tiers 0
-and 1. It proves nothing on the adoption either, the change whose base holds no binding: every
+Usage: ``project_bite.py [--root DIR] [--changed | --pull-request-gates] [--gate NAME]...
+[--jobs N] [--limit S]``. ``--changed`` is the pull-request form: it proves nothing unless the
+change touches a path that defines a gate (the manifest's ``tool-config``, ``gate-commands``,
+``fitness``, ``gate-tools`` and ``formal`` groups, the registry and the binding), and then proves
+the gates of tiers 0 and 1 that the change could affect (ADR 0069), one line each saying why.
+The registry names a gate by each bite added, removed or changed; a patch names the gates whose
+bites apply it; the binding names the gates of the rows that changed, and every gate when
+anything else in it changed, the plugin pin line included; a recipe in the justfile names the gates
+whose command reaches it. Any other path, and a path whose reading fails, affects every gate of
+tiers 0 and 1. ``--pull-request-gates`` proves every gate of tiers 0 and 1 with no change to
+read, to measure what the pull-request form costs; it cannot be combined with ``--changed``. The
+proof proves nothing on the adoption either, the change whose base holds no binding: every
 gate is new there, and the whole proof runs once in tier 2.
 """
 
@@ -156,7 +163,7 @@ import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, NamedTuple
@@ -164,10 +171,12 @@ from typing import TYPE_CHECKING, NamedTuple
 import application_types
 import budget
 import gatelib
+import plugin_pin
 
 # Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import diff as guard_paths
+from ratchet_guards.manifest import Manifest
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -219,6 +228,7 @@ UNSUPPORTED = (
 )
 TAIL = 15
 MAX_LANES = 4
+GATE_ROW_CELLS = 5
 GATE_LIMIT = 900.0
 RUN_CEILING = "bite-run"
 SLOW = 2.0
@@ -242,6 +252,7 @@ class Row:
     tier: str
     command: str
     limit: float = GATE_LIMIT
+    line: str = field(default="", compare=False)
 
     @property
     def gate(self) -> str:
@@ -260,31 +271,44 @@ class Row:
 
 def gate_rows(binding: str) -> list[Row]:
     """The rows of the ``## Gates`` table; a row short of its five cells is left out."""
-    return list(_gate_rows(binding))
+    return list(split_gates(binding)[0])
 
 
 @functools.lru_cache(maxsize=256)
-def _gate_rows(binding: str) -> tuple[Row, ...]:
-    _, _, body = binding.partition("\n## Gates\n")
-    lines = [line for line in body.split("\n## ")[0].splitlines() if line.startswith("|")]
-    table = [[cell.strip() for cell in line.strip().strip("|").split("|")] for line in lines]
-    rows = [cells for cells in table if not set("".join(cells)) <= set("-: ")]
-    return tuple(
-        Row(cells[0], cells[1], cells[2], cells[4].partition("`")[2].partition("`")[0])
-        for cells in rows[1:]
-        if len(cells) > 4  # noqa: PLR2004 # -- Question, Tool, Tier, Threshold source, Entry point
-    )
+def split_gates(binding: str) -> tuple[tuple[Row, ...], str]:
+    """The Gates table's rows, and the binding with those rows taken out.
+
+    A row has ``GATE_ROW_CELLS`` cells: Question, Tool, Tier, Threshold source, Entry point.
+    """
+    before, marker, body = binding.partition("\n## Gates\n")
+    section, divider, after = body.partition("\n## ")
+    kept: list[str] = []
+    rows: list[Row] = []
+    header = False
+    for line in section.splitlines(keepends=True):
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if not line.startswith("|") or set("".join(cells)) <= set("-: "):
+            kept.append(line)
+        elif not header:
+            header = True
+            kept.append(line)
+        elif len(cells) >= GATE_ROW_CELLS:
+            command = cells[4].partition("`")[2].partition("`")[0]
+            rows.append(Row(cells[0], cells[1], cells[2], command, line="|".join(cells)))
+        else:
+            kept.append(line)
+    return tuple(rows), before + marker + "".join(kept) + divider + after
 
 
 def run_git(
-    root: Path, *args: str, index: Path | None = None, stdin: str | None = None
+    root: Path, *args: str, index: Path | None = None, stdin: str | bytes | None = None
 ) -> subprocess.CompletedProcess[bytes]:
     """``git -C root args``, judging ``root`` and no other tree, through ``index`` when given."""
     return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True,
         check=False,
-        input=None if stdin is None else stdin.encode(),
+        input=stdin.encode() if isinstance(stdin, str) else stdin,
         env=environment() | ({"GIT_INDEX_FILE": str(index)} if index else {}),
     )
 
@@ -1424,57 +1448,382 @@ def proof(
     return 1 if unseen else 0
 
 
-def gate_paths_changed(root: Path) -> list[str] | None:
+class Touched(NamedTuple):
+    """A changed path that defines a gate, and the manifest group that says so (none: ``""``)."""
+
+    path: str
+    group: str
+
+
+class Cause(NamedTuple):
+    """Why a gate is in the proof's set; no gate means every gate of tiers 0 and 1."""
+
+    gate: str | None
+    why: str
+
+
+Targets = dict[tuple[bool, str], set[tuple[str, str]]]
+IGNORE_NAMES = (".gitignore", ".gitattributes")
+JUSTFILE_NAMES = ("justfile", ".justfile", "Justfile")
+READER = {"gate-commands": "runs it"}
+READS = "## What each gate reads"
+READS_BULLET = re.compile(r"^- ([^:\s]+):[ \t]*(.*)$")
+
+
+def defining_group(names: set[str]) -> str:
+    """The first gate group of ``names`` besides ``tool-config``, else ``tool-config``, else none.
+
+    A path in ``tool-config`` and in any other gate group is therefore judged by the other group.
+    """
+    wide = [name for name in GATE_GROUPS if name in names and name != "tool-config"]
+    return wide[0] if wide else "tool-config" if "tool-config" in names else ""
+
+
+def gate_paths_changed(root: Path, base: str | None) -> list[Touched] | None:
     """The changed paths that define a gate; ``None`` when there is no commit to compare with."""
-    base = gatelib.base_commit(root)
     if base is None:
         return None
     git = guard_paths.git_in(root)
     paths = guard_paths.changed_paths(git, base)
-    groups = dict(guard_paths.guarded(paths, guard_paths.manifests(git, base, root)))
+    manifests = guard_paths.manifests(git, base, root)
+    targets = fault_targets(root, base)
+    touched = []
+    for path in paths:
+        names = {
+            group.name
+            for manifest in manifests
+            for group in manifest.groups
+            if Manifest((group,)).group_of(path)
+        }
+        if gatelib.matches(path, list(GATE_PATHS)):
+            touched.append(Touched(path, ""))
+        elif defining_group(names):
+            touched.append(Touched(path, defining_group(names)))
+        elif PurePosixPath(path).name in IGNORE_NAMES:
+            touched.append(Touched(path, "ignore-rules"))
+        elif targeted_by(targets, path):
+            touched.append(Touched(path, "fault"))
+    return touched
+
+
+def registries(root: Path, base: str) -> tuple[Registry | None, Registry | None]:
+    """The registry at the merge base and at head; ``None`` for one that is absent or malformed."""
+    found = []
+    for source in (gatelib.show(root, base, str(REGISTRY)), gatelib.read_text(root / REGISTRY)):
+        registry, problems = read_registry(source) if source is not None else (None, [MISSING])
+        found.append(None if problems else registry)
+    return found[0], found[1]
+
+
+def registry_causes(root: Path, base: str) -> list[Cause]:
+    old, new = registries(root, base)
+    if old is None or new is None:
+        return [Cause(None, f"{REGISTRY} was added, removed or does not parse")]
+    if (old.setup, old.include) != (new.setup, new.include):
+        return [Cause(None, f"{REGISTRY} changed `setup` or `include`, which every copy holds")]
+    before = {(bite.gate, bite.name): bite for bite in old.bites}
+    after = {(bite.gate, bite.name): bite for bite in new.bites}
+    causes = []
+    for key in sorted(before.keys() | after.keys()):
+        if before.get(key) != after.get(key):
+            verb = "added" if key not in before else "removed" if key not in after else "changed"
+            causes.append(Cause(key[0], f"bite `{key[1]}` {verb}"))
+    return causes
+
+
+def patch_causes(root: Path, base: str, path: str) -> list[Cause]:
+    bites = [bite for registry in registries(root, base) if registry for bite in registry.bites]
+    named = {
+        (bite.gate, bite.name)
+        for bite in bites
+        if isinstance(bite.fault, Patch) and bite.fault.path == path
+    }
+    if not named:
+        why = f"{path} is under {PATCHES} and no bite names it as its patch, so setup may run it"
+        return [Cause(None, why)]
+    return [Cause(gate, f"patch {path} is named by bite `{name}`") for gate, name in sorted(named)]
+
+
+def patch_paths(root: Path, patch: bytes | None) -> set[str]:
+    """The files a patch touches, new names and old, as git lists them; ``**`` when it cannot.
+
+    Git is asked both ways, since a rename or a mode change lists only one name going forward.
+    """
+    if not patch:
+        return set()
+    forward = run_git(root, "apply", "--numstat", "-z", stdin=patch)
+    backward = run_git(root, "apply", "-R", "--numstat", "-z", stdin=patch)
+    if forward.returncode != 0 or backward.returncode != 0:
+        return {"**"}
+    fields = (forward.stdout + backward.stdout).decode(errors="replace").split("\0")
+    return {field.rpartition("\t")[2] for field in fields if field}
+
+
+def committed_bytes(root: Path, base: str, path: str) -> bytes | None:
+    """``path`` as the merge base holds it, byte for byte; ``None`` when it holds none."""
+    result = run_git(root, "show", f"{base}:{path}")
+    return result.stdout if result.returncode == 0 else None
+
+
+def fault_targets(root: Path, base: str) -> Targets:
+    """Each file or glob a bite's fault changes, with the bites that change it.
+
+    A ``write`` or ``replace`` names its files, a ``remove`` its patterns, and a ``patch`` the files
+    its diff lists at the merge base and at head. Only the patterns are globs.
+    """
+    targets: Targets = {}
+    for registry in registries(root, base):
+        for bite in registry.bites if registry else ():
+            fault = bite.fault
+            if isinstance(fault, Write):
+                names, glob = {fault.path}, False
+            elif isinstance(fault, Replace):
+                names, glob = {swap.path for swap in fault.swaps}, False
+            elif isinstance(fault, Remove):
+                names, glob = set(fault.patterns), True
+            else:
+                head = (root / fault.path).read_bytes() if (root / fault.path).is_file() else None
+                names = patch_paths(root, committed_bytes(root, base, fault.path))
+                names |= patch_paths(root, head)
+                glob = False
+            for name in names:
+                targets.setdefault((glob or name == "**", name), set()).add((bite.gate, bite.name))
+    return targets
+
+
+def targeted_by(targets: Targets, path: str) -> set[tuple[str, str]]:
+    """The bites whose fault changes ``path``."""
+    return {
+        who
+        for (pattern, name), bites in targets.items()
+        if (gatelib.matches(path, [name]) if pattern else name == path)
+        for who in bites
+    }
+
+
+def binding_causes(root: Path, base: str) -> list[Cause]:
+    """The gates a change to the binding could affect.
+
+    ``gatelib.show`` strips the text it returns while the work tree's file keeps its newline, so
+    the text outside the rows is compared stripped. A changed row that names no gate falls back.
+    """
+    binding = str(gatelib.BINDING)
+    old = gatelib.show(root, base, binding) or ""
+    new = gatelib.read_text(root / binding) or ""
+    (old_rows, old_rest), (new_rows, new_rest) = split_gates(old), split_gates(new)
+    if (
+        plugin_pin.PIN_LINE.sub("", old_rest).strip()
+        != plugin_pin.PIN_LINE.sub("", new_rest).strip()
+    ):
+        return [Cause(None, f"{binding} changed outside its gate rows, which a gate may read")]
+    if old_rest.strip() != new_rest.strip():
+        return [Cause(None, "the plugin pin changed, and the plugin supplies gates")]
+    if any(len({row.question for row in rows}) != len(rows) for rows in (old_rows, new_rows)):
+        why = f"{binding} has two gate rows for one question, so one could hide behind the other"
+        return [Cause(None, why)]
+    before = {row.question: row for row in old_rows}
+    after = {row.question: row for row in new_rows}
+    causes = []
+    for question in sorted(before.keys() | after.keys()):
+        was, now = before.get(question), after.get(question)
+        if was is not None and now is not None and was.line == now.line:
+            continue
+        verb = "added" if was is None else "removed" if now is None else "changed"
+        rows = [row for row in (was, now) if row is not None]
+        if not all(row.gate for row in rows):
+            why = f"the binding's row `{question}` {verb} and names no gate"
+            return [Cause(None, why)]
+        causes += [Cause(row.gate, f"the binding's row `{question}` {verb}") for row in rows]
+    return causes
+
+
+def read_reads(binding: str) -> tuple[dict[str, list[str]], list[str]]:
+    """The bullets of ``## What each gate reads``, and each line after the first that is no bullet.
+
+    An indented line continues the bullet above it.
+    """
+    _, marker, body = binding.partition(f"\n{READS}\n")
+    reads: dict[str, list[str]] = {}
+    strays: list[str] = []
+    gate = None
+    for line in body.partition("\n## ")[0].splitlines() if marker else []:
+        found = READS_BULLET.match(line)
+        if found:
+            gate, text = found[1], found[2]
+            reads.setdefault(gate, [])
+        elif gate is not None and line.strip() and line[0] in " \t":
+            text = line
+        else:
+            text = ""
+            if gate is not None and line.strip():
+                strays.append(line.strip())
+        if gate is not None:
+            entries = (entry.strip().strip("`") for entry in text.split(","))
+            reads[gate].extend(entry for entry in entries if entry)
+    return reads, strays
+
+
+def gate_reads(binding: str) -> dict[str, list[str]]:
+    """Each bullet of ``## What each gate reads``: the gate, and the paths it reads."""
+    return read_reads(binding)[0]
+
+
+def reading(path: str, entry: str) -> bool:
+    """Whether a bullet's file, directory or glob covers a repository path."""
+    return gatelib.matches(path, [entry, f"{entry.rstrip('/')}/**"])
+
+
+def unnamed_causes(root: Path, path: str, group: str) -> list[Cause]:
+    """The gates a path no gate's row names could affect.
+
+    A tool-config path goes to the gates whose bullet reads it and those with no bullet. Any other
+    path, and a tool-config path with no bullet in the binding at all, goes to every gate.
+    """
+    binding = gatelib.read_text(root / gatelib.BINDING) or ""
+    reads = gate_reads(binding) if group == "tool-config" else {}
+    if not reads:
+        who = READER.get(group, "reads it")
+        return [Cause(None, f"{path} changed, and no record says which gate {who}")]
+    if not any(reading(path, entry) for entries in reads.values() for entry in entries):
+        return [Cause(None, f"{path} changed, and no bullet names it")]
+    causes = []
+    for row in pull_request_gates(gate_rows(binding)):
+        entries = reads.get(row.gate)
+        if entries is None:
+            why = f"{path} changed, and `{row.gate}` has no bullet under {READS}"
+            causes.append(Cause(row.gate, why))
+        elif any(reading(path, entry) for entry in entries):
+            causes.append(Cause(row.gate, f"{path} changed, and `{row.gate}` reads it"))
+    return causes
+
+
+def could_affect(root: Path, base: str | None, touched: Sequence[Touched] | None) -> list[Cause]:
+    """Every gate the change could make unable to fail, each with why; no gate is every gate.
+
+    One source per kind of path. Where nothing records which gate a path serves, the cause names
+    no gate.
+    """
+    if base is None or touched is None:
+        return [Cause(None, "there is no merge base to compare with")]
+    causes: list[Cause] = []
+    targets = fault_targets(root, base)
+    for path, group in touched:
+        if path == str(REGISTRY):
+            causes += registry_causes(root, base)
+        elif gatelib.matches(path, [f"{PATCHES}**"]):
+            causes += patch_causes(root, base, path)
+        elif path == str(gatelib.BINDING):
+            causes += binding_causes(root, base)
+        elif PurePosixPath(path).name in JUSTFILE_NAMES:
+            name = PurePosixPath(path).name
+            why = f"the {name} changed, and its recipes are code the proof cannot read"
+            causes.append(Cause(None, why))
+        elif PurePosixPath(path).name in IGNORE_NAMES:
+            why = f"{path} changed, and the proof reads the ignore rules when it plants a fault"
+            causes.append(Cause(None, why))
+        elif group != "fault":
+            causes += unnamed_causes(root, path, group)
+        causes += [
+            Cause(gate, f"{path} is changed by bite `{name}`")
+            for gate, name in sorted(targeted_by(targets, path))
+        ]
+    return causes
+
+
+def pull_request_gates(rows: Sequence[Row]) -> list[Row]:
+    """Every gate of tiers 0 and 1."""
+    return [row for row in rows if row.tier in PULL_REQUEST_TIERS]
+
+
+def fallback(rows: Sequence[Row]) -> list[Row]:
+    """The gates to prove when a cause names no gate: every gate of tiers 0 and 1, for now."""
+    return pull_request_gates(rows)
+
+
+def targeted(rows: Sequence[Row], causes: Sequence[Cause]) -> list[Row]:
+    """The gates the causes put in the set, and the one place that falls back."""
+    if any(cause.gate is None for cause in causes):
+        return fallback(rows)
+    named = {cause.gate for cause in causes}
+    return [row for row in pull_request_gates(rows) if row.gate in named]
+
+
+def explain(rows: Sequence[Row], causes: Sequence[Cause]) -> list[str]:
+    """One line for each gate in the set; on a fallback one line, which ``budget.py`` reads."""
+    if any(cause.gate is None for cause in causes):
+        whys = dict.fromkeys(cause.why for cause in causes if cause.gate is None)
+        return [f"bite: fallback: {'; '.join(whys)}; proving every gate"]
     return [
-        path
-        for path in paths
-        if gatelib.matches(path, list(GATE_PATHS))
-        or (path in groups and groups[path].name in GATE_GROUPS)
+        f"bite: {row.gate}: "
+        + "; ".join(dict.fromkeys(cause.why for cause in causes if cause.gate == row.gate))
+        for row in targeted(rows, causes)
     ]
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="project_bite.py")
-    parser.add_argument("--root", type=Path, default=Path())
-    parser.add_argument("--changed", action="store_true", help="only when a gate changed")
-    parser.add_argument("--gate", action="append", default=[], help="only this gate's bites")
-    parser.add_argument("--jobs", type=int, default=min(MAX_LANES, gatelib.default_jobs()))
-    parser.add_argument("--limit", type=float, help="seconds a run may take, for every gate")
-    options = parser.parse_args(argv[1:])
-    if os.environ.get(BITING):
-        return gatelib.report("bite", ["a bite cannot plant a fault for the gate that runs it"])
-    root = options.root.resolve()
-    rows, registry, problems, gaps = inspect(root)
-    # Why: one gate at a time is how a registry is written, so `--gate` runs before it is whole.
-    problems += [] if options.gate else gaps
-    if problems:
-        return gatelib.report("bite", [f"{REGISTRY}: {problem}" for problem in problems])
-    if options.changed and gatelib.adoption(root, gatelib.base_commit(root)):
+def changed_gates(root: Path, rows: Sequence[Row]) -> list[Row] | int:
+    """The gates a pull request proves, or the exit code of a run that proves nothing."""
+    base = gatelib.base_commit(root)
+    if gatelib.adoption(root, base):
         print(
             "bite: green: this change is the adoption, whose base holds no binding; nothing is"
             " proven here, and `bite-all` proves every gate in tier 2"
         )
         return 0
+    touched = gate_paths_changed(root, base)
+    if touched == []:
+        print("bite: green: the change touches no path that defines a gate; nothing to prove")
+        return 0
+    print(
+        "bite: a gate may have changed"
+        f" ({', '.join(t.path for t in touched or []) or 'no merge base'})"
+    )
+    causes = could_affect(root, base, touched)
+    chosen = targeted(rows, causes)
+    if not chosen:
+        print("bite: green: the change affects no gate of tiers 0 and 1; nothing to prove")
+        return 0
+    print("\n".join(explain(rows, causes)))
+    return chosen
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="project_bite.py")
+    parser.add_argument("--root", type=Path, default=Path())
+    parser.add_argument("--changed", action="store_true", help="only the gates a change affects")
+    parser.add_argument(
+        "--pull-request-gates",
+        action="store_true",
+        help="every gate of tiers 0 and 1, whatever the change",
+    )
+    parser.add_argument("--gate", action="append", default=[], help="only this gate's bites")
+    parser.add_argument("--jobs", type=int, default=min(MAX_LANES, gatelib.default_jobs()))
+    parser.add_argument("--limit", type=float, help="seconds a run may take, for every gate")
+    options = parser.parse_args(argv[1:])
+    if options.changed and options.pull_request_gates:
+        parser.error("--changed and --pull-request-gates are two ways to choose the gates")
+    if os.environ.get(BITING):
+        return gatelib.report("bite", ["a bite cannot plant a fault for the gate that runs it"])
+    root = options.root.resolve()
+    rows, registry, problems, gaps = inspect(root)
+    # Why: one gate at a time is how a registry is written, so `--gate` runs before it is whole.
+    problems += [] if options.gate and not options.changed else gaps
+    if problems:
+        return gatelib.report("bite", [f"{REGISTRY}: {problem}" for problem in problems])
+    chosen = pull_request_gates(rows) if options.pull_request_gates else rows
     if options.changed:
-        touched = gate_paths_changed(root)
-        if touched == []:
-            print("bite: green: the change touches no path that defines a gate; nothing to prove")
-            return 0
-        print(f"bite: a gate may have changed ({', '.join(touched or ['no merge base'])})")
+        found = changed_gates(root, rows)
+        if isinstance(found, int):
+            return found
+        chosen = found
     tasks: list[Task] = [
         (row, [bite for bite in registry.bites if bite.gate == row.gate])
-        for row in rows
-        if (not options.changed or row.tier in PULL_REQUEST_TIERS)
-        and (not options.gate or row.gate in options.gate)
+        for row in chosen
+        if not options.gate or row.gate in options.gate
     ]
     tasks = [task for task in tasks if task[1]]
+    if not tasks and options.changed:
+        print("bite: green: the gates the change affects have no bite; nothing to prove")
+        return 0
     if not tasks:
         return gatelib.report("bite", ["no bite to run: a gate with nothing to run is red"])
     lanes = max(1, min(options.jobs, len(tasks)))
