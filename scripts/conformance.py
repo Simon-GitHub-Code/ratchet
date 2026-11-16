@@ -2002,10 +2002,24 @@ def check_plugin_fallback(root: Path) -> Iterable[Finding]:
     )
 
 
-def interpreter_calls(justfile: str, guard_diff: str) -> str:
+def bare_template_lines(template: str) -> dict[str, str]:
+    """Template lines run on ``plugin_py -P`` or showing the call, keyed by their bare text."""
+    bare = {}
+    for line in template.split("\n"):
+        held = line.replace(f"{{{{{INTERPRETER_VARIABLE}}}}} -P", "python3")
+        held = held.replace(f"' + {INTERPRETER_VARIABLE} + '", "python3")
+        if held != line:
+            bare[held] = line
+    return bare
+
+
+def interpreter_calls(justfile: str, guard_diff: str, template: str) -> str:
     """``justfile`` with each code line that runs a plugin script bare, run as the template does."""
+    inline = bare_template_lines(template)
 
     def fixed(line: str) -> str:
+        if line in inline:
+            return inline[line]
         if line.lstrip().startswith("#"):
             return line
         call = BARE_SCRIPT_CALL.sub(f"{{{{{INTERPRETER_VARIABLE}}}}}", line)
@@ -2018,7 +2032,7 @@ def interpreter_calls(justfile: str, guard_diff: str) -> str:
 RECIPE_HEAD = re.compile(r"^([A-Za-z_][\w-]*)(?:(?P<variable>[ \t]*:=)|[^\n:=]*:(?!=))")
 
 
-def bare_calls(justfile: str, guard_diff: str) -> list[str]:
+def bare_calls(justfile: str, guard_diff: str, template: str) -> list[str]:
     """Each line that runs a plugin script bare, as ``justfile:N: recipe `name` runs …``."""
     kind, name = "recipe", ""
     found = []
@@ -2026,9 +2040,10 @@ def bare_calls(justfile: str, guard_diff: str) -> list[str]:
         head = RECIPE_HEAD.match(line)
         if head is not None:
             kind, name = ("variable" if head.group("variable") else "recipe"), head.group(1)
-        if interpreter_calls(line, guard_diff) != line:
+        if interpreter_calls(line, guard_diff, template) != line:
             found.append(
-                f"justfile:{number}: {kind} `{name}` runs a plugin script under the bare `python3`"
+                f"justfile:{number}: {kind} `{name}` runs a plugin script or the template's inline"
+                " Python under the bare `python3`"
             )
     return found
 
@@ -2048,14 +2063,14 @@ def check_plugin_interpreter(root: Path) -> Iterable[Finding]:
     if justfile is None or call is None or block is None or PLUGIN_LINE.search(justfile) is None:
         return
     guard_diff = call.group(0)
-    if interpreter_calls(justfile, guard_diff) == justfile:
+    if interpreter_calls(justfile, guard_diff, template) == justfile:
         return
 
     def want(current: str | None) -> str:
         held = PLUGIN_LINE.sub(lambda _: block.group(0), current or "", count=1)
-        return interpreter_calls(held, guard_diff)
+        return interpreter_calls(held, guard_diff, template)
 
-    calls = "; ".join(bare_calls(justfile, guard_diff))
+    calls = "; ".join(bare_calls(justfile, guard_diff, template))
     yield Finding(
         "justfile",
         f"{calls}; the bare `python3` reads PYTHONPATH, PYTHONSTARTUP and the user's site folder,"
