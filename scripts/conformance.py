@@ -9,6 +9,7 @@ to pass and each mutated one to fail, so the checker is shown to bite.
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import re
@@ -419,20 +420,35 @@ def made(tree: Path, name: str, want: gatelib.Want) -> Iterator[bool]:
             target.unlink()
 
 
-def tried(tree: Path, check: Check, finding: Finding) -> Finding:
+Raised = dict[tuple[Check, str, bytes], set[tuple[str, str]]]
+
+
+def tried(
+    tree: Path,
+    check: Check,
+    finding: Finding,
+    *,
+    raised_after: Raised | None = None,
+) -> Finding:
     """The finding with its offered edit made ``Auto`` or ``otherwise``, as the check then says.
 
     Why: an edit counts as the fix only when the check that raised the finding, run again on the
     tree the edit made, no longer raises it. A test of the edit's own could be weaker than its
     finding, and a gate the upgrade claims to have fixed would stay loose without a sound.
+    ``raised_after`` keeps what a check raised on a file's bytes, so edits that leave a file the
+    same run the check once.
     """
     fix = finding.fix
     if not isinstance(fix, Edit):
         return finding
+    raised_after = {} if raised_after is None else raised_after
+    cleared = False
     with made(tree, finding.path, fix.want) as changed:
-        cleared = changed and all(
-            (again.path, again.problem) != (finding.path, finding.problem) for again in check(tree)
-        )
+        if changed:
+            key = (check, finding.path, (tree / finding.path).read_bytes())
+            if key not in raised_after:
+                raised_after[key] = {(again.path, again.problem) for again in check(tree)}
+            cleared = (finding.path, finding.problem) not in raised_after[key]
     then = fix.otherwise.then if isinstance(fix.otherwise, Agent) else ()
     return replace(finding, fix=Auto(fix.does, fix.want, then) if cleared else fix.otherwise)
 
@@ -483,6 +499,7 @@ def copied(root: Path, target: Path) -> dict[str, str]:
     return foreign
 
 
+@functools.cache
 def template_file(path: str) -> str:
     """A file of the adopt templates, or of the init templates when adopt has none."""
     return read(ADOPT_TEMPLATES / path) or read(INIT_TEMPLATES / path) or ""
@@ -755,6 +772,7 @@ def template_rows() -> dict[str, tuple[str, str]]:
     }
 
 
+@functools.cache
 def template_gate_row(question: str) -> str:
     """The template binding's Gates row for a question (a test holds that it has one)."""
     body = markdown_text.section(template_binding(), "## Gates")
@@ -781,6 +799,7 @@ def entry_row(name: str, rows: dict[str, tuple[str, str]], *, on_just: bool) -> 
     return Finding(BINDING_PATH, problem, edit)
 
 
+@functools.cache
 def missing_recipe(justfile: str, recipe: str, name: str) -> Finding:
     """A recipe an entry point runs and the justfile lacks, copied when it stands on its own."""
     text = template_file("justfile")
@@ -1013,6 +1032,7 @@ def with_tool(row: str, tool: str) -> str:
     return "|".join(cells)
 
 
+@functools.cache
 def template_questions() -> tuple[str, ...]:
     """The questions of the template binding's Gates table, in its order."""
     return tuple(row.question for row in project_bite.gate_rows(template_binding()))
@@ -2695,7 +2715,8 @@ def findings(root: Path, *, owned: bool = False) -> list[Finding]:
         if not owned:
             tree = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="ratchet-trial-")))
             copied(root, tree)
-        return [tried(tree, check, failure) for check, failure in found]
+        raised_after: Raised = {}
+        return [tried(tree, check, failure, raised_after=raised_after) for check, failure in found]
 
 
 def failures(root: Path) -> list[str]:
