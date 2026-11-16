@@ -164,18 +164,20 @@ tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible 
 tier1_sharded := "test mutation-changed"
 tier2_sharded := "mutation e2e test-stability"
 
-# Gates that cannot share a working tree at the same time, one variable per tier. Empty until
-# bound: the runner cannot see what a command touches, and a template cannot know this stack's
-# tools. Declare a group as `--serial A B`, repeated for more groups, each name a gate of that
-# tier: `serial1 := "--serial coverage diff-coverage"`. Declare one for:
+# Gates that cannot share a working tree at the same time, one variable per tier. Declare a group as
+# `--serial A B`, repeated for more groups, each name a gate of that tier. The runner cannot see what
+# a command touches, and a template cannot know this stack's tools, so the template declares one
+# group only: the tier 1 gates that run the whole suite, since each such run takes every core and
+# two side by side starve the tests inside them until they time out. Declare one for:
 #   - two gates that write one file or directory (a coverage data file, a cache, a lock);
 #   - a gate that mutates the tree (a formatter, a generator, a migration) and every gate that
 #     reads what it writes;
-#   - two gates that bind one fixed port (better: `{port}` through `with_service.py`).
+#   - two gates that bind one fixed port (better: `{port}` through `with_service.py`);
+#   - two more gates that each take every core.
 # Giving each gate an output of its own is better than a group. A gate that is red in parallel
 # and green alone shares state with another.
 serial0 := ""
-serial1 := ""
+serial1 := "--serial coverage test mutation-changed"
 serial2 := ""
 
 # How many gates run at once: every core unless RATCHET_JOBS, else `git config ratchet.jobs`, says
@@ -184,9 +186,11 @@ serial2 := ""
 configured_jobs := `git config --get ratchet.jobs 2>/dev/null || true`
 jobs := env_var_or_default("RATCHET_JOBS", if configured_jobs == "" { num_cpus() } else { configured_jobs })
 
-# Gates that are measured alone: they judge elapsed time, which a gate running beside them
-# disturbs, so each runs once the others have finished, by itself. A name not in a tier is ignored.
-alone := "--alone perf load"
+# Gates that run by themselves once the others have finished. `perf` and `load` judge elapsed
+# time, which a gate beside them disturbs. The full mutation and stability gates take every core
+# and would starve whatever ran beside them, the tier 1 group included when `check-deep` runs all
+# three tiers. A name not in a tier is ignored.
+alone := "--alone perf load mutation test-stability"
 
 # The runner. Each gate is an entry point of this file, run as `just <gate>` with its output held
 # whole, and every gate's seconds are appended to .ratchet/timing.jsonl so the slowest is named.
@@ -259,8 +263,8 @@ check: plugin-pin
 check-fast: plugin-pin
     {{parallel}} --fail-fast {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
-# `perf` and `load` judge elapsed time, so they run after the other gates, one at a time (`alone`
-# above); CI gives each a job of its own.
+# The gates `alone` names run after the others, one at a time (see `alone` above); CI gives each a
+# job of its own.
 check-deep: plugin-pin
     {{parallel}} {{serial0}} {{serial1}} {{serial2}} -- {{tier0_gates}} {{tier1_gates}} {{tier2_gates}}
 
