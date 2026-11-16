@@ -17,7 +17,7 @@ An installed copy of the plugin has no `.git`, so `plugin_pin.commit_of` returns
 
 **Each release has a release page.** After the check passes, the workflow publishes a GitHub release for `vV`. Its notes are the `## V` section of `CHANGELOG.md`, so the page and the changelog say the same thing. The workflow makes no page for a tag whose check is red, and it leaves a page that already exists alone. The owner authorised the pages on 2026-11-15.
 
-**The marketplace installs the tag.** In `.claude-plugin/marketplace.json`, the ratchet entry's `"source": "./"` becomes `{"source": "github", "repo": "Simon-GitHub-Code/ratchet", "ref": "vV"}`. The version PR sets `ref` with the version.
+**The marketplace installs the tag.** In `.claude-plugin/marketplace.json`, the ratchet entry's `"source": "./"` becomes `{"source": "url", "url": "https://github.com/Simon-GitHub-Code/ratchet.git", "ref": "vV"}`. The version PR sets `ref` with the version.
 
 **`commit_of` reads the file.** Without `.git`, it reads `.claude-plugin/commit`: 40 lowercase hex characters give the commit, a missing file gives `None`, and anything else gives `UNREADABLE`. With `.git`, a clone is a release only while `HEAD` is the release commit itself: it tracks the file, its single parent is the commit the file names, and the work tree is clean. Then the commit is the one the file names. Otherwise it is `HEAD`, as before, so a dev clone is unchanged. A commit says where a copy came from, never what it holds; only the tree id below does.
 
@@ -74,7 +74,8 @@ Main's CI is red when main holds `.claude-plugin/commit`, since a copy on main w
 
 This is wrong if any of these is seen:
 
-- The harness does not install a `github` source that names the marketplace's own repository at a tag. The build checks this first and stops if it fails.
+- The harness does not install and update a `url` source that names the marketplace's own repository at a tag. The build checks this first and stops if it fails.
+  - Seen after 0.12.4 shipped with a `github` source: the harness installed it over HTTPS, but `claude plugin update` cloned it over SSH and, on a machine with no SSH key, failed with `Permission denied (publickey)` and did not fall back to HTTPS. A `url` source with the HTTPS address installs and updates with no key, and its copy holds the same `.claude-plugin/commit` and tree, so the pin check is unchanged.
 - An installed copy of a tagged release fails to upgrade a project with no clone of the plugin.
 - A project pinned to M runs code in CI that differs from the installed copy at `vV`.
 - A `v*` tag moves or disappears with `release_check.py` still green.
