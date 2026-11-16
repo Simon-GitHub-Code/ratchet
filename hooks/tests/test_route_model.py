@@ -676,23 +676,50 @@ def sweep(repo: real.Repo, world: World, span: range, *, scratch: Path) -> int:
     return taken
 
 
+def cost(edge: model.Edge) -> int:
+    """What the sweep spends on ``edge``, in steps: the step taken, then the route asked.
+
+    Why not one each: a fill runs the real ``upgrade.py``, whose checks try each edit a finding
+    offers by checking the whole repository again. Once the binding declares a type the ``Flag:``
+    line is asked of, it has some two hundred such edits to try, and the fill costs about 19
+    steps; before, about 7. An upgrade costs about 17. Where the route names a safeguard, ``ask``
+    reads it three times. Measured from CI's times of the chunks cut by steps alone, and from a
+    profile of the slowest of them, where the fills took four fifths of the time.
+    """
+    if edge.action is ActionName.AGENT_FILLS_ROWS:
+        return 7 if edge.source.flag is Flag.WAITS else 19
+    if edge.action is ActionName.UPGRADE_LEAVES_ROWS_TO_FILL:
+        return 17
+    return 2 if model.real_advice(edge.target) is Advice.SAFEGUARD else 1
+
+
+@cache
+def costs() -> list[int]:
+    """The cost of the steps out of each state, in the order of the walk."""
+    return [sum(map(cost, leaving()[state])) for state in spanning().order]
+
+
 @cache
 def spans() -> list[range]:
-    """The walk's places cut into chunks that each take about as many steps."""
-    tree = spanning()
-    steps = [len(leaving()[state]) for state in tree.order]
-    total, bounds, done = sum(steps), [0], 0
-    for place, count in enumerate(steps):
-        done += count
+    """The walk's places cut into chunks that each cost about the same."""
+    total, bounds, done = sum(costs()), [0], 0
+    for place, spent in enumerate(costs()):
+        done += spent
         if done * SWEEP_CHUNKS >= total * len(bounds) and len(bounds) < SWEEP_CHUNKS:
             bounds.append(place + 1)
-    bounds.append(len(tree.order))
+    bounds.append(len(costs()))
     return [range(start, stop) for start, stop in itertools.pairwise(bounds)]
 
 
 def test_the_chunks_cover_every_state_once() -> None:
     assert [place for span in spans() for place in span] == list(range(len(spanning().order)))
     assert len(spans()) == SWEEP_CHUNKS
+
+
+def test_every_chunk_costs_within_a_tenth_of_the_mean() -> None:
+    spent = [sum(costs()[place] for place in span) for span in spans()]
+    mean = sum(spent) / len(spent)
+    assert all(abs(chunk - mean) <= mean / 10 for chunk in spent), spent
 
 
 @pytest.fixture
