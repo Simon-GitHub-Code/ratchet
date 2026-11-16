@@ -53,10 +53,14 @@ Usage::
   longer one after another than the slowest gate outside every group and ``--alone``, the group
   set the run's wall clock, and one line after the closing summary says so. It is never red.
 * ``--report PATH`` appends one JSON line per finished gate, in the record ``budget.py``
-  writes (``key``, ``seconds``, ``ceiling``, ``status``, ``exit``), so one reader serves both.
-  The ceiling is null: a parallel run's seconds include contention for the machine, so ceilings
-  are judged by ``budget.py`` where one gate runs alone, as CI does. The slowest gate is named
-  in the closing lines either way.
+  writes (``key``, ``seconds``, ``ceiling``, ``status``, ``exit``, and ``at``, ``run`` and
+  ``tree`` from ``runrecord.py``), so one reader serves both. The ceiling is null: a parallel
+  run's seconds include contention for the machine, so ceilings are judged by ``budget.py`` where
+  one gate runs alone, as CI does. The slowest gate is named in the closing lines either way.
+  When the run ends, one more line (``kind`` ``tier``) holds the wall time of the whole run.
+* After the closing lines, each path the binding's Cache line names (its code spans) that does
+  not exist is said in one line, and with ``--report`` has a line of its own (``kind``
+  ``cache-missing``, ``path``) after the tier's.
 * SIGINT, SIGTERM and SIGHUP stop every running gate's whole process group (each gate runs in a
   session of its own), then exit 128 plus the signal. Nothing is left running except what a gate
   detached from its own group; SIGKILL cannot be caught by anything.
@@ -99,6 +103,7 @@ import application_types
 import budget
 import gatelib
 import project_bite
+import runrecord
 
 POLL = 0.05
 # The job a gate that is measured alone runs in; the units count from 0.
@@ -248,6 +253,7 @@ class Scheduler:
         self.shares = shares(units, options.wide, alone=options.alone, jobs=options.jobs)
         self.fail_fast: bool = options.fail_fast
         self.report_to: Path | None = options.report
+        self.tree = runrecord.tree_id(self.root) if options.report else None
         self.tools = tools(self.root)
         self.live: dict[int, Live] = {}
         self.finished: list[Finished] = []
@@ -340,7 +346,7 @@ class Scheduler:
         self.finished.append(result)
         if self.report_to is not None:
             outcome = budget.Outcome(result.name, result.seconds, None, result.exit_code)
-            budget.report(self.report_to, outcome)
+            budget.report(self.report_to, outcome, runrecord.stamp(self.root, self.tree))
         if self.fail_fast and not result.green:
             self.halted = True
 
@@ -424,6 +430,28 @@ def closing(scheduler: Scheduler, wall: float) -> list[str]:
     return problems
 
 
+def record(scheduler: Scheduler, wall: float, exit_code: int) -> None:
+    """The tier's whole line, then one line for each Cache path the run left missing."""
+    missing = runrecord.missing_cache(scheduler.root)
+    for path in missing:
+        say(f"parallel: the binding's Cache line names {path}, which does not exist after this run")
+    if scheduler.report_to is None:
+        return
+    stamp = runrecord.stamp(scheduler.root, scheduler.tree)
+    whole: dict[str, object] = {
+        "kind": runrecord.TIER,
+        "seconds": round(wall, 3),
+        "status": "red" if exit_code else "green",
+        "exit": exit_code,
+        "gates": len(scheduler.finished),
+        **stamp,
+    }
+    runrecord.append(scheduler.report_to, whole)
+    for path in missing:
+        found: dict[str, object] = {"kind": runrecord.CACHE_MISSING, "path": path, **stamp}
+        runrecord.append(scheduler.report_to, found)
+
+
 def verdict(scheduler: Scheduler, problems: list[str]) -> str:
     """The last line: red, green with what ran and what waits, or that no check ran."""
     if problems:
@@ -481,9 +509,11 @@ def main(argv: list[str]) -> int:
     except gatelib.Interrupted as stop:
         say(f"parallel: {stop}; stopped {', '.join(scheduler.stopped) or 'nothing'}")
         return 128 + stop.signum
-    problems = closing(scheduler, time.monotonic() - started)
+    wall = time.monotonic() - started
+    problems = closing(scheduler, wall)
     for line in problems:
         say(line)
+    record(scheduler, wall, 1 if problems else 0)
     say(verdict(scheduler, problems))
     return 1 if problems else 0
 

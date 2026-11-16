@@ -39,6 +39,7 @@ import pins
 import plugin_pin
 import project_bite
 import report
+import runrecord
 import settings_rules
 import suites
 import suppressions
@@ -3173,6 +3174,33 @@ def check_bite_all_ceiling(root: Path) -> Iterable[Finding]:
         )
 
 
+def check_cache_written(root: Path) -> Iterable[Finding]:
+    """The last tier run's record names a path of the Cache line that did not exist after it."""
+    lines = (gatelib.read_text(root / gatelib.STATE / "timing.jsonl") or "").splitlines()
+    records = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    tiers = [at for at, record in enumerate(records) if record.get("kind") == runrecord.TIER]
+    after = records[tiers[-1] + 1 :] if tiers else []
+    for record in after:
+        if record.get("kind") == runrecord.CACHE_MISSING:
+            yield agent(
+                f"{BINDING_PATH}: the Cache line names {record.get('path')}, which did not exist"
+                " after the last tier run",
+                then=(
+                    (
+                        "make the recipe that owns the cache write it, or take the path off the"
+                        " Cache line, then run the tier again"
+                    ),
+                ),
+            )
+
+
 def full_proof_problem(root: Path, text: str) -> str:
     """What the missing ``bite-all`` ceiling costs: the tier 2 ceiling it falls to, the last run."""
     tier = budget.ceiling_of(text, "tier2")
@@ -3325,6 +3353,7 @@ CHECKS: tuple[Check, ...] = (
     check_installs,
     check_quality,
     check_bite_all_ceiling,
+    check_cache_written,
     check_gate_reads,
     check_bites,
     check_incidents,
