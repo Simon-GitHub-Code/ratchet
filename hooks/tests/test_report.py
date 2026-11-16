@@ -12,8 +12,8 @@ import gatelib
 import report
 from tests import repos
 
-HEAD = "| Report | Producer | Paths | Readers |\n| --- | --- | --- | --- |\n"
-SUITE = "| suite | `just suite-report` | `out.txt` | `just test`, `just coverage` |\n"
+HEAD = "| Report | Producer | Paths | Readers | Judged by |\n| --- | --- | --- | --- | --- |\n"
+SUITE = "| suite | `just suite-report` | `out.txt` | `just coverage`, `just test` | `just test` |\n"
 FAKE_JUST = (
     "#!/bin/sh\n"
     'echo "$@" >> "$COUNT"\n'
@@ -24,7 +24,8 @@ FAKE_JUST = (
 
 
 NO_TABLE = (
-    "'## Shared reports' lacks its table with the columns Report | Producer | Paths | Readers"
+    "'## Shared reports' lacks its table with the columns"
+    " Report | Producer | Paths | Readers | Judged by"
 )
 
 
@@ -32,6 +33,13 @@ def unreadable(name: str) -> str:
     return (
         f"the shared reports row '{name}' needs a name, one `just <recipe>` producer,"
         " backticked paths and backticked `just <recipe>` readers"
+    )
+
+
+def judgeless(name: str) -> str:
+    return (
+        f"the shared reports row '{name}' needs exactly one judge in `Judged by`,"
+        " and it is one of the row's readers"
     )
 
 
@@ -210,7 +218,9 @@ def test_the_table_names_each_report() -> None:
     reports, problems = report.parse(binding())
     assert problems == []
     assert reports == [
-        report.Report("suite", "just suite-report", ("out.txt",), ("just test", "just coverage"))
+        report.Report(
+            "suite", "just suite-report", ("out.txt",), ("just coverage", "just test"), "just test"
+        )
     ]
 
 
@@ -224,18 +234,26 @@ def test_the_table_names_each_report() -> None:
             NO_TABLE,
         ),
         (
-            binding("| <name> | <`just recipe`> | <`path`> | <`just recipe`> |\n"),
+            binding(
+                "| <name> | <`just recipe`> | <`path`> | <`just recipe`> | <`just recipe`> |\n"
+            ),
             "the shared reports table still has the template's placeholder row",
         ),
         (
-            binding("| none: x | none | none | none |\n"),
+            binding("| none: x | none | none | none | none |\n"),
             "a shared reports row says none with no reason: say why",
         ),
-        (binding("| suite | `just a` | | `just b` |\n"), unreadable("suite")),
-        (binding("| suite | `a` | `p` | `just b` |\n"), unreadable("suite")),
-        (binding("| suite | `just a` | `p` | `b` |\n"), unreadable("suite")),
-        (binding("| suite | `just a` | `p` | |\n"), unreadable("suite")),
-        (binding("| 1 | `just a` | `p` | `just b` |\n"), unreadable("1")),
+        (binding("| suite | `just a` | | `just b` | `just b` |\n"), unreadable("suite")),
+        (binding("| suite | `a` | `p` | `just b` | `just b` |\n"), unreadable("suite")),
+        (binding("| suite | `just a` | `p` | `b` | `b` |\n"), unreadable("suite")),
+        (binding("| suite | `just a` | `p` | | |\n"), unreadable("suite")),
+        (binding("| 1 | `just a` | `p` | `just b` | `just b` |\n"), unreadable("1")),
+        (binding("| suite | `just a` | `p` | `just b` | `just c` |\n"), judgeless("suite")),
+        (
+            binding("| suite | `just a` | `p` | `just b`, `just c` | `just b`, `just c` |\n"),
+            judgeless("suite"),
+        ),
+        (binding("| suite | `just a` | `p` | `just b` | |\n"), judgeless("suite")),
         (
             binding(SUITE + SUITE),
             "two shared reports rows have one name",
@@ -250,5 +268,19 @@ def test_a_binding_that_does_not_name_its_reports_is_refused(
     assert problems[-1] == expected
 
 
+def test_a_failed_producer_names_the_judge_of_its_row(
+    work: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    row = SUITE.replace("| `just test` |\n", "| `just coverage` |\n")
+    (work / gatelib.BINDING).write_text(binding(row), encoding="utf-8")
+    monkeypatch.setenv("STATUS", "2")
+    assert ask(work) == 1
+    assert capfd.readouterr().err == (
+        "report suite: `just suite-report` exited 2; `coverage` judges the failure\n"
+    )
+
+
 def test_a_binding_that_shares_none_names_no_report() -> None:
-    assert report.parse(binding("| none: the suite is one gate's own | | | |\n")) == ([], [])
+    assert report.parse(
+        binding("| none: the suite is one gate's own | none | none | none | none |\n")
+    ) == ([], [])

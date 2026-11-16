@@ -270,11 +270,11 @@ How this repository stays fast, from the first commit (the Speed section of `ski
 
 ## Shared reports
 
-A report that more than one gate reads is produced once for each run (ADR 0071). One row per report: the recipe that produces it, the paths it writes and the recipes that read it. The first reader judges a failed run. A reader never opens a path itself: it runs `scripts/report.py <report>` of the `ratchet` plugin, which prints the paths. With no report shared, the Report cell says `none: <reason>`.
+A report that more than one gate reads is produced once for each run (ADR 0071). One row per report: the recipe that produces it, the paths it writes, the recipes that read it, and the reader that judges a failed run. When the run that produced the report failed, every reader is red, and each reader but the judge says in one line that the judge's gate names the failure. A reader never opens a path itself: it runs `scripts/report.py <report>` of the `ratchet` plugin, which prints the paths. With no report shared, the Report cell says `none: <reason>`.
 
-| Report | Producer | Paths | Readers |
-| --- | --- | --- | --- |
-| <name> | <`just recipe`> | <`path`, ...> | <`just recipe`, ...> |
+| Report | Producer | Paths | Readers | Judged by |
+| --- | --- | --- | --- | --- |
+| <name> | <`just recipe`> | <`path`, ...> | <`just recipe`, ...> | <`just recipe`, one of the readers> |
 
 ## Weekly and advisory
 

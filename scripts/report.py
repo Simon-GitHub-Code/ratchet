@@ -28,7 +28,7 @@ import plugin_pin
 
 SECTION = "## Shared reports"
 SCRIPT = "scripts/report.py"
-COLUMNS = ("Report", "Producer", "Paths", "Readers")
+COLUMNS = ("Report", "Producer", "Paths", "Readers", "Judged by")
 NONE_PREFIX = "none:"
 MIN_REASON = 10
 RUN = "RATCHET_RUN"
@@ -46,6 +46,7 @@ class Report:
     producer: str
     paths: tuple[str, ...]
     readers: tuple[str, ...]
+    judge: str
 
 
 def recipe_of(command: str) -> str:
@@ -54,7 +55,7 @@ def recipe_of(command: str) -> str:
 
 
 def _row(row: tuple[str, ...], problems: list[str]) -> Report | None:
-    name, producer, paths, readers = (cell.strip() for cell in row)
+    name, producer, paths, readers, judged = (cell.strip() for cell in row)
     if any(cell.startswith("<") for cell in row):
         problems.append("the shared reports table still has the template's placeholder row")
         return None
@@ -78,7 +79,14 @@ def _row(row: tuple[str, ...], problems: list[str]) -> Report | None:
             " backticked paths and backticked `just <recipe>` readers"
         )
         return None
-    return Report(name, commands[0], files, listed)
+    judges = markdown_text.ticked(judged)
+    if len(judges) != 1 or judges[0] not in listed:
+        problems.append(
+            f"the shared reports row '{name}' needs exactly one judge in `Judged by`,"
+            " and it is one of the row's readers"
+        )
+        return None
+    return Report(name, commands[0], files, listed, judges[0])
 
 
 def parse(binding: str | None) -> tuple[list[Report] | None, list[str]]:
@@ -167,7 +175,7 @@ def main(argv: list[str]) -> int:
         return 1
     status = obtain(root, report)
     if status:
-        judge = recipe_of(report.readers[0])
+        judge = recipe_of(report.judge)
         print(
             f"report {report.name}: `{report.producer}` exited {status}; `{judge}` judges the"
             " failure",
