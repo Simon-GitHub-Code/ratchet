@@ -71,7 +71,9 @@ NEVER: dict[tuple[str, str | None], str] = {
 # names the step right after an upgrade, and neither a feature nor the drain starts while one is
 # owed, so the window is one agent step. The checks are named by rule, the name the ledger already
 # keys an entry by; the owner has nothing to do for any of them.
-FILL_FIRST = frozenset({"signs", "pins", "suppressions", "dependencies", "installs", "mutation"})
+FILL_FIRST = frozenset(
+    {"signs", "pins", "suppressions", "dependencies", "installs", "mutation", "changed_tests"}
+)
 TABLE = "owed"
 FIELDS = ("rule", "path", "problem", "since")
 HEADER = """\

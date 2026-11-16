@@ -98,6 +98,7 @@ export RATCHET_PLUGIN_DIR := replace_regex(plugin_choice, '(?s)^R.*|^D[0-9a-f]{4
 export RATCHET_PLUGIN_REFUSAL := replace_regex(plugin_choice, '(?s)^D.*|^R', '')
 export RATCHET_PLUGIN_CHECKED := replace_regex(plugin_choice, '(?s)^R.*', '')
 ratchet_plugin := "$RATCHET_PLUGIN_DIR"
+export RATCHET_RUN := env_var_or_default("RATCHET_RUN", uuid())
 
 # The deliverable as a running thing, for `start` and the three service gates the plugin ships
 # (`smoke`, `load-smoke`, `telemetry-e2e`). Adoption fills `boot`, `ready` and `service` for every
@@ -157,7 +158,7 @@ test-files *files:
 # and gives each gate a job of its own. `tier0_tree_gates` is tier 0 less the history gate.
 tier0_tree_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions"
 tier0_gates := tier0_tree_gates + " commits"
-tier1_gates := "test coverage diff-coverage test-counts mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
+tier1_gates := "test coverage diff-coverage test-counts tests-changed mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
 tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all"
 
 # The gates of a tier whose tool can run one `SHARD` of `SHARDS`: CI runs each over the shard count.
@@ -167,17 +168,19 @@ tier2_sharded := "mutation e2e test-stability"
 # Gates that cannot share a working tree at the same time, one variable per tier. Declare a group as
 # `--serial A B`, repeated for more groups, each name a gate of that tier. The runner cannot see what
 # a command touches, and a template cannot know this stack's tools, so the template declares one
-# group only: the tier 1 gates that run the whole suite, since each such run takes every core and
-# two side by side starve the tests inside them until they time out. Declare one for:
+# group only: the coverage gate and the changed-code mutation gate, which each run the whole suite
+# on every core and were seen to time out side by side. Declare one for:
 #   - two gates that write one file or directory (a coverage data file, a cache, a lock);
 #   - a gate that mutates the tree (a formatter, a generator, a migration) and every gate that
 #     reads what it writes;
 #   - two gates that bind one fixed port (better: `{port}` through `with_service.py`);
-#   - two more gates that each take every core.
+#   - two more gates whose tools each start a worker for every core, when a run shows one starving
+#     the other or a timed run is faster with them grouped. A group runs its gates one after
+#     another, so keep its chain shorter than the slowest gate outside it; the runner says when not.
 # Giving each gate an output of its own is better than a group. A gate that is red in parallel
 # and green alone shares state with another.
 serial0 := ""
-serial1 := "--serial coverage test mutation-changed"
+serial1 := "--serial coverage mutation-changed"
 serial2 := ""
 
 # How many gates run at once: every core unless RATCHET_JOBS, else `git config ratchet.jobs`, says
@@ -396,18 +399,21 @@ prose: _plugin
 
 # --- tier 1 bodies ---------------------------------------------------------------
 
+suite-report:
+    @echo "bind: the whole suite once, on every core, under the coverage tool: test_runner with the runner's shard flags, shard {{shard}} of {{shards}}, writing the paths the binding's Shared reports row names; red when none is collected"; exit 1
+
 test:
-    @echo "bind: unit, property and fitness tests on every core: test_runner with the runner's shard flags, shard {{shard}} of {{shards}}; red when none is collected"; exit 1
+    @echo "bind: through report.py --reader test; red when the suite run failed or collected none"; exit 1
 
 coverage: _plugin
-    @echo "bind: run the suite with a Cobertura or LCOV report, named in --report below"; exit 1
-    {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
+    @echo "bind: judge the coverage report that report.py --reader coverage prints, passed as --report below"; exit 1
+    report="$({{plugin_py}} "{{ratchet_plugin}}/scripts/report.py" suite --reader coverage --path 'bind: the coverage report path, as the suite row of ## Shared reports lists it')" && {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report "$report"
 
 diff-coverage:
-    @echo "bind: through changed, every line and branch changed since {base} ran"; exit 1
+    @echo "bind: through changed, every line and branch changed since {base} ran, read from the coverage report that report.py --reader diff-coverage prints"; exit 1
 
 test-counts:
-    @echo "bind: through changed, collected test count at head >= at {base}"; exit 1
+    @echo "bind: through changed, collected test count at head, read from the test results that report.py --reader test-counts prints, >= at {base}"; exit 1
 
 # The recipe runs the mutation tool, converts its outcomes to the plugin's neutral format (one JSON
 # line per mutant; the docstring of `scripts/mutation_survivors.py` has it) and hands the lines to
@@ -453,6 +459,9 @@ load-smoke: _plugin
 # affect, and says why each is in the set. `bite-all` is the whole proof.
 bite: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --changed
+
+tests-changed *suites: _plugin
+    {{changed}} -- {{plugin_py}} "{{ratchet_plugin}}/scripts/changed_tests.py" --base {base} {{suites}}
 
 # Reliability gates (ADR 0028). Each is bound once its trigger has fired; until then its body is
 # `@echo "later: <trigger>"` and it exits 0.
@@ -514,16 +523,16 @@ mutation:
 api-deep:
     @echo "bind: deep and stateful interface conformance, the deliverable booted through probed"; exit 1
 
-symbolic:
-    @echo "bind: symbolic checker over contracts"; exit 1
+# Why: a search's time grows with what there is to search. Each target gets `each` seconds and the
+# run stops at `cap` in total, so a skeleton with one target costs seconds, not the whole box.
+symbolic each="30" cap="600":
+    @echo "bind: symbolic or concolic search of each parser target, alone or as the fuzzer's hybrid mode, for {{each}} seconds, {{cap}} at most in total; red when there is no target"; exit 1
 
-# Why: fuzz time grows with what there is to fuzz. Each target gets `each` seconds and the run
-# stops at `cap` in total, so a skeleton with one target costs seconds, not the whole box.
 fuzz each="30" cap="600":
-    @echo "bind: fuzz each target for {{each}} seconds, {{cap}} at most in total; red when there is no fuzz target"; exit 1
+    @echo "bind: coverage-guided fuzzing of each target with a kept corpus for {{each}} seconds, {{cap}} at most in total; red when there is no fuzz target"; exit 1
 
-e2e:
-    @echo "bind: end-to-end suite, shard {{shard}} of {{shards}}; red when it holds no test"; exit 1
+e2e *files:
+    @echo "bind: end-to-end suite, shard {{shard}} of {{shards}}, building what it needs first; with files given, only those files; red when it holds no test"; exit 1
 
 test-stability:
     @echo "bind: run the suite shuffled and repeated, each run a fresh seed that is printed"; exit 1

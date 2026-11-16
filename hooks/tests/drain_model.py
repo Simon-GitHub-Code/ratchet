@@ -31,9 +31,12 @@ runs ``check`` only on a start no check passed, of a ticket its note does not ho
 ``--final`` is taken only in ``a``. A check that cannot read, or that finds only a rebase left
 unfinished, is taken only in ``a``, on a branch with commits of its own.
 
-In ``a`` the agent's commits are free: it may commit before the check. The feature skill's order,
-the check after the run returns and before the agent's first commit, is the one assumption the
-model can make of the agent, and ``in_order`` says which steps keep it.
+The guard refuses a commit in a queue work tree whose start no check with ``--final`` has passed
+(``commit_refused``). ``graph(guarded)`` is the drain as it runs: a commit step only where the
+guard lets it through, so a role never commits and the agent commits only after the check.
+``graph()`` is the drain without that gate, the record of what breaks there: in ``a`` the agent
+may commit before the check, and a role before its run's check. In ``d`` and ``e`` the commits
+obey the gate in both.
 """
 
 from __future__ import annotations
@@ -1091,8 +1094,8 @@ WHOLE: dict[Kind, Callable[[State], State | None]] = {
 # c, whose tree holds work. The drain's other commands and the owner reach a and c, and the
 # commands of the whole queue reach every ticket. The agent splits only a, into d and e, and
 # commits in them too, so they are opened, built, judged and landed and nothing more. Once a is
-# split no command names it, and the owner's one edit of it is to close it. The agent commits
-# before the check only in a: in d and e it keeps the skill's order.
+# split no command names it, and the owner's one edit of it is to close it. Without the gate the
+# agent commits before the check only in a: in d and e its commits obey the gate.
 A_AND_C = (Name.A, Name.C)
 BUILT = (Name.A, *PARTS[Name.A])
 PLAYS: dict[Kind, tuple[Name, ...]] = {
@@ -1147,7 +1150,7 @@ def moves(state: State) -> list[Move]:
     for action, act, name in ON_A_TICKET:
         if not state.filed(name) or (name in PARTS and on_a_split(state, action.kind)):
             continue
-        if name in PARTED and not in_order(state, action):
+        if name in PARTED and not guarded(state, action):
             continue
         after = act(state, name)
         if after is not None:
@@ -1403,6 +1406,8 @@ def unlanded(before: State, _: str, after: State) -> bool:
 
 
 AGENT_COMMITS = frozenset({Kind.COMMIT, Kind.RECORD})
+COMMITS = frozenset({*AGENT_COMMITS, Kind.PUBLISH})
+"""The steps that commit in a queue work tree, the agent's and a role's: what the guard gates."""
 
 
 def untouched(before: State, action: str, _: State) -> bool:
@@ -1414,12 +1419,12 @@ def untouched(before: State, action: str, _: State) -> bool:
     )
 
 
-def in_order(state: State, action: Action) -> bool:
-    """Whether ``action`` keeps the feature skill's order: the agent commits only on a start a check passed."""  # noqa: E501
+def guarded(state: State, action: Action) -> bool:
+    """Whether the guard lets ``action`` through: a commit only where ``commit_refused`` does not hold."""  # noqa: E501
     return (
-        action.kind not in AGENT_COMMITS
+        action.kind not in COMMITS
         or action.ticket is None
-        or not unchecked(state.of(action.ticket))
+        or not commit_refused(state.of(action.ticket))
     )
 
 
@@ -2116,7 +2121,7 @@ def run(
 ) -> Run:
     """The part of ``graph()`` its start reaches by the actions ``taken`` keeps, breadth first.
 
-    Only the steps ``keep`` keeps where they start, as the skill's order with ``in_order``. Each
+    Only the steps ``keep`` keeps where they start, as the guard's gate with ``guarded``. Each
     of its states and steps is one of ``graph()``, so a rule breaks on a step of it exactly where
     it breaks on that step of the graph.
     """
@@ -2137,10 +2142,10 @@ def run(
 
 
 def landing_run() -> Run:
-    """Every step but those on ``c``, a role's commit, a check without ``--final`` or that cannot read, the ``Flag:`` line and the steps no run takes, the agent keeping the skill's order: ``a`` built, checked, judged, landed or parked, ``b`` waiting on it."""  # noqa: E501
+    """Every step but those on ``c``, a role's commit, a check without ``--final`` or that cannot read, the ``Flag:`` line and the steps no run takes, each commit through the guard: ``a`` built, checked, judged, landed or parked, ``b`` waiting on it."""  # noqa: E501
     return run(
         lambda action: action.ticket is not Name.C and action.kind not in TICKET_LIFE | UNRUN,
-        in_order,
+        guarded,
     )
 
 
@@ -2164,8 +2169,11 @@ UNSPLIT = (Name.A, Name.B, Name.C)
 """The tickets the runs reach: the parts are filed only by a split."""
 
 
-def life_run() -> Run:
+def life_run(*, gate: bool) -> Run:
     """Every step but those on ``c``, the kills and a split: a ticket's life as the drain's commands, the publish check, the agent, a role, an upgrade and the owner lead it.
+
+    With ``gate`` each commit goes through the guard, so a role never commits; without it the
+    agent may commit before the check, and a role before its run's check.
 
     Why the upgrade only where no branch's tip matters: an upgrade under ``a``'s open tree leaves
     its branch behind, and the run would pass the 500 states the statechart tool draws whole. Only
@@ -2174,7 +2182,8 @@ def life_run() -> Run:
     return run(
         lambda action: action.ticket is not Name.C and action.kind not in KILLS.keys() | UNRUN,
         lambda state, action: (
-            action.kind is not Kind.UPGRADE or not any(map(tip_matters, state.tickets))
+            (action.kind is not Kind.UPGRADE or not any(map(tip_matters, state.tickets)))
+            and (not gate or guarded(state, action))
         ),
     )
 
@@ -2327,11 +2336,13 @@ def seen_through(
 def exports() -> tuple[model_tla.Export, ...]:
     """The modules ``docs/model/drain.md`` was checked and drawn from.
 
-    TLC checks the rules on the landing run, the work run, the life run and the whole lease
-    graph; the search in the tests proves them on the whole main graph. The charts are drawn from
-    those four, and from summaries of the life run and the lease graph.
+    TLC checks the rules on the landing run, the work run, the life run with the guard's gate and
+    without it, and the whole lease graph; the search in the tests proves them on the whole main
+    graph, gated and not. The charts are drawn from those five, and from summaries of the gated
+    life run and the lease graph.
     """
-    landing, life, lease = landing_run(), life_run(), lease_run()
+    landing, life, lease = landing_run(), life_run(gate=False), lease_run()
+    gated = life_run(gate=True)
     facts = state_facts(UNSPLIT)
     main = step_rules(RULES)
     return (
@@ -2345,6 +2356,14 @@ def exports() -> tuple[model_tla.Export, ...]:
             "DrainTicketLife", life, main, fields=(), derived=facts, action=model_tla.identifier
         ),
         model_tla.export(
+            "DrainTicketLifeGated",
+            gated,
+            main,
+            fields=(),
+            derived=facts,
+            action=model_tla.identifier,
+        ),
+        model_tla.export(
             "DrainLease",
             lease,
             step_rules(LEASE_RULES),
@@ -2353,6 +2372,6 @@ def exports() -> tuple[model_tla.Export, ...]:
             action=model_tla.identifier,
             deadlock=False,
         ),
-        seen_through("DrainLife", life, {fact: facts[fact] for fact in SHOWN_LANDING}),
+        seen_through("DrainLife", gated, {fact: facts[fact] for fact in SHOWN_LANDING}),
         seen_through("DrainLeaseShown", lease, SHOWN_LEASE, deadlock=False),
     )

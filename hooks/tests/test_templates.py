@@ -18,6 +18,7 @@ import conformance
 import parallel
 import pins
 import plugin_pin
+import suites as suites_module
 from tests import repos
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "skills/adopt/templates"
@@ -48,8 +49,14 @@ def gate_list(name: str) -> list[str]:
     return done.stdout.split()
 
 
+def suites_of(binding: str) -> tuple[list[suites_module.Suite] | None, list[str]]:
+    return suites_module.parse(binding)
+
+
 def recipe(name: str) -> str:
-    match = re.search(rf"^{name}:(?: _plugin)?\n((?:    .*\n)+)", JUSTFILE, re.MULTILINE)
+    match = re.search(
+        rf"^{name}(?: [*+]\w+)?:(?: _plugin)?\n((?:    .*\n)+)", JUSTFILE, re.MULTILINE
+    )
     assert match, name
     return match.group(1)
 
@@ -204,7 +211,7 @@ def test_a_serial_group_is_declared_per_tier_and_empty_until_the_stack_needs_one
     bound = tmp_path / "justfile"
     bound.write_text(
         JUSTFILE.replace(
-            'serial1 := "--serial coverage test mutation-changed"',
+            'serial1 := "--serial coverage mutation-changed"',
             'serial1 := "--serial coverage diff-coverage"',
         ),
         encoding="utf-8",
@@ -214,9 +221,9 @@ def test_a_serial_group_is_declared_per_tier_and_empty_until_the_stack_needs_one
     assert "--serial" not in dry_run("tier0", bound)
 
 
-def test_no_two_gates_that_take_every_core_run_side_by_side_in_any_run_of_tiers() -> None:
+def test_the_gates_seen_to_starve_each_other_never_run_side_by_side_in_any_run_of_tiers() -> None:
     needs_just()
-    every_core = {"coverage", "test", "mutation-changed", "mutation", "test-stability"}
+    seen = {"coverage", "mutation-changed", "mutation", "test-stability"}
     tiers = [gate_list(f"tier{n}_gates") for n in range(3)]
     groups = [
         [
@@ -231,16 +238,27 @@ def test_no_two_gates_that_take_every_core_run_side_by_side_in_any_run_of_tiers(
         gates = [gate for n in joined for gate in tiers[n]]
         serial = [group for n in joined for group in groups[n]]
         units = parallel.plan(gates, serial, frozenset(alone & set(gates)))
-        beside = [unit for unit in units if every_core & set(unit)]
+        beside = [unit for unit in units if seen & set(unit)]
         assert len(beside) <= 1, (joined, beside)
+        assert {"mutation", "test-stability"} & set(gates) <= alone
 
 
 def test_a_recipe_learns_its_shard_from_the_environment_and_is_whole_without_one() -> None:
     assert 'shard := env_var_or_default("SHARD", "1")' in JUSTFILE
     assert 'shards := env_var_or_default("SHARDS", "1")' in JUSTFILE
-    for name in ("test", "mutation-changed", "mutation", "e2e"):
+    for name in ("suite-report", "mutation-changed", "mutation", "e2e"):
         assert "shard {{shard}} of {{shards}}" in recipe(name), name
-    assert "test_runner" in recipe("test"), "the test gate runs the runner adoption provisioned"
+    for gate in ("test", "coverage", "diff-coverage", "test-counts"):
+        assert f"report.py --reader {gate}" in recipe(gate), f"{gate} reads the shared suite report"
+    body = recipe("coverage")
+    assert 'report="$(' in body, "coverage keeps report.py's exit status"
+    assert "--reader coverage --path " in body, "coverage asks for its path"
+    assert (
+        '&& {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report "$report"'
+        in body
+    )
+    assert "--report coverage.xml" not in recipe("coverage")
+    assert "test_runner" in recipe("suite-report"), "the producer runs the runner adoption set up"
 
 
 def test_a_gate_that_requests_routes_boots_with_the_flags_due_for_removal_on() -> None:
@@ -926,3 +944,40 @@ def test_every_plugin_script_runs_through_the_one_interpreter_variable() -> None
         and not any(part in line for part in allowed)
     ]
     assert bare == []
+
+
+def test_the_tests_changed_recipe_runs_the_plugin_script_through_changed_and_takes_a_scope() -> (
+    None
+):
+    body = recipe("tests-changed")
+    assert body.strip() == (
+        '{{changed}} -- {{plugin_py}} "{{ratchet_plugin}}/scripts/changed_tests.py"'
+        " --base {base} {{suites}}"
+    )
+    assert re.search(r"^tests-changed \*suites: _plugin$", JUSTFILE, re.MULTILINE)
+    assert "tests-changed" in gate_list("tier1_gates")
+    assert "tests-changed" not in gate_list("tier1_sharded")
+
+
+def test_the_later_tier_suite_recipe_of_the_template_takes_files() -> None:
+    assert re.search(r"^e2e \*files:$", JUSTFILE, re.MULTILINE)
+    assert "with files given, only those files" in recipe("e2e")
+    assert re.search(r"^test-files \*files:$", JUSTFILE, re.MULTILINE)
+
+
+def test_the_binding_template_holds_the_suites_table_and_names_the_gate_in_affected_only() -> None:
+    suites, problems = suites_of(BINDING)
+    assert suites is None
+    assert problems == [suites_module.PLACEHOLDER]
+    assert "| changed tests run |" in BINDING
+    assert "| `just tests-changed` |" in BINDING
+    affected = next(line for line in BINDING.splitlines() if line.startswith("- Affected only:"))
+    assert "`tests-changed`" in affected
+
+
+def test_the_ci_template_job_that_runs_tests_changed_asks_for_the_later_tier_setup() -> None:
+    job = WORKFLOWS["ci.yml"].partition("  tier1:\n")[2].partition("  tier1-long:")[0]
+    assert "# bind: the setup each later-tier suite needs" in job
+    assert "if: matrix.gate == 'tests-changed'" in job
+    assert "deep.yml sets up the whole suite" in job
+    assert "tests-changed" not in WORKFLOWS["deep.yml"]

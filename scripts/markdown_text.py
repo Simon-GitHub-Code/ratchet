@@ -282,6 +282,29 @@ def with_row(heading: str, row: str, template_order: Sequence[str]) -> Want:
     return want
 
 
+def with_cell(heading: str, key: str, *, column: int, value: str) -> Want:
+    """The want of a table whose row keyed by ``key`` holds ``value`` in ``column``."""
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        found = table(text, heading)
+        keys = [cells[0] for cells in found.rows] if found else []
+        if found is None or key not in keys:
+            return text
+        index = keys.index(key)
+        cells = list(found.rows[index])
+        cells[column] = value
+        lines = text.split("\n")
+        if found.padded:
+            rows = [*found.rows[:index], tuple(cells), *found.rows[index + 1 :]]
+            lines[found.first : found.last] = found.render(rows)
+        else:
+            lines[found.first + 2 + index] = "| " + " | ".join(cells) + " |"
+        return "\n".join(lines)
+
+    return want
+
+
 def with_section(heading: str, block: str, template_order: Sequence[str]) -> Want:
     """The want of a file holding the template's ``## `` section ``block``, heading line first."""
     rank = _ranks(template_order, heading)
