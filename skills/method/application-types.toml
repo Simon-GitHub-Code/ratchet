@@ -109,6 +109,8 @@ signs = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".github/ISSUE_
 outside-the-seam = "an entry point registered outside the instrumented seam, which emits nothing"
 broken-flag-state = "a flag whose on state breaks a test that its off state passes"
 erroring-route = "a route the smoke requests that answers with an error"
+guarded-crash = "a crash reached only when the input holds an exact value of four bytes or more that the parser compares against"
+related-fields = "a crash reached only when two fields of the input satisfy an arithmetic relation, such as one equal to the sum of the others"
 
 [[question]]
 name = "lint, near-all rules"
@@ -167,6 +169,7 @@ applies-to = ["service", "library"]
 name = "fuzzing"
 trigger = "code:untrusted-input"
 collection = true
+proofs = ["guarded-crash"]
 
 [[question]]
 name = "end to end"
@@ -283,7 +286,8 @@ trigger = "code:concurrency"
 
 [[question]]
 name = "symbolic checking"
-trigger = "code:formal-model"
+trigger = "code:untrusted-input"
+proofs = ["related-fields"]
 
 [[question]]
 name = "formal verification"
