@@ -220,11 +220,21 @@ MARKETPLACE_FALLBACK = ".claude/plugins/marketplaces/ratchet"
 PLUGIN_LINE = re.compile(
     r"^(?:(?:plugin_(?:choice|pyc)[ \t]*:=[ \t]*```(?s:.*?)```"
     r"|(?:export[ \t]+)?(?:RATCHET_PLUGIN_(?:DIR|REFUSAL|CHECKED)|PYTHONPYCACHEPREFIX"
-    r"|PYTHONDONTWRITEBYTECODE|plugin_tree|plugin_pyc_ok|plugin_py)[ \t]*:=.*)\n)*"
+    r"|PYTHONDONTWRITEBYTECODE|RATCHET_PYC_(?:NOTE|SAID)|plugin_tree|plugin_pyc_ok|pyc_said"
+    r"|plugin_py)[ \t]*:=.*)\n)*"
     rf"{PLUGIN_VARIABLE}[ \t]*:=.*$",
     re.MULTILINE,
 )
 PLUGIN_GUARD = "_plugin"
+INTERPRETER_VARIABLE = "plugin_py"
+BARE_SCRIPT_CALL = re.compile(r'(?<![\w-])python3(?= +"\{\{ratchet_plugin\}\}/)')
+BARE_STRING_CALL = re.compile(r"""'python3 "' \+ ratchet_plugin""")
+BARE_GUARD_DIFF = re.compile(
+    r'PYTHONPATH="\{\{ratchet_plugin\}\}/hooks" python3 -m ratchet_guards\.diff(?=[ \t]|$)'
+)
+GUARD_DIFF_CALL = re.compile(
+    r"\{\{plugin_py\}\} -P -c 'import sys; sys\.path[^\n]*?\{\{ratchet_plugin\}\}/hooks\""
+)
 NO_EXIT_MESSAGE = "[no-exit-message]"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
@@ -1847,6 +1857,7 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
             yield Finding(BINDING_PATH, problem, Agent())
     yield from check_pin_recipe(root)
     yield from check_plugin_fallback(root)
+    yield from check_plugin_interpreter(root)
     yield from check_pre_commit_recipe(root)
     yield from check_plugin_uses(root)
     if pin is None:
@@ -1987,6 +1998,55 @@ def check_plugin_fallback(root: Path) -> Iterable[Finding]:
         )
     yield Finding(
         "justfile", problem, edit, identity="ratchet_plugin falls back to the marketplace"
+    )
+
+
+def interpreter_calls(justfile: str, guard_diff: str) -> str:
+    """``justfile`` with each code line that runs a plugin script bare, run as the template does."""
+
+    def fixed(line: str) -> str:
+        if line.lstrip().startswith("#"):
+            return line
+        call = BARE_SCRIPT_CALL.sub(f"{{{{{INTERPRETER_VARIABLE}}}}}", line)
+        string = BARE_STRING_CALL.sub(f"{INTERPRETER_VARIABLE} + ' \"' + ratchet_plugin", call)
+        return BARE_GUARD_DIFF.sub(lambda _: guard_diff, string)
+
+    return "\n".join(fixed(line) for line in justfile.split("\n"))
+
+
+def check_plugin_interpreter(root: Path) -> Iterable[Finding]:
+    """A recipe that runs a plugin script under the bare ``python3``, not ``plugin_py``.
+
+    Why: the plain interpreter reads PYTHONPATH, PYTHONSTARTUP and the user's site folder, so a
+    folder on PYTHONPATH holding ``json.py`` replaces the real module in the gate script. The
+    template runs every plugin script as ``plugin_py``, which leaves those out; an adopted
+    justfile keeps its own recipes, so the fix rewrites each such call to the template's.
+    """
+    justfile = read_justfile(root)
+    template = template_file("justfile")
+    call = GUARD_DIFF_CALL.search(template)
+    block = PLUGIN_LINE.search(template)
+    if justfile is None or call is None or block is None or PLUGIN_LINE.search(justfile) is None:
+        return
+    guard_diff = call.group(0)
+    if interpreter_calls(justfile, guard_diff) == justfile:
+        return
+
+    def want(current: str | None) -> str:
+        held = PLUGIN_LINE.sub(lambda _: block.group(0), current or "", count=1)
+        return interpreter_calls(held, guard_diff)
+
+    yield Finding(
+        "justfile",
+        "a recipe runs a plugin script under the bare `python3`, which reads PYTHONPATH,"
+        " PYTHONSTARTUP and the user's site folder, so a folder on PYTHONPATH can replace a module"
+        f" the gate imports; run it as `{{{{{INTERPRETER_VARIABLE}}}}}`",
+        Edit(
+            f"run each plugin script as `{{{{{INTERPRETER_VARIABLE}}}}}` as the template does",
+            want,
+            Agent(),
+        ),
+        identity="a recipe runs a plugin script under the bare python3",
     )
 
 

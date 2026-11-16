@@ -114,6 +114,27 @@ def test_a_dry_run_writes_nothing_and_leaves_what_the_apply_leaves(
     assert plain(dry).replace("would move", "moves").replace("would make", "made") == plain(done)
 
 
+BARE_PLUGIN_CALL = re.compile(
+    r"python3 +\"\{\{ratchet_plugin\}\}|'python3 \"' \+ ratchet_plugin|PYTHONPATH="
+)
+
+
+@pytest.mark.parametrize("name", FIXTURES)
+def test_an_upgrade_runs_every_plugin_script_of_an_older_justfile_under_the_template_interpreter(
+    name: str, tmp_path: Path
+) -> None:
+    root = fixture(name, tmp_path)
+    held = (root / "justfile").read_text(encoding="utf-8")
+    assert BARE_PLUGIN_CALL.search(held), "the older justfile calls the bare interpreter"
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    done = (root / "justfile").read_text(encoding="utf-8")
+    code = "\n".join(line for line in done.splitlines() if not line.lstrip().startswith("#"))
+    assert not BARE_PLUGIN_CALL.search(code)
+    assert '{{plugin_py}} "{{ratchet_plugin}}/scripts/' in done
+    assert counts(root)[0] == 0
+    assert not [f for f in conformance.findings(root) if "bare `python3`" in f.problem]
+
+
 @pytest.mark.parametrize("name", FIXTURES)
 def test_a_second_upgrade_changes_nothing(name: str, tmp_path: Path) -> None:
     root = fixture(name, tmp_path)
@@ -535,7 +556,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 69 edits in 13 files. 89 items are owed")
+    assert verdict(out).startswith("upgrade: would write 70 edits in 13 files. 89 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -543,7 +564,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 69 changes in 13"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 70 changes in 13"
                 " files. The project owes 89 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"

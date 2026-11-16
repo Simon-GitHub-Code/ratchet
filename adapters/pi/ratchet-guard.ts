@@ -18,7 +18,7 @@ export function piCommands(text: string): string {
 }
 
 function run(script: string, payload: object): { ok: boolean; stdout: string; stderr: string } {
-  const result = spawnSync("python3", [script], { input: JSON.stringify(payload), encoding: "utf8" });
+  const result = spawnSync("python3", ["-E", "-s", script], { input: JSON.stringify(payload), encoding: "utf8" });
   return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 

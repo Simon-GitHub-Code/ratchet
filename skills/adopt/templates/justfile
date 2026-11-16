@@ -21,7 +21,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # recipe as the environment variable RATCHET_PLUGIN_DIR and is only ever read as a shell variable,
 # so a folder name with a quote, a `$` or a backtick runs nothing. Compiled files are cached
 # outside every copy, in a folder named by the tree id under a private folder this user owns; with
-# no such folder, none is read or written. Every plugin script runs as `plugin_py`: `-E` and `-s`
+# no such folder, none is read or written, and the first `just` says why. Every plugin script runs as
+# `plugin_py`: `-E` and `-s`
 # leave out the interpreter's environment variables (PYTHONPATH, PYTHONSTARTUP, PYTHONHOME) and the
 # user's site folder, and the compiled-file folder is an option, since `-E` ignores its variable.
 plugin_choice := ```
@@ -68,9 +69,14 @@ plugin_tree := replace_regex(plugin_choice, '(?s)^R.*|^D([0-9a-f]{40}) .*', '$1'
 plugin_pyc := ```
     d=${TMPDIR:-/tmp}/ratchet-pyc-$(id -u)
     mkdir -m 700 -- "$d" 2>/dev/null || true
-    if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && [ -z "$(find "$d" -maxdepth 0 -perm /022)" ]; then printf '%s' "$d"; fi
+    if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && [ -z "$(find "$d" -maxdepth 0 -perm /022)" ]; then printf 'O%s' "$d"; exit 0; fi
+    if [ -L "$d" ]; then why="a link"; elif [ ! -e "$d" ]; then why="not there and cannot be made"; elif [ ! -O "$d" ]; then why="owned by $(stat -c %U "$d")"; else why="mode $(stat -c %a "$d")"; fi
+    printf 'Rplugin: compiled files are not cached, since %s is %s, so every plugin script compiles from source on each start; remove %s and the next run makes a private one' "$d" "$why" "$d"
 ```
-plugin_pyc_ok := if plugin_tree == "" { "" } else { plugin_pyc }
+plugin_pyc_ok := if plugin_tree == "" { "" } else { replace_regex(plugin_pyc, '(?s)^R.*|^O', '') }
+pyc_said := env_var_or_default("RATCHET_PYC_SAID", "")
+export RATCHET_PYC_SAID := "1"
+export RATCHET_PYC_NOTE := if plugin_tree == "" { "" } else if pyc_said != "" { "" } else { replace_regex(plugin_pyc, '(?s)^O.*|^R', '') }
 plugin_py := if plugin_pyc_ok == "" { "python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode" } else { "python3 -E -s -X " + quote("pycache_prefix=" + plugin_pyc_ok + "/" + plugin_tree) }
 export RATCHET_PLUGIN_DIR := replace_regex(plugin_choice, '(?s)^R.*|^D[0-9a-f]{40} ', '')
 export RATCHET_PLUGIN_REFUSAL := replace_regex(plugin_choice, '(?s)^D.*|^R', '')
@@ -194,7 +200,7 @@ dependencies dir:
 # The one guard every recipe that runs a file of the plugin depends on.
 [no-exit-message]
 _plugin:
-    @if [ -n "${RATCHET_PLUGIN_REFUSAL:-}" ]; then printf '%s\n' "$RATCHET_PLUGIN_REFUSAL"; exit 1; fi; if [ -z "${RATCHET_PLUGIN_DIR:-}" ]; then echo "no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
+    @if [ -n "${RATCHET_PYC_NOTE:-}" ]; then printf '%s\n' "$RATCHET_PYC_NOTE" >&2; fi; if [ -n "${RATCHET_PLUGIN_REFUSAL:-}" ]; then printf '%s\n' "$RATCHET_PLUGIN_REFUSAL"; exit 1; fi; if [ -z "${RATCHET_PLUGIN_DIR:-}" ]; then echo "no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
 
 # Every tier starts here: the plugin the recipes run is the release docs/process/binding.md pins,
 # the commit CI checks out. Red before any gate runs when it is any other tree, or not there; a
@@ -248,7 +254,7 @@ ratchet-lowered: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/lowered.py"
 
 guard-diff: _plugin
-    {{plugin_py}} -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from ratchet_guards import diff; sys.exit(diff.main())' "{{ratchet_plugin}}/hooks" --root . || true
+    {{plugin_py}} -P -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from ratchet_guards import diff; sys.exit(diff.main())' "{{ratchet_plugin}}/hooks" --root . || true
 
 # The permission rules in .claude/settings.json mirror guards/manifest.toml: one Edit rule per
 # pattern, deny for a locked group, plus the fixed command rules. `just settings` regenerates them.
@@ -524,7 +530,7 @@ load:
 # traces, metrics and logs arrive for `service`. `--require traces` narrows it to what is emitted.
 telemetry-e2e: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/telemetry_sink.py" --service "{{service}}" -- {{booted}} -- \
-        {{plugin_py}} -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1]).close()' "{{ready}}"
+        {{plugin_py}} -P -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1]).close()' "{{ready}}"
 
 a11y:
     @echo "bind: accessibility checks inside the end-to-end suite; red when no surface is checked"; exit 1

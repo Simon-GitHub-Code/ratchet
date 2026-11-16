@@ -15,7 +15,7 @@ export const RatchetGuard = async ({ directory }: { directory: string }) => ({
     if (!tool) return;
     const toolInput = tool === "Bash" ? { command: output.args.command } : { file_path: output.args.filePath };
     const payload = { hook_event_name: "PreToolUse", tool_name: tool, tool_input: toolInput, cwd: directory };
-    const result = spawnSync("python3", [GUARD], { input: JSON.stringify(payload), encoding: "utf8" });
+    const result = spawnSync("python3", ["-E", "-s", GUARD], { input: JSON.stringify(payload), encoding: "utf8" });
     const stdout = (result.stdout ?? "").trim();
     if (result.status !== 0 && !stdout) {
       // Why: a guard that cannot run fails closed, as the Claude Code shim does.

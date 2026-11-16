@@ -1,6 +1,7 @@
 """The tool-neutral gate scripts: the ceiling direction in ``lowered`` and the ``budget`` gate."""
 
 import json
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -243,6 +244,44 @@ def test_codex_hooks_treats_a_shapeless_entry_as_empty() -> None:
     assert isinstance(hooks, dict)
     assert len(hooks["PreToolUse"]) == 3
     assert hooks["PreToolUse"][-1]["matcher"] == adapter.MATCHER
+
+
+def test_the_codex_entries_run_the_guard_and_session_hook_without_the_environment() -> None:
+    root = Path("/plugins/ratchet")
+    hooks = adapter.codex_hooks({}, root)["hooks"]
+    assert isinstance(hooks, dict)
+    commands = [hooks[event][0]["hooks"][0]["command"] for event in ("PreToolUse", "SessionStart")]
+    assert commands == [
+        'python3 -E -s "/plugins/ratchet/hooks/guard.py"',
+        'python3 -E -s "/plugins/ratchet/hooks/session.py"',
+    ]
+
+
+def test_an_installed_codex_entry_with_the_bare_interpreter_is_replaced_not_joined() -> None:
+    root = Path("/plugins/ratchet")
+    bare = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": adapter.MATCHER,
+                    "hooks": [{"command": 'python3 "/plugins/ratchet/hooks/guard.py"'}],
+                }
+            ],
+            "SessionStart": [
+                {"hooks": [{"command": 'python3 "/plugins/ratchet/hooks/session.py"'}]}
+            ],
+        }
+    }
+    hooks = adapter.codex_hooks(bare, root)["hooks"]
+    assert isinstance(hooks, dict)
+    assert [len(hooks[event]) for event in ("PreToolUse", "SessionStart")] == [1, 1]
+    assert hooks["PreToolUse"][0]["hooks"][0]["command"].startswith("python3 -E -s ")
+
+
+@pytest.mark.parametrize("name", ["pi", "opencode"])
+def test_the_typescript_adapters_start_the_guard_without_the_environment(name: str) -> None:
+    source = (adapter.PLUGIN_ROOT / f"adapters/{name}/ratchet-guard.ts").read_text(encoding="utf-8")
+    assert re.search(r'spawnSync\("python3", \["-E", "-s", ', source)
 
 
 def test_adapter_main_without_apply_only_prints_the_steps(

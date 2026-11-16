@@ -333,3 +333,56 @@ def test_on_the_fallback_a_planted_compiled_file_in_a_copy_never_runs(tmp_path: 
     done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
     assert done.returncode == 0, done.stdout + done.stderr
     assert not flag.exists()
+
+
+def test_a_group_writable_cache_folder_is_refused_with_one_line_saying_why_and_the_way_out(
+    tmp_path: Path,
+) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    folder = temporary / f"ratchet-pyc-{os.getuid()}"
+    keyed = folder / pinned / str(copy / "scripts").lstrip("/") / f"gatelib.{cache_tag()}.pyc"
+    flag = plant(tmp_path, keyed)
+    folder.chmod(0o775)
+    root = project(tmp_path / "repo", copy, pinned)
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+    said = [line for line in done.stderr.splitlines() if "compiled files are not cached" in line]
+    assert len(said) == 1
+    assert f"{folder} is mode 775" in said[0]
+    assert f"remove {folder}" in said[0]
+    assert "compiles from source on each start" in said[0]
+    assert sorted(path.name for path in folder.rglob("*.pyc")) == [keyed.name]
+
+
+def test_a_cache_folder_that_is_a_link_is_refused_with_the_line(tmp_path: Path) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    (temporary / f"ratchet-pyc-{os.getuid()}").symlink_to(tmp_path / "elsewhere")
+    root = project(tmp_path / "repo", copy, pinned)
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "is a link" in done.stderr
+
+
+def test_a_private_cache_folder_prints_nothing(tmp_path: Path) -> None:
+    done = gate_with(tmp_path, {})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "compiled files are not cached" not in done.stderr
+
+
+def test_a_json_module_at_the_project_root_never_runs_in_an_inline_gate_call(
+    tmp_path: Path,
+) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    root = project(tmp_path / "repo", copy, pinned)
+    flag = tmp_path / "ran-evil"
+    (root / "json.py").write_text(f"open({str(flag)!r}, 'w').close()\n", encoding="utf-8")
+    just(root, "guard-diff", plugin=copy, env={"TMPDIR": str(tmp_path)})
+    assert not flag.exists()

@@ -78,12 +78,13 @@ REPOSITORY_VARIABLES = frozenset(
 Want = Callable[[str | None], str]
 
 
-def interpreter() -> list[str]:
+def interpreter(*, inline: bool = False) -> list[str]:
     """This interpreter and the options it runs with, for a child that must run as it does.
 
     ``-E`` and ``-s`` keep the child from reading the interpreter's environment variables and
     the user's site folder, and the compiled-file options follow the parent's, so a gate's
-    children never read a folder the gate did not choose.
+    children never read a folder the gate did not choose. ``inline`` is for a child run with
+    ``-c``, whose first import folder is the working directory: ``-P`` takes it out.
     """
     argv = [sys.executable]
     if sys.flags.ignore_environment:
@@ -94,6 +95,8 @@ def interpreter() -> list[str]:
         argv.append("-B")
     if sys.pycache_prefix is not None:
         argv.extend(["-X", f"pycache_prefix={sys.pycache_prefix}"])
+    if inline:
+        argv.append("-P")
     return argv
 
 

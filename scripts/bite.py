@@ -506,10 +506,10 @@ TICKET_REF = [TICKET_PATH]
 ADDITIVE = ["--fail-unless-additive"]
 GATE_READS_RED = "import pathlib, sys; sys.exit(pathlib.Path('red').is_file())"
 PARALLEL = [
-    *("--runner", f"{shlex.join(gatelib.interpreter())} -c", "--jobs", "2"),
+    *("--runner", f"{shlex.join(gatelib.interpreter(inline=True))} -c", "--jobs", "2"),
     *("--", "pass", shlex.quote(GATE_READS_RED), "0"),
 ]
-IN_TIER = ["lint", "--tier", "tier1", "--", *gatelib.interpreter(), "-c", "pass"]
+IN_TIER = ["lint", "--tier", "tier1", "--", *gatelib.interpreter(inline=True), "-c", "pass"]
 SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("markers", markers.main, add_marker, []),
     ("suppressions: a count rose", suppressions.main, add_suppression, []),
@@ -584,7 +584,7 @@ EXPORT = (
 
 
 def python(code: str) -> str:
-    return f"{shlex.join(gatelib.interpreter())} -c {shlex.quote(code)}"
+    return f"{shlex.join(gatelib.interpreter(inline=True))} -c {shlex.quote(code)}"
 
 
 # Why: a request to /work is held until the stop, and the stop waits for one, so a request is in
@@ -667,8 +667,8 @@ SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
     (
         "telemetry-sink: no telemetry",
         telemetry_sink.main,
-        [*SINK, "--wait", "5", "--", *gatelib.interpreter(), "-c", EXPORT],
-        [*SINK, "--wait", "0.3", "--", *gatelib.interpreter(), "-c", ""],
+        [*SINK, "--wait", "5", "--", *gatelib.interpreter(inline=True), "-c", EXPORT],
+        [*SINK, "--wait", "0.3", "--", *gatelib.interpreter(inline=True), "-c", ""],
     ),
 ]
 

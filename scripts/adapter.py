@@ -20,6 +20,7 @@ HARNESSES = ("claude", "grok", "codex", "pi", "opencode")
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 MATCHER = "Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch"
 TIMEOUT_SECONDS = 10
+INTERPRETER = "python3 -E -s"
 PLACEHOLDER = "__RATCHET_PLUGIN_ROOT__"
 CODEX_HOOKS = Path(".codex/hooks.json")
 OPENCODE_PLUGIN = Path(".config/opencode/plugins/ratchet-guard.ts")
@@ -47,16 +48,37 @@ def codex_hooks(existing: dict[str, object], plugin_root: Path) -> dict[str, obj
     hooks = existing.get("hooks")
     table: dict[str, object] = dict(hooks) if isinstance(hooks, dict) else {}
     wanted = {
-        "PreToolUse": hook_entry(f'python3 "{plugin_root}/hooks/guard.py"', MATCHER),
-        "SessionStart": hook_entry(f'python3 "{plugin_root}/hooks/session.py"'),
+        "PreToolUse": hook_entry(f'{INTERPRETER} "{plugin_root}/hooks/guard.py"', MATCHER),
+        "SessionStart": hook_entry(f'{INTERPRETER} "{plugin_root}/hooks/session.py"'),
     }
     for event, entry in wanted.items():
         current = table.get(event)
-        entries: list[object] = list(current) if isinstance(current, list) else []
+        entries: list[object] = _upgraded(current, plugin_root) if isinstance(current, list) else []
         if not any(_same_command(candidate, entry) for candidate in entries):
             entries.append(entry)
         table[event] = entries
     return {**existing, "hooks": table}
+
+
+def _upgraded(entries: list[object], plugin_root: Path) -> list[object]:
+    """``entries`` with this adapter's earlier bare ``python3`` command given the flags."""
+    older = {}
+    for script in ("guard", "session"):
+        path = f'"{plugin_root}/hooks/{script}.py"'
+        older[f"python3 {path}"] = f"{INTERPRETER} {path}"
+
+    def upgraded(entry: object) -> object:
+        if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+            return entry
+        hooks = [
+            {**hook, "command": older[hook["command"]]}
+            if isinstance(hook, dict) and hook.get("command") in older
+            else hook
+            for hook in entry["hooks"]
+        ]
+        return {**entry, "hooks": hooks}
+
+    return [upgraded(entry) for entry in entries]
 
 
 def _same_command(candidate: object, entry: dict[str, object]) -> bool:

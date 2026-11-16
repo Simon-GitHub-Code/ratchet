@@ -2,6 +2,7 @@
 
 import contextlib
 import http.server
+import os
 import signal
 import socket
 import subprocess
@@ -478,3 +479,26 @@ def test_a_git_that_fails_raises_instead_of_answering(tmp_path: Path) -> None:
     assert gatelib.git_checked(tmp_path, "check-ignore", "x", ok=(0, 1)) == ""
     with pytest.raises(subprocess.CalledProcessError):
         gatelib.git_checked(tmp_path, "check-ignore", "x")
+
+
+def test_a_grandchild_started_through_the_interpreter_helper_ignores_the_environment(
+    tmp_path: Path,
+) -> None:
+    flag = tmp_path / "ran-evil"
+    folder = tmp_path / "hijack"
+    folder.mkdir()
+    (folder / "json.py").write_text(f"open({str(flag)!r}, 'w').close()\n", encoding="utf-8")
+    scripts = str(Path(gatelib.__file__).resolve().parent)
+    start = f"import sys; sys.path.insert(0, {scripts!r}); import gatelib, subprocess; "
+    child = start + "subprocess.run([*gatelib.interpreter(), '-c', 'import json'], check=True)"
+    parent = start + f"subprocess.run([*gatelib.interpreter(), '-c', {child!r}], check=True)"
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        ["python3", "-E", "-s", "-c", parent],  # noqa: S607 # -- PATH
+        env={**os.environ, "PYTHONPATH": str(folder)},
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert not flag.exists()
