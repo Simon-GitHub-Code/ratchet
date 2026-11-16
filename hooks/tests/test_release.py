@@ -314,7 +314,16 @@ def test_the_workflow_validates_the_notes_before_it_pushes_and_a_manual_run_make
     text = (PLUGIN_ROOT / ".github/workflows/release.yml").read_text("utf-8")
     assert "\n  workflow_dispatch:\n" in text
     assert text.index("release.py --notes") < text.index("git push origin")
+    assert text.index('release_check.py "$tag" --local --main HEAD') < text.index("git push origin")
     assert 'then made="$(python3 scripts/release.py --existing)"' in text
+
+
+def test_the_check_the_workflow_runs_before_the_push_passes_against_head(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root, _, _ = released(tmp_path)
+    code, lines = checked(root, capsys, main="HEAD")
+    assert code == 0, lines
 
 
 def test_a_tree_that_cannot_be_read_is_an_error_not_an_empty_tree(tmp_path: Path) -> None:

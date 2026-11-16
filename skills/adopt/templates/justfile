@@ -12,32 +12,42 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # The plugin the recipes run: the folder an agent session in this repository last started the
 # plugin from, which the session hook records in the git directory. For another harness, or CI,
 # export RATCHET_PLUGIN as the plugin's folder; an empty one counts as unset. Only the release the
-# pin in docs/process/binding.md names runs (ADR 0068): the folder's tree, which this computes with
-# system git alone and a throwaway object store, must be the pin's `tree`. When the recorded
-# folder is another tree, its siblings are tried, where a harness keeps earlier versions, and the
-# first that matches runs. With none, `_plugin` is red in one line. The folder checked is handed to
-# every `just` a recipe starts, as RATCHET_PLUGIN_CHECKED beside the pin's tree id, so a child
-# runs the folder its parent checked and never reads the record again. The folder reaches every recipe
-# as the environment variable RATCHET_PLUGIN_DIR and is only ever read as a shell variable, so a
-# folder name with a quote, a `$` or a backtick runs nothing. `_plugin` is red when there is no
-# folder.
+# pin in docs/process/binding.md names runs (ADR 0068): the folder's tree, which this computes in
+# memory with the system python3 alone, must be the pin's `tree`. When the recorded folder is
+# another tree, its siblings that hold a plugin manifest are tried, where a harness keeps earlier
+# versions, and the first that matches runs. With none, `_plugin` is red in one line. The folder
+# checked is handed to every `just` a recipe starts, as RATCHET_PLUGIN_CHECKED beside the pin's
+# tree id, and a child hashes that folder again and reads no record. The folder reaches every
+# recipe as the environment variable RATCHET_PLUGIN_DIR and is only ever read as a shell variable,
+# so a folder name with a quote, a `$` or a backtick runs nothing. Compiled files are cached
+# outside every copy, in a folder named by the tree id, and none is read from inside a copy.
 plugin_choice := ```
     want=$(sed -n 's/^- Ratchet plugin: [^ ]* at [0-9a-f]\{40\} tree \([0-9a-f]\{40\}\)[ \t\r]*$/\1/p' docs/process/binding.md 2>/dev/null | head -n 1 || true)
     checked=${RATCHET_PLUGIN_CHECKED:-}
-    if [ -n "$want" ] && [ "${checked:0:41}" = "D$want" ] && [ "${checked:41:1}" = " " ]; then printf '%s' "$checked"; exit 0; fi
     rec=${RATCHET_PLUGIN:-}; file=0
-    if [ -z "$rec" ]; then common=$(git rev-parse --git-common-dir 2>/dev/null) && rec=$(cat "$common/ratchet-plugin" 2>/dev/null) || rec=; file=1; fi
+    if [ -n "$want" ] && [ "${checked:0:41}" = "D$want" ] && [ "${checked:41:1}" = " " ]; then rec=${checked:42}
+    elif [ -z "$rec" ]; then common=$(git rev-parse --git-common-dir 2>/dev/null) && rec=$(cat "$common/ratchet-plugin" 2>/dev/null) || rec=; file=1; fi
     [ -n "$rec" ] || exit 0
     rec=${rec%/}
     treeof() {
-      (
-        cd -- "$1" 2>/dev/null || exit 1
-        work=$PWD; scratch=$(mktemp -d) || exit 1
-        trap 'rm -rf "$scratch"' EXIT
-        git() { env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_DIR="$scratch/g" GIT_WORK_TREE="$work" git -c core.autocrlf=false -c core.safecrlf=false -c core.filemode=true -c core.excludesFile=/dev/null -c core.attributesFile=/dev/null "$@"; }
-        git init -q --template= && mkdir "$scratch/g/info" && printf '* -text -eol -ident -filter -working-tree-encoding\n' > "$scratch/g/info/attributes" || exit 1
-        git add -A -f -- . ':(exclude).git' ':(exclude).claude-plugin/commit' ':(exclude).in_use' ':(exclude,glob)**/__pycache__/**' >/dev/null 2>&1 && git write-tree
-      )
+      python3 -I - "$1" 2>/dev/null <<-'PY'
+	import hashlib, os, stat, sys
+	def h(kind, body): return hashlib.sha1(b"%s %d\0" % (kind, len(body)) + body).digest()
+	def walk(folder, rel):
+	    out = []
+	    for name in os.listdir(folder):
+	        path = rel + name
+	        if path in (".git", ".claude-plugin/commit", ".in_use", ".orphaned_at") or name == "__pycache__": continue
+	        full = os.path.join(folder, name); mode = os.lstat(full).st_mode; raw = os.fsencode(name)
+	        if stat.S_ISLNK(mode): out.append((raw, b"120000", h(b"blob", os.fsencode(os.readlink(full)))))
+	        elif stat.S_ISDIR(mode):
+	            sub = walk(full, path + "/")
+	            if sub: out.append((raw + b"/", b"40000", sub))
+	        elif stat.S_ISREG(mode):
+	            with open(full, "rb") as handle: out.append((raw, b"100755" if mode & stat.S_IXUSR else b"100644", h(b"blob", handle.read())))
+	    return h(b"tree", b"".join(kind + b" " + raw.rstrip(b"/") + b"\0" + digest for raw, kind, digest in sorted(out))) if out else None
+	print((walk(sys.argv[1], "") or h(b"tree", b"")).hex())
+	PY
     }
     if [ -z "$want" ]; then printf 'Rdocs/process/binding.md pins no tree id, so the plugin at %s cannot be checked: upgrade this project with `python3 %s/scripts/upgrade.py --apply`' "$rec" "$rec"; exit 0; fi
     have=$(treeof "$rec") || have=
@@ -45,12 +55,15 @@ plugin_choice := ```
     if [ "$file" = 1 ]; then
       for sibling in "${rec%/*}"/*/; do
         sibling=${sibling%/}
-        [ "$sibling" != "$rec" ] && [ -d "$sibling" ] && [ "$(treeof "$sibling" || true)" = "$want" ] && { printf 'D%s %s' "$want" "$sibling"; exit 0; }
+        [ "$sibling" != "$rec" ] && [ -f "$sibling/.claude-plugin/plugin.json" ] && [ "$(treeof "$sibling" || true)" = "$want" ] && { printf 'D%s %s' "$want" "$sibling"; exit 0; }
       done
     fi
     if [ ! -d "$rec" ]; then printf 'Rthe plugin at %s is gone, and no copy on disk has the tree %s that docs/process/binding.md pins: install the plugin release the pin names, then start an agent session here once, or set RATCHET_PLUGIN to its folder' "$rec" "$want"; exit 0; fi
     printf 'Rthe plugin at %s is tree %s, not the %s that docs/process/binding.md pins, and no copy on disk matches: upgrade this project with `python3 %s/scripts/upgrade.py --apply`, or install the plugin release the pin names' "$rec" "${have:-unreadable}" "$want" "$rec"
 ```
+plugin_tree := replace_regex(plugin_choice, '(?s)^R.*|^D([0-9a-f]{40}) .*', '$1')
+plugin_uid := `id -u`
+export PYTHONPYCACHEPREFIX := if plugin_tree == "" { "" } else { env_var_or_default("TMPDIR", "/tmp") + "/ratchet-pyc-" + plugin_uid + "/" + plugin_tree }
 export RATCHET_PLUGIN_DIR := replace_regex(plugin_choice, '(?s)^R.*|^D[0-9a-f]{40} ', '')
 export RATCHET_PLUGIN_REFUSAL := replace_regex(plugin_choice, '(?s)^D.*|^R', '')
 export RATCHET_PLUGIN_CHECKED := replace_regex(plugin_choice, '(?s)^R.*', '')
@@ -173,11 +186,11 @@ dependencies dir:
 # The one guard every recipe that runs a file of the plugin depends on.
 [no-exit-message]
 _plugin:
-    @if [ -n "$RATCHET_PLUGIN_REFUSAL" ]; then printf '%s\n' "$RATCHET_PLUGIN_REFUSAL"; exit 1; fi; if [ -z "{{ratchet_plugin}}" ]; then echo "no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
+    @if [ -n "${RATCHET_PLUGIN_REFUSAL:-}" ]; then printf '%s\n' "$RATCHET_PLUGIN_REFUSAL"; exit 1; fi; if [ -z "${RATCHET_PLUGIN_DIR:-}" ]; then echo "no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
 
-# Every tier starts here: the plugin the recipes run is the version docs/process/binding.md pins,
-# the commit CI checks out. Red before any gate runs when it is older, another commit of the same
-# version, or not there; a newer one is green and says on every run what to change.
+# Every tier starts here: the plugin the recipes run is the release docs/process/binding.md pins,
+# the commit CI checks out. Red before any gate runs when it is any other tree, or not there; a
+# newer plugin is red too and says on every run what to change.
 plugin-pin: _plugin
     @test -f "{{ratchet_plugin}}/scripts/plugin_pin.py" || { echo "plugin-pin: no Ratchet plugin at $RATCHET_PLUGIN_DIR, or one older than the pin check; set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins"; exit 1; }
     @python3 "{{ratchet_plugin}}/scripts/plugin_pin.py"

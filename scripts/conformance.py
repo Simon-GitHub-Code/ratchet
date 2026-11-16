@@ -218,11 +218,13 @@ PLUGIN_VARIABLE = "ratchet_plugin"
 MARKETPLACE_FALLBACK = ".claude/plugins/marketplaces/ratchet"
 PLUGIN_LINE = re.compile(
     r"^(?:plugin_choice[ \t]*:=[ \t]*```(?s:.*?)```\n)?"
-    r"(?:export[ \t]+RATCHET_PLUGIN_(?:DIR|REFUSAL|CHECKED)[ \t]*:=.*\n)*"
+    r"(?:(?:export[ \t]+)?(?:RATCHET_PLUGIN_(?:DIR|REFUSAL|CHECKED)|PYTHONPYCACHEPREFIX"
+    r"|plugin_tree|plugin_uid)[ \t]*:=.*\n)*"
     rf"{PLUGIN_VARIABLE}[ \t]*:=.*$",
     re.MULTILINE,
 )
 PLUGIN_GUARD = "_plugin"
+NO_EXIT_MESSAGE = "[no-exit-message]"
 TOOLCHAIN_MARKER = "# bind: toolchain setup"
 TOOLCHAIN_PLACEHOLDER = f"      {TOOLCHAIN_MARKER}, pinned, with the setup action's own cache on"
 TOOLCHAIN_STEP = "      - run: ./scripts/install-toolchain"
@@ -1820,6 +1822,7 @@ def check_plugin_pin(root: Path) -> Iterable[Finding]:
             yield Finding(BINDING_PATH, problem, Agent())
     yield from check_pin_recipe(root)
     yield from check_plugin_fallback(root)
+    yield from check_pre_commit_recipe(root)
     yield from check_plugin_uses(root)
     if pin is None:
         return
@@ -1904,20 +1907,24 @@ def tier_recipes(binding: str, justfile: str) -> dict[str, str]:
 
 
 def check_plugin_fallback(root: Path) -> Iterable[Finding]:
-    """A justfile whose ``ratchet_plugin`` still falls back to the marketplace clone.
+    """A justfile whose plugin block is not the template's, such as a fallback to the marketplace.
 
     Why: that clone follows the default branch's head, not a release (ADR 0068), so every local
-    tier would run unreleased gates. The fix rewrites the line to the template's, which reads the
-    plugin the session hook recorded, adds the template's guard recipe and makes each recipe the
-    template gives that guard depend on it, so a repository with none recorded is told so.
+    tier would run unreleased gates, and any other block leaves the runs unhashed. The fix rewrites
+    the block to the template's, which reads the plugin the session hook recorded, adds the
+    template's guard recipe and makes each recipe the template gives that guard depend on it, so a
+    repository with none recorded is told so.
     """
     justfile = read_justfile(root)
     held = PLUGIN_LINE.search(justfile or "")
-    if held is None or MARKETPLACE_FALLBACK not in held.group(0):
-        return
     template = template_file("justfile")
     line = PLUGIN_LINE.search(template)
-    if line is None or justfile_text.template_recipe(template, PLUGIN_GUARD) is None:
+    if (
+        held is None
+        or line is None
+        or held.group(0) == line.group(0)
+        or justfile_text.template_recipe(template, PLUGIN_GUARD) is None
+    ):
         return
     guarded = [
         name
@@ -1943,12 +1950,50 @@ def check_plugin_fallback(root: Path) -> Iterable[Finding]:
         ),
         Agent(),
     )
-    problem = (
-        f"`{PLUGIN_VARIABLE}` falls back to the marketplace clone, which follows the default"
-        " branch's head and not a release, so every local tier runs unreleased gates"
-    )
+    if MARKETPLACE_FALLBACK in held.group(0):
+        problem = (
+            f"`{PLUGIN_VARIABLE}` falls back to the marketplace clone, which follows the default"
+            " branch's head and not a release, so every local tier runs unreleased gates"
+        )
+    else:
+        problem = (
+            f"the plugin block above `{PLUGIN_VARIABLE}` is not the template's, so no local run"
+            " is held to the release the binding pins"
+        )
     yield Finding(
         "justfile", problem, edit, identity="ratchet_plugin falls back to the marketplace"
+    )
+
+
+def check_pre_commit_recipe(root: Path) -> Iterable[Finding]:
+    """A ``pre-commit`` recipe that does not run the pin check first or hide its exit message.
+
+    Why: an upgraded project keeps its own recipe, so the hook would run gates of a plugin no
+    check held to the release, and just would add its own error line to the guard's one.
+    """
+    justfile = read_justfile(root)
+    template = template_file("justfile")
+    name = "pre-commit"
+    if (
+        justfile is None
+        or not justfile_text.defines_recipe(justfile, name)
+        or not justfile_text.defines_recipe(justfile, "tier0-tree")
+        or justfile_text.template_recipe(template, name) is None
+    ):
+        return
+    quiet = NO_EXIT_MESSAGE in justfile_text.definition(justfile, name)
+    if quiet and justfile_text.runs(justfile, name, PIN_SCRIPT):
+        return
+    yield Finding(
+        "justfile",
+        f"`{name}` neither runs {PIN_SCRIPT} first nor carries `{NO_EXIT_MESSAGE}`, so the commit"
+        " hook can run a plugin no check held to the release",
+        Edit(
+            f"make `{name}` the template's recipe",
+            justfile_text.with_template_recipe(template, name),
+            Agent(),
+        ),
+        identity="pre-commit recipe is not the template's",
     )
 
 

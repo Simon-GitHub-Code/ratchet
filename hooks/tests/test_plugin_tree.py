@@ -25,11 +25,12 @@ def raw_tree_id(copy: Path, scratch: Path) -> str:
     work = scratch / "oracle"
     shutil.copytree(repos.skeleton(), work / ".git", symlinks=True)
     for directory, names, files in os.walk(copy):
+        linked = [name for name in names if (Path(directory) / name).is_symlink()]
         names[:] = [name for name in names if name not in EXCLUDED]
-        for name in files:
+        for name in [*files, *(name for name in linked if name in names)]:
             path = Path(directory) / name
             relative = path.relative_to(copy).as_posix()
-            if relative == ".claude-plugin/commit":
+            if relative in (".claude-plugin/commit", ".orphaned_at"):
                 continue
             if path.is_symlink():
                 mode, sha = "120000", hash_object(work, "--stdin", feed=str(path.readlink()))

@@ -66,21 +66,21 @@ def test_a_checkout_that_moved_on_within_a_version_is_red_and_says_both_ways_out
     assert out.endswith("plugin-pin: red\n")
 
 
-def test_a_plugin_newer_than_the_pin_is_green_and_says_so_on_every_run(
+def test_a_plugin_newer_than_the_pin_is_red_and_says_so_on_every_run(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     used, commit = plugin(tmp_path / "plugin", "1.3.0")
     root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE}")
     code, out = run(root, used, capsys)
-    assert code == 0
+    assert code == 1
     assert out == (
-        f"plugin-pin: the plugin at {used} is 1.3.0 at {commit}, newer than the 1.2.3 that"
-        " docs/process/binding.md pins: this run judges by 1.3.0's gates and CI by 1.2.3's."
+        f"the plugin at {used} is 1.3.0 at {commit}, newer than the 1.2.3 that"
+        " docs/process/binding.md pins, so this run would judge by 1.3.0's gates and CI by 1.2.3's."
         f" Run `python3 {used / 'scripts/upgrade.py'} --apply`: it moves the pin in"
         f" docs/process/binding.md to `- Ratchet plugin: 1.3.0 at {commit} tree {tree(used)}`,"
         " every workflow `ref`"
         " and the permission rules together, and lists what it leaves to an agent or to you"
-        "\nplugin-pin: green\n"
+        "\nplugin-pin: red\n"
     )
     pin = plugin_pin.Pin("1.2.3", ELSEWHERE)
     assert plugin_pin.relation(pin, used) is plugin_pin.Relation.NEWER
@@ -455,7 +455,7 @@ def test_a_newer_copy_names_both_versions_and_its_own_upgrade_script(
     root = adopted(tmp_path / "repo", f"- Ratchet plugin: 1.2.3 at {ELSEWHERE}")
     code, out = run(root, used, capsys)
     first = out.splitlines()[0]
-    assert code == 0
+    assert code == 1
     assert "1.3.0" in first
     assert "newer than the 1.2.3" in first
     assert str(used / "scripts/upgrade.py") in first

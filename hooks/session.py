@@ -9,6 +9,7 @@ Antigravity's input names its event in ``hookEventName``, Claude Code's in
 ``hook_event_name``; the form of the answer follows.
 """
 
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -34,13 +35,9 @@ def main() -> int:
     root = root_of(text, os.environ, Path.cwd())
     sys.path.insert(0, str(HOOKS))
     try:
-        from ratchet_guards.session import (  # noqa: PLC0415 # -- after the path set-up above
-            main as session,
-        )
-        from ratchet_guards.session import record_plugin  # noqa: PLC0415 # -- same
-
-        record_plugin(root, HOOKS.parent)
-        return session(root, event_of(text), antigravity=ANTIGRAVITY_EVENT in payload_of(text))
+        module = importlib.import_module("ratchet_guards.session")
+        module.record_plugin(root, HOOKS.parent)
+        return module.main(root, event_of(text), antigravity=ANTIGRAVITY_EVENT in payload_of(text))
     except Exception:  # noqa: BLE001 # -- context only: a broken hook says nothing
         return 0
 

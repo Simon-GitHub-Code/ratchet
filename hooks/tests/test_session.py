@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import plugin_pin
 from ratchet_guards import events, session
 from tests import repos
 from tests.support import PLUGIN_ROOT
@@ -76,6 +77,24 @@ def test_an_adopted_repository_gets_the_stance(tmp_path: Path) -> None:
     assert text.endswith(STANCE.strip())
     assert "## Working" not in text
     assert session.message(root / "src/deep", plugin(tmp_path)) == text
+
+
+def test_a_session_on_a_copy_that_is_not_the_pinned_release_says_so_in_one_line(
+    tmp_path: Path,
+) -> None:
+    root = checkout(tmp_path, stanza=True, binding=True)
+    copy = plugin(tmp_path)
+    tree = plugin_pin.copy_tree_id(copy)
+    binding = root / session.BINDING
+    binding.write_text(f"- Ratchet plugin: 1.0.0 at {'1' * 40} tree {tree}\n", encoding="utf-8")
+    assert "which is not the release" not in (session.message(root, copy) or "")
+    binding.write_text(f"- Ratchet plugin: 1.0.0 at {'1' * 40} tree {'2' * 40}\n", encoding="utf-8")
+    text = session.message(root, copy) or ""
+    line = session.NOT_PINNED.format(plugin=copy)
+    assert text.count(line) == 1
+    assert "\n" not in line
+    binding.write_text(f"- Ratchet plugin: 1.0.0 at {'1' * 40}\n", encoding="utf-8")
+    assert line not in (session.message(root, copy) or "")
 
 
 def test_claude_md_alone_counts_as_the_stanza(tmp_path: Path) -> None:

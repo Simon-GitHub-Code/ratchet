@@ -9,35 +9,27 @@ gates with nothing saying so. The version is therefore one fact with one home, a
     - Ratchet plugin: 0.9.0 at <the 40-character commit> tree <the 40-character tree id>
 
 The tree id is the commit's ``<commit>^{tree}``. The conformance gate holds every workflow's plugin
-checkout to the commit. This script holds the plugin a tier runs from to the pin, before any gate
-runs, and CI holds the pin's tree id to the release's: the pin's side cannot be forged, since the
-checkout there comes from the forge (ADR 0068). A copy carries no history, so its tree is the one
-``git write-tree`` makes of its files, less the release file, ``.git``, ``__pycache__`` and the
-harness's ``.in_use``, which the template justfile computes the same way before any recipe runs
-anything from the copy.
+checkout to the commit. CI holds the pin's tree id to the release's: the pin's side cannot be
+forged, since the checkout there comes from the forge (ADR 0068). The template justfile, before any
+recipe runs anything from the plugin, computes the tree id of the copy's files in memory, as
+``git write-tree`` would, less the release file, ``.git``, ``__pycache__``, and the harness's
+``.in_use`` and ``.orphaned_at``, and runs the copy only when it is the pin's. This script holds
+the same hash again.
 
 Usage: ``plugin_pin.py [--root DIR] [--plugin DIR]``. The plugin is the one this script runs
 from unless ``--plugin`` names another. A ``--plugin`` that is empty or names nothing is red with
 one line: no plugin is recorded for the repository (the session hook records it, ADR 0068), and
 ``RATCHET_PLUGIN`` names one instead.
 
-* A git checkout (the Claude Code marketplace clone, the Codex and Grok plugin folders, a clone
-  made for pi or OpenCode, CI's own checkout) is green when its HEAD is the pinned commit and
-  its ``.claude-plugin/plugin.json`` carries the pinned version.
-* A copy with no history, as a harness leaves when it unpacks a plugin without ``.git``, has no
-  commit to compare. It is green when its version is the pinned one, and the line it prints
-  says only the version was compared.
-* A plugin whose version is newer than the pin is green, and says so on every run: this run
-  judges by its gates and CI by the pinned one's, and ``python3 <plugin>/scripts/upgrade.py
-  --apply`` moves the pin, every workflow ``ref`` and the permission rules to it in one change.
-  The newer version's conformance gate, in tier 1, is red while the repository lacks something
-  it needs (ADR 0027).
-* A plugin older than the pin is red: a local tier would run older gates than CI. So is one
-  whose order against the pin cannot be told: the same version at another commit, or a version
-  that is not dotted numbers. The red names both ways out: run the gates from a checkout of the
-  pinned commit, by setting ``RATCHET_PLUGIN`` to it, or upgrade by changing the pin and every
-  workflow ``ref`` in one change. The binding and the workflows are guard paths, so the owner
-  sees an upgrade.
+* A plugin whose files hash to the pin's tree id is green. Its commit and version are printed
+  from the release file and the manifest, and no git command runs in it when a tier's ``just``
+  has hashed it (``RATCHET_PLUGIN_CHECKED``).
+* A plugin whose files hash to another tree is red, and the red names the way out:
+  ``python3 <plugin>/scripts/upgrade.py --apply`` when the plugin is newer than the pin, which
+  moves the pin, every workflow ``ref`` and the permission rules to it in one change, or a
+  checkout of the pinned release, by setting ``RATCHET_PLUGIN`` to it. The binding and the
+  workflows are guard paths, so the owner sees an upgrade.
+* A plugin older than the pin, or whose order against the pin cannot be told, is red too.
 
 Exit status: 0 green, 1 red.
 """
@@ -45,13 +37,14 @@ Exit status: 0 green, 1 red.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -69,28 +62,11 @@ PIN = re.compile(
 # the project's own; only a line of the pin's shape, real or placeholder, is the pin.
 PIN_LINE = re.compile(r"^- Ratchet plugin: \S+ at \S+(?: tree \S+)?[ \t]*(?=\r?$)", re.MULTILINE)
 PLUGIN_REF = re.compile(r'repository:\s*\S*ratchet\S*?[,\s]+ref:\s*"?([^",\s}]+)')
+CHECKED = "RATCHET_PLUGIN_CHECKED"
 RUNNER = "## Runner"
 WORKFLOWS = Path(".github/workflows")
 UNREADABLE = "a commit git cannot read"
-EXCLUDED = (
-    ":(exclude).git",
-    ":(exclude).claude-plugin/commit",
-    ":(exclude).in_use",
-    ":(exclude,glob)**/__pycache__/**",
-)
-NEUTRAL = (
-    "-c",
-    "core.autocrlf=false",
-    "-c",
-    "core.safecrlf=false",
-    "-c",
-    "core.filemode=true",
-    "-c",
-    "core.excludesFile=/dev/null",
-    "-c",
-    "core.attributesFile=/dev/null",
-)
-UNFILTERED = "* -text -eol -ident -filter -working-tree-encoding\n"
+EXCLUDED_AT_ROOT = frozenset({".git", ".claude-plugin/commit", ".in_use", ".orphaned_at"})
 DOTTED = re.compile(r"\d+(?:\.\d+)*")
 NONE_RECORDED = (
     "plugin-pin: no plugin recorded for this repository: start an agent session here once, or set"
@@ -154,6 +130,12 @@ def git_output(plugin: Path, *args: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def checked_folder(plugin: Path) -> bool:
+    """Whether a tier's ``just`` hashed ``plugin`` and found the tree the binding pins."""
+    folder = os.environ.get(CHECKED, "")[42:]
+    return bool(folder) and os.path.realpath(folder) == os.path.realpath(plugin)
+
+
 def commit_of(plugin: Path) -> str | None:
     """The commit a plugin is at.
 
@@ -163,8 +145,11 @@ def commit_of(plugin: Path) -> str | None:
     checkout's ``HEAD``, or ``None`` for a copy with no file. ``UNREADABLE`` when the file holds
     anything but a commit. The commit says where a plugin came from, never what it holds: only
     ``copy_tree_id`` does.
+
+    Why: a folder a tier's ``just`` has hashed runs no git command, since its ``.git`` is left out
+    of the hash and its config can name a command that ``git status`` runs.
     """
-    if not (plugin / ".git").exists():
+    if checked_folder(plugin) or not (plugin / ".git").exists():
         return release_commit(gatelib.read_text(plugin / COMMIT_FILE))
     head = git_output(plugin, "rev-parse", "HEAD")
     if head is None:
@@ -179,50 +164,58 @@ def commit_of(plugin: Path) -> str | None:
     return head.strip()
 
 
+def object_id(kind: bytes, body: bytes) -> bytes:
+    return hashlib.sha1(b"%s %d\0" % (kind, len(body)) + body, usedforsecurity=False).digest()
+
+
+def tree_of(folder: Path, relative: str) -> bytes | None:
+    """The id of the git tree of ``folder``, built in memory; ``None`` when nothing is in it."""
+    entries = []
+    for entry in folder.iterdir():
+        name = entry.name
+        path = f"{relative}{name}"
+        if path in EXCLUDED_AT_ROOT or name == "__pycache__":
+            continue
+        full = entry
+        mode = full.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            entries.append(
+                (os.fsencode(name), b"120000", object_id(b"blob", os.fsencode(full.readlink())))
+            )
+        elif stat.S_ISDIR(mode):
+            if (sub := tree_of(full, f"{path}/")) is not None:
+                entries.append((os.fsencode(name) + b"/", b"40000", sub))
+        elif stat.S_ISREG(mode):
+            kind = b"100755" if mode & stat.S_IXUSR else b"100644"
+            entries.append((os.fsencode(name), kind, object_id(b"blob", full.read_bytes())))
+    if not entries:
+        return None
+    body = b"".join(
+        kind + b" " + name.removesuffix(b"/") + b"\0" + digest
+        for name, kind, digest in sorted(entries)
+    )
+    return object_id(b"tree", body)
+
+
 def copy_tree_id(plugin: Path) -> str | None:
     """The tree id of a copy's files, as the template justfile computes it, or ``None``.
 
-    Why: a throwaway git directory and an environment with no git configuration, so the id is the
-    same on every machine and nothing is written to any repository. An ``info/attributes`` that
-    unsets conversion outranks the copy's own ``.gitattributes``, and ``add --force`` ignores its
-    ``.gitignore``.
+    Why: hashed in memory as git hashes a tree, with the conversions off, so the id is the same on
+    every machine, equals ``git write-tree`` of the same files, and nothing is stored anywhere.
+    The release file, ``.git``, ``.in_use``, ``.orphaned_at`` and each ``__pycache__`` are left out.
     """
     if not plugin.is_dir():
         return None
-    with tempfile.TemporaryDirectory() as scratch:
-        git_dir = Path(scratch) / "g"
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": scratch,
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_SYSTEM": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_DIR": str(git_dir),
-            "GIT_WORK_TREE": str(plugin),
-        }
-
-        def run(*args: str) -> subprocess.CompletedProcess[str]:
-            return subprocess.run(
-                ["git", *NEUTRAL, *args],
-                cwd=plugin,
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-        (git_dir / "info").mkdir(parents=True)
-        (git_dir / "info" / "attributes").write_text(UNFILTERED, encoding="utf-8")
-        for step in (("init", "-q", "--template="), ("add", "-A", "-f", "--", ".", *EXCLUDED)):
-            if run(*step).returncode:
-                return None
-        done = run("write-tree")
-        return done.stdout.strip() if done.returncode == 0 else None
+    try:
+        tree = tree_of(plugin, "")
+    except OSError:
+        return None
+    return (tree or object_id(b"tree", b"")).hex()
 
 
 def release_tree(plugin: Path) -> str | None:
     """The tree id the pin of the commit ``plugin`` is at holds, or of a copy's files."""
-    if not (plugin / ".git").exists():
+    if checked_folder(plugin) or not (plugin / ".git").exists():
         return copy_tree_id(plugin)
     commit = commit_of(plugin)
     if commit in (None, UNREADABLE):
@@ -395,13 +388,13 @@ def judged(pin: Pin | None, plugin: Path) -> tuple[str, bool]:
     if standing is Relation.NEWER:
         return (
             (
-                f"plugin-pin: the plugin at {plugin} is {used}, newer than the {pin.version} that"
-                f" {home} pins: this run judges by {version}'s gates and CI by {pin.version}'s. Run"
+                f"the plugin at {plugin} is {used}, newer than the {pin.version} that {home} pins,"
+                f" so this run would judge by {version}'s gates and CI by {pin.version}'s. Run"
                 f" `{apply}`: it moves the pin in {home} to `{line_for(plugin)}`, every workflow"
                 " `ref` and the permission rules together, and lists what it leaves to an agent"
                 " or to you"
             ),
-            False,
+            True,
         )
     pinned = f"{pin.version} at {pin.commit}"
     if standing is Relation.OLDER:

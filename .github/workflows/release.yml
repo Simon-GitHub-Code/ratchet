@@ -40,7 +40,10 @@ jobs:
           set -euo pipefail
           tag="$TAG"
           python3 scripts/release.py --notes "${tag#v}" > "$RUNNER_TEMP/notes.md"
-          if [ "$FRESH" = "true" ]; then git push origin "refs/tags/$tag"; fi
+          if [ "$FRESH" = "true" ]; then
+            python3 scripts/release_check.py "$tag" --local --main HEAD
+            git push origin "refs/tags/$tag"
+          fi
           git fetch --quiet --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           python3 scripts/release_check.py "$tag"
           if gh release view "$tag" > /dev/null 2>&1; then

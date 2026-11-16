@@ -25,6 +25,9 @@ from pathlib import Path
 from ratchet_guards import events
 from ratchet_guards.hook import PLUGIN_ROOT, common_directory, repository_root
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import plugin_pin  # -- the pin check lives beside the gate scripts
+
 BINDING = Path("docs/process/binding.md")
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
 STANZA = "ratchet:method"
@@ -48,6 +51,10 @@ NO_BINDING = (
 ADOPTED = (
     "Ratchet: {root} is on the method. Load the ratchet:method skill before any work; the "
     "binding's `check` entry point is the gate, and a denied edit is a dispute, not a puzzle."
+)
+NOT_PINNED = (
+    "Ratchet: this session runs the plugin at {plugin}, which is not the release "
+    "docs/process/binding.md pins, so the local gates will not run from it."
 )
 ROUTE_SCRIPT = Path("scripts/route.py")
 ROUTE_TIMEOUT = 5
@@ -108,6 +115,14 @@ def stance(plugin_root: Path = PLUGIN_ROOT) -> str:
     return (body if end < 0 else body[:end]).strip()
 
 
+def unpinned(root: Path, plugin_root: Path) -> str:
+    """One line when ``plugin_root`` is not the release ``root``'s binding pins, else empty."""
+    pin = plugin_pin.pinned((root / BINDING).read_text(encoding="utf-8", errors="replace"))
+    if pin is None or pin.tree is None or plugin_pin.copy_tree_id(plugin_root) == pin.tree:
+        return ""
+    return NOT_PINNED.format(plugin=plugin_root)
+
+
 def message(cwd: Path, plugin_root: Path = PLUGIN_ROOT, run: Runner = run_route) -> str | None:
     """The context to add for the checkout holding ``cwd``, if any."""
     root = repository_root(cwd)
@@ -118,7 +133,7 @@ def message(cwd: Path, plugin_root: Path = PLUGIN_ROOT, run: Runner = run_route)
     elif not (root / BINDING).is_file():
         parts = [NO_BINDING.format(root=root)]
     else:
-        parts = [ADOPTED.format(root=root), stance(plugin_root)]
+        parts = [ADOPTED.format(root=root), unpinned(root, plugin_root), stance(plugin_root)]
     parts.append(next_step(root, plugin_root, run))
     return "\n\n".join(part for part in parts if part)
 

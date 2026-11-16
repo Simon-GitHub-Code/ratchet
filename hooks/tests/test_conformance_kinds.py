@@ -384,6 +384,64 @@ def test_a_fallback_check_has_nothing_to_rewrite_to_when_the_template_has_no_lin
     assert fallback_findings(repo) == []
 
 
+def block_findings(repo: Path) -> list[conformance.Finding]:
+    return [f for f in conformance.findings(repo) if "is not the template's" in f.problem]
+
+
+def test_a_plugin_block_that_is_not_the_templates_is_rewritten_to_it(repo: Path) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    line = 'ratchet_plugin := "$RATCHET_PLUGIN_DIR"'
+    assert line in text
+    path.write_text(
+        text.replace(line, 'ratchet_plugin := env_var_or_default("RATCHET_PLUGIN", "")'),
+        encoding="utf-8",
+    )
+    [found] = block_findings(repo)
+    assert "plugin block above `ratchet_plugin`" in found.problem
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.fix.want(path.read_text(encoding="utf-8")) == text
+
+
+def test_the_templates_plugin_block_is_not_a_finding(repo: Path) -> None:
+    assert block_findings(repo) == []
+
+
+PRE_COMMIT = "pre-commit"
+
+
+def pre_commit_findings(repo: Path) -> list[conformance.Finding]:
+    return [f for f in conformance.findings(repo) if "`pre-commit` neither" in f.problem]
+
+
+@pytest.mark.parametrize(
+    "own",
+    [
+        "pre-commit:\n    @just tier0-tree\n",
+        "[no-exit-message]\npre-commit:\n    @echo fast\n",
+    ],
+)
+def test_a_pre_commit_recipe_that_skips_the_pin_or_shows_just_errors_is_the_templates(
+    repo: Path, own: str
+) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    held = "\n".join(justfile_text.definition(text, PRE_COMMIT))
+    assert pre_commit_findings(repo) == []
+    path.write_text(text.replace(held, own.rstrip("\n")), encoding="utf-8")
+    [found] = pre_commit_findings(repo)
+    assert isinstance(found.fix, conformance.Auto)
+    assert found.fix.want(path.read_text(encoding="utf-8")) == text
+
+
+def test_a_justfile_with_no_pre_commit_recipe_has_nothing_to_offer(repo: Path) -> None:
+    path = repo / JUSTFILE
+    text = path.read_text(encoding="utf-8")
+    held = "\n".join(justfile_text.definition(text, PRE_COMMIT))
+    path.write_text(text.replace(held, ""), encoding="utf-8")
+    assert pre_commit_findings(repo) == []
+
+
 def value_findings(repo: Path) -> list[conformance.Finding]:
     return [
         f for f in conformance.findings(repo) if "read `ratchet_plugin` as a folder" in f.problem

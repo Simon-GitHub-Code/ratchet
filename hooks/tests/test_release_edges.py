@@ -39,10 +39,10 @@ def test_a_head_with_no_bump_commit_stops_the_release(
 
 def test_a_failed_git_call_and_a_missing_changelog_are_stops(tmp_path: Path) -> None:
     root = repos.repository(tmp_path / "work", versioned())
-    with pytest.raises(release.Stop, match="git rev-parse failed"):
+    with pytest.raises(release.StopError, match="git rev-parse failed"):
         release.git(root, "rev-parse", "--verify", "no-such-ref")
     (root / "CHANGELOG.md").unlink()
-    with pytest.raises(release.Stop, match="cannot be read"):
+    with pytest.raises(release.StopError, match="cannot be read"):
         release.notes(root, "1.2.3")
 
 
