@@ -3,12 +3,15 @@
 import os
 import stat
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 import plugin_pin
 from tests import repos
+from tests.support import PLUGIN_ROOT
 from tests.test_plugin_tree import just, project, raw_tree_id, red_line, release_copy
 
 
@@ -260,3 +263,195 @@ def test_a_folder_a_tier_hashed_is_read_without_git(
     assert plugin_pin.checked_folder(copy)
     assert plugin_pin.commit_of(copy) == "2" * 40
     assert plugin_pin.release_tree(copy) == plugin_pin.copy_tree_id(copy)
+
+
+def marker_module(tmp_path: Path, name: str) -> tuple[Path, Path]:
+    flag = tmp_path / "ran-evil"
+    folder = tmp_path / "hijack"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_text(f"open({str(flag)!r}, 'w').close()\n", encoding="utf-8")
+    return folder, flag
+
+
+def gate_with(tmp_path: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    root = project(tmp_path / "repo", copy, pinned)
+    return just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(tmp_path), **env})
+
+
+def test_a_folder_on_pythonpath_holding_json_never_replaces_the_real_module(
+    tmp_path: Path,
+) -> None:
+    folder, flag = marker_module(tmp_path, "json.py")
+    done = gate_with(tmp_path, {"PYTHONPATH": str(folder)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+
+
+@pytest.mark.parametrize(
+    "variable", [("PYTHONSAFEPATH", "1"), ("PYTHONHOME", "/nonexistent/ratchet-home")]
+)
+def test_an_interpreter_variable_that_would_break_a_script_run_leaves_the_gate_green(
+    tmp_path: Path, variable: tuple[str, str]
+) -> None:
+    done = gate_with(tmp_path, dict([variable]))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_a_startup_file_named_by_pythonstartup_never_runs(tmp_path: Path) -> None:
+    flag = tmp_path / "ran-evil"
+    startup = tmp_path / "startup.py"
+    startup.write_text(f"open({str(flag)!r}, 'w').close()\n", encoding="utf-8")
+    done = gate_with(tmp_path, {"PYTHONSTARTUP": str(startup), "PYTHONINSPECT": "1"})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+
+
+def test_on_the_fallback_no_compiled_file_is_written_anywhere(tmp_path: Path) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    folder = temporary / f"ratchet-pyc-{os.getuid()}"
+    folder.mkdir()
+    folder.chmod(0o777)
+    root = project(tmp_path / "repo", copy, pinned)
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not list(copy.rglob("*.pyc"))
+    assert not list(temporary.rglob("*.pyc"))
+
+
+def test_on_the_fallback_a_planted_compiled_file_in_a_copy_never_runs(tmp_path: Path) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    flag = plant(tmp_path, copy / "scripts/__pycache__" / f"gatelib.{cache_tag()}.pyc")
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    folder = temporary / f"ratchet-pyc-{os.getuid()}"
+    folder.mkdir()
+    folder.chmod(0o777)
+    root = project(tmp_path / "repo", copy, pinned)
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+
+
+def test_a_group_writable_cache_folder_is_refused_with_one_line_saying_why_and_the_way_out(
+    tmp_path: Path,
+) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    folder = temporary / f"ratchet-pyc-{os.getuid()}"
+    keyed = folder / pinned / str(copy / "scripts").lstrip("/") / f"gatelib.{cache_tag()}.pyc"
+    flag = plant(tmp_path, keyed)
+    folder.chmod(0o775)
+    root = project(tmp_path / "repo", copy, pinned)
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+    said = [line for line in done.stderr.splitlines() if "compiled files are not cached" in line]
+    assert len(said) == 1
+    assert f"{folder} is mode 775" in said[0]
+    assert f"remove {folder}" in said[0]
+    assert "compiles from source on each start" in said[0]
+    assert sorted(path.name for path in folder.rglob("*.pyc")) == [keyed.name]
+
+
+def test_a_check_that_fails_never_trusts_the_folder(tmp_path: Path) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    folder = temporary / f"ratchet-pyc-{os.getuid()}"
+    keyed = folder / pinned / str(copy / "scripts").lstrip("/") / f"gatelib.{cache_tag()}.pyc"
+    flag = plant(tmp_path, keyed)
+    folder.chmod(0o777)
+    fakes = tmp_path / "fakes"
+    fakes.mkdir()
+    real = subprocess.run(
+        ["python3", "-c", "import sys; print(sys.executable)"],  # noqa: S607 # -- PATH
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    python = fakes / "python3"
+    python.write_text(
+        f'#!/bin/bash\nin=$(cat)\ncase "$in" in *getpwuid*) exit 1;; esac\n'
+        f'printf "%s" "$in" | exec {real} "$@"\n',
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    finder = fakes / "find"
+    finder.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    finder.chmod(0o755)
+    root = project(tmp_path / "repo", copy, pinned)
+    path = f"{fakes}{os.pathsep}{os.environ['PATH']}"
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary), "PATH": path})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not flag.exists()
+    assert "compiled files are not cached" in done.stderr
+    assert "the check did not answer" in done.stderr
+
+
+def test_a_folder_of_another_owner_is_named_by_the_check() -> None:
+    template = (PLUGIN_ROOT / "skills/adopt/templates/justfile").read_text(encoding="utf-8")
+    start = template.index("<<-'PY'\n", template.index("privately()")) + len("<<-'PY'\n")
+    code = "\n".join(
+        line.removeprefix("\t")
+        for line in template[start : template.index("\tPY\n", start)].split("\n")
+    )
+    folder = Path(tempfile.mkdtemp())
+    try:
+        folder.chmod(0o700)
+        done = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os, sys; os.getuid = lambda: os.stat(sys.argv[1]).st_uid + 1;"
+                    " exec(sys.stdin.read())"
+                ),
+                str(folder),
+            ],
+            input=code,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    finally:
+        folder.rmdir()
+    assert done.stdout.startswith("Rowned by ")
+
+
+def test_a_cache_folder_that_is_a_link_is_refused_with_the_line(tmp_path: Path) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    temporary = tmp_path / "shared"
+    temporary.mkdir()
+    (temporary / f"ratchet-pyc-{os.getuid()}").symlink_to(tmp_path / "elsewhere")
+    root = project(tmp_path / "repo", copy, pinned)
+    done = just(root, "plugin-pin", plugin=copy, env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "is a link" in done.stderr
+
+
+def test_a_private_cache_folder_prints_nothing(tmp_path: Path) -> None:
+    done = gate_with(tmp_path, {})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "compiled files are not cached" not in done.stderr
+
+
+def test_a_json_module_at_the_project_root_never_runs_in_an_inline_gate_call(
+    tmp_path: Path,
+) -> None:
+    copy = release_copy(tmp_path / "copy")
+    pinned = raw_tree_id(copy, tmp_path)
+    root = project(tmp_path / "repo", copy, pinned)
+    flag = tmp_path / "ran-evil"
+    (root / "json.py").write_text(f"open({str(flag)!r}, 'w').close()\n", encoding="utf-8")
+    just(root, "guard-diff", plugin=copy, env={"TMPDIR": str(tmp_path)})
+    assert not flag.exists()

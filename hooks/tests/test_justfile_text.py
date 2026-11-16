@@ -513,3 +513,22 @@ def test_a_template_recipe_replaces_the_projects_and_is_copied_when_absent() -> 
     want = justfile_text.with_template_recipe(template, "a")
     assert want("a:\n    echo old\n\nb:\n    echo b\n") == template
     assert want("b:\n    echo b\n") == template
+
+
+PLUGIN_TEMPLATE = (
+    '# the plugin\nplugin_choice := "a"\nplugin_py := "b"\nratchet_plugin := "c"\n'
+    "\nlint:\n    echo\n"
+)
+
+
+def test_a_justfile_with_no_plugin_line_is_given_the_block_before_its_first_recipe() -> None:
+    project = 'set shell := ["sh", "-c"]\n\nlint:\n    echo lint\n'
+    assert justfile_text.with_plugin_block(PLUGIN_TEMPLATE)(project) == (
+        'set shell := ["sh", "-c"]\n\n# the plugin\nplugin_choice := "a"\nplugin_py := "b"\n\n'
+        "lint:\n    echo lint\n"
+    )
+
+
+def test_a_template_with_no_plugin_block_leaves_the_justfile_as_it_is() -> None:
+    project = "lint:\n    echo lint\n"
+    assert justfile_text.with_plugin_block("x := 1\n")(project) == project

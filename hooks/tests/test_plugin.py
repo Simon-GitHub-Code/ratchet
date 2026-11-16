@@ -346,7 +346,7 @@ def test_hooks_json_registers_the_session_shim_for_sessions_and_subagents(event:
     [command] = entry["hooks"]
     assert command == {
         "type": "command",
-        "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/session.py"',
+        "command": 'python3 -E -s "${CLAUDE_PLUGIN_ROOT}/hooks/session.py"',
         "timeout": 10,
     }
 
@@ -361,7 +361,7 @@ def test_hooks_json_registers_the_shim_for_edits_and_bash() -> None:
     [command] = entry["hooks"]
     assert command == {
         "type": "command",
-        "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/guard.py"',
+        "command": 'python3 -E -s "${CLAUDE_PLUGIN_ROOT}/hooks/guard.py"',
         "timeout": 10,
     }
 

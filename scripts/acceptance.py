@@ -135,16 +135,16 @@ class Boot:
         """``with_service.py`` booting this, with the proxy for ``directory`` as its command."""
         pairs = [word for pair in self.env for word in ("--env", pair)]
         return [
-            sys.executable,
+            *gatelib.interpreter(),
             str(WITH_SERVICE),
             *("--boot", self.command, "--ready", self.ready, "--timeout", f"{self.timeout:g}"),
             *pairs,
-            *("--", sys.executable, str(PROXY), str(directory)),
+            *("--", *gatelib.interpreter(), str(PROXY), str(directory)),
         ]
 
 
 NULL = Boot(
-    f"exec {shlex.quote(sys.executable)} {shlex.quote(str(PROXY))} --null",
+    f"exec {shlex.join(gatelib.interpreter())} {shlex.quote(str(PROXY))} --null",
     "http://127.0.0.1:{port}/",
     30.0,
 )
@@ -417,7 +417,7 @@ def launch(root: Path, directory: Path, boot: Boot) -> int:
     The supervisor holds the session's lock from here on: this command takes it, hands the
     supervisor the same open file, writes the supervisor's process id into it and lets go.
     """
-    argv = [sys.executable, str(Path(__file__).resolve()), "_supervise", str(directory)]
+    argv = [*gatelib.interpreter(), str(Path(__file__).resolve()), "_supervise", str(directory)]
     try:
         with (
             (directory / "live.lock").open("w") as lock,

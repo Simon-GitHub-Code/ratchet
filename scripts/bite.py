@@ -34,6 +34,7 @@ import coverage_groups
 import drain
 import feature_preflight
 import flags
+import gatelib
 import hooks_installed
 import load_smoke
 import lowered
@@ -505,10 +506,10 @@ TICKET_REF = [TICKET_PATH]
 ADDITIVE = ["--fail-unless-additive"]
 GATE_READS_RED = "import pathlib, sys; sys.exit(pathlib.Path('red').is_file())"
 PARALLEL = [
-    *("--runner", f"{shlex.quote(sys.executable)} -c", "--jobs", "2"),
+    *("--runner", f"{shlex.join(gatelib.interpreter(inline=True))} -c", "--jobs", "2"),
     *("--", "pass", shlex.quote(GATE_READS_RED), "0"),
 ]
-IN_TIER = ["lint", "--tier", "tier1", "--", sys.executable, "-c", "pass"]
+IN_TIER = ["lint", "--tier", "tier1", "--", *gatelib.interpreter(inline=True), "-c", "pass"]
 SCENARIOS: list[tuple[str, Gate, Violation, list[str]]] = [
     ("markers", markers.main, add_marker, []),
     ("suppressions: a count rose", suppressions.main, add_suppression, []),
@@ -583,7 +584,7 @@ EXPORT = (
 
 
 def python(code: str) -> str:
-    return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
+    return f"{shlex.join(gatelib.interpreter(inline=True))} -c {shlex.quote(code)}"
 
 
 # Why: a request to /work is held until the stop, and the stop waits for one, so a request is in
@@ -617,7 +618,7 @@ LOAD_SMOKE = str(Path(__file__).with_name("load_smoke.py"))
 GRACEFUL = [
     *("--ready", "http://127.0.0.1:{port}/", "--timeout", "120"),
     *("--graceful", "120", "--signal-after", "0.5"),
-    *("--", sys.executable, LOAD_SMOKE, "--url", "http://127.0.0.1:{port}/work"),
+    *("--", *gatelib.interpreter(), LOAD_SMOKE, "--url", "http://127.0.0.1:{port}/work"),
     *("--until-stopped", "--seconds", "2", "--timeout", "120"),
     *("--concurrency", "2", "--min-requests", "1"),
 ]
@@ -666,8 +667,8 @@ SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
     (
         "telemetry-sink: no telemetry",
         telemetry_sink.main,
-        [*SINK, "--wait", "5", "--", sys.executable, "-c", EXPORT],
-        [*SINK, "--wait", "0.3", "--", sys.executable, "-c", ""],
+        [*SINK, "--wait", "5", "--", *gatelib.interpreter(inline=True), "-c", EXPORT],
+        [*SINK, "--wait", "0.3", "--", *gatelib.interpreter(inline=True), "-c", ""],
     ),
 ]
 

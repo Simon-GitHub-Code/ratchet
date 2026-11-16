@@ -21,7 +21,10 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # recipe as the environment variable RATCHET_PLUGIN_DIR and is only ever read as a shell variable,
 # so a folder name with a quote, a `$` or a backtick runs nothing. Compiled files are cached
 # outside every copy, in a folder named by the tree id under a private folder this user owns; with
-# no such folder, none is read or written.
+# no such folder, none is read or written, and the first `just` says why. Every plugin script runs as
+# `plugin_py`: `-E` and `-s`
+# leave out the interpreter's environment variables (PYTHONPATH, PYTHONSTARTUP, PYTHONHOME) and the
+# user's site folder, and the compiled-file folder is an option, since `-E` ignores its variable.
 plugin_choice := ```
     want=$(sed -n 's/^- Ratchet plugin: [^ ]* at [0-9a-f]\{40\} tree \([0-9a-f]\{40\}\)[ \t\r]*$/\1/p' docs/process/binding.md 2>/dev/null | head -n 1 || true)
     checked=${RATCHET_PLUGIN_CHECKED:-}
@@ -66,11 +69,31 @@ plugin_tree := replace_regex(plugin_choice, '(?s)^R.*|^D([0-9a-f]{40}) .*', '$1'
 plugin_pyc := ```
     d=${TMPDIR:-/tmp}/ratchet-pyc-$(id -u)
     mkdir -m 700 -- "$d" 2>/dev/null || true
-    if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && [ -z "$(find "$d" -maxdepth 0 -perm /022)" ]; then printf '%s' "$d"; fi
+    privately() {
+      python3 -I - "$1" 2>/dev/null <<-'PY'
+	import os, pwd, stat, sys
+	try: found = os.lstat(sys.argv[1])
+	except OSError: print("Rnot there and cannot be made"); sys.exit()
+	if stat.S_ISLNK(found.st_mode): print("Ra link")
+	elif not stat.S_ISDIR(found.st_mode): print("Rnot a folder")
+	elif found.st_uid != os.getuid():
+	    try: owner = pwd.getpwuid(found.st_uid).pw_name
+	    except KeyError: owner = str(found.st_uid)
+	    print("Rowned by " + owner)
+	elif found.st_mode & 0o022: print("Rmode %o" % stat.S_IMODE(found.st_mode))
+	else: print("O")
+	PY
+    }
+    verdict=$(privately "$d") || verdict=
+    if [ "$verdict" = O ]; then printf 'O%s' "$d"; exit 0; fi
+    case "$verdict" in R?*) why=${verdict#R} ;; *) why="not checked, since the check did not answer" ;; esac
+    printf 'Rplugin: compiled files are not cached, since %s is %s, so every plugin script compiles from source on each start; remove %s and the next run makes a private one' "$d" "$why" "$d"
 ```
-plugin_pyc_ok := if plugin_tree == "" { "" } else { plugin_pyc }
-export PYTHONPYCACHEPREFIX := if plugin_pyc_ok == "" { "/nonexistent/ratchet-no-bytecode" } else { plugin_pyc_ok + "/" + plugin_tree }
-export PYTHONDONTWRITEBYTECODE := if plugin_pyc_ok == "" { "1" } else { "" }
+plugin_pyc_ok := if plugin_tree == "" { "" } else { replace_regex(plugin_pyc, '(?s)^R.*|^O', '') }
+pyc_said := env_var_or_default("RATCHET_PYC_SAID", "")
+export RATCHET_PYC_SAID := "1"
+export RATCHET_PYC_NOTE := if plugin_tree == "" { "" } else if pyc_said != "" { "" } else { replace_regex(plugin_pyc, '(?s)^O.*|^R', '') }
+plugin_py := if plugin_pyc_ok == "" { "python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode" } else { "python3 -E -s -X " + quote("pycache_prefix=" + plugin_pyc_ok + "/" + plugin_tree) }
 export RATCHET_PLUGIN_DIR := replace_regex(plugin_choice, '(?s)^R.*|^D[0-9a-f]{40} ', '')
 export RATCHET_PLUGIN_REFUSAL := replace_regex(plugin_choice, '(?s)^D.*|^R', '')
 export RATCHET_PLUGIN_CHECKED := replace_regex(plugin_choice, '(?s)^R.*', '')
@@ -92,14 +115,14 @@ boot := "bind: the command that builds and starts the deliverable in the foregro
 ready := "bind: the URL that answers once it is up, such as http://127.0.0.1:{port}/health"
 boot_timeout := "30"
 service := "bind: the service.name every signal carries"
-booted := 'python3 "' + ratchet_plugin + '/scripts/with_service.py" --boot ' + quote(boot) + ' --ready ' + quote(ready) + ' --timeout ' + boot_timeout
+booted := plugin_py + ' "' + ratchet_plugin + '/scripts/with_service.py" --boot ' + quote(boot) + ' --ready ' + quote(ready) + ' --timeout ' + boot_timeout
 
 # A gate that requests the deliverable's routes from outside (`load-smoke`, `api-deep`, `dast`,
 # `pentest`, `load`) boots it through `probed`: with every flag due for removal turned on. New
 # surface ships off, so a probe of the defaults meets a 404 on each flagged route and judges none
 # of it. `flags.py --temporary` prints those keys, one per line, and `flags_on` is the override
 # the flag seam reads with each of them on, as the shell builds it on every run, such as
-#   'FLAG_OVERRIDES=$(python3 "' + ratchet_plugin + '/scripts/flags.py" --temporary | sed "s/$/=true/" | paste -sd, -)'
+#   'FLAG_OVERRIDES=$(' + plugin_py + ' "' + ratchet_plugin + '/scripts/flags.py" --temporary | sed "s/$/=true/" | paste -sd, -)'
 # A `permanent` flag is a switch and keeps its default. `smoke`, the end-to-end suite and the off
 # half of `flag-states` judge the defaults, which are what ships. With nothing to boot: "none".
 flags_on := "bind: NAME=VALUE, the flag seam's override with each key of flags.py --temporary on"
@@ -168,12 +191,12 @@ alone := "--alone perf load"
 # The runner. Each gate is an entry point of this file, run as `just <gate>` with its output held
 # whole, and every gate's seconds are appended to .ratchet/timing.jsonl so the slowest is named.
 # What a gate started and left running is ended when the gate exits, and the runner says so.
-parallel := 'python3 "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + just_executable() + '" --report .ratchet/timing.jsonl --jobs ' + jobs + ' ' + alone
+parallel := plugin_py + ' "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + just_executable() + '" --report .ratchet/timing.jsonl --jobs ' + jobs + ' ' + alone
 
 # A gate over the change runs as `{{changed}} -- <command>`: `{base}` in the command is
 # the commit the change is compared with, the one the plugin's own gates use. On the adoption,
 # whose base holds no binding, it runs nothing and says so: tier 2 judges that tree whole.
-changed := 'python3 "' + ratchet_plugin + '/scripts/changed.py"'
+changed := plugin_py + ' "' + ratchet_plugin + '/scripts/changed.py"'
 
 # The tools the gates run, installed before they run (ADR 0039, ADR 0043). `merge` runs the gates in
 # a fresh work tree and CI runs each in a fresh checkout, so a tool that is on disk only after an
@@ -193,14 +216,14 @@ dependencies dir:
 # The one guard every recipe that runs a file of the plugin depends on.
 [no-exit-message]
 _plugin:
-    @if [ -n "${RATCHET_PLUGIN_REFUSAL:-}" ]; then printf '%s\n' "$RATCHET_PLUGIN_REFUSAL"; exit 1; fi; if [ -z "${RATCHET_PLUGIN_DIR:-}" ]; then echo "no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
+    @if [ -n "${RATCHET_PYC_NOTE:-}" ]; then printf '%s\n' "$RATCHET_PYC_NOTE" >&2; fi; if [ -n "${RATCHET_PLUGIN_REFUSAL:-}" ]; then printf '%s\n' "$RATCHET_PLUGIN_REFUSAL"; exit 1; fi; if [ -z "${RATCHET_PLUGIN_DIR:-}" ]; then echo "no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
 
 # Every tier starts here: the plugin the recipes run is the release docs/process/binding.md pins,
 # the commit CI checks out. Red before any gate runs when it is any other tree, or not there; a
 # newer plugin is red too and says on every run what to change.
 plugin-pin: _plugin
     @test -f "{{ratchet_plugin}}/scripts/plugin_pin.py" || { echo "plugin-pin: no Ratchet plugin at $RATCHET_PLUGIN_DIR, or one older than the pin check; set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins"; exit 1; }
-    @python3 "{{ratchet_plugin}}/scripts/plugin_pin.py"
+    @{{plugin_py}} "{{ratchet_plugin}}/scripts/plugin_pin.py"
 
 tier0: plugin-pin
     {{parallel}} {{serial0}} -- {{tier0_gates}}
@@ -220,7 +243,7 @@ pre-commit:
 
 [no-exit-message]
 commit-msg file:
-    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo commit-msg > "$RATCHET_HOOK_PROBE"; else just _plugin; python3 "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"; fi
+    @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo commit-msg > "$RATCHET_HOOK_PROBE"; else just _plugin; {{plugin_py}} "{{ratchet_plugin}}/scripts/commits.py" --message-file "{{file}}"; fi
 
 tier1: plugin-pin
     {{parallel}} {{serial1}} -- {{tier1_gates}}
@@ -244,50 +267,50 @@ check-deep: plugin-pin
 # --- method gates (tool-neutral, shipped by the ratchet plugin) --------------
 
 ratchet-lowered: _plugin
-    python3 "{{ratchet_plugin}}/scripts/lowered.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/lowered.py"
 
 guard-diff: _plugin
-    PYTHONPATH="{{ratchet_plugin}}/hooks" python3 -m ratchet_guards.diff --root . || true
+    {{plugin_py}} -P -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from ratchet_guards import diff; sys.exit(diff.main())' "{{ratchet_plugin}}/hooks" --root . || true
 
 # The permission rules in .claude/settings.json mirror guards/manifest.toml: one Edit rule per
 # pattern, deny for a locked group, plus the fixed command rules. `just settings` regenerates them.
 settings-check: _plugin
-    python3 "{{ratchet_plugin}}/scripts/settings_rules.py" --check
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/settings_rules.py" --check
 
 settings: _plugin
-    python3 "{{ratchet_plugin}}/scripts/settings_rules.py" --write
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/settings_rules.py" --write
 
 conformance: _plugin
-    python3 "{{ratchet_plugin}}/scripts/conformance.py" .
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/conformance.py" .
 
 # The change that brings a kind of code is free in any number of files, and a later one that adds
 # another while a safeguard it owes is still `later:` is red (ADR 0028, ADR 0030). `just triggers
 # --json` lists the rows head owes, for the route.
 triggers *flags: _plugin
-    python3 "{{ratchet_plugin}}/scripts/triggers.py" {{flags}}
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/triggers.py" {{flags}}
 
 # Each record under docs/incidents/ names a fault of quality/bites.toml that reproduces it.
 incidents: _plugin
-    python3 "{{ratchet_plugin}}/scripts/conformance.py" --incidents .
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/conformance.py" --incidents .
 
 # Time one tier or gate against its ceiling in quality/thresholds.toml; `just budget tier1 --set`
 # records the first ceiling. CI wraps every job in it, holds each to its tier's ceiling
 # (`--tier`), reports a ceiling passed on a pull request without blocking (`--over report`)
 # and uploads the report.
 budget key *flags: _plugin
-    python3 "{{ratchet_plugin}}/scripts/budget.py" {{key}} --report .ratchet/timing.jsonl {{flags}} -- just {{key}}
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/budget.py" {{key}} --report .ratchet/timing.jsonl {{flags}} -- just {{key}}
 
 # --- merging ------------------------------------------------------------------
 
 # May this change reach the default branch without the owner? Prints `merge: agent` or
 # `merge: owner` with every reason. The forge's merge job asks the same script.
 merge-ready *flags: _plugin
-    python3 "{{ratchet_plugin}}/scripts/merge_ready.py" {{flags}}
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/merge_ready.py" {{flags}}
 
 # With no forge: judge the branch, run `check` on the merge result, and merge it when both
 # pass. With a forge the pull request's merge job does this, and the recipe says so.
 merge branch: _plugin
-    python3 "{{ratchet_plugin}}/scripts/merge.py" "{{branch}}"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/merge.py" "{{branch}}"
 
 # --- ratchet maintenance ------------------------------------------------------
 
@@ -297,39 +320,39 @@ merge branch: _plugin
 ratchet: _plugin
     just hooks-installed
     @echo "bind: run the suites with a Cobertura or LCOV report, named in --report below, then the mutation run"; exit 1
-    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml --write
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml --write
     just snapshots
 
 # Would a commit here run tier 0? Red, with the repair, when it would not. CI has no commit
 # hooks, so no CI job and not `conformance` runs it.
 hooks-installed: _plugin
-    python3 "{{ratchet_plugin}}/scripts/hooks_installed.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/hooks_installed.py"
 
 # Install the repository's own commit hooks, then ask `hooks-installed`. An agent runs it: it
 # changes no git config and moves no hook somebody else wrote. What is left is the owner's.
 hooks-install: _plugin
-    python3 "{{ratchet_plugin}}/scripts/hooks_install.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/hooks_install.py"
 
 # The files of the manifest's tool-config group, copied into quality/snapshots/ (a ratchet path).
 snapshots: _plugin
-    python3 "{{ratchet_plugin}}/scripts/snapshots.py" --write
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/snapshots.py" --write
 
 snapshots-check: _plugin
-    python3 "{{ratchet_plugin}}/scripts/snapshots.py" --check
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/snapshots.py" --check
 
 suppressions: _plugin
-    python3 "{{ratchet_plugin}}/scripts/suppressions.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/suppressions.py"
 
 # The flag registry: declared, owned, off when new. `flags-expired` asks the calendar, in tier 2.
 # Add `--used-in <source dir>` once the stack is bound, so a flag leaves the registry with its code.
 flags: _plugin
-    python3 "{{ratchet_plugin}}/scripts/flags.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/flags.py"
 
 flags-expired: _plugin
-    python3 "{{ratchet_plugin}}/scripts/flags.py" --expired
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/flags.py" --expired
 
 commits: _plugin
-    python3 "{{ratchet_plugin}}/scripts/commits.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/commits.py"
 
 # --- tier 0 bodies ---------------------------------------------------------------
 
@@ -355,17 +378,17 @@ secrets:
     @echo "bind: secret scanner over the tree"; exit 1
 
 pins: _plugin
-    python3 "{{ratchet_plugin}}/scripts/pins.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/pins.py"
     @echo "bind: lockfile matches manifest, no floating range (the stack's lock --check)"; exit 1
 
 limits:
     @echo "bind: size and complexity rules plus the fitness test, numbers from the binding's Limits"; exit 1
 
 markers: _plugin
-    python3 "{{ratchet_plugin}}/scripts/markers.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/markers.py"
 
 prose: _plugin
-    python3 "{{ratchet_plugin}}/scripts/prose.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/prose.py"
 
 # --- tier 1 bodies ---------------------------------------------------------------
 
@@ -374,7 +397,7 @@ test:
 
 coverage: _plugin
     @echo "bind: run the suite with a Cobertura or LCOV report, named in --report below"; exit 1
-    python3 "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml
 
 diff-coverage:
     @echo "bind: through changed, every line and branch changed since {base} ran"; exit 1
@@ -418,14 +441,14 @@ flag-states:
 # URL. A skeleton whose one route is readiness replaces the `--url` with `--health-only`: green,
 # and it says so on every run until the first route takes its place.
 load-smoke: _plugin
-    {{probed}} -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --url "bind: METHOD URL STATUS BODY of a route worth overlapping, on port {port}"
+    {{probed}} -- {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --url "bind: METHOD URL STATUS BODY of a route worth overlapping, on port {port}"
 
 # Shipped: the pull-request half of the proof that every bound gate bites. It proves nothing, at
 # the cost of a few git calls, unless the change touches a path that defines a gate; then it
 # plants each fault of quality/bites.toml for the tier 0 and tier 1 gates the change could
 # affect, and says why each is in the set. `bite-all` is the whole proof.
 bite: _plugin
-    python3 "{{ratchet_plugin}}/scripts/project_bite.py" --changed
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --changed
 
 # Reliability gates (ADR 0028). Each is bound once its trigger has fired; until then its body is
 # `@echo "later: <trigger>"` and it exits 0.
@@ -450,7 +473,7 @@ config-refusal: _plugin
 # seconds. Where the gate cannot hold the listener, a request counts as accepted when it started
 # before the signal, and the smoke says so. A route that takes a moment shows the drain best.
 graceful-stop: _plugin
-    {{booted}} --graceful 10 -- python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --until-stopped --url "bind: METHOD URL STATUS BODY of a route that takes a moment, on port {port}"
+    {{booted}} --graceful 10 -- {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --until-stopped --url "bind: METHOD URL STATUS BODY of a route that takes a moment, on port {port}"
 
 api-check:
     @echo "bind: snapshot the public surface and diff; a change needs a version bump or changelog line"; exit 1
@@ -477,7 +500,7 @@ doc-coverage:
     @echo "bind: documentation coverage of the public surface >= quality/thresholds.toml"; exit 1
 
 change-size: _plugin
-    python3 "{{ratchet_plugin}}/scripts/change_size.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/change_size.py"
 
 # --- tier 2 bodies ---------------------------------------------------------------
 
@@ -522,8 +545,8 @@ load:
 # Shipped: an OTLP receiver the booted deliverable exports to; green only when a request's
 # traces, metrics and logs arrive for `service`. `--require traces` narrows it to what is emitted.
 telemetry-e2e: _plugin
-    python3 "{{ratchet_plugin}}/scripts/telemetry_sink.py" --service "{{service}}" -- {{booted}} -- \
-        python3 -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1]).close()' "{{ready}}"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/telemetry_sink.py" --service "{{service}}" -- {{booted}} -- \
+        {{plugin_py}} -P -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1]).close()' "{{ready}}"
 
 a11y:
     @echo "bind: accessibility checks inside the end-to-end suite; red when no surface is checked"; exit 1
@@ -532,12 +555,12 @@ a11y:
 # quality/bites.toml in a scratch copy: green without the fault, red with it, red when the
 # collection it judges is empty.
 bite-all: _plugin
-    python3 "{{ratchet_plugin}}/scripts/bite.py"
-    python3 "{{ratchet_plugin}}/scripts/project_bite.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/bite.py"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py"
 
 # Not a gate: the bites of one gate alone, while you write its recipe. `just bite-one lint`.
 bite-one gate: _plugin
-    python3 "{{ratchet_plugin}}/scripts/project_bite.py" --gate {{gate}}
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --gate {{gate}}
 
 formal:
     @echo "bind: run the project-local formal verification skill's command"; exit 1
@@ -573,7 +596,7 @@ restore-drill:
 # Trigger life:deployed. Shipped: the load smoke against the live deployment, nothing booted; green
 # only when its readiness route and its real routes answer without error. Name routes safe to repeat.
 prod-probe: _plugin
-    python3 "{{ratchet_plugin}}/scripts/load_smoke.py" --ready "bind: the live deployment's readiness URL" --url "bind: METHOD URL STATUS BODY of a live route safe to repeat"
+    {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --ready "bind: the live deployment's readiness URL" --url "bind: METHOD URL STATUS BODY of a live route safe to repeat"
 
 reports:
     @echo "bind: hotspots, coupling, complexity; advisory only"; exit 1

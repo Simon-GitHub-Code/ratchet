@@ -2,6 +2,7 @@
 
 import contextlib
 import http.server
+import os
 import signal
 import socket
 import subprocess
@@ -9,6 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -478,3 +480,37 @@ def test_a_git_that_fails_raises_instead_of_answering(tmp_path: Path) -> None:
     assert gatelib.git_checked(tmp_path, "check-ignore", "x", ok=(0, 1)) == ""
     with pytest.raises(subprocess.CalledProcessError):
         gatelib.git_checked(tmp_path, "check-ignore", "x")
+
+
+def test_a_grandchild_started_through_the_interpreter_helper_ignores_the_environment(
+    tmp_path: Path,
+) -> None:
+    flag = tmp_path / "ran-evil"
+    folder = tmp_path / "hijack"
+    folder.mkdir()
+    (folder / "json.py").write_text(f"open({str(flag)!r}, 'w').close()\n", encoding="utf-8")
+    scripts = str(Path(gatelib.__file__).resolve().parent)
+    start = f"import sys; sys.path.insert(0, {scripts!r}); import gatelib, subprocess; "
+    child = start + "subprocess.run([*gatelib.interpreter(), '-c', 'import json'], check=True)"
+    parent = start + f"subprocess.run([*gatelib.interpreter(), '-c', {child!r}], check=True)"
+    done = subprocess.run(  # noqa: S603 # -- a fixed argv, no shell
+        ["python3", "-E", "-s", "-c", parent],  # noqa: S607 # -- PATH
+        env={**os.environ, "PYTHONPATH": str(folder)},
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert not flag.exists()
+
+
+def test_a_child_keeps_the_options_its_parent_was_started_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flags = SimpleNamespace(ignore_environment=1, no_user_site=1, dont_write_bytecode=1)
+    monkeypatch.setattr(sys, "flags", flags)
+    monkeypatch.setattr(sys, "pycache_prefix", "/private/cache")
+    options = ["-E", "-s", "-B", "-X", "pycache_prefix=/private/cache"]
+    assert gatelib.interpreter()[1:] == options
+    assert gatelib.interpreter(inline=True)[1:] == [*options, "-P"]
