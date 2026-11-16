@@ -97,5 +97,19 @@ def test_an_unfinished_rebase_whose_start_passed_with_final_may_commit(tmp_path:
     assert judged(COMMIT, tree) == []
 
 
+def test_a_commit_outside_any_repository_is_unaffected(tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert judged(COMMIT, plain) == []
+
+
+def test_a_note_that_is_not_json_is_skipped_and_another_still_refuses(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    assert run(root, "open", ALPHA) == 0
+    notes = root / ".ratchet" / "queue" / "tickets"
+    (notes / "0-broken.json").write_text("{not json", encoding="utf-8")
+    assert [v.rule for v in judged(COMMIT, tree_of(root))] == GATED
+
+
 def tree_of(root: Path) -> Path:
     return drain.tree_of(root, BRANCH_A)
