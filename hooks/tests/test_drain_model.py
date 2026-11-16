@@ -24,7 +24,7 @@ import gatelib
 import publish_check
 from tests import drain_model as model
 from tests import model_tla
-from tests.drain_model import Branch, Kind, Merge, Name, Step
+from tests.drain_model import Branch, Kind, Merge, Name, Step, Tree
 from tests.drain_world import (
     BRANCH,
     DRAFT,
@@ -46,6 +46,7 @@ from tests.test_drain import (
     plan_file,
     scratch,  # noqa: F401 # -- an autouse fixture of the drain's tests
 )
+from tests.test_queue_gate import COMMIT, judged
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -70,6 +71,12 @@ if TYPE_CHECKING:
     UNTOUCHED,
 ) = model.RULES
 
+GATE = "queue-final-check"
+LET_THROUGH = Tree.REBASING
+"""Where the guard lets through a commit the model refuses: a tree ``update`` left mid-rebase.
+
+The tree is detached, and the guard finds the note by the branch the tree has checked out.
+"""
 CHECK_A = "drain.py check a"
 OPEN_A = ["drain.py open a", CHECK_A, "the agent commits a"]
 JUDGED_A = [*OPEN_A, "the agent commits the verdict record of a"]
@@ -271,6 +278,13 @@ class Play:
         assert merging == (self.state.scratch, self.state.half), self.says(f"merge.py: {merging}")
         for name, real, kept in zip(Name, seen.tickets, self.state.tickets, strict=True):
             assert real == kept, self.says(f"ticket {name.value} is {real}\nnot {kept}")
+        for name, kept in self.state.each():
+            if kept.tree is Tree.NONE:
+                continue
+            gated = GATE in {v.rule for v in judged(COMMIT, self.world.tree(name))}
+            said = f"the guard {'refuses' if gated else 'lets through'} a commit in {name.value}"
+            refused = model.commit_refused(kept) and kept.tree is not LET_THROUGH
+            assert gated == refused, self.says(said)
 
 
 # Why: the families an action is drawn from, a family as often as it is listed. A landing runs
@@ -775,6 +789,26 @@ def test_clean_all_clears_the_mark_of_an_update_killed_on_a_branch_with_no_commi
     assert play.world.printed.startswith(f"removed: {tree}: the drain that made it was interrupted")
     assert "rebasing" not in drain.queue_notes.read_note(play.world.root, BRANCH[Name.A])
     assert plan_of(play)[BRANCH[Name.A]].state == "buildable"
+
+
+def test_a_commit_goes_through_after_the_final_check_and_in_a_rebase_left_on_a_passed_start(
+    tmp_path: Path,
+) -> None:
+    stopped = replay(tmp_path / "stopped", ["drain.py open a", CHECK_A]).state.of(Name.A)
+    assert stopped.tree is Tree.CLEAN
+    assert not model.commit_refused(stopped)
+    halted = replay(tmp_path / "halted", [*OPEN_A, EDIT_A, MARK_LEFT[-1]]).state.of(Name.A)
+    assert halted.tree is Tree.REBASING
+    assert not model.commit_refused(halted)
+
+
+def test_the_guard_lets_through_a_commit_in_a_tree_an_update_killed_mid_rebase_left(
+    tmp_path: Path,
+) -> None:
+    play = replay(tmp_path, MARK_LEFT)
+    assert model.commit_refused(play.state.of(Name.A))
+    assert play.state.of(Name.A).tree is LET_THROUGH
+    assert GATE not in {v.rule for v in judged(COMMIT, play.world.tree(Name.A))}
 
 
 RECORDED = (
