@@ -382,8 +382,8 @@ def test_a_pin_with_no_tree_id_is_a_finding_for_an_agent_when_the_plugin_is_anot
     assert kind(repo, f"{BINDING}: the pin names no tree id") == "Agent"
 
 
-def test_a_pin_with_no_tree_id_at_the_plugin_in_use_is_fixed_by_an_edit(repo: Path) -> None:
+def test_a_pin_with_no_tree_id_at_the_plugin_in_use_is_fixed_by_the_upgrade(repo: Path) -> None:
     commit = conformance.plugin_pin.commit_of(conformance.plugin_pin.PLUGIN)
     pin = f"- Ratchet plugin: 0.0.0 at {'0' * 40} tree {'0' * 40}"
     replace(BINDING, pin, f"- Ratchet plugin: 0.0.0 at {commit}")(repo)
-    assert kind(repo, f"{BINDING}: the pin names no tree id") == "Edit"
+    assert kind(repo, f"{BINDING}: the pin names no tree id") == "Auto"
