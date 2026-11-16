@@ -285,7 +285,7 @@ def test_every_stale_entry_goes_in_one_edit(repo: Path, capsys: pytest.CaptureFi
     assert owed.read(repo).entries == held
 
 
-def test_the_fix_removes_the_stale_entries_and_keeps_every_other_byte(tmp_path: Path) -> None:
+def test_the_fix_removes_the_stale_entries_and_keeps_every_other_byte() -> None:
     live = owed.Entry("quality/b.toml", "bites", "gate 'lint' has no bite", "0.12.0")
     gone = owed.Entry("quality/a.toml", "bites", "gate 'old' has no bite", "0.12.0")
     also = owed.Entry("quality/c.toml", "bites", "gate 'older' has no bite", "0.12.0")

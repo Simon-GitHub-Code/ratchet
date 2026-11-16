@@ -2651,7 +2651,6 @@ def ledger_raised(root: Path, keys: list[owed.Key]) -> list[tuple[Check, Finding
     and the upgrade drops it. No check reads the ledger, so dropping an entry changes no other
     finding, and the check that judges the drop compares the edited ledger with ``keys``.
     """
-
     upgrade_line = f"run `{plugin_pin.upgrade_command(plugin_pin.PLUGIN)}`, which drops them"
 
     def check_owed(tree: Path) -> Iterator[Finding]:
