@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.12.4
+
+The first tagged release. Upgrade from any version from 0.10.0 on, as the README's Upgrading section says. The first upgrade to a tagged release starts from a red pin line that names the command to run.
+
+Releases are tagged, and a project pins the plugin by its content (ADR 0068).
+
+- The marketplace entry installs the tag, not the default branch's head.
+- The binding's pin line holds the release's version, its commit and the id of its tree. Every tier's first line names the plugin copy it runs, and a copy whose files do not hash to the pinned tree is red before any gate runs. Every `just` a tier starts checks again.
+- A session records the plugin folder it runs from in `.git/ratchet-plugin`, and the adopted justfile reads it, or `RATCHET_PLUGIN` first. The guard refuses an edit of that file, and the settings step adds a deny rule for it, so an upgraded project gets one settings change. Where a harness keeps earlier versions beside the recorded one, the justfile looks for the pinned copy among them.
+- The plugin's scripts, and the guard and session hooks under every harness, run with Python told to ignore its environment variables and the user's site folder. Their compiled files go to a folder only this user can write. Where that folder is not private, nothing is compiled to disk, and each run says so in one line that names the folder, why, the cost and the way out.
+- Conformance names, by line, each recipe that calls a plugin script with the bare interpreter, and the upgrade rewrites it. It also names a recipe that uses the plugin's folder where the checked folder cannot reach it, such as a shebang recipe or a `:=` expression, and a `pre-commit` recipe that is not the template's.
+- What the check does not hold is recorded as accepted risk: a file changed between the check and the run, a changed `PATH` or a variable the project's own tools read, and a compiled file this user's own process leaves in the private folder. CI runs the plugin from the forge on a fresh runner, so it catches what any of them changes.
+
+On a pull request, the proof that gates can fail proves only the gates the change could affect (ADR 0069, issue #168).
+
+- The proof narrows on what a record declares and never on what it infers from code. A changed fault, a patch a fault names, a row of the Gates table, a file a fault edits, and a tool-config path under a bullet of the binding's new `## What each gate reads` section each name their gates.
+- Anything no record assigns proves every gate: every path in the `gate-commands`, `gate-tools`, `fitness` or `formal` groups, the justfile included; a change to the registry's `setup` or `include`; a file under `quality/bites/` that no fault names; any `.gitignore` or `.gitattributes`; the plugin pin; a tool-config path no bullet names; and a binding change outside its gate rows.
+- A change that touches no path that defines a gate and no file a fault edits proves nothing, as before. The full proof runs after the merge and finds a product change that defeats a fault.
+- The pull request's proof is held to its own ceiling, `bite`, where one is recorded and never above the full proof's; else to the full proof's, `bite-all`; else to its tier's. Record `bite-all` after the upgrade: until then the pull request's proof is held to the tier 1 ceiling, and the full proof to the tier 2 ceiling where one is recorded, else to none. Conformance asks for the key and says how long the last timed full proof took.
+
+The drain refuses a commit made before its final check (issue #206). In a queue work tree whose start has not passed `drain.py check <ticket> --final`, the guard refuses `git commit`, `am`, `cherry-pick` and `revert`, and names that step. A commit that lands before the final check still parks the ticket, and the line now names both causes: a role committed, or the orchestrator committed before the final check. A one-ticket run of `/ratchet:feature`, which has no drain, names its own check instead.
+
+Records are found by their content, not by a branch's name (issue #191). The route names any unmerged branch that holds only records, whatever it is called, and the merge deletes such a branch once it is merged. When the upgrade drops stale owed entries, it keeps every other byte of `quality/owed.toml`.
+
+Faster:
+
+- An upgrade tries each of conformance's fixes once per file content, and lists the repository's files about a third as often as it did.
+
+Decisions recorded, with their code still to come: fuzzing is coverage-guided and a solver searches the first parser (ADR 0070); a check runs the suite once, and every gate that reads it still runs alone (ADR 0071).
+
+The models took one more turn each. The route model defines a waiting records branch by what it holds, and its walk leaves records on branches of either kind of name. The drain model says where a commit in a queue work tree is refused, and its walk asks the real guard at every state.
+
 ## 0.12.3
 
 A defect of 0.12.2 is fixed. Under 0.12.2, the proof that gates can fail ended a slow gate's runs early, so its faults read `TIMED OUT` and tier 1 was red on any change to a path that defines a gate, the upgrade to 0.12.2 included. If you saw that, upgrade: nothing in the project needs to change, and the next proof is judged under the new limit. Upgrade from any version from 0.10.0 on. Run the upgrade as the README's Upgrading section says: until installs come from a tagged release, from a clone at the commit this version was published at.
