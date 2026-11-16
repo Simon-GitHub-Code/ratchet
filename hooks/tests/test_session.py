@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -340,3 +341,10 @@ def test_a_directory_at_the_record_is_left_alone_and_nothing_is_raised(tmp_path:
     assert [p.name for p in (root / ".git").iterdir() if p.name.startswith(".ratchet-plugin")] == []
     with pytest.raises(OSError, match="directory"):
         events.replace(recorded(root), "/x\n")
+
+
+def test_the_route_runs_with_the_options_the_hook_was_started_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "flags", SimpleNamespace(ignore_environment=1, no_user_site=1))
+    assert session.child_interpreter() == [sys.executable, "-E", "-s"]

@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -502,3 +503,14 @@ def test_a_grandchild_started_through_the_interpreter_helper_ignores_the_environ
     )
     assert done.returncode == 0, done.stderr
     assert not flag.exists()
+
+
+def test_a_child_keeps_the_options_its_parent_was_started_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flags = SimpleNamespace(ignore_environment=1, no_user_site=1, dont_write_bytecode=1)
+    monkeypatch.setattr(sys, "flags", flags)
+    monkeypatch.setattr(sys, "pycache_prefix", "/private/cache")
+    options = ["-E", "-s", "-B", "-X", "pycache_prefix=/private/cache"]
+    assert gatelib.interpreter()[1:] == options
+    assert gatelib.interpreter(inline=True)[1:] == [*options, "-P"]
