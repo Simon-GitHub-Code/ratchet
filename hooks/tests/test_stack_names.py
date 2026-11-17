@@ -139,10 +139,6 @@ PATTERN = re.compile(
 )
 
 RESIDUE: dict[str, tuple[frozenset[str], str]] = {
-    "scripts/parse-js.mjs": (
-        frozenset({"javascript", "typescript"}),
-        "the plugin's own workflow and adapters, which it compiles as their runtime does",
-    ),
     "hooks/ratchet_guards/bash.py": (
         frozenset({"poetry"}),
         "the guard hook's command classifier, its security boundary (ADR 0042)",
@@ -152,7 +148,7 @@ RESIDUE: dict[str, tuple[frozenset[str], str]] = {
         "the guard hook's inline-interpreter list, its security boundary (ADR 0042)",
     ),
     "hooks/ratchet_guards/writes.py": (
-        frozenset({"deno", "ruby", "bun"}),
+        frozenset({"ruby"}),
         "the guard hook's write detection, its security boundary (ADR 0042)",
     ),
     "skills/method/guards.md": (

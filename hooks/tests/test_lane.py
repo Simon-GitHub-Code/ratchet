@@ -383,6 +383,7 @@ def test_a_path_joined_to_the_root_by_a_name_the_scan_cannot_resolve_is_reviewed
         "test_lane.py": "the files lane.PAGES names",
         "repos.py": "every tracked file, as an installed copy the tests hash or run as the plugin",
         "test_release.py": "the manifest and workflows; CHANGELOG.md through release.notes",
+        "test_no_prose_comments.py": "every tracked file in scope, for its comments and docstrings",
     }
     joined = {
         path.name
