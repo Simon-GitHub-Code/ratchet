@@ -24,7 +24,7 @@ import gatelib
 import publish_check
 from tests import drain_model as model
 from tests import model_tla
-from tests.drain_model import Branch, Kind, Merge, Name, Step, Tree
+from tests.drain_model import Branch, Deed, Keep, Kind, Merge, Name, Stage, Step, Tree
 from tests.drain_world import (
     BRANCH,
     DRAFT,
@@ -2022,6 +2022,161 @@ def test_a_stopped_drain_blocks_the_next_until_its_session_ends(two_drains: Leas
     assert taken == f"drain: {two_drains.world.tokens[model.Drain.TWO]}\n", (
         "a gone drain blocks not"
     )
+
+
+(LAST_DELETES, NEVER_REFUSED, CARRIED, RESOLVED, SPEC_FOUND, LAND_RECOVERS) = model.EXPIRY_RULES
+BUILT_A = ["the agent commits a", "documents.py expire runs on a"]
+BUILT_C = ["the agent commits c", "documents.py expire runs on c"]
+VERDICT_A = "the agent commits the verdict record of a"
+VERDICT_C = "the agent commits the verdict record of c"
+REJUDGE_A = "a judge-again run commits the verdict record of a"
+REJUDGE_C = "a judge-again run commits the verdict record of c"
+ANSWERED = "the owner lands an Answers line on a ticket of the unit"
+LANDED_A = [*BUILT_A, VERDICT_A, "drain.py land a"]
+EDITED_ACROSS = [*LANDED_A, *BUILT_C, ANSWERED, "drain.py update c"]
+OUT_OF_ORDER = [
+    "the agent commits a",
+    "the agent commits c",
+    "documents.py expire runs on a",
+    "documents.py expire runs on c",
+    VERDICT_A,
+    "drain.py land a",
+    "drain.py update c",
+    REJUDGE_C,
+    "drain.py land c",
+]
+SQUASHED = [
+    *BUILT_A,
+    "the owner squashes by hand the branch of a",
+    ANSWERED,
+    "drain.py update a",
+    REJUDGE_A,
+]
+UNKEPT: dict[frozenset[Keep], dict[str, list[str]]] = {
+    frozenset(): {SPEC_FOUND: SQUASHED},
+    frozenset({Keep.UPDATE_EXPIRE}): {SPEC_FOUND: SQUASHED, NEVER_REFUSED: OUT_OF_ORDER},
+    frozenset({Keep.CARRY}): {
+        SPEC_FOUND: SQUASHED,
+        CARRIED: EDITED_ACROSS,
+        NEVER_REFUSED: [*EDITED_ACROSS, REJUDGE_C, "drain.py land c"],
+    },
+    frozenset({Keep.ONCE}): {SPEC_FOUND: SQUASHED, CARRIED: EDITED_ACROSS},
+    frozenset({Keep.RESOLVE}): {SPEC_FOUND: SQUASHED, RESOLVED: EDITED_ACROSS},
+    frozenset({Keep.JUDGE}): {SPEC_FOUND: SQUASHED},
+    frozenset({Keep.HISTORY}): {SPEC_FOUND: [*BUILT_A, ANSWERED, "drain.py update a", REJUDGE_A]},
+    frozenset({Keep.NOTE}): {
+        SPEC_FOUND: SQUASHED,
+        LAND_RECOVERS: [
+            *LANDED_A,
+            *BUILT_C,
+            VERDICT_C,
+            "a kill before the note stops drain.py land c",
+            "drain.py land c",
+        ],
+    },
+    frozenset({Keep.UPDATE_EXPIRE, Keep.JUDGE}): {SPEC_FOUND: SQUASHED, LAST_DELETES: OUT_OF_ORDER},
+}
+
+
+def expiry_breaks(keeps: frozenset[Keep]) -> dict[str, list[str]]:
+    _, edges = model.expiry_graph(keeps)
+    came: dict[model.Expiry, tuple[model.Expiry, str] | None] = {model.EXPIRY_INITIAL: None}
+    breaks: dict[str, list[str]] = {}
+    for before, said, after in edges:
+        for name, rule_holds in model.EXPIRY_RULES.items():
+            if name not in breaks and not rule_holds(before, said, after):
+                path, at = [said], came[before]
+                while at is not None:
+                    path.append(at[1])
+                    at = came[at[0]]
+                breaks[name] = path[::-1]
+        came.setdefault(after, (before, said))
+    return breaks
+
+
+def expiry_walk(path: list[str], keeps: frozenset[Keep] = model.KEEPS) -> model.Expiry:
+    state = model.EXPIRY_INITIAL
+    for said in path:
+        state = dict(model.expiry_moves(state, keeps))[said]
+    return state
+
+
+def test_each_expiry_rule_holds_on_every_step_but_12d_which_a_hand_squash_breaks() -> None:
+    states, edges = model.expiry_graph()
+    assert (len(states), len(edges)) == (1237, 2752)
+    assert expiry_breaks(model.KEEPS) == UNKEPT[frozenset()]
+    taken = {said.removesuffix(" a").removesuffix(" c") for _, said, _ in edges}
+    assert taken == {deed.value for deed in Deed}
+
+
+@pytest.mark.parametrize(
+    "dropped", list(UNKEPT)[1:], ids=lambda keeps: "-".join(sorted(k.name for k in keeps))
+)
+def test_each_keep_the_adr_asks_for_is_what_holds_its_rule(dropped: frozenset[Keep]) -> None:
+    assert expiry_breaks(model.KEEPS - dropped) == UNKEPT[dropped]
+
+
+def test_expire_converges_on_every_branch_the_drain_leaves() -> None:
+    def unconverged(keeps: frozenset[Keep]) -> list[model.Change]:
+        states, _ = model.expiry_graph(keeps)
+        return [
+            change
+            for state in states
+            for name, change in zip(model.SIBLINGS, state.changes, strict=True)
+            if change is not None
+            and not change.merged
+            and change.stage not in {Stage.BUILT, Stage.STOPPED}
+            and model.expire(change, name, keeps)._replace(stage=change.stage) != change
+        ]
+
+    assert not unconverged(model.KEEPS), "a second run of expire changes nothing"
+    assert unconverged(model.KEEPS - {Keep.UPDATE_EXPIRE}), "an update that skips it leaves work"
+
+
+@pytest.mark.parametrize("first", [Name.A, Name.C], ids=lambda name: f"{name.value}-lands-first")
+def test_whichever_ticket_lands_last_deletes_the_unit_and_carries_its_line(first: Name) -> None:
+    last = Name.C if first is Name.A else Name.A
+    path = [
+        *BUILT_A,
+        VERDICT_A,
+        *BUILT_C,
+        VERDICT_C,
+        f"drain.py land {first.value}",
+        f"drain.py update {last.value}",
+        f"a judge-again run commits the verdict record of {last.value}",
+        f"drain.py land {last.value}",
+    ]
+    end = expiry_walk(path)
+    deleter, keeper = end.change(last), end.change(first)
+    assert (end.tip.unit, end.tip.brief) == (False, (0,))
+    assert deleter is not None
+    assert keeper is not None
+    assert (deleter.dropped, deleter.recorded) == (True, True)
+    assert (keeper.merged, keeper.dropped) == (True, False)
+
+
+def test_a_records_edit_between_expire_and_update_reaches_the_brief_once_and_lands() -> None:
+    end = expiry_walk([*EDITED_ACROSS, REJUDGE_C, "drain.py land c"])
+    assert (end.tip.unit, end.tip.brief) == (False, (0, model.OWNERS_LINE))
+
+
+def test_a_judge_again_run_after_two_updates_reads_the_deleted_spec() -> None:
+    path = [
+        *BUILT_A,
+        *BUILT_C,
+        VERDICT_C,
+        "drain.py land c",
+        "drain.py update a",
+        ANSWERED,
+        "drain.py update a",
+        REJUDGE_A,
+        "drain.py land a",
+    ]
+    end = expiry_walk(path)
+    change = end.change(Name.A)
+    assert change is not None
+    assert (change.history, change.blind) == (True, False)
+    assert (end.tip.unit, end.tip.brief) == (False, (0, model.OWNERS_LINE))
 
 
 def test_the_page_was_checked_and_drawn_from_the_current_exports() -> None:
