@@ -3,8 +3,8 @@
 from pathlib import Path
 
 import documents
-from tests.repos import branch, commit, repository, write
-from tests.test_merge_ready import BASE, VERDICT, judged, stamp
+from tests.repos import branch, commit, git, repository, write
+from tests.test_merge_ready import BASE, BINDING, VERDICT, judged, stamp
 
 BRIEF = documents.BRIEF
 PRUNE_RECORD = {**VERDICT, "slug": "prune-pages"}
@@ -19,6 +19,18 @@ LOSES = (
 PRODUCT_CUT = (
     "prune: `PRODUCT.md` is a product and design page, which a prune pass does not cut,"
     " so the merge is the owner's"
+)
+DELETED = (
+    "document: `docs/design-brief.md` is deleted, and a brief page keeps `## Purpose`, so the"
+    " merge is the owner's"
+)
+MOVED_LOSES = (
+    "document: `notes/b.md` loses `## Purpose`, which a notes page keeps, so the merge is the"
+    " owner's"
+)
+NOTES_TABLE = (
+    "## Documents\n\n| Kind | Paths | Prune |\n| --- | --- | --- |\n"
+    "| notes | `notes/*.md` | pass keeping `## Purpose` |\n\n"
 )
 SPEC = "docs/features/thing/spec.md"
 LOCAL = ".scratch/f/spec.md"
@@ -78,6 +90,39 @@ def test_a_feature_editing_the_body_of_its_own_spec_is_still_the_agents(tmp_path
     commit(root, "feat: the change")
     stamp(root)
     assert judged(root) == []
+
+
+def test_a_brief_deleted_whole_is_the_owners(tmp_path: Path) -> None:
+    root = held(tmp_path)
+    (root / BRIEF).unlink()
+    commit(root, "feat: the change")
+    stamp(root)
+    assert judged(root) == [DELETED]
+
+
+def test_a_page_moved_to_a_path_of_its_kind_is_read_as_a_move(tmp_path: Path) -> None:
+    binding = BASE[BINDING].replace("## Dependencies", NOTES_TABLE + "## Dependencies", 1)
+    page = "# Notes\n\n## Purpose\n\nA purpose.\n\n## Detail\n\n" + "Detail line.\n" * 20
+    repository(tmp_path, {**BASE, BINDING: binding, "notes/a.md": page})
+    branch(tmp_path, "feature/4-thing")
+    git(tmp_path, "mv", "notes/a.md", "notes/b.md")
+    commit(tmp_path, "feat: the change")
+    stamp(tmp_path)
+    assert judged(tmp_path) == []
+
+
+def test_a_page_moved_and_stripped_of_a_kept_heading_loses_it_under_the_target(
+    tmp_path: Path,
+) -> None:
+    binding = BASE[BINDING].replace("## Dependencies", NOTES_TABLE + "## Dependencies", 1)
+    page = "# Notes\n\n## Purpose\n\nA purpose.\n\n## Detail\n\n" + "Detail line.\n" * 20
+    repository(tmp_path, {**BASE, BINDING: binding, "notes/a.md": page})
+    branch(tmp_path, "feature/4-thing")
+    git(tmp_path, "mv", "notes/a.md", "notes/b.md")
+    write(tmp_path, "notes/b.md", page.replace("## Purpose\n\nA purpose.\n\n", ""))
+    commit(tmp_path, "feat: the change")
+    stamp(tmp_path)
+    assert judged(tmp_path) == [MOVED_LOSES]
 
 
 def test_a_kept_heading_moved_within_the_page_is_not_a_loss(tmp_path: Path) -> None:
