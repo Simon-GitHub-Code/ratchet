@@ -178,12 +178,13 @@ Where each `code:<kind>` trigger of the Gates table finds its instances in this 
 
 ## Life event signs
 
-Which files of this project show that a life event has happened or is about to (ADR 0050), so the route can propose the event to its owner. The method knows no stack, so name this one's from what you know of the tools it chose: what a place that runs the project, or a store that keeps its records, leaves in a tree. `Paths` are comma-separated globs over tracked files, each in backticks, or `none: <reason>` when no file of this project marks the event. A sign only proposes; the owner declares the event on the `- Life events:` line. The `depended-on` event's signs are the method's own and need no row. Revisit the rows when the architecture or its tools change (`/ratchet:architecture`).
+Which files of this project show that a life event has happened or is about to (ADR 0050), so the route can propose the event to its owner. The method knows no stack, so name this one's from what you know of the tools it chose: what a place that runs the project, or a store that keeps its records, leaves in a tree. `Paths` are comma-separated globs over tracked files, each in backticks, or `none: <reason>` when no file of this project marks the event. A sign only proposes; the owner declares the event on the `- Life events:` line. The `depended-on` event has signs of the method's own, which any project may hold. Its row adds the forge's: the files a maintainer writes there for strangers, such as issue templates or a funding file. Revisit the rows when the architecture or its tools change (`/ratchet:architecture`).
 
 | Event | Paths |
 | --- | --- |
 | deployed | <globs of the tracked files that show where it runs, or `none: <reason>`> |
 | irreplaceable-data | <globs of the tracked files that show where its records are kept, or `none: <reason>`> |
+| depended-on | <globs of the forge's files a maintainer writes for strangers, or `none: <reason>`> |
 
 ## Install
 
@@ -256,6 +257,14 @@ A formal model an agent writes and checks against the code, kept true to it by t
 - Model: <`globs` of the models, the harness and the skill>
 - Mirrors: <`globs` of the code the model describes>
 - Synced: <the default branch commit the last round checked>
+
+## Documents
+
+Every tracked Markdown file has a kind, which says how long it lives and whether the prune pass may cut it (ADR 0064, ADR 0065). The method's kinds come first, in the `ratchet` plugin's `skills/method/application-types.toml`. This table adds this project's own, written at adoption from the harness and the forge chosen there: the harness's instruction files, the forge's templates, and the project's own pages. Each lives as long as the project. `Prune` is `never`, or `pass` with the headings the pass keeps. The first kind that matches a file wins, the method's before these. The `conformance` gate is red on a tracked Markdown file that no kind matches.
+
+| Kind | Paths | Prune |
+| --- | --- | --- |
+| <kind> | <`globs` of its files> | <`never`, or `pass` keeping <`## heading`, ...>> |
 
 ## Absolute paths
 

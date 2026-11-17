@@ -30,6 +30,7 @@ import budget
 import change_size
 import changed_tests
 import comments
+import documents
 import formal_model
 import gatelib
 import hooks_installed
@@ -1602,6 +1603,30 @@ def check_comments_section(root: Path) -> Iterable[Finding]:
         problem = f"the `{comments.LISTER}` recipe still holds the template's `bind:` placeholder"
         yield replace(agent(f"justfile: {problem}"), stops=COMMENTS_STOPS)
     yield from unplanted_rows(root, text, listed)
+
+
+def check_documents(root: Path) -> Iterable[Finding]:
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    found = documents.declared(text)
+    if found is None:
+        problem = (
+            f"has no '{documents.SECTION}' section, which gives this project's own Markdown files"
+            " a kind (ADR 0064); add the template's section and fill it"
+        )
+        yield missing_section(
+            BINDING_PATH, problem, documents.SECTION, template_text=template_binding()
+        )
+        return
+    for problem in found.problems:
+        yield agent(f"{BINDING_PATH}: {problem}")
+    kinds = documents.all_kinds(text)
+    for path in documents.unkinded(gatelib.tracked_paths(root), kinds):
+        yield agent(
+            f"{BINDING_PATH}: `{path}` is a Markdown file of no kind; add a row for it to"
+            f" '{documents.SECTION}', `never` or `pass`, or move it under a kind's paths (ADR 0064)"
+        )
 
 
 def planted(root: Path, fault: project_bite.Fault) -> set[str]:
@@ -3708,6 +3733,7 @@ CHECKS: tuple[Check, ...] = (
     check_dependencies,
     check_suppressions,
     check_comments_section,
+    check_documents,
     check_signs,
     check_pins,
     check_mutation,
@@ -3906,6 +3932,21 @@ def mutations() -> list[Mutation]:
         *owed_mutations(),
         *architecture_mutations(),
         *comments_mutations(),
+        *documents_mutations(),
+    ]
+
+
+def documents_mutations() -> list[Mutation]:
+    return [
+        ("binding without a Documents section", rebind(documents.SECTION, "## Pages")),
+        (
+            "Documents row left as the template wrote it",
+            rebind(SELF_TEST_DOCUMENTS, "| <kind> | <`globs` of its files> | <`never`> |"),
+        ),
+        (
+            "Documents row that is neither never nor pass",
+            rebind(SELF_TEST_DOCUMENTS, "| self-test pages | `**/*.md` | sometimes |"),
+        ),
     ]
 
 
@@ -4708,11 +4749,15 @@ REGISTRIES_PLACEHOLDER = re.compile(r"^- Registries: <[^\n]*>$", re.MULTILINE)
 SUPPRESSION_KIND_PLACEHOLDER = re.compile(r"^\| <suppression kind> \|[^\n]*$", re.MULTILINE)
 SUPPRESSION_QUESTION_PLACEHOLDER = re.compile(r"^\| <question> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_KIND = "self-test-silence"
-SIGNS_PLACEHOLDER = re.compile(r"^\| (deployed|irreplaceable-data) \| <[^\n]*$", re.MULTILINE)
+SIGNS_PLACEHOLDER = re.compile(
+    r"^\| (deployed|irreplaceable-data|depended-on) \| <[^\n]*$", re.MULTILINE
+)
 PINS_PLACEHOLDER = re.compile(r"^\| <`globs` of the files that name an image[^\n]*$", re.MULTILINE)
 SELF_TEST_PINS = "| none: the self-test names no image | none |"
 COMMENTS_PLACEHOLDER = re.compile(r"^\| <`globs` of one kind of file> \|[^\n]*$", re.MULTILINE)
 SELF_TEST_COMMENTS = "| `**` | none: the self-test writes no code by hand |"
+DOCUMENTS_PLACEHOLDER = re.compile(r"^\| <kind> \| <`globs` of its files>[^\n]*$", re.MULTILINE)
+SELF_TEST_DOCUMENTS = "| self-test pages | `**/*.md` | `never` |"
 PUBLISHED_PLACEHOLDER = re.compile(r"^- Published interface: <[^\n]*>$", re.MULTILINE)
 REPORTS_PLACEHOLDER = re.compile(r"^\| `suite` \|[^\n]*$", re.MULTILINE)
 SELF_TEST_REPORTS = "| none: the self-test shares no report | none | none | none | none |"
@@ -4760,6 +4805,7 @@ def fill_binding(text: str) -> str:
     text = text.replace(f"| {LIBRARY_ONLY} | |", f"| {LIBRARY_ONLY} | {comments.NOT_A_LIBRARY} |")
     text = PUBLISHED_PLACEHOLDER.sub(f"- {comments.PUBLISHED}: {comments.NOT_A_LIBRARY}", text)
     text = COMMENTS_PLACEHOLDER.sub(SELF_TEST_COMMENTS, text)
+    text = DOCUMENTS_PLACEHOLDER.sub(SELF_TEST_DOCUMENTS, text)
     # Why: ADR 0028. One row waits on its trigger and so needs no bite; the rest are bound.
     for question, proven in application_types.load().proofs.items():
         if FORMAL_PROOF in proven:

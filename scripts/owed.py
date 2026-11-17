@@ -84,6 +84,7 @@ FILL_FIRST = frozenset(
         "changed_tests",
         "comments_section",
         "trigger_kinds",
+        "documents",
     }
 )
 TABLE = "owed"

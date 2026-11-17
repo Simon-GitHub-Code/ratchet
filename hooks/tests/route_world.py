@@ -58,6 +58,7 @@ import application_types
 import architecture
 import comments
 import conformance
+import documents
 import drain
 import feature_preflight as preflight
 import formal_model
@@ -938,6 +939,10 @@ FILLED: Final = {
     ),
     comments.SECTION: (
         "| Files | Comments |\n| --- | --- |\n| `**` | none: nobody writes it by hand |\n"
+    ),
+    documents.SECTION: (
+        "| Kind | Paths | Prune |\n| --- | --- | --- |\n"
+        "| forge templates | `.github/**` | `never` |\n"
     ),
 }
 
