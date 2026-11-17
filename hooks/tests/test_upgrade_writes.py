@@ -270,11 +270,30 @@ def test_an_operability_row_of_the_plugin_s_own_gate_is_bound_and_another_is_an_
     )
 
 
-def test_a_gate_the_plugin_ships_that_no_tier_runs_is_named_and_left_when_the_tier_has_a_body(
+def test_a_gate_the_plugin_ships_that_no_tier_runs_is_listed_where_the_tier_reads_its_gates(
     repo: Path,
 ) -> None:
     replace(JUSTFILE, " conformance triggers incidents ", " conformance triggers ")(repo)
-    [found] = settle(repo)
+    assert settle(repo) == []
+    listed = next(
+        line for line in text(repo, JUSTFILE).splitlines() if line.startswith("tier1_gates")
+    )
+    assert " incidents" in listed
+
+
+def test_a_gate_the_plugin_ships_that_no_tier_runs_is_named_and_left_when_the_tier_lists_its_own(
+    repo: Path,
+) -> None:
+    gates = next(
+        line for line in text(repo, JUSTFILE).splitlines() if line.startswith("tier1_gates :=")
+    )
+    own = justfile_text.STRING.search(gates).group(0).strip('"').replace(" incidents", "")
+    replace(
+        JUSTFILE,
+        "{{parallel}} {{serial1}} -- {{tier1_gates}}",
+        f"{{{{parallel}}}} {{{{serial1}}}} -- {own}",
+    )(repo)
+    [found] = [f for f in settle(repo) if f.stops == "incidents tighten a gate"]
     assert found.problem.startswith(
         "no tier runs `incidents`, which the binding binds to 'incidents tighten a gate' at tier 1"
     )
@@ -675,3 +694,79 @@ def test_a_cache_key_ending_in_the_run_is_green(repo: Path, part: str) -> None:
 def test_a_merge_workflow_without_a_cache_is_not_flagged(repo: Path) -> None:
     (repo / ".github/workflows/merge.yml").write_text("name: merge\njobs: {}\n", encoding="utf-8")
     assert [found for found in cache_findings(repo) if found.path.endswith("merge.yml")] == []
+
+
+def test_a_merge_workflow_that_reads_tier_2_its_own_way_is_left_for_an_agent_to_pass_tier_1(
+    repo: Path,
+) -> None:
+    merge = ".github/workflows/merge.yml"
+    lines = text(repo, merge).splitlines(keepends=True)
+    own = "".join(line for line in lines if not line.lstrip().startswith("tier1="))
+    own = own.replace('--tier1 "$tier1" --tier2 "$tier2"', '--tier2 "$deep"')
+    own = own.replace('tier2="$(', 'deep="$(')
+    (repo / merge).write_text(own, encoding="utf-8")
+    left = [f for f in settle(repo) if "--tier1" in f.problem]
+    assert text(repo, merge) == own
+    assert [f.path for f in left] == [merge]
+    assert isinstance(left[0].fix, conformance.Agent)
+
+
+def without_tier1(root: Path) -> str:
+    merge = ".github/workflows/merge.yml"
+    lines = text(root, merge).splitlines(keepends=True)
+    kept = "".join(line for line in lines if not line.lstrip().startswith("tier1="))
+    return kept.replace('--tier1 "$tier1" --tier2 "$tier2"', '--tier2 "$tier2"')
+
+
+def test_tier_1_is_read_at_the_indent_of_the_merge_workflows_own_tier_2_line(repo: Path) -> None:
+    merge = ".github/workflows/merge.yml"
+    deeper = "".join(
+        f"    {line}" if line.lstrip().startswith("tier2=") else line
+        for line in without_tier1(repo).splitlines(keepends=True)
+    )
+    (repo / merge).write_text(deeper, encoding="utf-8")
+    assert not [f for f in settle(repo) if "--tier1" in f.problem]
+    lines = text(repo, merge).splitlines()
+    read, tier2 = (
+        next(line for line in lines if line.lstrip().startswith(k)) for k in ("tier1=", "tier2=")
+    )
+    assert len(read) - len(read.lstrip()) == len(tier2) - len(tier2.lstrip())
+
+
+def test_tier_1_is_passed_on_the_judges_call_and_not_on_a_line_above_that_names_tier_2(
+    repo: Path,
+) -> None:
+    merge = ".github/workflows/merge.yml"
+    lines = without_tier1(repo).splitlines(keepends=True)
+    at = next(i for i, line in enumerate(lines) if line.lstrip().startswith("tier2="))
+    indent = lines[at][: len(lines[at]) - len(lines[at].lstrip())]
+    lines.insert(at + 1, f"{indent}echo 'judging with --tier2 \"$tier2\"'\n")
+    (repo / merge).write_text("".join(lines), encoding="utf-8")
+    settle(repo)
+    written = text(repo, merge).splitlines()
+    [call] = [line for line in written if "--target" in line]
+    assert '--tier1 "$tier1" --tier2 "$tier2"' in call
+    assert not [line for line in written if line.lstrip().startswith("echo") and "--tier1" in line]
+
+
+def test_a_run_id_the_justfile_sets_without_exporting_it_is_exported(repo: Path) -> None:
+    replace(JUSTFILE, "export RATCHET_RUN :=", "RATCHET_RUN :=")(repo)
+    [found] = [f for f in conformance.findings(repo) if "RATCHET_RUN" in f.problem]
+    assert isinstance(found.fix, conformance.Auto)
+    once = found.fix.want(text(repo, JUSTFILE))
+    assert found.fix.want(once) == once
+    exported = next(line for line in once.splitlines() if "RATCHET_RUN :=" in line)
+    assert exported.startswith("export ")
+    settle(repo)
+    assert not [f for f in conformance.findings(repo) if "RATCHET_RUN" in f.problem]
+
+
+def test_a_justfile_with_no_run_id_and_no_plugin_line_is_left_for_an_agent_to_export_it(
+    repo: Path,
+) -> None:
+    justfile = text(repo, JUSTFILE)
+    run = next(line for line in justfile.splitlines() if line.startswith("export RATCHET_RUN"))
+    replace(JUSTFILE, run + "\n", "")(repo)
+    [found] = [f for f in conformance.findings(repo) if "RATCHET_RUN" in f.problem]
+    renamed = text(repo, JUSTFILE).replace("ratchet_plugin :=", "ratchet_plugin  :=")
+    assert found.fix.want(renamed) == renamed

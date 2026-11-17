@@ -187,6 +187,48 @@ def test_an_upgrade_of_a_project_adopted_before_the_jobs_setting_carries_the_tem
     assert not [f for f in conformance.findings(root) if "ratchet.jobs" in f.problem]
 
 
+def upgraded_last_release(tmp_path: Path) -> Path:
+    root = fixture("0.12.4", tmp_path)
+    upgrade.main(["upgrade.py", "--root", str(root), "--apply"])
+    return root
+
+
+def test_an_upgrade_of_the_last_release_runs_the_comments_gate_in_tier_0(tmp_path: Path) -> None:
+    root = upgraded_last_release(tmp_path)
+    done = (root / "justfile").read_text(encoding="utf-8")
+    assert "comments" in justfile_text.listed(done, "tier0_tree_gates")
+    assert "comments" in justfile_text.reaches(done, "tier0-tree")
+    assert "comments" in justfile_text.reaches(done, "tier0")
+    assert not [f for f in conformance.findings(root) if "no tier runs `comments`" in f.problem]
+    assert "no tier runs `comments`" not in "\n".join(e.problem for e in owed.read(root).entries)
+
+
+def test_an_upgrade_of_the_last_release_passes_the_default_branchs_tier_1_to_the_merge_judge(
+    tmp_path: Path,
+) -> None:
+    root = upgraded_last_release(tmp_path)
+    done = (root / ".github/workflows/merge.yml").read_text(encoding="utf-8")
+    template = conformance.template_file(".github/workflows/merge.yml")
+    line = next(line for line in template.splitlines() if line.lstrip().startswith("tier1="))
+    assert line in done.splitlines()
+    assert '--tier1 "$tier1"' in done
+    assert done.index("tier1=") < done.index("tier2=")
+    assert "--tier1" not in "\n".join(e.problem for e in owed.read(root).entries)
+    assert not [f for f in conformance.findings(root) if "'--tier1' absent" in f.problem]
+
+
+def test_an_upgrade_of_the_last_release_exports_the_run_id_as_the_template_does(
+    tmp_path: Path,
+) -> None:
+    root = upgraded_last_release(tmp_path)
+    done = (root / "justfile").read_text(encoding="utf-8")
+    template = conformance.template_file("justfile")
+    line = next(line for line in template.splitlines() if line.startswith("export RATCHET_RUN :="))
+    assert line in done.splitlines()
+    assert not [f for f in conformance.findings(root) if "RATCHET_RUN" in f.problem]
+    assert "RATCHET_RUN" not in "\n".join(e.problem for e in owed.read(root).entries)
+
+
 @pytest.mark.parametrize("name", FIXTURES)
 def test_a_second_upgrade_changes_nothing(name: str, tmp_path: Path) -> None:
     root = fixture(name, tmp_path)
@@ -676,7 +718,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 80 edits in 13 files. 105 items are owed")
+    assert verdict(out).startswith("upgrade: would write 81 edits in 13 files. 105 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -684,7 +726,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 80 changes in 13"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 81 changes in 13"
                 " files. The project owes 105 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"

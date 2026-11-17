@@ -191,8 +191,10 @@ def test_a_bound_changed_tests_gate_no_tier_runs_is_carried_into_tier_one(repo: 
             " 1, so that gate never runs; run it in `tier1`"
         )
     ]
-    assert isinstance(found[0].fix, conformance.Agent)
-    assert any("tests-changed *suites" in line for line in found[0].fix.start)
+    assert isinstance(found[0].fix, conformance.Auto)
+    written = found[0].fix.want((repo / "justfile").read_text(encoding="utf-8"))
+    listed = next(line for line in written.splitlines() if line.startswith("tier1_gates :="))
+    assert "tests-changed" in listed.split('"')[1].split()
     assert found[0].stops == "changed tests run"
 
 

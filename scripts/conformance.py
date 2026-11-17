@@ -103,6 +103,11 @@ TIER_LISTS = {
     ),
 }
 MERGE_WORKFLOW = "merge.yml"
+TIER1_FLAG = "--tier1"
+TIER1_ARGUMENT = '--tier1 "$tier1"'
+TIER2_FLAG = '--tier2 "$tier2"'
+RUN_VARIABLE = "RATCHET_RUN"
+RUN_UNEXPORTED = re.compile(rf"{RUN_VARIABLE}[ \t]*:=")
 MERGE_SHAPE = (
     ("workflow_run:", "runs it after `ci`, as the default branch holds it"),
     ("merge_ready.py", "asks the merge judge"),
@@ -2113,8 +2118,36 @@ def forge_workflow(
         yield whole_file(str(WORKFLOWS / name), f"missing; {unmet}")
         return
     for marker, meaning in shape:
-        if marker not in text:
-            yield agent(f"{WORKFLOWS / name}: nothing {meaning} ('{marker}' absent)")
+        if marker in text:
+            continue
+        problem = f"nothing {meaning} ('{marker}' absent)"
+        path = str(WORKFLOWS / name)
+        if name == MERGE_WORKFLOW and marker == TIER1_FLAG:
+            does = "read the default branch's tier 1 and pass it to the judge, as the template does"
+            yield Finding(path, problem, Edit(does, with_tier1(name), Agent()))
+        else:
+            yield agent(f"{path}: {problem}")
+
+
+def with_tier1(name: str) -> gatelib.Want:
+    template = template_file(f".github/workflows/{name}").splitlines()
+    read_line = next((line for line in template if line.lstrip().startswith("tier1=")), None)
+
+    def want(current: str | None) -> str:
+        text = current or ""
+        lines = text.split("\n")
+        at = next((i for i, line in enumerate(lines) if line.lstrip().startswith("tier2=")), None)
+        call = next(
+            (i for i, line in enumerate(lines) if "--target" in line and TIER2_FLAG in line), None
+        )
+        if read_line is None or TIER1_FLAG in text or at is None or call is None:
+            return text
+        lines[call] = lines[call].replace(TIER2_FLAG, f"{TIER1_ARGUMENT} {TIER2_FLAG}", 1)
+        anchor = lines[at]
+        lines[at:at] = [anchor[: len(anchor) - len(anchor.lstrip())] + read_line.lstrip()]
+        return "\n".join(lines)
+
+    return want
 
 
 def tier_step_findings(root: Path, path: Path, content: str) -> Iterable[Finding]:
@@ -2478,6 +2511,50 @@ def check_jobs_line(root: Path) -> Iterable[Finding]:
     yield Finding("justfile", problem, fix, identity="jobs does not read ratchet.jobs")
 
 
+def exports_run(justfile: str) -> bool:
+    return re.search(rf"^export[ \t]+{RUN_VARIABLE}[ \t]*:=", justfile, re.MULTILINE) is not None
+
+
+def with_run_id(declaration: str) -> gatelib.Want:
+    def want(current: str | None) -> str:
+        text = current or ""
+        lines = text.split("\n")
+        anchor = next(
+            (i for i, line in enumerate(lines) if line.startswith("ratchet_plugin :=")), None
+        )
+        bare = next((i for i, line in enumerate(lines) if RUN_UNEXPORTED.match(line)), None)
+        if exports_run(text):
+            return text
+        if bare is not None:
+            lines[bare] = f"export {lines[bare]}"
+        elif anchor is not None:
+            lines.insert(anchor + 1, declaration)
+        return "\n".join(lines)
+
+    return want
+
+
+def check_run_id(root: Path) -> Iterable[Finding]:
+    justfile = read_justfile(root)
+    declaration = next(
+        (
+            line
+            for line in template_file("justfile").split("\n")
+            if line.startswith(f"export {RUN_VARIABLE} :=")
+        ),
+        "",
+    )
+    if justfile is None or not declaration or exports_run(justfile):
+        return
+    problem = (
+        f"nothing exports `{RUN_VARIABLE}`, so each reader of the shared suite report starts its"
+        " own run and the suite runs once per reader (ADR 0071); add the template's line"
+    )
+    does = f"export `{RUN_VARIABLE}` as the template does"
+    fix = Edit(does, with_run_id(declaration), Agent(start=(declaration,)))
+    yield Finding("justfile", problem, fix, identity=f"no {RUN_VARIABLE} export")
+
+
 def check_pre_commit_recipe(root: Path) -> Iterable[Finding]:
     justfile = read_justfile(root)
     template = template_file("justfile")
@@ -2786,6 +2863,27 @@ def runs_from_plugin(row: project_bite.Row) -> bool:
     )
 
 
+def tier_list_of(justfile: str, recipe: str) -> str | None:
+    name = recipe.replace("-", "_") + "_gates"
+    lines = justfile.split("\n")
+    block = next((b for b in justfile_text.blocks(lines) if b.name == recipe and b.parsed), None)
+    body = justfile_text.code_of("\n".join(lines[block.head + 1 : block.end])) if block else ""
+    if name not in justfile_text.INTERPOLATION.findall(body):
+        return None
+    values = justfile_text.variables(justfile)
+    built = justfile_text.BARE_NAME.findall(
+        justfile_text.STRING.sub(" ", values.get(name, "")) if name in values else ""
+    )
+    return next(
+        (
+            one
+            for one in (name, *built)
+            if justfile_text.QUOTED.fullmatch(values.get(one, "").strip())
+        ),
+        None,
+    )
+
+
 def unrun_gates(binding: str, justfile: str) -> Iterable[Finding]:
     tiers = tier_recipes(binding, justfile)
     template = template_file("justfile")
@@ -2809,12 +2907,17 @@ def unrun_gates(binding: str, justfile: str) -> Iterable[Finding]:
         defined = justfile_text.defines_recipe(justfile, row.gate)
         reasons = () if defined else justfile_text.unmet(template, justfile, row.gate)
         fix = Agent(start=template_definition(row.gate), then=reasons)
-        if reasons or justfile_text.dependencies(justfile, target) is None:
+        listing = tier_list_of(justfile, target)
+        bodiless = justfile_text.dependencies(justfile, target) is not None
+        if reasons or not (bodiless or listing):
             yield Finding("justfile", problem, fix, stops=row.question)
             continue
         copied = [] if defined else [justfile_text.with_recipe(template, row.gate)]
-        wants = [*copied, justfile_text.with_dependency(target, row.gate)]
-        if target == recipe:
+        if bodiless:
+            wants = [*copied, justfile_text.with_dependency(target, row.gate)]
+        else:
+            wants = [*copied, justfile_text.with_listed(listing or "", row.gate)]
+        if target == recipe and bodiless:
             wants.append(justfile_text.with_listed(f"{tier}_gates", row.gate))
         want = gatelib.chained(*wants)
         does = f"run `{row.gate}` in `{target}`" + (
@@ -3330,6 +3433,7 @@ CHECKS: tuple[Check, ...] = (
     check_manifest,
     check_default_branch,
     check_doors,
+    check_run_id,
     check_merge_workflow,
     check_weekly_workflow,
     check_toolchain,
