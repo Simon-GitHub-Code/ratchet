@@ -103,3 +103,11 @@ def test_a_lone_expired_ticket_is_named_in_the_singular(tmp_path: Path) -> None:
 def test_the_deleter_runs_under_the_plugin_interpreter_form() -> None:
     assert route.EXPIRE.startswith(PLUGIN_FORM)
     assert route.EXPIRE.endswith('/scripts/documents.py" expire')
+
+
+def test_a_spec_with_tickets_beside_it_is_never_offered_to_split(tmp_path: Path) -> None:
+    files = {
+        ".scratch/split/spec.md": "# Split\n",
+        ".scratch/split/issues/01-a.md": "# A\n\nStatus: ready-for-agent\n",
+    }
+    assert route.unsplit_spec(repository(tmp_path, files)) is None
