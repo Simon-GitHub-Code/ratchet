@@ -55,8 +55,7 @@ src = ["hooks", "scripts", "evals/first-hour"]
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-    "D203",   # one-blank-line-before-class: conflicts with D211 (no-blank-line-before-class)
-    "D213",   # multi-line-summary-second-line: conflicts with D212 (summary on first line)
+    "D",
     "COM812", # missing-trailing-comma: conflicts with the formatter, which owns commas
     "CPY001", # copyright notice: private single-owner repository, no header policy
 ]
@@ -80,12 +79,9 @@ ignore = [
 ]
 "scripts/*.py" = [
     "T201",   # the gate scripts report to stdout by design
-    "D103",   # docstrings are required only in core layers; the module docstring carries the contract
     "S603", "S607", # subprocess runs git with a literal argv list, no shell
     "INP001", # standalone scripts, deliberately not a package
 ]
-"scripts/comments.py" = ["D100", "D101"]
-"scripts/documents.py" = ["D100", "D101", "D102"]
 "evals/first-hour/run.py" = [
     "T201",   # the command prints the table by design
     "S603",   # subprocess runs the resolved `claude` with a literal argv list
@@ -102,12 +98,10 @@ ignore = [
     "S108",    # the policy and sandbox tables name the temp paths a session would write to
     "ARG002",  # the fakes keep the signatures of the protocols they stand in for
     "PLR2004", # magic numbers are the test fixtures
-    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
 ]
 "hooks/tests/**" = [
     "S101",    # assert is the test idiom
     "PLR2004", # magic numbers are the test fixtures
-    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
 ]
 
 [tool.ruff.lint.mccabe]
@@ -119,9 +113,6 @@ max-returns = 6          # PLR0911
 max-args = 5             # PLR0913
 max-positional-args = 3  # PLR0917
 max-statements = 40      # PLR0915
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"
 
 [tool.ruff.lint.isort]
 known-first-party = ["ratchet_guards", "tests", "guard", "first_hour"]
