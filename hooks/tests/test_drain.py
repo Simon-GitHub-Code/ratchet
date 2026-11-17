@@ -421,6 +421,80 @@ def test_update_makes_a_work_tree_for_a_built_branch_an_earlier_drain_left(
     assert drain.tree_of(root, BRANCH_A) in drain.worktrees(root)
 
 
+def killed(monkeypatch: pytest.MonkeyPatch, point: str) -> None:
+    def stop(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    writing = queue_notes.write_note
+    replacing = Path.replace
+    calls: list[Path] = []
+
+    def after_write(path: Path, note: dict[str, object]) -> None:
+        writing(path, note)
+        if "start" in note and "rebasing" not in note:
+            stop()
+
+    def torn(self: Path, target: Path) -> Path:
+        calls.append(self)
+        if len(calls) == 2:
+            stop()
+        return replacing(self, target)
+
+    if point == "before_rebase":
+        monkeypatch.setattr(drain, "rebase_tree", stop)
+    elif point == "after_rebase":
+        monkeypatch.setattr(drain, "drop_record", stop)
+    elif point == "mid_note_write":
+        monkeypatch.setattr(Path, "replace", torn)
+    else:
+        monkeypatch.setattr(queue_notes, "write_note", after_write)
+
+
+@pytest.mark.parametrize(
+    "point", ["before_rebase", "after_rebase", "mid_note_write", "after_note_write"]
+)
+def test_a_check_after_an_update_killed_at_any_point_never_names_a_role(
+    tmp_path: Path, capsys: Out, point: str
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    moved(root)
+    capsys.readouterr()
+    with pytest.MonkeyPatch.context() as patch:
+        killed(patch, point)
+        with pytest.raises(KeyboardInterrupt):
+            run(root, "update", ALPHA)
+    capsys.readouterr()
+    code = run(root, "check", ALPHA)
+    said = capsys.readouterr().out
+    assert "a role published" not in said
+    assert note(root, BRANCH_A).get("outcome") != drain.PARKED
+    if point in {"after_rebase", "mid_note_write"}:
+        assert code == drain.UNREAD
+        assert "run `update` again" in said
+    else:
+        assert code == 0
+    assert run(root, "update", ALPHA) == 0
+    capsys.readouterr()
+    assert run(root, "check", ALPHA, "--final") == 0
+    assert "rebasing" not in note(root, BRANCH_A)
+
+
+def test_a_role_s_commit_after_a_completed_update_still_parks_the_ticket(
+    tmp_path: Path, capsys: Out
+) -> None:
+    root = project(tmp_path)
+    run(root, "open", ALPHA)
+    moved(root)
+    assert run(root, "update", ALPHA) == 0
+    tree = drain.tree_of(root, BRANCH_A)
+    write(tree, "src/b.py", "B = 1\n")
+    commit(tree, "feat(core): a role's change")
+    capsys.readouterr()
+    assert run(root, "check", ALPHA) == 1
+    assert "a role published" in str(note(root, BRANCH_A)["reasons"])
+
+
 def test_a_built_branch_behind_the_default_branch_does_not_land_on_its_old_review(
     tmp_path: Path, capsys: Out
 ) -> None:

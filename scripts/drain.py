@@ -169,6 +169,7 @@ LANDING_TRIES, LANDING_POLL = 20, 0.05
 # Why: `update` uses 1 and 2 for its own answers, so a refusal for a live landing has its own code.
 LANDING_RUNNING = 3
 UNREAD = 3
+CUT_OFF = "is not checked: its update was cut off after it moved the branch; run `update` again"
 LANDING_MAY_RUN = "a landing may be in flight in another drain"
 LOCK, LEASE = "ratchet-drain.lock", "ratchet-drain.lease"
 LOCK_WAIT, LOCK_POLL = 30.0, 0.05
@@ -1007,6 +1008,11 @@ def unreadable_line(why: str) -> str:
     return f"{publish_check.SAID} the present state cannot be read: {why}; {publish_check.NEVER}"
 
 
+def cut_off(root: Path, branch: str) -> bool:
+    mark = queue_notes.read_note(root, branch).get("rebasing")
+    return bool(mark) and gatelib.git(root, "rev-parse", f"refs/heads/{branch}") != mark
+
+
 def checkable(drain: Drain, ticket: preflight.Ticket) -> tuple[publish_check.Start, Path] | int:
     root, branch = drain.root, route.own_branch(ticket)
     if merged_by_note(root, branch):
@@ -1016,8 +1022,15 @@ def checkable(drain: Drain, ticket: preflight.Ticket) -> tuple[publish_check.Sta
     if start is None:
         print(f"check: {ticket.ref} has no start to check against: `open` records it")
         return 2
-    if queue_notes.held(root, branch, ticket) is not None:
-        print(f"check: {ticket.ref} is held and is not checked: its text must change first")
+    unread = (
+        "is held and is not checked: its text must change first"
+        if queue_notes.held(root, branch, ticket) is not None
+        else CUT_OFF
+        if cut_off(root, branch)
+        else None
+    )
+    if unread is not None:
+        print(f"check: {ticket.ref} {unread}")
         return UNREAD
     tree = tree_of(root, branch)
     if tree in worktrees(root):
