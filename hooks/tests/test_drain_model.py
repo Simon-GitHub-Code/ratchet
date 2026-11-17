@@ -206,6 +206,19 @@ def landed_unchecked(*, gate: bool) -> list[str]:
     ]
 
 
+def committed_while_marked(*, gate: bool) -> list[str]:
+    """The commit steps on a ticket whose note holds ``update``'s mark: cut off, or mid-rebase."""
+    commits = {kind.value for kind in model.COMMITS}
+    return [
+        said
+        for before, said, _ in main_graph(gate=gate)[1]
+        if said.rpartition(" ")[0] in commits
+        and (name := model.ticket_of(said)) is not None
+        and (note := before.of(name).note) is not None
+        and note.rebasing
+    ]
+
+
 @pytest.mark.parametrize(
     "part", [pytest.param(n, marks=pytest.mark.shard_slot(4 * n)) for n in range(len(RULE_PARTS))]
 )
@@ -225,6 +238,7 @@ def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_pa
         assert any(name.startswith(kind.value) for name in found.taken), kind
     unchecked = landed_unchecked(gate=False)
     assert not unchecked, f"a branch lands on a start no check passed: {unchecked[0]}"
+    assert committed_while_marked(gate=False), "without the gate, a commit follows a cut-off update"
 
 
 @pytest.mark.parametrize(
@@ -247,6 +261,8 @@ def test_with_the_guards_gate_each_rule_but_10_holds_and_no_role_commits(part: i
         assert taken is (kind is not Kind.PUBLISH), kind
     unchecked = landed_unchecked(gate=True)
     assert not unchecked, f"a branch lands on a start no check passed: {unchecked[0]}"
+    marked = committed_while_marked(gate=True)
+    assert not marked, f"a commit goes through on a branch update moved: {marked[0]}"
     states, edges = main_graph(gate=True)
     moved = {
         (ticket.branch, ticket.note is not None and ticket.note.rebasing)
@@ -869,15 +885,15 @@ def test_clean_all_clears_the_mark_of_an_update_killed_on_a_branch_with_no_commi
     assert plan_of(play)[BRANCH[Name.A]].state == "buildable"
 
 
-def test_a_commit_goes_through_after_the_final_check_and_in_a_rebase_left_on_a_passed_start(
+def test_a_commit_goes_through_after_the_final_check_and_not_in_a_rebase_a_kill_left(
     tmp_path: Path,
 ) -> None:
     stopped = replay(tmp_path / "stopped", ["drain.py open a", CHECK_A]).state.of(Name.A)
     assert stopped.tree is Tree.CLEAN
     assert not model.commit_refused(stopped)
     halted = replay(tmp_path / "halted", [*OPEN_A, EDIT_A, MARK_LEFT[-1]]).state.of(Name.A)
-    assert halted.tree is Tree.REBASING
-    assert not model.commit_refused(halted)
+    assert (halted.tree, model.unchecked(halted)) == (Tree.REBASING, False), "on a passed start"
+    assert model.commit_refused(halted), "the mark refuses it"
 
 
 RECORDED = (
@@ -932,6 +948,9 @@ def test_an_update_killed_twice_before_it_drops_the_record_keeps_its_mark(
     tmp_path: Path,
 ) -> None:
     assert broken_by(KILLED_TWICE) == set()
+    killed = walked(KILLED_TWICE)[-1].of(Name.A)
+    assert not model.unchecked(killed), "the start a check passed is kept"
+    assert model.commit_refused(killed), "the mark refuses a commit"
     play = replay(tmp_path, [*KILLED_TWICE, "drain.py clean --all"])
     assert play.state.of(Name.A).branch is Branch.STALE
     assert note_of(play)["rebasing"], "the mark stays until the record is dropped"
@@ -942,6 +961,24 @@ def test_an_update_killed_twice_before_it_drops_the_record_keeps_its_mark(
     assert play.state.of(Name.A).branch is Branch.DRAFT, "update drops the record no review wrote"
     assert "rebasing" not in note_of(play)
     assert plan_of(play)[BRANCH[Name.A]].why == ()
+    assert model.commit_refused(play.state.of(Name.A)), "the new start awaits its check"
+    assert play.named(CHECK_A).startswith(publish_check.GREEN)
+    assert not model.commit_refused(play.state.of(Name.A)), "the final check lets a commit through"
+
+
+@pytest.mark.parametrize("kill", [MARK_LEFT[-1], KILL_AFTER_REBASE])
+def test_an_update_cut_off_after_the_agent_committed_on_a_passed_start_parks_nothing(
+    tmp_path: Path, kill: str
+) -> None:
+    path = ["drain.py open a", CHECK_A, "the agent commits a", EDIT_C, kill, UPDATE_A]
+    assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
+    states = walked(path)
+    assert model.commit_refused(states[-2].of(Name.A)), "the mark refuses a commit"
+    assert not any(model.held_by_note(state.of(Name.A)) for state in states), "nothing parks"
+    play = replay(tmp_path, path)
+    assert play.world.code == 0
+    assert "a role published" not in play.world.printed
+    assert note_of(play).get("outcome") != drain.PARKED
 
 
 def test_update_records_a_landed_branchs_merge_and_does_not_rebase_it(tmp_path: Path) -> None:

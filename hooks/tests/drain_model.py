@@ -31,9 +31,10 @@ runs ``check`` only on a start no check passed, of a ticket its note does not ho
 ``--final`` is taken only in ``a``. A check that cannot read, or that finds only a rebase left
 unfinished, is taken only in ``a``, on a branch with commits of its own.
 
-The guard refuses a commit in a queue work tree whose start no check with ``--final`` has passed
-(``commit_refused``). ``graph(guarded)`` is the drain as it runs: a commit step only where the
-guard lets it through, so a role never commits and the agent commits only after the check.
+The guard refuses a commit in a queue work tree whose start no check with ``--final`` has passed,
+or whose note holds ``update``'s mark (``commit_refused``). ``graph(guarded)`` is the drain as it
+runs: a commit step only where the guard lets it through, so a role never commits and the agent
+commits only after the check.
 ``graph()`` is the drain without that gate, the record of what breaks there: in ``a`` the agent
 may commit before the check, and a role before its run's check. In ``d`` and ``e`` the commits
 obey the gate in both.
@@ -568,11 +569,14 @@ def unchecked(ticket: Ticket) -> bool:
 
 
 def commit_refused(ticket: Ticket) -> bool:
-    """Whether a commit in the ticket's queue work tree is refused: one stands on a start unpassed.
+    """Whether a commit in the ticket's queue work tree is refused: the guard's ``awaiting_final``.
 
-    The note of a branch always holds a start, so a start no check passed is ``unchecked``.
+    The note of a branch always holds a start, so a start no check passed is ``unchecked``. While
+    ``update``'s mark stands, the branch is moving, or has moved, off the start a check passed, so
+    the mark refuses a commit whatever ``passed`` says.
     """
-    return ticket.tree is not Tree.NONE and unchecked(ticket)
+    mark = ticket.note is not None and ticket.note.rebasing
+    return ticket.tree is not Tree.NONE and (unchecked(ticket) or mark)
 
 
 def checked(ticket: Ticket) -> Ticket:
