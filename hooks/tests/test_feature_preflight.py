@@ -480,6 +480,27 @@ def test_a_forge_ticket_is_held_by_an_open_blocking_issue(tmp_path: Path) -> Non
         assert checks(run(root, "4", ParentGh(child, blocker))) == expected
 
 
+def test_a_bare_number_in_a_forge_tickets_blocked_by_is_part_of_a_title_and_holds_nothing(
+    tmp_path: Path,
+) -> None:
+    root = repository(tmp_path)
+    child = issue(
+        body="## Blocked by\n\n- Log 12 brews\n" + CONJECTURE, labels=("ready-for-agent",)
+    )
+    blocker = json.dumps({"number": 12, "title": "B", "body": "", "labels": [], "state": "OPEN"})
+    assert checks(run(root, "4", ParentGh(child, blocker))) == []
+
+
+def test_with_no_tracker_a_number_two_local_tickets_start_names_neither(tmp_path: Path) -> None:
+    ready = "Status: ready-for-agent" + CONJECTURE
+    files = {
+        ".scratch/a/issues/01-first.md": "# 01: First\n\n" + ready,
+        ".scratch/b/issues/01-second.md": "# 01: Second\n\n" + ready,
+    }
+    root = repository(tmp_path, files)
+    assert checks(run(root, "01")) == ["ticket"]
+
+
 def test_an_adopted_repository_without_commit_hooks_is_red_with_the_repair(
     tmp_path: Path,
 ) -> None:
