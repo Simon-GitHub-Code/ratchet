@@ -676,9 +676,10 @@ def test_the_last_mark_leaves_the_answers_carried_in_records_and_names_their_lan
     ]
     assert {(a.defect, b.tree, b.answers) for a, b in marks} == {
         (Defect.NONE, Tree.RECORDS, Answers.CARRIED),
+        (Defect.OPEN, Tree.RECORDS, Answers.CARRIED),
         (Defect.OPEN, Tree.RECORDS, Answers.NONE),
     }
-    marks = [b for a, b in marks if a.defect is Defect.NONE]
+    marks = [b for _a, b in marks]
     assert {model.advice(b) for b in marks if b.setup is Setup.BOUND} == {Advice.LAND_RECORDS}
     landings = {ActionName.AGENT_LANDS_RECORDS, ActionName.OWNER_MERGES_RECORDS}
     ends = {

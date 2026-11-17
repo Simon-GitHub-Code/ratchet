@@ -544,6 +544,7 @@ def as_its_carried_answers_unread(world: World) -> World:
             parked=False,
             tickets=(Ticket.MERGED, Ticket.RESOLVED),
             answers=Answers.ON_THE_UNIT,
+            defect=Defect.OPEN if world.defect is Defect.KEPT else world.defect,
         )
     return replace(world, tree=Tree.CODE)
 
@@ -700,11 +701,28 @@ class Action:
             return iter(())
         if self.name in variant.refused_behind and world.upkeep in BEHIND:
             return iter(())
-        return (lined(kept(variant.deleter(world, after))) for after in self.outcomes(world))
+        return (
+            lined(kept(variant.deleter(world, answered(self.name, world, after))))
+            for after in self.outcomes(world)
+        )
 
 
 ACTIONS: Final[dict[ActionName, Action]] = {}
 ADVISED: Final[dict[Advice, ActionName]] = {}
+
+
+ANSWERING: Final = frozenset(
+    {ActionName.OWNER_ANSWERS_ON_THE_TICKET, ActionName.OWNER_ANSWERS_BLOCKED_RUN}
+)
+
+
+def answered(name: ActionName, world: World, after: World) -> World:
+    if not defect_open(world) or after.answers is not Answers.NONE:
+        return after
+    flagged = name is ActionName.OWNER_STATES_CONJECTURE and after.flag is Flag.ASKED
+    if name in ANSWERING or flagged:
+        return replace(after, answers=Answers.ON_THE_UNIT)
+    return after
 
 
 def kept(world: World) -> World:
@@ -1142,7 +1160,12 @@ def _agent_binds_safeguard(world: World) -> Iterator[World]:
             and world.architecture is Architecture.RECORDED
             and rest(replace(world, owes=False))
         ):
-            yield replace(world, defect=Defect.OPEN, tickets=(Ticket.READY, Ticket.RESOLVED))
+            yield replace(
+                world,
+                defect=Defect.OPEN,
+                tickets=(Ticket.READY, Ticket.RESOLVED),
+                inherits=False,
+            )
 
 
 @action(ActionName.OWNER_RECORDS_ARCHITECTURE, Advice.ARCHITECTURE)
