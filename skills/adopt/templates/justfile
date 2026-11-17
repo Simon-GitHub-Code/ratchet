@@ -1,30 +1,5 @@
-# The `just` example of the method's entry points. `just` lists every recipe; CI runs these same
-# recipes. Bodies are the binding's job: fill each with the tool docs/process/binding.md names. A
-# gate the binding binds to `none` becomes `@echo "none: <reason>"` and exits 0. A gate whose
-# trigger has not fired (ADR 0028) is bound `later: <trigger>` and becomes
-# `@echo "later: <trigger>"`, which also exits 0; `/ratchet:safeguard` writes its body when the
-# trigger fires. Any other gate with nothing to run is red: no test, no benchmark or no fuzz
-# target is a failure, never a pass.
-# Each body you fill gets a fault in quality/bites.toml that `just bite-all` shows it red on.
-
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# The plugin the recipes run: the folder an agent session in this repository last started the
-# plugin from, which the session hook records in the git directory. For another harness, or CI,
-# export RATCHET_PLUGIN as the plugin's folder; an empty one counts as unset. Only the release the
-# pin in docs/process/binding.md names runs (ADR 0068): the folder's tree, which this computes in
-# memory with the system python3 alone, must be the pin's `tree`. When the recorded folder is
-# another tree, its siblings that hold a plugin manifest are tried, where a harness keeps earlier
-# versions, and the first that matches runs. With none, `_plugin` is red in one line. The folder
-# checked is handed to every `just` a recipe starts, as RATCHET_PLUGIN_CHECKED beside the pin's
-# tree id, and a child hashes that folder again and reads no record. The folder reaches every
-# recipe as the environment variable RATCHET_PLUGIN_DIR and is only ever read as a shell variable,
-# so a folder name with a quote, a `$` or a backtick runs nothing. Compiled files are cached
-# outside every copy, in a folder named by the tree id under a private folder this user owns; with
-# no such folder, none is read or written, and the first `just` says why. Every plugin script runs as
-# `plugin_py`: `-E` and `-s`
-# leave out the interpreter's environment variables (PYTHONPATH, PYTHONSTARTUP, PYTHONHOME) and the
-# user's site folder, and the compiled-file folder is an option, since `-E` ignores its variable.
 plugin_choice := ```
     want=$(sed -n 's/^- Ratchet plugin: [^ ]* at [0-9a-f]\{40\} tree \([0-9a-f]\{40\}\)[ \t\r]*$/\1/p' docs/process/binding.md 2>/dev/null | head -n 1 || true)
     checked=${RATCHET_PLUGIN_CHECKED:-}
@@ -100,44 +75,18 @@ export RATCHET_PLUGIN_CHECKED := replace_regex(plugin_choice, '(?s)^R.*', '')
 ratchet_plugin := "$RATCHET_PLUGIN_DIR"
 export RATCHET_RUN := env_var_or_default("RATCHET_RUN", uuid())
 
-# The deliverable as a running thing, for `start` and the three service gates the plugin ships
-# (`smoke`, `load-smoke`, `telemetry-e2e`). Adoption fills `boot`, `ready` and `service` for every
-# type that boots, before its code exists. `boot` stays in the foreground (a server until stopped,
-# one run of a job, a command line tool with the words after it, an app headless) and builds what
-# it runs: in CI each gate is a job of its own, with nothing another recipe built. `{port}` becomes
-# a free port, exported as PORT, so parallel runs never collide: `boot` takes `{port}` or `$PORT`,
-# `ready` takes `{port}`. `booted` passes both quoted, so the recipe's shell expands nothing in
-# them. `ready` is the URL that answers below 400 once it is up; `boot_timeout` is the seconds it
-# may take. `service` is the `service.name` its telemetry carries. A `cli`, `job` or `app` answers
-# no URL and sets `ready` to "none", which `booted` cannot wait for: its `smoke` runs `boot` itself,
-# to its exit, and is green on exit 0 with the expected output. A `library` boots nothing and sets
-# all three to "none".
 boot := "bind: the command that builds and starts the deliverable in the foreground, such as ./server --port {port}"
 ready := "bind: the URL that answers once it is up, such as http://127.0.0.1:{port}/health"
 boot_timeout := "30"
 service := "bind: the service.name every signal carries"
 booted := plugin_py + ' "' + ratchet_plugin + '/scripts/with_service.py" --boot ' + quote(boot) + ' --ready ' + quote(ready) + ' --timeout ' + boot_timeout
 
-# A gate that requests the deliverable's routes from outside (`load-smoke`, `api-deep`, `dast`,
-# `pentest`, `load`) boots it through `probed`: with every flag due for removal turned on. New
-# surface ships off, so a probe of the defaults meets a 404 on each flagged route and judges none
-# of it. `flags.py --temporary` prints those keys, one per line, and `flags_on` is the override
-# the flag seam reads with each of them on, as the shell builds it on every run, such as
-#   'FLAG_OVERRIDES=$(' + plugin_py + ' "' + ratchet_plugin + '/scripts/flags.py" --temporary | sed "s/$/=true/" | paste -sd, -)'
-# A `permanent` flag is a switch and keeps its default. `smoke`, the end-to-end suite and the off
-# half of `flag-states` judge the defaults, which are what ships. With nothing to boot: "none".
 flags_on := "bind: NAME=VALUE, the flag seam's override with each key of flags.py --temporary on"
 probed := booted + ' --env "' + flags_on + '"'
 
-# Which shard of how many this run is. CI's long-gate jobs export both from the `- Shards:` line of
-# the binding's Speed section; a local run is shard 1 of 1, the whole suite.
 shard := env_var_or_default("SHARD", "1")
 shards := env_var_or_default("SHARDS", "1")
 
-# The mutation tool's incremental mode, from the `- Incremental:` line of the binding's Speed
-# section: the option the recipe adds to the tool's command so a local run reuses the last run's
-# results. It is "" in CI, which runs every mutant without the cache, and in the bite proof's copy, and "" where the line says
-# `none: <reason>`. The forge sets CI.
 mutation_incremental := if env_var_or_default("CI", "") + env_var_or_default("RATCHET_BITING", "") == "" { "bind: the mutation tool's option that reuses the last run's results" } else { "" }
 
 port := "8000"
@@ -147,98 +96,47 @@ test_runner := "bind: the command that runs the test files named after it, or ev
 default:
     @just --list --unsorted
 
-# Not a gate: the deliverable for a person, and where to open it.
 start *args:
     @{{ if ready =~ '^https?://' { "echo 'open " + replace(ready, "{port}", port) + " once it is up; Ctrl-C stops it'" } else { "true" } }}
     export PORT={{port}}; {{ replace(boot, "{port}", port) }} {{args}}
 
-# `just test-files tests/unit/a.test.ts` runs that file; with none, every test.
 test-files *files:
     {{test_runner}} {{files}}
 
-# --- tiers -----------------------------------------------------------------
-
-# The gates of each tier: one list per tier, and the only place a gate is added to one. A tier
-# runs its gates at once through the plugin's runner, so it takes as long as its slowest gate and
-# one run names every red gate; CI reads the same lists (its `shape` job runs `just --evaluate`)
-# and gives each gate a job of its own. `tier0_tree_gates` is tier 0 less the history gate.
 tier0_tree_gates := "fmt-check lint types imports deadcode lint-workflows secrets flags pins limits markers prose snapshots-check ratchet-lowered suppressions comments"
 tier0_gates := tier0_tree_gates + " commits"
 tier1_gates := "test coverage diff-coverage test-counts tests-changed mutation-changed contracts-check audit duplication build smoke telemetry flag-states load-smoke bite api-check data-compat doctests sast iac artefact-scan type-coverage doc-coverage change-size guard-diff settings-check conformance triggers incidents rollback dependency-faults config-refusal graceful-stop"
 tier2_gates := "mutation api-deep symbolic fuzz e2e test-stability reproducible sanitizers perf dast pentest load telemetry-e2e flags-expired a11y formal bite-all"
 
-# The gates of a tier whose tool can run one `SHARD` of `SHARDS`: CI runs each over the shard count.
 tier1_sharded := "test mutation-changed"
 tier2_sharded := "mutation e2e test-stability"
 
-# Gates that cannot share a working tree at the same time, one variable per tier. Declare a group as
-# `--serial A B`, repeated for more groups, each name a gate of that tier. The runner cannot see what
-# a command touches, and a template cannot know this stack's tools, so the template declares one
-# group only: the coverage gate and the changed-code mutation gate, which each run the whole suite
-# on every core and were seen to time out side by side. Declare one for:
-#   - two gates that write one file or directory (a coverage data file, a cache, a lock);
-#   - a gate that mutates the tree (a formatter, a generator, a migration) and every gate that
-#     reads what it writes;
-#   - two gates that bind one fixed port (better: `{port}` through `with_service.py`);
-#   - two more gates whose tools each start a worker for every core, when a run shows one starving
-#     the other or a timed run is faster with them grouped. A group runs its gates one after
-#     another, so keep its chain shorter than the slowest gate outside it; the runner says when not.
-#     A group acts only where a tier runs in one process, never in CI's job per gate, so
-#     time a local `check`.
-# Giving each gate an output of its own is better than a group. A gate that is red in parallel
-# and green alone shares state with another.
 serial0 := ""
 serial1 := "--serial coverage mutation-changed"
 serial2 := ""
 
-# How many gates run at once: every core unless RATCHET_JOBS, else `git config ratchet.jobs`, says
-# fewer, for a shared machine or a stack whose every gate uses every core. The git value is the
-# machine's, read by every work tree and every agent's shell.
 configured_jobs := `git config --get ratchet.jobs 2>/dev/null || true`
 jobs := env_var_or_default("RATCHET_JOBS", if configured_jobs == "" { num_cpus() } else { configured_jobs })
 
-# Gates that run by themselves once the others have finished. `perf` and `load` judge elapsed
-# time, which a gate beside them disturbs. The full mutation and stability gates take every core
-# and would starve whatever ran beside them, the tier 1 group included when `check-deep` runs all
-# three tiers. A name not in a tier is ignored.
 alone := "--alone perf load mutation test-stability"
 
-# The runner. Each gate is an entry point of this file, run as `just <gate>` with its output held
-# whole, and every gate's seconds are appended to .ratchet/timing.jsonl so the slowest is named.
-# What a gate started and left running is ended when the gate exits, and the runner says so.
 parallel := plugin_py + ' "' + ratchet_plugin + '/scripts/parallel.py" --runner "' + just_executable() + '" --report .ratchet/timing.jsonl --jobs ' + jobs + ' ' + alone
 
-# A gate over the change runs as `{{changed}} -- <command>`: `{base}` in the command is
-# the commit the change is compared with, the one the plugin's own gates use. On the adoption,
-# whose base holds no binding, it runs nothing and says so: tier 2 judges that tree whole.
 changed := plugin_py + ' "' + ratchet_plugin + '/scripts/changed.py"'
 
-# The tools the gates run, installed before they run (ADR 0039, ADR 0043). `merge` runs the gates in
-# a fresh work tree and CI runs each in a fresh checkout, so a tool that is on disk only after an
-# install is missing there. The binding's `## Install` section says whether this stack needs one.
-# When it does, this recipe installs exactly what the lockfile it names says and does nothing once
-# that is installed, every recipe the section lists depends on it, and each tier runs it after
-# `plugin-pin`, so no two gates install at once. When it does not, the body below stays.
 install:
     @true
 
-# The dependency contract's entry point (ADR 0044): what the binding's `## Dependencies` section
-# names, run by `guard-diff` and the merge judge from the merge base's tree. It reads the files
-# under `dir` as data and prints the section's records. Bind it, or have the section say `none:`.
 dependencies dir:
     @echo "bind: print the records the Dependencies section describes, for the files under {{dir}}"; exit 1
 
 comments-list *files:
     @echo "bind: list the comments of the files given, read as data: one tab-separated record per line a comment occupies (path, line, comment or doc, the text without its delimiters); exit non-zero on a file it cannot read"; exit 1
 
-# The one guard every recipe that runs a file of the plugin depends on.
 [no-exit-message]
 _plugin:
     @if [ -n "${RATCHET_PYC_NOTE:-}" ]; then printf '%s\n' "$RATCHET_PYC_NOTE" >&2; fi; if [ -n "${RATCHET_PLUGIN_REFUSAL:-}" ]; then printf '%s\n' "$RATCHET_PLUGIN_REFUSAL"; exit 1; fi; if [ -z "${RATCHET_PLUGIN_DIR:-}" ]; then echo "no plugin recorded for this repository: start an agent session here once, or set RATCHET_PLUGIN to the plugin's folder"; exit 1; fi
 
-# Every tier starts here: the plugin the recipes run is the release docs/process/binding.md pins,
-# the commit CI checks out. Red before any gate runs when it is any other tree, or not there; a
-# newer plugin is red too and says on every run what to change.
 plugin-pin: _plugin
     @test -f "{{ratchet_plugin}}/scripts/plugin_pin.py" || { echo "plugin-pin: no Ratchet plugin at $RATCHET_PLUGIN_DIR, or one older than the pin check; set RATCHET_PLUGIN to a checkout of the commit docs/process/binding.md pins"; exit 1; }
     @{{plugin_py}} "{{ratchet_plugin}}/scripts/plugin_pin.py"
@@ -246,15 +144,9 @@ plugin-pin: _plugin
 tier0: plugin-pin
     {{parallel}} {{serial0}} -- {{tier0_gates}}
 
-# Tier 0 less the history gate: what the pre-commit hook runs, since `commits` there would judge
-# the commit an amend replaces. The commit-msg hook checks the new subject with `commit-msg`.
 tier0-tree: plugin-pin
     {{parallel}} {{serial0}} -- {{tier0_tree_gates}}
 
-# The two recipes the commit hooks call. RATCHET_HOOK_PROBE names a file: `hooks-installed` sets it
-# to learn that a commit would reach the recipe, and the recipe answers with its own name before
-# any gate runs. A file, because pre-commit hides the output of a hook that passes. Only these two
-# recipes answer it, so `tier0` and `check` never skip a gate for it.
 [no-exit-message]
 pre-commit:
     @if [ -n "${RATCHET_HOOK_PROBE:-}" ]; then echo pre-commit > "$RATCHET_HOOK_PROBE"; else just tier0-tree; fi
@@ -269,20 +161,14 @@ tier1: plugin-pin
 tier2: plugin-pin
     {{parallel}} {{serial2}} -- {{tier2_gates}}
 
-# Tiers 0 and 1 in one run: one wall clock, the slowest gate of the two.
 check: plugin-pin
     {{parallel}} {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
-# The inner loop: the same gates, stopped at the first red. Run `check` before you push.
 check-fast: plugin-pin
     {{parallel}} --fail-fast {{serial0}} {{serial1}} -- {{tier0_gates}} {{tier1_gates}}
 
-# The gates `alone` names run after the others, one at a time (see `alone` above); CI gives each a
-# job of its own.
 check-deep: plugin-pin
     {{parallel}} {{serial0}} {{serial1}} {{serial2}} -- {{tier0_gates}} {{tier1_gates}} {{tier2_gates}}
-
-# --- method gates (tool-neutral, shipped by the ratchet plugin) --------------
 
 ratchet-lowered: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/lowered.py"
@@ -290,8 +176,6 @@ ratchet-lowered: _plugin
 guard-diff: _plugin
     {{plugin_py}} -P -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from ratchet_guards import diff; sys.exit(diff.main())' "{{ratchet_plugin}}/hooks" --root . || true
 
-# The permission rules in .claude/settings.json mirror guards/manifest.toml: one Edit rule per
-# pattern, deny for a locked group, plus the fixed command rules. `just settings` regenerates them.
 settings-check: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/settings_rules.py" --check
 
@@ -301,57 +185,33 @@ settings: _plugin
 conformance: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/conformance.py" .
 
-# The change that brings a kind of code is free in any number of files, and a later one that adds
-# another while a safeguard it owes is still `later:` is red (ADR 0028, ADR 0030). `just triggers
-# --json` lists the rows head owes, for the route.
 triggers *flags: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/triggers.py" {{flags}}
 
-# Each record under docs/incidents/ names a fault of quality/bites.toml that reproduces it.
 incidents: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/conformance.py" --incidents .
 
-# Time one tier or gate against its ceiling in quality/thresholds.toml; `just budget tier1 --set`
-# records the first ceiling. CI wraps every job in it, holds each to its tier's ceiling
-# (`--tier`), reports a ceiling passed on a pull request without blocking (`--over report`)
-# and uploads the report.
 budget key *flags: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/budget.py" {{key}} --report .ratchet/timing.jsonl {{flags}} -- just {{key}}
 
-# --- merging ------------------------------------------------------------------
-
-# May this change reach the default branch without the owner? Prints `merge: agent` or
-# `merge: owner` with every reason. The forge's merge job asks the same script.
 merge-ready *flags: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/merge_ready.py" {{flags}}
 
-# With no forge: judge the branch, run `check` on the merge result, and merge it when both
-# pass. With a forge the pull request's merge job does this, and the recipe says so.
 merge branch: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/merge.py" "{{branch}}"
 
-# --- ratchet maintenance ------------------------------------------------------
-
-# Raise every threshold to its measured value and refresh the snapshots. Red first when a commit
-# would not run tier 0: the gate prints the repair, which is `just hooks-install` or the owner's
-# one command.
 ratchet: _plugin
     just hooks-installed
     @echo "bind: run the suites with a Cobertura or LCOV report, named in --report below, then the mutation run"; exit 1
     {{plugin_py}} "{{ratchet_plugin}}/scripts/coverage_groups.py" --report coverage.xml --write
     just snapshots
 
-# Would a commit here run tier 0? Red, with the repair, when it would not. CI has no commit
-# hooks, so no CI job and not `conformance` runs it.
 hooks-installed: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/hooks_installed.py"
 
-# Install the repository's own commit hooks, then ask `hooks-installed`. An agent runs it: it
-# changes no git config and moves no hook somebody else wrote. What is left is the owner's.
 hooks-install: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/hooks_install.py"
 
-# The files of the manifest's tool-config group, copied into quality/snapshots/ (a ratchet path).
 snapshots: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/snapshots.py" --write
 
@@ -364,8 +224,6 @@ suppressions: _plugin
 comments *options: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/comments.py" --files | xargs -0 -r just comments-list | {{plugin_py}} "{{ratchet_plugin}}/scripts/comments.py" --changed {{options}}
 
-# The flag registry: declared, owned, off when new. `flags-expired` asks the calendar, in tier 2.
-# Add `--used-in <source dir>` once the stack is bound, so a flag leaves the registry with its code.
 flags: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/flags.py"
 
@@ -374,8 +232,6 @@ flags-expired: _plugin
 
 commits: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/commits.py"
-
-# --- tier 0 bodies ---------------------------------------------------------------
 
 fmt-check:
     @echo "bind: formatter --check"; exit 1
@@ -411,8 +267,6 @@ markers: _plugin
 prose: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/prose.py"
 
-# --- tier 1 bodies ---------------------------------------------------------------
-
 suite-report:
     @echo "bind: the whole suite once, on every core, under the coverage tool: test_runner with the runner's shard flags, shard {{shard}} of {{shards}}, writing the paths the binding's Shared reports row names; red when none is collected"; exit 1
 
@@ -429,11 +283,8 @@ diff-coverage:
 test-counts:
     @echo "bind: through changed, collected test count at head, read from the test results that report.py --reader test-counts prints, >= at {base}"; exit 1
 
-# The recipe runs the mutation tool, converts its outcomes to the plugin's neutral format (one JSON
-# line per mutant; the docstring of `scripts/mutation_survivors.py` has it) and hands the lines to
-# `scripts/mutation_survivors.py --tool <name> --mutants <file>`.
 mutation-changed:
-    @echo "bind: through changed, mutate the functions changed since {base}, with the `mutation_incremental` option added to the tool's command, shard {{shard}} of {{shards}}; zero unregistered survivors"; exit 1
+    @echo "bind: through changed, mutate the functions changed since {base}, with the `mutation_incremental` option added to the tool's command, shard {{shard}} of {{shards}}; convert its outcomes to the JSON lines mutation_survivors.py --tool <name> --mutants <file> reads, and judge them with it: zero unregistered survivors"; exit 1
 
 contracts-check:
     @echo "bind: regenerate contract artefacts and diff"; exit 1
@@ -447,58 +298,33 @@ duplication:
 build:
     @echo "bind: build the deliverable"; exit 1
 
-# Shipped: boot the deliverable, wait until `ready` answers, stop the whole process tree. With
-# `ready` "none", the body runs `boot` to its exit instead, as the comment on `boot` says.
 smoke: _plugin
     {{booted}}
 
 telemetry:
     @echo "bind: the telemetry tests against an in-memory exporter; red when there are none"; exit 1
 
-# `flags.py --changed` prints one key per line; no changed flag means no extra run.
 flag-states:
-    @echo "bind: for each key of flags.py --changed, the suite with the flag forced off, then on"; exit 1
+    @echo "bind: for each key of flags.py --changed, the suite with the flag forced off, then on; no run when no flag changed"; exit 1
 
-# Shipped: seconds of concurrent requests at the booted deliverable, judged on errors only. Name
-# one `--url "METHOD URL STATUS BODY"` per route worth overlapping; the binding's Limits hold the
-# `--concurrency` and `--seconds`. The smoke is red while it requests nothing but the readiness
-# URL. A skeleton whose one route is readiness replaces the `--url` with `--health-only`: green,
-# and it says so on every run until the first route takes its place.
 load-smoke: _plugin
     {{probed}} -- {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --url "bind: METHOD URL STATUS BODY of a route worth overlapping, on port {port}"
 
-# Shipped: the pull-request half of the proof that every bound gate bites. It proves nothing, at
-# the cost of a few git calls, unless the change touches a path that defines a gate; then it
-# plants each fault of quality/bites.toml for the tier 0 and tier 1 gates the change could
-# affect, and says why each is in the set. `bite-all` is the whole proof.
 bite: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --changed
 
 tests-changed *suites: _plugin
     {{changed}} -- {{plugin_py}} "{{ratchet_plugin}}/scripts/changed_tests.py" --base {base} {{suites}}
 
-# Reliability gates (ADR 0028). Each is bound once its trigger has fired; until then its body is
-# `@echo "later: <trigger>"` and it exits 0.
-
-# Trigger life:deployed and code:stored-format. The merge base's build run against the data the head's migrations leave:
-# it must still read it.
 rollback:
     @echo "bind: build the merge base ({base}) and run it against the data head's migrations leave; or later: life:deployed and code:stored-format"; exit 1
 
-# Trigger code:outbound-call. Every outbound call has a timeout, and a test meets the dependency
-# erroring, slow and gone.
 dependency-faults:
     @echo "bind: the outbound-call timeout check and the fault tests; or later: code:outbound-call"; exit 1
 
-# Trigger code:config-read. Shipped: boot with one required setting removed (`--refuses NAME`);
-# green only when the deliverable exits non-zero before it is ready and names the setting.
 config-refusal: _plugin
     {{booted}} --refuses "bind: the name of a setting the deliverable requires"
 
-# Trigger code:listener. Shipped: the load smoke keeps requests in flight while `--graceful` signals
-# the deliverable; green only when every request it accepted is answered and it exits within the
-# seconds. Where the gate cannot hold the listener, a request counts as accepted when it started
-# before the signal, and the smoke says so. A route that takes a moment shows the drain best.
 graceful-stop: _plugin
     {{booted}} --graceful 10 -- {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --until-stopped --url "bind: METHOD URL STATUS BODY of a route that takes a moment, on port {port}"
 
@@ -529,16 +355,12 @@ doc-coverage:
 change-size: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/change_size.py"
 
-# --- tier 2 bodies ---------------------------------------------------------------
-
 mutation:
     @echo "bind: full mutation run over the absolute paths, shard {{shard}} of {{shards}}"; exit 1
 
 api-deep:
     @echo "bind: deep and stateful interface conformance, the deliverable booted through probed"; exit 1
 
-# Why: a search's time grows with what there is to search. Each target gets `each` seconds and the
-# run stops at `cap` in total, so a skeleton with one target costs seconds, not the whole box.
 symbolic each="30" cap="600":
     @echo "bind: symbolic or concolic search of each parser target, alone or as the fuzzer's hybrid mode, for {{each}} seconds, {{cap}} at most in total; red when there is no target"; exit 1
 
@@ -569,8 +391,6 @@ pentest:
 load:
     @echo "bind: load test of the deliverable booted through probed, thresholds from the binding's Limits; red when there is no scenario"; exit 1
 
-# Shipped: an OTLP receiver the booted deliverable exports to; green only when a request's
-# traces, metrics and logs arrive for `service`. `--require traces` narrows it to what is emitted.
 telemetry-e2e: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/telemetry_sink.py" --service "{{service}}" -- {{booted}} -- \
         {{plugin_py}} -P -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1]).close()' "{{ready}}"
@@ -578,26 +398,16 @@ telemetry-e2e: _plugin
 a11y:
     @echo "bind: accessibility checks inside the end-to-end suite; red when no surface is checked"; exit 1
 
-# Shipped: every gate against its fault. The plugin's own gates first, then each `[[bite]]` of
-# quality/bites.toml in a scratch copy: green without the fault, red with it, red when the
-# collection it judges is empty.
 bite-all: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/bite.py"
     {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py"
 
-# Not a gate: the bites of one gate alone, while you write its recipe. `just bite-one lint`.
 bite-one gate: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/project_bite.py" --gate {{gate}}
 
 formal:
     @echo "bind: run the project-local formal verification skill's command"; exit 1
 
-# --- outside the tiers ------------------------------------------------------------
-
-# The weekly gates. They block nothing, and a finding gets its own pull request. The `weekly`
-# workflow runs this on a schedule and keeps one issue while a run is red; with no forge the
-# machine's own scheduler runs it. One after another: `load-soak` judges elapsed time, which a
-# gate running beside it disturbs.
 weekly_gates := "audit-all licenses drift load-soak restore-drill prod-probe"
 
 weekly: plugin-pin
@@ -615,13 +425,9 @@ drift:
 load-soak:
     @echo "bind: hold the load for an hour, then raise it to the breaking point; advisory"; exit 1
 
-# Trigger life:irreplaceable-data. The latest backup restores into scratch and the deliverable
-# boots on it; or `later: life:irreplaceable-data`.
 restore-drill:
     @echo "bind: restore the latest backup into scratch and boot the deliverable on it; or later: life:irreplaceable-data"; exit 1
 
-# Trigger life:deployed. Shipped: the load smoke against the live deployment, nothing booted; green
-# only when its readiness route and its real routes answer without error. Name routes safe to repeat.
 prod-probe: _plugin
     {{plugin_py}} "{{ratchet_plugin}}/scripts/load_smoke.py" --ready "bind: the live deployment's readiness URL" --url "bind: METHOD URL STATUS BODY of a live route safe to repeat"
 

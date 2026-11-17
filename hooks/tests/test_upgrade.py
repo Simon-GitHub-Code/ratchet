@@ -157,7 +157,7 @@ def test_an_upgrade_of_a_project_as_the_last_release_left_it_carries_the_interpr
     assert f'{{{{plugin_py}}}} "{{{{ratchet_plugin}}}}/scripts/markers.py"{mine}' in done
     assert "{{plugin_py}} -P -c 'import sys, urllib.request;" in done
     assert "python3 -c 'import sys, urllib.request;" not in done
-    assert "'FLAG_OVERRIDES=$(' + plugin_py + ' \"' + ratchet_plugin" in done
+    assert "#   'FLAG_OVERRIDES=$(python3 \"' + ratchet_plugin" in done
     just = shutil.which("just")
     if just is None:
         pytest.skip("just is not installed")
