@@ -307,6 +307,29 @@ def test_the_harnesss_own_files_and_other_repositories_are_read_only(
 
 
 @needs_bwrap
+def test_the_plugin_under_test_is_read_only_inside(layout: sandbox.Layout) -> None:
+    layout.pinned.mkdir()
+    assert inside(layout, f"echo x > {layout.pinned}/forged").returncode != 0
+    assert not (layout.pinned / "forged").exists()
+
+
+@needs_bwrap
+def test_a_toolchain_program_hidden_with_the_operators_home_runs_inside_read_only(
+    tmp_path: Path,
+) -> None:
+    tool = tmp_path / "operator-home" / "bin" / "hello"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("#!/bin/sh\necho hello from the toolchain\n")
+    tool.chmod(0o755)
+    layout = sandbox.Layout(tmp_path / "run")
+    sandbox.prepare(layout, {"hello": tool}, [])
+    ran = inside(layout, "hello")
+    assert ran.stdout.strip() == "hello from the toolchain", ran.stderr
+    assert inside(layout, f"echo forged >> {tool}").returncode != 0
+    assert "forged" not in tool.read_text()
+
+
+@needs_bwrap
 @pytest.mark.parametrize(
     "look",
     [

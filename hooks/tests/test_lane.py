@@ -1,7 +1,10 @@
 """``lane.py``: only a change of records and pages takes the light lane; any doubt runs it all."""
 
+import os
 import re
+import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -234,6 +237,43 @@ def test_the_lane_is_printed_for_the_workflow(
     assert lane.main(["lane.py", "main"]) == 0
     assert lane.main(["lane.py"]) == 0
     assert capsys.readouterr().out == "pages hooks/tests/test_skills.py\nfull\n"
+
+
+CI = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
+LIGHT = 'print("pages hooks/tests/test_skills.py")\n'
+FULL = {"lane": "full", "tests": ""}
+
+
+def ci_lane(root: Path, base_classifier: str | None, head_classifier: str) -> dict[str, str]:
+    job = CI.read_text(encoding="utf-8").split("\n  lane:\n", 1)[1].split("\n  gates:\n", 1)[0]
+    step = textwrap.dedent(job.split("      - id: lane\n", 1)[1].split("        run: |\n", 1)[1])
+    repository(root, {"scripts/lane.py": base_classifier} if base_classifier else None)
+    base = git(root, "rev-parse", "HEAD")
+    branch(root)
+    change(root, {"scripts/lane.py": head_classifier})
+    output = root.parent / f"{root.name}.out"
+    output.write_text("", encoding="utf-8")
+    bash = shutil.which("bash")
+    assert bash
+    environment = {**os.environ, "BASE": base, "RUNNER_TEMP": str(root.parent)}
+    subprocess.run(  # noqa: S603
+        [bash, "-c", step],
+        cwd=root,
+        env={**environment, "GITHUB_OUTPUT": str(output)},
+        capture_output=True,
+        check=True,
+    )
+    return dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+
+
+def test_ci_takes_the_lane_from_the_classifier_the_base_holds_and_any_doubt_is_full(
+    tmp_path: Path,
+) -> None:
+    light = ci_lane(tmp_path / "light", LIGHT, 'print("full")\n')
+    assert light == {"lane": "pages", "tests": " hooks/tests/test_skills.py"}
+    assert ci_lane(tmp_path / "head", 'print("full")\n', LIGHT) == FULL
+    assert ci_lane(tmp_path / "none", None, LIGHT) == FULL
+    assert ci_lane(tmp_path / "fails", "raise SystemExit(1)\n", LIGHT) == FULL
 
 
 def test_every_model_page_a_test_reads_is_mapped_to_that_test() -> None:

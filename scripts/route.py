@@ -94,7 +94,10 @@ LOCAL_TICKETS = ".scratch/*/issues/*.md"
 LOCAL_SPECS = ".scratch/*/spec.md"
 PURPOSE_PLACEHOLDER = "<One paragraph"
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-EXPIRE = f'python3 "{PLUGIN_ROOT / "scripts/documents.py"}" expire'
+EXPIRE = (
+    "python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode"
+    f' "{PLUGIN_ROOT / "scripts/documents.py"}" expire'
+)
 CHECK_FALLBACK = "the binding's `check` entry point"
 
 INIT = "/ratchet:init"
@@ -317,11 +320,13 @@ def expire_step(root: Path) -> Step | None:
     left = sorted(documents.listed(documents.work_tree(root)))
     if not left:
         return None
+    paths = f"{', '.join(left[:SHOWN])}{' ...' if len(left) > SHOWN else ''}"
+    one = len(left) == 1
     return Step(
         EXPIRE,
-        f"{len(left)} steering document(s) have expired and are still in the tree"
-        f" ({', '.join(left[:SHOWN])}{' ...' if len(left) > SHOWN else ''}): this deletes them and"
-        " appends their `## Answers` lines to the design brief",
+        f"{paths} {'has' if one else 'have'} expired and {'is' if one else 'are'} still in the"
+        f" tree: this deletes {'it' if one else 'them'} and carries {'its' if one else 'their'}"
+        " `## Answers` lines to the design brief's `## In the owner's words`",
         NEXT,
         "expire",
     )

@@ -165,7 +165,10 @@ def test_a_brief_with_no_place_for_the_lines_stops_the_deletion(root: Path) -> N
     write(root, BRIEF, "# Brief\n\n## Purpose\n\nA purpose.\n")
     unit(root)
     done = documents.expire(root, TODAY)
-    assert done.problem == f"{BRIEF} has no `{WORDS}` section to carry 3 line(s) to"
+    assert done.problem == (
+        f"{BRIEF} has no `{WORDS}` section, so nothing expired was deleted: add the heading, then"
+        " run `documents.py expire` again"
+    )
     assert (root / ALPHA).is_file()
     assert (root / BRIEF).read_text(encoding="utf-8") == "# Brief\n\n## Purpose\n\nA purpose.\n"
 
@@ -232,6 +235,7 @@ def test_the_command_says_what_it_deleted_and_carried(
     printed = capsys.readouterr().out.splitlines()
     assert printed[:3] == [f"expire: deleted {path}" for path in (ALPHA, BETA, SPEC)]
     assert printed[3].startswith("expire: carried - ")
+    assert printed[3].endswith(f" to {BRIEF}")
     assert len(printed) == 6
 
 

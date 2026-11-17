@@ -185,7 +185,7 @@ MERGE = "merge"
 SLOWEST = 3
 LOCKED = frozenset({"open", "update", "check", "close", "clean", "report", "split"})
 # Why: the triggers gate's red line; the kind it names is what the safeguard binds (ADR 0028).
-EXPIRED = "docs: delete what has expired and keep its answers"
+EXPIRED = "docs(documents): delete expired plans and keep their answers"
 SIDES = {frozenset({1, 2}): "--ours", frozenset({1, 3}): "--theirs"}
 OWED_RED = re.compile(r"triggers: '([^']+)' gained \d+ instance")
 # Why: ADR 0052. The red line of a kind whose architecture review is owed; the review releases it.
@@ -1150,8 +1150,10 @@ def rebase(drain: Drain, ticket: preflight.Ticket) -> int:
             # Why: the run was killed after the rebase; its record is still on top. The record is
             # dropped before the mark is cleared: a run killed between the two is told again by
             # the mark, and one that cleared it first would leave the outdated record to land.
-            after_rebase(tree)
-            queue_notes.write_note(path, restarted(drain, tree, note, branch=branch))
+            waiting = after_rebase(tree)
+            queue_notes.write_note(
+                path, {**restarted(drain, tree, note, branch=branch), "unexpired": waiting}
+            )
             print(json.dumps({"moved": True, "conflicts": []}))
             return 0
         queue_notes.write_note(path, note)
@@ -1210,15 +1212,20 @@ def carry_on(tree: Path) -> list[str] | None:
             return None
 
 
-def after_rebase(tree: Path) -> None:
-    """Drop the outdated verdict record, then delete what has expired in a commit of its own."""
+def after_rebase(tree: Path) -> list[str]:
+    """Drop the outdated verdict record, then delete what has expired in a commit of its own.
+
+    What it could not delete is returned, to wait in the note until the owner's report.
+    """
     drop_record(tree)
     done = documents.expire(tree, now().date())
     if done.problem is not None:
         print(f"update: {done.problem}", file=sys.stderr)
-    elif done.deleted:
+        return [f"update: {done.problem}"]
+    if done.deleted:
         gatelib.git(tree, "add", "--all")
         gatelib.git(tree, "commit", "--quiet", "--no-verify", "-m", EXPIRED)
+    return []
 
 
 def rebase_tree(drain: Drain, tree: Path, note: dict[str, object], *, branch: str) -> int:
@@ -1226,9 +1233,11 @@ def rebase_tree(drain: Drain, tree: Path, note: dict[str, object], *, branch: st
     path = queue_notes.note_path(drain.root, branch)
     conflicts = None if gatelib.git(tree, "rebase", "--quiet", base) is not None else carry_on(tree)
     if conflicts is None:
-        after_rebase(tree)
+        waiting = after_rebase(tree)
         print(json.dumps({"moved": True, "conflicts": []}))
-        queue_notes.write_note(path, restarted(drain, tree, note, branch=branch))
+        queue_notes.write_note(
+            path, {**restarted(drain, tree, note, branch=branch), "unexpired": waiting}
+        )
         return 0
     gatelib.git(tree, "rebase", "--abort")
     queue_notes.write_note(path, restarted(drain, tree, note, branch=branch, rebase_onto=base))
@@ -1718,8 +1727,22 @@ def render(notes: list[dict[str, object]], idle: list[Entry], stamp: datetime) -
     """The drain's one report: what merged, what waits and why, every assumption."""
     by = {
         outcome: [row for note in notes if note.get("outcome") == outcome for row in listed(note)]
-        for outcome in (MERGED, WAITS, PARKED, SPLIT)
+        for outcome in (MERGED, PARKED, SPLIT)
     }
+    by[WAITS] = [
+        row
+        for note in notes
+        if note.get("outcome") == WAITS
+        for row in listed(
+            {
+                **note,
+                "reasons": [
+                    *queue_notes.texts(note.get("reasons")),
+                    *queue_notes.texts(note.get("unexpired")),
+                ],
+            }
+        )
+    ]
     held = [
         row
         for entry in idle

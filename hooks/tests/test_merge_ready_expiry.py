@@ -23,10 +23,13 @@ LEFT = (
     " `documents.py expire` and commit what it deletes"
 )
 NOT_CARRIED = (
-    "adds or drops more than the dated `## Answers` lines of the files the change deletes,"
-    " under ## In the owner's words"
+    ": a records change may only append, under `## In the owner's words`, the dated"
+    " `## Answers` lines of the files it deletes; this one changes more"
 )
-NOT_SPENT = "is a ticket the owner agreed to build, whose build left no record: only they delete it"
+NOT_SPENT = (
+    "is a ticket the owner agreed to build, and no verdict record of its build is at the merge"
+    " base: deleting it is the owner's merge (ADR 0061)"
+)
 THE_FIRST, THE_SECOND = "- 2026-11-17: Alpha's answer", "- 2026-11-17: Beta's answer"
 
 
@@ -195,7 +198,9 @@ def test_a_feature_spec_only_a_deletion_changes(tmp_path: Path) -> None:
     root = unit(tmp_path, **{spec: "# F\n", **record_of("f")})
     write(root, spec, "# F, rewritten\n")
     commit(root, "docs: rewrite")
-    assert judged(root) == [f"{BUT}{spec} is a feature spec, which a records change only deletes"]
+    assert judged(root) == [
+        f"{BUT}{spec} is a feature spec: a records change may delete it but not edit it"
+    ]
 
 
 def test_the_judge_reads_a_deletion_of_a_file_the_default_branch_changed_since_as_stale(
@@ -234,7 +239,7 @@ def test_a_brief_edit_that_adds_any_other_line_is_not_a_record(tmp_path: Path) -
     expire(root)
     write(root, BRIEF, brief(THE_FIRST, THE_SECOND, "- 2026-11-17: a thing nobody said"))
     commit(root, "docs: and one more")
-    assert judged(root) == [f"{BUT}{BRIEF} {NOT_CARRIED}"]
+    assert judged(root) == [f"{BUT}{BRIEF}{NOT_CARRIED}"]
 
 
 def test_a_brief_edit_that_removes_a_line_is_not_a_record(tmp_path: Path) -> None:
@@ -249,14 +254,14 @@ def test_a_brief_edit_that_removes_a_line_is_not_a_record(tmp_path: Path) -> Non
     expire(root)
     write(root, BRIEF, brief(THE_FIRST, THE_SECOND))
     commit(root, "docs: and the held line dropped")
-    assert judged(root) == [f"{BUT}{BRIEF} {NOT_CARRIED}"]
+    assert judged(root) == [f"{BUT}{BRIEF}{NOT_CARRIED}"]
 
 
 def test_the_carried_lines_with_no_deletion_beside_them_are_not_a_record(tmp_path: Path) -> None:
     root = spent(tmp_path)
     write(root, BRIEF, brief(THE_FIRST))
     commit(root, "docs: a line with no deletion")
-    assert judged(root) == [f"{BUT}{BRIEF} {NOT_CARRIED}"]
+    assert judged(root) == [f"{BUT}{BRIEF}{NOT_CARRIED}"]
 
 
 def test_the_work_tree_reads_as_records_only_when_its_brief_edit_is_the_carried_lines(

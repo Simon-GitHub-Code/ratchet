@@ -17,7 +17,7 @@ import pytest
 
 from ratchet_guards.context import Guard
 from ratchet_guards.manifest import EMPTY
-from tests.support import ROOT, WORKTREE, FakeRepo, make_guard, rules
+from tests.support import NAMES, ROOT, WORKTREE, FakeRepo, make_guard, rules
 from tests.test_units import Heads
 
 W = "guard-path-write"
@@ -290,6 +290,7 @@ DENIED: list[tuple[str, list[str]]] = [
     ("function f { rm -f justfile; }; f", [P, U]),
     ("cat <<E\\ F\nE F\nrm -f justfile\nE", [P]),
     ("cat <<'E F'\nE F\nrm -f justfile\nE", [P]),
+    ('cat <<E"F"\nrm -f justfile\nEF', [P]),
     ("(( x = 1 << y ))\nrm -f justfile\ny", [P]),
     ("echo $(( 1 << 2 ))\nrm -f justfile\n2", [P]),
     ("env -C .github/workflows tee ci.yml", [P, F]),
@@ -416,6 +417,7 @@ DENIED: list[tuple[str, list[str]]] = [
     ("claude -p plugin eval init --bare", ["nested-settings"]),
     ("claude plugin eval init --bare --eval-dir /tmp/x name", ["nested-settings"]),
     ("claude plugin eval init --eval-dir=/tmp/x --bare name", ["nested-settings"]),
+    ("claude plugin eval init --bare --eval-d /tmp/x name", ["nested-settings"]),
     ("claude plugin eval init --bare name --eval-dir ../..", ["nested-settings"]),
     ("claude --bare plugin eval init x", ["nested-settings"]),
     ("claude -p hi disableAllHooks=true", ["nested-settings"]),
@@ -528,6 +530,7 @@ DENIED: list[tuple[str, list[str]]] = [
     ("bash +o pipefail -c 'git push --force'", ["force-push"]),
     ("bash --login -c 'git push --force'", ["force-push"]),
     ("echo 'git push --force' | bash -s arg", ["force-push"]),
+    ("{ echo git push --force | bash; }", ["force-push"]),
     ("case x in y) git push --force;; esac", ["force-push"]),
     ("git --no-pager push --force", ["force-push"]),
     ("git -c core.hooksPath=/tmp/a=b commit -m x", ["hooks-path"]),
@@ -904,6 +907,7 @@ DENIED: list[tuple[str, list[str]]] = [
     ("S=/repo/.git; true || S=/tmp; cd $S && echo x > HEAD", [W]),
     ("if x; then S=/repo/.git; cd $S && echo x > HEAD; fi", [W]),
     ("S=/tmp; if x; then S=/repo/.git; fi; cd $S && echo x > HEAD", [W]),
+    ("S=/repo/.git; if x; then S=/tmp; fi; cd $S && echo x > HEAD", [W]),
     ("S=/tmp; echo | S=/repo/.git; cd $S && echo x > HEAD", [W]),
     ("S=/tmp T=/repo/.git; cd $T && echo x > HEAD", [W]),
     ("S=/repo; T=.git; cd $S/$T && echo x > HEAD", [W]),
@@ -961,6 +965,7 @@ ASKED_ELSEWHERE: list[str] = [
     "cd $S && cp x .github/workflows/ci.yml",
     "cd $S && echo x | tee .github/workflows/ci.yml",
     f"S=/a; unset S; cd $S && {LOST}",
+    f"S=/a; unset T S; cd $S && {LOST}",
     f"S=/a; read S; cd $S && {LOST}",
     f"S=/a; for S in /b; do cd $S; {LOST}; done",
     f"S=/a; (S=/b); cd $S && {LOST}",
@@ -987,6 +992,8 @@ NOT_ASKED_ELSEWHERE: list[str] = [
     "cd /tmp/x && cd $S && cd /tmp/y && " + LOST,
     "S=/a; cd $S && sed -i s/a/b/ src/app.py",
     f"S=/a; if x; then S=/b; fi; cd $S && {LOST}",
+    f"{{ S=/a; }}; cd $S && {LOST}",
+    f"S=/a; for T in S; do :; done; cd $S && {LOST}",
     f"(cd $S); {LOST}",
     f"(cd $S && ls) && {LOST}",
 ]
@@ -1259,6 +1266,7 @@ ALLOWED: list[str] = [
     "python3 -c \"import tomllib; print(tomllib.load(open('config/lint.toml','rb')))\"",
     "python3 -c \"print(open('CLAUDE.md').read().replace('a', 'b'))\"",
     "python3 -c \"open('/tmp/out.txt','w').write('x')\"",
+    "python3 -c \"open('out.txt', 'w').write('src/*/CLAUDE.md')\"",
     "python3 -c \"import os; x = 'a / b'; os.unlink('/tmp/out.txt')\"",
     (
         "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('app/core/money.py')\n"
@@ -1692,6 +1700,19 @@ def test_unknown_branch_is_not_main(command: str) -> None:
     assert rules(command, make_guard(FakeRepo(branch=None))) == []
 
 
+@pytest.mark.parametrize("command", ["git push", "git push origin feat/work"])
+def test_a_push_git_sends_to_a_default_branch_is_a_push_to_main_under_any_name(
+    command: str,
+) -> None:
+    repo = FakeRepo(names={"feat/work@{push}": "refs/remotes/origin/main"})
+    assert rules(command, make_guard(repo)) == ["push-main"]
+
+
+def test_a_sync_asks_the_upstream_of_every_default_branch_the_line_may_be_on() -> None:
+    repo = FakeRepo(names={**NAMES, "master@{upstream}": "refs/heads/feature/x"})
+    assert rules("git switch $B && git merge --ff-only @{u}", make_guard(repo)) == [M]
+
+
 def test_amending_a_pushed_head_is_denied() -> None:
     guard = make_guard(FakeRepo(pushed=True))
     assert rules("git commit --amend -m x", guard) == ["amend-pushed"]
@@ -1781,6 +1802,11 @@ def test_a_move_the_line_does_not_spell_out_is_followed_or_refused(
 @pytest.mark.parametrize("command", [command for command, expected in FROM_APP if P in expected])
 def test_a_write_followed_to_the_root_is_refused_on_main(command: str) -> None:
     assert P in rules(command, make_guard(FakeRepo(branch="main")), cwd=ROOT / "app")
+
+
+def test_a_tilde_beside_a_home_assignment_is_the_home_from_before_it() -> None:
+    guard = make_guard(FakeRepo(branch="main"))
+    assert rules("HOME=/repo cd ~; echo x > justfile", guard, cwd=ROOT / "app") == [UNRESOLVED]
 
 
 # A session in one checkout whose line `cd`s into another: the write is judged by the checkout that

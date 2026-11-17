@@ -16,6 +16,7 @@ SPEC = ".scratch/f/spec.md"
 RESOLVED = "# 01: A\n\nStatus: resolved\n\n## Answers\n\n- the first answer\n"
 BRIEF = f"# Brief\n\n{documents.OWNERS_WORDS}\n\n## Purpose\n\nA purpose.\n"
 THEN = f", then run `{route.EXPIRE}`"
+PLUGIN_FORM = "python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "
 
 
 def unit(tmp_path: Path, **extra: str) -> Path:
@@ -69,15 +70,17 @@ def test_a_unit_left_expired_in_the_tree_is_deleted_before_anything_else(tmp_pat
     root = unit(tmp_path, **{ONE: RESOLVED})
     step = route.decide(root, None)
     assert (step.command, step.stage, step.then) == (route.EXPIRE, "expire", route.NEXT)
-    assert step.why.startswith("2 steering document(s) have expired and are still in the tree (")
-    assert "this deletes them and appends their `## Answers` lines to the design brief" in step.why
+    assert step.why == (
+        f"{ONE}, {SPEC} have expired and are still in the tree: this deletes them and carries"
+        " their `## Answers` lines to the design brief's `## In the owner's words`"
+    )
 
 
 def test_the_listing_of_an_expired_unit_is_cut_where_it_is_long(tmp_path: Path) -> None:
     more = {f".scratch/f/issues/0{n}-x.md": RESOLVED for n in range(1, 6)}
     step = route.decide(unit(tmp_path, **more), None)
     assert step.stage == "expire"
-    assert " ...)" in step.why
+    assert " ... have expired and are still in the tree" in step.why
 
 
 def test_after_the_deleter_has_run_the_records_stage_names_the_merge(tmp_path: Path) -> None:
@@ -86,3 +89,17 @@ def test_after_the_deleter_has_run_the_records_stage_names_the_merge(tmp_path: P
     step = route.decide(root, None)
     assert step.stage == "records"
     assert step.command == "`just merge --records`"
+
+
+def test_a_lone_expired_ticket_is_named_in_the_singular(tmp_path: Path) -> None:
+    root = repository(tmp_path, {**ADOPTED, "docs/design-brief.md": BRIEF, ONE: RESOLVED})
+    step = route.decide(root, None)
+    assert step.why == (
+        f"{ONE} has expired and is still in the tree: this deletes it and carries its"
+        " `## Answers` lines to the design brief's `## In the owner's words`"
+    )
+
+
+def test_the_deleter_runs_under_the_plugin_interpreter_form() -> None:
+    assert route.EXPIRE.startswith(PLUGIN_FORM)
+    assert route.EXPIRE.endswith('/scripts/documents.py" expire')
