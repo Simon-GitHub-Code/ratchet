@@ -1161,6 +1161,15 @@ def test_a_branch_abandoned_or_owned_by_a_run_is_not_named_for_the_owners_merge(
     assert route.owner_branch_waiting(route.observe(root)) is None
 
 
+def test_a_branch_the_merge_judge_passes_is_not_named_for_the_owners_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = held_root(tmp_path)
+    owner_branch(root, "fix/gate")
+    monkeypatch.setattr(route.merge_ready, "judge", lambda *_args: [])
+    assert route.owner_branch_waiting(route.observe(root)) is None
+
+
 def test_a_guard_hold_with_no_base_commit_is_released_by_the_ticket_and_not_by_landing(
     tmp_path: Path,
 ) -> None:

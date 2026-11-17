@@ -12,6 +12,7 @@ from queue_notes import (
     holds_of,
     mechanical,
     note_path,
+    safeguarded,
     split_into,
     write_note,
 )
@@ -59,6 +60,10 @@ def test_a_blocked_run_is_released_only_when_a_path_it_named_changes_on_the_defa
     write(root, "guards/manifest.toml", "b\n")
     commit(root, "chore(core): the guard edit lands")
     assert caused(root, note)
+
+
+def test_a_note_that_owes_nothing_is_not_released_by_a_safeguard(tmp_path: Path) -> None:
+    assert not safeguarded(tmp_path, {"owes": [], "reviews": []})
 
 
 def test_a_note_with_no_default_branch_commit_is_released_by_no_landed_change(
