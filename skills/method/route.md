@@ -164,7 +164,7 @@ After its three lines the route prints an `also:` line for each of these, in thi
 
 **A standing answer.** For each question the owner has answered with the recommended option three times running, the line proposes a standing answer and changes nothing. Read `scripts/questions.py` for which questions count and how an answer is recorded.
 
-**A sign of a life event.** When the tree shows a sign of a life event the binding does not declare, the line names the sign, the event's meaning and `/ratchet:safeguard <event>`. A sign is a glob of the binding's `## Life event signs` table, or a shipped sign of `application-types.toml`, such as the files a maintainer writes for strangers. Declaring it is the owner's. When the owner says not yet, `/ratchet:next` runs `route.py --decline <event>`, which records each sign it saw in `.ratchet/events.tsv`. The line comes back only when a sign appears that was not there then, so an owner who said no is not asked again for the same evidence.
+**A sign of a life event.** When the tree shows a sign of a life event the binding does not declare, the line names the sign, the event's meaning and `/ratchet:safeguard <event>`. A sign is a glob of the binding's `## Life event signs` table, or a shipped sign of `application-types.toml`, such as the files a maintainer writes for strangers. A README or a licence is no sign: a private project has them too. Declaring it is the owner's. When the owner says not yet, `/ratchet:next` runs `route.py --decline <event>`, which records each sign it saw in `.ratchet/events.tsv`. The line comes back only when a sign appears that was not there then, so an owner who said no is not asked again for the same evidence.
 
 ## What the route cannot see
 

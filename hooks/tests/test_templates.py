@@ -977,10 +977,52 @@ def test_the_binding_template_holds_the_suites_table_and_names_the_gate_in_affec
 
 def test_the_ci_template_job_that_runs_tests_changed_asks_for_the_later_tier_setup() -> None:
     job = WORKFLOWS["ci.yml"].partition("  tier1:\n")[2].partition("  tier1-long:")[0]
-    assert "# bind: the setup each later-tier suite needs" in job
+    assert '- { name: "bind: the setup each later-tier suite needs' in job
     assert "if: matrix.gate == 'tests-changed'" in job
     assert "deep.yml sets up the whole suite" in job
     assert "tests-changed" not in WORKFLOWS["deep.yml"]
+
+
+def test_every_toolchain_placeholder_is_a_step_that_fails_until_the_project_replaces_it() -> None:
+    for text in (*WORKFLOWS.values(), WEEKLY):
+        placeholders = [line for line in text.splitlines() if "bind:" in line]
+        assert placeholders
+        for line in placeholders:
+            assert re.fullmatch(r' +- \{ name: "bind: [^"]+", run: exit 1 \}', line), line
+
+
+def concurrency_of(text: str) -> str:
+    return text.partition("\nconcurrency:\n")[2].partition("\nenv:\n")[0]
+
+
+def test_a_superseded_run_is_cancelled_but_a_default_branch_ci_or_a_merge_in_flight_runs_out() -> (
+    None
+):
+    pulls_only = "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
+    assert concurrency_of(WORKFLOWS["ci.yml"]) == f"  group: ci-${{{{ github.ref }}}}\n{pulls_only}"
+    assert concurrency_of(WORKFLOWS["deep.yml"]).endswith("\n  cancel-in-progress: true")
+    assert concurrency_of(WEEKLY).endswith("\n  cancel-in-progress: true")
+    assert concurrency_of(MERGE) == "  group: merge\n  cancel-in-progress: false"
+
+
+def test_the_merge_job_runs_only_after_a_green_ci_of_a_pull_request_from_this_repository() -> None:
+    condition = MERGE.partition("  merge:\n    if: >-\n")[2].partition("\n    runs-on:")[0]
+    assert [line.strip() for line in condition.splitlines()] == [
+        "github.event.workflow_run.event == 'pull_request'",
+        "&& github.event.workflow_run.conclusion == 'success'",
+        "&& github.event.workflow_run.path == '.github/workflows/ci.yml'",
+        "&& github.event.workflow_run.head_repository.full_name == github.repository",
+    ]
+    assert "on:\n  workflow_run:\n    workflows: [ci]\n    types: [completed]\n" in MERGE
+
+
+def test_the_merge_job_merges_only_the_head_it_judged_and_as_a_merge_commit(
+    tmp_path: Path,
+) -> None:
+    code, _, log = merge_job(tmp_path, forge({1: ("aaaa", "feat/a")}))
+    assert code == 0
+    [merge] = [line for line in log.splitlines() if "-X PUT" in line]
+    assert "repos/owner/repo/pulls/1/merge -f sha=aaaa -f merge_method=merge" in merge
 
 
 def mutation_value(env_set: dict[str, str], tmp_path: Path) -> str:
