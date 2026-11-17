@@ -228,6 +228,9 @@ install:
 dependencies dir:
     @echo "bind: print the records the Dependencies section describes, for the files under {{dir}}"; exit 1
 
+comments-list *files:
+    @echo "bind: list the comments of the files given, read as data: one tab-separated record per line a comment occupies (path, line, comment or doc, the text without its delimiters); exit non-zero on a file it cannot read"; exit 1
+
 # The one guard every recipe that runs a file of the plugin depends on.
 [no-exit-message]
 _plugin:
