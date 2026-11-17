@@ -90,6 +90,19 @@ def test_a_file_that_several_lcov_records_name_is_tallied_once(tmp_path: Path) -
     assert (tally.lines, tally.lines_hit, tally.branches, tally.branches_hit) == (2, 1, 2, 1)
 
 
+def test_a_line_one_lcov_record_hit_stays_hit_when_a_later_record_of_the_file_missed_it(
+    tmp_path: Path,
+) -> None:
+    root = project(tmp_path)
+    later_misses = (
+        "SF:src/app/b.py\nDA:1,3\nBRDA:1,0,0,2\nend_of_record\n"
+        "TN:other\nSF:src/app/b.py\nDA:1,0\nBRDA:1,0,0,0\nend_of_record\n"
+    )
+    (root / "coverage.info").write_text(later_misses)
+    tally = coverage_groups.measured(root / "coverage.info", root)["src/app/b.py"]
+    assert (tally.lines, tally.lines_hit, tally.branches, tally.branches_hit) == (1, 1, 1, 1)
+
+
 def test_a_report_in_neither_format_is_red_and_not_an_unmeasured_green(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
