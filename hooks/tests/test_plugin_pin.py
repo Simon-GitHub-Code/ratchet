@@ -287,6 +287,14 @@ def test_with_pin_leaves_a_line_that_only_starts_like_the_pin_as_the_projects_ow
     assert PIN_LINE in pinned
 
 
+def test_with_pin_leaves_a_note_that_begins_in_the_pins_shape_as_the_projects_own() -> None:
+    note = "- Ratchet plugin: 1.2.3 at github.com is where the plugin comes from\n"
+    held = BINDING.replace("`just`.\n", f"`just`.\n\n{note}")
+    pinned = plugin_pin.with_pin(PIN_LINE)(held)
+    assert note in pinned
+    assert PIN_LINE in pinned
+
+
 def test_with_pin_adds_the_line_after_the_runner_paragraph_as_the_template_does() -> None:
     assert plugin_pin.with_pin(PIN_LINE)(BINDING) == BINDING.replace(
         "`just`.\n", f"`just`.\n\n{PIN_LINE}\n"
@@ -488,6 +496,20 @@ def test_a_clone_at_a_release_tag_is_at_the_commit_its_release_file_names(
     assert run(other, clone, capsys)[0] == 1
 
 
+def test_a_clone_at_a_release_tag_with_a_file_changed_is_at_its_head(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    work, _ = plugin(tmp_path / "work")
+    repos.write(work, "CHANGELOG.md", "# Changelog\n\n## 1.2.3\n\nThe release.\n")
+    repos.commit(work, "docs(core): the changelog")
+    assert release.main(["release.py", "--repo", str(work)]) == 0
+    capsys.readouterr()
+    clone = tmp_path / "clone"
+    repos.git(tmp_path, "clone", "-q", "--branch", "v1.2.3", str(work), str(clone))
+    repos.write(clone, MANIFEST, '{"version": "1.2.3", "edited": true}')
+    assert plugin_pin.commit_of(clone) == repos.git(clone, "rev-parse", "HEAD")
+
+
 def test_a_clone_that_tracks_no_release_file_is_at_its_head(tmp_path: Path) -> None:
     used, head = plugin(tmp_path / "plugin")
     assert plugin_pin.commit_of(used) == head
@@ -527,6 +549,22 @@ def test_the_pin_line_a_plugin_writes_holds_the_tree_id_of_its_commit(tmp_path: 
     assert plugin_pin.line_for(used) == f"- Ratchet plugin: 1.2.3 at {commit} tree {tree(used)}"
     held = plugin_pin.pinned(plugin_pin.line_for(used))
     assert held == plugin_pin.Pin("1.2.3", commit, tree(used))
+
+
+def test_a_copys_tree_id_leaves_out_what_the_harness_and_the_interpreter_write(
+    tmp_path: Path,
+) -> None:
+    copy = tmp_path / "copy"
+    repos.write(copy, "scripts/x.py", "print(1)\n")
+    held = plugin_pin.copy_tree_id(copy)
+    for name in (
+        "scripts/__pycache__/x.pyc",
+        ".in_use",
+        ".orphaned_at",
+        ".claude-plugin/commit",
+    ):
+        repos.write(copy, name, "left out\n")
+    assert plugin_pin.copy_tree_id(copy) == held
 
 
 def test_a_folder_that_is_not_there_or_cannot_be_read_has_no_tree_id(tmp_path: Path) -> None:
