@@ -77,7 +77,15 @@ DENIED_TOOLS = (
     "ArtifactData",
 )
 SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc", "/opt", "/proc/self")
-SINKS = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd", "/dev/zero", "/nonexistent")
+SINKS = (
+    "/dev/null",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/tty",
+    "/dev/fd",
+    "/dev/zero",
+    "/nonexistent",
+)
 SECRET = re.compile(
     r"\.credentials\.json|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|/proc/\S*environ"
 )
@@ -93,7 +101,7 @@ FORBIDDEN = (
     (rf"{GIT}(?:send-email|credential)\b", "reaches a remote"),
     (rf"{_RUN}(?:gh|glab)(?!\s+(?:auth\s+status|--version)\b){_END}", "calls a forge"),
     (rf"{_RUN}hub{_END}", "calls a forge"),
-    (rf"(?:://|@|[\w-]\.)(?:github|gitlab|bitbucket)\.(?:com|org|io)\b", "names a forge"),
+    (r"(?:://|@|[\w-]\.)(?:github|gitlab|bitbucket)\.(?:com|org|io)\b", "names a forge"),
     (
         (
             rf"{_RUN}(?:wget|ssh|scp|sftp|nc|ncat|netcat|socat|telnet|ftp|lftp|aria2c"
@@ -102,8 +110,10 @@ FORBIDDEN = (
         "opens a network connection",
     ),
     (
-        rf"{_RUN}rsync(?:[^\S\n]+[^;&|\n\s]+)*?[^\S\n]+"
-        r"(?:rsync://|[\w.-]+@[\w.-]+:|[A-Za-z0-9][\w.-]*:)",
+        (
+            rf"{_RUN}rsync(?:[^\S\n]+[^;&|\n\s]+)*?[^\S\n]+"
+            r"(?:rsync://|[\w.-]+@[\w.-]+:|[A-Za-z0-9][\w.-]*:)"
+        ),
         "opens a network connection",
     ),
     (rf"{_RUN}twine{_END}", "publishes to a registry"),

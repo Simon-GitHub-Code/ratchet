@@ -171,7 +171,7 @@ ALLOWED = [
         '"/tmp/fh-run/plugin/scripts/route.py" --root . --offline'
     ),
     "go get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest",
-    "go -C /tmp/fh-run/probe get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest",
+    "go -C /tmp/fh-run/p get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest",
     "go list -m -f '{{.Path}}' github.com/rhysd/actionlint@latest",
     "for m in github.com/rhysd/actionlint; do curl -s https://proxy.golang.org/$m/@latest; done",
     "rsync -a --ignore-existing --itemize-changes /tmp/fh-run/plugin/t/ /tmp/fh-run/app/",
