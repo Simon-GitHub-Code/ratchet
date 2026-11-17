@@ -445,6 +445,18 @@ def test_a_branch_cannot_make_the_entry_point_lenient_for_itself(root: Path) -> 
     assert any("not dependency-only: alpha 1.2.0 changed in place" in r for r in reasons)
 
 
+def test_a_dependencies_section_a_branch_adds_judges_nothing_of_its_own_change(
+    tmp_path: Path,
+) -> None:
+    files = {**BASE, BINDING: f"# Binding\n\n- Application types: service, library\n{LIVE}"}
+    repository(tmp_path, files)
+    branch(tmp_path, "feature/4-thing")
+    change(
+        tmp_path, {BINDING: BASE[BINDING], "app.manifest": stack.MANIFEST + "use main beta 1.0\n"}
+    )
+    assert "guard: app.manifest (tool-config)" in judged(tmp_path)
+
+
 def test_a_binding_without_the_section_sends_every_manifest_change_to_the_owner(
     tmp_path: Path,
 ) -> None:
@@ -1586,6 +1598,15 @@ def test_a_link_that_turns_into_a_number_or_back_is_the_owners(
     assert judged(repo) == [f"{BUT}{TICKET} {FROZEN}"]
 
 
+def test_a_ref_the_preflight_reads_differently_from_the_link_pattern_is_the_owners(
+    tmp_path: Path,
+) -> None:
+    ticket = WITH_LINKS.replace("Blocked by: 02-b.md", "Blocked by: [02-b.md]")
+    repo = linked_by(tmp_path, ticket)
+    change(repo, {TICKET: ticket.replace("[02-b.md]", "[./02-b.md]")}, record=False)
+    assert judged(repo) == [f"{BUT}{TICKET} {FROZEN}"]
+
+
 def test_a_parent_section_in_place_of_a_line_is_the_owners(tmp_path: Path) -> None:
     ticket = WITH_LINKS.replace("Parent: ../spec.md\n", "")
     repo = linked_by(tmp_path, ticket + "\n## Parent\n\n../spec.md\n")
@@ -1779,6 +1800,20 @@ def test_a_ticket_no_one_agreed_to_takes_its_conjecture_and_answers(tmp_path: Pa
     appended = "\n## Conjecture\n\nIt works.\n\n## Answers\n\nQ: a? A: b.\n"
     change(tmp_path, {path: "# 02: B\n\nStatus: needs-info\n" + appended}, record=False)
     assert judged(tmp_path) == []
+
+
+def test_a_new_ticket_taking_the_number_of_a_ticket_only_the_tip_holds_is_the_owners(
+    tracked: Path,
+) -> None:
+    other = ".scratch/thing/issues/02-b.md"
+    path = ".scratch/thing/issues/2-c.md"
+    git(tracked, "checkout", "-q", "main")
+    write(tracked, other, "# 02: B\n\nStatus: needs-triage\n")
+    commit(tracked, "docs(tracker): a second ticket lands on the default branch")
+    git(tracked, "checkout", "-q", "records-thing")
+    change(tracked, {path: "# 02: C\n\nStatus: needs-triage\n"}, record=False)
+    reason = f"shares its number with {other}, which a `Blocked by` line could mean"
+    assert judged(tracked) == [f"{BUT}{path} {reason}"]
 
 
 def test_no_ticket_is_closed_by_records_alone(tracked: Path) -> None:
