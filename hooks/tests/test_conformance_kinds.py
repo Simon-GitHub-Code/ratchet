@@ -485,7 +485,8 @@ def test_a_justfile_that_falls_back_to_the_marketplace_clone_is_rewritten_to_the
     [found] = fallback_findings(repo)
     assert isinstance(found.fix, conformance.Auto)
     made = found.fix.want((repo / JUSTFILE).read_text(encoding="utf-8"))
-    assert made == (conformance.ADOPT_TEMPLATES / "justfile").read_text(encoding="utf-8")
+    template = (conformance.ADOPT_TEMPLATES / "justfile").read_text(encoding="utf-8")
+    assert made == conformance.INCREMENTAL_PLACEHOLDER.sub('"stated for this stack"', template)
 
 
 def test_a_justfile_with_the_templates_plugin_line_is_not_held_to_the_marketplace(

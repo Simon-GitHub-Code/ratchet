@@ -136,9 +136,9 @@ shards := env_var_or_default("SHARDS", "1")
 
 # The mutation tool's incremental mode, from the `- Incremental:` line of the binding's Speed
 # section: the option the recipe adds to the tool's command so a local run reuses the last run's
-# results. It is "" in CI, which runs every mutant without the cache, and "" where the line says
+# results. It is "" in CI, which runs every mutant without the cache, and in the bite proof's copy, and "" where the line says
 # `none: <reason>`. The forge sets CI.
-mutation_incremental := if env_var_or_default("CI", "") == "" { "bind: the mutation tool's option that reuses the last run's results" } else { "" }
+mutation_incremental := if env_var_or_default("CI", "") + env_var_or_default("RATCHET_BITING", "") == "" { "bind: the mutation tool's option that reuses the last run's results" } else { "" }
 
 port := "8000"
 
@@ -427,7 +427,7 @@ test-counts:
 # line per mutant; the docstring of `scripts/mutation_survivors.py` has it) and hands the lines to
 # `scripts/mutation_survivors.py --tool <name> --mutants <file>`.
 mutation-changed:
-    @echo "bind: through changed, mutate the functions changed since {base} with {{mutation_incremental}} added to the tool's command, shard {{shard}} of {{shards}}; zero unregistered survivors"; exit 1
+    @echo "bind: through changed, mutate the functions changed since {base}, with the `mutation_incremental` option added to the tool's command, shard {{shard}} of {{shards}}; zero unregistered survivors"; exit 1
 
 contracts-check:
     @echo "bind: regenerate contract artefacts and diff"; exit 1
