@@ -474,8 +474,9 @@ def ticket_step(root: Path, gh: preflight.Runner | None, checkout: Checkout) -> 
             why = hold.reasons[0] if hold.reasons else "the drain parked it"
             return Step(
                 "; ".join(releases(hold, held, checkout.default_branch)),
-                f'the drain parked ticket {held.ref} "{held.title}" and holds it until its text'
-                f" changes or the cause it names lands ({why});"
+                f'the drain parked ticket {held.ref} "{held.title}" and holds it until each part'
+                " of the park is met: a change to its text for questions, the guard edits landed"
+                f" for guard edits ({why});"
                 f" {FEATURE} would be refused again",
                 FEATURE + guard_words(hold.kinds),
                 "blocked-run",
@@ -665,7 +666,7 @@ def checked_out(root: Path) -> set[str]:
     }
 
 
-def waiting_records(checkout: Checkout) -> list[str]:
+def unowned_branches(checkout: Checkout) -> list[str]:
     root, default = checkout.root, checkout.default_branch
     listed = gatelib.git(root, "branch", "--no-merged", default, "--format=%(refname:short)")
     held = checked_out(root)
@@ -674,11 +675,41 @@ def waiting_records(checkout: Checkout) -> list[str]:
         for name in (listed or "").split()
         if name not in (default, checkout.branch)
         and name not in held
-        and could_be_records(root, default, name)
         and not owned_by_a_run(root, name)
-        and merge.holds_only_records(root, default, name)
     ]
     return sorted(names, key=lambda name: first_commit_time(root, default, name))
+
+
+def waiting_records(checkout: Checkout) -> list[str]:
+    root, default = checkout.root, checkout.default_branch
+    return [
+        name
+        for name in unowned_branches(checkout)
+        if could_be_records(root, default, name) and merge.holds_only_records(root, default, name)
+    ]
+
+
+def described(root: Path, default: str, name: str) -> bool:
+    listed = gatelib.git(root, "diff", "--name-only", "--no-renames", f"{default}...{name}")
+    return f"{CHANGES}/{name.replace('/', '-')}.md" in (listed or "").split("\n")
+
+
+def owner_branch_waiting(checkout: Checkout) -> Step | None:
+    root, default = checkout.root, checkout.default_branch
+    for name in unowned_branches(checkout):
+        if name.startswith(f"{formal_model.NAMESPACE}/") or not described(root, default, name):
+            continue
+        reasons = merge_ready.judge(root, f"{merge.HEADS}{default}", f"{merge.HEADS}{name}")
+        if reasons:
+            return Step(
+                owner_merge(default, name),
+                f"the merge judge leaves branch `{name}` to the owner, and no run is attached to"
+                f" it: {reasons[0].text}; {merge_command(root, name)} prints every reason. A ticket"
+                " held for the change it carries is released once it lands",
+                NEXT,
+                "owner-merge",
+            )
+    return None
 
 
 def records_waiting(checkout: Checkout) -> Step | None:
@@ -720,7 +751,7 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         return dirty_step(checkout)
     if not checkout.on_default:
         return switch_step(checkout) or pull_request_step(checkout, gh)
-    waiting = records_waiting(checkout) or fill_step(root)
+    waiting = records_waiting(checkout) or owner_branch_waiting(checkout) or fill_step(root)
     if waiting is not None:
         return waiting
     missing = records_missing(root)

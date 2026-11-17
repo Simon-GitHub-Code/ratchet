@@ -48,6 +48,7 @@ class Ticket(StrEnum):
     HELD = "held"
     ASKED = "asked"
     GUARDED = "guarded"
+    ASKED_GUARDED = "asked-guarded"
     OWED = "owed"
     PARKED = "parked"
     OWES_ITS_ROW = "owes-its-row"
@@ -102,6 +103,7 @@ class Advice(StrEnum):
     SWITCH = "switch"
     MERGE = "merge"
     MERGE_RECORDS = "merge-records"
+    OWNER_MERGE = "owner-merge"
     FILL = "fill"
     REVIEW = "review"
     SAFEGUARD = "safeguard"
@@ -174,6 +176,7 @@ class ActionName(StrEnum):
     AGENT_LANDS_RECORDS = "AgentLandsRecords"
     RECORDS_RUN_STOPS = "RecordsRunStops"
     OWNER_MERGES_RECORDS = "OwnerMergesRecords"
+    OWNER_MERGES_THE_WAITING_BRANCH = "OwnerMergesTheWaitingBranch"
     MIRRORED_CODE_LANDS = "MirroredCodeLands"
     AGENT_RUNS_A_ROUND = "AgentRunsARound"
     OWNER_MERGES_THE_ROUND = "OwnerMergesTheRound"
@@ -186,8 +189,18 @@ class ActionName(StrEnum):
 Slots = tuple[Ticket, Ticket]
 BLOCKED_BY: Final = {1: 0}
 HOLDS: Final = frozenset(
-    {Ticket.HELD, Ticket.ASKED, Ticket.GUARDED, Ticket.OWED, Ticket.PARKED, Ticket.OWES_ITS_ROW}
+    {
+        Ticket.HELD,
+        Ticket.ASKED,
+        Ticket.GUARDED,
+        Ticket.ASKED_GUARDED,
+        Ticket.OWED,
+        Ticket.PARKED,
+        Ticket.OWES_ITS_ROW,
+    }
 )
+ASKING: Final = frozenset({Ticket.ASKED, Ticket.ASKED_GUARDED})
+GUARDING: Final = frozenset({Ticket.GUARDED, Ticket.ASKED_GUARDED})
 STATED: Final = frozenset({Ticket.STATED})
 LABELLED: Final = (
     HOLDS | STATED | frozenset({Ticket.READY, Ticket.STALE, Ticket.BUILT, Ticket.MERGED})
@@ -203,6 +216,7 @@ class World:
     head: Head = Head.MAIN
     tree: Tree = Tree.CLEAN
     parked: bool = False
+    waits: bool = False
     foundation: bool = False
     spec: Spec = Spec.NONE
     tickets: Slots = (Ticket.NONE, Ticket.NONE)
@@ -250,6 +264,7 @@ def rest(world: World) -> bool:
         and world.upkeep is Upkeep.CLEAR
         and world.defect is Defect.NONE
         and not pruning(world)
+        and not world.waits
     )
 
 
@@ -322,9 +337,9 @@ def lacks_the_line(world: World) -> bool:
     )
 
 
-def held_for(world: World, ticket: Ticket) -> bool:
+def held_for(world: World, *tickets: Ticket) -> bool:
     slots = free(world)
-    return bool(slots) and not buildable(world) and world.tickets[slots[0]] is ticket
+    return bool(slots) and not buildable(world) and world.tickets[slots[0]] in tickets
 
 
 @dataclass(frozen=True)
@@ -356,6 +371,7 @@ MEET: Final = Rule(Advice.CHANGE_TICKET, lambda w: held_for(w, Ticket.OWES_ITS_R
 COMMENTS_OWED: Final = Rule(Advice.PRUNE_COMMENTS, lambda w: w.comments)
 PAGES_DUE: Final = Rule(Advice.PRUNE_PAGES, lambda w: w.pages)
 PRUNES: Final = frozenset({Advice.PRUNE_COMMENTS, Advice.PRUNE_PAGES})
+WAITING_BRANCH: Final = Rule(Advice.OWNER_MERGE, lambda w: w.waits)
 
 
 CHAIN: Final = (
@@ -369,6 +385,7 @@ CHAIN: Final = (
     Rule(Advice.SWITCH, lambda w: w.head is Head.MERGED),
     Rule(Advice.MERGE, lambda w: w.head is Head.WORK),
     Rule(Advice.MERGE_RECORDS, lambda w: w.parked),
+    WAITING_BRANCH,
     Rule(Advice.FILL, lambda w: w.fills),
     Rule(Advice.REVIEW, lambda w: w.reviews),
     SAFEGUARD_OWED,
@@ -388,7 +405,7 @@ CHAIN: Final = (
     Rule(Advice.RESOLVE, lambda w: Ticket.MERGED in w.tickets),
     Rule(Advice.BLOCKED, lambda w: not free(w)),
     Rule(Advice.BLOCKED_RUN, lambda w: held_for(w, Ticket.HELD)),
-    Rule(Advice.ANSWER, lambda w: held_for(w, Ticket.ASKED)),
+    Rule(Advice.ANSWER, lambda w: held_for(w, *ASKING)),
     Rule(Advice.LAND_GUARD, lambda w: held_for(w, Ticket.GUARDED)),
     Rule(Advice.SAFEGUARD, lambda w: held_for(w, Ticket.OWED)),
     MEET,
@@ -414,7 +431,7 @@ def swapped(rule: Rule, *by: Rule) -> Chain:
 def beneath(world: World, chain: Chain = CHAIN) -> str:
     if Ticket.BUILT in world.tickets:
         return "building"
-    clean = replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False)
+    clean = replace(world, head=Head.MAIN, tree=Tree.CLEAN, parked=False, waits=False)
     recorded = replace(clean, architecture=Architecture.RECORDED)
     owed = replace(recorded, owes=False, reviews=False, fills=False, upkeep=Upkeep.CLEAR)
     due = advice(owed, chain)
@@ -528,12 +545,25 @@ def drops_the_answers(before: World, after: World) -> World:
     return after
 
 
+def by_its_own_cause(_before: World, after: World) -> World:
+    return after
+
+
+def by_any_cause(before: World, after: World) -> World:
+    first, second = (
+        Ticket.STATED if old is Ticket.ASKED_GUARDED and new in HOLDS - {old} else new
+        for old, new in zip(before.tickets, after.tickets, strict=True)
+    )
+    return replace(after, tickets=(first, second))
+
+
 @dataclass(frozen=True)
 class Variant:
     deleter: Deleter = deletes
     chain: Chain = CHAIN
     refused_behind: frozenset[ActionName] = frozenset()
     prune_blocks: bool = False
+    release: Deleter = by_its_own_cause
 
     def advice(self, world: World) -> Advice:
         return advice(world, self.chain)
@@ -555,7 +585,13 @@ class Action:
         if self.name in variant.refused_behind and world.upkeep in BEHIND:
             return iter(())
         return (
-            lined(kept(variant.deleter(world, answered(self.name, world, after))))
+            lined(
+                kept(
+                    variant.deleter(
+                        world, variant.release(world, answered(self.name, world, after))
+                    )
+                )
+            )
             for after in self.outcomes(world)
         )
 
@@ -883,7 +919,7 @@ per_ticket(
 
 @action(ActionName.DRAIN_PARKS_TICKET)
 def _drain_parks_ticket(world: World) -> Iterator[World]:
-    for kind in (Ticket.ASKED, Ticket.GUARDED, Ticket.PARKED):
+    for kind in (Ticket.ASKED, Ticket.GUARDED, Ticket.ASKED_GUARDED, Ticket.PARKED):
         yield from moves(world, Move(one(Ticket.STATED), kind, needs_free=True))
     if defect_open(world):
         for parked in moves(world, Move(one(Ticket.STATED), Ticket.OWES_ITS_ROW, needs_free=True)):
@@ -902,16 +938,31 @@ def _drain_parks_for_a_safeguard(world: World) -> Iterator[World]:
         yield replace(world, tickets=(Ticket.MERGED, Ticket.OWED), owes=True)
 
 
-per_ticket(
-    ActionName.OWNER_ANSWERS_ON_THE_TICKET,
-    (Advice.ANSWER,),
-    Move(one(Ticket.ASKED), Ticket.STATED),
-)
-per_ticket(
-    ActionName.OWNER_LANDS_GUARD_EDITS,
-    (Advice.LAND_GUARD,),
-    Move(one(Ticket.GUARDED), Ticket.STATED),
-)
+@action(ActionName.OWNER_ANSWERS_ON_THE_TICKET, Advice.ANSWER)
+def _owner_answers_on_the_ticket(world: World) -> Iterator[World]:
+    yield from moves(world, Move(one(Ticket.ASKED), Ticket.STATED))
+    yield from moves(world, Move(one(Ticket.ASKED_GUARDED), Ticket.GUARDED))
+
+
+def guard_landed(world: World) -> World:
+    after = {Ticket.GUARDED: Ticket.STATED, Ticket.ASKED_GUARDED: Ticket.ASKED}
+    first, second = (after.get(ticket, ticket) for ticket in world.tickets)
+    return replace(world, tickets=(first, second))
+
+
+@action(ActionName.OWNER_LANDS_GUARD_EDITS, Advice.LAND_GUARD)
+def _owner_lands_guard_edits(world: World) -> Iterator[World]:
+    if calm(world) and not world.waits and GUARDING & set(world.tickets):
+        yield guard_landed(world)
+        yield replace(world, waits=True)
+
+
+@action(ActionName.OWNER_MERGES_THE_WAITING_BRANCH, Advice.OWNER_MERGE)
+def _owner_merges_the_waiting_branch(world: World) -> Iterator[World]:
+    if calm(world) and world.waits:
+        yield guard_landed(replace(world, waits=False))
+
+
 per_ticket(
     ActionName.OWNER_CHANGES_TICKET,
     (Advice.CHANGE_TICKET,),
@@ -1224,13 +1275,14 @@ def never_merges_a_merged_branch(label: str) -> str:
 def above_architecture_open(world: World) -> bool:
     return not (
         adopted(world)
-        and (world.head, world.tree, world.parked) == (Head.MAIN, Tree.CLEAN, False)
+        and (world.head, world.tree, world.parked, world.waits)
+        == (Head.MAIN, Tree.CLEAN, False, False)
         and not (world.fills or world.reviews or (world.owes and not defect_open(world)))
     )
 
 
 ABOVE_ARCHITECTURE_CLEAR: Final = (
-    'setup = "bound" /\\ hooks /\\ head = "main" /\\ tree = "clean" /\\ ~parked'
+    'setup = "bound" /\\ hooks /\\ head = "main" /\\ tree = "clean" /\\ ~parked /\\ ~waits'
     f' /\\ ~fills /\\ ~reviews /\\ (~owes \\/ defect = "{Defect.OPEN}")'
 )
 
@@ -1268,6 +1320,63 @@ AHEAD_OF_BEHIND: Final = frozenset({Upkeep.TICKET, Upkeep.UNSTATED, Upkeep.WAITI
 def round_before_behind(label: str) -> str:
     ahead = ", ".join(f'"{upkeep}"' for upkeep in sorted(AHEAD_OF_BEHIND))
     return f'upkeep \\in {{{ahead}}} => {label} # "{Advice.FORMAL_UPKEEP}"'
+
+
+FINISHED_CHECKOUT: Final = (
+    'setup = "bound" /\\ hooks /\\ head = "main" /\\ tree = "clean" /\\ ~parked'
+)
+
+
+def finished_checkout(world: World) -> bool:
+    return (world.setup, world.hooks, world.head, world.tree, world.parked) == (
+        Setup.BOUND,
+        True,
+        Head.MAIN,
+        Tree.CLEAN,
+        False,
+    )
+
+
+def waiting_branch_named(label: str) -> str:
+    return f'(waits /\\ {FINISHED_CHECKOUT}) => {label} = "{Advice.OWNER_MERGE}"'
+
+
+def quoted(tickets: Iterable[Ticket]) -> str:
+    return ", ".join(f'"{ticket}"' for ticket in sorted(tickets))
+
+
+def released_only_by(tickets: frozenset[Ticket], *names: ActionName) -> str:
+    steps = " \\/ ".join(names)
+    return (
+        f"(tickets[slot] \\in {{{quoted(tickets)}}} /\\ tickets'[slot] \\notin"
+        f" {{{quoted(tickets)}}}) => ({steps})"
+    )
+
+
+QUESTIONS_RELEASED_BY: Final = (ActionName.OWNER_ANSWERS_ON_THE_TICKET,)
+GUARD_RELEASED_BY: Final = (
+    ActionName.OWNER_LANDS_GUARD_EDITS,
+    ActionName.OWNER_MERGES_THE_WAITING_BRANCH,
+)
+
+
+def each_hold_by_its_own_cause() -> str:
+    return (
+        f"[][{EACH_TICKET} :\n"
+        f"  /\\ {released_only_by(ASKING, *QUESTIONS_RELEASED_BY)}\n"
+        f"  /\\ {released_only_by(GUARDING, *GUARD_RELEASED_BY)}]_vars"
+    )
+
+
+def cause_unmet(world: World) -> bool:
+    return world.waits or bool(HOLDS & set(world.tickets))
+
+
+def no_build_while_a_cause_is_unmet(label: Callable[[World], Advice]) -> Callable[[World], bool]:
+    def check(world: World) -> bool:
+        return not cause_unmet(world) or label(world) not in BUILDS
+
+    return check
 
 
 def only(action_name: ActionName, before: str, after: str) -> str:
@@ -1545,6 +1654,33 @@ RULES: Final[dict[str, model_tla.Rule]] = {
     "CommentsBeforePages": model_tla.Invariant(
         "Where comments are owed, the route never names the pages pass: the comments come first.",
         f'comments => advice # "{Advice.PRUNE_PAGES}"',
+    ),
+    "WaitingBranchNamed": model_tla.Invariant(
+        "Where a branch whose merge the merge judge leaves to the owner waits, with no run attached"
+        " and its change description on it, the route names its merge once the checkout is"
+        " finished.",
+        waiting_branch_named("advice"),
+    ),
+    "RealWaitingBranchNamed": model_tla.Invariant(
+        "Where a branch whose merge the merge judge leaves to the owner waits, with no run attached"
+        " and its change description on it, the real route names its merge once the checkout is"
+        " finished.",
+        waiting_branch_named("real_advice"),
+    ),
+    "EachHoldReleasesByItsOwnCause": model_tla.Property(
+        "A hold for questions ends only by an answer on the ticket, and a hold for guard edits only"
+        " by their landing on the default branch, whatever else the same park holds.",
+        each_hold_by_its_own_cause(),
+    ),
+    "NoBuildWhileAHoldsCauseIsUnmet": model_tla.Invariant(
+        "While a ticket is held, or the guard edits its hold named wait on a branch for the"
+        " owner's merge, the route names no build and no drain.",
+        no_build_while_a_cause_is_unmet(advice),
+    ),
+    "RealNoBuildWhileAHoldsCauseIsUnmet": model_tla.Invariant(
+        "While a ticket is held, or the guard edits its hold named wait on a branch for the"
+        " owner's merge, the real route names no build and no drain.",
+        no_build_while_a_cause_is_unmet(real_advice),
     ),
 }
 

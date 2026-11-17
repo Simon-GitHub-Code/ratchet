@@ -247,6 +247,7 @@ class Repo:
     rounds: int = 0
     waiting: str | None = None
     prunes: int = 0
+    guarded: str | None = None
 
     @classmethod
     def start(cls, parent: Path) -> Repo:
@@ -651,10 +652,13 @@ def park(repo: Repo, slot: int, result: dict[str, object]) -> None:
 
 
 GUARD_PATH = "docs/process/layers.md"
+QUESTIONS: Final = {"openQuestions": [{"kind": "direction", "question": "which way?"}]}
+GUARD_EDITS: Final = {"guardEdits": [{"path": GUARD_PATH, "edit": "allow it"}]}
 BLOCKS: Final[dict[Ticket, dict[str, object]]] = {
-    Ticket.ASKED: {"openQuestions": [{"kind": "direction", "question": "which way?"}]},
-    Ticket.GUARDED: {"guardEdits": [{"path": GUARD_PATH, "edit": "allow it"}]},
-    Ticket.PARKED: {"guardEdits": [{"path": GUARD_PATH, "edit": "allow it"}]},
+    Ticket.ASKED: QUESTIONS,
+    Ticket.GUARDED: GUARD_EDITS,
+    Ticket.ASKED_GUARDED: {**QUESTIONS, **GUARD_EDITS},
+    Ticket.PARKED: GUARD_EDITS,
 }
 NEWER: Final = frozenset({"base"})
 
@@ -713,10 +717,28 @@ def _owner_answers_on_the_ticket(repo: Repo, change: Change) -> None:
 
 
 @does(ActionName.OWNER_LANDS_GUARD_EDITS)
-def _owner_lands_guard_edits(repo: Repo, _change: Change) -> None:
+def _owner_lands_guard_edits(repo: Repo, change: Change) -> None:
     repo.edits += 1
+    if change.after.waits:
+        repo.guarded = f"fix/guard-edits-{repo.edits}"
+        branch(repo.root, repo.guarded)
+        write(repo.root, change_description(repo.guarded), CHANGE_DESCRIPTION)
     write(repo.root, GUARD_PATH, f"The guard edit the run named ({repo.edits}).\n")
     snapshot(repo.root, "chore(guards): land the guard edits the run named")
+    git(repo.root, "switch", "-q", "main")
+
+
+def change_description(name: str) -> str:
+    return f"{route.CHANGES}/{name.replace('/', '-')}.md"
+
+
+CHANGE_DESCRIPTION = "## Summary\n\nThe guard edits the run named.\n"
+
+
+@does(ActionName.OWNER_MERGES_THE_WAITING_BRANCH)
+def _owner_merges_the_waiting_branch(repo: Repo, _change: Change) -> None:
+    git(repo.root, "merge", "-q", "--no-ff", "--no-edit", str(repo.guarded))
+    repo.guarded = None
 
 
 @does(ActionName.OWNER_CHANGES_TICKET)
@@ -1158,6 +1180,7 @@ STAGES: Final = {
     "change": Advice.COMMIT,
     "switch": Advice.SWITCH,
     "merge": Advice.MERGE,
+    "owner-merge": Advice.OWNER_MERGE,
     "fill": Advice.FILL,
     "architecture-review": Advice.REVIEW,
     "safeguard": Advice.SAFEGUARD,

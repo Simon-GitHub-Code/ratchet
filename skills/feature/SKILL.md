@@ -138,7 +138,7 @@ Run every command below from the repository's own checkout, on the default branc
 
    1. **Not approved.**
       - **A result with `tooLarge`** is split as [Too large](#too-large-the-agent-splits-it) says, or parked there when its split is refused. The parts join the plan and the drain goes on.
-      - **Any other `verdict` than `approve`** parks the ticket. Write the result to a file made with `mktemp` and run `D close <ticket> --outcome parked --result <file> --root .`. It removes the work tree, keeps what the agents left as the stash `<branch>: blocked run`, and holds the ticket until the ticket changes.
+      - **Any other `verdict` than `approve`** parks the ticket. Write the result to a file made with `mktemp` and run `D close <ticket> --outcome parked --result <file> --root .`. It removes the work tree, keeps what the agents left as the stash `<branch>: blocked run`, and holds the ticket until each kind of hold the result names is met. A file that holds no JSON object is refused and nothing is closed: write the result there again and rerun the close.
       - Keep the result's `openQuestions` for step 7.
    2. **Commit.** On `approve`:
       - First run `D check <ticket> --final --root .`. On any exit but 0, settle it as [The publish check](#the-publish-check) says, and commit nothing.
