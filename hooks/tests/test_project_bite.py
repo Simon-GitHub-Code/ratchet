@@ -1799,6 +1799,11 @@ def adds_a_submodule(root: Path) -> None:
     git(root, "commit", "-q", "-m", "feat(core): a submodule")
 
 
+def links_to_a_directory(root: Path) -> None:
+    (root / "dirlink").symlink_to("src", target_is_directory=True)
+    commit(root, "feat(core): a tracked link to a directory")
+
+
 def links_to_a_tracked_file(root: Path) -> None:
     (root / "alias.txt").symlink_to("src/code.txt")
     commit(root, "feat(core): a tracked link to a tracked file")
@@ -1851,6 +1856,11 @@ def links_to_a_tracked_file(root: Path) -> None:
             'patch = "quality/bites/new-attributes.patch"',
             None,
             ".gitattributes would be a new .gitattributes",
+        ),
+        (
+            'write = { path = "dirlink/code.txt", content = "planted\\n" }',
+            links_to_a_directory,
+            "dirlink/code.txt is reached through a symbolic link",
         ),
         ('remove = ["alias.txt"]', links_to_a_tracked_file, "alias.txt is reached through a"),
         ('patch = "quality/bites/new-secret.patch"', None, "x.secret is ignored by git"),
@@ -2708,3 +2718,95 @@ def test_a_copy_its_directories_cannot_reach_is_red_and_says_why(
     root = project(tmp_path / "repo", {"lint": LINT}, registry)
     assert prove(root) == 1
     assert shown(capsys) == "[Errno 20] Not a directory: '.git/info'\nbite: red\n"
+
+
+def test_a_chain_of_links_longer_than_any_real_one_is_refused_though_it_ends_inside_the_copy(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": "exit 0"}, "")
+    steps = ["ln -s . l45", *(f"ln -s l{n + 1} l{n}" for n in range(44, 0, -1))]
+    setup = json.dumps("sh -c " + shlex.quote(" && ".join(steps)))
+    (root / "quality/bites.toml").write_text(
+        f"setup = [{setup}]\n" + bite("lint", "f"), encoding="utf-8"
+    )
+    commit(root, "registry")
+    assert prove(root) == 1
+    assert "a symbolic link that leads outside the scratch copy" in shown(capsys)
+
+
+def test_a_rule_a_gate_adds_to_the_exclude_file_does_not_hide_what_it_left_from_the_next_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gate = (
+        "test -e hidden && { echo L001 left behind; exit 1; }\n"
+        "echo hidden > .git/info/exclude; echo planted > hidden\n"
+        f"{LINT}"
+    )
+    registry = bite("lint", "first") + bite("lint", "second")
+    root = project(tmp_path / "repo", {"lint": gate}, registry)
+    assert prove(root) == 0
+    assert shown(capsys).count(": bites\n") == 2
+
+
+def test_a_cell_naming_the_plugin_script_and_a_tool_of_the_repository_is_bound() -> None:
+    cell = "`ratchet` plugin `scripts/pins.py` and a linter of our own"
+    table = f"# Binding\n\n## Gates\n\n{TABLE}{row('mixed', tool=cell)}\n## Speed\n\n| a |\n"
+    assert [(r.gate, r.bound) for r in project_bite.gate_rows(table)] == [("mixed", True)]
+
+
+def test_a_collection_a_fault_empties_has_no_directory_left_either(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gates = {"tests": 'test -d tests || { echo "L001 no directory"; exit 1; }'}
+    root = project(tmp_path / "repo", gates, bite("tests", "no tests", 'remove = ["tests/**"]'))
+    assert prove(root) == 0
+    assert "bite: tests: no tests: bites" in shown(capsys)
+
+
+def test_a_tracked_file_an_ignore_rule_matches_is_a_file_a_fault_may_change(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gate = "grep -l planted tracked.secret && { echo L001; exit 1; }; exit 0"
+    fault = 'write = { path = "tracked.secret", content = "planted\\n" }'
+    root = project(tmp_path / "repo", {"lint": gate}, bite("lint", "tracked", fault))
+    write(root, "tracked.secret", "clean\n")
+    git(root, "add", "-f", "tracked.secret")
+    commit(root, "feat(core): a tracked file an ignore rule matches")
+    assert prove(root) == 0
+    assert "bite: lint: tracked: bites" in shown(capsys)
+
+
+def test_what_a_gate_staged_is_not_left_staged_for_the_next_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gate = (
+        'git diff --cached --quiet || { echo "left staged"; exit 1; }\n'
+        "echo x > extra.txt; git add extra.txt\n"
+        f"{LINT}"
+    )
+    registry = bite("lint", "first") + bite("lint", "second")
+    root = project(tmp_path / "repo", {"lint": gate}, registry)
+    assert prove(root) == 0
+    assert shown(capsys).count(": bites\n") == 2
+
+
+def test_a_setup_that_replaces_the_copy_with_another_directory_of_its_name_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, "")
+    swap = 'd="$PWD"; cd /; mv "$d" "$d.aside" && cp -a "$d.aside" "$d"'
+    setup = json.dumps("sh -c " + shlex.quote(swap))
+    (root / "quality/bites.toml").write_text(
+        f"setup = [{setup}]\n" + bite("lint", "f"), encoding="utf-8"
+    )
+    commit(root, "registry")
+    assert prove(root) == 1
+    assert "is no longer the directory the scratch copy was made in" in shown(capsys)
+
+
+def test_a_patch_fault_rewritten_to_edit_another_file_is_targeted_by_both_files(
+    tmp_path: Path,
+) -> None:
+    root = patched(tmp_path)
+    write(root, "quality/bites/p.patch", PATCH_FILE.replace("src/code.txt", "src/other.txt"))
+    named_by(project_bite.fault_targets(root, "main"), "src/code.txt", "src/other.txt")
