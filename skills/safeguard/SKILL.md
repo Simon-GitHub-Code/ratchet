@@ -19,7 +19,7 @@ The owner is asked nothing. A tool the architecture record names was their choic
 1. **Find what is owed.**
    - Start on the default branch with a clean tree. Make the branch `chore/safeguard-<what>`, where `<what>` is the kinds or the event in a word or two.
    - Given an event, write it on the binding's `- Life events:` line with the Edit tool, replacing `none`. The binding is a guard path, so the owner's merge of this change is the declaration.
-   - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --json` in one Bash call. It lists each owed row: the question, its trigger, the kind or event, and how many instances.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/triggers.py" --root . --json` in one Bash call. It lists each owed row: the question, its trigger, the kind or event, and how many instances.
    - When it lists nothing, say so, print the route as step 6 does, and stop.
 
    Done when you hold the list.
@@ -63,4 +63,4 @@ The owner is asked nothing. A tool the architecture record names was their choic
 
    An **Assumed** line carries the real names in place of the brackets, such as ``Security checks on new code: <the tool you chose>, current and it reads this language; <the one you passed over> was the other choice. Changing later: a change of its own that an agent makes while you are away (the tool swapped, its settings written, the check rewired and shown to catch a planted mistake again, a decision record). It touches protected files: the list of checks, the list of planted mistakes, the tool's settings and their saved copy, the record of which tool runs each check, and the package list and its lock file where the tool is installed through them. The agent puts the new tool's settings file on the protected list in place of the old one, and the merge is yours. Nothing built is redone; the code changes only where the new tool objects to it. Say "use another" to switch.``
 
-   The last lines are the route: run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.
+   The last lines are the route: run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/route.py" --root .` in one Bash call and print its lines as they are.

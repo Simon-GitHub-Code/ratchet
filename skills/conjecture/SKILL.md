@@ -123,7 +123,7 @@ Write a ticket's `## Conjecture`, `## Size` and `## Operability` from what the o
    - Its **assumed** rows are the reply's **Assumed** block, each with what changing it later costs.
    - Say how many questions the owner answered.
    - **The merge job will leave the pull request to the owner** (step 4, a forge): say that it will, with a comment on the pull request saying why.
-   - Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" <ticket> --root .` in one Bash call and report its verdict.
+   - Run `python3 -E -s -B -X pycache_prefix=/nonexistent/ratchet-no-bytecode "${CLAUDE_PLUGIN_ROOT}/scripts/feature_preflight.py" <ticket> --root .` in one Bash call and report its verdict.
    - **Red on the label:** say that the ticket needs the agent-ready label and that applying it is the owner's keystroke.
    - **Red on `size`:** say that the ticket's size passes a ceiling and that `/ratchet:feature` splits it by size before it builds, asking the owner nothing.
    - **Green, or red on `size` alone:** the last line is the next command, `/ratchet:feature <ticket>` (or `/pstack:poteto-mode <ticket>` when the owner stays).

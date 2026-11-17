@@ -61,6 +61,7 @@ import owed
 import project_bite
 import publish_check
 import queue_notes
+import run_time
 
 # Why: a local ticket is the file the guard asks about the label on; both read its shape here.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
@@ -761,8 +762,11 @@ def preflight(ref: str, root: Path, *, base: str, branch: str | None, gh: Runner
 def record_start(report: Report, root: Path, *, branch: str, gh: Runner) -> None:
     try:
         report.start = publish_check.start_of(root, branch, gh)
+        queue_notes.record_feature_start(root, branch, asdict(report.start))
     except publish_check.UnreadableError as error:
         report.fail("start", str(error), "the forge reachable again, or the branch made again")
+        return
+    run_time.stamp_start(root, branch)
 
 
 def main(argv: list[str]) -> int:

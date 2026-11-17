@@ -652,7 +652,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 71 edits in 13 files. 95 items are owed")
+    assert verdict(out).startswith("upgrade: would write 72 edits in 13 files. 95 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -660,7 +660,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 71 changes in 13"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 72 changes in 13"
                 " files. The project owes 95 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
@@ -932,3 +932,36 @@ def test_an_upgrade_stays_green_and_owes_the_incremental_line_without_blocking_a
     assert [e.rule for e in owing] == ["speed"]
     assert owing[0].path == "docs/process/binding.md"
     assert owing[0].rule not in owed.FILL_FIRST
+
+
+@pytest.mark.parametrize("name", ["0.8.2", "0.9.2"])
+def test_an_upgrade_carries_the_incremental_variable_and_owes_the_recipe_its_use(
+    name: str, tmp_path: Path
+) -> None:
+    root = fixture(name, tmp_path)
+    assert "mutation_incremental" not in (root / "justfile").read_text(encoding="utf-8")
+    repos.branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    text = (root / "justfile").read_text(encoding="utf-8")
+    assert re.search(r"^mutation_incremental := if env_var_or_default\(\"CI\"", text, re.MULTILINE)
+    assert 'env_var_or_default("RATCHET_BITING"' in text
+    binding = (root / "docs/process/binding.md").read_text(encoding="utf-8")
+    (root / "docs/process/binding.md").write_text(
+        re.sub(
+            r"^(- Shards: .*)$",
+            r"\1\n- Incremental: --mode-on",
+            binding,
+            count=1,
+            flags=re.MULTILINE,
+        ),
+        encoding="utf-8",
+    )
+    bound = re.sub(r'"bind: the mutation tool[^"]*"', '"--mode-on"', text)
+    recipe = "\nmutation-changed:\n    ./run-mutants --shard {{shard}}\n"
+    head = re.sub(r"\nmutation-changed:\n(?:    .*\n?)+", "", bound)
+    (root / "justfile").write_text(head + recipe, encoding="utf-8")
+    problems = [
+        f.problem for f in conformance.findings(root) if "mutation_incremental" in f.problem
+    ]
+    assert len(problems) == 1
+    assert problems[0].startswith("the recipe `mutation-changed` does not use")

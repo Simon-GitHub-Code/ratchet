@@ -36,7 +36,7 @@ class RepoState(Protocol):
         ...
 
     def awaiting_final(self, cwd: Path) -> str | None:
-        """The branch at ``cwd`` when a queue work tree's start has not passed its final check."""
+        """The branch at ``cwd`` when a queue work tree or a one-ticket run has no passed start."""
         ...
 
     def default_file(self, root: Path, relative: str) -> str | None:
