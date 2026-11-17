@@ -1370,8 +1370,8 @@ def test_a_switch_past_its_removal_date_is_named_beside_the_step(
 
 def test_a_spec_whose_tickets_exist_is_not_split_again(tmp_path: Path) -> None:
     spec = ".scratch/settle/spec.md"
-    done = ".scratch/settle/issues/01-a.md"
-    files = {**ADOPTED, spec: "# Settle\n", done: "# 01: A\n\nStatus: resolved\n"}
+    waiting = ".scratch/settle/issues/01-a.md"
+    files = {**ADOPTED, spec: "# Settle\n", waiting: "# 01: A\n\nStatus: needs-info\n"}
     root = repository(tmp_path, files)
     step = route.decide(root, None)
     assert spec not in step.command
@@ -1403,7 +1403,7 @@ def test_a_blocked_run_of_one_feature_does_not_hold_the_same_number_in_another(
     files = {
         **ADOPTED,
         "guards/manifest.toml": MANIFEST,
-        ".scratch/f1/issues/01-alpha.md": "# 01: Alpha\n\nStatus: resolved\n",
+        ".scratch/f1/issues/01-alpha.md": "# 01: Alpha\n\nStatus: ready-for-agent" + CONJECTURE,
         beta: "# 01: Beta\n\nStatus: ready-for-agent" + CONJECTURE,
     }
     root = repository(tmp_path, files)
