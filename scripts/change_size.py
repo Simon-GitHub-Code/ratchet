@@ -181,7 +181,6 @@ def exemption(root: Path, base: str) -> str | None:
 
 def with_ceilings(text: str, ceilings: tuple[int, int, int]) -> str:
     files, lines, tests = ceilings
-    """The thresholds text with ``[ceilings.change]`` set to the three ceilings."""
     body = (
         f"{CEILINGS_TABLE}\nproduct_files = {files}\nproduct_lines = {lines}\n"
         f"test_lines = {tests}\n"

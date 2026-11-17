@@ -58,7 +58,6 @@ def names(records: frozenset[Record], step: Step) -> bool:
 
 
 Held = tuple[Cell, Cell]
-"""Per key, the value the default branch last held: the value it holds, or held before removal."""
 
 
 @dataclass(frozen=True)
@@ -67,7 +66,6 @@ class Tree:
     ceiling: Cell
     records: frozenset[Record] = frozenset()
     file: bool = True
-    """Whether ``quality/thresholds.toml`` is there; without it both keys are absent."""
 
     def cell(self, key: Key) -> Cell:
         return self.floor if key is Key.FLOOR else self.ceiling
@@ -151,7 +149,6 @@ class Action:
 Move = tuple[Action, State]
 STRAY = Step(Key.FLOOR, Value.ONE, Value.THREE)
 NEVER: Held = (None, None)
-"""No memory: what a rule passes when it asks only about keys present before and after."""
 INITIAL = State(
     default=Tree(floor=Value.TWO, ceiling=Value.THREE),
     branches=(None, None),
@@ -445,7 +442,6 @@ class Default(NamedTuple):
     floor: str
     ceiling: str
     relaxes: frozenset[str]
-    """The loosenings its records name, each as ``key from old to new``, and which copy."""
 
 
 def default(state: State) -> Default:

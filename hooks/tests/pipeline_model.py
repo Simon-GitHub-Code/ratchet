@@ -254,38 +254,24 @@ class Ending:
     ceiling: Ceiling | None = None
     measured_after: Role | None = None
     parts: bool = False
-    """Whether a run stopped too large names the parts to split the ticket into."""
     split_unasked: bool = False
-    """Whether the result tells the orchestrator to split the ticket itself and ask the owner nothing."""  # noqa: E501
     error: str = ""
-    """The agent the script's error names, or ``REFUSED`` for one it raises on a bad input."""
     resume: bool = False
-    """Whether the script's error tells the orchestrator to resume the run."""
     objections: frozenset[Objection] = frozenset()
     rounds: int = 0
     unresolved: bool = False
     lost: bool = False
-    """Whether the result returns the ticket's lost promises for the next run."""
     kept: bool = False
-    """Whether the result's assumptions list the promise the run kept from the ticket."""
     record: Outcome | None = None
     rejudged: bool = False
     after: Role | None = None
-    """The role whose answer a run stopped on a question after, for the two stops of ADR 0072."""
     asks: bool = False
-    """Whether the result's open questions hold the case or the departure the run stopped on."""
     carried: bool = False
-    """Whether the result names a critic finding that was still owed after the round it was fixed in."""  # noqa: E501
     unstated: bool = False
-    """Whether the result's ``unstated`` entries hold the finding the critic could not quote."""
     assumes_role: bool = False
-    """Whether the result's assumptions hold what the fork test gave a role."""
     unclassified: bool = False
-    """Whether the result counts a moved critic finding that no role classified."""
     unquoted_review: bool = False
-    """Whether the result counts a blocker or major of the review's own whose quote was not found."""  # noqa: E501
     review_rounds: bool = False
-    """Whether the result lists the blocking issues of a review that sent a fix pass."""
 
 
 @dataclass(frozen=True)
@@ -322,7 +308,6 @@ class Action:
     role: Role | None = None
     rounds: int = 0
     published: bool = False
-    """Whether the agent committed, pushed or opened a pull request, which no answer field says."""
 
     @property
     def label(self) -> str:
@@ -1047,7 +1032,6 @@ ENDED_AS: dict[str, Callable[[Ending], object]] = {
     "reviewRounds": lambda ending: ending.review_rounds,
 }
 NOT_ENDED = Ending(Outcome.ERROR)
-"""What ``ENDED_AS`` reads of a run that has not ended: every field's default."""
 
 AS_STATE: dict[str, Callable[[State], object]] = {
     "started": lambda state: state.started,

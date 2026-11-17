@@ -718,7 +718,6 @@ class Kind(NamedTuple):
     held: bool
     start: str
     allowance: int
-    """As ``State.allowance``, with -1 for none."""
 
 
 def kind(state: State) -> Kind:

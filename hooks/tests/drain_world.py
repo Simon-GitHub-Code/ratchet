@@ -74,7 +74,6 @@ BRANCH = {
     Name.E: "feature/5-list",
 }
 DONE = ("Status: ready-for-agent", "Status: done")
-"""The owner's close of a local ticket: its status line, on the default branch."""
 ANSWER = "\n## Answers\n\nWhich case? The lower.\n"
 NO_FLAG = (
     "\n## Operability\n\nFlag: none: the owner chose to have it appear as soon as it is"
@@ -94,9 +93,7 @@ COMMANDS = frozenset({Kind.OPEN, Kind.UPDATE, Kind.LAND, Kind.CLOSE})
 NOT_FINAL = frozenset({Kind.CHECK_NOT_FINAL, Kind.CHECK_HALTED_NOT_FINAL})
 CHECKS = frozenset({Kind.CHECK, Kind.CHECK_UNREADABLE, Kind.CHECK_HALTED, *NOT_FINAL})
 UNREADABLE = "the forge cannot be reached"
-"""Why a check cannot read the present state here: a forge down, as ADR 0060 names it."""
 HALTED_WHY = "conflict: the rebase onto `main` was left unfinished"
-"""The conflict close's reason, which a check that finds only a rebase left unfinished writes."""
 
 
 def no_forge(_argv: list[str]) -> None: ...
@@ -237,7 +234,6 @@ class World:
         self.printed = ""
         self.code = 0
         self.texts = dict(TEXTS)
-        """Each ticket's text as filed, which its note's digest names until the owner edits it."""
 
     def upgrade(self) -> None:
         pin = "- Default branch: `main`\n"
