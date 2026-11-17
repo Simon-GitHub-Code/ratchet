@@ -2475,6 +2475,21 @@ def test_a_file_a_gate_changed_to_the_same_length_with_its_times_put_back_is_res
     assert target.read_text(encoding="utf-8") == "clean\n"
 
 
+def test_a_restore_leaves_the_times_of_a_file_no_run_changed(tmp_path: Path) -> None:
+    root = project(tmp_path / "repo", {"lint": LINT}, None)
+    old = 1_000_000_000_000_000_000
+    os.utime(root / "src/code.txt", ns=(old, old))
+    copy = project_bite.make_copy(
+        root, tmp_path / "copy", registry=project_bite.Registry(), shell=project_bite.Shell()
+    )
+    untouched = copy.path / "src/code.txt"
+    changed = copy.path / "tests/one.t"
+    changed.write_text("changed\n", encoding="utf-8")
+    copy.restore()
+    assert changed.read_text(encoding="utf-8") == "a test\n"
+    assert untouched.stat().st_mtime_ns == old
+
+
 def test_a_tracked_file_an_ignore_rule_also_matches_is_restored(tmp_path: Path) -> None:
     root = project(tmp_path / "repo", {"lint": LINT}, None)
     write(root, "kept.secret", "clean\n")
