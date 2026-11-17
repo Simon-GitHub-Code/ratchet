@@ -119,6 +119,7 @@ SAFEGUARD = "/ratchet:safeguard"
 FILL = "/ratchet:fill"
 ARCHITECTURE = "/ratchet:architecture"
 ARCHITECTURE_RULE = "architecture"
+PRUNE = "/ratchet:prune"
 EVENTS_LOG = "events.tsv"
 EVENTS_HEADER = "date\tevent\tsign\tanswer"
 DECLINED = "declined"
@@ -892,11 +893,12 @@ def decide(root: Path, gh: preflight.Runner | None) -> Step:
         if missing
         else ticket_step(root, gh, checkout)
     )
+    work = prune_step(root, step, checkout.default_branch) or step
     return (
-        review_step(root, step)
-        or safeguard_step(root, step)
-        or architecture_step(root, step)
-        or step
+        review_step(root, work)
+        or safeguard_step(root, work)
+        or architecture_step(root, work)
+        or work
     )
 
 
@@ -1022,6 +1024,30 @@ def architecture_step(root: Path, instead: Step) -> Step | None:
         f" asks you once. Or carry on with {instead.command}: nothing is red for it",
         instead.command,
         "architecture",
+    )
+
+
+def prune_step(root: Path, instead: Step, default_branch: str) -> Step | None:
+    owing = owed.comments(root)
+    if owing:
+        return Step(
+            f"{PRUNE} comments",
+            f"{len(owing)} comment(s) are owed in quality/owed.toml, and a batch deletes or"
+            " encodes as many as the change-size ceiling allows. Or carry on with"
+            f" {instead.command}: nothing is red for it",
+            instead.command,
+            "prune",
+        )
+    pass_due = documents.due(root, default_branch)
+    if pass_due is None:
+        return None
+    return Step(
+        f"{PRUNE} pages",
+        f"{pass_due.merges} merges have landed since the last prune pass, and {pass_due.page}"
+        f" cites `{pass_due.path}`, which changed after it: a pass cuts what the code now says."
+        f" Or carry on with {instead.command}: nothing is red for it",
+        instead.command,
+        "prune",
     )
 
 

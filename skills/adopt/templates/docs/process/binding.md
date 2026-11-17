@@ -255,6 +255,10 @@ Every tracked Markdown file has a kind, which says how long it lives and whether
 | --- | --- | --- |
 | <kind> | <`globs` of its files> | <`never`, or `pass` keeping <`## heading`, ...>> |
 
+- Prune after: 10
+
+`- Prune after:` is the number of merges to the default branch after which a pages pass is due, if a prunable page also cites a path that changed after it (ADR 0065).
+
 ## Absolute paths
 
 <The paths held at 100% line and branch coverage with no exclusion: the gate tools always, plus whatever the owner declares pure.>
