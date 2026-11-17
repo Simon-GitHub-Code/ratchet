@@ -829,8 +829,15 @@ def test_a_dropped_row_of_the_catalogue_prints_the_template_row_to_add(repo: Pat
     assert "| backup restores | later: life:irreplaceable-data | weekly | |" in written
     replace(BINDING, "- Life events: none", "- Life events: irreplaceable-data")(repo)
     [fired] = [f for f in conformance.findings(repo) if "'backup restores'" in f.problem]
-    assert start(fired) == ("| backup restores | | weekly | | `just restore-drill` |",)
-    assert isinstance(fired.fix, conformance.Agent)
+    assert fired.problem.endswith(
+        "add the template's row as `later: life:irreplaceable-data`: it has fired here, so the"
+        " row is owed"
+    )
+    assert isinstance(fired.fix, conformance.Auto)
+    assert fired.fix.does == "add the 'backup restores' row as `later: life:irreplaceable-data`"
+    assert "| backup restores | later: life:irreplaceable-data | weekly | |" in fired.fix.want(
+        (repo / BINDING).read_text(encoding="utf-8")
+    )
     needs = (
         "binding 'backup restores' to a tool needs a [[bite]] for gate 'restore-drill' in"
         " quality/bites.toml"

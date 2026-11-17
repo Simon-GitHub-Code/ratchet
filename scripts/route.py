@@ -475,8 +475,8 @@ def releases(hold: queue_notes.Hold, ticket: preflight.Ticket, default_branch: s
     if hold.reviews:
         steps.append(f"run {ARCHITECTURE} for {', '.join(hold.reviews)}")
     meet = meet_step(ref)
-    defective = defect_kind(ticket)
-    if hold.owes and defective in hold.owes:
+    defective = defect_kind(ticket) if hold.owes else None
+    if defective in hold.owes:
         others = [kind for kind in hold.owes if kind != defective]
         if others:
             steps.append(f"run {SAFEGUARD} for {', '.join(others)}")

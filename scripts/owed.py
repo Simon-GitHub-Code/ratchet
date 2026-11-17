@@ -83,6 +83,7 @@ FILL_FIRST = frozenset(
         "mutation",
         "changed_tests",
         "comments_section",
+        "trigger_kinds",
     }
 )
 TABLE = "owed"

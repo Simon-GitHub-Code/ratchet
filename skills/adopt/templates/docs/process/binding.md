@@ -157,6 +157,9 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | no flag past its removal date | `ratchet` plugin `scripts/flags.py --expired` | 2 | `flags.toml` | `just flags-expired` |
 | accessibility | | 2 | | `just a11y` |
 | formal verification | | 2 | the project-local verification skill | `just formal` |
+| formal verification of concurrency | | 2 | the project-local verification skill | `just formal` |
+| formal verification of untrusted input | | 2 | the project-local verification skill | `just formal` |
+| formal verification of state | | 2 | the project-local verification skill | `just formal` |
 | every gate bites | `ratchet` plugin `scripts/bite.py` and `scripts/project_bite.py` | 2 | `quality/bites.toml` | `just bite-all` |
 | backup restores | | weekly | | `just restore-drill` |
 | production answers | | weekly | | `just prod-probe` |
@@ -245,6 +248,14 @@ One row per kind of file. `Files` are globs over tracked files, each in backtick
 | Files | Comments |
 | --- | --- |
 | <`globs` of one kind of file> | <`listed`, or `none: <reason>`> |
+
+## Formal verification
+
+A formal model an agent writes and checks against the code, kept true to it by the project-local verification skill (ADR 0062). The lines are filled once a model exists.
+
+- Model: <`globs` of the models, the harness and the skill>
+- Mirrors: <`globs` of the code the model describes>
+- Synced: <the default branch commit the last round checked>
 
 ## Absolute paths
 

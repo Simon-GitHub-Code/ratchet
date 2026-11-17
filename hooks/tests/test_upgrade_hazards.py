@@ -263,7 +263,7 @@ TRIGGERS = (
 )
 
 
-def test_a_gates_row_whose_trigger_has_fired_is_never_steered_to_later(
+def test_a_gates_row_whose_trigger_has_fired_is_written_later_and_owed_at_once(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root = fixture("0.8.2", tmp_path)
@@ -272,10 +272,8 @@ def test_a_gates_row_whose_trigger_has_fired_is_never_steered_to_later(
     commit(root)
     assert upgrade.main(["upgrade.py", "--root", str(root)]) == 1
     out = capsys.readouterr().out
-    fired = next(line for line in out.splitlines() if "'configuration hardening' row" in line)
-    assert "bind it: its trigger `code:container` has fired here" in fired
-    assert "later" not in fired.split("never dropped")[1]
-    assert "'container' has 1 instance here: Dockerfile" in out
+    assert "    - add the 'configuration hardening' row as `later: code:container`" in out
+    assert "bind it: its trigger `code:container` has fired here" not in out
     assert "    - add the 'changed flags off and on' row as `later: code:flag`" in out
     assert "    - add the 'incidents tighten a gate' row, bound to the plugin's own gate" in out
     assert "a row that says `later: <trigger>` needs none" not in out

@@ -36,7 +36,7 @@
 #            (`skills/method/application-types.toml` in the `ratchet` plugin, under `[proofs]`):
 #            `outside-the-seam` for `telemetry emitted`, `broken-flag-state` for `changed flags
 #            off and on`, `erroring-route` for `load smoke`, `guarded-crash` for `fuzzing`,
-#            `related-fields` for `symbolic checking`. The conformance gate is red while a bound
+#            `related-fields` for `symbolic checking`, `code-departs-from-model` for each `formal verification of` row. The conformance gate is red while a bound
 #            row lacks one.
 #   args     optional words appended to the gate's command, such as the seconds a fuzz or solver
 #            run takes

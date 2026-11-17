@@ -37,7 +37,9 @@ class Formal:
 
 
 def globs(value: str) -> tuple[str, ...]:
-    """The comma-separated globs of a line, backticks and blanks dropped."""
+    """The comma-separated globs of a line, backticks and blanks dropped; a placeholder has none."""
+    if value.startswith("<"):
+        return ()
     return tuple(item for item in (glob.strip(" `") for glob in value.split(",")) if item)
 
 
@@ -47,7 +49,8 @@ def read(binding: str) -> Formal | None:
     mirrors = globs(lines.get("Mirrors", ""))
     if not mirrors:
         return None
-    return Formal(globs(lines.get("Model", "")), mirrors, lines.get("Synced", "").strip(" `"))
+    synced = lines.get("Synced", "").strip(" `")
+    return Formal(globs(lines.get("Model", "")), mirrors, "" if synced.startswith("<") else synced)
 
 
 @dataclass(frozen=True)
