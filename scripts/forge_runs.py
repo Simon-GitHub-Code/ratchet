@@ -22,11 +22,13 @@ written.
 ``red`` or ``none``: the result on the commit nearest the default branch's tip, among the runs of
 this repository that an event of the template started on a commit of the default branch. A run
 on a tag named like the branch, or an old run started again, does not change the answer.
-Unreadable input is ``red``.
+Unreadable input is ``red``. ``forge_runs.py tier1`` answers the same of the ``ci.yml`` runs a
+push started. Where more runs match than one page holds, the newest page decides, and is ``red``
+when no run in it counts.
 
 Usage: ``forge_runs.py ci --pulls FILE --events FILE --number N --sha SHA --branch NAME --base
-NAME --repository OWNER/NAME [--report FILE]`` and ``forge_runs.py deep --tip REF --repository
-OWNER/NAME [--root DIR]``.
+NAME --repository OWNER/NAME [--report FILE]`` and ``forge_runs.py deep|tier1 --tip REF
+--repository OWNER/NAME [--root DIR]``.
 """
 
 import argparse
@@ -45,6 +47,7 @@ PULL_REQUEST = "pull_request"
 # Why: the triggers of the `deep.yml` template. A run of any other event came from a workflow
 # file the default branch does not hold.
 DEEP_EVENTS = frozenset({"push", "schedule", "workflow_dispatch"})
+ON_THE_DEFAULT_BRANCH = {"deep": DEEP_EVENTS, "tier1": frozenset({"push"})}
 RETARGETS = frozenset({"base_ref_changed", "automatic_base_change_succeeded"})
 UNCOUNTED = frozenset({"cancelled", "skipped"})
 COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
@@ -87,12 +90,19 @@ def rows(text: str | None) -> list[object] | None:
     return [item for page in pages if isinstance(page, list) for item in page]
 
 
-def listed(text: str) -> list[object] | None:
-    """The runs in one page of the runs API, or ``None`` when unreadable or not all there are."""
+def newest_page(text: str) -> tuple[list[object], bool] | None:
     pages = documents(text) or []
     page = pages[0] if len(pages) == 1 else None
-    runs = at(page, "workflow_runs")
-    return runs if isinstance(runs, list) and at(page, "total_count") == len(runs) else None
+    runs, total = at(page, "workflow_runs"), at(page, "total_count")
+    if not isinstance(runs, list) or not isinstance(total, int) or total < len(runs):
+        return None
+    return runs, total == len(runs)
+
+
+def listed(text: str) -> list[object] | None:
+    """The runs in one page of the runs API, or ``None`` when unreadable or not all there are."""
+    page = newest_page(text)
+    return page[0] if page is not None and page[1] else None
 
 
 def newest(runs: list[object]) -> object:
@@ -228,22 +238,23 @@ def _distance(root: Path, sha: object, tip: str) -> int | None:
     return int(only_tip) if only_sha == "0" else None
 
 
-def deep(runs: str, *, root: Path, tip: str, repository: str) -> str:
-    """Tier 2's state on the default branch: ``green``, ``red`` or ``none``."""
-    ran = listed(runs)
-    if ran is None:
+def on_the_tip(runs: str, *, root: Path, tip: str, repository: str, events: frozenset[str]) -> str:
+    """A tier's state on the default branch: ``green``, ``red`` or ``none``."""
+    page = newest_page(runs)
+    if page is None:
         return RED
+    ran, whole = page
     nearest: dict[int, list[object]] = {}
     for run in ran:
         ours = at(run, "head_repository", "full_name") == repository
         counts = at(run, "status") == "completed" and at(run, "conclusion") not in UNCOUNTED
-        if not ours or not counts or at(run, "event") not in DEEP_EVENTS:
+        if not ours or not counts or at(run, "event") not in events:
             continue
         distance = _distance(root, at(run, "head_sha"), tip)
         if distance is not None:
             nearest.setdefault(distance, []).append(run)
     if not nearest:
-        return NONE
+        return NONE if whole else RED
     return GREEN if at(newest(nearest[min(nearest)]), "conclusion") == "success" else RED
 
 
@@ -265,15 +276,17 @@ def main(argv: list[str] | None = None, runs: str | None = None) -> int:
     one.add_argument("--base", required=True)
     one.add_argument("--repository", required=True)
     one.add_argument("--report", type=Path)
-    two = commands.add_parser("deep")
-    two.add_argument("--tip", required=True)
-    two.add_argument("--repository", required=True)
-    two.add_argument("--root", default=".")
+    for name in ON_THE_DEFAULT_BRANCH:
+        tier = commands.add_parser(name)
+        tier.add_argument("--tip", required=True)
+        tier.add_argument("--repository", required=True)
+        tier.add_argument("--root", default=".")
     options = parser.parse_args(argv)
     text = sys.stdin.read() if runs is None else runs
-    if options.command == "deep":
-        root = Path(options.root)
-        print(deep(text, root=root, tip=options.tip, repository=options.repository))
+    if options.command in ON_THE_DEFAULT_BRANCH:
+        events = ON_THE_DEFAULT_BRANCH[options.command]
+        root, tip, repository = Path(options.root), options.tip, options.repository
+        print(on_the_tip(text, root=root, tip=tip, repository=repository, events=events))
         return 0
     pull = Pull(options.number, options.sha, options.branch, options.base, options.repository)
     found = ci(pull, answered(text, read(options.pulls), read(options.events)))
