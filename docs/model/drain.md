@@ -4,11 +4,11 @@
 
 The drain promises that an interrupted drain loses no work and repeats nothing (ADR 0023). Each command finishes from what git holds when it is run again: `update` abandons a rebase it left and starts over, `land` records a merge that landed, `clean` records the merge of a branch whose note does not yet say it, and every command first puts back what a killed `merge.py` left. One drain runs on a repository at a time: `clean --all` takes a lease and is refused while another drain is alive, and the report ends it. This page writes the drain down as a state machine, and says which of these promises the code keeps. For the publish check it says what the code does: `drain.py check` runs it, and the model holds the steps.
 
-The model is `hooks/tests/drain_model.py`. The tests in `hooks/tests/test_drain_model.py` check each rule on every step the model reaches. They also take the model's steps on real repositories, where the real `drain.py` and `merge.py` must leave what the model says (`hooks/tests/drain_world.py`).
+The model is `hooks/tests/drain_model.py`. The tests in `hooks/tests/test_drain_model.py` check each rule on every step the model reaches. They also take the model's steps on real repositories, where the real `drain.py` and `merge.py` must leave what the model says (`hooks/tests/drain_world.py`). The steps of the expiry graph, ADR 0064's turn, are not taken on a real repository yet: the scripts do not do them, as [below](#what-the-script-change-of-adr-0064-must-do) says.
 
 ## Scope
 
-The model has two graphs.
+The model has three graphs.
 
 The main graph is one drain on one repository with no forge:
 
@@ -32,6 +32,27 @@ A landing is seen by three locks of the kernel's, each freed when its holder die
 - `land` alone once its `merge.py` has probed it. The merge lock is held, so every command of either drain sees a merge running. The `merge.py` then lands the merge or ends having landed nothing.
 
 While the landing is alive, either drain's agent can also run `update`, `close --outcome parked` or a second `land` on the ticket. The landing drain's own agent does so when its shell gave up waiting on `land`. A second `land` in the instant before a killed `land`'s `merge.py` probes it starts a merge of its own, so two `merge.py` of one ticket run: the first stops at its probe, and the second lands under its live `land`, or meets the merge lock the first holds past its tries and stops, and its `land` closes nothing.
+
+The expiry graph is the drain's turn of ADR 0064: a local feature, the unit `.scratch/<slug>/`, that two tickets share, `a` and `c`, neither blocked by the other. A unit expires when every ticket in it is resolved, and the change of the last of them to land deletes it. The graph holds:
+
+- the unit on the default branch, with one `## Answers` line on a ticket of it, and the brief's `## In the owner's words`;
+- each ticket's branch: the agent's content commit at the default tip, which resolves the ticket and commits its spec; `documents.py expire` after it; the agent's verdict record; `drain.py update`; the verdict record of a judge-again run after an update; and `drain.py land`, with a kill before its note;
+- the owner's one records edit, an `## Answers` line landed on a ticket of the unit while the unit is on the default branch; and the owner's squash of a branch by hand;
+- these steps in any order, each ticket built once. So the two land in either order, and the second lands on a branch built before the first landed, which `update` brings up to date, or after it.
+
+`land` stands for every judged merge here: the drain's, a forge's merge job and the owner's own run of the merge entry point. Each asks the judge, which refuses a branch that is behind, so the graph does not tell them apart. It leaves out what the main graph holds: the cap, the trees, the holds but the judge's, the notes but whether one records the merge, the publish check and the other kills. Each commit of the agent here follows a check with `--final`, and `update` makes its own, so the guard's gate refuses none of them and the graph is the gated drain's. The two tickets stand for any two of a unit: the parts of a split are filed in the unit of the split ticket, and from then on they are tickets of it like any other.
+
+The steps ADR 0064 asks of the drain are each a keep of the graph, and the tests take each one away in turn to find the rule it keeps:
+
+| Keep | Says |
+| --- | --- |
+| `UPDATE_EXPIRE` | `update` runs `expire` once its rebase is done. |
+| `CARRY` | On a modify/delete conflict in the unit, `update` takes the incoming edit, then runs `expire`, which deletes it again and carries its `## Answers` line. |
+| `ONCE` | `expire` carries only a line the brief does not hold yet. |
+| `RESOLVE` | `update` resolves a modify/delete conflict whose every path is in a unit `expire` lists, where it would otherwise stop for Reconcile. |
+| `JUDGE` | The judge refuses a change that leaves a unit it made expired, and `ratchet-lowered` one that deletes a ticket or spec and drops one of its `## Answers` lines from the brief. |
+| `HISTORY` | A judge-again run reads the spec from the parent of the newest commit on the branch that deleted it. |
+| `NOTE` | A command on a ticket finds it by the note written when it opened, not by its file. |
 
 What it leaves out is listed [at the end](#left-out).
 
@@ -69,6 +90,21 @@ From the start the main graph reaches 49,223 states and 699,349 steps with the g
 
 From the start the lease graph reaches 4,583 states and 60,124 steps.
 
+| Part of the expiry graph | Values |
+| --- | --- |
+| The default branch | whether it holds the unit; the `## Answers` lines in the unit's files, or once it is gone those it held; the lines in the brief, in order; the tickets of the unit resolved there |
+| Each ticket's branch | none; the content commit, `expire` not yet run; `expire` ran, no verdict record; the verdict record last; a rebase stopped on a conflict, left for Reconcile |
+| The base the branch sits on | a version of the default branch: its tip, or an older one |
+| What the branch's `expire` commits did | whether they deleted the unit, and the lines they carried to the brief |
+| Whether a commit on the branch deletes its spec | yes once `expire` ran, until the owner squashes the branch by hand |
+| Whether `update` moved the branch | yes or no. Where it did, the next verdict record is a judge-again run's |
+| Whether the ticket merged, and whether a note says so | yes or no |
+| Whether the judge refused it for its unit, so that `land` holds it | yes or no |
+| Whether a judge-again run found no spec | yes or no. No file holds it: the model keeps it so that rule 12d can read it |
+| Whether the owner landed their line | yes or no |
+
+From the start the expiry graph reaches 1,237 states and 2,752 steps.
+
 ## Steps
 
 | Step | What it does |
@@ -100,9 +136,23 @@ On the lease graph, each drain can: `clean --all`, with its token, or with `--ta
 
 While a landing is seen, either drain can also run `update a`, `close --outcome parked a` or `land a` on its ticket. Each is refused and changes nothing. While `land` holds the landing lock, `update` and `close` print ``<command>: a landing of `<branch>` is running in another command; nothing was done; wait for it to end, then run plan: the landing records the ticket's outcome itself`` and exit 3, and a second `land` prints its own line and exits 2. While only the merge lock is held, `update` and `close` print ``<command>: a merge of `<branch>` is running in another command; nothing was done; wait for it to end, then run plan`` and exit 3, and a second `land` prints ``land: a merge of `<branch>` is running in another command; run land again once it ends`` and exits 2. `report` and `clean` leave the ticket alone either way, and `clean --all` keeps its tree with ``kept: <tree>: `<branch>` has a landing running`` or ``has a merge running``. `open a` changes nothing there either: the plan does not start the ticket, whose branch has commits or has merged. The graph has `update` and `close` only while a landing is alive or in the instant before a killed `land`'s `merge.py` probes it. Outside those they are the main graph's steps.
 
+On the expiry graph:
+
+| Step | What it does |
+| --- | --- |
+| the agent commits | the ticket's content commit, on a branch at the default tip: it resolves the ticket in the unit and commits its spec. Once a ticket, while the unit is on the default branch |
+| `documents.py expire` | after the content commit, in a commit of its own. It deletes the spec. Where every ticket of the unit is resolved at the branch's head, it deletes the unit too, and appends to the brief each of the unit's `## Answers` lines the brief does not hold yet |
+| the agent commits the verdict record | on a branch `update` has not moved |
+| `drain.py update` | rebases the branch onto the default tip, dropping a last verdict record. Where the branch deleted the unit and the default branch has since changed a file of it, the rebase meets a modify/delete conflict whose every path is in the unit. `update` takes the incoming file and runs `expire`, which deletes it again and carries the incoming line. Otherwise it runs `expire` once the rebase is done, which deletes the unit where the tip resolved every other ticket of it |
+| a judge-again run commits the verdict record | on a branch `update` moved. It reads the spec from the parent of the newest commit on the branch that deleted it, and finds none where no commit there deletes it |
+| `drain.py land` | the judged merge, of a branch whose verdict record is last and that holds the default tip. The judge refuses a change that leaves a unit it made expired, or that deletes the unit and drops one of its lines from the brief, and `land` then holds the ticket for the owner. Run again on a merge no note says, it records the merge |
+| a kill before the note stops `drain.py land` | the merge lands, and no note says so |
+| the owner squashes by hand the branch | its commits as one, after `expire` and before a verdict record: no commit on it deletes the spec |
+| the owner lands an `## Answers` line on a ticket of the unit | once, while the unit is on the default branch, which moves its tip |
+
 ## Rules
 
-The promises are thirty-one rules, each about a step. The model numbers them, and the tests and this page use the numbers. The module names each `Rule` and its number, as `Rule6a`.
+The promises are thirty-seven rules, each about a step. The model numbers them, and the tests and this page use the numbers. The module names each `Rule` and its number, as `Rule6a`.
 
 | Rule | Says | In Python | In TLC |
 | --- | --- | --- | --- |
@@ -137,8 +187,14 @@ The promises are thirty-one rules, each about a step. The model numbers them, an
 | 9k | A landing is not seen once its `land` and every merge of the branch have ended. | holds | holds |
 | 9l | No close is written while a merge that can still land is alive, but by its own landing. | holds | holds |
 | 9m | At most one merge of the ticket that can still land is alive at a time. | holds | holds |
+| 12 | No step leaves the default branch holding a unit expired at its tip: the last ticket of it to land deletes it (ADR 0064). | holds | holds |
+| 12a | No ticket's merge is refused for a unit it left or an `## Answers` line it dropped (ADR 0064). | holds | holds |
+| 12b | Wherever the unit is gone, on the default branch or at a branch's head, each of its `## Answers` lines is in the brief once (ADR 0064). | holds | holds |
+| 12c | No update stops on a conflict whose every path is in a unit `expire` lists (ADR 0064). | holds | holds |
+| 12d | A judge-again run finds the spec (ADR 0064). | breaks in 6 steps, by the owner's squash by hand | breaks in 6 steps, by a run as short |
+| 12e | A `land` killed after its merge records the merge when run again, though the merge deleted the ticket's file (ADR 0064). | holds | holds |
 
-Rules 1 to 8, 7a to 7d, 10, 11a and 11b are on the main graph, 9 to 9m on the lease graph. In Python the main rules are proved on the whole main graph, with the gate and without it, and the lease rules on the whole lease graph. Each main rule holds or breaks the same both ways but 11b, which breaks only without the gate. TLC checks the main rules on four runs of the main graph, as [below](#the-rules-in-the-modules) says, and the lease rules on the whole lease graph.
+Rules 1 to 8, 7a to 7d, 10, 11a and 11b are on the main graph, 9 to 9m on the lease graph, and 12 to 12e on the expiry graph. In Python the main rules are proved on the whole main graph, with the gate and without it, the lease rules on the whole lease graph, and the expiry rules on the whole expiry graph, with every keep and with each keep taken away. Each main rule holds or breaks the same both ways but 11b, which breaks only without the gate. TLC checks the main rules on four runs of the main graph, as [below](#the-rules-in-the-modules) says, and the lease rules on the whole lease graph.
 
 In rules 7, 7c and 7d a ticket that waits on a split ticket waits on its parts: the method builds a split ticket as its parts, and it is done when they are (ADR 0046). A part can still land while the plan keeps it buildable, building, built or waiting, or once it has. Rule 7 reads the parts as the blockers: a ticket that waits on a held part is refused.
 
@@ -206,9 +262,35 @@ The fix holds three locks of the kernel's, none of them inherited by a child (AD
 
 The merge lock has a side effect. The owner's own run of the merge entry point on a ticket's branch holds it too, so the drain sees a merge running and refuses the ticket's commands with the merge-only lines. `test_an_owners_hand_merge_is_seen_as_a_merge_running_and_one_merge_lands` replays it three ways. With the hand merge first, `update`, `close` and `land` are refused and the next `land` records the owner's merge. With `land`'s `merge.py` past its probe first, the hand merge prints ``merge: a merge of `<branch>` is already running; nothing was merged`` and returns 2, and `land` closes its own merge. With the hand merge taking the lock while `land`'s `merge.py` waits to start, that `merge.py` meets the lock and stops, and `land` closes nothing.
 
+### The turn of ADR 0064
+
+The judge refuses a branch that is behind, so a branch lands only on the tip it was brought up to. Its `expire` ran after that update, and saw every ticket of the unit that landed before it, so the last to land is the one whose `expire` deleted the unit. That is how rule 12 holds, in either order of the landings and whichever branch was built first. The judge's own check of the unit stands behind it: with `update`'s `expire` the drain never offers the judge a change that left the unit, so taking the judge's check away alone breaks no rule.
+
+Each keep taken away breaks a rule, by these shortest runs:
+
+- Without `UPDATE_EXPIRE`, 12a breaks in 9 steps: `the agent commits a`; `the agent commits c`; `documents.py expire runs on a`; `documents.py expire runs on c`; `the agent commits the verdict record of a`; `drain.py land a`; `drain.py update c`; `a judge-again run commits the verdict record of c`; `drain.py land c`. Each was built while the other was open, so neither `expire` deleted the unit. `c`'s update brought in `a`'s landing and ran no `expire`, so the judge refuses `c`, which leaves the unit its change made expired, and `land` holds it for the owner.
+- Without `UPDATE_EXPIRE` and `JUDGE` both, 12 breaks by the same 9 steps: the judge lands `c`, and the default branch holds the expired unit.
+- Without `CARRY`, 12b breaks in 8 steps: `the agent commits a`; `documents.py expire runs on a`; `the agent commits the verdict record of a`; `drain.py land a`; `the agent commits c`; `documents.py expire runs on c`; `the owner lands an Answers line on a ticket of the unit`; `drain.py update c`. `c`'s `expire` deleted the unit, and the owner then answered on a ticket of it. The update resolves the conflict to the deletion alone, so the owner's line is in neither the unit nor the brief. 12a breaks in 10, the same run and `a judge-again run commits the verdict record of c`; `drain.py land c`, where `ratchet-lowered` refuses `c`.
+- Without `ONCE`, 12b breaks by the same 8 steps: the update's `expire` reads the incoming file, which holds the unit's first line as well as the owner's new one, and carries both. `c`'s first `expire` carried the first already, so the brief holds it twice.
+- Without `RESOLVE`, 12c breaks by the same 8 steps: the update stops on the conflict, and the ticket waits for Reconcile.
+- Without `HISTORY`, 12d breaks in 5 steps: `the agent commits a`; `documents.py expire runs on a`; `the owner lands an Answers line on a ticket of the unit`; `drain.py update a`; `a judge-again run commits the verdict record of a`. The judge-again run reads the spec in the work tree, where `expire` deleted it.
+- Without `NOTE`, 12e breaks in 9 steps: `the agent commits a`; `documents.py expire runs on a`; `the agent commits the verdict record of a`; `drain.py land a`; `the agent commits c`; `documents.py expire runs on c`; `the agent commits the verdict record of c`; `a kill before the note stops drain.py land c`; `drain.py land c`. `c`'s merge deleted its ticket's file, so `land` run again finds no such ticket, as `drain.py` answers a ref today, and records nothing.
+
+With every keep, 12d breaks in 6 steps, by the owner's squash by hand: `the agent commits a`; `documents.py expire runs on a`; `the owner squashes by hand the branch of a`; `the owner lands an Answers line on a ticket of the unit`; `drain.py update a`; `a judge-again run commits the verdict record of a`. ADR 0064 accepts it: "A branch squashed by hand loses the commit that deleted the spec. A judge-again run then falls back on the ticket and the verdict's assumptions."
+
+`expire` converges. On every branch the drain leaves past its content commit, with every keep, a second run of `expire` changes nothing. Without `UPDATE_EXPIRE` some branch an update left is one where `expire` would still delete the unit.
+
+ADR 0064 lists tests for the builders. Here is where the model takes each:
+
+- One ticket waits, a second lands, and the first is merged by hand later; and a forge merges two changes out of build order. Both tickets are built while the other is open, and either lands first; the last is brought up to date and lands, and its `expire` deleted the unit (`test_whichever_ticket_lands_last_deletes_the_unit_and_carries_its_line`). A hand merge and a forge's merge are the same judged merge here.
+- Split parts land after the sibling that ran `expire`. Once filed, the parts are tickets of the unit like `a` and `c`. The split itself is [left out](#left-out).
+- A records edit to the unit lands between a ticket's `expire` and its update. That is the run of 8 steps above, which with every keep lands with both lines in the brief once (`test_a_records_edit_between_expire_and_update_reaches_the_brief_once_and_lands`).
+- A judge-again run after two updates reads the deleted spec: the second update across the owner's edit (`test_a_judge_again_run_after_two_updates_reads_the_deleted_spec`).
+- A fix commit after the description, the `expire` commit after it, and a hand squash. The hand squash is rule 12d's run. The change description is the route's and the merge's, and is left out.
+
 ### The rules in the modules
 
-`exports()` writes seven modules. Five carry the rules, each as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, so a module holds each state once for each set of step rules the step into it broke. The rules are computed in Python, so TLC checks that a module carries them and finds the shortest runs to them. It does not prove them a second way.
+`exports()` writes nine modules. Six carry the rules, each as a rule on a step. TLA+ cannot see a step that leaves every variable as it was, so a module holds each state once for each set of step rules the step into it broke. The rules are computed in Python, so TLC checks that a module carries them and finds the shortest runs to them. It does not prove them a second way.
 
 The whole main graph is too large to export on every test run: at 12,863 states its module was 15 MB, and writing it took about 8 seconds. So TLC checks the main rules on four runs of it. Each run is the part of the main graph its start reaches by some of the model's own steps, so each of its states and steps is one of the graph, and a rule breaks on a step of it exactly where it breaks on that step of the graph.
 
@@ -217,6 +299,7 @@ The whole main graph is too large to export on every test run: at 12,863 states 
 - `DrainTicketLifeGated`, the life run with the gate: every step but those on `c`, the kills and the steps no run takes, and the upgrade only where no branch's tip matters, with every commit through the guard's gate. Ticket `a` is opened, checked with `--final` or without, built by the agent once the check has passed, judged, landed or parked, the upgrade refuses it until the owner lands its `Flag:` line, and `b` waits on it. No role commits. It reaches 203 states and 1,770 steps. No step rule breaks, so the module has as many.
 - `DrainTicketLife`, the same life run without the gate, the record of what the gate prevents. The agent may commit before the check, and a role before its run's check or after a check without `--final`. It reaches 407 states and 3,937 steps. One step rule breaks, rule 11b, so the module has 422 states and 4,091 steps.
 - `DrainLease`: the whole lease graph, 4,583 states and 60,124 steps. Four step rules break, so the module has 5,207 states and 71,616 steps.
+- `DrainExpiry`: the whole expiry graph with every keep, 1,237 states and 2,752 steps. One step rule breaks, rule 12d, so the module has 1,313 states and 2,948 steps. The graphs with a keep taken away are proved in Python alone.
 
 No run takes a split, a check that finds only a rebase left unfinished, with `--final` or without, an `update` whose check cannot read, or an upgrade under `a`'s open tree, so that the life run stays a module the statechart tool draws whole. Only the search in the tests reaches them.
 
@@ -243,7 +326,9 @@ The main rules were checked on `DrainLanding.tla`, SHA-256 `cf151c9ce9bc371559ee
 
 The lease rules were checked on `DrainLease.tla`, SHA-256 `d8dcc245916be657678b56ad5471ff8d97346db4904020e1b9b0b9fa5fbd46a6`. TLC reached 5,207 states. Run again with only the rules that hold, it counts 71,617 states generated: the start and 71,616 steps, as many as the module has. Rules 9c, 9e, 9f, 9g, 9h, 9i, 9j, 9k, 9l and 9m hold. Rules 9, 9a, 9b and 9d break, each by the run above. Once both drains' sessions have ended no step is left, so the module tells TLC that a state with no step out is no deadlock.
 
-The charts of a kill are drawn from `DrainLanding.tla`, the chart of uncommitted work from `DrainWork.tla`, the chart of the upgrade from `DrainTicketLifeGated.tla`, and the chart of a role's commit from `DrainTicketLife.tla`, since with the gate no role commits. Four charts are drawn from summaries, each the graph seen through the few values the chart shows. `DrainLife.tla`, SHA-256 `5337dc011a212d540ee14e52732fe96c607991bbab119a1975c12cbfb53584f2`, is the life run with the gate, seen through what the plan and the note say of ticket `a`. `DrainLeaseShown.tla`, SHA-256 `4284a6774bcfbb061fe332b5cf5d0abc316a8d67b6a85f9225fa3d75d1baa6ba`, is the whole lease graph seen through how the drains run, the lease's holder and whether it drains, has stopped or is gone, the landing, the merge, and a `merge.py` whose `land` was killed before its probe or after. It leaves out the other drain's session and whether it drains, which no chart reads, so that it stays under the 500 states the statechart tool draws. A box groups states, and an arrow from a box leaves every state in it.
+The expiry rules were checked on `DrainExpiry.tla`, SHA-256 `acd0c8bb195b9f6fdd98fab761dcf182170d9285d48ba93eac658c1ba8eb186e`. TLC reached 1,313 states: the graph's 1,237, and 76 that a step into them broke rule 12d. Run with only the rules that hold, it counts 2,949 states generated: the start and 2,948 steps, as many as the module has. Rules 12, 12a, 12b, 12c and 12e hold. Rule 12d breaks, with one worker in 6 steps, as the search's run does: `the agent commits a`; `the owner lands an Answers line on a ticket of the unit`; `documents.py expire runs on a`; `the owner squashes by hand the branch of a`; `drain.py update a`; `a judge-again run commits the verdict record of a`. It is the search's run with the owner's line landed before `expire` in place of after it. Once both tickets have landed, or one is held, no step is left, so the module tells TLC that a state with no step out is no deadlock.
+
+The charts of a kill are drawn from `DrainLanding.tla`, the chart of uncommitted work from `DrainWork.tla`, the chart of the upgrade from `DrainTicketLifeGated.tla`, and the chart of a role's commit from `DrainTicketLife.tla`, since with the gate no role commits. Five charts are drawn from summaries, each the graph seen through the few values the chart shows. `DrainLife.tla`, SHA-256 `5337dc011a212d540ee14e52732fe96c607991bbab119a1975c12cbfb53584f2`, is the life run with the gate, seen through what the plan and the note say of ticket `a`. `DrainLeaseShown.tla`, SHA-256 `4284a6774bcfbb061fe332b5cf5d0abc316a8d67b6a85f9225fa3d75d1baa6ba`, is the whole lease graph seen through how the drains run, the lease's holder and whether it drains, has stopped or is gone, the landing, the merge, and a `merge.py` whose `land` was killed before its probe or after. It leaves out the other drain's session and whether it drains, which no chart reads, so that it stays under the 500 states the statechart tool draws. `DrainExpiryShown.tla`, SHA-256 `ff92f49e453eeebf823d255701214cd8af4572b309ab4d2ead8c42d0182a5b97`, is the expiry graph seen through whether the default branch holds the unit, how many of its tickets have landed, whether a branch not yet landed deletes it, and whether that branch lacks a line the default branch holds. A box groups states, and an arrow from a box leaves every state in it.
 
 ### One ticket's life
 
@@ -644,9 +729,32 @@ stateDiagram-v2
   class s12 bugPath
 ```
 
+### A unit two tickets share
+
+Drawn from `DrainExpiryShown.tla`, where TLC reached 5 states and 61 steps: 5 states and 6 arrows. It does not draw the 44 steps that stay in one state: the commits, the verdict records, the squash by hand, and an update or an `expire` that deletes nothing. Neither ticket's `expire` deletes the unit while the other is open. Once one has landed, the other's `expire` deletes it: on a branch built after the landing, or by the `update` that brings an older branch up to the landing. An `## Answers` line the owner lands after the branch was built is not on it, and the next `update` takes the edit, runs `expire` again and carries the line. The branch that deleted the unit lands it gone, with every line in the brief. With every keep no arrow breaks a rule here; rule 12d's run, the owner's squash by hand, stays in one state.
+
+```mermaid
+---
+title: "A unit two tickets share: the last to land deletes it"
+---
+stateDiagram-v2
+  s0: On the default branch, neither ticket landed
+  s1: One ticket landed, the other's branch keeps the unit
+  s2: Deleted on the last ticket's branch, its lines in the brief there
+  s3: Deleted on the last ticket's branch, the owner's new line not on it
+  s4: Gone from the default branch, its lines in the brief
+  [*] --> s0
+  s0 --> s1: a ticket lands
+  s1 --> s2: expire, on a branch built after the landing or update runs expire
+  s1 --> s3: expire, on a branch built after the landing
+  s2 --> s3: the owner lands an Answers line
+  s2 --> s4: a ticket lands
+  s3 --> s2: update takes the edit and runs expire
+```
+
 ## Left out
 
-- Forge mode. With a remote `land` is not used: the skill opens a pull request and the forge's merge job merges it. So a role's push and a role's pull request are left out too: the role's step here is a commit on the local branch, while ADR 0060's check also compares the remote branch and the open pull request.
+- Forge mode. With a remote `land` is not used: the skill opens a pull request and the forge's merge job merges it. So a role's push and a role's pull request are left out too: the role's step here is a commit on the local branch, while ADR 0060's check also compares the remote branch and the open pull request. On the expiry graph `land` stands for the forge's merge job too, which asks the same judge.
 - A move of the branch in a queue work tree that is not a `commit`, `am`, `cherry-pick` or `revert`, which the guard gates: a `merge`, `reset`, `update-ref` or `pull`. The role's step here is a commit, so with the gate no role moves the branch, and the publish check is left to find such a move.
 - Which role commits, and more than one commit by roles in a run. The publish check runs once per run, not once per role, so one commit stands for any number.
 - A ticket an older drain opened, whose note holds no `start`. `land` refuses it, and `check` changes nothing; the way out is `close --outcome waits`, and the next drain's `open` records a start.
@@ -684,7 +792,17 @@ stateDiagram-v2
 - The merge judge's reasons of ADR 0061: `unflagged` on new surface before deployment, the key a yes names, and the full closure, under which a change that adds surface under the owner's no waits for the owner while an open labelled ticket reads a yes. The model abstracts the judge, as the record says. To the drain each is a reason it does not resolve itself, so `land` holds the ticket, and only the owner's edit frees it here.
 - A project that has declared `deployed`, where the preflight asks the `Flag:` line already, before the upgrade.
 
-The real scripts agree with the model on the runs above, the kills, the random runs and the lease walks. They are not compared on every step of either graph.
+On the expiry graph:
+
+- What the route owns of ADR 0064: a unit already expired at the merge base, which no change deletes and the route names a records change for; the records check that lets a change delete a file `expire` lists; the owner's agreement on a labelled ticket and its spec; the change description as a marked commit; the kinds, `conformance` and the prune pass.
+- A third ticket of the unit, and an open ticket elsewhere that names a file of the unit as its parent or blocker. A unit here expires when both its tickets are resolved.
+- The split, and the owner's close of the split ticket. A split ticket stays open until the owner closes it, so its unit expires only then, whichever part lands last; no command of the drain closes it.
+- An `## Answers` line on a ticket's own spec. `expire` carries it to the brief when it deletes the spec, so two tickets built on one tip would each append a line to `## In the owner's words`. The second to land would meet a conflict in the brief on its update, which is no file of a unit, so Reconcile would get it as ADR 0064 says. Here only the unit's files hold a line, and only the change that deletes the unit appends to the brief.
+- A conflict outside the unit, a rebase Reconcile finishes, and a hand merge or a forge's merge that runs no judge.
+- More than one records edit by the owner, a records edit that closes a ticket of the unit, and one after the unit is gone.
+- The cap, the trees, the holds the main graph reads, the publish check and its start, and the kills but the one of `land` before its note.
+
+The real scripts agree with the model on the runs above, the kills, the random runs and the lease walks. They are not compared on every step of the main graph or the lease graph, and on no step of the expiry graph.
 
 ## What the next script change must do
 
@@ -718,6 +836,18 @@ These tests were expected failures until the change, and now pass:
 
 Rules 7a and 7b hold on the code as it is: `drain.py` already refuses to open a ticket the preflight refuses, and lifts the refusal of a ticket that waits on one once that one is buildable again. What they need of the preflight, which the model reads only as a refusal, it now does: it asks a ticket of an asked type for its `Flag:` line before deployment as after (ADR 0061). The scripts under test ship it already, so the tests' upgrade step commits a binding that declares a type the catalogue asks the line of, as the route's world does, and the real preflight refuses `a`.
 
+## What the script change of ADR 0064 must do
+
+No script does the expiry graph's steps yet: `documents.py` is not written, and `drain.py` and `merge.py` do not run it. So no real repository takes them, and the comparisons above leave the expiry graph out. The tests prove its rules on the model alone. The change must keep each rule the model holds:
+
+- **`documents.py expire`.** It deletes the feature's spec, and a unit every ticket of which is resolved at the head, in a commit of its own, and appends to the brief each `## Answers` line of what it deletes that the brief does not hold yet (`ONCE`). The lines are dated, so it compares a line without its date. Run again, it changes nothing.
+- **`drain.py update`.** Once its rebase is done it runs `expire` (`UPDATE_EXPIRE`). On a modify/delete conflict whose every path is in a unit `expire` lists, it takes the incoming file, runs `expire` and goes on (`RESOLVE`, `CARRY`). Any other conflict stops as now, for Reconcile. Its own commits come before the start it records (ADR 0060), or the next check finds the branch moved from its start and parks it as a role's commit; the expiry graph holds no start, so it does not show this.
+- **A judge-again run.** It reads the spec from the parent of the newest commit on the branch that deleted it (`HISTORY`).
+- **`drain.py land`, and every command that takes a ticket.** It finds a ticket its own landing deleted by the note written when it opened (`NOTE`). Today `land` run again after a kill past the merge prints `drain: <ref>: no such ticket` and exits 2.
+- **The judge.** It refuses a change that leaves a unit not expired at the merge base and expired at the head, and `ratchet-lowered` one that deletes a ticket or spec and drops one of its lines from the brief (`JUDGE`).
+
+The change carries each run of [the turn of ADR 0064](#the-turn-of-adr-0064) as a replay on a real repository: the runs each keep keeps, the runs of ADR 0064's tests, and the squash by hand.
+
 ## Changing the drain
 
 Change the model first, then the code, then the page.
@@ -735,4 +865,4 @@ for e in drain_model.exports():
     Path(sys.argv[1], e.name + ".cfg").write_text(e.config)' /tmp/drain-model
 ```
 
-Then, as [the models' README](README.md#drawing-the-charts-again) says, run the `statechart` command once on each of `DrainLanding.tla`, `DrainWork.tla`, `DrainTicketLifeGated.tla`, `DrainTicketLife.tla` and `DrainLease.tla` with no view for the rules, run TLC directly with only the rules that hold for the counts, and once for each rule that breaks with one worker. Draw each chart from its module and view in `docs/model/drain/`, as the chart's heading says. Put each `chart.mmd` in its block, the counts beside it, and each SHA-256 on the line that names it.
+Then, as [the models' README](README.md#drawing-the-charts-again) says, run the `statechart` command once on each of `DrainLanding.tla`, `DrainWork.tla`, `DrainTicketLifeGated.tla`, `DrainTicketLife.tla`, `DrainLease.tla` and `DrainExpiry.tla` with no view for the rules, run TLC directly with only the rules that hold for the counts, and once for each rule that breaks with one worker. Draw each chart from its module and view in `docs/model/drain/`, as the chart's heading says. Put each `chart.mmd` in its block, the counts beside it, and each SHA-256 on the line that names it.

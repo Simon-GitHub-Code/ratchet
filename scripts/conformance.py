@@ -29,6 +29,7 @@ import architecture
 import budget
 import change_size
 import changed_tests
+import comments
 import gatelib
 import hooks_installed
 import installs
@@ -68,6 +69,8 @@ ENTRY_POINTS = (
     "snapshots",
     "snapshots-check",
     "suppressions",
+    "comments",
+    comments.LISTER,
     "commits",
     "guard-diff",
     "settings",
@@ -315,7 +318,7 @@ RUNS_JUST = re.compile(r"^just\s+@?([A-Za-z_][\w-]*)")
 OVER_THE_CHANGE = frozenset({"diff-coverage", "test-counts", "mutation-changed"})
 # Why: ADR 0073. A gate the plugin runs through a recipe the template carries, whose Tool cell
 # also names the project's runners, so its fault is the project's to register.
-CARRIED_GATES = frozenset({"tests-changed"})
+CARRIED_GATES = frozenset({"tests-changed", "comments"})
 CHANGED_TESTS_STOPS = "changed tests run"
 SHOWN = 3
 VARIADIC = re.compile(r"\s[*+]\w")
@@ -893,7 +896,9 @@ def check_entry_points(root: Path, text: str) -> Iterable[Finding]:
         if justfile is None or recipe is None or recipe.group(1) in justfile_text.modules(justfile):
             continue
         if not justfile_text.defines_recipe(justfile, recipe.group(1)):
-            yield missing_recipe(justfile, recipe.group(1), name)
+            yield missing_recipe(
+                justfile, recipe.group(1), name, placeholder=name == comments.LISTER
+            )
 
 
 def check_binding(root: Path) -> Iterable[Finding]:
@@ -956,6 +961,28 @@ def check_binding(root: Path) -> Iterable[Finding]:
             yield agent(f"{BINDING_PATH}: {failure}", then=triggers_follow(catalogue))
         else:
             yield agent(f"{BINDING_PATH}: {failure}")
+    yield from library_only(text, rows)
+
+
+LIBRARY_ONLY = "documentation coverage, ratcheted"
+
+
+def library_only(binding: str, rows: Sequence[tuple[str, str]]) -> Iterable[Finding]:
+    kinds = application_types.declared(binding)
+    if kinds is None or comments.LIBRARY in kinds:
+        return
+    for question, tool in rows:
+        if question == LIBRARY_ONLY and bound(tool):
+            problem = (
+                f"gate '{question}' is asked of a library only, and the types do not declare"
+                f" one; write `{comments.NOT_A_LIBRARY}` (ADR 0063: the owner merges this"
+                " unbinding)"
+            )
+            want = markdown_text.with_cell(
+                "## Gates", question, column=1, value=comments.NOT_A_LIBRARY
+            )
+            does = f"write `{comments.NOT_A_LIBRARY}` in the '{question}' row"
+            yield Finding(BINDING_PATH, problem, Edit(does, want, Agent()))
 
 
 def check_architecture(root: Path) -> Iterable[Finding]:
@@ -978,7 +1005,7 @@ def check_architecture(root: Path) -> Iterable[Finding]:
         )
         return
     declared = architecture.declared(text)
-    for problem in declared.problems:
+    for problem in [*declared.problems, *comments.interface_problems(text)]:
         yield agent(f"{BINDING_PATH}: {problem}")
     if declared.record is None:
         return
@@ -1069,7 +1096,7 @@ def dropped_row(failure: str, question: str, *, trigger: str, fired: Fired) -> F
     if always:
         fill = "add the template's row and bind it: the question is asked from the first commit"
         fix = Agent(start, (bite,))
-        if shipped(row):
+        if shipped(row) or gate in CARRIED_GATES:
             edit = (f"add the '{question}' row, bound to the plugin's own gate", row)
     elif {state for state, _ in said} == {True}:
         fill = f"add the template's row and bind it: its trigger `{trigger}` has fired here"
@@ -1373,6 +1400,76 @@ def check_suppressions(root: Path) -> Iterable[Finding]:
                 " backticks or `none: <reason>`"
             )
             yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=SUPPRESSIONS_STOPS)
+
+
+COMMENTS_STOPS = "the comments gate, which judges nothing until its lister is bound"
+COMMENTS_QUESTION = "no prose comments"
+
+
+def check_comments_section(root: Path) -> Iterable[Finding]:
+    text = read(root / BINDING_PATH)
+    if text is None:
+        return
+    found = comments.table(text)
+    if found is None:
+        problem = (
+            f"has no '{comments.SECTION}' section, which names the lister the `comments` gate"
+            " reads (ADR 0063); add the template's section and fill it"
+        )
+        added = missing_section(
+            BINDING_PATH, problem, comments.SECTION, template_text=template_binding()
+        )
+        yield replace(added, stops=COMMENTS_STOPS)
+        return
+    for problem in found.problems:
+        yield replace(agent(f"{BINDING_PATH}: {problem}"), stops=COMMENTS_STOPS)
+    if found.rows:
+        for path in comments.tracked_text(root):
+            if comments.row_of(found, path) is None:
+                yield agent(
+                    f"{BINDING_PATH}: '{comments.SECTION}' has no row matching `{path}`; add a"
+                    " row for its kind, `listed` or `none: <reason>`"
+                )
+    listed = [row for row in found.rows if row.listed]
+    if listed and comments.placeholder(read_justfile(root)):
+        problem = f"the `{comments.LISTER}` recipe still holds the template's `bind:` placeholder"
+        yield replace(agent(f"justfile: {problem}"), stops=COMMENTS_STOPS)
+    yield from unplanted_rows(root, text, listed)
+
+
+def planted(root: Path, fault: project_bite.Fault) -> set[str]:
+    if isinstance(fault, project_bite.Write):
+        return {fault.path}
+    if isinstance(fault, project_bite.Replace):
+        return {swap.path for swap in fault.swaps}
+    if isinstance(fault, project_bite.Patch):
+        diff = root / fault.path
+        return project_bite.patch_paths(root, diff.read_bytes() if diff.is_file() else None)
+    return set()
+
+
+def unplanted_rows(root: Path, binding: str, listed: Sequence[comments.Row]) -> Iterable[Finding]:
+    gate = next(
+        (row for row in project_bite.gate_rows(binding) if row.question == COMMENTS_QUESTION), None
+    )
+    source = read(root / project_bite.REGISTRY)
+    if gate is None or not gate.bound or source is None or not listed:
+        return
+    registry, _ = project_bite.read_registry(source)
+    paths = {
+        path
+        for bite in registry.bites
+        if bite.gate == gate.gate
+        for path in planted(root, bite.fault)
+    }
+    for row in listed:
+        if not any(gatelib.matches(path, list(row.globs)) for path in paths):
+            globs = ", ".join(f"`{glob}`" for glob in row.globs)
+            yield agent(
+                f"{project_bite.REGISTRY}: the Comments row {globs} is `listed`, and no [[bite]] of"
+                f" gate '{gate.gate}' plants into a file it matches; add one, so the lister is"
+                " shown to find a comment of that kind (ADR 0063)"
+            )
 
 
 SIGNS_STOPS = "the route's proposal of a life event it sees a sign of, which waits for the table"
@@ -3441,6 +3538,7 @@ CHECKS: tuple[Check, ...] = (
     check_triggers,
     check_dependencies,
     check_suppressions,
+    check_comments_section,
     check_signs,
     check_pins,
     check_mutation,
@@ -3508,7 +3606,8 @@ def ledger_raised(root: Path, keys: list[owed.Key]) -> list[tuple[Check, Finding
         ledger = owed.read(tree)
         for problem in ledger.problems:
             yield Finding(str(owed.LEDGER), problem, Agent(), rule=owed.OWN)
-        _, stale = owed.excused(keys, ledger.entries)
+        mine = [entry for entry in ledger.entries if entry.rule not in owed.GATE_RULES]
+        _, stale = owed.excused(keys, mine)
         if not stale:
             return
         count = stale.total()
@@ -3637,6 +3736,29 @@ def mutations() -> list[Mutation]:
         *upgrade_mutations(),
         *owed_mutations(),
         *architecture_mutations(),
+        *comments_mutations(),
+    ]
+
+
+def comments_mutations() -> list[Mutation]:
+    published = f"- {comments.PUBLISHED}: {comments.NOT_A_LIBRARY}"
+    return [
+        ("binding without a Comments section", rebind(comments.SECTION, "## Remarks")),
+        (
+            "Comments row left as the template wrote it",
+            rebind(SELF_TEST_COMMENTS, "| <`globs` of one kind of file> | <`listed`> |"),
+        ),
+        (
+            "Comments row that is neither listed nor none with a reason",
+            rebind(SELF_TEST_COMMENTS, "| `**` | sometimes |"),
+        ),
+        ("binding without a published interface line", rebind(published + "\n", "")),
+        (
+            "documentation coverage bound outside a library",
+            rebind(
+                f"| {LIBRARY_ONLY} | {comments.NOT_A_LIBRARY} |", f"| {LIBRARY_ONLY} | a tool |"
+            ),
+        ),
     ]
 
 
@@ -4418,6 +4540,9 @@ SELF_TEST_KIND = "self-test-silence"
 SIGNS_PLACEHOLDER = re.compile(r"^\| (deployed|irreplaceable-data) \| <[^\n]*$", re.MULTILINE)
 PINS_PLACEHOLDER = re.compile(r"^\| <`globs` of the files that name an image[^\n]*$", re.MULTILINE)
 SELF_TEST_PINS = "| none: the self-test names no image | none |"
+COMMENTS_PLACEHOLDER = re.compile(r"^\| <`globs` of one kind of file> \|[^\n]*$", re.MULTILINE)
+SELF_TEST_COMMENTS = "| `**` | none: the self-test writes no code by hand |"
+PUBLISHED_PLACEHOLDER = re.compile(r"^- Published interface: <[^\n]*>$", re.MULTILINE)
 REPORTS_PLACEHOLDER = re.compile(r"^\| `suite` \|[^\n]*$", re.MULTILINE)
 SELF_TEST_REPORTS = "| none: the self-test shares no report | none | none | none | none |"
 SUITES_PLACEHOLDER = re.compile(r"^\| <suite name> \|[^\n]*$", re.MULTILINE)
@@ -4461,6 +4586,9 @@ def fill_binding(text: str) -> str:
     text = DECISION_PLACEHOLDER.sub(f"- Decision: `{SELF_TEST_RECORD}`", text)
     text = PARTS_PLACEHOLDER.sub(SELF_TEST_PARTS, text)
     text = text.replace("| contract drift | |", "| contract drift | none: not a service |")
+    text = text.replace(f"| {LIBRARY_ONLY} | |", f"| {LIBRARY_ONLY} | {comments.NOT_A_LIBRARY} |")
+    text = PUBLISHED_PLACEHOLDER.sub(f"- {comments.PUBLISHED}: {comments.NOT_A_LIBRARY}", text)
+    text = COMMENTS_PLACEHOLDER.sub(SELF_TEST_COMMENTS, text)
     # Why: ADR 0028. One row waits on its trigger and so needs no bite; the rest are bound.
     text = text.replace(
         "| rolls back safely | |",

@@ -58,6 +58,7 @@ def test_every_proof_a_question_requires_is_described_and_every_description_is_r
     required = {proof for proofs in SHIPPED.proofs.values() for proof in proofs}
     assert required == set(SHIPPED.meanings)
     assert SHIPPED.proofs == {
+        "no prose comments": ("prose-comment", "doc-comment"),
         "telemetry emitted": ("outside-the-seam",),
         "changed flags off and on": ("broken-flag-state",),
         "load smoke": ("erroring-route",),

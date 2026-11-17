@@ -23,6 +23,7 @@ export const NEXT = {
   fill: "Fill the rows the upgrade left",
   review: "Review the architecture",
   architecture: "Record the architecture",
+  expire: "Delete the expired unit",
   resolve: "Mark the merged ticket resolved",
 };
 
@@ -73,6 +74,8 @@ const STEP = {
   AgentLandsTheReview: "an agent lands the architecture review",
   AgentBindsSafeguard: "an agent binds the safeguard",
   OwnerRecordsArchitecture: "you run /ratchet:architecture",
+  UpgradeFindsAnExpiredUnit: "an upgrade finds a unit an older plugin left",
+  AgentDeletesTheExpiredUnit: "an agent deletes the expired unit",
   SomeoneEditsCode: "someone edits code",
   AgentCommitsOnABranch: "an agent commits on a branch",
   BranchMerges: "the branch merges",

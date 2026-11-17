@@ -1,6 +1,7 @@
 """``upgrade``: the plan, the write, and the report, on repositories adoption left behind."""
 
 import hashlib
+import io
 import os
 import re
 import shutil
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import budget
+import comments
 import conformance
 import gatelib
 import justfile_text
@@ -640,7 +642,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert first.startswith(f"upgrade: {root} from 0.8.2 at {adopted.RELEASES['0.8.2'][:12]} (CI")
     assert f"to {plugin_pin.in_use(PLUGIN_ROOT)}." in first
     assert "Would write 13 files (run with --apply):" in out
-    assert "  quality/owed.toml\n    - write down 95 things owed since " in out
+    assert "  quality/owed.toml\n    - write down 98 things owed since " in out
     assert "  .claude/settings.json\n    - regenerate the permission rules" in out
     assert f"    - pinned: {plugin_pin.line_for(PLUGIN_ROOT)}" in out
     assert out.index("\n  docs/process/binding.md\n") > out.index("\n  justfile\n")
@@ -652,7 +654,7 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
     assert "        settled by the owner's answer to: Which of these has already happened" in out
     assert "        seen: no file in the tree is a sign of a life event" in out
     assert "        then: `deployed` owes the Gates rows " in out
-    assert verdict(out).startswith("upgrade: would write 72 edits in 13 files. 95 items are owed")
+    assert verdict(out).startswith("upgrade: would write 79 edits in 13 files. 98 items are owed")
     assert "and 0 red; 4 of them hold an assumption" in verdict(out)
     assert "The change touches guard paths" in verdict(out)
     assert plain(out) == "\n".join(
@@ -660,8 +662,8 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
             "In plain words:",
             (
                 "This project would move from Ratchet 0.8.2 to"
-                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 72 changes in 13"
-                " files. The project owes 95 things since the upgrade. None of them turns a check"
+                f" {plugin_pin.version_of(PLUGIN_ROOT)}. The upgrade would make 79 changes in 13"
+                " files. The project owes 98 things since the upgrade. None of them turns a check"
                 " red or stops a merge, and between upgrades the list only gets shorter. Nothing"
                 " fixes them by itself: ask an agent to. Each is in a guard path: an agent can"
                 " make all the fixes in one change on a branch, and you decide at that one merge."
@@ -674,7 +676,8 @@ def test_the_report_says_where_from_where_to_what_was_written_and_what_is_left(
                 " judgement of guard-diff and the merge judge, which sends every dependency change"
                 " to the owner until the section is filled, the suppressions gate and the coverage"
                 " gate's search for exclusions on absolute paths, which count nothing until the"
-                " section is filled, the route's proposal of a life event it sees a sign of,"
+                " section is filled, the comments gate, which judges nothing until its lister is"
+                " bound, the route's proposal of a life event it sees a sign of,"
                 " which waits for the table, the pins gate's reading of the project's image"
                 " files, which reads none until filled, the check that a fresh checkout has the"
                 " tools the recipes run."
@@ -965,3 +968,34 @@ def test_an_upgrade_carries_the_incremental_variable_and_owes_the_recipe_its_use
     ]
     assert len(problems) == 1
     assert problems[0].startswith("the recipe `mutation-changed` does not use")
+
+
+@pytest.mark.parametrize("name", ["0.8.2", "0.9.2"])
+def test_an_upgrade_owes_the_comments_section_and_is_never_red_for_a_comment_that_exists(
+    name: str,
+    tmp_path: Path,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = fixture(name, tmp_path)
+    repos.write(root, "src/old.txt", "x // a reason from before\n")
+    repos.commit(root, "feat(core): a file with a comment")
+    repos.branch(root, "upgrade")
+    assert upgrade.main(["upgrade.py", "--root", str(root), "--apply"]) == 0
+    red, _ = conformance.owed_split(root, conformance.findings(root))
+    assert red == []
+    section = [e for e in owed.read(root).entries if e.rule == "comments_section"]
+    assert section
+    assert {e.path for e in section} == {"docs/process/binding.md"}
+    assert all(e.rule in owed.FILL_FIRST for e in section)
+    text = (root / "justfile").read_text(encoding="utf-8")
+    assert justfile_text.defines_recipe(text, "comments")
+    assert justfile_text.defines_recipe(text, comments.LISTER)
+    assert "comments" in justfile_text.reaches(text, "tier0")
+    binding = (root / "docs/process/binding.md").read_text(encoding="utf-8")
+    assert "| no prose comments |" in binding
+    capsys.readouterr()
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert comments.main(["comments", "--root", str(root), "--changed"]) == 0
+    assert "the lister is not bound yet, so nothing is judged" in capsys.readouterr().out

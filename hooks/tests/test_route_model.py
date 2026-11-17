@@ -20,7 +20,7 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import replace
-from functools import cache
+from functools import cache, reduce
 from pathlib import Path
 from typing import NamedTuple
 
@@ -38,6 +38,7 @@ from hypothesis.stateful import (
 
 import conformance
 import hooks_installed
+import markdown_text
 import merge_ready
 import owed
 import route
@@ -48,6 +49,7 @@ from tests.repos import git, snapshot
 from tests.route_model import (
     ActionName,
     Advice,
+    Answers,
     Architecture,
     Flag,
     Head,
@@ -265,6 +267,30 @@ def edit_moves_more(_label: Label) -> set[World]:
     }
 
 
+def leaves_the_unit(edge: model.Edge) -> bool:
+    return (
+        not edge.source.left
+        and edge.target.left
+        and edge.action is not ActionName.UPGRADE_FINDS_AN_EXPIRED_UNIT
+    )
+
+
+def drops_its_answers(edge: model.Edge) -> bool:
+    return edge.target.answers is Answers.DROPPED and edge.source.answers is not Answers.DROPPED
+
+
+def left_by_a_step(graph: model.Graph) -> set[World]:
+    return {edge.source for edge in graph.edges if leaves_the_unit(edge)}
+
+
+def works_beside_an_expired_unit(label: Label, graph: model.Graph) -> set[World]:
+    return {s for s in graph.states if not model.expired_before_the_work(label)(s)}
+
+
+def answers_dropped(graph: model.Graph) -> set[World]:
+    return {s for s in graph.states if s.answers is Answers.DROPPED}
+
+
 CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "AdviceCanBeFollowed": (cannot_be_followed, model.advice),
     "AdviceReachesRest": (never_rests, model.advice),
@@ -297,6 +323,16 @@ CHECKS: dict[str, tuple[Callable[[Label], set[World]], Label]] = {
     "NoRunStartsOnAStaleConjecture": (runs_on_a_stale_conjecture, model.advice),
     "OnlyTheRedraftClearsAStaleConjecture": (cleared_by_another, model.advice),
     "TheCriteriaEditMovesNothingElse": (edit_moves_more, model.advice),
+    "NoStepLeavesTheUnitItExpires": (lambda _label: left_by_a_step(model.graph()), model.advice),
+    "ExpiredUnitBeforeTheWork": (
+        lambda label: works_beside_an_expired_unit(label, model.graph()),
+        model.advice,
+    ),
+    "RealExpiredUnitBeforeTheWork": (
+        lambda label: works_beside_an_expired_unit(label, model.graph()),
+        model.real_advice,
+    ),
+    "TheOwnersAnswersOutliveTheUnit": (lambda _label: answers_dropped(model.graph()), model.advice),
 }
 
 
@@ -326,9 +362,16 @@ def test_a_rule_breaks_only_where_a_divergence_says_it_does(name: str) -> None:
     assert label is model.real_advice or not broken
 
 
-def test_no_state_holds_two_divergences() -> None:
+def test_a_state_that_holds_two_divergences_is_read_the_same_in_either_order() -> None:
     both = [s for s in model.graph().states if sum(e.holds(s) for e in model.DIVERGENCES) > 1]
-    assert both == []
+    assert {(s.setup, s.answers) for s in both} == {(Setup.PINNED, Answers.CARRIED)}
+    for state in both:
+        held = [e for e in model.DIVERGENCES if e.holds(state)]
+        read = {
+            reduce(lambda world, entry: entry.reads(world), order, state)
+            for order in itertools.permutations(held)
+        }
+        assert read == {model.as_the_route_reads(state)}
 
 
 def test_the_architecture_rules_are_met_where_they_bite() -> None:
@@ -370,6 +413,147 @@ def test_the_stale_conjecture_rules_are_met_where_they_bite() -> None:
         if stale_slots(state) and model.advice(state) is Advice.CONJECTURE:
             redrafts = model.ACTIONS[ActionName.OWNER_STATES_CONJECTURE].successors(state)
             assert any(stale_slots(after) < stale_slots(state) for after in redrafts), state
+
+
+def shortest_run_that_breaks(
+    graph: model.Graph, breaks: Callable[[model.Edge], bool]
+) -> list[ActionName]:
+    parent: dict[World, model.Edge] = {}
+    for edge in graph.edges:
+        if edge.target not in parent and edge.target != graph.states[0]:
+            parent[edge.target] = edge
+
+    def trail(world: World) -> list[ActionName]:
+        return [*trail(parent[world].source), parent[world].action] if world in parent else []
+
+    first = min((e for e in graph.edges if breaks(e)), key=lambda e: len(trail(e.source)))
+    return [*trail(first.source), first.action]
+
+
+TO_TWO_TICKETS_IN_TRIAGE = [
+    ActionName.OWNER_INITS,
+    ActionName.OWNER_SETS_UP_TRACKER,
+    ActionName.OWNER_ADOPTS,
+    ActionName.AGENT_INSTALLS_HOOKS,
+    ActionName.OWNER_GRILLS,
+    ActionName.AGENT_COMMITS_ON_A_BRANCH,
+    ActionName.BRANCH_MERGES,
+    ActionName.OWNER_WRITES_SPEC,
+    ActionName.AGENT_LANDS_RECORDS,
+    ActionName.OWNER_SPLITS_SPEC,
+    ActionName.AGENT_LANDS_RECORDS,
+]
+BOTH_FINISHED_BY_HAND = [
+    *TO_TWO_TICKETS_IN_TRIAGE,
+    ActionName.OWNER_WORKS_TICKET_THEMSELF,
+    ActionName.OWNER_WORKS_TICKET_THEMSELF,
+]
+WITHOUT_THE_DELETER: dict[str, tuple[model.Deleter, Callable[[model.Edge], bool]]] = {
+    "NoStepLeavesTheUnitItExpires": (model.leaves, leaves_the_unit),
+    "TheOwnersAnswersOutliveTheUnit": (model.drops_the_answers, drops_its_answers),
+}
+
+
+@pytest.mark.parametrize("rule", list(WITHOUT_THE_DELETER))
+def test_without_the_deleter_the_rule_breaks_after_both_tickets_are_finished_by_hand(
+    rule: str,
+) -> None:
+    deleter, breaks = WITHOUT_THE_DELETER[rule]
+    graph = model.graph(World(), deleter)
+    assert shortest_run_that_breaks(graph, breaks) == BOTH_FINISHED_BY_HAND
+    assert not breaks_in(model.graph())[rule]
+    assert {name for name, broken in breaks_in(graph).items() if broken} == {rule}
+
+
+def breaks_in(graph: model.Graph) -> dict[str, bool]:
+    ranks = model.ranks(graph)
+    return {
+        "NoStepLeavesTheUnitItExpires": bool(left_by_a_step(graph)),
+        "ExpiredUnitBeforeTheWork": bool(works_beside_an_expired_unit(model.advice, graph)),
+        "TheOwnersAnswersOutliveTheUnit": bool(answers_dropped(graph)),
+        "AdviceReachesRest": model.LOOPS in ranks.values(),
+    }
+
+
+def test_a_unit_left_by_an_older_plugin_is_deleted_before_the_next_spec() -> None:
+    graph = model.graph()
+    left = [s for s in graph.states if s.left]
+    assert left
+    assert {model.advice(s) for s in left} == {Advice.EXPIRE}
+    assert {model.real_advice(s) for s in left} == {Advice.SPECIFY}
+    deleted = {
+        b.tree for a, act, b in graph.edges if act is ActionName.AGENT_DELETES_THE_EXPIRED_UNIT
+    }
+    assert deleted == {Tree.RECORDS}
+    expiring = {(act, b.tree) for a, act, b in graph.edges if model.expires(a, b)}
+    assert expiring == {
+        (ActionName.OWNER_RESOLVES_TICKET, Tree.RECORDS),
+        (ActionName.OWNER_WORKS_TICKET_THEMSELF, Tree.CLEAN),
+    }
+
+
+def test_the_last_mark_leaves_the_answers_carried_in_records_and_names_their_landing() -> None:
+    graph = model.graph()
+    marks = [
+        b
+        for a, act, b in graph.edges
+        if model.expires(a, b) and act is ActionName.OWNER_RESOLVES_TICKET
+    ]
+    assert {(b.tree, b.answers) for b in marks} == {(Tree.RECORDS, Answers.CARRIED)}
+    assert {model.advice(b) for b in marks if b.setup is Setup.BOUND} == {Advice.LAND_RECORDS}
+    landings = {ActionName.AGENT_LANDS_RECORDS, ActionName.OWNER_MERGES_RECORDS}
+    ends = {
+        (act, b.parked)
+        for a, act, b in graph.edges
+        if a.answers is Answers.CARRIED and b.answers is not Answers.CARRIED
+    }
+    assert ends == {(act, False) for act in landings}
+
+
+def test_the_last_mark_appends_to_the_brief_only_dated_answers_of_the_files_it_deletes(
+    tmp_path: Path,
+) -> None:
+    (entry,) = (e for e in model.DIVERGENCES if e.name == "carried-answers-read-as-code")
+    path = path_to(entry.example)
+    assert path[-1].action is ActionName.OWNER_RESOLVES_TICKET
+    repo = real.Repo.start(tmp_path)
+    for source, name, target in path:
+        real.apply(repo, name, real.Change(source, target))
+    status = git(repo.root, "status", "--porcelain", "--no-renames").splitlines()
+    brief = str(route.DESIGN_BRIEF)
+    deleted = sorted(line[3:] for line in status if line[:2].strip() == "D")
+    assert sorted(line[3:] for line in status) == sorted([*deleted, brief])
+    assert deleted
+    assert all(name.startswith(f"{repo.feature()}/") for name in deleted)
+    diff = git(repo.root, "diff", "--unified=0", "HEAD", "--", brief).splitlines()
+    added = [line[1:] for line in diff if line.startswith("+") and not line.startswith("+++")]
+    removed = [line for line in diff if line.startswith("-") and not line.startswith("---")]
+    answers = {
+        line
+        for name in deleted
+        for line in markdown_text.section(
+            git(repo.root, "show", f"HEAD:{name}"), real.ANSWERS
+        ).splitlines()
+        if line.strip()
+    }
+    assert added
+    assert removed == []
+    assert {line.replace(f"- {real.EXPIRED_ON}: ", "- ", 1) for line in added} <= answers
+
+
+def test_the_step_that_resolves_the_last_ticket_deletes_the_unit_and_keeps_its_answers(
+    tmp_path: Path,
+) -> None:
+    finished = replace(ADOPTED, foundation=True, tickets=(Ticket.RESOLVED, Ticket.RESOLVED))
+    path = path_to(finished)
+    assert [edge.action for edge in path] == BOTH_FINISHED_BY_HAND
+    repo = real.Repo.start(tmp_path)
+    for source, name, target in path:
+        real.apply(repo, name, real.Change(source, target))
+    assert not (repo.root / repo.feature()).exists()
+    brief = (repo.root / route.DESIGN_BRIEF).read_text(encoding="utf-8")
+    assert "`spec.scope`: one command, not a list of them." in brief
+    assert git(repo.root, "status", "--porcelain") == ""
 
 
 def advice_loop(graph: model.Graph) -> list[World]:
@@ -823,7 +1007,11 @@ def test_a_commit_the_hold_did_not_name_leaves_a_guard_hold_and_its_edits_releas
     the default branch.
     """
     parked = World(
-        setup=Setup.BOUND, hooks=True, foundation=True, tickets=(Ticket.GUARDED, Ticket.TRIAGE)
+        setup=Setup.BOUND,
+        hooks=True,
+        foundation=True,
+        tickets=(Ticket.GUARDED, Ticket.TRIAGE),
+        answers=Answers.ON_THE_UNIT,
     )
     repo = real.Repo.start(tmp_path)
     for source, name, target in path_to(parked):
@@ -920,7 +1108,15 @@ DONE = World(
 
 
 FILLED_BY_THE_UPGRADE = frozenset(
-    {"changed_tests", "dependencies", "installs", "pins", "signs", "suppressions"}
+    {
+        "changed_tests",
+        "comments_section",
+        "dependencies",
+        "installs",
+        "pins",
+        "signs",
+        "suppressions",
+    }
 )
 
 
@@ -980,6 +1176,7 @@ def test_the_real_upgrade_owes_more_than_the_model_and_leaves_a_faithful_adoptio
     assert beyond - {route.ARCHITECTURE_RULE} == {
         "adrs",
         "binding",
+        "bites",
         "brief",
         "commit_hooks",
         "doors",
@@ -1020,6 +1217,7 @@ def test_a_review_and_a_safeguard_owed_beside_the_architecture_come_before_it(
 
 
 ADOPTED = World(setup=Setup.BOUND, hooks=True, architecture=Architecture.RECORDED)
+IN_FLIGHT = replace(ADOPTED, foundation=True, answers=Answers.ON_THE_UNIT)
 BRANCHES = {
     "the adoption's branch": (replace(ADOPTED, setup=Setup.PINNED, head=Head.WORK), ()),
     "a working branch": (
@@ -1184,7 +1382,7 @@ def test_a_build_stopped_on_the_branch_it_cut_is_left_and_built_again(tmp_path: 
     it. The stop is not a step the route names, so no rule of the advice breaks, and the build the
     route names next commits on the branch.
     """
-    stated = replace(ADOPTED, foundation=True, tickets=(Ticket.STATED, Ticket.TRIAGE))
+    stated = replace(IN_FLIGHT, tickets=(Ticket.STATED, Ticket.TRIAGE))
     repo = built(tmp_path, stated)
     cut = replace(stated, head=Head.MERGED)
     assert cut in model.ACTIONS[ActionName.BUILD_STOPS].successors(stated)
@@ -1219,6 +1417,7 @@ DETOURS = [
     Advice.REVIEW,
     Advice.SAFEGUARD,
     Advice.ARCHITECTURE,
+    Advice.EXPIRE,
     Advice.BLOCKED,
     Advice.BLOCKED_RUN,
     Advice.ANSWER,
@@ -1386,7 +1585,7 @@ def test_the_route_names_each_switch_past_its_removal_date(tmp_path: Path) -> No
     reason="feature_preflight.py reads the `- Criteria:` line as a conjecture: flip it with that",
 )
 def test_a_conjecture_that_holds_only_its_criteria_line_states_none(tmp_path: Path) -> None:
-    agreed = replace(ADOPTED, foundation=True, tickets=(Ticket.READY, Ticket.TRIAGE))
+    agreed = replace(IN_FLIGHT, tickets=(Ticket.READY, Ticket.TRIAGE))
     repo = built(tmp_path, agreed)
     text = repo.ticket_text(0, Ticket.READY, inherits=False)
     lined = f"{text}\n## Conjecture\n\n{real.criteria_line(text, real.CRITERIA)}"
@@ -1410,7 +1609,7 @@ def test_the_criteria_line_the_world_writes_is_read_as_the_skill_reads_it(
     tmp_path: Path, holder: str
 ) -> None:
     tickets = (Ticket.STALE, Ticket.TRIAGE)
-    stale = replace(ADOPTED, foundation=True, tickets=tickets, inherits=HOLDERS[holder])
+    stale = replace(IN_FLIGHT, tickets=tickets, inherits=HOLDERS[holder])
     repo = real.Repo.start(tmp_path)
     path = repo.root / ".scratch/f1" / holder
     for source, name, target in path_to(stale):

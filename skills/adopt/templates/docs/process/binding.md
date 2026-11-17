@@ -22,7 +22,10 @@ The plugin version has this one home. Every workflow checks the plugin out at th
 
 The shape of the system, chosen with the owner at adoption (ADR 0049 in the `ratchet` plugin; the method's `architecture.md` says what the record holds). Every agent reads this before it places code, a review judges a change against it, and the `dependency direction` gate holds the table. The `conformance` gate is red while the decision record is missing, records fewer than two alternatives, or lacks who chose it, a reversal cost or a refutation criterion, and while the table declares no part or lets a part depend on one it does not declare.
 
+The published interface is chosen with the architecture, since which surfaces are promises is the question `depended-on` reopens. Only a file it matches may carry a doc comment, and only while `- Application types:` declares `library` (ADR 0063).
+
 - Decision: <`docs/adr/NNNN-<slug>.md`, the decision record of the architecture>
+- Published interface: <globs of the files whose doc comments are this library's promise to its users, each in backticks, or `none: not a library`>
 
 One row per part, inner to outer. `Path` is the globs of the files that belong to the part, each in backticks. `May depend on` names other parts of this table, comma-separated, or `nothing`.
 
@@ -53,6 +56,8 @@ Every entry point is one command that exits non-zero on any failure. `check` is 
 | snapshots-check | `just snapshots-check` |
 | commits | `just commits` |
 | suppressions | `just suppressions` |
+| comments | `just comments` |
+| comments-list | `just comments-list` |
 | guard-diff | `just guard-diff` |
 | settings | `just settings` |
 | settings-check | `just settings-check` |
@@ -100,6 +105,7 @@ Every question also has a trigger in the same file (ADR 0028): `always`, `code:<
 | effective-config snapshots | `ratchet` plugin `scripts/snapshots.py` | 0 | `quality/snapshots/` | `just snapshots-check` |
 | no threshold lowered | `ratchet` plugin `scripts/lowered.py` | 0 | `quality/thresholds.toml` at the merge base | `just ratchet-lowered` |
 | no suppression kind rose, no focus marker | `ratchet` plugin `scripts/suppressions.py` | 0 | the Suppressions section below, as the merge base holds it | `just suppressions` |
+| no prose comments | `ratchet` plugin `scripts/comments.py`, over this binding's lister | 0 | the Comments and Suppressions sections and the Architecture section's published interface, as the merge base holds them | `just comments` |
 | commit subjects follow the convention | `ratchet` plugin `scripts/commits.py` | 0 | | `just commits` |
 | unit, property and fitness tests | | 1 | | `just test` |
 | coverage, absolute and ratcheted | `ratchet` plugin `scripts/coverage_groups.py` over the suite's Cobertura or LCOV report | 1 | 100% for absolute paths; `quality/thresholds.toml` for the rest | `just coverage` |
@@ -216,7 +222,7 @@ Which files of this project name a container image to build from or run, and how
 
 ## Suppressions
 
-How the tools bound in the Gates table are told, in the code, to skip a finding, and which markers narrow a suite to the part somebody was looking at (ADR 0042). The method names none: list each directive of the tools this stack binds, from what you know of them, as one row per kind. `Pattern` is an extended regular expression in backticks (a literal `|` in it is written `\|`); the `suppressions` gate counts the lines it matches at the merge base and at head. `Rule` is `rises` (red when the count rose) or `never` (red when a line matches at all). The merge base's table judges a change, so a change cannot loosen its own judge.
+How the tools bound in the Gates table are told, in the code, to skip a finding, and which markers narrow a suite to the part somebody was looking at (ADR 0042). The method names none: list each directive of the tools this stack binds, from what you know of them, as one row per kind. `Pattern` is an extended regular expression in backticks (a literal `|` in it is written `\|`); the `suppressions` gate counts the lines it matches at the merge base and at head. `Rule` is `rises` (red when the count rose), `never` (red when a line matches at all) or `kept` (a directive that silences no gate, such as a script's interpreter line, a build constraint or a one-line licence identifier; it is not counted). A comment is allowed only on a line some kind of this table matches, whatever its rule, so list every directive this stack's files carry, not only those that silence a gate (ADR 0063). A licence whose header runs to several lines lists those lines as a `kept` kind. The merge base's table judges a change, so a change cannot loosen its own judge.
 
 | Kind | Pattern | Rule |
 | --- | --- | --- |
@@ -227,6 +233,18 @@ Every Gates row whose question a directive can silence (the catalogue marks them
 | Question | Kinds |
 | --- | --- |
 | <question> | <`kind`, ... or `none: <reason>`> |
+
+## Comments
+
+A comment is allowed only where a tool reads it: a line a kind of the Suppressions table matches, with its reason on the same line. A doc comment is allowed only in a file of the Architecture section's published interface, while the binding declares `library`. Every other comment is a finding of the `comments` gate, and one that existed at adoption is owed in `quality/owed.toml` until it is gone (ADR 0063). A reason worth keeping goes into a test named for it, a type, a lint rule or a decision record, where a gate or a reviewer reads it.
+
+The method knows no language, so the lister is yours to write, from what you know of this stack's file kinds. `just comments-list <file>...` reads the files as data and runs nothing. It prints one record per line a comment occupies, fields separated by tabs: path, line, kind (`comment` or `doc`) and the comment's text without its delimiters. It exits non-zero on a file it cannot read. The gate refuses a record whose text is not on the line it names. The lister is a guard path, so changing it is the owner's merge.
+
+One row per kind of file. `Files` are globs over tracked files, each in backticks. `Comments` is `listed` where the lister reads them, or `none: <reason>` for code nobody writes by hand, such as generated code, vendored code or a fixture that reproduces outside input. Every tracked text file other than a Markdown document matches a row, and the `conformance` gate is red on one that matches none.
+
+| Files | Comments |
+| --- | --- |
+| <`globs` of one kind of file> | <`listed`, or `none: <reason>`> |
 
 ## Absolute paths
 
