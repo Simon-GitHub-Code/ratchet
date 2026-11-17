@@ -1,5 +1,3 @@
-"""Fakes and fixtures shared by the guard tests: a fake filesystem and git, a fixture manifest."""
-
 import posixpath
 import re
 from collections.abc import Sequence
@@ -36,8 +34,6 @@ LABELS_RECORD = """# Triage Labels
 | `ready-for-agent` | `agent:ready` | Fully specified, ready for an AFK agent |
 | `wontfix` | `wontfix` | Will not be actioned |
 """
-# What git reads each name as in the fake repository: a clone whose ``main`` and ``master``
-# track the remote's, with the local branches the corpus switches between.
 NAMES = {
     "origin/main": "refs/remotes/origin/main",
     "origin/master": "refs/remotes/origin/master",
@@ -55,13 +51,6 @@ _VARIABLE = re.compile(r"\$(\w+)|\$\{(\w+)\}")
 
 @dataclass
 class FakeFilesystem:
-    """Checkouts at ``/repo`` and a worktree inside it carry the manifest; ``/elsewhere`` not.
-
-    ``manifest`` is the one every guarded checkout carries, ``manifests`` overrides it per root.
-    ``merged`` is what every checkout's merge base with its default branch holds, by path
-    relative to the checkout; ``None`` stands for a checkout with no such commit.
-    """
-
     manifest: Manifest = MANIFEST
     manifests: dict[Path, Manifest] = field(default_factory=dict)
     home: Path = HOME
@@ -90,7 +79,6 @@ class FakeFilesystem:
             return None
         nearest = max(roots, key=lambda root: len(root.parts))
         manifest = self.manifests.get(nearest, self.manifest)
-        # Why: a manifest needs a group to parse, so an empty one stands for none committed.
         if nearest not in self.guarded or not manifest.groups:
             return None
         return Checkout(nearest, manifest)
@@ -123,8 +111,6 @@ class FakeFilesystem:
 
 @dataclass
 class FakeRepo:
-    """Git state: the checked-out branch and whether HEAD is pushed; records the queries."""
-
     branch: str | None = "feat/work"
     pushed: bool | None = False
     asked: list[str] = field(default_factory=list)
@@ -165,7 +151,6 @@ def make_guard(
     filesystem: FakeFilesystem | None = None,
     manifest: Manifest = MANIFEST,
 ) -> Guard:
-    """A guard over the fakes, the fixture manifest and a plugin installed at ``/plugin``."""
     locator = Locator(
         with_plugin_group(manifest, PLUGIN),
         filesystem or FakeFilesystem(manifest=manifest),
@@ -175,15 +160,12 @@ def make_guard(
 
 
 def rules(command: str, guard: Guard | None = None, cwd: Path = ROOT) -> list[str]:
-    """The sorted, distinct rule ids that fire on ``command`` run in ``cwd``."""
     return sorted({verdict.rule for verdict in verdicts(command, guard, cwd)})
 
 
 def verdicts(command: str, guard: Guard | None = None, cwd: Path = ROOT) -> list[Verdict]:
-    """Every verdict on ``command``."""
     return bash.check(command, Context(cwd), guard or make_guard())
 
 
 def details(command: str, guard: Guard | None = None) -> Sequence[str]:
-    """The details of every verdict on ``command``."""
     return [verdict.detail for verdict in verdicts(command, guard)]

@@ -1,5 +1,3 @@
-"""The TLA+ exporter on a toy machine: what each part of a model becomes in the module."""
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -9,14 +7,10 @@ from tests import model_tla
 
 @dataclass(frozen=True)
 class Count:
-    """The state of a toy machine: a number."""
-
     n: int
 
 
 class Toy(NamedTuple):
-    """A toy graph: two states and a step each way."""
-
     states: tuple[Count, ...] = (Count(1), Count(2))
     edges: tuple[tuple[Count, str, Count], ...] = (
         (Count(1), "Up", Count(2)),
@@ -61,8 +55,6 @@ def test_a_derived_value_is_a_variable_beside_the_fields() -> None:
 
 
 class Stays(NamedTuple):
-    """A toy graph with a step that changes nothing: from 1, staying or going up, then down."""
-
     states: tuple[Count, ...] = (Count(1), Count(2))
     edges: tuple[tuple[Count, str, Count], ...] = (
         (Count(1), "Stay", Count(1)),
@@ -72,7 +64,6 @@ class Stays(NamedTuple):
 
 
 def test_a_step_rule_splits_each_state_by_the_rules_the_step_into_it_broke() -> None:
-    # Why: the step that breaks the rule changes nothing, so only a state of its own shows it.
     moves = model_tla.Step("It never stays.", lambda _before, act, _after: act != "Stay")
     exported = model_tla.export("Toy", Stays(), {"Moves": moves})
     assert "VARIABLES node, n, moves\n" in exported.module

@@ -24,7 +24,6 @@ BWRAP = fakes.bwrap_works()
 
 @pytest.fixture(autouse=True)
 def _own_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each test's runtime directory sits in its own temp, not in the machine's."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
 
@@ -220,8 +219,6 @@ def test_a_sandboxed_run_wraps_every_command(tmp_path: Path) -> None:
 
 @dataclass
 class Scripted:
-    """A session whose turns raise what a test names."""
-
     raises: type[Exception]
     costs: dict[str, float]
 

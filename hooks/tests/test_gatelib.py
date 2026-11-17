@@ -1,5 +1,3 @@
-"""The gate library: one merge base for every gate, the changed paths, the thresholds file."""
-
 import contextlib
 import errno
 import http.server
@@ -139,8 +137,6 @@ def ephemeral() -> range:
 
 
 def test_a_free_port_is_never_one_the_kernel_gives_an_outgoing_connection() -> None:
-    # Why: a client anywhere on the host can take a port of that range between the pick and the
-    # service's bind, and the service then fails to boot.
     ports = [gatelib.free_port() for _ in range(500)]
     assert all(gatelib.UNPRIVILEGED <= port < ephemeral().start for port in ports)
     assert len(set(ports)) > 1, "two gates picking at once rarely pick the same port"
@@ -212,9 +208,6 @@ def test_http_status_refuses_what_is_not_an_http_url_and_raises_for_a_dead_port(
 def test_http_status_names_the_client_port_however_soon_the_connection_is_reset(
     scheme: str,
 ) -> None:
-    # Why: the load smoke matches a connection reset after the stop signal against the ones the
-    # gate took, by both of its ends. A reset can land before the connect returns, or during the
-    # TLS handshake, and the connection must be named all the same, as the gate names it.
     with socket.create_server(("127.0.0.1", 0)) as listener:
         clients: list[gatelib.Connection] = []
         accepted: list[gatelib.Connection] = []
@@ -257,7 +250,6 @@ def test_http_status_says_why_a_connect_failed_or_that_it_timed_out() -> None:
     assert [each.host for each in tried] == ["255.255.255.255"], (
         "the connection is named even when the connect fails at once"
     )
-    # A listener whose accept queue is full drops the next connect's SYN, so it never connects.
     with socket.create_server(("127.0.0.1", 0), backlog=0) as listener:
         url = f"http://127.0.0.1:{listener.getsockname()[1]}/"
         with socket.create_connection(listener.getsockname()), pytest.raises(TimeoutError):
@@ -265,7 +257,6 @@ def test_http_status_says_why_a_connect_failed_or_that_it_timed_out() -> None:
 
 
 def test_an_ipv4_client_of_a_dual_stack_listener_is_named_alike_from_both_ends() -> None:
-    # Why: a listener on [::] sees an IPv4 client mapped into IPv6; the client writes it as IPv4.
     seen_by_gate = gatelib.connection(("::ffff:127.0.0.1", 80, 0, 0), ("::ffff:127.0.0.1", 5, 0, 0))
     seen_by_client = gatelib.connection(("127.0.0.1", 80), ("127.0.0.1", 5))
     assert seen_by_gate == seen_by_client == gatelib.Connection("127.0.0.1", 80, "127.0.0.1", 5)

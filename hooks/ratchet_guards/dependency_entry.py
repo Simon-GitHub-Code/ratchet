@@ -1,15 +1,3 @@
-"""Run a project's dependency entry point as the merge base has it (ADR 0044).
-
-The binding's ``## Dependencies`` section names ``just dependencies`` as the recipe that reads
-manifests and lockfiles. It runs from a copy of the merge base's tree, never from the change under
-judgement, so the change cannot rewrite the code that judges its own files. It is given a directory
-holding the files to read, and is bounded: a time limit, a size limit on what it prints, and no
-standard input. Whatever goes wrong is a refusal, never a pass.
-
-Only ``guard-diff`` and the merge judge call it; the hook that runs before every tool call does
-not (ADR 0011).
-"""
-
 import shutil
 import subprocess
 import tempfile
@@ -30,16 +18,12 @@ def _fail(message: str) -> NoReturn:
 
 
 class Entry:
-    """The entry point of the tree at ``rev`` in ``root``, made ready on its first call."""
-
     def __init__(self, root: Path, rev: str) -> None:
-        """Remember where the tree comes from; nothing is extracted until a call needs it."""
         self.root, self.rev = root, rev
         self.scratch: tempfile.TemporaryDirectory[str] | None = None
         self.runs = 0
 
     def __enter__(self) -> Self:
-        """Use the entry as a block that cleans its copy up."""
         return self
 
     def __exit__(
@@ -48,7 +32,6 @@ class Entry:
         error: BaseException | None,
         trace: TracebackType | None,
     ) -> None:
-        """Remove the copy of the tree and the files it was given."""
         if self.scratch is not None:
             self.scratch.cleanup()
 
@@ -73,7 +56,6 @@ class Entry:
         return Path(self.scratch.name) / "tree", Path(self.scratch.name)
 
     def __call__(self, files: Mapping[str, str]) -> str:
-        """What ``just dependencies <dir>`` prints for ``files`` written under ``dir`` by path."""
         just = shutil.which("just")
         if just is None:
             _fail("just is not on the path, so the entry point cannot run")

@@ -1,5 +1,3 @@
-"""The shipped gates: markers, pins, prose, snapshots, commits and change size."""
-
 from pathlib import Path
 
 import pytest
@@ -23,9 +21,6 @@ def run(gate: object, root: Path, *flags: str) -> int:
     return result
 
 
-# --- markers --------------------------------------------------------------------------------
-
-
 def test_markers_rise_is_red_and_paydown_is_green(tmp_path: Path, capsys: Out) -> None:
     root = repository(tmp_path, {"a.py": "x = 1  # TODO one\ny = 2  # FIXME two\n"})
     assert run(markers, root) == 0
@@ -46,8 +41,6 @@ def test_a_marker_inside_a_longer_word_is_not_counted(tmp_path: Path) -> None:
     root = repository(tmp_path, {"a.py": "x = 1  # TODOS and FIXMEs and HACKED and XXXL\n"})
     assert markers.counts(root, None) == {"TODO": 0, "FIXME": 0, "HACK": 0, "XXX": 0}
 
-
-# --- pins -----------------------------------------------------------------------------------
 
 PINNED = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5"
 IMAGE_PINS = (
@@ -98,7 +91,7 @@ def test_pins_check_actions_images_and_permissions(tmp_path: Path) -> None:
     ]
     assert run(pins, root) == 1
     (root / "bin.yml").write_bytes(b"\x00")
-    write(root, ".github/workflows/bin.yml", "\x00")  # unreadable, skipped
+    write(root, ".github/workflows/bin.yml", "\x00")
     assert len(pins.problems(root)) == 7
 
 
@@ -149,8 +142,6 @@ def test_image_pin_rows_are_read_and_their_faults_named() -> None:
     assert "lacks its table" in pins.parse("# B\n\n## Image pins\n\nprose\n")[1][0]
 
 
-# --- prose ----------------------------------------------------------------------------------
-
 GLOSSARY = (
     "# Glossary\n\n## Language\n\n**Customer**:\nWho buys.\n_Avoid_: client, `buyer`, <synonym>\n\n"
     "**Order**:\nWhat they buy.\n_Avoid_: purchase order\n"
@@ -196,7 +187,6 @@ def test_prose_without_a_glossary_or_without_avoid_lists(tmp_path: Path) -> None
 
 
 def test_prose_judges_the_change_not_the_history(tmp_path: Path, capsys: Out) -> None:
-    """A word newly put on an Avoid list does not turn every earlier record red; new uses do."""
     root = repository(tmp_path, {"GLOSSARY.md": GLOSSARY, "DESIGN.md": "A broken image.\n"})
     commit(root, "docs(design): record")
     branch(root)
@@ -218,7 +208,6 @@ NOTE = (
 
 
 def test_prose_follows_a_rename_to_the_earlier_uses(tmp_path: Path, capsys: Out) -> None:
-    """A pure rename keeps the earlier Avoid-word uses; a use added in the move still fails."""
     root = repository(tmp_path, {"GLOSSARY.md": GLOSSARY, "docs/old.md": NOTE})
     branch(root)
     git(root, "mv", "docs/old.md", "docs/new.md")
@@ -242,8 +231,6 @@ def test_prose_counts_uses_in_a_path_holding_a_quote(tmp_path: Path) -> None:
         "docs/it's.md:3: 'Client' is on the Avoid list of 'Customer'",
     ]
 
-
-# --- snapshots ------------------------------------------------------------------------------
 
 MANIFEST = (
     '[[group]]\nname = "tool-config"\nreason = "Rule sets."\n'
@@ -293,9 +280,6 @@ def test_snapshots_need_the_group(tmp_path: Path) -> None:
         root, "guards/manifest.toml", '[[group]]\nname = "tool-config"\nreason = "r"\npaths = 1\n'
     )
     assert snapshots.patterns(root, "tool-config") == []
-
-
-# --- commits --------------------------------------------------------------------------------
 
 
 def test_commit_subjects_follow_the_convention(tmp_path: Path, capsys: Out) -> None:
@@ -376,12 +360,7 @@ def test_the_number_a_squash_merge_appends_is_not_counted() -> None:
     ], "only a number in brackets after a space, at the very end, is the forge's"
 
 
-# --- change size ----------------------------------------------------------------------------
-
-
 def test_change_size_does_not_count_the_methods_own_records(tmp_path: Path) -> None:
-    # Why: the spec, the verdict record and the change description are written by the pipeline,
-    # the last two after the review, and counting them turned an approved change red at the merge.
     root = repository(tmp_path, {"a.txt": "1\n", ".scratch/f/issues/01-a.md": "Status: open\n"})
     commit(root, "feat(core): second")
     branch(root)
@@ -399,8 +378,6 @@ def test_change_size_does_not_count_the_methods_own_records(tmp_path: Path) -> N
 def test_change_size_does_not_count_the_lockfiles_the_merge_bases_binding_names(
     tmp_path: Path,
 ) -> None:
-    # Why: a package manager writes the lockfile and `just snapshots` copies it, so a two-package
-    # change measured twice a lockfile nobody reads; `pins` still fails a lockfile that drifts.
     binding = stack.BINDING.replace("- Lockfiles: `*.lock`", "- Lockfiles: `*.lock`, `*/*.lock`")
     root = repository(tmp_path, {"a.txt": "1\n", "docs/process/binding.md": binding})
     commit(root, "feat(core): second")
@@ -425,8 +402,6 @@ def test_change_size_counts_every_file_when_the_merge_base_names_no_lockfile(
 
 
 def test_change_size_counts_a_moved_file_by_its_changed_lines(tmp_path: Path) -> None:
-    # Why: moving six test files with twenty changed lines measured 2,101 lines as deleted plus
-    # added, over a 1,500 ceiling the move did not come near.
     body = "".join(f"line {n}\n" for n in range(100))
     root = repository(tmp_path, {"old/a.py": body, "docs/features/f/spec.md": "x\n"})
     commit(root, "feat(core): second")
@@ -574,17 +549,11 @@ def test_change_size_on_the_default_branch_reports_a_merge_it_cannot_reopen(
     assert run(change_size, root) == 1, "a direct commit on the default branch is still judged"
 
 
-# --- change size: product code and tests apart (ADR 0045) -----------------------------------
-
 BINDING_WITH_ROW = "# Binding\n\n## Test paths\n\nWhy.\n\n- Tests: {row}\n\n## Limits\n"
 CEILINGS = "[ceilings.change]\nproduct_files = 2\nproduct_lines = 5\ntest_lines = 20\n"
 
 
 def sized(tmp_path: Path, row: str | None) -> Path:
-    """A repository whose binding holds the row (or none).
-
-    The change is 3 product lines in one file and 12 lines in two test files.
-    """
     binding = BINDING_WITH_ROW.format(row=row) if row is not None else "# Binding\n\n## Limits\n"
     root = repository(
         tmp_path, {"docs/process/binding.md": binding, "quality/thresholds.toml": CEILINGS}
@@ -633,7 +602,6 @@ def test_change_size_is_red_on_product_lines_and_on_a_runaway_of_tests_alone(
 def test_change_size_counts_everything_as_product_without_a_filled_row(
     tmp_path: Path, capsys: Out, row: str | None
 ) -> None:
-    # Why: fail closed. The plugin names no stack, so with no row nothing is known to be a test.
     root = sized(tmp_path, row)
     assert change_size.test_globs(root, "main") is None
     assert change_size.measure(root, "main") == change_size.Size(3, 15)
@@ -668,7 +636,6 @@ def test_change_size_reads_the_older_keys_as_the_product_ceilings(tmp_path: Path
     ids=["a later section names tests", "the section runs to the end"],
 )
 def test_a_test_paths_section_without_its_bullet_is_unfilled(binding: str) -> None:
-    # Why: only the section's own lines are read; a bullet under another heading is not its row.
     globs, problems = change_size.test_paths(binding)
     assert globs is None
     assert any("still the template's" in problem for problem in problems)

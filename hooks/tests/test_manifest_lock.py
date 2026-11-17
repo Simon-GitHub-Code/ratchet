@@ -1,13 +1,3 @@
-"""The manifest the guards come from: an agent can neither lose it nor shrink it.
-
-A default branch that held ``guards/manifest.toml`` and no longer does locks every guard path its
-last manifest named; only one that never held one is not adopted yet, and the adoption writes with
-no prompt. On every branch the manifest itself is locked against a deletion, a rename and any
-change but an addition by Edit or Write: a path at the end of a group's or a door's paths, or a
-whole group or door after the ones the default branch holds. A path added to a group that also
-matches a pattern of a group below it would take paths from that group, and is no addition.
-"""
-
 import io
 import json
 from pathlib import Path
@@ -40,7 +30,6 @@ def bound(name: str, pattern: str) -> str:
 
 
 def answer(root: Path, tool: str, **tool_input: str) -> dict[str, str]:
-    """What the hook prints for one call in a session at ``root``, or ``{}``."""
     case = {"tool_name": tool, "tool_input": tool_input, "cwd": str(root)}
     stdout = io.StringIO()
     assert hook.main(root, io.StringIO(json.dumps(case)), stdout, project=root) == 0
@@ -62,7 +51,6 @@ def commit_all(root: Path, subject: str) -> None:
 
 @pytest.fixture
 def adopted(tmp_path: Path) -> Path:
-    """A checkout whose default branch holds the template manifest, on a branch."""
     root = checkout(tmp_path, manifest=TEMPLATE)
     switch_to_a_branch(root)
     return root
@@ -70,7 +58,6 @@ def adopted(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def vanished(tmp_path: Path) -> Path:
-    """A checkout whose default branch held two manifests, then lost the file, on a branch."""
     root = checkout(tmp_path, manifest=TEMPLATE)
     (root / MANIFEST).write_text(TEMPLATE + EXTRA_GROUP, encoding="utf-8")
     commit_all(root, "more guard paths")

@@ -1,6 +1,3 @@
-// The owner's words for the drain's model, shared by the charts of docs/model/drain.md.
-
-// The model's own names for the steps of the main graph, which its tests use too.
 const MAIN = {
   DrainPyOpenA: "drain.py open a",
   DrainPyOpenB: "drain.py open b",
@@ -47,7 +44,6 @@ const MAIN = {
   DrainPyReport: "drain.py report",
 };
 
-// The model's own names for a drain's steps on the lease graph, without the drain's number.
 const LEASE = {
   DrainPyCleanAll: "drain.py clean --all",
   DrainPyCleanAllDrainWithItsToken: "drain.py clean --all --drain with its token",
@@ -89,18 +85,15 @@ const LEASE_WHOLE = {
 
 export const named = (action) => MAIN[action];
 
-// A lease step: the drain that takes it, as a number, and its words without the number.
 export const byDrain = (action) => {
   const found = /^Drain([12])(\w+)$/.exec(action);
   return found ? { drain: found[1], words: LEASE[found[2]] } : null;
 };
-// Why: Mermaid 11 reads a second colon in an arrow's label as an error, so a comma follows the drain.
 export const leaseNamed = (action) => {
   const step = byDrain(action);
   return step ? `drain ${step.drain}, ${step.words}` : LEASE_WHOLE[action];
 };
 
-// What a chart calls a command of the drain, or a step of the agent, the owner or git.
 const COMMAND = {
   DrainPyOpen: "open",
   DrainPyCloseOutcomeParked: "close as parked",
@@ -126,8 +119,6 @@ const COMMAND = {
 };
 export const command = (action) => COMMAND[action] ?? COMMAND[action.replace(/[ABC]$/, "")];
 
-// What a kill of update, land or the merge.py it runs leaves of ticket a. A fast-forward cut
-// off half-way leaves merge.py's scratch tree too, and is named for the cut.
 export const leftByUpdate = (v) => {
   if (v.treeA === "rebasing") return "A rebase cut off, the tree detached";
   if (v.rebasingA && v.branchA === "stale") return "Rebased, the old verdict record still last";
@@ -145,7 +136,6 @@ export const leftByMerge = (v) => {
   return "Nothing of merge.py left over";
 };
 
-// One ticket's life, as the plan and the note call ticket a.
 export const life = (v) => {
   if (v.mergedA) return v.freshA ? "Merged, the next report prints it" : "Merged and reported";
   if (v.statusA === "held") return "Held until its text changes";

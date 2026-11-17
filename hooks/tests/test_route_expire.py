@@ -1,5 +1,3 @@
-"""The route names the deleter of a steering document that leaves with its feature (ADR 0064)."""
-
 from pathlib import Path
 
 import documents

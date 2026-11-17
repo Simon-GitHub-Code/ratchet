@@ -1,5 +1,3 @@
-"""``report``: a shared report is produced once for a run and read by every gate that asks."""
-
 import fcntl
 import os
 import stat

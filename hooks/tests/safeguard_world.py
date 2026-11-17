@@ -1,15 +1,3 @@
-"""The safeguard model's actions on a real repository, judged by the real triggers gate.
-
-Each instance of the kind is a file of its own under ``src/`` holding one line the Triggers row's
-pattern matches; the binding is written from the model's ``Tree``, a field to a line, and the
-review's record is a decision record of its own under ``docs/adr/``. The kind is one whose arrival
-reopens the architecture (ADR 0052) and the event is one that does not. A branch is
-committed as ``merge.attempt`` would meet it, and landed the way it lands one: merged ``--no-ff``
-on a detached copy of the default branch's tip, the gate run on the merge result, and the default
-branch moved forward to it only when the merge is clean and the gate is green. The gate also runs
-on the branch, against the commit it forked from, as the branch's own check does.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -57,7 +45,6 @@ REVIEWED = (
 
 
 def binding(tree: Tree) -> str:
-    """The binding ``tree`` describes, each field on a line with an unchanged line beside it."""
     kind_tool = f"later: code:{KIND}" if tree.row is Row.LATER else "a beacon check"
     event_tool = f"later: life:{EVENT}" if tree.event_row is Row.LATER else "a launch check"
     kind_row = f"| {QUESTIONS[Debt.KIND]} | {kind_tool} | 1 | | `just beacon` |\n"
@@ -79,7 +66,6 @@ def binding(tree: Tree) -> str:
 
 
 def read_binding(text: str) -> tuple[Row, Table, Event, Row, Row]:
-    """The fields of a binding ``binding`` wrote, read back from its lines alone."""
     lines = text.splitlines()
 
     def row(question: str, later: str) -> Row:
@@ -101,8 +87,6 @@ def read_binding(text: str) -> tuple[Row, Table, Event, Row, Row]:
 
 @dataclass(frozen=True)
 class Run:
-    """One run of the gate: its exit code and what it printed."""
-
     code: int
     out: str
 
@@ -121,8 +105,6 @@ class Run:
 
 @dataclass(frozen=True)
 class Attempt:
-    """What the world saw on one landing: both runs of the gate, the trees, and the move."""
-
     landing: Landing
     branch_run: Run
     merge_run: Run | None
@@ -130,8 +112,6 @@ class Attempt:
 
 @dataclass
 class World:
-    """A scratch repository the model's actions are taken on, with every command it ran."""
-
     root: Path
     files: dict[int, str] = field(default_factory=dict)
     made: int = 0
@@ -156,7 +136,6 @@ class World:
         return Run(code, printed.getvalue())
 
     def commit(self, tree: Tree, before: Tree, subject: str) -> None:
-        """Commit ``tree`` on the checked-out branch, its new instances as new files."""
         for instance in tree.instances - before.instances:
             self.made += 1
             self.files[instance] = f"src/part{self.made}.txt"
@@ -164,16 +143,12 @@ class World:
             (self.root / self.files[instance]).unlink()
             self.log.append(f"rm {self.files[instance]}")
         for instance in tree.instances - before.instances:
-            # Why: each instance's text is its own, as code is; files alike would read to git as
-            # one moved, and a move beside a removal of the same file conflicts.
             text = f"beacon('{self.files[instance]}')\n"
             write(self.root, self.files[instance], text)
             self.log.append(f"write {self.files[instance]}: {text.strip()}")
         if tree.binding != before.binding:
             write(self.root, BINDING, binding(tree))
             self.log.append(f"write {BINDING}: {', '.join(f.value for f in tree.binding)}")
-        # Why two files: a record that landed before the kind first arrived and one that landed
-        # after are different files, and the gate counts only the second.
         for held, was, path in (
             (tree.early, before.early, EARLY),
             (tree.reviewed, before.reviewed, RECORD),
@@ -185,7 +160,6 @@ class World:
         self.git("commit", "-q", "-m", subject)
 
     def tree(self) -> Tree:
-        """What the work tree holds, read from its files: the model's ``Tree`` of it."""
         names = {path: instance for instance, path in self.files.items()}
         listed = [f"src/{path.name}" for path in (self.root / "src").glob("*")]
         instances = frozenset(names[path] for path in listed)
@@ -198,23 +172,15 @@ class World:
         )
 
     def owed(self) -> dict[Debt, int]:
-        """What ``triggers.owed`` says the default branch's work tree owes, by debt."""
         by_question = {question: debt for debt, question in QUESTIONS.items()}
         return {by_question[row.question]: row.count for row in triggers.owed(self.root)}
 
     def reviews(self) -> int | None:
-        """The kind's count when ``triggers.reviews_owed`` says the review is owed."""
         return next((row.count for row in triggers.reviews_owed(self.root)), None)
 
     def take(
         self, step: Step, before: State, *, after: State, result: Landing | None
     ) -> Attempt | None:
-        """Take ``step`` from ``before``; what was seen when it lands a branch.
-
-        A branch landed at once forks from the tip, so its merge result holds the branch's tree
-        and the gate on the branch judges the same change as on the merge: it runs once. Every
-        branch has a name of its own, so an abandoned one is left where it is.
-        """
         if step.verb is Verb.FORK:
             assert after.branch is not None
             self.open = self.fork(after.branch.head, before.main, step)
@@ -237,7 +203,6 @@ class World:
         return self.land(name, trees, None, held=held, start=start)
 
     def fork(self, head: Tree, tip: Tree, step: Step) -> str:
-        """Commit ``head`` on a new branch from the default branch; the branch's name."""
         self.forked += 1
         name = f"change-{self.forked}"
         self.git("switch", "-q", "-c", name, "main")
@@ -254,12 +219,6 @@ class World:
         held: tuple[bool, bool],
         start: tuple[Start, Start],
     ) -> Attempt:
-        """``merge.attempt`` of branch ``name``: merge, gate, and move the default branch.
-
-        ``held`` is the model's word on whether the tip's and the fork's past held an instance,
-        and ``start`` on where the reviews stood at each; the gate reads both from the log, and
-        its verdict is what is compared.
-        """
         self.git("switch", "-q", "--detach", "main")
         try:
             self.git("merge", "--no-ff", "-q", "-m", f"Merge branch '{name}'", name)

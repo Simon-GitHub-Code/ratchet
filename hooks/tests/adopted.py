@@ -1,5 +1,3 @@
-"""Adopted repositories as an earlier plugin's adopt templates left them, built from its history."""
-
 import atexit
 import functools
 import re
@@ -42,7 +40,6 @@ PROJECT_BITE = "    ./scripts/project-bites --all\n"
 
 
 def history(*args: str) -> str:
-    """What git prints for ``args`` in the plugin's own repository, which must hold its history."""
     try:
         return git(PLUGIN_ROOT, *args)
     except subprocess.CalledProcessError as error:
@@ -51,7 +48,6 @@ def history(*args: str) -> str:
 
 
 def template_files(commit: str) -> dict[str, str]:
-    """Every init and adopt template file at ``commit``, by the path adoption wrote it to."""
     names = history("ls-tree", "-r", "--name-only", commit, "--", *TEMPLATES).splitlines()
     files = {}
     for name in names:
@@ -61,7 +57,6 @@ def template_files(commit: str) -> dict[str, str]:
 
 
 def fill(files: dict[str, str], commit: str) -> dict[str, str]:
-    """The placeholders adoption filled, and the project's own setup step and bite command."""
     filled = dict(files)
     for name in [name for name in filled if name.startswith(".github/workflows/")]:
         filled[name] = filled[name].replace("<ratchet-sha>", commit)
@@ -83,7 +78,6 @@ def fill(files: dict[str, str], commit: str) -> dict[str, str]:
 
 
 def release_settings(root: Path, commit: str) -> None:
-    """``.claude/settings.json`` as the release's own ``settings_rules.py --write`` wrote it."""
     script = root.parent / f"settings_rules-{commit[:7]}.py"
     script.write_text(history("show", f"{commit}:scripts/settings_rules.py"), encoding="utf-8")
     subprocess.run(  # noqa: S603 # -- a fixed argv, the release's own script
@@ -95,7 +89,6 @@ def release_settings(root: Path, commit: str) -> None:
 
 
 def build(root: Path, version: str) -> Path:
-    """A committed repository as the adopt templates of ``version`` left it."""
     commit = {**RELEASES, **LATER}[version]
     repository(root, fill(template_files(commit), commit))
     if version in RELEASES:
@@ -106,7 +99,6 @@ def build(root: Path, version: str) -> Path:
 
 @functools.cache
 def adopted(version: str) -> Path:
-    """The repository adoption at ``version`` left, built once per process."""
     scratch = Path(tempfile.mkdtemp(prefix=f"ratchet-adopted-{version}-"))
     atexit.register(shutil.rmtree, scratch, ignore_errors=True)
     return build(scratch / "repo", version)
@@ -114,7 +106,6 @@ def adopted(version: str) -> Path:
 
 @functools.cache
 def half_done() -> Path:
-    """A 0.9.2 adoption whose permission rules a newer plugin rewrote: the pin did not move."""
     scratch = Path(tempfile.mkdtemp(prefix="ratchet-half-done-"))
     atexit.register(shutil.rmtree, scratch, ignore_errors=True)
     root = scratch / "repo"
@@ -125,6 +116,5 @@ def half_done() -> Path:
 
 
 def copy(source: Path, target: Path) -> Path:
-    """A copy of a built repository, history included, for one test to change."""
     shutil.copytree(source, target, symlinks=True)
     return target

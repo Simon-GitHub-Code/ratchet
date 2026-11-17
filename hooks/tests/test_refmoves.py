@@ -1,5 +1,3 @@
-"""The refs the guard reads the default branch through: names, spellings, state and detail."""
-
 import tomllib
 from pathlib import Path
 

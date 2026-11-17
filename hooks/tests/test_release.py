@@ -1,5 +1,3 @@
-"""The release: the tag on main's commit plus its commit file, and the check that holds the tag."""
-
 import json
 import os
 import subprocess

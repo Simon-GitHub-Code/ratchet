@@ -1,5 +1,3 @@
-# Test fixture: a guard manifest with the shape a repository on the Ratchet method uses.
-# The corpus and property tests in this directory pin the guard's behaviour against it.
 [[group]]
 name = "tool-config"
 reason = "Rule sets, limits and thresholds of every gate: loosening one silently weakens every later check."

@@ -1,10 +1,3 @@
-"""Events the reducer counts, read from one recorded SDK message.
-
-The driver records every message as ``{"type": <class name>, "msg": <fields>}``. Content blocks
-are dicts here; the one-off run recorded them as their ``repr``, so whatever is read from a block
-is read from the message's JSON text, which holds in both forms.
-"""
-
 from __future__ import annotations
 
 import json
@@ -70,7 +63,6 @@ def _user(msg: dict[str, object]) -> list[dict[str, object]]:
 
 
 def events(type_name: str, msg: dict[str, object]) -> list[dict[str, object]]:
-    """The countable events in one recorded message."""
     if type_name == "ResultMessage":
         return _result(msg)
     if type_name == "UserMessage":

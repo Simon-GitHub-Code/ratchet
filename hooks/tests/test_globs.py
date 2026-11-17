@@ -1,5 +1,3 @@
-"""Glob matching agrees with ``PurePosixPath.full_match`` and the gates' copy agrees with it."""
-
 import sys
 from pathlib import PurePosixPath
 

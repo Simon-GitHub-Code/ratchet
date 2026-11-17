@@ -1,13 +1,3 @@
-"""Drive one first-hour run: an empty directory, a scripted owner, and the route deciding each step.
-
-The driver never chooses a step: it runs the plugin's route and does what its ``next:`` line
-names (``steps.py``). Questions go to the owner model (``owner.py``). Every process of the run
-starts in the run's sandbox (``sandbox.py``), and every tool call of the product session passes
-the policy (``policy.py``). Everything is logged as events, which ``reduce.py`` folds into the
-measurements. This module starts no model itself: ``Models`` does, so a test can drive a whole
-run with fakes and the Agent SDK stays in ``drive.py``.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -64,17 +54,15 @@ T = TypeVar("T")
 
 
 class Deadline(Exception):  # noqa: N818
-    """The wall-clock budget ran out."""
+    ...
 
 
 class OverBudget(Exception):  # noqa: N818
-    """The cost budget ran out."""
+    ...
 
 
 @dataclass(frozen=True)
 class Config:
-    """One run's inputs."""
-
     plugin: Path
     root: Path
     persona: Persona
@@ -86,12 +74,6 @@ class Config:
 
 @dataclass(frozen=True)
 class Operator:
-    """What the harness reads of the operator's machine, once, before the run starts.
-
-    After this the run reads nothing of the operator's: the companions are copied, the tools are
-    bound read-only, and the watched files are only hashed again at the end.
-    """
-
     tools: Mapping[str, Path]
     plugins: Sequence[sandbox.Plugin]
     claude: str
@@ -100,7 +82,6 @@ class Operator:
 
     @classmethod
     def read(cls, home: Path, found: Mapping[str, str | None], claude: str) -> Operator:
-        """The operator's toolchain, companion plugins and the files the integrity check hashes."""
         plugins_dir = home / ".claude" / "plugins"
         registry = _json(plugins_dir / "installed_plugins.json")
         markets = _json(plugins_dir / "known_marketplaces.json")
@@ -125,7 +106,6 @@ def _json(path: Path) -> dict[str, object]:
 
 
 def jsonable(value: object) -> object:
-    """An SDK message as plain JSON, its dataclasses named by ``_type``."""
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         fields = {f.name: jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)}
         return {"_type": type(value).__name__, **fields}
@@ -140,26 +120,21 @@ def jsonable(value: object) -> object:
 
 @dataclass
 class Log:
-    """The run's event log and transcript, timed from the run's start."""
-
     root: Path
     t0: float = field(default_factory=time.monotonic)
     epoch: float = field(default_factory=time.time)
     step: str = "setup"
 
     def elapsed(self) -> float:
-        """Seconds since the run started."""
         return time.monotonic() - self.t0
 
     def emit(self, kind: str, **fields: object) -> None:
-        """Append one event to the log."""
         event: dict[str, object] = {"s": round(self.elapsed(), 1), "step": self.step, "kind": kind}
         event.update(fields)
         with (self.root / "events.jsonl").open("a", encoding="utf-8") as out:
             out.write(json.dumps(event, default=str) + "\n")
 
     def message(self, message: object) -> None:
-        """Keep one SDK message whole, and log the events it carries."""
         name = type(message).__name__
         body = jsonable(message)
         body = body if isinstance(body, dict) else {"value": body}
@@ -173,8 +148,6 @@ class Log:
 
 @dataclass
 class Run:
-    """One run's place on disk, its clock, its environment, and the processes it started."""
-
     config: Config
     layout: sandbox.Layout
     log: Log
@@ -186,24 +159,20 @@ class Run:
 
     @property
     def deadline(self) -> float:
-        """When the wall-clock budget runs out, on the monotonic clock."""
         return self.log.t0 + self.config.budget.minutes * 60
 
     def left(self) -> float:
-        """Seconds left on the wall clock; ``Deadline`` once there are none."""
         left = self.deadline - time.monotonic()
         if left <= 0:
             raise Deadline
         return left
 
     def wrap(self, command: Sequence[str], *, writable: Sequence[Path] | None = None) -> list[str]:
-        """``command`` as the run starts it: in the sandbox, unless a test turned it off."""
         if not self.sandboxed:
             return list(command)
         return sandbox.argv(self.layout, command, tools=self.tools.values(), writable=writable)
 
     def track(self, process: subprocess.Popen[bytes]) -> None:
-        """Remember a process the run started, so that a stop can end it."""
         self.children.add(process)
 
     def call(
@@ -214,11 +183,6 @@ class Run:
         timeout: float,
         writable: Sequence[Path] | None = None,
     ) -> tuple[str, int]:
-        """Run one command to its end; its output and exit code. A timeout ends its group.
-
-        Once the run is halted nothing new starts: a thread still finishing a paste after a stop
-        gets ``Deadline`` instead of a process.
-        """
         if self.halted:
             raise Deadline
         with subprocess.Popen(
@@ -241,7 +205,6 @@ class Run:
         return out.decode("utf-8", errors="replace"), process.returncode
 
     def git(self, *args: str, writable: Sequence[Path] = ()) -> str | None:
-        """Git's output in the owner's project, or ``None`` when git fails."""
         out, code = self.call(
             ["git", "-C", str(self.layout.app), *args],
             cwd=self.layout.app,
@@ -251,7 +214,6 @@ class Run:
         return out.strip() if code == 0 else None
 
     def halt(self) -> int:
-        """Start nothing more, and end every process the run started; how many were running."""
         self.halted = True
         running = [p for p in list(self.children) if p.poll() is None]
         for process in running:
@@ -261,47 +223,28 @@ class Run:
 
 
 class Session(Protocol):
-    """The product session: one Claude Code session the owner types into."""
-
     costs: dict[str, float]
 
-    async def turn(self, text: str, deadline: float) -> str:
-        """Type ``text``; the last result, once nothing runs behind it."""
-        ...
+    async def turn(self, text: str, deadline: float) -> str: ...
 
-    async def close(self) -> None:
-        """Stop the session and everything it started."""
-        ...
+    async def close(self) -> None: ...
 
 
 class OwnerModel(Protocol):
-    """The owner model: a small model in character."""
-
     usd: float
 
-    async def answer(self, question: owner.Question, channel: owner.Channel) -> owner.Answer:
-        """Answer one question in character."""
-        ...
+    async def answer(self, question: owner.Question, channel: owner.Channel) -> owner.Answer: ...
 
-    async def read_turn(self, text: str) -> owner.Reply:
-        """Whether a turn's last message asks the owner something."""
-        ...
+    async def read_turn(self, text: str) -> owner.Reply: ...
 
 
 class Models(Protocol):
-    """What starts the run's models: the owner model, then the product session."""
+    def owner(self, run: Run) -> OwnerModel: ...
 
-    def owner(self, run: Run) -> OwnerModel:
-        """The owner model for this run."""
-        ...
-
-    async def session(self, run: Run, owner_: OwnerModel) -> Session:
-        """The product session for this run, connected."""
-        ...
+    async def session(self, run: Run, owner_: OwnerModel) -> Session: ...
 
 
 async def bounded(run: Run, work: Awaitable[T]) -> T:
-    """``work``, given until the wall clock runs out; ``Deadline`` when it does not finish."""
     try:
         return await asyncio.wait_for(work, timeout=run.left())
     except TimeoutError:
@@ -310,8 +253,6 @@ async def bounded(run: Run, work: Awaitable[T]) -> T:
 
 @dataclass
 class Driver:
-    """The run: the route's instructions, the owner's moves, and the measurements after each."""
-
     run: Run
     owner: OwnerModel
     session: Session
@@ -325,16 +266,13 @@ class Driver:
 
     @property
     def log(self) -> Log:
-        """The run's log."""
         return self.run.log
 
     @property
     def layout(self) -> sandbox.Layout:
-        """The run's directories."""
         return self.run.layout
 
     def route(self) -> steps.Instruction:
-        """The route's instruction for the checkout now."""
         script = self.layout.pinned / "scripts" / "route.py"
         out, code = self.run.call(
             ["python3", str(script), "--root", str(self.layout.app), "--json"],
@@ -347,7 +285,6 @@ class Driver:
         return steps.Instruction.parse(json.loads(out))
 
     def state(self) -> str:
-        """The checkout's state: HEAD, the tree and the stash."""
         head = self.run.git("rev-parse", "HEAD") or "no-head"
         status = self.run.git("status", "--porcelain") or ""
         stashes = self.run.git("stash", "list") or ""
@@ -355,14 +292,12 @@ class Driver:
         return f"{head[:12]}:{digest}"
 
     def default_branch(self) -> str | None:
-        """The default branch, once one exists."""
         return next(
             (b for b in ("main", "master") if self.run.git("rev-parse", "--verify", "-q", b)),
             None,
         )
 
     async def life_events(self, instruction: steps.Instruction) -> steps.Move | None:
-        """Each ``also:`` line that proposes a life event, put to the owner; a yes is the move."""
         for line in instruction.also:
             proposal = owner.life_event_question(line)
             if proposal is None:
@@ -381,7 +316,6 @@ class Driver:
         return None
 
     async def converse(self, text: str) -> None:
-        """Type into the session, then answer what the turn's last message asks, in character."""
         self.owner_text = await self.session.turn(text, self.run.deadline)
         for _ in range(PROSE_REPLIES):
             reply = await bounded(self.run, self.owner.read_turn(self.owner_text))
@@ -391,7 +325,6 @@ class Driver:
             self.owner_text = await self.session.turn(reply.text, self.run.deadline)
 
     def run_gates(self, command: str, output: str) -> None:
-        """Record the gates in a pasted command's output; rerun a red one once."""
         found = gates.parse(output)
         if not found:
             return
@@ -404,7 +337,6 @@ class Driver:
             command=command,
             gates=[dataclasses.asdict(g) for g in found],
         )
-        # Why: rerunning a merge command would land the merge on a flaky second try.
         if "merge" not in command and any(g.status is gates.Status.RED for g in found):
             again, _code = self.shell(command)
             self.log.emit(
@@ -417,7 +349,6 @@ class Driver:
             )
 
     def shell(self, command: str) -> tuple[str, int]:
-        """Run one command line in the project as the owner would, inside the sandbox."""
         timeout = min(PASTE_TIMEOUT_S, self.run.left())
         try:
             return self.run.call(["sh", "-c", command], cwd=self.layout.app, timeout=timeout)
@@ -426,7 +357,6 @@ class Driver:
             raise Deadline from None
 
     def paste(self, commands: Sequence[str], why: str, depth: int = 0) -> None:
-        """Run what the owner was told to paste; follow the ``next:`` lines it prints, once."""
         for command in commands:
             started = time.time()
             try:
@@ -445,7 +375,6 @@ class Driver:
                 self.paste(follow, "next-line", depth + 1)
 
     def app_check(self, label: str) -> appcheck.Result | None:
-        """Start the default branch's app in a work tree of its own and exercise the slice."""
         branch = self.default_branch()
         if branch is None:
             return None
@@ -477,7 +406,6 @@ class Driver:
         return result
 
     def record_merges(self) -> list[merges.Landing]:
-        """Log each merge onto the default branch since the last look, with who made it."""
         branch = self.default_branch()
         if branch is None:
             return []
@@ -489,8 +417,6 @@ class Driver:
             self.landed.append(landing)
             self.log.emit(
                 "merge",
-                # Why: the reflog keeps whole seconds, so a merge in the run's first second
-                # would otherwise land before the run started.
                 s=round(max(landing.at - self.log.epoch, 0.0), 1),
                 commit=landing.sha[:12],
                 branch=landing.branch,
@@ -501,7 +427,6 @@ class Driver:
         return found
 
     async def step(self, move: steps.Move) -> None:
-        """Do one move, then measure what it merged; merges are logged even when it is cut off."""
         started = time.monotonic()
         self.log.emit(
             "step", action=move.action.value, text=move.text, commands=list(move.commands)
@@ -523,11 +448,9 @@ class Driver:
                 self.log.emit("usable")
 
     def spent(self) -> float:
-        """Dollars spent so far, product session and owner model."""
         return sum(self.session.costs.values()) + self.owner.usd
 
     async def next_move(self) -> tuple[steps.Move | None, steps.Stop | None, str]:
-        """The route's instruction now, and either the owner's move or why the run stops."""
         instruction = await asyncio.to_thread(self.route)
         self.log.emit(
             "route",
@@ -553,7 +476,6 @@ class Driver:
         return move, None, ""
 
     async def loop(self) -> tuple[steps.Stop, str]:
-        """Follow the route until a stop condition holds; every wait is bounded by the clock."""
         while True:
             try:
                 move, reason, detail = await self.next_move()
@@ -569,7 +491,6 @@ class Driver:
 
 
 def fingerprints(paths: Iterable[Path]) -> dict[str, str | None]:
-    """A short hash of each file, ``None`` for one that does not exist."""
     return {
         str(p): hashlib.sha256(p.read_bytes()).hexdigest()[:16] if p.is_file() else None
         for p in paths
@@ -577,14 +498,13 @@ def fingerprints(paths: Iterable[Path]) -> dict[str, str | None]:
 
 
 def reap(roots: Sequence[Path]) -> int:
-    """Stop every process still running inside the run's directories; how many there were."""
     reaped = 0
     for proc in Path("/proc").iterdir():
         if not proc.name.isdigit() or int(proc.name) == os.getpid():
             continue
         try:
             cwd = (proc / "cwd").readlink()
-        except OSError:  # another user's process, or one that just ended
+        except OSError:
             continue
         if any(cwd == root or root in cwd.parents for root in roots):
             with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -594,16 +514,10 @@ def reap(roots: Sequence[Path]) -> int:
 
 
 def slug(path: Path) -> str:
-    """Claude Code's name for a project directory under ``~/.claude/projects``."""
     return re.sub(r"[^A-Za-z0-9]", "-", str(path))
 
 
 def tidy(run: Run, projects: Path) -> dict[str, object]:
-    """Clean up after the run, and name what it left in the operator's projects.
-
-    The drain's leftover work trees and the run's runtime directory are removed; the operator's
-    ``~/.claude/projects`` is only listed, never deleted from.
-    """
     listed = run.git("worktree", "list", "--porcelain") or ""
     trees = [
         Path(line.split(" ", 1)[1]) for line in listed.splitlines() if line.startswith("worktree ")
@@ -621,11 +535,6 @@ def tidy(run: Run, projects: Path) -> dict[str, object]:
 
 
 def _pin(config: Config, layout: sandbox.Layout) -> dict[str, object]:
-    """Clone the checkout's HEAD into the run, so a commit landing on it mid-run changes nothing.
-
-    Why: the first baseline ran against the main checkout and a merge landed on it eight minutes
-    in; the run measured two plugins. Uncommitted changes in the checkout are not under test.
-    """
     subprocess.run(
         ["git", "clone", "--quiet", "--no-hardlinks", str(config.plugin), str(layout.pinned)],
         check=True,
@@ -647,7 +556,6 @@ def _pin(config: Config, layout: sandbox.Layout) -> dict[str, object]:
 
 
 def under_test(layout: sandbox.Layout, meta: Mapping[str, object]) -> sandbox.Plugin:
-    """The pinned clone as the registry names it."""
     return sandbox.Plugin(
         key="ratchet@ratchet",
         version=str(meta.get("version")),
@@ -658,7 +566,6 @@ def under_test(layout: sandbox.Layout, meta: Mapping[str, object]) -> sandbox.Pl
 
 
 def setup(config: Config, operator: Operator, environ: Mapping[str, str]) -> Run:
-    """The run's directory, home and environment, ready for its first process."""
     layout = sandbox.Layout(config.root, config.toolchains)
     layout.root.mkdir(parents=True, exist_ok=True)
     plugin = _pin(config, layout)
@@ -708,11 +615,6 @@ async def _close(session: Session | None) -> None:
 
 
 async def _follow(run: Run, models: Models) -> tuple[steps.Stop, str, Driver | None]:
-    """Start the models and follow the route; why the run stopped, and its driver.
-
-    The driver is ``None`` when the models never started. The session is closed however the
-    run ends, a cancel included.
-    """
     driver: Driver | None = None
     session: Session | None = None
     try:
@@ -729,24 +631,16 @@ async def _follow(run: Run, models: Models) -> tuple[steps.Stop, str, Driver | N
 
 @dataclass
 class Interrupt:
-    """The first SIGINT or SIGTERM, which cancels the run's work; a second changes nothing."""
-
     task: asyncio.Task[tuple[steps.Stop, str, Driver | None]]
     name: str = ""
 
     def __call__(self, signum: int) -> None:
-        """Cancel the work once, and remember which signal did it."""
         if not self.name:
             self.name = signal.Signals(signum).name
             self.task.cancel()
 
 
 async def drive(run: Run, operator: Operator, models: Models) -> dict[str, object]:
-    """Run the first hour once; write the event log, the measurements and the table.
-
-    SIGINT and SIGTERM stop the run the same way the budget does: the sessions are closed, every
-    process the run started is ended, and the measurements are written from what was logged.
-    """
     before = fingerprints(operator.watched)
     loop = asyncio.get_running_loop()
     interrupt = Interrupt(asyncio.ensure_future(_follow(run, models)))
@@ -764,8 +658,6 @@ async def drive(run: Run, operator: Operator, models: Models) -> dict[str, objec
         stopped = run.halt()
     run.log.step = "end"
     run.log.emit("stop", reason=reason.value, detail=detail, load_avg=os.getloadavg())
-    # Why: after an interrupt a cancelled paste's thread may still be unwinding on `run`, which
-    # stays halted; the epilogue gets a run of its own.
     epilogue = dataclasses.replace(run, children=set(), halted=False)
     if driver is not None:
         driver.run = epilogue
@@ -792,7 +684,6 @@ async def drive(run: Run, operator: Operator, models: Models) -> dict[str, objec
 
 
 def record_audit(run: Run, driver: Driver | None) -> None:
-    """Log what the run did about architecture, and where the plugin's own text named a stack."""
     root = run.layout.root
     branch = driver.default_branch() if driver is not None else None
     if branch is not None:
@@ -808,7 +699,6 @@ def record_audit(run: Run, driver: Driver | None) -> None:
 
 
 def checked_root(path: Path, temp: Path) -> Path:
-    """The run directory: under the system temp location, and empty or new."""
     root = path.resolve()
     if temp.resolve() not in root.parents:
         msg = f"the run directory must be under {temp}, not {root}"

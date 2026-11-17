@@ -1,5 +1,3 @@
-""":mod:`red_gates`: a red gate's own output out of a ``parallel.py`` log, for the weekly issue."""
-
 import shlex
 import subprocess
 import sys
@@ -15,29 +13,21 @@ SPEAK = "import sys\nprint(open(sys.argv[1]).read(), end='')\nraise SystemExit(i
 
 
 class Tier:
-    """Gates that print a file and exit with a code, run by the real ``parallel.py``."""
-
     def __init__(self, root: Path) -> None:
         self.root = root
         self.gates: list[str] = []
         (root / "speak.py").write_text(SPEAK, encoding="utf-8")
 
     def add(self, name: str, code: int, *lines: str) -> "Tier":
-        """A gate called ``name``, whose command line holds none of what it prints.
-
-        Its last word is ``name``, the entry point a row of a binding at the root may name.
-        """
         (self.root / name).write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
         speak = [sys.executable, str(self.root / "speak.py"), str(self.root / name)]
         self.gates.append(shlex.join([*speak, str(code), name]))
         return self
 
     def options(self) -> list[str]:
-        """One gate at a time, run at the root, where a binding may say which gates wait."""
         return ["--jobs", "1", "--root", str(self.root)]
 
     def log(self) -> str:
-        """The log of the run, as the weekly workflow's ``tee`` keeps it."""
         done = subprocess.run(  # noqa: S603 # -- a fixed argv; the runner is the plugin's own
             [sys.executable, str(PARALLEL), *self.options(), "--", *self.gates],
             capture_output=True,

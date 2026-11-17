@@ -1,5 +1,3 @@
-"""Who fixes each finding: the script (auto), an agent, or the owner, decided where it is raised."""
-
 import json
 import shutil
 from pathlib import Path
@@ -35,7 +33,6 @@ def repo(tmp_path: Path) -> Path:
 
 
 def kind(root: Path, prefix: str) -> str:
-    """The kind of the one finding whose line starts with ``prefix``."""
     [found] = [f for f in conformance.findings(root) if str(f).startswith(prefix)]
     return type(found.fix).__name__
 
@@ -181,7 +178,6 @@ def test_settings_that_are_not_a_json_object_are_left_to_an_agent(repo: Path) ->
 
 
 def test_a_manifest_that_uses_exclude_leaves_the_fixed_settings_as_they_are(repo: Path) -> None:
-    # Why: the permission rules no longer mirror the manifest, so nothing in it can stop them.
     replace(MANIFEST, "[[group]]\n", '[[group]]\nexclude = ["x"]\n')(repo)
     assert not [f for f in conformance.findings(repo) if f.path == SETTINGS or "exclude" in str(f)]
 

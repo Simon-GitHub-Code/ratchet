@@ -1,5 +1,3 @@
-"""The quote check: a finding is found when the record it names holds its quote word for word."""
-
 import json
 from pathlib import Path
 

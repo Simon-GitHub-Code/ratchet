@@ -1,5 +1,3 @@
-"""The queue drain's rules: on every state of its model, then on real repositories."""
-
 from __future__ import annotations
 
 import contextlib
@@ -87,9 +85,6 @@ REPLAYED_AFTER_A_KILL = [RETRIED]
 PARKED_THEN_LANDED = [PARK_A, EDIT_A, *JUDGED_A, LAND_KILLED[-1]]
 MARK_LEFT = ["drain.py open a", EDIT_A, "a kill mid-rebase stops drain.py update a"]
 CUT_OFF = "a kill mid fast-forward stops merge.py in drain.py land a"
-# Why: a rule the code does not keep is pinned here by the shortest path from the initial state
-# to a step that breaks it, so the break is a recorded fact and not a red test; each pinned path
-# is replayed below on a real repository.
 COUNTEREXAMPLES: dict[str, list[str] | None] = {
     CAP: None,
     KEPT: None,
@@ -105,8 +100,6 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
     PARTS_FIRST: None,
     PARTS_AWAITED: None,
     RECOVERS: None,
-    # Why: the docstring accepts it: "A work tree whose uncommitted work git cannot stash (a stale
-    # lock, a merge left unfinished, a damaged index) is not removed".
     NO_TREE: [
         PARK_A,
         "drain.py open c",
@@ -115,8 +108,6 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
         "drain.py clean --all",
     ],
     UNLANDED: None,
-    # Why: the agent's commits are free here, and nothing in the drain stops one before the check.
-    # The feature skill's order does: the rule holds on every step that keeps it.
     UNTOUCHED: [
         "drain.py open a",
         "a role of the pipeline run commits in a",
@@ -126,8 +117,6 @@ COUNTEREXAMPLES: dict[str, list[str] | None] = {
 
 
 PARK_C = "drain.py close --outcome parked c"
-# Why: for each kind of kill, on a landed ticket and on one not landed, the shortest path to one
-# that leaves what neither the whole command nor none of it leaves, as the search finds them.
 KILL_CUTS = [
     ["drain.py open a", CHECK_A, LAND_CUT],
     ["drain.py open a", EDIT_A, "a kill mid-rebase stops drain.py update a"],
@@ -168,7 +157,6 @@ RULE_PARTS = tuple(tuple(sorted(model.RULES))[part::3] for part in range(3))
 
 @functools.cache
 def search(*, gate: bool, rules: tuple[str, ...]) -> Search:
-    """What the breadth-first steps show of ``rules``, with the guard's gate or without it."""
     _, edges = main_graph(gate=gate)
     checked = {name: model.RULES[name] for name in rules}
     came: dict[model.State, tuple[model.State, str] | None] = {model.INITIAL: None}
@@ -197,7 +185,6 @@ def search(*, gate: bool, rules: tuple[str, ...]) -> Search:
 
 
 def landed_unchecked(*, gate: bool) -> list[str]:
-    """The steps that land a branch on a start no check passed."""
     return [
         said
         for before, said, after in main_graph(gate=gate)[1]
@@ -207,7 +194,6 @@ def landed_unchecked(*, gate: bool) -> list[str]:
 
 
 def committed_while_marked(*, gate: bool) -> list[str]:
-    """The commit steps on a ticket whose note holds ``update``'s mark: cut off, or mid-rebase."""
     commits = {kind.value for kind in model.COMMITS}
     return [
         said
@@ -246,8 +232,6 @@ def test_each_rule_holds_on_every_step_of_the_model_or_breaks_on_its_recorded_pa
     [pytest.param(n, marks=pytest.mark.shard_slot(slot)) for n, slot in enumerate((2, 6, 8))],
 )
 def test_with_the_guards_gate_each_rule_but_10_holds_and_no_role_commits(part: int) -> None:
-    # Why: the guard refuses a commit on a start no final check passed, so neither the agent's
-    # commit before the check nor a role's commit, by which rule 11b breaks, is a step.
     found = search(gate=True, rules=RULE_PARTS[part])
     for name in RULE_PARTS[part]:
         path = found.breaks.get(name)
@@ -289,8 +273,6 @@ def test_every_rule_reads_as_one_sentence() -> None:
 
 
 class Play:
-    """The model and a real repository taking the same actions, compared after each one."""
-
     def __init__(self, directory: Path) -> None:
         self.world = World(directory)
         self.state = model.INITIAL
@@ -303,14 +285,12 @@ class Play:
         return "\n".join([*lines, f"the last command printed:\n{self.world.printed}"])
 
     def named(self, name: str, *, compare: bool = True) -> str:
-        """Take the action the model calls ``name``; what the command printed."""
         move = next((move for move in model.moves(self.state) if move[0].name == name), None)
         assert move is not None, self.says(f"no action is called {name!r} here")
         self.take(*move, compare=compare)
         return self.world.printed
 
     def cut(self, kind: Kind, name: Name) -> str:
-        """A kill the model takes as its whole command, which leaves what the whole one leaves."""
         whole = model.ON_TICKET[model.KILLS[kind]](self.state, name)
         assert whole is not None
         self.take(model.Action(kind, name), whole)
@@ -325,7 +305,6 @@ class Play:
             self.agree()
 
     def agree(self) -> None:
-        """Assert the repository is what the model says it is now."""
         seen = self.world.seen(self.state)
         statuses = model.classify(self.state)
         assert seen.statuses == statuses, self.says(f"the plan says {seen.statuses}")
@@ -345,11 +324,9 @@ class Play:
             assert gated == refused, self.says(said)
 
     def guard_refuses(self, name: Name) -> bool:
-        """Whether the real guard refuses a commit in the ticket's queue work tree now."""
         return GATE in {v.rule for v in judged(COMMIT, self.world.tree(name))}
 
     def guard_allows(self, action: model.Action) -> bool:
-        """Whether the real guard lets ``action`` through here, which the gated model must say too."""  # noqa: E501
         name = action.ticket
         if action.kind not in model.COMMITS or name is None:
             return True
@@ -360,9 +337,6 @@ class Play:
         return not refused
 
 
-# Why: the families an action is drawn from, a family as often as it is listed. A landing runs
-# merge.py in a process of its own, several times the cost of any other step. The order is the
-# first-choice example's: it reaches first what the replays below do not take.
 WEIGHTED = [
     Kind.OPEN,
     Kind.OPEN,
@@ -402,8 +376,6 @@ WALKED: list[Play] = []
 
 
 class DrainOnARepository(RuleBasedStateMachine):
-    """Random actions on the model and on a real repository together, each commit only where the real guard lets it through."""  # noqa: E501
-
     def __init__(self) -> None:
         super().__init__()
         self.scratch = Path(tempfile.mkdtemp(prefix="drain-model-"))
@@ -411,9 +383,6 @@ class DrainOnARepository(RuleBasedStateMachine):
 
     @rule(data=st.data())
     def act(self, data: st.DataObject) -> None:
-        # Why: Hypothesis tries the first choice of every draw first. Listing the actions that
-        # change the state ahead of those that do not makes that example walk the lifecycle,
-        # not repeat one refused command.
         state = self.play.state
         allowed = [move for move in model.moves(state) if self.play.guard_allows(move[0])]
         moves = sorted(allowed, key=lambda move: move[1] == state)
@@ -434,8 +403,6 @@ class DrainOnARepository(RuleBasedStateMachine):
 
 
 def test_the_real_drain_agrees_with_the_model_on_every_step() -> None:
-    # Why: every shrink replays git and merge.py; a red run reports its path unshrunk, and the
-    # exhaustive tests above give each rule's shortest break.
     run_state_machine_as_test(
         DrainOnARepository,
         settings=settings(
@@ -454,15 +421,11 @@ def test_the_real_drain_agrees_with_the_model_on_every_step() -> None:
 
 
 def test_the_real_drain_agrees_with_the_model_after_each_kind_of_kill(tmp_path: Path) -> None:
-    # Why: the stateful run above takes few steps and reaches few kills. Each kill is taken here
-    # where it first leaves a state of its own, on a landed ticket and on one not landed, then a
-    # report and the killed command run again: what rules 5 and 8 read after a kill.
     assert {Kind(path[-1].rpartition(" ")[0]) for path in KILL_CUTS} == set(model.KILLS)
     elsewhere = 0
     for at, path in enumerate(KILL_CUTS):
         kill, _, name = path[-1].rpartition(" ")
         then = [*path, "drain.py report", f"{model.KILLS[Kind(kill)].value} {name}"]
-        # Why: a replay below that takes the same steps checks them; this one would repeat it.
         if any(other[: len(then)] == then for other in REPLAYED_AFTER_A_KILL):
             elsewhere += 1
             continue
@@ -475,12 +438,7 @@ def plan_of(play: Play) -> dict[str, drain.Entry]:
     return {entry.branch: entry for entry in drafted.tickets}
 
 
-# Why: each history below replays a pinned path, and the steps of the past defects on the way,
-# comparing with the model at its end; the stateful run compares every step.
-
-
 def broken_by(path: list[str]) -> set[str]:
-    """The rules the last step of ``path`` breaks in the model."""
     state = before = model.INITIAL
     for name in path:
         before = state
@@ -488,14 +446,10 @@ def broken_by(path: list[str]) -> set[str]:
     return {rule for rule, holds in model.RULES.items() if not holds(before, path[-1], state)}
 
 
-# Why: a path played on a new repository reads back the same at each step, so a step another
-# replay of this run compared after the same steps is not compared again; most replays begin
-# with the same few steps, and a comparison costs as much as the drain command it follows.
 COMPARED: set[tuple[str, ...]] = set()
 
 
 def replay(tmp_path: Path, path: list[str]) -> Play:
-    """``path`` played on the model and a repository, compared at its end and after each step new to this run."""  # noqa: E501
     play = Play(tmp_path)
     for at, name in enumerate(path, 1):
         steps = (*play.path, name)
@@ -669,7 +623,6 @@ UPDATE_UNREAD_A = "the check of drain.py update cannot read the present state of
 
 
 def walked(path: list[str]) -> list[model.State]:
-    """The model's state after each step of ``path``."""
     states = [model.INITIAL]
     for name in path:
         states.append(
@@ -903,7 +856,6 @@ UNSAID = f"drain: {REF[Name.A]} merged, and a merge is not unsaid by closing it 
 
 
 def listed_under(report: str, heading: str) -> str:
-    """The rows of the report's section ``heading``."""
     return report.split(f"## {heading}\n")[1].split("\n## ", maxsplit=1)[0]
 
 
@@ -1027,7 +979,6 @@ def test_a_refused_landing_killed_after_its_discard_and_run_again_counts_its_ret
 def test_a_close_after_a_cut_off_fast_forward_puts_it_back_first_and_holds_the_ticket_on_its_text(
     tmp_path: Path,
 ) -> None:
-    # Why: the path that broke 6a and 8 before every command recovered first; they hold on it now.
     path = [*JUDGED_A, CUT_OFF, PARK_A, "drain.py land a", "drain.py land a"]
     assert {rule for at in range(1, len(path) + 1) for rule in broken_by(path[:at])} == set()
     play = replay(tmp_path, path[:-2])
@@ -1043,8 +994,6 @@ def test_a_close_after_a_cut_off_fast_forward_puts_it_back_first_and_holds_the_t
     assert plan_of(play)[BRANCH[Name.A]].state == "held", "the owner edited nothing"
     assert BRANCH[Name.A] not in drain.route.merged_features(play.world.root, "main")
 
-
-# --- the lease ---------------------------------------------------------------------------------
 
 (
     LIVE_SPARED,
@@ -1090,40 +1039,17 @@ STOPPED = [
     "drain 2: drain.py clean --all",
 ]
 LEASE_COUNTEREXAMPLES: dict[str, list[str] | None] = {
-    # Why: 9 breaks where the drain's docstring accepts it: "two drains run by one process on one
-    # repository, with drain 1 between commands and nothing running from its tree, cannot be told
-    # apart". 9a, which allows only that, holds there.
     LIVE_SPARED: TAKEN_UNDER_ONE,
-    # Why: 9a breaks only after the owner's `--take-over` while the first drain is alive, which
-    # the docstring accepts: "a landing that drain runs keeps its tree while it runs, and the next
-    # `clean --all` takes the tree once that landing has ended, its work all committed". The
-    # take-over leaves the tree of the first drain's live landing; once that landing is killed,
-    # here before its merge, the drain that took over takes the tree on its next `clean --all`.
     TOLD_APART: [*TAKEN_OVER, "drain 2: drain.py clean --all"],
-    # Why: 9b breaks where the docstring accepts it: "A drain is alive while a process of its own
-    # is", so one that stopped with its session open blocks the next until the owner says
-    # `--take-over`. 9c, which asks only that a drain whose processes are gone block nothing,
-    # holds.
     STOPPED_FREE: STOPPED,
     GONE_FREE: None,
-    # Why: 9d breaks only where the docstring accepts it: under one process a report cannot tell
-    # whose drain it ends. In sessions of their own it ends only its own drain's lease.
     OWN_LEASE: [UNDER_ONE, D1_STARTS[0], "drain 2: drain.py report"],
     PRINTED_ONCE: None,
-    # Why: 9f, 9h, 9i, 9j, 9l and 9m broke where `land` was killed alone and its merge.py ran on
-    # with no lock any command read. merge.py now holds its own lock on the branch from before its
-    # probe to its end, and every command reads it, so the merge past its probe is seen; one
-    # before its probe finds its land's private lock free and stops, merging nothing.
     LANDING_SPARED: None,
-    # Why: no step meets it. No command but the landing records its merge while it is alive, so
-    # its close never meets one recorded; the rule stays so that a change letting one in shows.
     RECORD_KEPT: None,
     LANDING_UNTOUCHED: None,
     HOLD_KEPT: None,
     SEEN_ALIVE: None,
-    # Why: what `drain.landing_holder` reads are the locks of a `land` and of a merge.py alive,
-    # which a process either left behind does not hold; the replay of a check, and of a shell,
-    # that leaves one shows it on real drains.
     UNSEEN_ENDED: None,
     CLOSED_BY_OWNER: None,
     ONE_MERGE: None,
@@ -1132,7 +1058,6 @@ LEASE_COUNTEREXAMPLES: dict[str, list[str] | None] = {
 
 @functools.cache
 def lease_search() -> tuple[dict[str, list[str]], frozenset[str]]:
-    """Each lease rule's shortest break, read off the lease graph; every step taken."""
     _, edges = model.lease_graph()
     came: dict[model.Lease, tuple[model.Lease, str] | None] = {model.LEASE_INITIAL: None}
     breaks: dict[str, list[str]] = {}
@@ -1149,8 +1074,6 @@ def lease_search() -> tuple[dict[str, list[str]], frozenset[str]]:
 
 
 def test_each_lease_rule_holds_on_every_step_or_breaks_on_its_recorded_path() -> None:
-    # Why: one test and not one a rule, so a run that spreads the tests over processes builds the
-    # lease graph in fewer of them; a red run names every rule whose break moved.
     breaks = lease_search()[0]
     moved = {
         name: breaks.get(name)
@@ -1172,7 +1095,6 @@ def test_every_lease_step_is_taken_and_every_lease_rule_reads_as_one_sentence() 
 
 
 def lease_broken_by(path: list[str]) -> set[str]:
-    """The lease rules the last step of ``path`` breaks in the model."""
     lease = before = model.LEASE_INITIAL
     for said in path:
         before = lease
@@ -1181,15 +1103,12 @@ def lease_broken_by(path: list[str]) -> set[str]:
 
 
 class LeasePlay:
-    """The lease model and two real drains taking the same steps, compared after each one."""
-
     def __init__(self, directory: Path, check: str = "true", before_merge: str = "") -> None:
         self.world = LeaseWorld(directory, check, before_merge)
         self.lease = model.LEASE_INITIAL
         self.path: list[str] = []
 
     def named(self, said: str) -> str:
-        """Take the step the model calls ``said``, compare, and return what the command printed."""
         self.lease = dict(model.lease_moves(self.lease))[said]
         self.path.append(said)
         self.world.world.printed = ""
@@ -1197,8 +1116,6 @@ class LeasePlay:
         seen = self.world.seen(self.lease)
         lines = ["path:", *(f"  {step}" for step in self.path), self.world.world.printed]
         assert seen == self.lease, "\n".join([f"seen {seen}", f"not {self.lease}", *lines])
-        # Why: the model's merge lock is held only by a merge past its probe whose land is gone;
-        # a land's own merge here waits before the lock, or has ended.
         merging = lock_held(self.world.merge_lock)
         assert merging == (self.lease.orphan is not None), "\n".join(["merge lock", *lines])
         return self.world.world.printed
@@ -1356,7 +1273,6 @@ def test_a_take_over_leaves_a_live_landing_and_takes_its_tree_once_the_landing_i
 
 
 def read_back(play: LeasePlay) -> tuple[object, ...]:
-    """The lease, the note, the default and branch tips and the work trees, as the world reads them now."""  # noqa: E501
     root = play.world.world.root
     note = drain.queue_notes.read_note(root, BRANCH[Name.A])
     tips = git(root, "rev-parse", "main", BRANCH[Name.A])
@@ -1368,7 +1284,6 @@ def lease_note(play: LeasePlay) -> dict[str, object]:
 
 
 def landing_runs(command: str) -> str:
-    """What ``update``, ``close`` or ``split`` prints when a landing of the ticket is alive."""
     return (
         f"{command}: a landing of `{BRANCH[Name.A]}` is running in another command; nothing was"
         " done; wait for it to end, then run plan: the landing records the ticket's outcome"
@@ -1377,7 +1292,6 @@ def landing_runs(command: str) -> str:
 
 
 def merge_runs(command: str) -> str:
-    """What ``update``, ``close`` or ``split`` prints when only a merge of the ticket is seen."""
     return (
         f"{command}: a merge of `{BRANCH[Name.A]}` is running in another command; nothing was"
         " done; wait for it to end, then run plan\n"
@@ -1395,19 +1309,16 @@ LOCK_HELD = f"merge: a merge of `{BRANCH[Name.A]}` is already running; nothing w
 
 
 def refused_in_flight(play: LeasePlay, said: str) -> None:
-    """Take ``said``, a command on the ticket of a live landing: exit 3, and nothing changed."""
     before = read_back(play)
     by_merge = model.seen_by(play.lease) == "merge"
     printed = play.named(said)
     command = "update" if said.endswith(Step.UPDATE.value) else "close"
     said_by = merge_runs if by_merge else landing_runs
-    # Why: the feature skill reads exit 3 as a live landing, and 1 and 2 are `update`'s own.
     assert (play.world.world.code, printed) == (3, said_by(command)), said
     assert read_back(play) == before, f"{said}: nothing changed"
 
 
 def plan_of_a(play: LeasePlay) -> list[tuple[str, tuple[str, ...]]]:
-    """What the real ``plan`` says of the ticket: its state and why; nothing once it is resolved."""
     drafted = drain.plan(drain.Drain(play.world.world.root, None, model.CAP))
     return [(entry.state, entry.why) for entry in drafted.tickets if entry.branch == BRANCH[Name.A]]
 
@@ -1415,7 +1326,6 @@ def plan_of_a(play: LeasePlay) -> list[tuple[str, tuple[str, ...]]]:
 def test_a_second_land_while_one_is_in_flight_is_refused_and_the_merge_printed_once(
     two_drains: LeasePlay,
 ) -> None:
-    # Why: drain 1 again is its agent whose shell timed out on the first `land`.
     again = [f"{which.value}: {Step.LAND.value}" for which in model.Drain]
     path = [APART, *D1_STARTS, LANDS, *again, MERGES, *again, CLOSES]
     path.append("drain 1: drain.py report --drain with its token")
@@ -1497,11 +1407,6 @@ def test_an_update_and_a_close_after_the_merge_are_refused_and_the_landing_recor
     assert lease_note(two_drains)["reasons"] == [], "no command said the landing stopped"
     assert listed_under(two_drains.named(path[8]), "Merged").count("Alpha") == 1
     assert plan_of_a(two_drains) == []
-
-
-# Why: the lease graph has no mark of a close cut off before its discard, no `split`, and its
-# default branch moves only by the merge. These replays take its steps up to a real landing in
-# flight, then do what the model cannot.
 
 
 def test_an_update_while_the_merge_runs_is_refused_and_the_landing_waits_as_behind(
@@ -1591,15 +1496,10 @@ TICKET_STEPS = frozenset({Step.OPEN, Step.UPDATE, Step.PARK, Step.LAND})
 def landing_decision(
     before: model.Lease, drain_: model.Drain | None, step: Step | None
 ) -> tuple[object, ...] | None:
-    """What a command on the ticket meets in a live landing, by which lock, or while a doomed merge starts; whether the landing's close meets a merge another command recorded, and whether a session's end ends it before its merge or after; ``None`` for any other step."""  # noqa: E501
     seen = model.seen_by(before)
     if step in TICKET_STEPS and seen is not None:
-        # Why: each is refused, before the merge lands and after, with a line for each lock. Not
-        # whose agent typed it, which none of these commands reads, nor the tree, which none of
-        # them touches.
         return (step.value, seen, before.merge is Merge.NONE)
     if step in {Step.UPDATE, Step.PARK} and before.doomed:
-        # Why: no lock is held, so each runs as with no landing, on a merge that has landed or not.
         return (step.value, "unseen", before.merge)
     if step is Step.LAND_REST:
         return (step.value, before.merge is Merge.UNSAID)
@@ -1610,7 +1510,6 @@ def landing_decision(
 
 
 def decision(before: model.Lease, said: str) -> tuple[object, ...]:
-    """The branch of ``drain.lease`` or ``drain.other_drain`` a step takes, whether a ``clean --all`` takes another drain's tree, whether a merge no note says is recorded or left alone, what a step meets in a live landing, and whether `open` meets a branch with commits; any other step is its own."""  # noqa: E501
     drain_, step = model.LEASE_STEPS.get(said, (None, None))
     if (found := landing_decision(before, drain_, step)) is not None:
         return found
@@ -1634,8 +1533,6 @@ def decision(before: model.Lease, said: str) -> tuple[object, ...]:
     )
     landing = model.seen_by(before)
     if step in model.CLEANS:
-        # Why: the merge lock is read where the landing lock is, after the lease is taken, so
-        # each branch of the lease is taken under a live landing already.
         lease = landing if landing == "merge" else branch
         return "clean --all", lease, before.tree not in {None, drain_}, landing is not None
     said_by = "report" if step in model.REPORTS else "clean"
@@ -1653,7 +1550,6 @@ Steps = dict[model.Lease, list[tuple[str, model.Lease]]]
 
 
 def nearest(out: Steps, start: model.Lease, untaken: set[tuple[object, ...]]) -> list[str]:
-    """The fewest steps from ``start`` to a decision in ``untaken``; none when none is reached."""
     came: dict[model.Lease, tuple[model.Lease, str] | None] = {start: None}
     frontier = deque([start])
     while frontier:
@@ -1673,7 +1569,6 @@ def nearest(out: Steps, start: model.Lease, untaken: set[tuple[object, ...]]) ->
 
 @functools.cache
 def lease_tour() -> list[list[str]]:
-    """Walks from the initial lease that take every decision: each goes on to the nearest one not yet taken."""  # noqa: E501
     _, edges = model.lease_graph()
     out: Steps = {}
     for before, said, after in edges:
@@ -1692,9 +1587,6 @@ def lease_tour() -> list[list[str]]:
 
 
 def test_two_real_drains_agree_with_the_lease_model_on_every_decision(tmp_path: Path) -> None:
-    # Why: every step of the lease graph is some 16,000 commands on real repositories, and each
-    # landing a process. Each decision the code makes, for each kind of step, is under a hundred,
-    # chained into a few walks; a walk lands one merge at most, so a landing ends most walks.
     for at, walk in enumerate(lease_tour()):
         play = LeasePlay(tmp_path / str(at))
         try:
@@ -1731,13 +1623,7 @@ def test_the_runs_that_broke_on_a_land_killed_alone_now_meet_a_merge_that_is_see
         assert lease_broken_by([*LEFT_RUNNING, said]) == set(), said
 
 
-# Why: the replays below kill a `land` by its pid alone: past its merge's probe, once its
-# merge.py has judged and merged the branch in its scratch tree and is about to run the check,
-# or before the probe, while its merge.py waits to start.
-
-
 def merge_runs_seen(play: LeasePlay) -> int:
-    """Assert the killed land's merge.py runs and the drain sees a merge running; its pid."""
     orphan = play.world.orphan
     assert orphan is not None, "a land was killed alone"
     assert running(orphan[1]), "its merge.py runs on"
@@ -1752,7 +1638,6 @@ def merges_on_main(play: LeasePlay) -> int:
 
 
 def recorded_once(play: LeasePlay, holder: str) -> None:
-    """The merge no note says: the holder's report records and prints it, and no report again."""
     assert merges_on_main(play) == 1
     assert "outcome" not in lease_note(play), "no note says it merged"
     assert plan_of_a(play) == [], "the merge resolved the ticket on the default branch"

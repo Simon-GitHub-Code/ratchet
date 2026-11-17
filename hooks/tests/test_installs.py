@@ -1,9 +1,3 @@
-"""The binding says whether an install comes first, and the justfile keeps to it (ADR 0043).
-
-The stack here is made up: a lockfile called ``tool.lock`` and an install that copies it to a stamp.
-The plugin names no package manager, so nothing below needs one.
-"""
-
 import shutil
 import subprocess
 from pathlib import Path
@@ -36,7 +30,6 @@ def binding(root: Path) -> str:
 
 
 def without_install(text: str) -> str:
-    """The binding with its whole Install section cut out."""
     start = text.index(installs.SECTION)
     return text[:start] + text[text.index("\n## ", start + 1) + 1 :]
 
@@ -48,7 +41,6 @@ def rebind(root: Path, lines: str) -> None:
 
 
 def stack(root: Path, lines: str = NEEDED, *, wired: bool = True) -> None:
-    """A project whose tools need an install: its lockfile, section, recipe and dependencies."""
     (root / "tool.lock").write_text("locked\n", encoding="utf-8")
     rebind(root, lines)
     text = justfile(root).replace("install:\n    @true", f"install:\n    {STAMP}")
@@ -82,9 +74,6 @@ def agent_reasons(root: Path) -> str:
     fix = finding.fix.otherwise if isinstance(finding.fix, conformance.Edit) else finding.fix
     assert isinstance(fix, conformance.Agent)
     return "\n".join(fix.then)
-
-
-# --- the section ----------------------------------------------------------------------------
 
 
 def test_the_template_with_none_and_a_reason_asks_nothing(repo: Path) -> None:
@@ -177,9 +166,6 @@ def test_the_upgrade_owes_the_section_when_the_justfile_does_not_state_it(repo: 
     assert [f.rule for f in left] == ["installs"]
 
 
-# --- derived from a justfile ----------------------------------------------------------------
-
-
 def derived(text: str, tiers: tuple[str, ...] = ("tier0",)) -> dict[str, str] | None:
     return installs.derived(text, tracked=lambda name: name == "tool.lock", tiers=tiers)
 
@@ -204,9 +190,6 @@ def test_an_install_the_justfile_does_not_explain_is_left_to_the_agent() -> None
     assert derived("install:\n    fetch --all\n\nlint: install\n    x\n") is None
     assert derived(f"install:\n    {STAMP}\n\nlint:\n    x\n") is None
     assert derived("lint:\n    x\n") is None
-
-
-# --- the justfile held to the section ------------------------------------------------------
 
 
 def test_a_justfile_that_keeps_to_the_section_is_green(repo: Path) -> None:

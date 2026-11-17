@@ -136,7 +136,6 @@ def test_later_questions_to_change_the_architecture_are_counted_apart_from_the_r
     found = architecture.asked(questions)
     assert found["change_questions"] == 3
     assert len(found["change_list"]) == 3
-    # without an architecture round every question outside it is a later one
     assert architecture.asked(questions[1:])["change_questions"] == 3
 
 

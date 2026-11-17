@@ -1,7 +1,3 @@
-# A command-line owner who insists on Go. The slice is checked by running the program the way the
-# repository says, not by opening a page: `kind = "cli"` runs `value`, then `then`, and looks for
-# `expect` in the last output.
-
 name = "go-todo-cli"
 stack = "Go, a command-line tool"
 

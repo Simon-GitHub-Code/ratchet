@@ -1,39 +1,3 @@
-"""The guard manifest, ``guards/manifest.toml`` under the repository root, plus the plugin's own.
-
-A pattern is matched against a POSIX path with the ``PurePosixPath.full_match`` rules
-(``ratchet_guards.globs``, since the system ``python3`` may predate 3.13): ``*`` and ``?``
-stay within one segment and ``**`` spans any number of segments. Its ``Scope`` is read from
-its first characters: ``~/`` is matched relative to the user's home directory, ``/`` against
-the absolute path (only the implicit plugin group uses these; the file may not), and
-anything else relative to the repository. A group's optional ``edit`` is ``"ask"`` (the
-default: a change on a branch goes to the merge judge, and one that lands on the default branch
-is denied, ADR 0033), ``"deny"``, for paths that act before any merge, or ``"append"``, for
-records an agent may add to and only the owner changes: an edit that ``ratchet_guards.records``
-finds additive passes even on the default branch (ADR 0014). Its
-optional ``exclude`` lists patterns its ``paths`` do not cover, such as agent worktrees under
-``.claude/worktrees/``, which are checkouts of their own. A group whose ``paths`` list is
-empty matches nothing: the adopt template ships such groups until adopt fills them, and the
-conformance gate reports any still empty.
-
-The file also lists the repository's one-way doors, as ``[[door]]`` tables: paths whose change
-cannot be taken back once it ships (ADR 0021). A door is no guard group: the hook, ``guard-diff``
-and the permission rules never read it, so an agent builds a change that goes through one without
-a prompt. The merge judge (``scripts/merge_ready.py``) reads it, and sends such a change to the
-owner. A door's ``on`` says what shuts it: ``"change"`` (the default) is any change to a matching
-path, ``"rewrite"`` a change to or deletion of a file the default branch holds, and ``"removal"``
-a deletion, or a change that does more than add to the file.
-
-The manifest is optional. When the default branch never held the file the hook judges with
-``EMPTY``, so no repository path is a guard path and only the command rules apply (gate
-bypasses, force pushes, pushes to main, history rewrites, GitHub protection, label and settings
-changes, nested Claude Code sessions and plugin removal). When it held the file and lost it,
-every group of the last manifest it held is locked (``gone``). In an adopted checkout the file
-itself is locked on every branch (``MANIFEST_LOCK``), but for an Edit or Write that only adds
-patterns or whole groups and doors (``grown``). Whether or not a manifest exists,
-``with_plugin_group`` prepends the locked ``plugin`` group: the plugin's own directory, the
-installed plugins under ``~/.claude/plugins/`` and the user settings that enable them.
-"""
-
 import tomllib
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
@@ -63,8 +27,6 @@ PLUGIN_REASON = (
     "The guard's own code, the installed plugins and the user settings that enable them: "
     "changing them can switch the guard off, so the owner changes them by hand."
 )
-# Why: the guard runs in six harnesses; each one's installed plugins and the settings that
-# enable them are the switch an agent must not reach.
 PLUGIN_HOME_PATTERNS = (
     "~/.claude/plugins",
     "~/.claude/plugins/**",
@@ -98,9 +60,6 @@ GIT_STATE_REASON = (
     "directory: the path guards and the additive-records check read the default branch through "
     "them, so a write to one can switch the guards off, and git writes them itself (ADR 0016)."
 )
-# Why: the guard reads the default branch through these files, so the hook protects them in every
-# checkout, adopted or not. The template manifest's `local-git` group lists them too, so that
-# `just settings` writes an `Edit` rule for each; a test keeps the two in step.
 GIT_STATE_PATTERNS = (
     ".git/refs",
     ".git/refs/**",
@@ -114,15 +73,12 @@ GIT_STATE_PATTERNS = (
 
 
 class Scope(Enum):
-    """What a pattern's path is relative to."""
-
     REPOSITORY = "repository"
     HOME = "home"
     ABSOLUTE = "absolute"
 
 
 def scope_of(pattern: str) -> Scope:
-    """The scope a pattern's prefix declares."""
     if pattern.startswith(HOME_PREFIX):
         return Scope.HOME
     if pattern.startswith(ABSOLUTE_PREFIX):
@@ -130,13 +86,10 @@ def scope_of(pattern: str) -> Scope:
     return Scope.REPOSITORY
 
 
-class ManifestError(ValueError):
-    """The manifest does not have the documented shape."""
+class ManifestError(ValueError): ...
 
 
 class EditRule(Enum):
-    """What the hook answers to an edit of a group's paths."""
-
     ASK = "ask"
     DENY = "deny"
     APPEND = "append"
@@ -144,13 +97,6 @@ class EditRule(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Group:
-    """Guard paths that share a reason, and the answer an edit of one gets.
-
-    ``source`` says where the group comes from, after every verdict on its paths: the manifest
-    the owner committed (``COMMITTED``), the one the default branch lost (``GONE``), or nothing
-    for a group the guard holds by itself.
-    """
-
     name: str
     reason: str
     patterns: tuple[str, ...]
@@ -160,22 +106,17 @@ class Group:
 
     @property
     def locked(self) -> bool:
-        """Whether an edit is denied outright (``edit = "deny"``)."""
         return self.edit is EditRule.DENY
 
     @property
     def additive(self) -> bool:
-        """Whether an edit that only adds passes without asking (``edit = "append"``)."""
         return self.edit is EditRule.APPEND
 
     def excludes(self, path: PurePosixPath) -> bool:
-        """Whether one of the group's ``exclude`` patterns matches ``path``."""
         return any(matches(str(path), pattern) for pattern in self.excluded)
 
 
 class DoorRule(Enum):
-    """What makes a change to a door's paths one the owner merges."""
-
     CHANGE = "change"
     REWRITE = "rewrite"
     REMOVAL = "removal"
@@ -183,8 +124,6 @@ class DoorRule(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Door:
-    """Paths whose change cannot be taken back once it ships, and what shuts the door."""
-
     name: str
     reason: str
     patterns: tuple[str, ...]
@@ -193,8 +132,6 @@ class Door:
 
 @dataclass(frozen=True, slots=True)
 class Manifest:
-    """Every guard group, in file order, and the one-way doors beside them."""
-
     groups: tuple[Group, ...]
     doors: tuple[Door, ...] = ()
 
@@ -205,7 +142,6 @@ class Manifest:
                     yield group, pattern.removeprefix(HOME_PREFIX)
 
     def group_of(self, path: str, *, scope: Scope = Scope.REPOSITORY) -> Group | None:
-        """The group guarding ``path``, written relative to ``scope``."""
         candidate = PurePosixPath(path)
         for group, pattern in self._patterns(scope):
             if matches(path, pattern) and not group.excludes(candidate):
@@ -213,11 +149,6 @@ class Manifest:
         return None
 
     def group_below(self, directory: str, *, scope: Scope = Scope.REPOSITORY) -> Group | None:
-        """The group guarding something at or below ``directory`` (``"."`` is the top).
-
-        A locked group wins over the rest: removing the directory removes every path in it, and
-        on a branch only a locked one is refused (ADR 0033).
-        """
         prefix = "" if directory == "." else directory.rstrip("/") + "/"
         below = [group for group, pattern in self._patterns(scope) if pattern.startswith(prefix)]
         holding = self.group_of(directory, scope=scope)
@@ -225,11 +156,9 @@ class Manifest:
         return next((group for group in (*below, holding) if group and group.locked), first)
 
     def patterns(self) -> list[str]:
-        """Every pattern as written, in file order."""
         return [pattern for group in self.groups for pattern in group.patterns]
 
     def doors_of(self, path: str) -> list[Door]:
-        """Every one-way door ``path``, written relative to the repository, goes through."""
         return [
             door for door in self.doors if any(matches(path, pattern) for pattern in door.patterns)
         ]
@@ -254,8 +183,6 @@ FEATURE_STARTS_REASON = (
     "refuses a commit on the run's branch until the check has passed it, so only the plugin's "
     "scripts write it."
 )
-# Why: the log has a group of its own, not a line in GIT_STATE_PATTERNS, which the template's
-# `local-git` group and `just settings` keep in step with; the hook guards it by itself.
 GIT_STATE = Manifest(
     (
         Group(GIT_STATE_GROUP, GIT_STATE_REASON, GIT_STATE_PATTERNS, EditRule.DENY, source=""),
@@ -276,21 +203,16 @@ GIT_STATE = Manifest(
         ),
     )
 )
-# Why: the guards are read from this file, so it is locked in every adopted checkout, on every
-# branch: a branch that deletes or shrinks it would merge a repository the hook reads as never
-# adopted. The hook lets an Edit or Write through that only appends (`grown`).
 MANIFEST_LOCK = Group(MANIFEST_GROUP, MANIFEST_REASON, (MANIFEST_PATH,), EditRule.DENY, source="")
 
 
 def plugin_group(plugin_root: Path) -> Group:
-    """The locked group over the plugin at ``plugin_root`` (absolute) and the user's plugins."""
     root = plugin_root.as_posix()
     patterns = (root, f"{root}/**", *PLUGIN_HOME_PATTERNS)
     return Group(PLUGIN_GROUP, PLUGIN_REASON, patterns, EditRule.DENY, source="")
 
 
 def with_manifest_lock(manifest: Manifest) -> Manifest:
-    """``manifest`` with ``MANIFEST_LOCK`` first, unless a group of its own locks the file."""
     own = manifest.group_of(MANIFEST_PATH)
     if own is not None and own.locked:
         return manifest
@@ -298,20 +220,11 @@ def with_manifest_lock(manifest: Manifest) -> Manifest:
 
 
 def gone(manifest: Manifest) -> Manifest:
-    """``manifest``, the last the default branch held before it lost the file, locked throughout."""
     groups = (replace(group, edit=EditRule.DENY, source=GONE) for group in manifest.groups)
     return Manifest(tuple(groups), manifest.doors)
 
 
 def grown(before: Manifest, text: str) -> str | None:
-    """Why ``text`` does more than add to ``before``, or ``None``.
-
-    An addition is a pattern after the others in a group's or a door's paths, or a whole group or
-    door after the ones there. Why: the first group that matches a path wins, so a pattern added
-    to a group may take paths from a group below it. One that matches a pattern of a group below,
-    or is matched by one, is not an addition; a group appended after every group takes only paths
-    no group named, and every door is read.
-    """
     try:
         after = parse(text)
     except ManifestError as error:
@@ -333,7 +246,6 @@ def grown(before: Manifest, text: str) -> str | None:
 
 
 def _extended(before: Sequence[Group | Door], after: Sequence[Group | Door]) -> bool:
-    """Whether ``after`` holds each of ``before`` in order, each with any new patterns last."""
     kept = after[: len(before)]
     return len(kept) == len(before) and all(
         replace(new, patterns=new.patterns[: len(old.patterns)]) == old
@@ -342,12 +254,10 @@ def _extended(before: Sequence[Group | Door], after: Sequence[Group | Door]) -> 
 
 
 def _overlaps(pattern: str, group: Group) -> bool:
-    """Whether ``pattern`` matches one of ``group``'s patterns as written, or one matches it."""
     return any(matches(other, pattern) or matches(pattern, other) for other in group.patterns)
 
 
 def with_plugin_group(manifest: Manifest, plugin_root: Path) -> Manifest:
-    """``manifest`` with the plugin group prepended, so it wins every match it shares."""
     return Manifest((plugin_group(plugin_root), *manifest.groups), manifest.doors)
 
 
@@ -414,7 +324,6 @@ def _door(table: object) -> Door:
 
 
 def parse(text: str) -> Manifest:
-    """Parse manifest TOML; raise ``ManifestError`` on any departure from the documented shape."""
     try:
         document = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:

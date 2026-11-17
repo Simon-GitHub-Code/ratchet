@@ -1,5 +1,3 @@
-"""Justfile edits: the template's recipes a project may be given, and the lines that join them."""
-
 import shutil
 import subprocess
 from pathlib import Path
@@ -62,7 +60,6 @@ KNOWN: dict[str, list[str]] = {
 
 @st.composite
 def justfiles(draw: st.DrawFn) -> str:
-    """A project's justfile: some of the template's recipes as the project has them, and more."""
     names = draw(st.lists(st.sampled_from(sorted(KNOWN)), unique=True))
     indent = draw(INDENTS)
     gaps = draw(st.lists(st.sampled_from(["", "\n", "\n\n"]), min_size=len(names), max_size=20))
@@ -78,7 +75,6 @@ def without(text: str, line: str | None = None) -> list[str]:
 
 
 def kept(old: str, new: str) -> bool:
-    """Every non-blank line of ``old`` is in ``new``, in the same order."""
     later = iter(new.split("\n"))
     return all(any(line == candidate for candidate in later) for line in old.split("\n") if line)
 

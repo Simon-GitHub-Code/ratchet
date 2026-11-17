@@ -1,5 +1,3 @@
-"""The template justfile runs only the plugin copy whose tree id is the one the binding pins."""
-
 import os
 import shutil
 import stat
@@ -21,7 +19,6 @@ EXCLUDED = {".git", ".in_use", "__pycache__"}
 
 
 def raw_tree_id(copy: Path, scratch: Path) -> str:
-    """The tree id of a copy's bytes as they are: no filter, no ignore file, no conversion."""
     work = scratch / "oracle"
     shutil.copytree(repos.skeleton(), work / ".git", symlinks=True)
     for directory, names, files in os.walk(copy):

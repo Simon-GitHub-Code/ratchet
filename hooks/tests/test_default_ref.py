@@ -1,12 +1,3 @@
-"""The default branch's ref is what the path guards read; a command that moves it is refused.
-
-Each case is a real repository. The manifest is committed on ``main`` as the second commit and
-``old`` is the commit before it, so a ref moved to ``old`` reads a history that holds no
-manifest, and every path guard is off. The first test shows that each command here does switch
-them off when nothing stands in the way. The second asks the hook first, as an agent's tool call
-would, and runs the command only if the hook let it through (ADR 0016).
-"""
-
 import io
 import json
 import os
@@ -20,13 +11,11 @@ from ratchet_guards import hook
 from tests.repos import commit, git, repository, write
 from tests.support import MANIFEST_TEXT
 
-# A path only the owner changes: refused on any branch while the path guards are on.
 PROBE = "tools/guards/gate.py"
 EDITORS = frozenset({"GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "VISUAL", "EDITOR"})
 
 
 def local(tmp_path: Path) -> Path:
-    """``main`` holds the manifest, ``old`` precedes it, and ``feature/x`` is checked out."""
     root = tmp_path / "local"
     root.mkdir()
     repository(root)
@@ -45,14 +34,12 @@ def on_main(tmp_path: Path) -> Path:
 
 
 def linked(tmp_path: Path) -> Path:
-    """A work tree on ``feature/x`` beside the checkout of ``main``, which is ``../local``."""
     root = on_main(tmp_path)
     git(root, "worktree", "add", "-q", str(tmp_path / "wt"), "feature/x")
     return tmp_path / "wt"
 
 
 def cloned(tmp_path: Path) -> Path:
-    """The same history behind a remote, so that ``origin/HEAD`` names the default branch."""
     source = local(tmp_path)
     git(source, "switch", "-q", "main")
     clone = tmp_path / "clone"
@@ -62,7 +49,6 @@ def cloned(tmp_path: Path) -> Path:
 
 
 def decision(root: Path, tool: str, tool_input: dict[str, str]) -> str:
-    """What the hook prints for one tool call in ``root``: ``ask``, ``deny`` or nothing."""
     payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(root)}
     stdout = io.StringIO()
     assert hook.main(root, io.StringIO(json.dumps(payload)), stdout) == 0
@@ -72,16 +58,10 @@ def decision(root: Path, tool: str, tool_input: dict[str, str]) -> str:
 
 
 def probe(root: Path) -> str:
-    """The decision on a Write of a locked guard path: ``deny`` while the path guards are on."""
     return decision(root, "Write", {"file_path": str(root / PROBE)})
 
 
 def run(root: Path, command: str) -> None:
-    """Run ``command`` in bash, the shell an agent's tool call is run in.
-
-    The editors this machine's environment names are left out, so that the one a command names
-    is the one git runs.
-    """
     env = {name: value for name, value in os.environ.items() if name not in EDITORS}
     done = subprocess.run(  # noqa: S603 # -- the attack under test, in a temporary repository
         ["/bin/bash", "-c", command], cwd=root, env=env, capture_output=True, text=True, check=False
@@ -208,11 +188,6 @@ def test_an_agent_cannot_move_the_default_ref_and_then_write_a_guard_path(
 
 
 def test_the_switch_the_route_names_on_a_merged_branch_passes(tmp_path: Path) -> None:
-    """The route names ``git switch main`` for a clean branch ``main`` holds; the guard lets it be.
-
-    Why: a step the guard refused would leave the owner where the route found them, which is the
-    loop the switch was added to end.
-    """
     root = tmp_path / "merged"
     root.mkdir()
     repository(root)

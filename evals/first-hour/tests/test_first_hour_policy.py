@@ -14,8 +14,6 @@ SCOPE = Scope(
     writable=(ROOT / "app", ROOT / "home", ROOT / "tmp"),
 )
 
-# Every kind of tool an operator's own sessions may carry: connectors, remote MCP servers, the web,
-# remote triggers, notifications, scheduling and messages to other sessions or projects.
 NOT_ON_THE_LIST = [
     "mcp__claude_ai_Brokerage__create_order",
     "mcp__claude_ai_Brokerage__get_positions",
@@ -58,7 +56,6 @@ def test_a_tool_not_on_the_list_is_denied_whatever_its_input(tool: str) -> None:
 
 
 def test_the_result_tool_of_an_agent_with_a_schema_is_allowed() -> None:
-    """A workflow agent with a `schema` returns through `StructuredOutput`; the run refused it."""
     result = {"ok": True, "number": 1, "failures": []}
     assert policy.decide("StructuredOutput", result, SCOPE) == policy.ALLOW
 
@@ -67,8 +64,6 @@ def test_every_tool_the_cli_is_told_to_refuse_is_off_the_list() -> None:
     assert not set(policy.DENIED_TOOLS) & set(policy.TOOLS)
 
 
-# Each case: the command, and the reason the policy gives. The sandbox and the missing credentials
-# stop these too (test_first_hour_sandbox.py runs them); this is the layer that records them.
 FORGE_AND_NETWORK = [
     ("gh repo create app --private --source . --push", "calls a forge"),
     ("gh api -X POST user/repos -f name=app", "calls a forge"),
@@ -195,7 +190,6 @@ def test_file_tools_reach_the_run_and_write_only_the_owners_trees(
 
 
 def test_a_file_tool_is_judged_by_where_a_link_leads(tmp_path: Path) -> None:
-    """The file tools run outside the sandbox: a link in the project must not carry them out."""
     root = tmp_path / "run"
     (root / "app").mkdir(parents=True)
     outside = tmp_path / "operator-secret"

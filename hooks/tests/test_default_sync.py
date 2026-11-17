@@ -1,13 +1,3 @@
-"""On a default branch only the remote's own default branch comes in without the owner.
-
-``git merge --ff-only @{u}``, ``git merge --ff-only origin/main`` and a bare ``git pull`` are how
-a checkout catches up with the remote, and the hook lets them through. Each names what it merges
-through something an agent can set: the branch's upstream, or a short name that a local branch,
-a tag or a stray ref of the same spelling is read before. The first test shows that each
-tampering does bring another branch onto ``main`` when nothing stands in the way. The others ask
-the hook as a tool call would, after the tampering and on the same command line (ADR 0024).
-"""
-
 from pathlib import Path
 
 import pytest
@@ -35,7 +25,6 @@ CASES = [
 
 
 def cloned(tmp_path: Path) -> Path:
-    """A clone on ``main``, level with the remote, beside a ``feature/x`` that is ahead of it."""
     source = tmp_path / "source"
     source.mkdir()
     repository(source)
@@ -50,7 +39,6 @@ def cloned(tmp_path: Path) -> Path:
 
 
 def moved(root: Path) -> bool:
-    """Whether ``main`` now holds the work of ``feature/x``."""
     return git(root, "rev-parse", "main") == git(root, "rev-parse", "feature/x")
 
 
@@ -100,7 +88,6 @@ def test_the_everyday_sync_passes(tmp_path: Path, command: str) -> None:
 
 
 def tracking_main(tmp_path: Path) -> Path:
-    """A branch made from ``origin/main``, as ``git switch -c`` leaves it: its upstream is main."""
     root = cloned(tmp_path)
     git(root, "config", "user.email", "t@example.invalid")
     git(root, "config", "user.name", "t")

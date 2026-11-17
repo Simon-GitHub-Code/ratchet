@@ -1,10 +1,3 @@
-"""``forge_runs.py``: which runs the merge job counts, for ``ci`` and for tier 2 (ADR 0024).
-
-The answers of the forge are written here as the REST API documents them. No test here reaches
-a forge: what GitHub does with a retargeted pull request or a tag named like a branch is the
-ADR's to say was observed or not.
-"""
-
 import io
 import json
 import sys
@@ -28,7 +21,6 @@ def pull(number: int = 1, base: str = "main", **over: object) -> dict[str, objec
 
 
 def run(conclusion: str | None = "success", **over: object) -> dict[str, object]:
-    """A ``ci`` run on the head commit that names pull request 1 against ``main``."""
     return {
         "id": 1,
         "event": "pull_request",
@@ -100,8 +92,6 @@ def test_the_runs_arrive_on_standard_input(
 def test_a_second_pull_request_from_the_branch_against_another_base_leaves_ci_uncounted(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], state: str
 ) -> None:
-    # Why: the forge lists on a run every open pull request with its head, so the green run of
-    # the one against `weak`, whose merge used the `ci.yml` of `weak`, names this one too.
     both = [{"number": 2, "base": {"ref": "weak"}}, {"number": 1, "base": {"ref": "main"}}]
     pulls = json.dumps([pull(), pull(2, "weak", state=state)])
     code, said = ci(tmp_path, capsys, page(run(pull_requests=both)), pulls=pulls)
@@ -121,7 +111,6 @@ def test_a_pull_request_from_a_fork_s_branch_of_the_same_name_is_not_this_branch
 def test_a_retargeted_pull_request_leaves_ci_uncounted(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], event: str
 ) -> None:
-    # Why: retargeting starts no run, so the green run is the one against the earlier base.
     events = json.dumps([{"event": "labeled"}]) + json.dumps([{"event": event}])
     code, said = ci(tmp_path, capsys, page(run()), events=events)
     assert (code, said) == (
@@ -226,7 +215,6 @@ def comment_for(
     pulls: str | None = None,
     events: str = "[]",
 ) -> tuple[int, str, str | None]:
-    """Exit code, the line for the job's log, and the comment the job would post, if any."""
     report = tmp_path / "left.md"
     report.write_text("a comment left by an earlier pull request", encoding="utf-8")
     code, said = ci(tmp_path, capsys, runs, pulls=pulls, events=events)
@@ -249,7 +237,6 @@ UNNAMED_ROW = f"- `unnamed`: no ci run on {SHA} names it against `main`\n"
 @pytest.mark.parametrize(
     ("row", "case"),
     [
-        # Why: observed on a forge, 2026-11-12: the only green run tested the other base.
         (TWIN_ROW, (page(run(pull_requests=BOTH)), TWIN, "[]")),
         (RETARGET_ROW, (page(run()), None, '[{"event": "base_ref_changed"}]')),
         (TARGET_ROW, (page(run()), json.dumps([pull(base="weak")]), "[]")),
@@ -325,7 +312,6 @@ def test_a_red_ci_beside_a_twin_still_tells_the_owner_about_the_twin(
 
 
 def history(root: Path) -> dict[str, str]:
-    """``main`` with three commits, and ``side`` one commit off its first."""
     repository(root)
     commits = {"first": git(root, "rev-parse", "HEAD")}
     git(root, "switch", "-q", "-c", "side")
@@ -337,7 +323,6 @@ def history(root: Path) -> dict[str, str]:
 
 
 def tier2(sha: str, conclusion: str = "success", **over: object) -> dict[str, object]:
-    """A completed ``deep`` run of this repository, started by a push, on ``sha``."""
     return {
         "id": 1,
         "event": "push",
@@ -397,7 +382,6 @@ def test_an_old_green_run_started_again_does_not_hide_a_red_one_nearer_the_tip(
 def test_a_run_that_is_not_tier_2_on_a_commit_of_the_default_branch_does_not_count(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], other: dict[str, object]
 ) -> None:
-    # Why: a tag named `main` on a commit nobody merged gives a run whose branch reads `main`.
     at = history(tmp_path)
     if other.get("head_sha") == "side":
         other = {"head_sha": at["side"]}

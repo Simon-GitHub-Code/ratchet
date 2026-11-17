@@ -40,7 +40,7 @@ When a rule breaks on purpose, say why in the change, and change the rule.
 
 ## Drawing the charts again
 
-The charts are drawn by the `statechart` command of pstack (`/pstack:statechart`), which runs TLC on the export and draws one Mermaid chart for each view. A view is a small module beside the page, in `docs/model/<model>/`, that gives each state and each step its words.
+The charts are drawn by the `statechart` command of pstack (`/pstack:statechart`), which runs TLC on the export and draws one Mermaid chart for each view. A view is a small module beside the page, in `docs/model/<model>/`, that gives each state and each step its words. Mermaid 11 reads a second colon in a state's words or an arrow's label as an error, so no view's words hold one.
 
 From the `hooks` directory, write the export to a directory outside the checkout:
 

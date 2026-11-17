@@ -1,5 +1,3 @@
-"""The guard refuses a commit in a queue work tree whose start has not passed its final check."""
-
 from pathlib import Path
 
 import pytest

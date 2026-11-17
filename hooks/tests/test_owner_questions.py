@@ -1,39 +1,3 @@
-"""Only product questions reach the owner: the skills are held to ``skills/method/questions.toml``.
-
-ADR 0034. Every question a skill tells an agent to put to the owner is written as
-``**Ask** `<key>`: "<text>"``, and the registry lists the key with the kind ``product`` and the
-same text, or, under ``architecture.`` alone, the kind ``architecture`` (ADR 0049). A question
-that a default answers is an ``[[assume]]`` entry instead, and its skill writes
-``**Assume** `<key>``` beside the default the hand-over states.
-
-What this catches: a new ``**Ask**`` line whose key is not registered, whose kind is not
-``product``, whose text differs from the registry's, or whose skill the registry does not list;
-a sentence in any skill page or template that tells an agent to ask, confirm or wait for an
-answer in the words below without an ``**Ask**`` key; a registered question no skill asks or an
-assumption no skill states; a product question whose text uses a method term; and a sentence
-about asking that puts questions to the owner one at a time, one by one, alone, one (question)
-per message, in a message of its own or a separate message, separately, singly, individually,
-each in turn or one after another, where ADR 0034 puts all of a step's open questions in one
-message. That last check also reads ``workflows/pipeline.js``, whose strings tell the
-orchestrator how to put a blocked run's open questions to the owner; the other checks skip
-``workflows/``.
-
-A negation before the asking words ("never ask the owner") is a rule, not a question, unless
-``until`` comes between them ("do not start until you ask the owner"), which still asks.
-
-What it cannot catch: a question worded outside ``ASKING`` ("see what the owner thinks", "run
-the table past them"); a sentence that puts any other negation before the asking words and
-still asks ("do not bind a row before you ask the owner"); a quoted question with no word that
-addresses anyone within forty characters of it; a non-product question someone registers as
-``product`` with matching skill text, since nothing reviews the registry's diff on its own (ADR
-0034); questions a companion plugin's own skill asks, which only the rule in the ``AGENTS.md``
-template governs; an unkeyed question in the pipeline's prompts in ``workflows/``, whose open
-questions are bounded by their schema's kinds; whether an agent obeys the page at run time,
-which only a live run shows; a sentence that asks one by one in words the one-message check
-lacks ("then the next", "after each answer", "in a second message", "follow up with the
-rest"); and one whose asking words are two sentences back or in another paragraph.
-"""
-
 import re
 import tomllib
 from dataclasses import dataclass
@@ -110,7 +74,6 @@ def skill_of(page: Path, root: Path = SKILLS) -> str:
 
 
 def sentences(text: str) -> list[tuple[int, str]]:
-    """Each sentence of a page outside code fences, with the line it starts on."""
     text = FENCE.sub(lambda fence: "\n" * fence.group(0).count("\n"), text)
     found: list[tuple[int, str]] = []
     start = 0
@@ -125,7 +88,6 @@ def sentences(text: str) -> list[tuple[int, str]]:
 
 
 def asks_unmarked(sentence: str) -> bool:
-    """Whether a sentence tells an agent to ask the owner without naming a registered question."""
     asking = ASKING.search(sentence)
     if asking is None or ASK_KEY.search(sentence) or RULE in sentence.lower():
         return False
@@ -135,18 +97,12 @@ def asks_unmarked(sentence: str) -> bool:
 
 
 def allowed_kind(entry: Entry) -> bool:
-    """Whether a question's kind may reach the owner: product, or the architecture (ADR 0049).
-
-    Only a key under ``architecture.`` may carry the kind ``architecture``, so the exception
-    cannot grow into a tooling question under another name.
-    """
     return entry.kind == "product" or (
         entry.kind == ARCHITECTURE and entry.key.startswith(f"{ARCHITECTURE}.")
     )
 
 
 def ask_problems(text: str, skill: str, entries: dict[str, Entry]) -> list[tuple[int, str]]:
-    """Each ``**Ask**`` line of a page that does not match its registered product question."""
     problems: list[tuple[int, str]] = []
     for match in ASK_KEY.finditer(text):
         key, line = match.group(1), text.count("\n", 0, match.start()) + 1
@@ -165,7 +121,6 @@ def ask_problems(text: str, skill: str, entries: dict[str, Entry]) -> list[tuple
 
 
 def findings(root: Path = SKILLS, entries: dict[str, Entry] | None = None) -> list[str]:
-    """Every way the pages under ``root`` break ADR 0034's rule, one line each."""
     entries = registry() if entries is None else entries
     problems: list[str] = []
     asked: set[str] = set()
@@ -214,8 +169,6 @@ ASKED = '[[ask]]\nkey = "demo.what"\nskills = ["demo"]\nkind = "product"\ntext =
 
 
 def test_a_question_a_default_answers_is_caught_however_it_is_added(tmp_path: Path) -> None:
-    # Why: the 2026-11-13 dogfood asked the owner ten questions a default answers. Each way of
-    # adding one back must turn this red.
     assert plant(tmp_path, "Ask through the question tool which linter to use.\n") == [
         (
             "skills/demo/SKILL.md:1: asks the owner with no registered key:"
@@ -235,8 +188,6 @@ def test_an_unregistered_key_and_a_kind_other_than_product_are_caught(tmp_path: 
 
 
 def test_the_architecture_kind_is_allowed_only_under_its_own_keys(tmp_path: Path) -> None:
-    # Why: ADR 0049 asks the architecture and the tools at adoption. The kind must not become a
-    # way to register any tooling question.
     system = ASKED.replace('"demo.what"', '"architecture.what"').replace(
         '"product"', '"architecture"'
     )
@@ -277,8 +228,6 @@ def test_a_reworded_question_and_one_no_skill_asks_are_caught(tmp_path: Path) ->
     ],
 )
 def test_each_way_of_asking_the_verifier_planted_is_caught(tmp_path: Path, sentence: str) -> None:
-    # Why: the verifier of PR #47 planted ten phrasings that ask the owner a tooling question in
-    # the adopt skill, and the lint caught three of them.
     assert plant(tmp_path, sentence + "\n") != [], sentence
 
 
@@ -305,13 +254,6 @@ ONE_MESSAGE = (
 
 
 def asked_one_by_one(root: Path = SKILLS, also: tuple[Path, ...] = (PIPELINE,)) -> list[str]:
-    """Each sentence that tells an agent to ask the owner one question per message.
-
-    A sentence counts when it, or the sentence before it in the same paragraph, is about asking:
-    "One at a time, in this order" follows the sentence that names the questions. Besides the
-    skill pages it reads ``also``, by default the pipeline script, whose strings tell the
-    orchestrator how to put a blocked run's open questions to the owner.
-    """
     found: list[str] = []
     for page in [*pages(root), *also]:
         text = FENCE.sub(lambda f: "\n" * f.group(0).count("\n"), page.read_text(encoding="utf-8"))
@@ -325,9 +267,6 @@ def asked_one_by_one(root: Path = SKILLS, also: tuple[Path, ...] = (PIPELINE,)) 
 
 
 def test_all_open_questions_of_a_step_go_in_one_message() -> None:
-    # Why: the skills said "one at a time" and "alone" while the spec step already put all of a
-    # step's questions in one dialog, and the conjecture asked again in a message of its own. An
-    # owner who accepts every recommendation should do it once per step.
     assert asked_one_by_one() == []
     places = ["init/templates/AGENTS.md", "method/SKILL.md", "method/records.md"]
     places += ["method/pipeline.md"]
@@ -367,8 +306,6 @@ def test_the_pipeline_script_is_read_for_questions_asked_one_by_one(tmp_path: Pa
 def test_each_way_of_asking_one_by_one_the_verifier_planted_is_caught(
     tmp_path: Path, sentence: str
 ) -> None:
-    # Why: the verifier of PR #47 replaced "all in one message" with each of these, and the check
-    # caught only "one at a time" and "one per message".
     page = tmp_path / "skills/demo/SKILL.md"
     page.parent.mkdir(parents=True)
     page.write_text(sentence + "\n", encoding="utf-8")
@@ -376,8 +313,6 @@ def test_each_way_of_asking_one_by_one_the_verifier_planted_is_caught(
 
 
 def test_the_feature_skill_asks_a_parked_tickets_questions_in_one_message() -> None:
-    # Why: the verifier removed "all in one message" from the step that asks them, and nothing
-    # went red: the step said nothing about how many messages, which the check cannot see.
     text = " ".join((SKILLS / "feature/SKILL.md").read_text(encoding="utf-8").split())
     step_7 = text.split("7. **The questions, then the route.**", 1)[1].split(" ## ", 1)[0]
     assert "ask every parked ticket's open questions as `feature.open-question`, all in one" in (

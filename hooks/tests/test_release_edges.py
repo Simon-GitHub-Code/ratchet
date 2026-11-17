@@ -1,5 +1,3 @@
-"""The release scripts' edges: what the bump commit is, and what they say when git cannot answer."""
-
 import json
 from pathlib import Path
 

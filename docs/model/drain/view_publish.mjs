@@ -1,6 +1,5 @@
 import * as c from "./view_common.mjs";
 
-// Drawn from DrainTicketLife: a role's commit on ticket a's branch, and the publish check on it.
 export const title = "A role's commit on the branch, and the publish check of ADR 0060";
 export const state = (v) => {
   if (v.mergedA) return "Merged";

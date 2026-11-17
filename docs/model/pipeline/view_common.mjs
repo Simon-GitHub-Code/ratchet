@@ -1,6 +1,3 @@
-// The owner's words for one pipeline run, shared by the charts of docs/model/pipeline.md.
-
-// Why: Mermaid 11 reads a second colon in a state's words as an error, so no label holds one.
 export const FIRST_BUILD = "A first build";
 export const REJUDGE = "Judging a rebased branch again";
 
@@ -17,8 +14,6 @@ const AGENT = {
   reconcile: "The reconcile finishes the rebase and turns the check green",
   "review-again": "The review, once more",
 };
-// Why: before the project is depended-on the review hands its blockers to one fix pass, and a
-// second review judges what the pass left.
 export const PASS = "The fix pass on the review's blockers";
 export const SECOND_REVIEW = "The review, after the fix pass";
 export const agent = (v) => {
@@ -44,7 +39,6 @@ const CARRIED =
 const DIED = "Stopped on an error, resume the run";
 const MISSING = "Stopped on an error, an input is missing";
 
-// How a run ended, or the agent it waits on.
 export const where = (v) => {
   if (v.outcome === "running") return v.waits === "none" ? "Not started" : agent(v);
   if (v.outcome === "approve") return "Approved";
@@ -53,7 +47,6 @@ export const where = (v) => {
   return v.resume ? DIED : MISSING;
 };
 
-// The agent's answer that moved the run between two of those.
 export const answer = (from, to) => {
   const now = where(to);
   if (now === DIED) return "the agent dies";
@@ -105,12 +98,9 @@ export const start = (to) => {
     : "it starts with no ticket";
 };
 
-// The chart does not draw a step that stays in one of its states, so that step needs no words.
 export const drawn = (state, words) => (action, from, to) =>
   JSON.stringify(state(from)) === JSON.stringify(state(to)) ? "stays" : words(action, from, to);
 
-// The model's own names for its steps, as the tests give the runs: each TLA+ action is the name
-// with each word capitalised.
 export const named = (action) =>
   action
     .match(/[A-Z][a-z]*|[0-9]+/g)

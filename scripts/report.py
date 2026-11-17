@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""A shared report: produced once for a run, read by every gate that asks (ADR 0071).
-
-Usage: ``report.py [--root DIR] <report> --reader <gate> [--path <path>]`` prints the report's
-paths, or the one path asked for, one per line, and exits 0.
-It runs the producer the binding's ``## Shared reports`` table names unless this run already
-produced the report from this tree's content, and readers that ask together wait for the first.
-It exits 1 with one line when the producer failed or a path is missing.
-The run id, ``RATCHET_RUN``, is trusted as given: one left set in a shell makes every run started
-there one run, as ADR 0071 accepts.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -48,8 +37,6 @@ COMMAND = re.compile(r"just ([A-Za-z_][\w-]*)(?: .*)?")
 
 @dataclass(frozen=True)
 class Report:
-    """One row of the binding's table: what produces a report, what it writes, who reads it."""
-
     name: str
     producer: str
     paths: tuple[str, ...]

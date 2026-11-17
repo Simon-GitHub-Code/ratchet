@@ -1,5 +1,3 @@
-"""``split.py``: judging a plan and filing its parts, locally and on the tracker (ADR 0046)."""
-
 import json
 from collections.abc import Sequence
 from pathlib import Path

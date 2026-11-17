@@ -1,5 +1,3 @@
-"""A ``Relaxes:`` record excuses a loosening only in the change that adds it (ADR 0047)."""
-
 from pathlib import Path
 
 import pytest
@@ -26,7 +24,6 @@ def root(tmp_path: Path) -> Path:
 
 
 def change(root: Path, name: str, value: str | None, *adrs: Adr, same: bool = False) -> int:
-    """One commit on a new branch from ``main``: the value (unless ``same``), the records."""
     git(root, "checkout", "-q", "main")
     branch(root, name)
     if not same:
@@ -47,7 +44,6 @@ def judge(root: Path) -> int:
 
 
 def merge_result(root: Path, name: str) -> int:
-    """What the gate says of ``main`` merged into ``name``, which is what merge.py judges."""
     git(root, "checkout", "-q", name)
     git(root, "merge", "-q", "--no-ff", "-m", "merge main", "main")
     return judge(root)

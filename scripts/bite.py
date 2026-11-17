@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""Every shipped gate against its synthetic violation: each must go red, and green without it.
-
-A gate nobody has seen fail is a gate that may never fire. For each gate this plugin ships,
-``bite.py`` builds a scratch repository on ``main`` with one commit, applies a violation on a
-branch, runs the gate and expects red; then runs it on the clean state and expects green. The
-adopted repository's ``bite-all`` entry point runs this, and the plugin's own ``just check``
-runs it too. ``project_bite.py`` is the other half: the gates a repository bound to its own tools,
-against the faults its ``quality/bites.toml`` plants. It is a shipped gate, so it is bitten here.
-
-Usage: ``bite.py``. Exits 1 when any gate fails to bite or fails to pass.
-"""
-
 from __future__ import annotations
 
 import http.server
@@ -55,7 +43,6 @@ import telemetry_sink
 import triggers
 import with_service
 
-# Why: the guard-diff gate lives with the guard, under hooks/, as gatelib lives here for it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks"))
 from ratchet_guards import diff as guard_paths
 
@@ -82,7 +69,6 @@ THRESHOLDS = (
     '[python.coverage.core]\npaths = ["src/**"]\nabsolute = true\n\n'
     "[ceilings.change]\nproduct_files = 1\nproduct_lines = 2\ntest_lines = 100\n"
 )
-# Why: the preflight reads a local ticket only where the guard asks about its label.
 TICKET_PATH = ".scratch/thing/issues/01-add-the-thing.md"
 TICKET = (
     "# 01: Add the thing\n\n**Status:** `ready-for-agent`\n\n## What to build\n\nThe thing.\n\n"
@@ -93,7 +79,6 @@ FLAG = (
     '[[flag]]\nkey = "new-sum"\nowner = "core"\ndefault = {default}\n'
     'remove-by = {due}\nreason = "Ships the new sum dark until it is measured."\n'
 )
-# A repository's own two gates, as one shell script, and the faults that show each one bites.
 LINT_RULE = 'if grep -rq planted src; then echo "L001 a planted word"; exit 1; fi'
 TESTS_RULE = 'ls tests/test_*.py >/dev/null 2>&1 || { echo "no test to run"; exit 1; }'
 OWN_GATES = f'#!/bin/sh\ncase "$1" in\nlint) {LINT_RULE} ;;\ntests) {TESTS_RULE} ;;\nesac\n'
@@ -135,7 +120,6 @@ REPORT = (
 
 
 def pinned(root: Path, binding: str) -> str:
-    """``binding`` with the tree id of the plugin copy the scratch repository carries."""
     return binding.replace("<tree>", plugin_pin.copy_tree_id(root / PLUGIN_COPY) or "")
 
 
@@ -150,7 +134,6 @@ def write(root: Path, path: str, text: str) -> None:
 
 
 def scratch(root: Path) -> None:
-    """A repository on ``main`` with one clean commit carrying every gate's inputs."""
     git(root, "init", "-q", "-b", "main")
     git(root, "config", "user.email", "bite@example.invalid")
     git(root, "config", "user.name", "bite")
@@ -183,7 +166,6 @@ def scratch(root: Path) -> None:
 
 
 def install_hooks(root: Path) -> None:
-    """Hooks that answer the probe as the template's recipes do: a commit here would run tier 0."""
     for name in hooks_installed.HOOKS:
         hook = root / ".git/hooks" / name
         hook.write_text(HOOK.format(name=name), encoding="utf-8")
@@ -238,7 +220,6 @@ def stale_entry(root: Path) -> None:
 
 
 def records(root: Path, *statuses: str) -> list[mutation_survivors.Mutant]:
-    """The neutral records with one mutant per status, all of one mutator and replacement."""
     lines = [
         json.dumps(
             {
@@ -382,11 +363,6 @@ OUTBOUND_CALL = "import requests\nrequests.get('http://x')\n"
 
 
 def triggers_gate(argv: list[str]) -> int:
-    """The triggers gate on a repository whose base already holds one outbound call.
-
-    The first one is free, so the scratch repository is first given the call, committed, with the
-    row still ``later:``; the change is judged against that commit.
-    """
     root = Path(argv[2])
     if not (root / "src/client.py").is_file():
         write(
@@ -406,11 +382,6 @@ REVIEW_ROW = (
 
 
 def review_gate(argv: list[str]) -> int:
-    """The triggers gate where the first outbound call arrived after the reviews started.
-
-    Why: ADR 0052. The call reopens the architecture and no record reviews it, so a second one is
-    red; the binding that asks the review lands first, so the call is not reviewed by adoption.
-    """
     root = Path(argv[2])
     if not (root / "src/client.py").is_file():
         write(
@@ -429,7 +400,6 @@ def second_outbound_call(root: Path) -> None:
 
 
 def incidents_gate(argv: list[str]) -> int:
-    """The incidents check of the conformance gate, alone."""
     return conformance.main(["conformance", "--incidents", argv[2]])
 
 
@@ -438,12 +408,6 @@ def incident_without_a_bite(root: Path) -> None:
 
 
 def merge_judge(argv: list[str]) -> int:
-    """The merge judge on the scratch change as the pipeline leaves one: committed, then recorded.
-
-    Work not yet committed is committed and the verdict recorded over it, so the judge is red for
-    what the change does and never for a missing record. A commit made after the record stays as
-    it is: that is the violation.
-    """
     root = Path(argv[2])
     if merge_ready.dirty(root, VERDICT_RECORD) or not (root / VERDICT_RECORD).is_file():
         write(root, "src/b.py", "B = 1\n")
@@ -520,7 +484,6 @@ PLUGIN_MANIFEST = f"{PLUGIN_COPY}/{plugin_pin.MANIFEST}"
 
 
 def pin_gate(argv: list[str]) -> int:
-    """The pin check against the plugin copy the scratch repository carries."""
     return plugin_pin.main([*argv, "--plugin", str(Path(argv[2]) / PLUGIN_COPY)])
 
 
@@ -547,7 +510,6 @@ BLOCKER = ".scratch/the-thing/issues/02-first.md"
 
 
 def queue_gate(argv: list[str]) -> int:
-    """``drain.py open`` on a ticket of the default branch; the work tree it makes is removed."""
     root = Path(argv[2])
     if not (root / QUEUED).is_file():
         git(root, "switch", "-q", "main")
@@ -665,10 +627,6 @@ def python(code: str) -> str:
     return f"{shlex.join(gatelib.interpreter(inline=True))} -c {shlex.quote(code)}"
 
 
-# Why: a request to /work is held until the stop, and the stop waits for one, so a request is in
-# flight when it comes however late the machine delivers either; the fault drops it. The stop runs
-# on a thread started at boot: a signal handler that started one could deadlock on the lock the
-# server takes to start each request's thread.
 STOPS = (
     "import os, signal, threading, http.server as h\n"
     "signalled, held, stopping = threading.Event(), threading.Event(), threading.Event()\n"
@@ -691,8 +649,6 @@ STOPS = (
     "s.serve_forever(); s.server_close()"
 )
 LOAD_SMOKE = str(Path(__file__).with_name("load_smoke.py"))
-# Why: each limit ends the wait the moment the service or the request is done, so it is only how
-# long a busy machine may take; the fault is caught by the request it drops, never by a limit.
 GRACEFUL = [
     *("--ready", "http://127.0.0.1:{port}/", "--timeout", "120"),
     *("--graceful", "120", "--signal-after", "0.5"),
@@ -713,8 +669,6 @@ SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
     (
         "smoke: a service that never answers",
         with_service.main,
-        # Why: the clean run returns the moment the service answers; the limit is only how long a
-        # starting interpreter may take on a machine running many of them at once.
         ["--boot", python(SERVE), "--ready", READY, "--timeout", "120"],
         ["--boot", python("import time; time.sleep(30)"), "--ready", READY, "--timeout", "0.5"],
     ),
@@ -753,8 +707,6 @@ SERVICE_SCENARIOS: list[tuple[str, Gate, list[str], list[str]]] = [
 
 @contextmanager
 def stub_service() -> Iterator[str]:
-    """A loopback server that answers 200, and 500 on ``/boom``; its base URL."""
-
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             self.send_response(500 if self.path == "/boom" else 200)
@@ -762,7 +714,7 @@ def stub_service() -> Iterator[str]:
             self.end_headers()
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002 # -- the override
-            """Say nothing."""
+            ...
 
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True)
@@ -776,7 +728,6 @@ def stub_service() -> Iterator[str]:
 
 
 def quietly(gate: Gate, argv: list[str]) -> tuple[int, str]:
-    """The gate's exit code and what it printed, the commands it ran included."""
     sys.stdout.flush()
     sys.stderr.flush()
     kept = [os.dup(1), os.dup(2)]
@@ -807,11 +758,6 @@ def run(gate: Gate, root: Path, flags: list[str]) -> tuple[int, str]:
 
 
 def verdict(label: str, clean: tuple[int, str], faulty: tuple[int, str]) -> bool:
-    """Print the scenario's line; whether the gate bit and passed.
-
-    A run that went the wrong way is named, and what the gate said in it is printed under it, so
-    the verdict explains itself.
-    """
     green, red = clean[0] == 0, faulty[0] != 0
     if red and green:
         print(f"bite: {label}: bites")
@@ -828,16 +774,11 @@ def verdict(label: str, clean: tuple[int, str], faulty: tuple[int, str]) -> bool
 
 
 def bite(scratch_dir: Path) -> int:
-    """Every scenario, with the machine's git config set aside.
-
-    A hooks path in it would change which hooks a scratch repository runs.
-    """
     with mock.patch.dict(
         os.environ,
         {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
     ):
         os.environ.pop("RATCHET_HOOK_PROBE", None)
-        # Why: run as a gate inside a scratch copy, this script still bites the runner itself.
         os.environ.pop(project_bite.BITING, None)
         return scenarios(scratch_dir)
 

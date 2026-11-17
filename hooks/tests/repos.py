@@ -1,5 +1,3 @@
-"""Real scratch repositories for the gate-script tests."""
-
 import atexit
 import functools
 import shutil
@@ -20,7 +18,6 @@ def git(root: Path, *args: str) -> str:
 
 @functools.cache
 def installed_copy() -> Path:
-    """The plugin's tracked files as a harness installs them: a folder with no history, once."""
     here = Path(__file__).resolve().parents[2]
     scratch = Path(tempfile.mkdtemp(prefix="ratchet-installed-"))
     atexit.register(shutil.rmtree, scratch, ignore_errors=True)
@@ -41,25 +38,17 @@ def write(root: Path, path: str, text: str) -> None:
 
 @functools.cache
 def skeleton() -> Path:
-    """The ``.git`` of an empty repository on ``main`` with a committer, made once per process.
-
-    Copying it costs microseconds; ``git init`` and four ``git config`` calls cost a hundred
-    milliseconds of process spawns, once per scratch repository, a thousand times a run.
-    """
     directory = Path(tempfile.mkdtemp(prefix="ratchet-skeleton-"))
     atexit.register(shutil.rmtree, directory, ignore_errors=True)
     git(directory, "init", "-q", "-b", "main")
     git(directory, "config", "user.email", "t@example.invalid")
     git(directory, "config", "user.name", "t")
     git(directory, "config", "commit.gpgsign", "false")
-    # Why: a commit can start git's maintenance in the background, and a test that copies the
-    # repository while it runs reads a lock file that is gone by the time it is copied.
     git(directory, "config", "maintenance.auto", "false")
     return directory / ".git"
 
 
 def repository(root: Path, files: dict[str, str] | None = None) -> Path:
-    """A repository on ``main`` with one commit holding ``files`` (a README by default)."""
     shutil.copytree(skeleton(), root / ".git", symlinks=True)
     for path, text in (files or {"README.md": "# A\n"}).items():
         write(root, path, text)
@@ -82,7 +71,6 @@ def branch(root: Path, name: str = "change") -> None:
 
 
 def hook_script(directory: Path, name: str, body: str) -> Path:
-    """An executable hook ``name`` in ``directory``."""
     path = directory / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
@@ -91,12 +79,10 @@ def hook_script(directory: Path, name: str, body: str) -> Path:
 
 
 def answering(name: str) -> str:
-    """A hook body that answers the probe as the template recipe ``name`` does."""
     return f'[ -n "$RATCHET_HOOK_PROBE" ] && echo {name} > "$RATCHET_HOOK_PROBE"\nexit 0'
 
 
 def install_hooks(root: Path) -> None:
-    """The repository's own hooks, as ``pre-commit install`` leaves them: both answer the probe."""
     for name in ("pre-commit", "commit-msg"):
         hook_script(root / ".git/hooks", name, answering(name))
 
@@ -108,6 +94,5 @@ CHAIN = (
 
 
 def chaining_hooks(directory: Path) -> None:
-    """Global hooks that run the repository's own, as the machine's global hooks do."""
     for name in ("pre-commit", "commit-msg"):
         hook_script(directory, name, CHAIN.format(name=name))

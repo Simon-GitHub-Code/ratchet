@@ -1,5 +1,3 @@
-"""The transcript audit: a tester naming a file of the product, or the harness's log, is seen."""
-
 import json
 from pathlib import Path
 

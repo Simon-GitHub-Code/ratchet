@@ -44,8 +44,6 @@ import gatelib
 PAGE = 100
 CI_PATH = ".github/workflows/ci.yml"
 PULL_REQUEST = "pull_request"
-# Why: the triggers of the `deep.yml` template. A run of any other event came from a workflow
-# file the default branch does not hold.
 DEEP_EVENTS = frozenset({"push", "schedule", "workflow_dispatch"})
 ON_THE_DEFAULT_BRANCH = {"deep": DEEP_EVENTS, "tier1": frozenset({"push"})}
 RETARGETS = frozenset({"base_ref_changed", "automatic_base_change_succeeded"})
@@ -54,21 +52,17 @@ COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
 GREEN, RED, NONE = "green", "red", "none"
 DONE = ("completed", "success")
 UNREADABLE = "the forge's answer could not be read"
-# Why: `merge_ready.py` writes the same marker and verdict line, so the job's comment and the
-# judge's are one comment edited in place. test_forge_runs.py holds the two to one shape.
 MARKER = "<!-- ratchet:merge -->"
 OWNER = "merge: owner"
 
 
 def at(value: object, *keys: str) -> object:
-    """``value[k1][k2]...`` through JSON objects, or ``None`` where one is missing."""
     for key in keys:
         value = value.get(key) if isinstance(value, dict) else None
     return value
 
 
 def documents(text: str) -> list[object] | None:
-    """Every JSON document in ``text``, one after another as ``gh api --paginate`` prints them."""
     decoder = json.JSONDecoder()
     found: list[object] = []
     rest = text.strip()
@@ -83,7 +77,6 @@ def documents(text: str) -> list[object] | None:
 
 
 def rows(text: str | None) -> list[object] | None:
-    """The items of every JSON array in ``text``, or ``None`` when it is not arrays alone."""
     pages = documents(text or "")
     if pages is None or not all(isinstance(page, list) for page in pages):
         return None
@@ -100,7 +93,6 @@ def newest_page(text: str) -> tuple[list[object], bool] | None:
 
 
 def listed(text: str) -> list[object] | None:
-    """The runs in one page of the runs API, or ``None`` when unreadable or not all there are."""
     page = newest_page(text)
     return page[0] if page is not None and page[1] else None
 
@@ -111,8 +103,6 @@ def newest(runs: list[object]) -> object:
 
 @dataclass(frozen=True)
 class Pull:
-    """The pull request the merge job is about to judge, as the job read it."""
-
     number: int
     sha: str
     branch: str
@@ -120,14 +110,12 @@ class Pull:
     repository: str
 
     def twin(self, pull: object) -> bool:
-        """Whether ``pull`` comes from this pull request's branch of this repository."""
         return (
             at(pull, "head", "ref") == self.branch
             and at(pull, "head", "repo", "full_name") == self.repository
         )
 
     def is_this(self, pull: object) -> bool:
-        """Whether ``pull`` is this one, still open on the commit and the base the job read."""
         return (
             at(pull, "number") == self.number
             and at(pull, "state") == "open"
@@ -136,7 +124,6 @@ class Pull:
         )
 
     def tested(self, run: object) -> bool:
-        """Whether ``run`` is a ``ci`` run on this head commit that names this pull request."""
         named = at(run, "pull_requests")
         return (
             at(run, "event") == PULL_REQUEST
@@ -154,15 +141,12 @@ class Pull:
 
 @dataclass(frozen=True)
 class Forge:
-    """What the forge answered about one pull request: its runs, its twins, its events."""
-
     runs: list[object]
     pulls: list[object]
     events: list[object]
 
 
 def answered(runs: str, pulls: str | None, events: str | None) -> Forge | None:
-    """The three answers, or ``None`` when one is unreadable or may not be all there is."""
     twins, changes, ran = rows(pulls), rows(events), listed(runs)
     if twins is None or changes is None or ran is None or len(twins) >= PAGE:
         return None
@@ -171,15 +155,12 @@ def answered(runs: str, pulls: str | None, events: str | None) -> Forge | None:
 
 @dataclass(frozen=True)
 class Doubt:
-    """A reason ``ci`` does not count as green, and whether it is one the owner must act on."""
-
     code: str
     text: str
     owner: bool
 
 
 def doubts(pull: Pull, forge: Forge) -> Iterator[Doubt]:
-    """Each reason ``ci`` does not count as green for ``pull``."""
     twins = [twin for twin in forge.pulls if pull.twin(twin)]
     if not any(pull.is_this(twin) for twin in twins):
         this = next((twin for twin in twins if at(twin, "number") == pull.number), None)
@@ -203,9 +184,6 @@ def doubts(pull: Pull, forge: Forge) -> Iterator[Doubt]:
         yield Doubt("retargeted", text, owner=True)
     counted = [run for run in forge.runs if pull.tested(run)]
     if not counted:
-        # Why: a pull request ci has not run on yet is pending, and says nothing to the owner.
-        # A run that finished and names no pull request against the default branch is the forge
-        # answering something this script does not expect, which only the owner can look into.
         finished = any(at(run, "status") == "completed" for run in forge.runs)
         text = f"no ci run on {pull.sha} names it against `{pull.base}`"
         yield Doubt("unnamed", text, owner=finished)
@@ -214,14 +192,12 @@ def doubts(pull: Pull, forge: Forge) -> Iterator[Doubt]:
 
 
 def ci(pull: Pull, forge: Forge | None) -> list[Doubt]:
-    """Every reason ``ci`` does not count as green for ``pull``; none means it does."""
     if forge is None:
         return [Doubt("unreadable", UNREADABLE, owner=False)]
     return list(doubts(pull, forge))
 
 
 def report(pull: Pull, owners: list[Doubt]) -> str:
-    """The pull request comment for the reasons the owner must act on, in the judge's shape."""
     rows = "".join(f"- `{doubt.code}`: {doubt.text}\n" for doubt in owners)
     return (
         f"{MARKER}\n**{OWNER}** at `{pull.sha[:12]}`. The merge job leaves this pull request to"
@@ -230,7 +206,6 @@ def report(pull: Pull, owners: list[Doubt]) -> str:
 
 
 def _distance(root: Path, sha: object, tip: str) -> int | None:
-    """How many commits ``tip`` is ahead of ``sha``, or ``None`` when ``sha`` is not behind it."""
     if not isinstance(sha, str) or not COMMIT.match(sha):
         return None
     apart = gatelib.git(root, "rev-list", "--left-right", "--count", f"{sha}...{tip}") or ""
@@ -239,7 +214,6 @@ def _distance(root: Path, sha: object, tip: str) -> int | None:
 
 
 def on_the_tip(runs: str, *, root: Path, tip: str, repository: str, events: frozenset[str]) -> str:
-    """A tier's state on the default branch: ``green``, ``red`` or ``none``."""
     page = newest_page(runs)
     if page is None:
         return RED

@@ -1,5 +1,3 @@
-"""The justfile check holds against a forged marker, planted bytecode and a real cache layout."""
-
 import os
 import stat
 import subprocess
@@ -134,7 +132,7 @@ def plant(tmp_path: Path, destination: Path) -> Path:
 
 
 def cache_tag() -> str:
-    return subprocess.run(  # -- a fixed argv, no shell
+    return subprocess.run(
         ["python3", "-c", "import sys; print(sys.implementation.cache_tag)"],  # noqa: S607 # -- PATH
         capture_output=True,
         text=True,

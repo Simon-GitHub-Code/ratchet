@@ -1,20 +1,3 @@
-"""The architecture a repository declares: the binding's section and the record it names.
-
-ADR 0049. The owner chooses the architecture and its tools at adoption, and the choice lands in
-two places a gate reads. The binding's ``## Architecture`` section names the decision record on its
-``- Decision:`` line and declares the parts in a table, inner to outer::
-
-    | Part | Path | May depend on |
-    | --- | --- | --- |
-    | rules | `src/rules/**` | nothing |
-    | web | `src/web/**` | rules |
-
-The record holds ``## Decision`` with a ``- Chosen by:`` line, ``## Considered options`` with at
-least two alternatives as list items, ``## Reversal cost`` and ``## Refutation criterion``. These
-readers judge structure only: sections, fields, list items and cells, never how well the prose
-argues, which is the merge's to judge.
-"""
-
 from __future__ import annotations
 
 import re
@@ -37,14 +20,11 @@ ITEM = re.compile(r"^- \S", re.MULTILINE)
 
 @dataclass(frozen=True)
 class Declared:
-    """What the binding's section says: the record's path, if it names one, and what is wrong."""
-
     record: str | None
     problems: tuple[str, ...]
 
 
 def declared(binding: str) -> Declared:
-    """Read the binding's ``## Architecture`` section; ``problems`` is empty when it is whole."""
     body = markdown_text.section(binding, SECTION)
     value = markdown_text.bullets(body).get(DECISION, "")
     named = markdown_text.ticked(value)
@@ -88,10 +68,6 @@ def _part_problems(binding: str) -> list[str]:
 
 
 def record_problems(text: str) -> list[str]:
-    """What the decision record lacks of the fields ADR 0049 names.
-
-    The refutation criterion is not read here: the check every record has already reads it.
-    """
     problems: list[str] = []
     decision = markdown_text.section(text, DECISION_SECTION)
     if not decision.strip():

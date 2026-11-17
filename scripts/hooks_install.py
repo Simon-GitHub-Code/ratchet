@@ -1,29 +1,4 @@
 #!/usr/bin/env python3
-"""Install the repository's own commit hooks, then prove that a commit runs tier 0.
-
-``hooks_installed.py`` is red while a commit would skip tier 0. Where the cause is that the
-repository's own hooks are missing, this script is the repair, and an agent runs it (ADR 0026).
-It runs the ``pre-commit`` framework's install, the one command the owner would type, and then
-the same probe, which stays the only proof. The install writes the framework's hooks into the
-repository's own hooks directory and nowhere else.
-
-A ``core.hooksPath`` in the global or system git config makes that install refuse, though the
-hooks there may chain to the repository's own. The script hides those scopes from the install
-alone, by its environment. It never changes git config and writes no hook itself: what the
-hooks run is the framework's, read from ``.pre-commit-config.yaml``, a guard path.
-
-It does nothing, and prints the gate's answer, when the repair is not this one:
-
-- the hooks already answer;
-- the repair is a change of git config (a local ``core.hooksPath``, or a global hook that does
-  not chain to the repository's hooks), which is the owner's;
-- the binding names another hook mechanism, whose install command the gate prints;
-- a hook is already there that the framework did not write. The install would move it aside
-  and run it first, and moving a hook somebody wrote is the owner's.
-
-Usage: ``hooks_install.py [--root DIR]``. Exits 1 while a commit would not run tier 0.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -41,7 +16,6 @@ OUTPUT_LINES = 3
 
 
 def foreign(root: Path) -> list[Path]:
-    """The repository's own commit hooks that the ``pre-commit`` framework did not write."""
     hooks = hooks_installed.hooks_dir(root) or root / ".git/hooks"
     found = [hooks / name for name in hooks_installed.HOOKS]
     return [
@@ -52,10 +26,7 @@ def foreign(root: Path) -> list[Path]:
 
 
 def install(root: Path) -> Problem | None:
-    """Install the framework's hooks when that is the repair; the gate's answer afterwards."""
     problem = hooks_installed.check(root)
-    # Why: the gate names this entry point only where installing the framework's hooks, with no
-    # change of git config, is the whole repair.
     this = f"run `{hooks_installed.install_entry(root)}`"
     if problem is None or problem.fix != this:
         return problem
@@ -86,7 +57,6 @@ def install(root: Path) -> Problem | None:
     after = hooks_installed.check(root)
     if after is None or after.fix != this:
         return after
-    # Why: the gate would name this script again, and running it twice changes nothing.
     return Problem(
         f"the install ran and the hooks still do not answer: {after.detail}",
         f"see that {hooks_installed.COMMIT_HOOKS} runs the `pre-commit` and `commit-msg` recipes"
